@@ -1,0 +1,23 @@
+workflow:
+
+  reflection:
+    - schema_linking
+    - generate_sql
+    - execute_sql
+    - reflect
+    - output
+
+  fixed:
+    - schema_linking
+    - generate_sql
+    - execute_sql
+    - output
+
+  empty: []
+
+  dynamic:
+    - schema_linking
+    - generate_sql
+    - execute_sql
+    - reflect
+    - output

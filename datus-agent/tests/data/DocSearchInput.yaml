@@ -1,0 +1,15 @@
+- doc_search:
+    keywords:
+    - snowflake sql reference
+    top_n: 3
+    method: external
+- doc_search:
+    keywords:
+    - sqllite sql reference
+    top_n: 3
+    method: external
+- doc_search:
+    keywords:
+    - starrocks sql reference
+    top_n: 3
+    method: external

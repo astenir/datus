@@ -1,0 +1,188 @@
+"""
+Datus-CLI Context Commands
+This module provides context-related commands for the Datus CLI.
+"""
+
+from rich.table import Table
+from rich.tree import Tree
+
+from datus.utils.loggings import get_logger
+from datus.utils.rich_util import dict_to_tree
+
+logger = get_logger("datus-cli")
+
+
+class ContextCommands:
+    """Handles all context-related commands in the CLI."""
+
+    def __init__(self, cli):
+        """Initialize with a reference to the CLI instance."""
+        self.cli = cli
+        self.console = cli.console
+
+    def cmd_catalogs(self, args: str):
+        """Display database catalogs."""
+        try:
+            if not self.cli.db_connector:
+                self.console.print("[bold red]Error:[/] No database connection.")
+                return
+
+            # Get metadata from the connector
+            metadata = self.cli.db_connector.get_metadata()
+
+            # Create a table to display the catalog
+            table = Table(title="Database Catalog", show_header=True, header_style="bold green")
+            table.add_column("Database")
+            table.add_column("Schema")
+            table.add_column("Table")
+
+            # Add rows to the table
+            for item in metadata:
+                db_name = item.get("database_name", "")
+                schema_name = item.get("schema_name", "")
+                table_name = item.get("table_name", "")
+
+                table.add_row(db_name, schema_name, table_name)
+
+            # Display the table
+            self.console.print(table)
+
+            # Add usage info
+            self.console.print("[dim]Tip: Use '@tables <table_name>' to see details of a specific table.[/]")
+
+        except Exception as e:
+            logger.error(f"Catalog fetch error: {str(e)}")
+            self.console.print(f"[bold red]Error:[/] Failed to fetch catalog: {str(e)}")
+
+    def cmd_context(self, args: str = "sql"):
+        """Display the current context."""
+        try:
+            if not self.cli.agent.workflow:
+                self.console.print("[yellow]No workflow available. Please start a new workflow using !dastart[/]")
+                return
+
+            context_type = args.lower().strip() if args else "sql"
+            query_map = {
+                "sql": self.cli.agent.workflow.context.sql_contexts,
+                "schema": self.cli.agent.workflow.context.table_schemas,
+                "schema_values": self.cli.agent.workflow.context.table_values,
+                "metrics": self.cli.agent.workflow.context.metrics,
+            }
+
+            if context_type in query_map:
+                for i, item in enumerate(query_map[context_type]):
+                    tree = dict_to_tree(item.to_dict(), tree=Tree(f"{i + 1}."))
+                    self.console.print(tree)
+            elif context_type == "lastsql":
+                self.console.print(dict_to_tree(self.cli.agent.workflow.context.sql_contexts[-1].to_dict()))
+            elif context_type == "task":
+                self.console.print(self.cli.agent.workflow.task.to_dict())
+            else:
+                self.console.print(dict_to_tree(self.cli.agent.workflow.context.to_dict()))
+        except Exception as e:
+            logger.error(f"Context display error: {str(e)}")
+            self.console.print(f"[bold red]Error:[/] Failed to display context: {str(e)}")
+
+    def cmd_context_screen(self, args: str):
+        """Display the current context in a screen."""
+        if not self.cli.agent.workflow:
+            self.console.print("[yellow]No workflow available. Please start a new workflow using !dastart[/]")
+            return
+
+        context_type = args.strip().lower()
+
+        try:
+            from cli.context_screen import show_workflow_context_screen
+
+            # Get all context data from the workflow
+            context_data = {
+                "sql_contexts": [item.to_dict() for item in self.cli.agent.workflow.context.sql_contexts],
+                "table_schemas": [item.to_dict() for item in self.cli.agent.workflow.context.table_schemas],
+                "table_values": [item.to_dict() for item in self.cli.agent.workflow.context.table_values],
+                "metrics": [item.to_dict() for item in self.cli.agent.workflow.context.metrics],
+            }
+
+            # Enhanced debugging
+            logger.debug("Context data summary:")
+            logger.debug(f"  SQL contexts: {len(context_data['sql_contexts'])}")
+            logger.debug(f"  Table schemas: {len(context_data['table_schemas'])}")
+            logger.debug(f"  Table values: {len(context_data['table_values'])}")
+            logger.debug(f"  Metrics: {len(context_data['metrics'])}")
+
+            # Debug table schemas specifically
+            if context_data["table_schemas"]:
+                logger.debug(f"First table schema keys: {list(context_data['table_schemas'][0].keys())}")
+                first_schema = context_data["table_schemas"][0]
+                if "table_name" in first_schema:
+                    logger.debug(f"First table name: {first_schema['table_name']}")
+                if "columns" in first_schema:
+                    logger.debug(f"Columns type: {type(first_schema['columns'])}")
+                    if isinstance(first_schema["columns"], list) and first_schema["columns"]:
+                        logger.debug(f"First column: {first_schema['columns'][0]}")
+                    else:
+                        logger.debug(f"Columns content: {first_schema['columns']}")
+
+            logger.debug(f"Full context data: {context_data}")
+
+            if context_type:
+                # If a specific context type is specified, filter to only show that type
+                if context_type in ["sql", "schema", "schema_values", "metrics"]:
+                    # Map command arg to context data key
+                    context_map = {
+                        "sql": "sql_contexts",
+                        "schema": "table_schemas",
+                        "schema_values": "table_values",
+                        "metrics": "metrics",
+                    }
+
+                    # Create a new context_data with only the specified type
+                    filtered_data = {context_map[context_type]: context_data[context_map[context_type]]}
+                    logger.debug(f"Filtered data for {context_type}: {filtered_data}")
+                    show_workflow_context_screen(f"Context: {context_type.capitalize()}", filtered_data)
+                else:
+                    self.console.print(f"[bold yellow]Warning:[/] Unknown context type: {context_type}")
+                    self.console.print("Valid types: sql, schema, schema_values, metrics")
+            else:
+                # Show all context types
+                show_workflow_context_screen("Workflow Context", context_data)
+
+        except Exception as e:
+            logger.error(f"Context screen error: {str(e)}")
+            self.console.print(f"[bold red]Error:[/] Failed to display context screen: {str(e)}")
+
+    def cmd_tables(self, args: str):
+        """List all tables in the current database with context information."""
+        if not self.cli.db_connector:
+            self.console.print("[bold red]Error:[/] No database connection.")
+            return
+
+        try:
+            # For SQLite, query the sqlite_master table
+            if self.cli.db_connector.get_type() == "sqlite":
+                sql = "SELECT type, name FROM sqlite_master WHERE type='table' ORDER BY name"
+                result = self.cli.db_connector.execute_arrow(sql)
+                self.cli.last_result = result
+
+                # Display results
+                table = Table(title="Show tables", show_header=True, header_style="bold green")
+                if result is not None and result.success:
+                    # Add columns
+                    for col in result.sql_return.column_names:
+                        table.add_column(col)
+                    # Add rows
+                    for row in result.sql_return.to_pylist():
+                        table.add_row(*[str(cell) for cell in row.values()])
+                    self.console.print(table)
+                else:
+                    self.console.print("[bold red]Error:[/] Failed to retrieve table list")
+            else:
+                # For other database types, execute the appropriate query
+                self.console.print("[yellow]Table listing not implemented for this database type.[/]")
+
+        except Exception as e:
+            logger.error(f"Table listing error: {str(e)}")
+            self.console.print(f"[bold red]Error:[/] {str(e)}")
+
+    def cmd_metrics(self, args: str):
+        """Display metrics."""
+        self.console.print("[yellow]Feature not implemented in MVP.[/]")

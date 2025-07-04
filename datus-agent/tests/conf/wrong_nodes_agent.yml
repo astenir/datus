@@ -1,0 +1,6 @@
+agent:
+  nodes:
+    non-existent-node:
+      model: qwen3
+      matching_rate: fast
+      prompt_version: "1.0"

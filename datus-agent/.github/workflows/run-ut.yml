@@ -1,0 +1,33 @@
+name: unit test
+on:
+  workflow_call:
+    outputs:
+      build-artifact:
+        description: "Built artifact path"
+        value: ${{ jobs.build.outputs.build-artifact }}
+
+jobs:
+  run-ut:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Copy config file
+        run: |
+          cp /home/eyu/ci_template/agent.yml conf/agent.yml
+
+      - name: run pytest
+        run: |
+          pytest tests/test_node.py::TestNode::test_schema_linking_node

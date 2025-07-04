@@ -1,0 +1,204 @@
+import argparse
+import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Set
+
+import pandas as pd
+import yaml
+
+from datus.agent.node.generate_metrics_node import GenerateMetricsNode
+from datus.agent.node.generate_semantic_model_node import GenerateSemanticModelNode
+from datus.configuration.agent_config import AgentConfig
+from datus.configuration.node_type import NodeType
+from datus.schemas.generate_metrics_node_models import GenerateMetricsInput
+from datus.schemas.generate_semantic_model_node_models import GenerateSemanticModelInput, SemanticModelMeta
+from datus.schemas.node_models import Metrics, SqlTask
+from datus.storage.metric.init_utils import exists_semantic_metrics
+from datus.utils.loggings import get_logger
+
+from .store import SemanticMetricsRAG
+
+logger = get_logger(__file__)
+
+
+def init_success_story_metrics(
+    storage: SemanticMetricsRAG,
+    args: argparse.Namespace,
+    agent_config: AgentConfig,
+    build_mode: str = "overwrite",
+    pool_size: int = 1,
+):
+    all_semantic_models, all_metrics = exists_semantic_metrics(storage, build_mode)
+    logger.debug(f"all_semantic_models: {all_semantic_models}")
+    logger.debug(f"all_metrics: {all_metrics}")
+
+    df = pd.read_csv(args.success_story)
+    with ThreadPoolExecutor(max_workers=pool_size) as executor:
+        futures = [
+            executor.submit(
+                process_line, storage, row.to_dict(), index, args, agent_config, all_semantic_models, all_metrics
+            )
+            for index, row in df.iterrows()
+        ]
+        for future in as_completed(futures):
+            future.result()
+
+    storage.after_init()
+
+
+def process_line(
+    storage: SemanticMetricsRAG,
+    row: dict,
+    index: int,
+    args: argparse.Namespace,
+    agent_config: AgentConfig,
+    all_semantic_models: Set[str],
+    all_metrics: Set[str],
+):
+    logger.info(f"process line: {row}")
+
+    sql_task = SqlTask(
+        id=f"sql_task_{index}",
+        database_type=agent_config.db_type,
+        task=row["question"],
+        database_name="mf_demo",
+    )
+    layer1 = args.layer1 if getattr(args, "layer1", None) else agent_config.db_type
+    layer2 = args.layer2 if getattr(args, "layer2", None) else sql_task.database_name
+    semantic_model_meta = SemanticModelMeta(
+        layer1=layer1,
+        layer2=layer2,
+        domain=args.domain,
+        catalog_name=args.catalog,
+        database_name=sql_task.database_name,
+    )
+
+    logger.info(f"sql task: {sql_task}")
+    semantic_model_input_data = GenerateSemanticModelInput(
+        sql_task=sql_task, semantic_model_meta=semantic_model_meta, sql_query=row["sql"], prompt_version="1.0"
+    )
+    logger.info(f"semantic model input data: {semantic_model_input_data}")
+    semantic_model_node = GenerateSemanticModelNode(
+        node_id=f"semantic_model_node_{index}",
+        description=f"Generate semantic model for {row['question']}",
+        node_type=NodeType.TYPE_GENERATE_SEMANTIC_MODEL,
+        input_data=semantic_model_input_data,
+        agent_config=agent_config,
+    )
+    semantic_model_result = semantic_model_node.run()
+    logger.info(f"semantic model result: {semantic_model_result}")
+    if not semantic_model_result.success:
+        logger.error(f"Failed to generate semantic model for {row['question']}: {semantic_model_result.error}")
+        return
+    semantic_model_meta = semantic_model_result.semantic_model_meta
+    semantic_model = gen_semantic_model(
+        semantic_model_result.semantic_model_file,
+        sql_task.database_name,
+        semantic_model_meta.table_name,
+        semantic_model_meta.schema_name,
+        semantic_model_meta.catalog_name,
+        args.domain,
+    )
+    logger.info(f"semantic model: {semantic_model}")
+
+    full_semantic_model_name = ".".join(
+        [
+            semantic_model_meta.catalog_name,
+            semantic_model_meta.database_name,
+            semantic_model_meta.schema_name,
+            semantic_model.get("semantic_model_name", ""),
+        ]
+    )
+    if full_semantic_model_name not in all_semantic_models:
+        storage.semantic_model_storage.store([semantic_model])
+        all_semantic_models.add(full_semantic_model_name)
+    else:
+        logger.info(f"semantic model {full_semantic_model_name} already exists")
+
+    metric_input_data = GenerateMetricsInput(sql_task=sql_task, sql_query=row["sql"], prompt_version="1.0")
+    logger.info(f"metric input data: {metric_input_data}")
+    metric_node = GenerateMetricsNode(
+        node_id=f"metric_node_{index}",
+        description=f"Generate metrics for {row['question']}",
+        node_type=NodeType.TYPE_GENERATE_METRICS,
+        input_data=metric_input_data,
+        agent_config=agent_config,
+    )
+    metric_result = metric_node.run()
+    logger.info(f"metric node result: {metric_result}")
+    if not metric_result.success:
+        logger.error(f"Failed to generate metrics for {row['question']}: {metric_result.error}")
+        return
+
+    metrics = gen_metrics(
+        semantic_model.get("semantic_model_name", ""),
+        metric_result.sql_query,
+        metric_result.metrics,
+        metric_result.metrics,
+        args.domain,
+        layer1,
+        layer2,
+    )
+    logger.info(f"metrics: {metrics}")
+    for metric in metrics:
+        full_metric_name = f'{metric["semantic_model_name"]}.{metric["metric_name"]}'
+        if full_metric_name not in all_metrics:
+            storage.metric_storage.store([metric])
+            all_metrics.add(full_metric_name)
+        else:
+            logger.info(f"metric {full_metric_name} already exists")
+
+
+def gen_semantic_model(
+    semantic_model_file: str,
+    database_name: str,
+    table_name: str,
+    schema_name: str,
+    catalog_name: str,
+    domain: str,
+):
+    semantic_model = {}
+    with open(semantic_model_file, "r") as f:
+        docs = yaml.safe_load_all(f)
+        for doc in docs:
+            content = doc.get("data_source", {})
+            if not content:
+                continue
+            semantic_model["semantic_model_name"] = content.get("name", "")
+            semantic_model["semantic_model_desc"] = content.get("description", "")
+            semantic_model["identifiers"] = json.dumps(content.get("identifiers", []))
+            semantic_model["dimensions"] = json.dumps(content.get("dimensions", []))
+            semantic_model["measures"] = json.dumps(content.get("measures", []))
+            semantic_model["database_name"] = database_name
+            semantic_model["table_name"] = table_name
+            semantic_model["schema_name"] = schema_name
+            semantic_model["catalog_name"] = catalog_name
+            semantic_model["catalog_database_schema"] = f"{catalog_name}.{database_name}.{schema_name}"
+            semantic_model["domain"] = domain
+            semantic_model["semantic_file_path"] = semantic_model_file
+            break
+    return semantic_model
+
+
+def gen_metrics(
+    semantic_model_name: str,
+    sql_query: str,
+    metrics: List[Metrics],
+    domain: str,
+    layer1: str,
+    layer2: str,
+):
+    metric_list = []
+    for metric in metrics:
+        metric_dict = {}
+        metric_dict["semantic_model_name"] = semantic_model_name
+        metric_dict["domain"] = domain
+        metric_dict["layer1"] = layer1
+        metric_dict["layer2"] = layer2
+        metric_dict["domain_layer1_layer2"] = f"{domain}_{layer1}_{layer2}"
+        metric_dict["metric_name"] = metric.metric_name
+        metric_dict["metric_value"] = metric.metric_value
+        metric_dict["metric_type"] = metric.metric_type
+        metric_dict["sql_query"] = sql_query
+        metric_list.append(metric_dict)
+    return metric_list

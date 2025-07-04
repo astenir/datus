@@ -1,0 +1,106 @@
+import asyncio
+import json
+from typing import Any, Dict, List
+
+from langsmith import traceable
+
+from datus.configuration.agent_config import DbConfig
+from datus.models.base import LLMBaseModel
+from datus.prompts.generate_metrics_with_mcp import get_generate_metrics_prompt
+from datus.prompts.prompt_manager import prompt_manager
+from datus.schemas.generate_metrics_node_models import GenerateMetricsInput, GenerateMetricsResult, Metrics
+from datus.tools.mcp_server import MCPServer
+from datus.utils.json_utils import strip_json_str
+from datus.utils.loggings import get_logger
+
+logger = get_logger(__file__)
+
+
+@traceable
+def generate_metrics_with_mcp(
+    model: LLMBaseModel,
+    input_data: GenerateMetricsInput,
+    db_config: DbConfig,
+    tool_config: Dict[str, Any],
+) -> GenerateMetricsResult:
+    """Generate metrics for the given SQL query."""
+    if not isinstance(input_data, GenerateMetricsInput):
+        raise ValueError("Input must be a GenerateMetricsInput instance")
+
+    db_mcp_server = MCPServer.get_db_mcp_server(db_config, input_data.sql_task.database_name)
+    metricflow_mcp_server = MCPServer.get_metricflow_mcp_server()
+    filesystem_mcp_server = MCPServer.get_filesystem_mcp_server()
+
+    instruction = prompt_manager.get_raw_template("generate_metrics_system", input_data.prompt_version)
+    max_turns = tool_config.get("max_turns", 30)
+
+    prompt = get_generate_metrics_prompt(
+        database_type=input_data.get("database_type", "duckdb"),
+        sql_query=input_data.sql_query,
+        description=input_data.sql_task.task,
+        prompt_version=input_data.prompt_version,
+    )
+    try:
+        exec_result = asyncio.run(
+            model.generate_with_mcp(
+                prompt=prompt,
+                mcp_servers={
+                    "db_mcp_server": db_mcp_server,
+                    "metricflow_mcp_server": metricflow_mcp_server,
+                    "filesystem_mcp_server": filesystem_mcp_server,
+                },
+                instruction=instruction,
+                output_type=GenerateMetricsResult,
+                max_turns=max_turns,
+            )
+        )
+
+        try:
+            logger.info(f"exec_result: {exec_result['content']}")
+            content_dict = json.loads(strip_json_str(exec_result["content"]))
+            metrics = parse_metrics(content_dict)
+            metrics = parse_metrics(content_dict)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse exec_result.content: {e}, exec_result: {exec_result}")
+            content_dict = {}
+        # content_dict = exec_result
+        # Extract required pieces from the parsed dict
+        return GenerateMetricsResult(
+            success=True,
+            error="",
+            sql_query=content_dict.get("sql_query", ""),
+            metrics=metrics,
+        )
+    except Exception as e:
+        # TODO : deal with excced the max round
+        error_msg = str(e)
+        logger.error(f"Generate Metrics with MCP failed: {e}")
+
+        # Re-raise permission/tool-calling errors so fallback can handle them
+        if any(indicator in error_msg.lower() for indicator in ["403", "forbidden", "not allowed", "permission"]):
+            logger.info("Re-raising permission error for fallback handling")
+            raise
+
+        # Return failed result for other errors
+        return GenerateMetricsResult(
+            success=False,
+            error=error_msg,
+            sql_query="",
+            metrics=[],
+        )
+
+
+def parse_metrics(content_dict: Dict[str, Any]) -> List[Metrics]:
+    metrics = []
+    metric_list = content_dict.get("metrics", [])
+    if not metric_list:
+        return metrics
+    for metric in metric_list:
+        metrics.append(
+            Metrics(
+                metric_name=metric.get("name", ""),
+                metric_value=json.dumps(metric),
+                metric_type=metric.get("type", ""),
+            )
+        )
+    return metrics

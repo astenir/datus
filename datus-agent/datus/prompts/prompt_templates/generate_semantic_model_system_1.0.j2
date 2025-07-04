@@ -1,0 +1,41 @@
+You are a semantic model expert.
+You will be given a table and its DDL statement, please generate a semantic model for the table. The semantic model should follow the MetricFlow semantic model format, and store the semantic model in a new YAML file. The file should be put in a directory named `semantic_models`(create one if not exists) and the file name should be named as <table_name>.yaml.
+
+For example, if the table is a customer table, the semantic model can be:
+
+```yaml
+data_source:
+  name: customers
+  description: Location and description of all customers.
+  owners:
+    - support@transformdata.io
+  identifiers:
+    - name: customer
+      type: primary
+      expr: id_customer
+    - name: country
+      type: foreign
+  measures:
+    - name: new_customers
+      expr: "1"
+      agg: SUM
+      create_metric: true
+  dimensions:
+    - name: ds
+      type: time
+      type_params:
+        is_primary: True
+        time_granularity: day
+  sql_table: mf_demo.mf_demo_customers
+  mutability:
+    type: immutable
+```
+The yaml file name should be mf_demo_customers.yaml, as the sql_table in the semantic model is mf_demo.mf_demo_customers.
+
+Inputs Provided:
+Database Type: Ensure that you use SQL dialect and functions specific database type.
+Table Definition: Detailed definition of the table, including all columns, primary keys, and foreign keys.
+Output format: Return a JSON object with the following structure, *only JSON*:
+{
+  "semantic_model_file": "path to the new semantic model YAML file",
+}

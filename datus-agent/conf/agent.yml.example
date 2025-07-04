@@ -1,0 +1,154 @@
+agent:
+  target: anthropic
+  models:
+    openai:
+      type: openai
+      vendor: openai
+      base_url: https://api.openai.com/v1
+      api_key: sk-xxxxxx
+      model: gpt-4-turbo
+
+    anthropic:
+      type: claude
+      vendor: anthropic
+      base_url: https://api.anthropic.com
+      api_key: sk-xxxxx
+      model: claude-3-sonnet-20241022
+
+    deep_seek_v3:
+      type: deepseek
+      vendor: deepseek
+      base_url: https://api.deepseek.com
+      api_key: sk-xxxxxx
+      model: deepseek-r1-250120
+
+    deep_seek_ark:
+      type: deepseek
+      vendor: ark
+      base_url: https://ark.cn-beijing.volces.com/api/v3
+      api_key: ${DEEPSEEK_API_KEY}
+      model: deepseek-v3-250324
+
+  nodes:
+    schema_linking:
+      model: openai
+      matching_rate: fast
+      prompt_version: "1.0"
+    generate_sql:
+      model: deep_seek_ark
+      prompt_version: "1.0"
+      max_table_schemas_length: 4000
+      max_data_details_length: 2000
+      max_context_length: 8000
+      max_value_length: 500
+    reasoning:
+      model: anthropic
+      prompt_version: "1.0"
+      max_table_schemas_length: 4000
+      max_data_details_length: 2000
+      max_context_length: 8000
+      max_value_length: 500
+    reflect:
+      prompt_version: "1.0"
+    output:
+      prompt_version: "1.0"
+      check_result: true # Whether to check the results of the previous step, the default value is false
+
+  # benchmark configuration
+  benchmark:
+    bird_dev: # this is namespace of benchmark
+      benchmark_path: benchmark/bird/dev_20240627
+    spider2:
+      benchmark_path: benchmark/spider2/spider2-snow
+
+  # local databases configuration
+  namespace:
+    snowflake:
+      type: snowflake
+      # uri: snowflake://${SNWOFLAKE_USER}:${SNOWFLAKE_PASSWORD}@${SNOWFLAKE_ACCOUNT} # use uri or account&username&password
+      account: ${SNOWFLAKE_ACCOUNT}  # Use environment variables or real values
+      username: ${SNWOFLAKE_USER}
+      password: ${SNOWFLAKE_PASSWORD}
+    bird_dev: # this is namespace of databases
+      type: sqlite
+      path_pattern: benchmark/bird/dev_20240627/dev_databases/**/*.sqlite # just support glob pattern
+    local_sqlite:
+      type: sqlite
+      # Only sqlite and duckdb support multiple data source configuration
+      dbs:
+        - name: ssb # sqlite and duckdb must have a name
+          uri: sqlite:////Users/xxx/benchmark/SSB.db
+    local_sqlite2:
+      type: sqlite
+      # Only sqlite and duckdb support multiple data source configuration
+      name: ssb # sqlite and duckdb must have a name
+      uri: sqlite:////Users/xxx/benchmark/SSB.db
+    local_duckdb:
+      type: duckdb
+      dbs:
+        - name: ssb
+          uri: duckdb:////absolute/path/to/db.db # absolute path
+        - name abc
+          uri: duckdb:///relative/path/to/abc.sqlite # relative path
+    starrocks:
+      type: starrocks
+      host: ${STARROCKS_HOST}
+      port: ${STARROCKS_PORT}
+      username: ${STARROCKS_USER}
+      password: ${STARROCKS_PASSWORD}
+      database: ${STARROCKS_DATABASE}
+
+  storage:
+    base_path: data # rag storage base path,final data path is 'data/datus_db_spider2',  'data/datus_db_bird_dev', 'data/datus_db_local1' ...
+    # Local model suggestions:
+    # 1. if you want extreme performance, choose the small multilingual model with 384 dimensions: all-MiniLM-L6-v2 (~100M) or intfloat/multilingual-e5-small (~460M).
+    # 2. if you want performance and retrieval quality, choose the 1024-dimension multilingual model: intfloat/multilingual-e5-large-instruct (~1.2G)
+    # 3. if you pay more attention to retrieval quality, you can choose 1024-dimension model according to language (English/Chinese): BAAI/bge-large-en-v1.5 or BAAI/bge-large-zh-v1.5 (~1.2G)
+    # Of course, you can also choose your own model according to your business.
+    # If you don't configure the following models, all-MiniLM-L6-v2 will be selected by default.
+    # Cloud model suggestions: Now we just support openai.
+    database:
+      registry_name: openai # default is sentence-transformers
+      model_name: text-embedding-v3
+      dim_size: 1024
+      batch_size: 10 # Aliyun only supports no more than 10
+    document:
+      model_name: all-MiniLM-L6-v2 #～100MB The lightest model
+      dim_size: 384
+    metric:
+      model_name: all-MiniLM-L6-v2 #～100MB The lightest model
+      dim_size: 384
+
+  workflow:
+    plan: planA
+
+    planA:
+      - schema_linking
+      - generate_sql
+      - output
+
+    planB:
+      - schema_linking
+      - generate_sql
+      - execute_sql
+      - reflect
+      - output
+
+  reflection_nodes:
+    schema_linking:
+      - schema_linking
+      - generate_sql
+      - execute_sql
+      - reflect
+    doc_search:
+      - doc_search
+      - generate_sql
+      - execute_sql
+      - reflect
+    simple_regenerate:
+      - execute_sql
+      - reflect
+    reasoning:
+      - reasoning
+      - execute_sql
+      - reflect

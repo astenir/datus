@@ -1,0 +1,268 @@
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List
+
+from datus.models.base import LLMBaseModel
+from datus.prompts.schema_lineage import gen_prompt, gen_summary_prompt
+from datus.schemas.node_models import TableSchema
+from datus.schemas.schema_linking_node_models import SchemaLinkingInput, SchemaLinkingResult
+from datus.storage.schema_metadata import SchemaStorage
+from datus.tools.base import BaseTool
+from datus.utils.exceptions import DatusException, ErrorCode
+from datus.utils.json_utils import llm_result2json
+from datus.utils.loggings import get_logger
+from datus.utils.sql_utils import metadata_identifier
+from datus.utils.token_utils import cal_task_size
+
+logger = get_logger("MatchSchemaLLMTool")
+
+
+class MatchSchemaTool(BaseTool):
+    def __init__(self, model: LLMBaseModel, storage: SchemaStorage, **kwargs):
+        super().__init__(**kwargs)
+        self.model = model
+        self.storage = storage
+
+    def validate_input(self, input_data: Any) -> bool:
+        if not isinstance(input_data, SchemaLinkingInput):
+            return False
+        return True
+
+    def execute(self, input_data: SchemaLinkingInput) -> SchemaLinkingResult:
+        table_metadata = self.storage.search_all(database_name=input_data.database_name)
+        if len(table_metadata) == 0:
+            return SchemaLinkingResult(
+                success=False,
+                error=f"No table metadata found in {input_data.database_name}",
+                table_schemas=[],
+                schema_count=0,
+                table_values=[],
+                value_count=0,
+            )
+        try:
+            all_tables = gen_all_table_dict(input_data.database_name, table_metadata)
+            match_result = self.match_schema(input_data, table_metadata, all_tables)
+            return self._process_match_result(input_data, match_result, input_data.database_name, all_tables)
+        except Exception as e:
+            raise DatusException(
+                ErrorCode.TOOL_EXECUTION_FAILED,
+                message=f"Schema linking by LLM execution error cause by {str(e)}",
+            ) from e
+
+    def _process_match_result(
+        self,
+        input_data: SchemaLinkingInput,
+        match_result: Dict[str, Any],
+        database_name: str,
+        all_tables: Dict[str, Dict[str, Any]],
+    ) -> SchemaLinkingResult:
+        if not match_result:
+            return SchemaLinkingResult(
+                success=False,
+                error="No match result found",
+                table_schemas=[],
+                schema_count=0,
+                table_values=[],
+                value_count=0,
+            )
+
+        schema_result = []
+        for table_schema in match_result:
+            table_name = table_schema["table"]
+            if isinstance(table_name, str):
+                table_name = [table_name]
+            for sub_table_name in table_name:
+                sub_table_name = sub_table_name.split(".")
+                full_table_name = f"{database_name}.{sub_table_name[-2]}.{sub_table_name[-1]}"
+                if full_table_name in all_tables:
+                    matched_table = all_tables[full_table_name]
+                    if "identifier" in matched_table:
+                        identifier = matched_table["identifier"]
+                    else:
+                        identifier = metadata_identifier(
+                            dialect=input_data.database_type,
+                            catalog_name=matched_table["catalog_name"],
+                            database_name=database_name,
+                            schema_name=matched_table["schema_name"],
+                            table_name=matched_table["table_name"],
+                        )
+                    schema_result.append(
+                        TableSchema(
+                            identifier=identifier,
+                            catalog_name=matched_table["catalog_name"],
+                            database_name=database_name,
+                            schema_name=matched_table["schema_name"],
+                            table_name=matched_table["table_name"],
+                            definition=matched_table["definition"],
+                            table_type=matched_table["table_type"],
+                        )
+                    )
+                else:
+                    logger.warning(f"Table {full_table_name} not found  metadata in {database_name}")
+        return SchemaLinkingResult(
+            success=True,
+            error=None,
+            table_schemas=schema_result,
+            schema_count=len(schema_result),
+            table_values=[],
+            value_count=0,
+        )
+
+    def map_reduce_match_schema(
+        self,
+        input_data: SchemaLinkingInput,
+        table_metadata: List[Dict[str, Any]],
+        all_table_dict: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        all_schemas = set([item["schema_name"] for item in table_metadata])
+        logger.debug(
+            f"Current task should merge by schema: table_size={len(table_metadata)}, schemas={len(all_schemas)} "
+            f"question={input_data.input_text}"
+        )
+        should_match_tables = self.storage.search_top_tables_by_every_schema(
+            input_data.input_text,
+            database_name=input_data.database_name,
+            catalog_name=input_data.catalog_name,
+            all_schemas=all_schemas,
+            top_n=20,
+        )
+        return self._match_schema(input_data, all_table_dict, should_match_tables)
+
+    def match_schema(
+        self,
+        input_data: SchemaLinkingInput,
+        table_metadata: List[Dict[str, Any]],
+        all_table_dict: Dict[str, Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Match the schema of the input database with the table metadata by LLM
+
+        Args:
+            input_data: Database name, user query and top_n
+            table_metadata: The table metadata
+
+        Returns:
+            json string: matched tables and their scores. Example:
+           [
+                {"table": "table1", "score": 0.95, "reasons": ["reason1", "reason2"]},
+                {"table": "table2", "score": 0.9, "reasons": ["reason1", "reason2"]},
+            ] //...
+        """
+
+        if len(table_metadata) > 200:
+            return self.map_reduce_match_schema(input_data, table_metadata, all_table_dict)
+        else:
+            match_result = self._match_schema(input_data, all_table_dict, table_metadata)
+        return match_result
+
+    def _match_schema(
+        self,
+        input_data: SchemaLinkingInput,
+        all_table_dict: Dict[str, Dict[str, Any]],
+        table_metadata: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        messages = gen_prompt(
+            input_data.database_type,
+            input_data.database_name,
+            input_data.input_text,
+            table_metadata,
+            input_data.prompt_version,
+            # input_data.top_n,
+        )
+        task_size = self.count_task_size(self.model, input_data.input_text, messages)
+        if task_size == 1:
+            return llm_result2json(self.model.generate(messages, temperature=0.3))
+        else:
+            return self.split_and_match_schema(input_data, all_table_dict, table_metadata, task_size)
+
+    def count_task_size(self, model: LLMBaseModel, user_question: str, prompt: str) -> int:
+        tokens_count = model.token_count(prompt)
+        max_tokens = model.max_tokens()
+        if tokens_count > max_tokens:
+            task_size = cal_task_size(tokens_count, max_tokens)
+            logger.info(
+                f"""query ```{user_question}``` ; tokens count: {tokens_count}, will split into {task_size} tasks"""
+            )
+            return task_size
+        else:
+            return 1
+
+    def split_and_match_schema(
+        self,
+        input_data: SchemaLinkingInput,
+        all_table_dict: Dict[str, Dict[str, Any]],
+        table_metadata: List[Dict[str, Any]],
+        task_size: int,
+    ) -> Dict[str, Any]:
+        futures = []
+
+        with ThreadPoolExecutor(max_workers=min(task_size, 10)) as executor:
+            step = len(table_metadata) // task_size
+            for i in range(task_size):
+                start = i * step
+                if start >= len(table_metadata):
+                    break
+                end = start + step
+                if end > len(table_metadata):
+                    end = len(table_metadata)
+                futures.append(
+                    executor.submit(self._match_schema, input_data, all_table_dict, table_metadata[start:end])
+                )
+        # reduce the result
+        summary_metadata = []
+        for future in futures:
+            matched_tables = future.result()
+
+            if isinstance(matched_tables, dict):
+                summary_metadata = parse_matched_tables(input_data.database_name, matched_tables, all_table_dict)
+            elif isinstance(matched_tables, list):
+                for mt in matched_tables:
+                    summary_metadata.extend(parse_matched_tables(input_data.database_name, mt, all_table_dict))
+
+            else:
+                logger.warning(
+                    f"Invalid matched_tables type, excepted: list or dict, current type: {type(matched_tables)},"
+                    f"matched_tables: {matched_tables}"
+                )
+        logger.info(f"user query: {input_data.input_text}, child tasks result: {len(summary_metadata)}")
+
+        summary_prompt = gen_summary_prompt(
+            input_data.database_type,
+            input_data.database_name,
+            input_data.input_text,
+            summary_metadata,
+            # input_data.top_n,
+        )
+        # todo truncate
+        summary_response = self.model.generate(summary_prompt)
+        return llm_result2json(summary_response)
+
+
+def parse_matched_tables(
+    database_name: str, tables: Dict[str, Any], all_table_dict: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    summary_metadata = []
+    table = tables["table"]
+    if isinstance(table, str):
+        table = [table]
+    for sub_table_name in table:
+        tb_arry = sub_table_name.split(".")
+        sm = {
+            "database_name": database_name,
+            "schema_name": tb_arry[-2],
+            "table_name": tb_arry[-1],
+            "score": tables["score"],
+            "reasons": tables["reasons"],
+        }
+        full_table_name = f"{sm['database_name']}.{sm['schema_name']}.{sm['table_name']}"
+        if full_table_name in all_table_dict:
+            sm["schema_text"] = all_table_dict[full_table_name]["schema_text"]
+            summary_metadata.append(sm)
+        else:
+            logger.warning(f"Table {full_table_name} not found  metadata in {database_name}")
+    return summary_metadata
+
+
+def gen_all_table_dict(database_name: str, all_tables: List[Dict[str, Any]]) -> Dict[str, Any]:
+    table_metadata = {}
+    for table in all_tables:
+        table_metadata[f"{database_name}.{table['schema_name']}.{table['table_name']}"] = table
+    return table_metadata
