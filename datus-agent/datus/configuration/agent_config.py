@@ -142,7 +142,7 @@ class AgentConfig:
                     if "dbs" in db_config:
                         for item in db_config.get("dbs", []):
                             self.namespaces[namespace][item["name"]] = DbConfig(
-                                type=db_type, uri=item["uri"], database=item["name"], schema=db_path.get("schema", "")
+                                type=db_type, uri=item["uri"], database=item["name"], schema=item.get("schema", "")
                             )
                     elif "name" not in db_config or "uri" not in db_config:
                         raise DatusException(
