@@ -1,6 +1,6 @@
 import functools
 import inspect
-from abc import ABC, abstractmethod
+from abc import ABC
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, Optional
 
@@ -78,15 +78,6 @@ class BaseTool(ABC):
             raise ValueError(f"Action '{action_name}' not found in tool {self.tool_name}")
 
         return self._actions[action_name]["method"](*args, **kwargs)
-
-    @abstractmethod
-    def execute(self, *args, **kwargs) -> Any:
-        """Execute the tool's main functionality.
-
-        This method should be implemented by subclasses to define the tool's
-        behavior.
-        """
-        pass
 
     # @ToolAction(description="Execute the main functionality of the tool")
     # def execute(self, input_params: BaseInput) -> BaseResult:
