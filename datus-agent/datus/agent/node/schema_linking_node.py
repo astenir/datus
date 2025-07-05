@@ -59,7 +59,7 @@ class SchemaLinkingNode(Node):
         path = self.agent_config.rag_storage_path()
         logger.debug(f"Checking if rag storage path exists: {path}")
         if not os.path.exists(path):
-            logger.info("RAG storage path does not exist.")
+            logger.info(f"RAG storage path `{path}` does not exist.")
             return SchemaLinkingResult(
                 success=False,
                 error="Schema linking failed: RAG storage path does not exist.",
@@ -69,10 +69,10 @@ class SchemaLinkingNode(Node):
                 table_values=[],
             )
         else:
+            tool = SchemaLineageTool(db_path=path)
             try:
                 # Import SchemaLineageTool only when needed
 
-                tool = SchemaLineageTool(db_path=self.agent_config.rag_storage_path())
                 if tool:
                     result = tool.execute(self.input, self.model)
                     logger.info(f"Schema linking result: found {len(result.table_schemas)} tables")
