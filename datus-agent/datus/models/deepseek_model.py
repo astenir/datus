@@ -213,7 +213,7 @@ class DeepSeekModel(LLMBaseModel):
         prompt: str,
         mcp_servers: Dict[str, MCPServerStdio],
         instruction: str,
-        output_type: dict,
+        output_type: type[Any],
         max_turns: int = 10,
         **kwargs,
     ) -> Dict:
@@ -301,9 +301,11 @@ class DeepSeekModel(LLMBaseModel):
                     response_content=result.final_output,
                     reasoning_content=reasoning_content,
                 )
-
-                return final_result
-
+                return {
+                    "content": result.final_output,
+                    "sql_contexts": extract_sql_contexts(result),
+                }
+            return final_result
         except Exception as e:
             logger.error(f"Error in run_agent: {str(e)}")
             reasoning_steps.append("=== Error Occurred ===")
