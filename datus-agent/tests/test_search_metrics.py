@@ -75,7 +75,7 @@ def test_empty_vector_and_scalar_query(search_metrics_tool, build_empty_pure_sca
 def test_pure_scalar_query(search_metrics_tool):
     result = (
         search_metrics_tool.store.semantic_model_storage.table.search()
-        .where("catalog_database_schema like '%.%.%'")
+        .where("catalog_database_schema like '%_%_%'")
         .to_list()
     )
     print(f"result: {result}")
@@ -92,7 +92,7 @@ def test_qualify_name_with_none_or_blank():
     second = ""
     three = "23456"
     full_name = qualify_name([first, second, three])
-    assert "%.%.23456" == full_name
+    assert "%_%_23456" == full_name
 
 
 def test_invalid_input(search_metrics_tool):
