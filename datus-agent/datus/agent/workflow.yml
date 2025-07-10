@@ -21,3 +21,9 @@ workflow:
     - execute_sql
     - reflect
     - output
+
+  metric2SQL:
+    - search_metrics
+    - generate_sql
+    - execute_sql
+    - output

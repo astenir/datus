@@ -194,6 +194,9 @@ def create_parser() -> argparse.ArgumentParser:
         help="Schema linking type for the task, (mv for materialized view, full for all types)",
     )
     run_parser.add_argument("--task_ext_knowledge", type=str, default="", help="External knowledge for the task")
+    run_parser.add_argument("--domain", type=str, default="", help="Domain of the success story")
+    run_parser.add_argument("--layer1", type=str, default="", help="Layer1 of the metrics")
+    run_parser.add_argument("--layer2", type=str, default="", help="Layer2 of the metrics")
 
     # Node configuration group (available for run and benchmark)
     for p in [run_parser, benchmark_parser]:
@@ -269,6 +272,9 @@ def main():
                     external_knowledge=args.task_ext_knowledge,
                     output_dir=agent_config.output_dir,
                     schema_linking_type=args.schema_linking_type,
+                    domain=args.domain,
+                    layer1=args.layer1,
+                    layer2=args.layer2,
                 ),
                 True,
             )

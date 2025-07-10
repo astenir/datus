@@ -24,6 +24,7 @@ from datus.schemas.node_models import (
 )
 from datus.schemas.reason_sql_node_models import ReasoningInput, ReasoningResult
 from datus.schemas.schema_linking_node_models import SchemaLinkingInput, SchemaLinkingResult
+from datus.schemas.search_metrics_node_models import SearchMetricsInput, SearchMetricsResult
 from datus.tools.db_tools.db_manager import DBManager, db_manager_instance
 from datus.tools.llms_tools.llms import LLMTool
 from datus.utils.loggings import get_logger
@@ -105,6 +106,14 @@ def generate_semantic_model_input() -> List[Dict[str, Any]]:
         return yaml.safe_load(f)
 
 
+@pytest.fixture
+def search_metrics_input() -> List[Dict[str, Any]]:
+    """Load test data from YAML file"""
+    yaml_path = Path(__file__).parent / "data" / "SearchMetricsInput.yaml"
+    with open(yaml_path, "r") as f:
+        return yaml.safe_load(f)
+
+
 # @pytest.fixture
 # def mock_generate_sql_input() -> Dict[str, Any]:
 #    return {
@@ -118,6 +127,13 @@ def generate_semantic_model_input() -> List[Dict[str, Any]]:
 @pytest.fixture
 def agent_config() -> AgentConfig:
     agent_config = load_acceptance_config(namespace="local_duckdb")  # FIXME Modify it according to your configuration
+    return agent_config
+
+
+@pytest.fixture
+def search_metrics_agent_config() -> AgentConfig:
+    # conf = Path(__file__).parent.parent / "conf" / "agent.yml"
+    agent_config = load_agent_config(namespace="local_duckdb")  # FIXME Modify it according to your configuration
     return agent_config
 
 
@@ -563,4 +579,28 @@ class TestNode:
                 assert len(result.sql_queries) > 0, "SQL queries is empty"
         except Exception as e:
             logger.error(f"Generate metrics node test failed: {str(e)}")
+            raise
+
+    def test_search_metrics_node(self, search_metrics_input, search_metrics_agent_config: AgentConfig):
+        """Test schema linking node"""
+        # Take first test case from the list
+        try:
+            for case in search_metrics_input:
+                input_data = SearchMetricsInput(**case["input"])
+                node = Node.new_instance(
+                    node_id="search_metrics",
+                    description="Search Metrics",
+                    node_type=NodeType.TYPE_SEARCH_METRICS,
+                    input_data=input_data,
+                    agent_config=search_metrics_agent_config,
+                )
+                assert node.type == NodeType.TYPE_SEARCH_METRICS
+                assert isinstance(node.input, SearchMetricsInput)
+                result = node.run()
+                logger.debug(f"Search metrics node result: {result}")
+                assert node.status == "completed", f"Node execution failed with status: {node.status}"
+                assert isinstance(result, SearchMetricsResult), "Result type mismatch"
+                assert result.success is True, f"Node execution failed: {result}"
+        except Exception as e:
+            logger.error(f"Search metrics node test failed: {str(e)}")
             raise
