@@ -21,6 +21,7 @@ class LLMBaseModel(ABC):  # Changed from BaseModel to LLMBaseModel
         LLMProvider.QWEN: "QwenModel",
         LLMProvider.OPENAI: "OpenAIModel",
         LLMProvider.CLAUDE: "ClaudeModel",
+        LLMProvider.GEMINI: "GeminiModel",
     }
 
     def __init__(self, model_config: ModelConfig):
