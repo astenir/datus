@@ -1,8 +1,9 @@
 import json
 import os
+import uuid
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import yaml
 from agents import Agent, OpenAIChatCompletionsModel, Runner, set_tracing_disabled
@@ -14,6 +15,7 @@ from pydantic import AnyUrl
 from datus.configuration.agent_config import ModelConfig
 from datus.models.base import LLMBaseModel
 from datus.models.mcp_result_extractors import extract_sql_contexts
+from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
@@ -266,11 +268,12 @@ class DeepSeekModel(LLMBaseModel):
             async with multiple_mcp_servers(mcp_servers) as connected_servers:
                 logger.debug("MCP servers started successfully")
 
+                # DeepSeek doesn't support structured output, force to str
                 agent = Agent(
                     name=kwargs.pop("agent_name", "MCP_Agent"),
                     instructions=instruction,
                     mcp_servers=list(connected_servers.values()),
-                    output_type=output_type,
+                    output_type=str,
                     model=async_model,
                 )
                 logger.debug(f"Agent created with name: {agent.name}, {output_type}")
@@ -304,9 +307,6 @@ class DeepSeekModel(LLMBaseModel):
                 return final_result
         except Exception as e:
             logger.error(f"Error in run_agent: {str(e)}")
-            reasoning_steps.append("=== Error Occurred ===")
-            reasoning_steps.append(f"Error: {str(e)}")
-
             # Save trace even on error
             full_reasoning_content = "\n".join(reasoning_steps)
             self._save_llm_trace(
@@ -315,6 +315,167 @@ class DeepSeekModel(LLMBaseModel):
                 reasoning_content=full_reasoning_content,
             )
             raise
+
+    async def generate_with_mcp_stream(
+        self,
+        prompt: str,
+        mcp_servers: Dict[str, MCPServerStdio],
+        instruction: str,
+        output_type: dict,
+        max_turns: int = 10,
+        action_history_manager: Optional[ActionHistoryManager] = None,
+        **kwargs,
+    ) -> AsyncGenerator[ActionHistory, None]:
+        """Generate a response using multiple MCP servers with streaming support."""
+        if action_history_manager is None:
+            action_history_manager = ActionHistoryManager()
+
+        # Setup JSON encoder for special types
+        class CustomJSONEncoder(json.JSONEncoder):
+            def default(self, obj):
+                if isinstance(obj, AnyUrl):
+                    return str(obj)
+                if isinstance(obj, (date, datetime)):
+                    return obj.isoformat()
+                return super().default(obj)
+
+        json._default_encoder = CustomJSONEncoder()
+
+        try:
+            from datus.models.mcp_utils import multiple_mcp_servers
+
+            async with multiple_mcp_servers(mcp_servers) as connected_servers:
+                agent = self._setup_async_agent(instruction, connected_servers, output_type, **kwargs)
+                result = Runner.run_streamed(agent, input=prompt, max_turns=max_turns)
+                function_call_count = 0
+
+                while not result.is_complete:
+                    async for event in result.stream_events():
+                        if not hasattr(event, "type") or event.type != "run_item_stream_event":
+                            continue
+
+                        if not (hasattr(event, "item") and hasattr(event.item, "type")):
+                            continue
+
+                        action = None
+                        item_type = event.item.type
+
+                        if item_type == "tool_call_item":
+                            function_call_count += 1
+                            action = self._process_tool_call_start(event, action_history_manager)
+                        elif item_type == "tool_call_output_item":
+                            action = self._process_tool_call_complete(event, action_history_manager)
+                        elif item_type == "message_output_item":
+                            action = self._process_message_output(event, action_history_manager)
+
+                        if action:
+                            yield action
+
+        except Exception as e:
+            logger.error(f"Error in streaming MCP execution: {str(e)}")
+            raise
+
+    def _setup_async_agent(self, instruction: str, mcp_servers: Dict, output_type: dict, **kwargs):
+        """Setup async client and agent."""
+        async_client = wrap_openai(AsyncOpenAI(api_key=self.api_key, base_url=self.api_base))
+        model_params = {"model": self.model_name}
+        async_model = OpenAIChatCompletionsModel(**model_params, openai_client=async_client)
+
+        # DeepSeek doesn't support structured output, force to str
+        agent = Agent(
+            name=kwargs.pop("agent_name", "MCP_Agent"),
+            instructions=instruction,
+            mcp_servers=list(mcp_servers.values()),
+            output_type=str,
+            model=async_model,
+        )
+        return agent
+
+    def _process_tool_call_start(self, event, action_history_manager: ActionHistoryManager) -> ActionHistory:
+        """Process tool_call_item events."""
+
+        raw_item = event.item.raw_item
+        call_id = getattr(raw_item, "call_id", None)
+        function_name = getattr(raw_item, "name", None)
+        arguments = getattr(raw_item, "arguments", None)
+
+        # Check if action with this call_id already exists
+        if call_id and action_history_manager.find_action_by_id(call_id):
+            return None
+
+        action = ActionHistory(
+            action_id=call_id,
+            role=ActionRole.TOOL,
+            messages="MCP call",
+            action_type=function_name or "unknown",
+            input={"function_name": function_name, "arguments": arguments, "call_id": call_id},
+            status=ActionStatus.PROCESSING,
+        )
+        action_history_manager.add_action(action)
+        return action
+
+    def _process_tool_call_complete(self, event, action_history_manager: ActionHistoryManager) -> ActionHistory:
+        """Process tool_call_output_item events."""
+        # try to find the action by call_id, but it seems deepseek doesn't have call_id in the raw_item sometimes
+        call_id = getattr(event.item.raw_item, "call_id", None)
+        matching_action = action_history_manager.find_action_by_id(call_id) if call_id else None
+
+        if not matching_action:
+            # Try to match by the most recent PROCESSING action as fallback
+            processing_actions = [a for a in action_history_manager.actions if a.status == ActionStatus.PROCESSING]
+            if processing_actions:
+                matching_action = processing_actions[-1]  # Get the most recent
+            else:
+                return None
+
+        output_data = {
+            "call_id": call_id,
+            "success": True,
+            "raw_output": event.item.output,
+        }
+
+        action_history_manager.update_action_by_id(
+            matching_action.action_id, output=output_data, end_time=datetime.now(), status=ActionStatus.SUCCESS
+        )
+
+        # Don't return the action to avoid duplicate yield
+        return None
+
+    def _process_message_output(self, event, action_history_manager: ActionHistoryManager) -> ActionHistory:
+        """Process message_output_item events."""
+        if not (hasattr(event.item, "raw_item") and hasattr(event.item.raw_item, "content")):
+            return None
+
+        content = event.item.raw_item.content
+        if not content:
+            return None
+        logger.debug(f"Processing message output: {content}")
+        # Extract text content
+        if isinstance(content, list) and content:
+            text_content = content[0].text if hasattr(content[0], "text") else str(content[0])
+        else:
+            text_content = str(content)
+
+        # Create action with raw content
+        if len(text_content) > 0:
+            action = ActionHistory(
+                action_id=str(uuid.uuid4()),
+                role=ActionRole.ASSISTANT,
+                messages=(f"Thinking: {text_content}"),
+                action_type="message",
+                input={},
+                output={
+                    "success": True,
+                    "raw_output": text_content,
+                },
+                status=ActionStatus.SUCCESS,
+            )
+            action.end_time = datetime.now()
+            action_history_manager.add_action(action)
+        else:
+            action = None
+            logger.debug(f"No text content found in message output: {content}")
+        return action
 
     def token_count(self, prompt: str) -> int:
         """Estimate the number of tokens in a text using the deepseek tokenizer.
