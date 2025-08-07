@@ -7,6 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import AsyncGenerator, Optional, Set
 
+from black.trans import defaultdict
 from langsmith import traceable
 
 from datus.agent.evaluate import evaluate_result, setup_node_input
@@ -515,7 +516,7 @@ class Agent:
         try:
             from datus.tools.mcp_server import MCPServer
 
-            db_configs = self.db_manager.current_dbconfigs(self.global_config.current_namespace)
+            db_configs = self.db_manager.current_db_configs(self.global_config.current_namespace)
             db_type = self.global_config.db_type
 
             logger.info(f"Checking MCP server for database type: {db_type}")
@@ -794,32 +795,38 @@ class Agent:
 
     def benchmark_bird_dev(self, benchmark_path: str, target_task_ids: Optional[Set[str]] = None):
         tasks = load_bird_dev_tasks(benchmark_path)
+        current_namespace = self.global_config.current_namespace
 
         # Convert Bird tasks to format expected by generate_gold_standard_results
-        converted_tasks = []
-        for task in tasks:
-            task_id = str(task["question_id"])
-            if target_task_ids and task_id not in target_task_ids:
-                continue
-
-            converted_tasks.append(
-                {"question_id": task["question_id"], "sql": task["SQL"], "question": task["question"]}
-            )
-
-        logger.info(f"Loaded {len(converted_tasks)} tasks from Bird benchmark")
-        logger.info("Phase 1: Generating gold standard results...")
-        current_db_config = self.global_config.current_db_config()
-        generate_gold_standard_results(converted_tasks, benchmark_path, current_db_config, target_task_ids)
-
-        logger.info("Phase 2: Running agent benchmark tests...")
-
+        task_size = 0
+        group_task_ids = defaultdict(list)
         # Prepare filtered tasks for parallel execution
         filtered_bird_tasks = []
         for task in tasks:
             task_id = str(task["question_id"])
             if target_task_ids and task_id not in target_task_ids:
                 continue
+            db_id = task["db_id"]
             filtered_bird_tasks.append(task)
+            group_task_ids[db_id].append(
+                {"question_id": task["question_id"], "sql": task["SQL"], "question": task["question"]}
+            )
+            task_size += 1
+        if task_size == 0:
+            logger.warn("There are no benchmarks that need to be run.")
+            return {}
+        logger.info(f"Loaded {task_size} tasks from Bird benchmark")
+        logger.info("Phase 1: Generating gold standard results...")
+
+        for db_id, converted_tasks in group_task_ids.items():
+            generate_gold_standard_results(
+                converted_tasks,
+                benchmark_path,
+                self.db_manager.get_conn(current_namespace, db_name=db_id),
+                target_task_ids,
+            )
+
+        logger.info("Phase 2: Running agent benchmark tests...")
 
         def run_single_bird_task(task):
             """Execute a single Bird benchmark task"""
@@ -887,8 +894,11 @@ class Agent:
 
         logger.info(f"Loaded {len(tasks)} tasks from semantic_layer benchmark")
         logger.info("Phase 1: Generating gold standard results...")
-        current_db_config = self.global_config.current_db_config()
-        generate_gold_standard_results(tasks, benchmark_path, current_db_config, target_task_ids)
+
+        # current_db_config = self.global_config.current_db_config()
+        generate_gold_standard_results(
+            tasks, benchmark_path, self.db_manager.get_conn(self.global_config.current_namespace), target_task_ids
+        )
         metric_meta = self.global_config.current_metric_meta(self.args.metric_meta)
 
         logger.info("Phase 2: Running agent benchmark tests...")
@@ -899,7 +909,7 @@ class Agent:
 
             question = task["question"]
             logger.info(f"start benchmark with {task_id}: {question}")
-
+            current_db_config = self.global_config.current_db_config()
             self.run(
                 SqlTask(
                     id=task_id,
