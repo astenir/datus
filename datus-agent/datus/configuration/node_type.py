@@ -2,6 +2,7 @@ from typing import Optional, get_type_hints
 
 from pydantic import BaseModel, create_model
 
+from datus.schemas.chat_agentic_node_models import ChatNodeInput
 from datus.schemas.compare_node_models import CompareInput
 from datus.schemas.doc_search_node_models import DocSearchInput
 from datus.schemas.fix_node_models import FixInput
@@ -41,6 +42,9 @@ class NodeType:
     TYPE_SEARCH_METRICS = "search_metrics"  # For search metrics
     TYPE_COMPARE = "compare"  # For comparing SQL with expectations
 
+    # Agentic node types
+    TYPE_CHAT = "chat"  # For conversational AI interactions
+
     ACTION_TYPES = [
         TYPE_SCHEMA_LINKING,
         TYPE_GENERATE_SQL,
@@ -54,6 +58,9 @@ class NodeType:
         TYPE_SEARCH_METRICS,
         TYPE_COMPARE,
     ]
+
+    # Agentic node types list
+    AGENTIC_TYPES = [TYPE_CHAT]
 
     NODE_TYPE_DESCRIPTIONS = {
         TYPE_BEGIN: "Beginning of the workflow",
@@ -73,6 +80,7 @@ class NodeType:
         TYPE_SELECTION: "Select best result from multiple candidates",
         TYPE_SUBWORKFLOW: "Execute a nested workflow",
         TYPE_COMPARE: "Compare SQL with expectations",
+        TYPE_CHAT: "Conversational AI interactions with tool calling",
     }
 
     @classmethod
@@ -112,6 +120,8 @@ class NodeType:
             input_data_cls = SubworkflowInput
         elif node_type == NodeType.TYPE_COMPARE:
             input_data_cls = CompareInput
+        elif node_type == NodeType.TYPE_CHAT:
+            input_data_cls = ChatNodeInput
         else:
             raise NotImplementedError(f"node_type {node_type} not implemented")
 
