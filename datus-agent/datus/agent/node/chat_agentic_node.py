@@ -13,7 +13,9 @@ from datus.agent.node.agentic_node import AgenticNode
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.chat_agentic_node_models import ChatNodeInput, ChatNodeResult
+from datus.tools.db_tools.db_manager import db_manager_instance
 from datus.tools.mcp_server import MCPServer
+from datus.tools.tools import DBFuncTool
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
@@ -48,23 +50,31 @@ class ChatAgenticNode(AgenticNode):
         self.max_turns = max_turns
 
         # Initialize MCP servers based on namespace
-        mcp_servers = self._setup_mcp_servers(namespace, agent_config)
+        mcp_servers = self._setup_mcp_servers()
 
         super().__init__(
-            tools=[],  # Empty tools list initially
+            tools=[],
             mcp_servers=mcp_servers,
             agent_config=agent_config,
         )
 
-    def _setup_mcp_servers(
-        self, namespace: Optional[str], agent_config: Optional[AgentConfig]
-    ) -> Dict[str, MCPServerStdio]:
+        self.setup_tools()
+
+    def setup_tools(self):
+        # Only a single database connection is now supported
+        db_manager = db_manager_instance(self.agent_config.namespaces)
+        if not self.agent_config._current_database:
+            name, conn = db_manager.first_conn_with_name(self.agent_config.current_namespace)
+            self.agent_config._current_database = name
+        else:
+            conn = db_manager.get_conn(self.agent_config.current_namespace, self.agent_config._current_database)
+        self.tool_instance = DBFuncTool(conn)
+        self.tools = self.tool_instance.available_tools()
+
+    def _setup_mcp_servers(self) -> Dict[str, MCPServerStdio]:
         """
         Set up MCP servers based on namespace and configuration.
 
-        Args:
-            namespace: Database namespace for server selection
-            agent_config: Agent configuration containing namespace definitions
 
         Returns:
             Dictionary of MCP servers
@@ -82,31 +92,6 @@ class ChatAgenticNode(AgenticNode):
                 logger.debug(f"Added filesystem MCP server with path: {sqls_path}")
             else:
                 logger.warning(f"Failed to create filesystem MCP server for path: {sqls_path}")
-
-            # Add database MCP server based on namespace
-            if namespace and agent_config and namespace in agent_config.namespaces:
-                namespace_config = agent_config.namespaces[namespace]
-
-                # Get the first database config from the namespace
-                if isinstance(namespace_config, dict):
-                    for db_name, db_config in namespace_config.items():
-                        try:
-                            db_server = MCPServer.get_db_mcp_server(db_config)
-                            if db_server:
-                                mcp_servers[f"database_{db_name}"] = db_server
-                                logger.debug(f"Added database MCP server for {db_name}")
-                                break  # Use the first available database
-                        except Exception as e:
-                            logger.warning(f"Failed to initialize database MCP server for {db_name}: {e}")
-                else:
-                    # Single database configuration
-                    try:
-                        db_server = MCPServer.get_db_mcp_server(namespace_config)
-                        if db_server:
-                            mcp_servers[f"database_{namespace}"] = db_server
-                            logger.debug(f"Added database MCP server for namespace {namespace}")
-                    except Exception as e:
-                        logger.warning(f"Failed to initialize database MCP server for namespace {namespace}: {e}")
 
         except Exception as e:
             logger.error(f"Error setting up MCP servers: {e}")
@@ -183,6 +168,7 @@ class ChatAgenticNode(AgenticNode):
             # Stream response using the model's generate_with_tools_stream
             async for stream_action in self.model.generate_with_tools_stream(
                 prompt=enhanced_message,
+                tools=self.tools,
                 mcp_servers=self.mcp_servers,
                 instruction=system_instruction,
                 max_turns=self.max_turns,

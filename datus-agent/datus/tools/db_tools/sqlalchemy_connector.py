@@ -19,9 +19,10 @@ from sqlalchemy.exc import (
 
 from datus.schemas.node_models import ExecuteSQLInput, ExecuteSQLResult
 from datus.tools.db_tools.base import BaseSqlConnector
-from datus.utils.constants import DBType
+from datus.utils.constants import DBType, SQLType
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
+from datus.utils.sql_utils import parse_sql_type
 
 logger = get_logger(__name__)
 
@@ -66,48 +67,55 @@ class SQLAlchemyConnector(BaseSqlConnector):
     def _trans_sqlalchemy_exception(
         self, e: Exception, sql: str = None, operation: str = "SQL execution"
     ) -> DatusException:
+        if isinstance(e, DatusException):
+            return e
         """Map SQLAlchemy exceptions to specific Datus ErrorCode values."""
         error_message = str(e)
-        message_args = {"error_message": error_message}
-        if sql:
-            message_args["sql"] = sql
+        message_args = {"error_message": error_message, "sql": sql}
 
+        error_msg_lower = error_message.lower()
+        if any(keyword in error_msg_lower for keyword in ["syntax", "parse error", "sql error"]):
+            return DatusException(
+                ErrorCode.DB_EXECUTION_SYNTAX_ERROR,
+                message_args=message_args,
+            )
         # Connection-related errors
         if isinstance(e, (OperationalError, InterfaceError)):
-            if any(keyword in error_message.lower() for keyword in ["timeout", "timed out", "connection timeout"]):
+            if any(keyword in error_msg_lower for keyword in ["timeout", "timed out", "connection timeout"]):
                 return DatusException(
                     ErrorCode.DB_CONNECTION_TIMEOUT,
                     message_args=message_args,
                 )
-            elif any(
-                keyword in error_message.lower() for keyword in ["authentication", "access denied", "login failed"]
-            ):
+            elif any(keyword in error_msg_lower for keyword in ["authentication", "access denied", "login failed"]):
                 return DatusException(
                     ErrorCode.DB_AUTHENTICATION_FAILED,
                     message_args=message_args,
                 )
-            elif any(keyword in error_message.lower() for keyword in ["permission denied", "insufficient privilege"]):
+            elif any(keyword in error_msg_lower for keyword in ["permission denied", "insufficient privilege"]):
                 message_args["operation"] = operation
                 return DatusException(
                     ErrorCode.DB_PERMISSION_DENIED,
                     message_args=message_args,
                 )
-            elif any(
-                keyword in error_message.lower() for keyword in ["connection refused", "could not connect", "network"]
-            ):
+            elif any(keyword in error_msg_lower for keyword in ["syntax", "parse error", "sql error"]):
                 return DatusException(
-                    ErrorCode.DB_CONNECTION_FAILED,
+                    ErrorCode.DB_EXECUTION_SYNTAX_ERROR,
                     message_args=message_args,
                 )
+            elif any(
+                keyword in error_msg_lower
+                for keyword in ["connection refused", "connection failed", "connect", "unable to open database"]
+            ):
+                return DatusException(ErrorCode.DB_CONNECTION_FAILED, message_args=message_args)
             else:
                 return DatusException(
-                    ErrorCode.DB_CONNECTION_FAILED,
+                    ErrorCode.DB_EXECUTION_ERROR,
                     message_args=message_args,
                 )
 
         # SQL syntax and programming errors
         elif isinstance(e, ProgrammingError):
-            if any(keyword in error_message.lower() for keyword in ["syntax", "parse error", "sql error"]):
+            if any(keyword in error_msg_lower for keyword in ["syntax", "parse error", "sql error"]):
                 return DatusException(
                     ErrorCode.DB_EXECUTION_SYNTAX_ERROR,
                     message_args=message_args,
@@ -198,17 +206,23 @@ class SQLAlchemyConnector(BaseSqlConnector):
         if self.engine and self._owns_engine:
             return
         try:
-            self.engine = create_engine(
-                self.connection_string,
-                pool_size=3,
-                max_overflow=5,
-                pool_timeout=self.timeout_seconds * 1000,
-                pool_recycle=3600,
-            )
+            if self.dialect not in (DBType.DUCKDB, DBType.SQLITE):
+                self.engine = create_engine(
+                    self.connection_string,
+                    pool_size=3,
+                    max_overflow=5,
+                    pool_timeout=self.timeout_seconds * 1000,
+                    pool_recycle=3600,
+                )
+            else:
+                self.engine = create_engine(
+                    self.connection_string,
+                )
             self.connection = self.engine.connect().execution_options(statement_timeout=self.timeout_seconds * 1000)
             self._owns_engine = True
         except Exception as e:
-            raise self._trans_sqlalchemy_exception(e, "Connection initialization") from e
+            raise self._trans_sqlalchemy_exception(e, sql="", operation="CONNECTION_INITIALIZATION") from e
+
         if self.engine is None or self.connection is None:
             raise DatusException(
                 ErrorCode.DB_CONNECTION_FAILED,
@@ -234,10 +248,21 @@ class SQLAlchemyConnector(BaseSqlConnector):
         """Validate the input parameters before execution."""
         super().validate_input(input_params)
 
+    @override
+    def execute_ddl(self, sql: str) -> ExecuteSQLResult:
+        self.connect()
+        try:
+            res = self.connection.execute(text(sql))
+            return ExecuteSQLResult(success=True, sql_query=sql, sql_return=str(res.rowcount), row_count=res.rowcount)
+        except Exception as e:
+            ex = self._trans_sqlalchemy_exception(e, sql)
+            logger.error(f"Failed to execute DDL: {ex.message}")
+            return ExecuteSQLResult(success=False, sql_query=sql, error=str(ex))
+
     def do_execute(
         self,
         input_params: Union[ExecuteSQLInput, Dict[str, Any]],
-        result_format: Literal["csv", "arrow", "list"] = "csv",
+        result_format: Literal["csv", "arrow", "pandas", "list"] = "csv",
     ) -> ExecuteSQLResult:
         if isinstance(input_params, ExecuteSQLInput):
             sql_query = input_params.sql_query.strip()
@@ -245,18 +270,11 @@ class SQLAlchemyConnector(BaseSqlConnector):
             sql_query = input_params["sql_query"].strip()
         self.connect()
         try:
-            sql_lower = sql_query.lower()
-            if sql_lower.startswith("insert"):
-                lastrowid, rowcount = self.insert(sql_query)
-                return ExecuteSQLResult(
-                    success=True,
-                    sql_query=sql_query,
-                    sql_return=str(lastrowid),
-                    row_count=rowcount,
-                    result_format=result_format,
-                )
-            elif sql_lower.startswith("update") or sql_lower.startswith("delete"):
-                rowcount = self.update(sql_query)
+            sql_type = parse_sql_type(sql_query)
+            if sql_type == SQLType.INSERT:
+                return self.execute_insert(sql_query)
+            elif sql_type in (SQLType.UPDATE, SQLType.DELETE):
+                rowcount = self._update(sql_query)
                 return ExecuteSQLResult(
                     success=True,
                     sql_query=sql_query,
@@ -265,19 +283,21 @@ class SQLAlchemyConnector(BaseSqlConnector):
                     result_format=result_format,
                 )
             else:
-                df = self._execute_query(sql_query)
+                result_list = self._execute_query(sql_query)
                 result = ExecuteSQLResult(
                     success=True,
                     sql_query=sql_query,
-                    row_count=len(df),
+                    row_count=len(result_list),
                     result_format=result_format,
                 )
+                if result_format == "pandas":
+                    result.sql_return = DataFrame(result_list)
                 if result_format == "csv":
-                    result.sql_return = df.to_csv(index=False)
+                    result.sql_return = DataFrame(result_list).to_csv(index=False)
                 elif result_format == "arrow":
-                    result.sql_return = Table.from_pandas(df)
+                    result.sql_return = Table.from_pylist(result_list)
                 else:
-                    result.sql_return = df.to_dict(orient="records")
+                    result.sql_return = result_list
                 return result
         except Exception as e:
             logger.error(f"Execute sql error: {str(e)}")
@@ -290,45 +310,37 @@ class SQLAlchemyConnector(BaseSqlConnector):
                 result_format=result_format,
             )
 
-    def execute_csv(self, query: str) -> ExecuteSQLResult:
+    def execute_pandas(self, query_sql: str) -> ExecuteSQLResult:
+        try:
+            df = self._execute_pandas(query_sql)
+            return ExecuteSQLResult(
+                success=True,
+                sql_query=query_sql,
+                sql_return=df,
+                row_count=len(df),
+                result_format="pandas",
+            )
+        except Exception as e:
+            return ExecuteSQLResult(success=False, error=str(e), sql_query=query_sql)
+        # return self.do_execute(ExecuteSQLInput(sql_query=query), "pandas")
+
+    def execute_csv(self, query_sql: str) -> ExecuteSQLResult:
         """Execute a SQL query and return results with csv format."""
         self.connect()
 
         try:
-            result = self.connection.execute(text(query))
-
-            if result.returns_rows:  # rows returned: select
-                rows = result.fetchall()
-                return ExecuteSQLResult(
-                    success=True,
-                    error=None,
-                    sql_query=query,
-                    sql_return=str(rows),
-                    row_count=len(rows),
-                    result_format="csv",
-                )
-            else:  # no rows returned: insert, update, delete
-                return ExecuteSQLResult(
-                    success=True,
-                    error=None,
-                    sql_query=query,
-                    sql_return="",
-                    row_count=result.rowcount,
-                    result_format="csv",
-                )
-        except SQLAlchemyError as e:
+            df = self._execute_pandas(query_sql)
             return ExecuteSQLResult(
                 success=True,
-                error=str(e),
-                sql_query=query,
-                sql_return="",
-                row_count=0,
+                sql_query=query_sql,
+                sql_return=df.to_csv(index=False),
+                row_count=len(df),
                 result_format="csv",
             )
         except Exception as e:
             return ExecuteSQLResult(
                 success=False,
-                sql_query=query,
+                sql_query=query_sql,
                 sql_return="",
                 row_count=0,
                 error=str(e),
@@ -437,9 +449,9 @@ class SQLAlchemyConnector(BaseSqlConnector):
 
     def test_connection(self) -> bool:
         """Test the database connection."""
+        self.connect()
         try:
-            self.connect()
-            self.execute_query("SELECT 1")
+            self._execute_query("SELECT 1")
             return True
         except DatusException as e:
             raise e
@@ -453,31 +465,141 @@ class SQLAlchemyConnector(BaseSqlConnector):
         finally:
             self.close()
 
-    # TODO execute_update
+    @override
+    def execute_insert(
+        self,
+        sql: str,
+    ) -> ExecuteSQLResult:
+        """Execute an INSERT SQL statement.
 
-    def _execute_query(self, query: str) -> DataFrame:
-        result = self.connection.execute(text(query))
-        return DataFrame(result.fetchall(), columns=list(result.keys()))
-
-    def insert(self, sql: str) -> Tuple[int, int]:
-        """Insert the database.
         Args:
-            sql: insert sql
+            sql: The INSERT SQL statement to execute
+
         Returns:
-            lastrowid
+            A dictionary containing the insert operation results
         """
+
         self.connect()
         try:
             res = self.connection.execute(text(sql))
-            return (res.lastrowid, res.rowcount)
-        except SQLAlchemyError as e:
-            raise self._trans_sqlalchemy_exception(e, sql) from e
+            return ExecuteSQLResult(
+                success=True,
+                sql_query=sql,
+                sql_return=str(res.lastrowid),
+                row_count=res.rowcount,
+            )
+        except Exception as e:
+            ex = self._trans_sqlalchemy_exception(e, sql)
+            logger.error(f"Execute insert error: {ex.message}")
+            return ExecuteSQLResult(
+                success=False,
+                error=str(ex),
+                sql_query=sql,
+                sql_return="",
+                row_count=0,
+            )
+
+    def execute_update(
+        self,
+        sql: str,
+    ) -> ExecuteSQLResult:
+        """Execute an UPDATE SQL statement.
+
+        Args:
+            sql: The UPDATE SQL statement to execute
+
+        Returns:
+            A dictionary containing the update operation results
+        """
+        self.connect()
+        try:
+            rowcount = self._update(sql)
+            return ExecuteSQLResult(
+                success=True,
+                sql_query=sql,
+                sql_return=str(rowcount),
+                row_count=rowcount,
+            )
+        except Exception as e:
+            ex = self._trans_sqlalchemy_exception(e, sql)
+            logger.error(f"Execute update error: {ex.message}")
+            return ExecuteSQLResult(
+                success=False,
+                error=str(ex),
+                sql_query=sql,
+                sql_return="",
+                row_count=0,
+            )
 
     @override
-    def get_schemas(self, catalog_name: str = "", database_name: str = "") -> List[str]:
-        return self._inspector().get_schema_names()
+    def execute_delete(
+        self,
+        sql: str,
+    ) -> ExecuteSQLResult:
+        """Execute a DELETE SQL statement.
 
-    def update(self, sql: str) -> int:
+        Args:
+            sql: The DELETE SQL statement to execute
+
+        Returns:
+            A dictionary containing the delete operation results
+        """
+
+        self.connect()
+        try:
+            rowcount = self.delete(sql)
+            return ExecuteSQLResult(
+                success=True,
+                sql_query=sql,
+                sql_return=str(rowcount),
+                row_count=rowcount,
+            )
+        except Exception as e:
+            ex = self._trans_sqlalchemy_exception(e, sql)
+            logger.error(f"Execute delete error: {ex.message}")
+            return ExecuteSQLResult(
+                success=False,
+                error=str(ex),
+                sql_query=sql,
+                sql_return="",
+                row_count=0,
+            )
+
+    def execute_query(self, query_sql: str) -> ExecuteSQLResult:
+        try:
+            self.connect()
+            result = self._execute_query(query_sql)
+            return ExecuteSQLResult(
+                success=True, sql_query=query_sql, sql_return=result, row_count=len(result), result_format="list"
+            )
+        except Exception as e:
+            return ExecuteSQLResult(success=False, error=str(e), sql_query=query_sql)
+
+    def _execute_query(self, query_sql: str) -> List[Dict[str, Any]]:
+        if parse_sql_type(query_sql) in (SQLType.INSERT, SQLType.UPDATE, SQLType.DELETE, SQLType.CONTENT_SET):
+            raise DatusException(
+                ErrorCode.DB_EXECUTION_ERROR, message="Only supports normal queries and metadata queries."
+            )
+        self.connect()
+        try:
+            result = self.connection.execute(text(query_sql))
+            return result.fetchall()
+        except Exception as e:
+            raise self._trans_sqlalchemy_exception(e, query_sql) from e
+
+    def _execute_pandas(self, query_sql: str) -> DataFrame:
+        return DataFrame(self._execute_query(query_sql))
+
+    @override
+    def get_schemas(self, catalog_name: str = "", database_name: str = "", include_sys: bool = False) -> List[str]:
+        schemas = self._inspector().get_schema_names()
+        if not include_sys:
+            system_schemas = self._sys_schemas()
+            # Filter out common system schemas
+            schemas = [s for s in schemas if s.lower() not in system_schemas]
+        return schemas
+
+    def _update(self, sql: str) -> int:
         """Update the database.
         Args:
             sql: update sql
@@ -502,22 +624,6 @@ class SQLAlchemyConnector(BaseSqlConnector):
             The number of rows deleted
         """
         return self._update_or_delete(sql, "delete")
-
-    def execute_query(self, query: str) -> DataFrame:
-        """Execute a query and return the result."""
-        if not isinstance(query, str):
-            raise ValueError("Query must be a string")
-        self.connect()
-        try:
-            return self._execute_query(query)
-        except SQLAlchemyError as e:
-            raise self._trans_sqlalchemy_exception(e, sql=query) from e
-
-    def execute_ddl(self, ddl_sql: str):
-        try:
-            self.connection.execute(text(ddl_sql))
-        except Exception as e:
-            raise self._trans_sqlalchemy_exception(e, sql=ddl_sql) from e
 
     def _execute(self, query: str) -> Any:
         result = self.connection.execute(text(query))
@@ -632,7 +738,9 @@ class SQLAlchemyConnector(BaseSqlConnector):
         """
         return database_name or schema_name
 
-    def get_materialized_views(self, schema_name: Optional[str] = None) -> List[str]:
+    def get_materialized_views(
+        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> List[str]:
         """Get list of materialized views in the database."""
         inspector = self._inspector()
         try:
@@ -674,7 +782,7 @@ class SQLAlchemyConnector(BaseSqlConnector):
                     table_name=table_name,
                 )
                 query = f"SELECT * FROM {full_table_name} LIMIT {top_n}"
-                result = self.execute_query(query)
+                result = self._execute_pandas(query)
                 if not result.empty:
                     samples.append(
                         {

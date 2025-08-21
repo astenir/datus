@@ -4,7 +4,7 @@ from typing import Any, Dict, List
 import sqlglot
 from sqlglot.expressions import CTE, Table
 
-from datus.utils.constants import DBType
+from datus.utils.constants import DBType, SQLType
 
 from .loggings import get_logger
 
@@ -226,7 +226,44 @@ def parse_table_name_parts(full_table_name: str, dialect: str = DBType.SNOWFLAKE
     dialect = parse_dialect(dialect)
 
     # Split the table name by dots
-    parts = full_table_name.split(".")
+    # Handle different quote styles: `backticks`, "double quotes", [brackets]
+    quote_patterns = [
+        r'(["`])(?:(?=(\\?))\2.)*?\1',  # "quoted" or `quoted`
+        r"\[(.*?)\]",  # [bracketed]
+    ]
+
+    # Find all quoted parts
+    parts = []
+
+    # First, extract all quoted parts
+    for pattern in quote_patterns:
+        matches = re.findall(pattern, full_table_name)
+        if matches:
+            # Handle different regex return formats
+            if isinstance(matches[0], tuple):
+                # Pattern returns tuples, extract the actual content
+                for match in matches:
+                    if isinstance(match, tuple):
+                        part = match[0] if match[0] else match[1] if len(match) > 1 else ""
+                    else:
+                        part = str(match)
+                    if part and part not in parts:
+                        parts.append(part.strip('"`[]'))
+            else:
+                # Pattern returns strings
+                parts.extend([str(m).strip('"`[]') for m in matches])
+
+    # If no quoted parts found, split by dots
+    if not parts:
+        parts = [part.strip() for part in full_table_name.split(".")]
+    else:
+        # Split by dots, but respect quotes
+        pattern = r'(?:["`\[][^"`\]]*["`\]]|[^.])+'
+        matches = re.findall(pattern, full_table_name)
+        parts = [match.strip('"`[] ') for match in matches]
+
+    # Clean up parts - remove empty strings
+    parts = [p for p in parts if p]
 
     # Initialize result with empty strings
     result = {"catalog_name": "", "database_name": "", "schema_name": "", "table_name": ""}
@@ -271,3 +308,40 @@ def parse_table_names_parts(full_table_names: List[str], dialect: str = DBType.S
         List of dicts with keys: catalog_name, database_name, schema_name, table_name
     """
     return [parse_table_name_parts(table_name, dialect) for table_name in full_table_names]
+
+
+def parse_sql_type(sql: str) -> SQLType:
+    """
+    Determines the type of an SQL statement based on its first keyword.
+
+    This function analyzes the beginning of an SQL query to classify it into
+    one of the SQLType categories (SELECT, DDL, METADATA, etc.). It is designed
+    to handle common SQL commands across different database dialects.
+
+    Args:
+        sql: The SQL query string.
+
+    Returns:
+        The determined SQLType enum member.
+    """
+    if not sql or not isinstance(sql, str):
+        return SQLType.CONTENT_SET
+
+    # Normalize the query for parsing by stripping whitespace and getting the first word.
+    normalized_sql = sql.strip().lower()
+    first_word = normalized_sql.split()[0] if normalized_sql else ""
+
+    if first_word in ("select", "with"):
+        return SQLType.SELECT
+    elif first_word == "insert":
+        return SQLType.INSERT
+    elif first_word == "update":
+        return SQLType.UPDATE
+    elif first_word == "delete":
+        return SQLType.DELETE
+    elif first_word in ("create", "alter", "drop", "truncate", "rename"):
+        return SQLType.DDL
+    elif first_word in ("show", "describe", "desc", "explain", "pragma"):
+        return SQLType.METADATA_SHOW
+    else:
+        return SQLType.CONTENT_SET
