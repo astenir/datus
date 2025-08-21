@@ -107,6 +107,7 @@ class DatusAPIService:
             schema_name=request.schema_name or "",
             external_knowledge="",
             output_dir=agent.global_config.output_dir,
+            current_date=request.current_date,
         )
 
     def _create_response(

@@ -127,6 +127,11 @@ def create_parser() -> argparse.ArgumentParser:
         default="benchmark/semantic_layer/success_story.csv",
         help="Path to success story file",
     )
+    bootstrap_parser.add_argument(
+        "--semantic_yaml",
+        type=str,
+        help="Path to semantic model YAML file",
+    )
     bootstrap_parser.add_argument("--metric_meta", type=str, help="Metric meta for the success story")
     bootstrap_parser.add_argument("--domain", type=str, help="Domain of the success story")
     bootstrap_parser.add_argument("--catalog", type=str, help="Catalog of the success story")
@@ -160,6 +165,9 @@ def create_parser() -> argparse.ArgumentParser:
     benchmark_parser.add_argument("--layer1", type=str, help="Layer1 for the task")
     benchmark_parser.add_argument("--layer2", type=str, help="Layer2 for the task")
     benchmark_parser.add_argument("--task_ext_knowledge", type=str, default="", help="External knowledge for the task")
+    benchmark_parser.add_argument(
+        "--current_date", type=str, help="Current date reference for relative time expressions (e.g., '2025-07-01')"
+    )
     benchmark_parser.add_argument(
         "--max_workers",
         type=int,
@@ -229,6 +237,9 @@ def create_parser() -> argparse.ArgumentParser:
         help="Schema linking type for the task, (mv for materialized view, full for all types)",
     )
     run_parser.add_argument("--task_ext_knowledge", type=str, default="", help="External knowledge for the task")
+    run_parser.add_argument(
+        "--current_date", type=str, help="Current date reference for relative time expressions (e.g., '2025-07-01')"
+    )
     run_parser.add_argument("--domain", type=str, default="", help="Domain of the success story")
     run_parser.add_argument("--layer1", type=str, default="", help="Layer1 of the metrics")
     run_parser.add_argument("--layer2", type=str, default="", help="Layer2 of the metrics")
@@ -318,6 +329,7 @@ def main():
                     domain=args.domain,
                     layer1=args.layer1,
                     layer2=args.layer2,
+                    current_date=args.current_date,
                 ),
                 True,
             )
