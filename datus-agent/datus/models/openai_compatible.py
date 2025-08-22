@@ -8,8 +8,9 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import yaml
-from agents import Agent, OpenAIChatCompletionsModel, Runner, SQLiteSession, Tool
+from agents import Agent, ModelSettings, OpenAIChatCompletionsModel, Runner, SQLiteSession, Tool
 from agents.mcp import MCPServerStdio
+from langsmith import traceable
 from langsmith.wrappers import wrap_openai
 from openai import APIConnectionError, APIError, APITimeoutError, AsyncOpenAI, OpenAI, RateLimitError
 from pydantic import AnyUrl
@@ -226,6 +227,7 @@ class OpenAICompatibleModel(LLMBaseModel):
                 logger.error(f"Unexpected error in {operation_name}: {str(e)}")
                 raise
 
+    @traceable(name="openai_compatible_generate", run_type="chain")
     def generate(self, prompt: Any, enable_thinking: bool = False, **kwargs) -> str:
         """
         Generate a response from the model with error handling and retry logic.
@@ -290,13 +292,36 @@ class OpenAICompatibleModel(LLMBaseModel):
 
             final_content = content or ""
 
-            # Save LLM trace if method exists (for models that support it like DeepSeekModel)
             if hasattr(self, "_save_llm_trace"):
                 self._save_llm_trace(messages, final_content, reasoning_content)
 
-            return final_content
+            # Extract usage information for LangSmith tracking
+            usage_info = {}
+            if hasattr(response, "usage") and response.usage:
+                usage_info = {
+                    "input_tokens": getattr(response.usage, "prompt_tokens", 0),
+                    "output_tokens": getattr(response.usage, "completion_tokens", 0),
+                    "total_tokens": getattr(response.usage, "total_tokens", 0),
+                }
+                logger.debug(f"Token usage: {usage_info}")
 
-        return self._with_retry(_generate_operation, "text generation")
+            # Return structured data for LangSmith to capture
+            return {
+                "content": final_content or "",
+                "usage": usage_info,
+                "model": self.model_name,
+                "response_metadata": {
+                    "finish_reason": response.choices[0].finish_reason if response.choices else None,
+                    "model": response.model if hasattr(response, "model") else self.model_name,
+                },
+            }
+
+        result = self._with_retry(_generate_operation, "text generation")
+
+        # Return just the content for backward compatibility, but LangSmith will capture the full result
+        if isinstance(result, dict):
+            return result.get("content", "")
+        return result
 
     def generate_with_json_output(self, prompt: Any, **kwargs) -> Dict:
         """
@@ -318,7 +343,9 @@ class OpenAICompatibleModel(LLMBaseModel):
         response_text = self.generate(prompt, enable_thinking=enable_thinking_param, **json_kwargs)
 
         try:
-            return json.loads(response_text)
+            parsed_json = json.loads(response_text)
+            # For LangSmith tracing, we want to capture metadata but return the actual JSON for backward compatibility
+            return parsed_json
         except json.JSONDecodeError:
             # Try to extract JSON from response
             import re
@@ -326,12 +353,14 @@ class OpenAICompatibleModel(LLMBaseModel):
             json_match = re.search(r"\{.*\}", response_text, re.DOTALL)
             if json_match:
                 try:
-                    return json.loads(json_match.group(0))
+                    parsed_json = json.loads(json_match.group(0))
+                    return parsed_json
                 except json.JSONDecodeError:
                     pass
 
             return {"error": "Failed to parse JSON response", "raw_response": response_text}
 
+    @traceable(name="openai_compatible_tools", run_type="chain")
     async def generate_with_tools(
         self,
         prompt: str,
@@ -362,10 +391,24 @@ class OpenAICompatibleModel(LLMBaseModel):
             Dict with content and sql_contexts
         """
         # Use the internal method that returns a Dict
-        return await self._generate_with_tools_internal(
+        result = await self._generate_with_tools_internal(
             prompt, mcp_servers, tools, instruction, output_type, max_turns, session, **kwargs
         )
 
+        # Enhance result with tracing metadata
+        enhanced_result = {
+            **result,
+            "model": self.model_name,
+            "max_turns": max_turns,
+            "tool_count": len(tools) if tools else 0,
+            "mcp_server_count": len(mcp_servers) if mcp_servers else 0,
+            "instruction_length": len(instruction),
+            "prompt_length": len(prompt),
+        }
+
+        return enhanced_result
+
+    @traceable(name="openai_compatible_tools_stream", run_type="chain")
     async def generate_with_tools_stream(
         self,
         prompt: str,
@@ -470,7 +513,57 @@ class OpenAICompatibleModel(LLMBaseModel):
 
                     self._save_llm_trace(messages, result.final_output, conversation_history)
 
-                return {"content": result.final_output, "sql_contexts": extract_sql_contexts(result)}
+                # Extract usage information from the correct location: result.context_wrapper.usage
+                usage_info = {}
+                if hasattr(result, "context_wrapper") and hasattr(result.context_wrapper, "usage"):
+                    usage = result.context_wrapper.usage
+
+                    # Extract basic token counts
+                    input_tokens = getattr(usage, "input_tokens", 0)
+                    output_tokens = getattr(usage, "output_tokens", 0)
+                    total_tokens = getattr(usage, "total_tokens", 0)
+
+                    # Extract cache information
+                    cached_tokens = 0
+                    if hasattr(usage, "input_tokens_details") and usage.input_tokens_details:
+                        cached_tokens = getattr(usage.input_tokens_details, "cached_tokens", 0)
+
+                    # Extract reasoning tokens (for reasoning models like DeepSeek R1)
+                    reasoning_tokens = 0
+                    if hasattr(usage, "output_tokens_details") and usage.output_tokens_details:
+                        reasoning_tokens = getattr(usage.output_tokens_details, "reasoning_tokens", 0)
+
+                    # Calculate cache hit rate
+                    cache_hit_rate = round(cached_tokens / input_tokens, 3) if input_tokens > 0 else 0
+
+                    # Calculate context usage ratio
+                    context_usage_ratio = 0
+                    max_context = self.context_length()
+                    if max_context and total_tokens > 0:
+                        context_usage_ratio = round(total_tokens / max_context, 3)
+
+                    usage_info = {
+                        "requests": getattr(usage, "requests", 0),
+                        "input_tokens": input_tokens,
+                        "output_tokens": output_tokens,
+                        "total_tokens": total_tokens,
+                        "cached_tokens": cached_tokens,
+                        "reasoning_tokens": reasoning_tokens,
+                        "cache_hit_rate": cache_hit_rate,
+                        "context_usage_ratio": context_usage_ratio,
+                    }
+                    logger.debug(f"Agent execution usage: {usage_info}")
+                else:
+                    logger.warning("No usage information found in result.context_wrapper")
+
+                return {
+                    "content": result.final_output,
+                    "sql_contexts": extract_sql_contexts(result),
+                    "usage": usage_info,
+                    "model": self.model_name,
+                    "turns_used": getattr(result, "turn_count", 0),
+                    "final_output_length": len(result.final_output) if result.final_output else 0,
+                }
 
         return await self._with_retry_async(_tools_operation, "tool execution")
 
@@ -501,6 +594,10 @@ class OpenAICompatibleModel(LLMBaseModel):
 
         async def _stream_operation():
             async_client = self._create_async_client()
+
+            # Configure stream_options to include usage information for token tracking
+            model_settings = ModelSettings(extra_body={"stream_options": {"include_usage": True}})
+
             model_params = {"model": self.model_name}
             async_model = OpenAIChatCompletionsModel(**model_params, openai_client=async_client)
 
@@ -511,6 +608,7 @@ class OpenAICompatibleModel(LLMBaseModel):
                     "instructions": instruction,
                     "output_type": output_type,
                     "model": async_model,
+                    "model_settings": model_settings,
                 }
 
                 # Only add mcp_servers if we have connected servers
@@ -525,6 +623,7 @@ class OpenAICompatibleModel(LLMBaseModel):
 
                 result = Runner.run_streamed(agent, input=prompt, max_turns=max_turns, session=session)
 
+                # Yield streaming actions as they come
                 while not result.is_complete:
                     async for event in result.stream_events():
                         if not hasattr(event, "type") or event.type != "run_item_stream_event":
@@ -563,6 +662,10 @@ class OpenAICompatibleModel(LLMBaseModel):
 
                     final_output = result.final_output if hasattr(result, "final_output") else ""
                     self._save_llm_trace(messages, final_output, conversation_history)
+
+                # After streaming completes, extract usage information from the final result
+                # and distribute it to the actions in the action_history_manager
+                await self._extract_and_distribute_token_usage(result, action_history_manager)
 
         # Execute the streaming operation directly without retry logic
         async for action in _stream_operation():
@@ -692,47 +795,151 @@ class OpenAICompatibleModel(LLMBaseModel):
             logger.debug(f"No text content found in message output: {content}")
             return None
 
-    def get_model_info(self) -> Optional[Dict]:
-        """
-        Get model information from the /v1/models API endpoint.
-
-        Returns:
-            Dictionary with model info, or None if unavailable
-        """
-        if self._model_info is not None:
-            return self._model_info
-
+    async def _extract_and_distribute_token_usage(self, result, action_history_manager: ActionHistoryManager) -> None:
+        """Extract token usage from completed streaming result and distribute to ActionHistory objects."""
         try:
-            # Use the OpenAI client to get model info
-            model_info = self.client.models.retrieve(self.model_name)
+            # With stream_options: {"include_usage": true}, usage should now be properly populated
+            if not (hasattr(result, "context_wrapper") and hasattr(result.context_wrapper, "usage")):
+                logger.warning("No usage information found in streaming result")
+                return
 
-            # Convert to dict for easier access
-            self._model_info = {
-                "id": getattr(model_info, "id", None),
-                "context_length": getattr(model_info, "context_length", None),
-                "max_tokens": getattr(model_info, "max_tokens", None),
-                "owned_by": getattr(model_info, "owned_by", None),
-                "created": getattr(model_info, "created", None),
+            usage = result.context_wrapper.usage
+
+            # Extract all usage information (same as non-streaming version)
+            usage_info = {
+                "requests": getattr(usage, "requests", 0),
+                "input_tokens": getattr(usage, "input_tokens", 0),
+                "output_tokens": getattr(usage, "output_tokens", 0),
+                "total_tokens": getattr(usage, "total_tokens", 0),
+                "cached_tokens": (
+                    getattr(usage.input_tokens_details, "cached_tokens", 0)
+                    if hasattr(usage, "input_tokens_details") and usage.input_tokens_details
+                    else 0
+                ),
+                "reasoning_tokens": (
+                    getattr(usage.output_tokens_details, "reasoning_tokens", 0)
+                    if hasattr(usage, "output_tokens_details") and usage.output_tokens_details
+                    else 0
+                ),
+                "cache_hit_rate": (
+                    round(
+                        getattr(usage.input_tokens_details, "cached_tokens", 0) / getattr(usage, "input_tokens", 1), 3
+                    )
+                    if hasattr(usage, "input_tokens_details") and getattr(usage, "input_tokens", 0) > 0
+                    else 0
+                ),
+                "context_usage_ratio": (
+                    round(getattr(usage, "total_tokens", 0) / self.context_length(), 3)
+                    if self.context_length() and getattr(usage, "total_tokens", 0) > 0
+                    else 0
+                ),
             }
 
-            logger.debug(f"Retrieved model info for {self.model_name}: {self._model_info}")
-            return self._model_info
+            logger.debug(f"Extracted streaming token usage: {usage_info}")
+
+            self._distribute_token_usage_to_actions(action_history_manager, usage_info)
 
         except Exception as e:
-            logger.warning(f"Failed to retrieve model info for {self.model_name}: {str(e)}")
-            self._model_info = {}  # Cache empty result to avoid repeated failures
-            return None
+            logger.error(f"Error extracting and distributing token usage: {e}")
+
+    def _distribute_token_usage_to_actions(
+        self, action_history_manager: ActionHistoryManager, usage_info: dict
+    ) -> None:
+        """
+        Distribute token usage information to ActionHistory objects.
+        Only adds full usage to final assistant action to avoid double-counting.
+
+        Args:
+            action_history_manager: ActionHistoryManager containing actions
+            usage_info: Usage information dictionary with token counts
+        """
+        try:
+            actions = action_history_manager.get_actions()
+            if not actions:
+                return
+
+            total_tokens = usage_info.get("total_tokens", 0)
+            assistant_actions = [a for a in actions if a.role == "assistant"]
+
+            # Add full usage to the final assistant action (represents the complete conversation cost)
+            if assistant_actions:
+                final_assistant = assistant_actions[-1]
+                self._add_usage_to_action(final_assistant, usage_info)
+                logger.debug(f"Distributed {total_tokens} tokens to final assistant action")
+
+            # Note: Tool actions don't get token counts to avoid double-counting
+
+        except Exception as e:
+            logger.error(f"Error distributing token usage: {e}")
+
+    def _add_usage_to_action(self, action: ActionHistory, usage_info: dict) -> None:
+        """Add usage information to an action's output."""
+        if action.output is None:
+            action.output = {}
+        elif not isinstance(action.output, dict):
+            action.output = {"raw_output": action.output}
+
+        action.output["usage"] = usage_info
+
+    @property
+    def model_specs(self) -> Dict[str, Dict[str, int]]:
+        """
+        Model specifications dictionary containing context_length and max_tokens for various models.
+        """
+        return {
+            # OpenAI Models
+            "gpt-5": {"context_length": 400000, "max_tokens": 128000},
+            "gpt-4o": {"context_length": 128000, "max_tokens": 16384},
+            "gpt-03": {"context_length": 200000, "max_tokens": 200000},
+            # DeepSeek Models
+            "deepseek-chat": {"context_length": 65535, "max_tokens": 8192},
+            "deepseek-v3": {"context_length": 65535, "max_tokens": 8192},
+            "deepseek-reasoner": {"context_length": 65535, "max_tokens": 65535},
+            "deepseek-r1": {"context_length": 65535, "max_tokens": 65535},
+            # Moonshot (Kimi) Models
+            "kimi-k2": {"context_length": 128000, "max_tokens": 8192},
+            # Qwen Models
+            "qwen3-coder": {"context_length": 128000, "max_tokens": 8192},
+            # Gemini Models
+            "gemini-2.5-pro": {"context_length": 1048576, "max_tokens": 65535},
+            "gemini-2.5-flash": {"context_length": 1048576, "max_tokens": 8192},
+            "gemini-2.5-flash-lite": {"context_length": 1048576, "max_tokens": 8192},
+        }
 
     def max_tokens(self) -> Optional[int]:
         """
-        Get the max tokens from model info.
+        Get the max tokens from model specs with prefix matching.
 
         Returns:
-            Max tokens from model info, or None if unavailable
+            Max tokens from model specs, or None if unavailable
         """
-        model_info = self.get_model_info()
-        if model_info:
-            return model_info.get("max_tokens")
+        # First try exact match
+        if self.model_name in self.model_specs:
+            return self.model_specs[self.model_name]["max_tokens"]
+
+        # Try prefix matching for models like gpt-4o-mini, kimi-k2-0711-preview
+        for spec_model in self.model_specs:
+            if self.model_name.startswith(spec_model):
+                return self.model_specs[spec_model]["max_tokens"]
+
+        return None
+
+    def context_length(self) -> Optional[int]:
+        """
+        Get the context length from model specs with prefix matching.
+
+        Returns:
+            Context length from model specs, or None if unavailable
+        """
+        # First try exact match
+        if self.model_name in self.model_specs:
+            return self.model_specs[self.model_name]["context_length"]
+
+        # Try prefix matching for models like gpt-4o-mini, kimi-k2-0711-preview
+        for spec_model in self.model_specs:
+            if self.model_name.startswith(spec_model):
+                return self.model_specs[spec_model]["context_length"]
+
         return None
 
     def token_count(self, prompt: str) -> int:

@@ -47,7 +47,15 @@ class ChatAgenticNode(AgenticNode):
             max_turns: Maximum conversation turns per interaction
         """
         self.namespace = namespace
-        self.max_turns = max_turns
+        # Get max_turns from node configuration if available
+        node_max_turns = None
+        if agent_config and hasattr(agent_config, "nodes") and "chat" in agent_config.nodes:
+            chat_node_config = agent_config.nodes["chat"]
+            if chat_node_config.input and hasattr(chat_node_config.input, "max_turns"):
+                node_max_turns = chat_node_config.input.max_turns
+
+        # Priority: provided value > node config > default 30
+        self.max_turns = max_turns if max_turns != 30 else (node_max_turns or 30)
 
         # Initialize MCP servers based on namespace
         mcp_servers = self._setup_mcp_servers()
@@ -82,16 +90,29 @@ class ChatAgenticNode(AgenticNode):
         mcp_servers = {}
 
         try:
-            # Add filesystem MCP server as default
+            # Add filesystem MCP server with configurable root path
             import os
 
-            sqls_path = os.path.join(os.getcwd(), "sqls")
-            filesystem_server = MCPServer.get_filesystem_mcp_server(path=sqls_path)
+            root_path = "."
+            if self.agent_config and hasattr(self.agent_config, "nodes") and "chat" in self.agent_config.nodes:
+                chat_node_config = self.agent_config.nodes["chat"]
+                if chat_node_config.input and hasattr(chat_node_config.input, "workspace_root"):
+                    workspace_root = chat_node_config.input.workspace_root
+                    if workspace_root is not None:
+                        root_path = workspace_root
+
+            # Handle relative vs absolute paths
+            if root_path and os.path.isabs(root_path):
+                filesystem_path = root_path
+            else:
+                filesystem_path = os.path.join(os.getcwd(), root_path)
+
+            filesystem_server = MCPServer.get_filesystem_mcp_server(path=filesystem_path)
             if filesystem_server:
                 mcp_servers["filesystem"] = filesystem_server
-                logger.debug(f"Added filesystem MCP server with path: {sqls_path}")
+                logger.debug(f"Added filesystem MCP server with path: {filesystem_path}")
             else:
-                logger.warning(f"Failed to create filesystem MCP server for path: {sqls_path}")
+                logger.warning(f"Failed to create filesystem MCP server for path: {filesystem_path}")
 
         except Exception as e:
             logger.error(f"Error setting up MCP servers: {e}")
@@ -206,9 +227,26 @@ class ChatAgenticNode(AgenticNode):
 
             logger.debug(f"Final response_content: '{response_content}' (length: {len(response_content)})")
 
-            # Count tokens (simplified - would need actual implementation)
-            if response_content:
-                tokens_used = len(response_content.split()) * 1.3  # Rough estimation
+            # Extract token usage from final actions using our new approach
+            # With our streaming token fix, only the final assistant action will have accurate usage
+            final_actions = action_history_manager.get_actions()
+            tokens_used = 0
+
+            # Find the final assistant action with token usage
+            for action in reversed(final_actions):
+                if action.role == "assistant":
+                    if action.output and isinstance(action.output, dict):
+                        usage_info = action.output.get("usage", {})
+                        if usage_info and isinstance(usage_info, dict) and usage_info.get("total_tokens"):
+                            conversation_tokens = usage_info.get("total_tokens", 0)
+                            if conversation_tokens > 0:
+                                # Add this conversation's tokens to the session
+                                self._add_session_tokens(conversation_tokens)
+                                tokens_used = conversation_tokens
+                                logger.info(f"Added {conversation_tokens} tokens to session")
+                                break
+                            else:
+                                logger.warning(f"no usage token found in this action {action.messages}")
 
             # Create final result
             result = ChatNodeResult(
