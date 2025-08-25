@@ -132,6 +132,7 @@ class DatusCLI:
             ".quit": self._cmd_exit,
             ".clear": self._cmd_clear_chat,
             ".chat_info": self._cmd_chat_info,
+            ".compact": self._cmd_compact,
             # temporary commands for sqlite, remove after mcp server is ready
             ".databases": self._cmd_list_databases,
             ".database": self._cmd_switch_database,
@@ -684,34 +685,37 @@ class DatusCLI:
                     sql = None
                     clean_output = None
 
+                    logger.debug(f"DEBUG: final_action.output: {final_action.output}")
+
                     # First check if SQL and response are directly available
                     sql = final_action.output.get("sql")
                     response = final_action.output.get("response")
 
-                    # If response contains debug format, extract from it
-                    if isinstance(response, dict) and "raw_output" in response:
-                        extracted_sql, extracted_output = self._extract_sql_and_output_from_content(
-                            response["raw_output"]
-                        )
-                        sql = sql or extracted_sql  # Use extracted if not already available
-                        clean_output = extracted_output
-                    elif isinstance(response, str):
-                        clean_output = response
+                    # Try to extract SQL and output from the string response
+                    extracted_sql, extracted_output = self._extract_sql_and_output_from_content(response)
+                    sql = sql or extracted_sql
+                    # Determine clean_output based on sql and extracted_output
+                    clean_output = None
 
-                    # If we still don't have clean output, check other actions for content
-                    if not clean_output:
-                        for action in reversed(incremental_actions):
-                            if (
-                                action.status == ActionStatus.SUCCESS
-                                and action.output
-                                and isinstance(action.output, dict)
-                            ):
-                                content = action.output.get("content")
-                                if content:
-                                    extracted_sql, extracted_output = self._extract_sql_and_output_from_content(content)
-                                    sql = sql or extracted_sql
-                                    clean_output = extracted_output or content
-                                    break
+                    if sql:
+                        # Has SQL: use extracted_output or fallback to response
+                        clean_output = extracted_output or response
+                    elif isinstance(extracted_output, dict):
+                        # No SQL, extracted_output is dict: get raw_output from dict
+                        clean_output = extracted_output.get("raw_output", str(extracted_output))
+                    else:
+                        # No SQL, no extracted_output: try to parse raw_output from response string
+                        try:
+                            import ast
+
+                            response_dict = ast.literal_eval(response)
+                            clean_output = (
+                                response_dict.get("raw_output", response)
+                                if isinstance(response_dict, dict)
+                                else response
+                            )
+                        except (ValueError, SyntaxError):
+                            clean_output = response
 
                     # Display using simple, focused methods
                     if sql:
@@ -727,9 +731,11 @@ class DatusCLI:
             self.chat_history.append(
                 {
                     "user": message,
-                    "response": incremental_actions[-1].output.get("response", "")
-                    if incremental_actions and incremental_actions[-1].output
-                    else "",
+                    "response": (
+                        incremental_actions[-1].output.get("response", "")
+                        if incremental_actions and incremental_actions[-1].output
+                        else ""
+                    ),
                     "actions": len(incremental_actions),
                 }
             )
@@ -997,6 +1003,7 @@ class DatusCLI:
             (".exit, .quit", "Exit the CLI"),
             (".clear", "Clear console and chat session"),
             (".chat_info", "Show current chat session information"),
+            (".compact", "Compact chat session by summarizing conversation history"),
             (".databases", "List all databases"),
             (".database database_name", "Switch current database"),
             (".tables", "List all tables"),
@@ -1062,9 +1069,45 @@ class DatusCLI:
                 self.console.print(f"  Context Remaining: {session_info['context_remaining']}")
                 self.console.print(f"  Context Length: {session_info['context_length']}")
             else:
-                self.console.print("[yellow]Chat node exists but no active session.[/]")
+                self.console.print("[yellow]No active session, you can use / to start a new one[/]")
         else:
             self.console.print("[yellow]No active chat session.[/]")
+
+    def _cmd_compact(self, args: str):
+        """Manually compact the chat session by summarizing conversation history."""
+        if not self.chat_node:
+            self.console.print("[yellow]No active chat session to compact.[/]")
+            return
+
+        session_info = self.chat_node.get_session_info()
+        if not session_info["session_id"]:
+            self.console.print("[yellow]No active chat session to compact.[/]")
+            return
+
+        try:
+            # Display session info before compacting
+            self.console.print("[bold blue]Compacting Chat Session...[/]")
+            self.console.print(f"  Current Session ID: {session_info['session_id']}")
+            self.console.print(f"  Current Token Count: {session_info['token_count']}")
+            self.console.print(f"  Current Action Count: {session_info['action_count']}")
+
+            # Call the manual compact method asynchronously
+            import asyncio
+
+            async def run_compact():
+                return await self.chat_node._manual_compact()
+
+            # Run the compact operation
+            success = asyncio.run(run_compact())
+
+            if success:
+                self.console.print("[bold green]✓ Chat session compacted successfully![/]")
+            else:
+                self.console.print("[bold red]✗ Failed to compact chat session.[/]")
+
+        except Exception as e:
+            logger.error(f"Compact command error: {str(e)}")
+            self.console.print(f"[bold red]Error:[/] Failed to compact session: {str(e)}")
 
     def catalogs_callback(self, selected_path: str = "", selected_data: Optional[Dict[str, Any]] = None):
         if not selected_path:
@@ -1473,7 +1516,7 @@ Type '.help' for a list of commands or '.exit' to quit.
                 try:
                     json_content = json.loads(json_match.group(1))
                     sql = json_content.get("sql")
-                    output = json_content.get("output")
+                    output = json_content.get("output") or json_content.get("raw_output")
                     if output:
                         output = output.replace("\\n", "\n").replace('\\"', '"').replace("\\'", "'")
                     return sql, output
@@ -1482,14 +1525,18 @@ Type '.help' for a list of commands or '.exit' to quit.
 
             # Pattern 2: Direct JSON in content
             try:
-                json_content = json.loads(content)
+                # Handle escaped quotes in the JSON string
+                unescaped_content = content.replace("\\'", "'").replace('\\"', '"')
+                json_content = json.loads(unescaped_content)
+                logger.debug(f"DEBUG: Successfully parsed JSON: {json_content}")
                 sql = json_content.get("sql")
-                output = json_content.get("output")
-                if output:
+                output = json_content.get("output") or json_content.get("raw_output")
+                logger.debug(f"DEBUG: Extracted sql={sql}, output={output} (type: {type(output)})")
+                if output and isinstance(output, str):
                     output = output.replace("\\n", "\n").replace('\\"', '"').replace("\\'", "'")
                 return sql, output
-            except json.JSONDecodeError:
-                pass
+            except json.JSONDecodeError as e:
+                logger.debug(f"DEBUG: JSON decode failed for content: {content[:100]}... Error: {e}")
 
             # Pattern 3: Look for SQL code blocks
             sql_pattern = r"```sql\s*(.*?)\s*```"

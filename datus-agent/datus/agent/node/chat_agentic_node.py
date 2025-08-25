@@ -147,11 +147,14 @@ class ChatAgenticNode(AgenticNode):
         yield action
 
         try:
-            # Get or create session
-            session = self._get_or_create_session()
+            # Check for auto-compact before session creation to ensure fresh context
+            await self._auto_compact()
 
-            # Get system instruction from template
-            system_instruction = self.system_prompt
+            # Get or create session and any available summary
+            session, conversation_summary = self._get_or_create_session()
+
+            # Get system instruction from template, passing summary if available
+            system_instruction = self._get_system_prompt(conversation_summary)
 
             # Add database context to user message if provided
             enhanced_message = user_input.user_message
@@ -165,9 +168,6 @@ class ChatAgenticNode(AgenticNode):
                     context_parts.append(f"schema: {user_input.db_schema}")
 
                 enhanced_message = f"Context: {', '.join(context_parts)}\n\nUser question: {user_input.user_message}"
-
-            # Check for auto-compact
-            await self._auto_compact()
 
             # Execute with streaming
             response_content = ""
