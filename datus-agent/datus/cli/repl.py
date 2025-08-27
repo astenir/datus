@@ -75,13 +75,16 @@ class DatusCLI:
         history_file.parent.mkdir(parents=True, exist_ok=True)
         self.history = FileHistory(str(history_file))
 
-        # Setup prompt session
+        # Setup prompt session with custom key bindings
+        # custom_bindings = self._create_custom_key_bindings()
         self.session = PromptSession(
             history=self.history,
             auto_suggest=AutoSuggestFromHistory(),
             lexer=PygmentsLexer(SqlLexer),
             completer=SQLCompleter(),
             multiline=False,
+            # This conflicts with textual.
+            # key_bindings=custom_bindings,
             key_bindings=KeyBindings(),
             enable_history_search=True,
             search_ignore_case=True,
@@ -164,6 +167,33 @@ class DatusCLI:
         # Start agent initialization in background
         self._async_init_agent()
         self._init_connection()
+
+    # def _create_custom_key_bindings(self):
+    #     """Create custom key bindings for the REPL."""
+    #     kb = KeyBindings()
+    #
+    #     @kb.add("c-d")
+    #     def _(event):
+    #         """Handle Ctrl+R for mode switching if available."""
+    #         # Check if chat executor is available and mode switch is enabled
+    #         if (
+    #             self.chat_executor
+    #             and hasattr(self.chat_executor, "is_mode_switch_available")
+    #             and self.chat_executor.is_mode_switch_available()
+    #         ):
+    #             # Switch to app display
+    #             success = self.chat_executor.switch_to_app_display()
+    #             if success:
+    #                 # Refresh the prompt after returning from textual
+    #                 event.app.invalidate()
+    #             else:
+    #                 # Show error message if switch failed
+    #                 self.console.print("[yellow]Mode switching is not available at this time[/yellow]")
+    #         else:
+    #             # Show message that Ctrl+R is reserved for mode switching
+    #             self.console.print("[dim]Ctrl+D is reserved for mode switching after chat completion[/dim]")
+    #
+    #     return kb
 
     def run(self):
         """Run the REPL loop."""
@@ -724,6 +754,8 @@ class DatusCLI:
                     if clean_output:
                         self._display_markdown_response(clean_output)
 
+                    self._show_detail(incremental_actions)
+
             # Add all actions from chat to our main action history
             self.actions.actions.extend(incremental_actions)
 
@@ -753,6 +785,23 @@ class DatusCLI:
                 status=ActionStatus.FAILED,
             )
             self.actions.add_action(error_action)
+
+    def _show_detail(self, actions: List[ActionHistory]):
+        while True:
+            choice = self._prompt_input(
+                "Would you like to check the details? yes/no",
+                choices=["y", "n"],
+                default="y",
+            )
+            # modify the node input
+            if choice == "y":
+                from datus.cli.screen.action_display_app import ChatApp
+
+                app = ChatApp(actions)
+                app.run()
+                break
+            else:
+                return
 
     def _execute_internal_command(self, cmd: str, args: str):
         """Execute an internal command (. prefix)."""
