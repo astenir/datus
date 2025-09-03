@@ -2,11 +2,10 @@
 Autocomplete module for Datus CLI.
 Provides SQL keyword, table name, and column name autocompletion.
 """
-
 from abc import abstractmethod
 from typing import Any, Dict, Iterable, List, Union
 
-from prompt_toolkit.completion import Completer, Completion
+from prompt_toolkit.completion import Completer, Completion, PathCompleter
 from prompt_toolkit.document import Document
 from pygments.lexers.sql import SqlLexer
 from pygments.styles.default import DefaultStyle
@@ -617,7 +616,6 @@ class AtReferenceCompleter(Completer):
         # Initialize specialized completers
         self.table_completer = TableCompleter(agent_config)
         self.metric_completer = MetricsCompleter(agent_config)
-        from prompt_toolkit.completion import PathCompleter
 
         # Get workspace_root from chat node configuration or storage configuration
         workspace_root = None
@@ -644,9 +642,9 @@ class AtReferenceCompleter(Completer):
             "File": PathCompleter(get_paths=get_search_paths),
         }
         self.type_options = {
-            "Table ": "📊 Table",
-            "Metric ": "📈 Metric",
-            "File ": "📁 File",
+            "Table": "📊 Table",
+            "Metric": "📈 Metric",
+            "File": "📁 File",
         }
 
     def reload_data(self):

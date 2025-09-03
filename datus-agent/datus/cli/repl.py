@@ -162,47 +162,34 @@ class DatusCLI:
 
             if buffer.complete_state:
                 # If the menu is already open, close it.
-                buffer.complete_state = None
+                buffer.complete_next()
+            else:
+                # If the menu is incomplete, trigger completion.
+                buffer.start_completion(select_first=False)
+
+        @kb.add("enter")
+        def _(event):
+            """Enter key: closes the complementary menu or executes a command"""
+            buffer = event.app.current_buffer
+
+            if buffer.complete_state:
+                # When there is a complementary menu, close the menu but do not apply the complementary
+                buffer.apply_completion(buffer.complete_state.current_completion)
                 return
 
-            # If the menu is incomplete, trigger completion.
-            buffer.start_completion(select_first=True)
-
-        # @kb.add("c-d")
-        # def _(event):
-        #     """Handle Ctrl+R for mode switching if available."""
-        #     # Check if chat executor is available and mode switch is enabled
-        #     if (
-        #         self.chat_executor
-        #         and hasattr(self.chat_executor, "is_mode_switch_available")
-        #         and self.chat_executor.is_mode_switch_available()
-        #     ):
-        #         # Switch to app display
-        #         success = self.chat_executor.switch_to_app_display()
-        #         if success:
-        #             # Refresh the prompt after returning from textual
-        #             event.app.invalidate()
-        #         else:
-        #             # Show error message if switch failed
-        #             self.console.print("[yellow]Mode switching is not available at this time[/yellow]")
-        #     else:
-        #         # Show message that Ctrl+R is reserved for mode switching
-        #         self.console.print("[dim]Ctrl+D is reserved for mode switching after chat completion[/dim]")
+            # Performs normal Enter behavior when there is no complementary menu
+            buffer.validate_and_handle()
 
         return kb
 
     def _init_prompt_session(self):
         # Setup prompt session with custom key bindings
-        # custom_bindings = self._create_custom_key_bindings()
-
         self.session = PromptSession(
             history=self.history,
             auto_suggest=AutoSuggestFromHistory(),
             lexer=PygmentsLexer(CustomSqlLexer),
             completer=self.create_combined_completer(),
             multiline=False,
-            # This conflicts with textual.
-            # key_bindings=custom_bindings,
             key_bindings=self._create_custom_key_bindings(),
             enable_history_search=True,
             search_ignore_case=True,
@@ -1682,8 +1669,8 @@ Type '.help' for a list of commands or '.exit' to quit.
 
                 # Add choices to prompt text
                 prompt_text = f"{message} ({'/'.join(choices)}): "
-                if default:
-                    prompt_text = f"{message} ({'/'.join(choices)}) ({default}): "
+                # if default:
+                #     prompt_text = f"{message} ({'/'.join(choices)}) ({default}): "
 
             # Use the existing session for consistency but create a temporary one for this input
             from prompt_toolkit.history import InMemoryHistory
