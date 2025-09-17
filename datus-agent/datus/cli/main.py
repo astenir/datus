@@ -80,6 +80,27 @@ class ArgumentParser:
             help="Enable saving LLM input/output traces to YAML files",
         )
 
+        # Web interface settings
+        self.parser.add_argument(
+            "--web",
+            action="store_true",
+            help="Launch web-based Streamlit chatbot interface",
+        )
+
+        self.parser.add_argument(
+            "--port",
+            type=int,
+            default=8501,
+            help="Port for web interface (default: 8501)",
+        )
+
+        self.parser.add_argument(
+            "--host",
+            type=str,
+            default="localhost",
+            help="Host for web interface (default: localhost)",
+        )
+
     def parse_args(self):
         return self.parser.parse_args()
 
@@ -92,12 +113,21 @@ class Application:
         args = self.arg_parser.parse_args()
 
         # Configure logging based on debug flag, disable console output
-
         configure_logging(args.debug, console_output=False)
 
-        # Initialize and run CLI
-        cli = DatusCLI(args)
-        cli.run()
+        # Check if web interface is requested
+        if args.web:
+            self._run_web_interface(args)
+        else:
+            # Initialize and run CLI
+            cli = DatusCLI(args)
+            cli.run()
+
+    def _run_web_interface(self, args):
+        """Launch Streamlit web interface"""
+        from .web_chatbot import run_web_interface
+
+        run_web_interface(args)
 
 
 def main():

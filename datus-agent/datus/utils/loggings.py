@@ -168,6 +168,49 @@ def get_logger(name: str) -> structlog.BoundLogger:
     return structlog.get_logger(name)
 
 
+def setup_web_chatbot_logging(debug=False, log_dir="logs"):
+    """Setup simplified logging for web chatbot using same format as agent.log
+
+    Args:
+        debug: Enable debug logging
+        log_dir: Directory for log files
+
+    Returns:
+        structlog.BoundLogger: Configured logger for web chatbot
+    """
+    # Create log directory if it doesn't exist
+    log_dir = os.path.expanduser(log_dir)
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+
+    # Create independent logger for web chatbot
+    web_logger = logging.getLogger("web_chatbot")
+    web_logger.setLevel(logging.DEBUG if debug else logging.INFO)
+
+    # Remove existing handlers to avoid duplicates
+    web_logger.handlers.clear()
+
+    # Create file handler with same naming pattern as agent.log
+    from datetime import datetime
+
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    log_file_base = os.path.join(log_dir, f"web_chatbot.{current_date}")
+
+    file_handler = TimedRotatingFileHandler(
+        log_file_base + ".log", when="midnight", interval=1, backupCount=30, encoding="utf-8"
+    )
+    file_handler.suffix = "%Y-%m-%d"
+
+    # Use same formatter as agent.log (simple message format)
+    formatter = logging.Formatter("%(message)s")
+    file_handler.setFormatter(formatter)
+
+    web_logger.addHandler(file_handler)
+    web_logger.propagate = False  # Prevent propagation to root logger
+
+    return structlog.get_logger("web_chatbot")
+
+
 @contextmanager
 def log_context(target: Literal["both", "file", "console", "none"]):
     """Log output context manager
