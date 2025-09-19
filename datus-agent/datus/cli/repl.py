@@ -66,6 +66,9 @@ class DatusCLI:
         self.agent_initializing = False
         self.agent_ready = False
 
+        # Plan mode support
+        self.plan_mode_active = False
+
         # Setup history
         history_file = Path(args.history_file)
         history_file.parent.mkdir(parents=True, exist_ok=True)
@@ -153,6 +156,27 @@ class DatusCLI:
                 # If the menu is incomplete, trigger completion.
                 buffer.start_completion(select_first=False)
 
+        @kb.add("s-tab")
+        def _(event):
+            """Shift+Tab: Toggle Plan Mode on/off"""
+            self.plan_mode_active = not self.plan_mode_active
+
+            # Clear current input buffer and force exit current prompt
+            buffer = event.app.current_buffer
+            buffer.reset()
+
+            # Force the prompt to exit and restart with new prefix
+            # This will cause the main loop to regenerate the prompt
+            buffer.validation_state = None
+            event.app.exit()
+
+            # Show mode change message
+            if self.plan_mode_active:
+                self.console.print("[bold green]Plan Mode Activated![/]")
+                self.console.print("[dim]Enter your planning task and press Enter to generate plan[/]")
+            else:
+                self.console.print("[yellow]Plan Mode Deactivated[/]")
+
         @kb.add("enter")
         def _(event):
             """Enter key: closes the complementary menu or executes a command"""
@@ -163,10 +187,26 @@ class DatusCLI:
                 buffer.apply_completion(buffer.complete_state.current_completion)
                 return
 
+            # Don't intercept plan mode here - let it flow through normal command processing
+
             # Performs normal Enter behavior when there is no complementary menu
             buffer.validate_and_handle()
 
         return kb
+
+    def _get_prompt_text(self):
+        """Get the current prompt text based on mode"""
+        if self.plan_mode_active:
+            return "[PLAN MODE] Datus> "
+        else:
+            return "Datus> "
+
+    def _update_prompt(self):
+        """Update the prompt display (called when mode changes)"""
+        # The prompt will be updated on the next iteration of the main loop
+        # This is a limitation of prompt_toolkit's PromptSession
+        # For immediate feedback, we could force a redraw, but it's complex
+        pass
 
     def _init_prompt_session(self):
         # Setup prompt session with custom key bindings
@@ -216,19 +256,16 @@ class DatusCLI:
 
         while True:
             try:
-                # Check if we have a selected catalog path to inject
-                prompt_text = "Datus> "
-                # TODO use selected_catalog_path
-                # if self.selected_catalog_path:
-                #     # prompt_text = f"Datus> {self.selected_catalog_path}"
-                #     selected_path = self.selected_catalog_path
-                #     self.console.print(f"Selected catalog: {selected_path}")
-                #     self.selected_catalog_path = None
+                # Get dynamic prompt text
+                prompt_text = self._get_prompt_text()
 
                 # Get user input
-                user_input = self.session.prompt(
+                user_input_raw = self.session.prompt(
                     message=prompt_text,
-                ).strip()
+                )
+                if user_input_raw is None:
+                    continue
+                user_input = user_input_raw.strip()
                 if not user_input:
                     continue
 
@@ -254,6 +291,10 @@ class DatusCLI:
             except EOFError:
                 return 0
             except Exception as e:
+                # Check if this is an exit event (for plan mode toggle)
+                if "exit" in str(e).lower() and "app" in str(e).lower():
+                    # This is expected from shift+tab toggle, continue loop
+                    continue
                 logger.error(f"Error: {str(e)}")
                 self.console.print(f"[bold red]Error:[/] {str(e)}")
 
@@ -677,7 +718,7 @@ class DatusCLI:
 
     def _execute_chat_command(self, message: str):
         """Execute a chat command (/ prefix) using ChatAgenticNode."""
-        self.chat_commands.execute_chat_command(message)
+        self.chat_commands.execute_chat_command(message, plan_mode=self.plan_mode_active)
 
     def _execute_internal_command(self, cmd: str, args: str):
         """Execute an internal command (. prefix)."""

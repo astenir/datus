@@ -46,7 +46,7 @@ class ChatCommands:
         if self.chat_node:
             self.chat_node.setup_tools()
 
-    def execute_chat_command(self, message: str):
+    def execute_chat_command(self, message: str, plan_mode: bool = False):
         """Execute a chat command (/ prefix) using ChatAgenticNode."""
         if not message.strip():
             self.console.print("[yellow]Please provide a message to chat with the AI.[/]")
@@ -64,6 +64,7 @@ class ChatCommands:
                 schemas=at_tables,
                 metrics=at_metrics,
                 historical_sql=at_sqls,
+                plan_mode=plan_mode,
             )
             # Get or create persistent ChatAgenticNode
             if self.chat_node is None:
@@ -91,13 +92,24 @@ class ChatCommands:
 
             # Run streaming execution with real-time display
             # Create a live display like the !reason command (shows only new actions)
-            with action_display.display_streaming_actions(incremental_actions):
-                # Run the async streaming method
+            # Skip live display in plan mode to avoid conflicts
+            if not plan_mode:
+                with action_display.display_streaming_actions(incremental_actions):
+                    # Run the async streaming method
+                    async def run_chat_stream():
+                        async for action in self.chat_node.execute_stream(chat_input, self.cli.actions):
+                            incremental_actions.append(action)
+                            # Add delay to make the streaming visible
+                            await asyncio.sleep(0.5)
+
+                    # Execute the streaming chat
+                    asyncio.run(run_chat_stream())
+            else:
+                # In plan mode, run without live display to avoid conflicts with plan hooks
                 async def run_chat_stream():
                     async for action in self.chat_node.execute_stream(chat_input, self.cli.actions):
                         incremental_actions.append(action)
-                        # Add delay to make the streaming visible
-                        await asyncio.sleep(0.5)
+                        # No delay needed in plan mode
 
                 # Execute the streaming chat
                 asyncio.run(run_chat_stream())

@@ -40,12 +40,13 @@ def trans_to_function_tool(bound_method: Callable) -> FunctionTool:
     def create_async_invoker(method_to_call: Callable) -> Callable:
         async def final_invoker(tool_ctx, args_str: str) -> dict:
             """
-            This is an async wrapper around our synchronous tool method.
+            This is an async wrapper for tool methods.
             The agent framework will 'await' this coroutine.
             """
-            # The actual work (JSON parsing, method call) is synchronous.
+            # The actual work (JSON parsing, method call)
             args_dict = json.loads(args_str)
             result_dict = method_to_call(**args_dict)
+
             if isinstance(result_dict, FuncToolResult):
                 result_dict = result_dict.model_dump()
             return result_dict

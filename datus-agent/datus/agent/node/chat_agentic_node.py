@@ -69,6 +69,7 @@ class ChatAgenticNode(AgenticNode):
         )
         self.db_func_tool: DBFuncTool
         self.context_search_tools: ContextSearchTools
+        self.plan_mode_active = False
         self.setup_tools()
 
     def setup_tools(self):
@@ -134,10 +135,24 @@ class ChatAgenticNode(AgenticNode):
         if not action_history_manager:
             action_history_manager = ActionHistoryManager()
 
+        is_plan_mode = getattr(user_input, "plan_mode", False)
+        if is_plan_mode:
+            self.plan_mode_active = True
+
+            # Create plan mode hooks
+            from rich.console import Console
+
+            from datus.cli.plan_hooks import PlanModeHooks
+
+            console = Console()
+            session = self._get_or_create_session()[0]
+            self.plan_hooks = PlanModeHooks(console=console, session=session)
+
         # Create initial action
+        action_type = "plan_mode_interaction" if is_plan_mode else "chat_interaction"
         action = ActionHistory.create_action(
             role=ActionRole.USER,
-            action_type="chat_interaction",
+            action_type=action_type,
             messages=f"User: {user_input.user_message}",
             input_data=user_input.model_dump(),
             status=ActionStatus.PROCESSING,
@@ -199,15 +214,16 @@ class ChatAgenticNode(AgenticNode):
             action_history_manager.add_action(assistant_action)
             yield assistant_action
 
-            # Stream response using the model's generate_with_tools_stream
-            async for stream_action in self.model.generate_with_tools_stream(
+            # Determine execution mode and start unified recursive execution
+            execution_mode = "plan" if is_plan_mode and self.plan_hooks else "normal"
+
+            # Start unified recursive execution
+            async for stream_action in self._execute_with_recursive_replan(
                 prompt=enhanced_message,
-                tools=self.tools,
-                mcp_servers=self.mcp_servers,
-                instruction=system_instruction,
-                max_turns=self.max_turns,
-                session=session,
+                execution_mode=execution_mode,
+                original_input=user_input,
                 action_history_manager=action_history_manager,
+                session=session,
             ):
                 yield stream_action
 
@@ -297,34 +313,175 @@ class ChatAgenticNode(AgenticNode):
             yield final_action
 
         except Exception as e:
-            logger.error(f"Chat execution error: {e}")
+            # Handle user cancellation as success, not error
+            if "User cancelled" in str(e) or "UserCancelledException" in str(type(e).__name__):
+                logger.info("User cancelled execution, stopping gracefully...")
 
-            # Create error result
-            error_result = ChatNodeResult(
-                success=False,
-                error=str(e),
-                response="Sorry, I encountered an error while processing your request.",
-                tokens_used=0,
-            )
+                # Create cancellation result (success=True)
+                result = ChatNodeResult(
+                    success=True,
+                    response="Execution cancelled by user.",
+                    tokens_used=0,
+                )
 
-            # Update action with error
-            action_history_manager.update_current_action(
-                status=ActionStatus.FAILED,
-                output=error_result.model_dump(),
-                messages=f"Error: {str(e)}",
-            )
+                # Update action with cancellation
+                action_history_manager.update_current_action(
+                    status=ActionStatus.SUCCESS,
+                    output=result.model_dump(),
+                    messages="Execution cancelled by user",
+                )
 
-            # Create error action
-            error_action = ActionHistory.create_action(
-                role=ActionRole.ASSISTANT,
-                action_type="error",
-                messages=f"Chat interaction failed: {str(e)}",
-                input_data=user_input.model_dump(),
-                output_data=error_result.model_dump(),
-                status=ActionStatus.FAILED,
-            )
-            action_history_manager.add_action(error_action)
-            yield error_action
+                # Create cancellation action
+                action = ActionHistory.create_action(
+                    role=ActionRole.ASSISTANT,
+                    action_type="user_cancellation",
+                    messages="Execution cancelled by user",
+                    input_data=user_input.model_dump(),
+                    output_data=result.model_dump(),
+                    status=ActionStatus.SUCCESS,
+                )
+            else:
+                logger.error(f"Chat execution error: {e}")
+
+                # Create error result for all other exceptions
+                result = ChatNodeResult(
+                    success=False,
+                    error=str(e),
+                    response="Sorry, I encountered an error while processing your request.",
+                    tokens_used=0,
+                )
+
+                # Update action with error
+                action_history_manager.update_current_action(
+                    status=ActionStatus.FAILED,
+                    output=result.model_dump(),
+                    messages=f"Error: {str(e)}",
+                )
+
+                # Create error action
+                action = ActionHistory.create_action(
+                    role=ActionRole.ASSISTANT,
+                    action_type="error",
+                    messages=f"Chat interaction failed: {str(e)}",
+                    input_data=user_input.model_dump(),
+                    output_data=result.model_dump(),
+                    status=ActionStatus.FAILED,
+                )
+
+            action_history_manager.add_action(action)
+            yield action
+
+        finally:
+            # Clean up plan mode state
+            if is_plan_mode:
+                self.plan_mode_active = False
+                self.plan_hooks = None
+
+    async def _execute_with_recursive_replan(
+        self,
+        prompt: str,
+        execution_mode: str,
+        original_input: "ChatNodeInput",
+        action_history_manager: "ActionHistoryManager",
+        session,
+    ):
+        """
+        Unified recursive execution function that handles all execution modes.
+
+        Args:
+            prompt: The prompt to send to LLM
+            execution_mode: "normal", "plan", or "replan"
+            original_input: Original chat input for context
+            action_history_manager: Action history manager
+            session: Chat session
+        """
+        logger.info(f"Executing mode: {execution_mode}")
+
+        # Get execution configuration for this mode
+        config = self._get_execution_config(execution_mode, original_input)
+
+        # Reset state for replan mode
+        if execution_mode == "plan" and self.plan_hooks:
+            self.plan_hooks.plan_phase = "generating"
+
+        try:
+            # Build enhanced prompt for plan mode
+            final_prompt = prompt
+            if execution_mode == "plan":
+                final_prompt = self._build_plan_prompt(prompt)
+
+            # Unified execution using configuration
+            async for stream_action in self.model.generate_with_tools_stream(
+                prompt=final_prompt,
+                tools=config["tools"],
+                mcp_servers=self.mcp_servers,
+                instruction=config["instruction"],
+                max_turns=self.max_turns,
+                session=session,
+                action_history_manager=action_history_manager,
+                hooks=config.get("hooks"),
+            ):
+                yield stream_action
+
+        except Exception as e:
+            if "REPLAN_REQUIRED" in str(e):
+                logger.info("Replan requested, recursing...")
+
+                # Recursive call - enter replan mode with original user prompt
+                async for action in self._execute_with_recursive_replan(
+                    prompt=prompt,
+                    execution_mode=execution_mode,
+                    original_input=original_input,
+                    action_history_manager=action_history_manager,
+                    session=session,
+                ):
+                    yield action
+            else:
+                raise
+
+    def _get_execution_config(self, execution_mode: str, original_input: "ChatNodeInput") -> dict:
+        """
+        Get execution configuration based on mode.
+
+        Args:
+            execution_mode: "normal", "plan"
+            original_input: Original chat input for context
+
+        Returns:
+            Configuration dict with tools, instruction, and hooks
+        """
+        if execution_mode == "normal":
+            return {"tools": self.tools, "instruction": self._get_system_instruction(original_input), "hooks": None}
+        elif execution_mode == "plan":
+            # Plan mode: standard tools + plan tools
+            plan_tools = self.plan_hooks.get_plan_tools() if self.plan_hooks else []
+
+            # Add execution steps to instruction for consistency
+            base_instruction = self._get_system_instruction(original_input)
+            current_phase = getattr(self.plan_hooks, "plan_phase", "generating") if self.plan_hooks else "generating"
+
+            if current_phase in ["executing", "confirming"]:
+                plan_instruction = (
+                    base_instruction
+                    + "\n\nEXECUTION steps:\n"
+                    + "For each todo step: todo_update_pending(id) → execute task → todo_update_completed(id)\n"
+                    + "Always follow this exact sequence for every step."
+                )
+            else:
+                plan_instruction = base_instruction
+
+            return {
+                "tools": self.tools + plan_tools,
+                "instruction": plan_instruction,
+                "hooks": self.plan_hooks,
+            }
+        else:
+            raise ValueError(f"Unknown execution mode: {execution_mode}")
+
+    def _get_system_instruction(self, original_input: "ChatNodeInput") -> str:
+        """Get system instruction for normal mode."""
+        _, conversation_summary = self._get_or_create_session()
+        return self._get_system_prompt(conversation_summary, original_input.prompt_version)
 
     def _extract_sql_and_output_from_response(self, output: dict) -> tuple[Optional[str], Optional[str]]:
         """
