@@ -4,14 +4,19 @@ This module provides a class to handle all agent-related commands.
 """
 
 import asyncio
+import os.path
 import uuid
+from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 
 from rich.prompt import Confirm
+from rich.syntax import Syntax
+from rich.table import Table
 
 from datus.agent.evaluate import setup_node_input, update_context_from_node
 from datus.agent.node import Node
 from datus.agent.workflow import Workflow
 from datus.cli.action_history_display import ActionHistoryDisplay
+from datus.cli.subject_rich_utils import build_historical_sql_tags
 from datus.configuration.node_type import NodeType
 from datus.schemas.action_history import ActionHistoryManager
 from datus.schemas.base import BaseInput
@@ -21,17 +26,22 @@ from datus.schemas.generate_semantic_model_node_models import GenerateSemanticMo
 from datus.schemas.node_models import ExecuteSQLInput, GenerateSQLInput, OutputInput, SqlTask
 from datus.schemas.reason_sql_node_models import ReasoningInput
 from datus.schemas.schema_linking_node_models import SchemaLinkingInput
+from datus.tools.context_search import ContextSearchTools
+from datus.tools.output_tools import OutputTool
 from datus.utils.constants import DBType
 from datus.utils.loggings import get_logger
 from datus.utils.rich_util import dict_to_tree
 
 logger = get_logger(__name__)
 
+if TYPE_CHECKING:
+    from datus.cli.repl import DatusCLI
+
 
 class AgentCommands:
     """Handles all agent, workflow, and node-related commands."""
 
-    def __init__(self, cli_instance, cli_context):
+    def __init__(self, cli_instance: "DatusCLI", cli_context):
         """Initialize with reference to the CLI instance and CLI context."""
         self.cli = cli_instance
         self.cli_context = cli_context
@@ -41,6 +51,14 @@ class AgentCommands:
         # Only one interactive workflow is supported, the other one is the background workflow
         self.workflow = None
         self.agent_thread = None
+        self._context_search_tools: ContextSearchTools | None = None
+        self.output_tool: OutputTool | None = None
+
+    @property
+    def context_search_tools(self):
+        if not self._context_search_tools:
+            self._context_search_tools = ContextSearchTools(self.cli.agent_config)
+        return self._context_search_tools
 
     def update_agent_reference(self):
         """Update the agent reference if it has changed in the CLI."""
@@ -60,11 +78,11 @@ class AgentCommands:
 
         if node_type == NodeType.TYPE_SCHEMA_LINKING:
             if not task_text:
-                task_text = sql_task.task or self.cli._prompt_input(
+                task_text = sql_task.task or self.cli.prompt_input(
                     "Enter task description for schema linking", default=""
                 )
-            top_n = self.cli._prompt_input("Enter number of tables to link", default="5")
-            matching_rate = self.cli._prompt_input(
+            top_n = self.cli.prompt_input("Enter number of tables to link", default="5")
+            matching_rate = self.cli.prompt_input(
                 "Enter matching method",
                 choices=["fast", "medium", "slow", "from_llm"],
                 default="fast",
@@ -81,7 +99,7 @@ class AgentCommands:
             task_text = (
                 task_text
                 or sql_task.task
-                or self.cli._prompt_input("Enter task description for SQL generation", default="")
+                or self.cli.prompt_input("Enter task description for SQL generation", default="")
             )
             return GenerateSQLInput(
                 input_text=task_text,
@@ -97,13 +115,13 @@ class AgentCommands:
             if not last_sql:
                 self.console.print("[bold red]Error:[/] No recent SQL to fix")
                 return None
-            fix_description = self.cli._prompt_input("Describe the issue to fix", default="")
+            fix_description = self.cli.prompt_input("Describe the issue to fix", default="")
             return ExecuteSQLInput(
                 sql_query=last_sql, sql_task=sql_task, database_type=sql_task.database_type, expectation=fix_description
             )
 
         elif node_type == NodeType.TYPE_REASONING:
-            sql_query = self.cli._prompt_input(
+            sql_query = self.cli.prompt_input(
                 "Enter SQL query to reason about", default=self.cli_context.get_last_sql() or ""
             )
             return ReasoningInput(
@@ -128,7 +146,7 @@ class AgentCommands:
             )
 
         elif node_type == NodeType.TYPE_COMPARE:
-            expectation = self.cli._prompt_input("Enter expectation (SQL query or expected data format)", default="")
+            expectation = self.cli.prompt_input("Enter expectation (SQL query or expected data format)", default="")
             if not expectation.strip():
                 self.console.print("[bold red]Error:[/] Expectation cannot be empty")
                 return None
@@ -265,11 +283,11 @@ class AgentCommands:
                 external_knowledge = ""
                 current_date = ""
             else:  # If no input, use a prompt to get the task info
-                task_id = self.cli._prompt_input("Enter task ID", default=task_id)
+                task_id = self.cli.prompt_input("Enter task ID", default=task_id)
 
                 # Use existing task description as default if available
                 default_task = self.cli_context.current_sql_task.task if self.cli_context.current_sql_task else ""
-                task_description = self.cli._prompt_input("Enter task description", default=default_task)
+                task_description = self.cli.prompt_input("Enter task description", default=default_task)
                 if not task_description.strip():
                     self.console.print("[bold red]Error:[/] Task description is required")
                     return
@@ -280,7 +298,7 @@ class AgentCommands:
                     or (self.cli.args.db_path if hasattr(self.cli.args, "db_path") else "")
                     or ""
                 )
-                database_name = self.cli._prompt_input("Enter database name", default=default_db)
+                database_name = self.cli.prompt_input("Enter database name", default=default_db)
                 if not database_name.strip():
                     self.console.print("[bold red]Error:[/] Database name is required")
                     return
@@ -289,10 +307,10 @@ class AgentCommands:
                 output_dir = "output"
 
                 # External knowledge - optional input
-                external_knowledge = self.cli._prompt_input("Enter external knowledge (optional)", default="")
+                external_knowledge = self.cli.prompt_input("Enter external knowledge (optional)", default="")
 
                 # Current date - optional input for relative time expressions
-                current_date = self.cli._prompt_input("Enter current date (optional, e.g., '2025-07-01')", default="")
+                current_date = self.cli.prompt_input("Enter current date (optional, e.g., '2025-07-01')", default="")
 
             # Create the SQL task
             sql_task = SqlTask(
@@ -354,40 +372,271 @@ class AgentCommands:
             logger.error(f"Failed to start agent session: {str(e)}")
             self.console.print(f"[bold red]Error:[/] {str(e)}")
 
-    def cmd_sl(self, args: str):
-        """Show list of recommended tables."""
-        # Create input for schema linking node
-        input_data = self.create_node_input(NodeType.TYPE_SCHEMA_LINKING, args)
-        if not input_data:
+    def cmd_schema_linking(self, args: str):
+        """
+        Command to perform schema linking. Corresponds to !sl
+        """
+        self.console.print("[bold blue]Schema Linking[/]")
+        input_text = args.strip() or self.cli.prompt_input("Enter search text for tables")
+        if not input_text:
+            self.console.print("[bold red]Error:[/] Input text cannot be empty.")
             return
 
-        # Run standalone node
-        result = self.run_standalone_node(NodeType.TYPE_SCHEMA_LINKING, input_data)
+        catalog_name, database_name, schema_name = self._prompt_db_layers()
+        top_n = self.cli.prompt_input("Enter top_n to match", default="5")
 
-        if result and result.success:
-            # Store found tables in CLI context
-            self.cli_context.add_tables(result.table_schemas)
-            self.console.print(f"[green]Found {len(result.table_schemas)} relevant tables[/]")
+        # The tool's search_similar seems to handle table_type internally.
+        # The PDF mentions table_type, but the tool implementation has it fixed to "full".
+        # I will omit prompting for it as it won't be used.
 
-            # Display results
-            for i, table in enumerate(result.table_schemas):
-                self.console.print(f"\n[bold]{i+1}. {table.table_name}[/]")
-                self.console.print(f"   Database: {table.database}")
-                self.console.print(f"   Schema: {table.catalog}")
+        with self.console.status("[bold green]Searching for relevant tables...[/]"):
+            result = self.context_search_tools.search_table_metadata(
+                query_text=input_text,
+                catalog_name=catalog_name,
+                database_name=database_name,
+                schema_name=schema_name,
+                simple_sample_data=False,
+                top_n=int(top_n.strip()),
+            )
+
+        if result.success and result.result:
+            metadata = result.result.get("metadata", [])
+            sample_data = result.result.get("sample_data", [])
+
+            self.console.print(
+                f"Found [bold green]{len(metadata)}[/] relevant tables and [bold blue]{len(sample_data)}[/] sample rows"
+            )
+
+            if metadata:
+                self._print_metadata_table(
+                    metadata, data_column="definition", data_column_dsc="Definition (DDL)", lexer="sql"
+                )
+
+            if sample_data:
+                self._print_metadata_table(
+                    sample_data, data_column="sample_rows", data_column_dsc="Sample Rows", lexer="markdown"
+                )
+
+        elif not result.success:
+            self.console.print(f"[bold red]Error during schema linking:[/] {result.error}")
         else:
-            self.console.print("[bold red]Schema linking failed[/]")
+            self.console.print("[yellow]No relevant tables found.[/]")
+
+    def _prompt_db_layers(self) -> Tuple[str, str, str]:
+        dialect = self.cli.db_connector.dialect
+        catalog_name, database_name, schema_name = "", "", ""
+
+        if DBType.support_catalog(dialect):
+            catalog_name = self.cli.prompt_input("Enter catalog name", default=self.cli_context.current_catalog or "")
+        if DBType.SQLITE == dialect or DBType.support_database(dialect):
+            database_name = self.cli.prompt_input("Enter database name", default=self.cli_context.current_db_name or "")
+        if DBType.support_schema(dialect):
+            schema_name = self.cli.prompt_input("Enter schema name", default=self.cli_context.current_schema or "")
+
+        return catalog_name, database_name, schema_name
+
+    def _print_metadata_table(
+        self, data_list: List[Dict[str, Any]], data_column: str, data_column_dsc: str = "", lexer: str = "sql"
+    ):
+        table = Table(
+            title="Schema Linking Results",
+            show_header=True,
+            border_style="blue",
+            header_style="bold cyan",
+            expand=True,
+        )
+        table.add_column("Catalog", style="green", max_width=20)
+        table.add_column("Database", style="green", max_width=20)
+        table.add_column("Schema", style="green", max_width=20)
+        table.add_column("Table Name", style="bold green")
+        table.add_column("Type", style="yellow")
+        table.add_column(data_column_dsc if data_column_dsc else data_column, style="default")
+        table.add_column("Distance", style="dim")
+        for item in data_list:
+            table.add_row(
+                item.get("catalog_name"),
+                item.get("database_name"),
+                item.get("schema_name"),
+                item.get("table_name"),
+                item.get("table_type"),
+                Syntax(item.get(data_column, ""), lexer=lexer, line_numbers=True, word_wrap=True),
+                str(item.get("_distance", "")),
+            )
+        self.console.print(table)
+
+    def cmd_search_metrics(self, args: str):
+        """
+        Command to search for metrics. Corresponds to !sm
+        """
+        self.console.print("[bold blue]Search Metrics[/]")
+        input_text = args.strip() or self.cli.prompt_input("Enter search text for metrics")
+        if not input_text:
+            self.console.print("[bold red]Error:[/] Input text cannot be empty.")
+            return
+
+        domain, layer1, layer2 = self._prompt_logic_layer()
+
+        catalog_name, database_name, schema_name = self._prompt_db_layers()
+
+        top_n = self.cli.prompt_input("Enter top_n to match", default="5")
+
+        with self.console.status("[bold green]Searching for metrics...[/]"):
+            result = self.context_search_tools.search_metrics(
+                query_text=input_text,
+                domain=domain,
+                layer1=layer1,
+                layer2=layer2,
+                catalog_name=catalog_name,
+                database_name=database_name,
+                schema_name=schema_name,
+                top_n=int(top_n.strip()),
+            )
+        if result.success and result.result:
+            metrics = result.result
+            self.console.print(f"[bold green]Found {len(metrics)} metrics.[/]")
+            table = Table(
+                title="Metrics Search Results",
+                show_header=True,
+                header_style="bold cyan",
+                border_style="blue",
+                expand=True,
+            )
+            table.add_column("Name", style="bold green")
+            table.add_column("Description", style="default")
+            table.add_column("SQL Query", style="default")
+            table.add_column("Constraint", style="yellow")
+
+            for metric in metrics:
+                table.add_row(
+                    metric.get("name"),
+                    metric.get("description"),
+                    Syntax(metric.get("sql_query"), lexer="sql", line_numbers=True, word_wrap=True),
+                    metric.get("constraint"),
+                )
+            self.console.print(table)
+        elif not result.success:
+            self.console.print(f"[bold red]Error searching metrics:[/] {result.error}")
+        else:
+            self.console.print("[yellow]No metrics found.[/]")
+
+    def _prompt_logic_layer(self) -> Tuple[str, str, str]:
+        domain = self.cli.prompt_input("Enter domain (optional)")
+        layer1 = self.cli.prompt_input("Enter layer1 (optional)")
+        layer2 = self.cli.prompt_input("Enter layer2 (optional)")
+        return domain, layer1, layer2
+
+    def cmd_search_history(self, args: str):
+        """
+        Command to search historical SQL queries. Corresponds to !sh
+        """
+        self.console.print("[bold blue]Search SQL History[/]")
+        input_text = args.strip() or self.cli.prompt_input("Enter search text for SQL history")
+        if not input_text:
+            self.console.print("[bold red]Error:[/] Input text cannot be empty.")
+            return
+
+        domain, layer1, layer2 = self._prompt_logic_layer()
+        top_n = self.cli.prompt_input("Enter top_n to match", default="5")
+        with self.console.status("[bold green]Searching SQL history...[/]"):
+            result = self.context_search_tools.search_historical_sql(
+                query_text=input_text, domain=domain, layer1=layer1, layer2=layer2, top_n=int(top_n.strip())
+            )
+
+        if result.success and result.result:
+            history = result.result
+            self.console.print(f"[bold]Found [green]{len(history)}[/] historical SQL queries.[/]")
+            table = Table(
+                title="SQL History Search Results",
+                show_header=True,
+                border_style="blue",
+                header_style="bold cyan",
+                expand=True,
+            )
+            table.add_column("Name", style="bold green")
+            table.add_column("SQL", style="default")
+            table.add_column("Summary", style="default")
+            table.add_column("Comment", style="default")
+            table.add_column("Tags", style="blue")
+            table.add_column("Domain", style="yellow")
+            table.add_column("Layer1", style="yellow")
+            table.add_column("Layer2", style="yellow")
+            table.add_column("File Path", style="dim")
+            table.add_column("Distance", style="dim")
+            #
+            for item in history:
+                table.add_row(
+                    item.get("name"),
+                    Syntax(item.get("sql"), lexer="sql", line_numbers=True, word_wrap=True),
+                    item.get("summary"),
+                    item.get("comment"),
+                    build_historical_sql_tags(item.get("tags", ""), "\n"),
+                    item.get("domain"),
+                    item.get("layer1"),
+                    item.get("layer2"),
+                    item.get("filepath"),
+                    str(item.get("_distance", "")),
+                )
+            self.console.print(table)
+        elif not result.success:
+            self.console.print(f"[bold red]Error searching SQL history:[/] {result.error}")
+        else:
+            self.console.print("[yellow]No historical SQL queries found.[/]")
+
+    def cmd_save(self, args: str):
+        """
+        Command to save the last result to a file. Corresponds to !output/save
+        """
+        self.console.print("[bold blue]Save Output[/]")
+        last_sql = self.cli.cli_context.get_last_sql_context()
+        if not last_sql:
+            self.console.print("[bold red]Error:[/] No previous result to save.")
+            return
+
+        file_type = self.cli.prompt_input(
+            "Enter file type (json/csv/sql/all)", default="all", choices=["json", "csv", "sql", "all"]
+        )
+        target_dir = self.cli.prompt_input(
+            "Enter output directory (optional)", default=os.path.expanduser("~/.datus/output")
+        )
+        from datetime import datetime
+
+        file_name = self.cli.prompt_input("Enter file name(optional)", default=datetime.now().strftime("%Y%m%d%H%M%S"))
+        try:
+            with self.console.status("[bold green]Saving SQL...[/]"):
+                if not self.output_tool:
+                    self.output_tool = OutputTool()
+                result = self.output_tool.execute(
+                    OutputInput(
+                        task="",
+                        database_name=self.cli.cli_context.current_db_name,
+                        task_id=file_name,
+                        gen_sql=last_sql.sql_query,
+                        sql_result=last_sql.sql_return,
+                        row_count=last_sql.row_count,
+                        file_type=file_type,
+                        check_result=False,
+                        error=last_sql.sql_error,
+                        finished=not last_sql.sql_error,
+                        output_dir=target_dir,
+                    ),
+                    self.cli.db_connector,
+                )
+            self.console.print(f"[green]SQL query saved to {result.output}[/]")
+
+        except Exception as e:
+            self.console.print(f"[bold red]Error saving file:[/] {e}")
 
     def _modify_input(self, input: BaseInput):
         if isinstance(input, SchemaLinkingInput):
-            top_n = self.cli._prompt_input("Enter number of tables to link", default="5")
+            top_n = self.cli.prompt_input("Enter number of tables to link", default="5")
             input.top_n = int(top_n.strip())
-            matching_rate = self.cli._prompt_input(
+            matching_rate = self.cli.prompt_input(
                 "Enter matching method",
                 choices=["fast", "medium", "slow", "from_llm"],
                 default="fast",
             )
             input.matching_rate = matching_rate.strip()
-            database_name = self.cli._prompt_input("Enter database name", default=input.database_name)
+            database_name = self.cli.prompt_input("Enter database name", default=input.database_name)
             input.database_name = database_name.strip()
         elif isinstance(input, GenerateSQLInput):
             pass
@@ -402,7 +651,7 @@ class AgentCommands:
                     self.console.print(f"\n[bold]Context {i + 1}:[/]")
                     self.console.print(sql_context.to_dict())
 
-                sql_context_id = self.cli._prompt_input(
+                sql_context_id = self.cli.prompt_input(
                     "Enter SQL context ID", default=str(len(self.workflow.context.sql_contexts))
                 )
                 try:
@@ -419,51 +668,51 @@ class AgentCommands:
                 self.console.print("[bold red]Error:[/] No SQL context available")
         elif isinstance(input, GenerateMetricsInput):
             # Allow user to modify task, sql_query and prompt version
-            task = self.cli._prompt_input("Enter task description", default=input.sql_task.task)
+            task = self.cli.prompt_input("Enter task description", default=input.sql_task.task)
             input.sql_task.task = task.strip()
             if not input.sql_task.task.strip():
                 self.console.print("[bold red]Error:[/] Task description is required")
                 return
-            sql_query = self.cli._prompt_input("Enter SQL query to generate metrics from", default=input.sql_query)
+            sql_query = self.cli.prompt_input("Enter SQL query to generate metrics from", default=input.sql_query)
             input.sql_query = sql_query.strip()
             if not input.sql_query.strip():
                 self.console.print("[bold red]Error:[/] SQL query is required")
                 return
-            prompt_version = self.cli._prompt_input("Enter prompt version", default=input.prompt_version)
+            prompt_version = self.cli.prompt_input("Enter prompt version", default=input.prompt_version)
             input.prompt_version = prompt_version.strip()
         elif isinstance(input, GenerateSemanticModelInput):
             # Allow user to modify table name
-            table_name = self.cli._prompt_input(
+            table_name = self.cli.prompt_input(
                 "Enter table name to generate semantic model from", default=input.table_name
             )
             input.table_name = table_name.strip()
 
             # Interactive prompts for metadata (now using sql_task fields)
             self.console.print("[bold blue]Semantic Model Metadata:[/]")
-            catalog_name = self.cli._prompt_input("Enter catalog name", default=input.sql_task.catalog_name)
+            catalog_name = self.cli.prompt_input("Enter catalog name", default=input.sql_task.catalog_name)
             input.sql_task.catalog_name = catalog_name.strip()
 
-            database_name = self.cli._prompt_input("Enter database name", default=input.sql_task.database_name)
+            database_name = self.cli.prompt_input("Enter database name", default=input.sql_task.database_name)
             input.sql_task.database_name = database_name.strip()
 
-            schema_name = self.cli._prompt_input("Enter schema name", default=input.sql_task.schema_name)
+            schema_name = self.cli.prompt_input("Enter schema name", default=input.sql_task.schema_name)
             input.sql_task.schema_name = schema_name.strip()
 
-            layer1 = self.cli._prompt_input("Enter layer1 (business layer)", default=input.sql_task.layer1)
+            layer1 = self.cli.prompt_input("Enter layer1 (business layer)", default=input.sql_task.layer1)
             input.sql_task.layer1 = layer1.strip()
 
-            layer2 = self.cli._prompt_input("Enter layer2 (sub-layer)", default=input.sql_task.layer2)
+            layer2 = self.cli.prompt_input("Enter layer2 (sub-layer)", default=input.sql_task.layer2)
             input.sql_task.layer2 = layer2.strip()
 
-            domain = self.cli._prompt_input("Enter domain", default=input.sql_task.domain)
+            domain = self.cli.prompt_input("Enter domain", default=input.sql_task.domain)
             input.sql_task.domain = domain.strip()
 
-            prompt_version = self.cli._prompt_input("Enter prompt version", default=input.prompt_version)
+            prompt_version = self.cli.prompt_input("Enter prompt version", default=input.prompt_version)
             input.prompt_version = prompt_version.strip()
         elif isinstance(input, CompareInput):
             # Allow user to modify expectation
             if not input.expectation:
-                expectation = self.cli._prompt_input("Enter expectation (SQL query or expected data)", default="")
+                expectation = self.cli.prompt_input("Enter expectation (SQL query or expected data)", default="")
                 input.expectation = expectation.strip()
 
     def cmd_gen(self, args: str):
@@ -643,7 +892,7 @@ class AgentCommands:
             # 3. Human confirmation
             if need_confirm:
                 while True:
-                    choice = self.cli._prompt_input(
+                    choice = self.cli.prompt_input(
                         "Do you want to execute this node? yes/no/edit",
                         choices=["y", "n", "e"],
                         default="y",
@@ -685,8 +934,6 @@ class AgentCommands:
                 sql_query = result_dict.get("sql_query")
                 # Display SQL separately without tree structure for easy copying
                 if sql_query:
-                    from rich.syntax import Syntax
-
                     # Display title separately
                     self.console.print("[bold green]📋 SQL Query[/]")
 
@@ -736,15 +983,6 @@ class AgentCommands:
             logger.error(f"Node execution error: {str(e)}")
             self.console.print(f"[bold red]Error:[/] {str(e)}")
             return {"success": False, "error": str(e)}
-
-    def cmd_save(self, args: str, file_name: str = None):
-        """Save the last SQL and result files"""
-        if not self.workflow:
-            self.console.print("[bold yellow]Warning:[/] No active workflow. Starting a new one.")
-            self.cmd_dastart()
-
-        # Run the reasoning node
-        self.run_node(NodeType.TYPE_OUTPUT, args)
 
     def cmd_compare(self, args: str):
         """Compare SQL with expectations - interactive analysis."""
@@ -842,9 +1080,7 @@ class AgentCommands:
                 if hasattr(self.cli, "streamlit_mode") and self.cli.streamlit_mode:
                     show_details = "n"  # Auto-skip in Streamlit mode
                 else:
-                    show_details = (
-                        self.cli._prompt_input("Show Full Action History? (y/N)", default="n").strip().lower()
-                    )
+                    show_details = self.cli.prompt_input("Show Full Action History? (y/N)", default="n").strip().lower()
 
                 if show_details == "y":
                     self.console.print("\n[bold blue]Full Action History:[/]")

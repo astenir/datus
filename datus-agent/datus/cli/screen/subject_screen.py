@@ -35,7 +35,7 @@ def _fetch_metrics_with_cache(
             layer1,
             layer2,
             semantic_model_name,
-            selected_fields=["name", "description", "constraint", "sql_query"],
+            selected_fields=["name", "description", "constraint", "sql_query", "domain_layer1_layer2"],
         )
     except Exception as e:
         logger.error(f"Metrics fetch failed: {str(e)}")
@@ -460,7 +460,6 @@ class SubjectScreen(ContextScreen):
 
         table.add_column("Key", style="bright_cyan", ratio=1)
         table.add_column("Value", style="yellow", justify="left", ratio=3, no_wrap=False)
-
         # Add basic properties
         table.add_row("Semantic Model Name", semantic_details.get("semantic_model_name", "N/A"))
         table.add_row("Domain", semantic_details.get("domain", "N/A"))

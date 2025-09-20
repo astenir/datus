@@ -103,7 +103,13 @@ class DatusCLI:
         # Dictionary of available commands - created after handlers are initialized
         self.commands = {
             "!run": self.agent_commands.cmd_darun_screen,
-            "!sl": self.agent_commands.cmd_sl,
+            "!sl": self.agent_commands.cmd_schema_linking,
+            "!schema_linking": self.agent_commands.cmd_schema_linking,
+            "!sm": self.agent_commands.cmd_search_metrics,
+            "!search_metrics": self.agent_commands.cmd_search_metrics,
+            "!sh": self.agent_commands.cmd_search_history,
+            "!search_history": self.agent_commands.cmd_search_history,
+            # "!doc_search": self.agent_commands.cmd_doc_search,
             "!gen": self.agent_commands.cmd_gen,
             "!fix": self.agent_commands.cmd_fix,
             "!save": self.agent_commands.cmd_save,
@@ -909,7 +915,7 @@ Type '.help' for a list of commands or '.exit' to quit.
         else:
             self.console.print("[yellow]Warning: No database connection initialized.[/]")
 
-    def _prompt_input(self, message: str, default: str = "", choices: list = None, multiline: bool = False):
+    def prompt_input(self, message: str, default: str = "", choices: list = None, multiline: bool = False):
         """
         Unified input method using prompt_toolkit to avoid conflicts with rich.Prompt.ask().
 
