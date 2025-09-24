@@ -57,6 +57,9 @@ class AgenticNode(ABC):
         self._session_tokens: int = 0
         self.last_summary: Optional[str] = None
 
+        # Parse node configuration from agent.yml (available to all agentic nodes)
+        self.node_config = self._parse_node_config(agent_config, self.get_node_name())
+
         # Initialize the model using agent config
         if agent_config:
             model_name = None
@@ -367,6 +370,62 @@ class AgenticNode(ABC):
         except Exception as e:
             logger.error(f"Auto-compact check failed: {e}")
             return False
+
+    def _parse_node_config(self, agent_config: Optional[AgentConfig], node_name: str) -> dict:
+        """
+        Parse node configuration from agent.yml.
+
+        Args:
+            agent_config: Agent configuration
+            node_name: Name of the node configuration
+
+        Returns:
+            Dictionary containing node configuration
+        """
+        if not agent_config or not hasattr(agent_config, "agentic_nodes"):
+            return {}
+
+        nodes_config = agent_config.agentic_nodes
+        if node_name not in nodes_config:
+            logger.warning(f"Node configuration '{node_name}' not found in agent.yml")
+            return {}
+
+        node_config = nodes_config[node_name]
+
+        # Extract configuration attributes
+        config = {}
+
+        # Basic node config attributes
+        if isinstance(node_config, dict):
+            config["model"] = node_config.get("model")
+        elif hasattr(node_config, "model"):
+            config["model"] = node_config.model
+
+        # Check direct attributes on node_config
+        direct_attributes = [
+            "system_prompt",
+            "prompt_version",
+            "prompt_language",
+            "tools",
+            "mcp",
+            "rules",
+            "max_turns",
+            "workspace_root",
+        ]
+        for attr in direct_attributes:
+            # Handle both dict and object access patterns
+            if attr not in config:
+                value = None
+                if isinstance(node_config, dict):
+                    value = node_config.get(attr)
+                elif hasattr(node_config, attr):
+                    value = getattr(node_config, attr)
+
+                if value is not None:
+                    config[attr] = value
+
+        logger.info(f"Parsed node configuration for '{node_name}': {config}")
+        return config
 
     @abstractmethod
     async def execute_stream(

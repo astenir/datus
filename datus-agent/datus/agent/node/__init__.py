@@ -17,6 +17,7 @@ __all__ = [
     "SubworkflowNode",
     "CompareNode",
     "DateParserNode",
+    "GenSQLAgenticNode",
     "Node",
 ]
 
@@ -28,6 +29,7 @@ from .date_parser_node import DateParserNode
 from .doc_search_node import DocSearchNode
 from .execute_sql_node import ExecuteSQLNode
 from .fix_node import FixNode
+from .gen_sql_agentic_node import GenSQLAgenticNode
 from .generate_metrics_node import GenerateMetricsNode
 from .generate_semantic_model_node import GenerateSemanticModelNode
 from .generate_sql_node import GenerateSQLNode
