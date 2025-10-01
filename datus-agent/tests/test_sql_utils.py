@@ -528,8 +528,7 @@ def test_parse_sqlite_select():
     SELECT CAST(COUNT(CASE WHEN element = 'h' THEN atom_id ELSE NULL END) AS REAL) / (CASE WHEN COUNT(atom_id) = 0
     THEN NULL ELSE COUNT(atom_id) END) AS ratio, label FROM SubQuery GROUP BY label"""
     tables = extract_table_names(sql, dialect=DBType.SQLITE)
-    print(tables)
-    assert tables == ["atom", "molecule"]
+    assert set(tables) == {"atom", "molecule"}
 
 
 def test_parse_full_tables():
@@ -576,5 +575,16 @@ FROM gold_vs_bitcoin"""
         parse_sql_type("select * from `default_catalog`.`ac_manage`.`v_udata_ac_info`", dialect="starrocks")
         == SQLType.SELECT
     )
+
+    assert parse_sql_type("   ", dialect=DBType.DUCKDB) == SQLType.UNKNOWN
+
+    merge_sql = (
+        "MERGE INTO target USING source ON target.id = source.id WHEN MATCHED THEN UPDATE SET value = source.value"
+    )
+    assert parse_sql_type(merge_sql, dialect=DBType.SNOWFLAKE) == SQLType.MERGE
+
+    assert parse_sql_type("EXPLAIN SELECT * FROM gold_vs_bitcoin", dialect=DBType.DUCKDB) == SQLType.EXPLAIN
+
+    assert parse_sql_type("SHOW TABLES", dialect=DBType.DUCKDB) == SQLType.METADATA_SHOW
 
     assert parse_sql_type("SHOW CATALOGS", dialect="starrocks") == SQLType.METADATA_SHOW

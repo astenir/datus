@@ -53,7 +53,7 @@ class BaseSqlConnector(ABC):
             sql_type = parse_sql_type(sql_query, self.dialect)
             if sql_type == SQLType.INSERT:
                 result = self.execute_insert(sql_query)
-            elif sql_type in (SQLType.UPDATE, SQLType.DELETE):
+            elif sql_type in (SQLType.UPDATE, SQLType.DELETE, SQLType.MERGE):
                 result = self.execute_update(sql_query)
             elif sql_type == SQLType.CONTENT_SET:
                 result = self.execute_content_set(sql_query)
@@ -63,6 +63,8 @@ class BaseSqlConnector(ABC):
                 result = self.execute_query(sql_query, result_format)
             elif sql_type == SQLType.METADATA_SHOW:
                 result = self.execute_query(sql_query, result_format)
+            elif sql_type == SQLType.EXPLAIN:
+                result = self.execute_explain(sql_query, result_format)
             else:
                 return ExecuteSQLResult(
                     success=False,
@@ -147,6 +149,12 @@ class BaseSqlConnector(ABC):
         The best performing query in the current connector
         """
         raise NotImplementedError
+
+    def execute_explain(
+        self, sql: str, result_format: Literal["csv", "arrow", "pandas", "list"] = "csv"
+    ) -> ExecuteSQLResult:
+        """Run EXPLAIN/EXPLAIN ANALYZE statements. Default implementation reuses execute_query."""
+        return self.execute_query(sql, result_format)
 
     @abstractmethod
     def execute_pandas(self, sql: str) -> ExecuteSQLResult:
