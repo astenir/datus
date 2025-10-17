@@ -116,20 +116,21 @@ class Application:
     def run(self):
         args = self.arg_parser.parse_args()
 
-        # Configure logging based on debug flag, disable console output
         configure_logging(args.debug, console_output=False)
 
-        # Check if web interface is requested
+        if not args.namespace:
+            self.arg_parser.parser.print_help()
+            return
+
         if args.web:
             self._run_web_interface(args)
         else:
-            # Initialize and run CLI
             cli = DatusCLI(args)
             cli.run()
 
     def _run_web_interface(self, args):
         """Launch Streamlit web interface"""
-        from datus.cli.web_chatbot import run_web_interface
+        from datus.cli.web import run_web_interface
 
         run_web_interface(args)
 
