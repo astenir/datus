@@ -118,7 +118,6 @@ def create_parser() -> argparse.ArgumentParser:
         help="Database name to be initialized: It represents duckdb, schema_name in Snowflake; "
         "database names in MySQL, StarRocks, PostgreSQL, etc.; SQLite is not supported.",
     )
-    bootstrap_parser.add_argument("--benchmark_path", type=str, help="Path to benchmark files")
     bootstrap_parser.add_argument(
         "--pool_size",
         type=int,
@@ -172,7 +171,6 @@ def create_parser() -> argparse.ArgumentParser:
         choices=["spider2", "bird_dev", "semantic_layer"],
         help="Benchmark type to run",
     )
-    benchmark_parser.add_argument("--benchmark_path", type=str, help="Path to benchmark configuration")
     benchmark_parser.add_argument(
         "--benchmark_task_ids", type=str, nargs="+", help="Specific benchmark task IDs to run"
     )
@@ -210,9 +208,7 @@ def create_parser() -> argparse.ArgumentParser:
         parents=[global_parser],
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    generate_dataset_parser.add_argument(
-        "--trajectory_dir", type=str, required=True, help="Directory containing trajectory files"
-    )
+    # trajectory_dir parameter has been deprecated - trajectory path is now fixed at {agent.home}/trajectory
     generate_dataset_parser.add_argument(
         "--dataset_name", type=str, required=True, help="Name for the output dataset file"
     )
@@ -272,10 +268,14 @@ def create_parser() -> argparse.ArgumentParser:
     # Node configuration group (available for run and benchmark)
     for p in [run_parser, benchmark_parser]:
         node_group = p.add_argument_group("Node Configuration")
-        node_group.add_argument("--output_dir", type=str, default="output", help="Directory for output files")
+        # output_dir parameter deprecated - save path is now fixed at {agent.home}/save
         node_group.add_argument(
-            "--trajectory_dir", type=str, default="save", help="Directory for trajectory files (default: save)"
+            "--output_dir",
+            type=str,
+            default=None,
+            help=argparse.SUPPRESS,  # Hide from help to discourage use
         )
+        # trajectory_dir parameter deprecated - trajectory path is now fixed at {agent.home}/trajectory
         node_group.add_argument(
             "--schema_linking_rate",
             type=str,
@@ -316,8 +316,6 @@ def main():
 
     configure_logging(args.debug)
     setup_exception_handler()
-    os.makedirs(getattr(args, "output_dir", "output"), exist_ok=True)
-    os.makedirs("save", exist_ok=True)
 
     # Handle init command separately as it doesn't require existing configuration
     if args.action == "init":

@@ -2,7 +2,6 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-import os
 from pathlib import Path
 from typing import Any, Dict
 
@@ -114,17 +113,44 @@ def configuration_manager(config_path: str = "", reload: bool = False) -> Config
 
 
 def parse_config_path(config_file: str = "") -> Path:
+    """
+    Parse and resolve agent configuration file path.
+
+    Priority:
+    1. Explicit config_file parameter if provided
+    2. ./conf/agent.yml in current directory
+    3. ~/.datus/conf/agent.yml (fixed path, not from agent.home config)
+
+    Note: The third option uses a fixed ~/.datus path because we need to
+    read the config file first to determine the agent.home location.
+
+    Args:
+        config_file: Optional explicit config file path
+
+    Returns:
+        Resolved Path to configuration file
+
+    Raises:
+        DatusException: If configuration file not found
+    """
+    # 1. Check explicit config file
     if config_file:
         config_path = Path(config_file).expanduser()
         if config_path.exists():
             return config_path
         elif config_file != "conf/agent.yml":
-            # default config file
             raise DatusException(
                 code=ErrorCode.COMMON_FILE_NOT_FOUND, message=f"Agent configuration file not found: {config_path}"
             )
-    if os.path.exists("conf/agent.yml"):
-        return Path("conf/agent.yml")
+
+    # 2. Check current directory
+    local_config = Path("conf/agent.yml")
+    if local_config.exists():
+        return local_config
+
+    # 3. Check default home directory (~/.datus/conf/agent.yml)
+    # Note: This path is fixed because we need to read the config file
+    # to determine agent.home location for other directories
     home_config = Path.home() / ".datus" / "conf" / "agent.yml"
     if home_config.exists():
         return home_config

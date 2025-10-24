@@ -135,7 +135,7 @@ class AgentConfig:
     schema_linking_rate: str
     search_metrics_rate: str
     _reflection_nodes: Dict[str, List[str]]
-    _output_dir: str
+    _save_dir: str
     _current_namespace: str
     _current_database: str
     _trajectory_dir: str
@@ -144,6 +144,10 @@ class AgentConfig:
         """
         Initialize the global config from yaml file
         """
+        # Initialize home directory and update path_manager
+        self.home = kwargs.get("home", "~/.datus")
+        self._init_path_manager()
+
         models_raw = kwargs["models"]
         self.target = kwargs["target"]
         self.models = {name: load_model_config(cfg) for name, cfg in models_raw.items()}
@@ -153,18 +157,20 @@ class AgentConfig:
         self.agentic_nodes = kwargs.get("agentic_nodes", {})
         # use default embedding model if not provided
 
-        self._output_dir = kwargs.get("output_dir", "output")
-        self._trajectory_dir = kwargs.get("trajectory_dir", "save")
+        # Save directory is now fixed at {agent.home}/save
+        # Trajectory directory is now fixed at {agent.home}/trajectory
+        from datus.utils.path_manager import get_path_manager
+
+        self._save_dir = str(get_path_manager().save_dir)
+        self._trajectory_dir = str(get_path_manager().trajectory_dir)
 
         self._init_storage_config(kwargs.get("storage", {}))
         self.schema_linking_rate = kwargs.get("schema_linking_rate", "fast")
         self.search_metrics_rate = kwargs.get("search_metrics_rate", "fast")
-        self._output_dir = kwargs.get("output_dir", "output")
         self.db_type = ""
 
-        self.benchmark_paths = {
-            k: os.path.expanduser(v["benchmark_path"]) for k, v in kwargs.get("benchmark", {}).items()
-        }
+        # Benchmark paths are now fixed at {agent.home}/benchmark/{name}
+        # Supported benchmarks: bird_dev, spider2, semantic_layer
         self._reflection_nodes = DEFAULT_REFLECTION_NODES
         self._reflection_nodes.update(kwargs.get("reflection_nodes", {}))
 
@@ -307,7 +313,7 @@ class AgentConfig:
 
     @property
     def output_dir(self) -> str:
-        return f"{self._output_dir}/{self._current_namespace}"
+        return f"{self._save_dir}/{self._current_namespace}"
 
     @property
     def trajectory_dir(self) -> str:
@@ -326,16 +332,34 @@ class AgentConfig:
             raise KeyError(f"Model '{key}' not found.")
         return self.models[key]
 
+    def _init_path_manager(self):
+        """Initialize or update path manager with configured home directory."""
+        from datus.utils.path_manager import get_path_manager
+
+        path_manager = get_path_manager()
+        path_manager.update_home(self.home)
+        logger.info(f"Using datus home directory: {path_manager.datus_home}")
+
     def _init_storage_config(self, storage_config: dict):
-        self.rag_base_path = os.path.expanduser(storage_config.get("base_path", "data"))
+        # Use fixed path from path_manager: {home}/data
+        from datus.utils.path_manager import get_path_manager
+
+        self.rag_base_path = str(get_path_manager().data_dir)
+
         self.storage_configs = init_embedding_models(
             storage_config, openai_configs=self.models, default_openai_config=self.active_model()
         )
         self.workspace_root = storage_config.get("workspace_root")
 
     def override_by_args(self, **kwargs):
-        if kwargs.get("storage_path", ""):
-            self.rag_base_path = os.path.expanduser(kwargs["storage_path"])
+        # storage_path parameter has been deprecated - data path is now fixed at {home}/data
+        if "storage_path" in kwargs and kwargs["storage_path"] is not None:
+            logger.warning(
+                "The --storage_path parameter is deprecated and will be ignored. "
+                "Data path is now fixed at {agent.home}/data. "
+                "Configure agent.home in agent.yml to change the root directory."
+            )
+
         if kwargs.get("schema_linking_rate", ""):
             self.schema_linking_rate = kwargs["schema_linking_rate"]
         if kwargs.get("search_metrics_rate", ""):
@@ -348,23 +372,29 @@ class AgentConfig:
             self.current_database = database_name
         if kwargs.get("benchmark", ""):
             benchmark_platform = kwargs["benchmark"]
-            if benchmark_platform not in self.benchmark_paths:
-                raise DatusException(
-                    code=ErrorCode.COMMON_UNSUPPORTED,
-                    message_args={"field_name": "benchmark", "your_value": benchmark_platform},
-                )
+            # Validate benchmark is supported (will raise exception if not)
+            self.benchmark_path(benchmark_platform)
+
             if benchmark_platform == "spider2" and self.db_type != DBType.SNOWFLAKE:
                 raise DatusException(code=ErrorCode.COMMON_UNSUPPORTED, message="spider2 only support snowflake")
             if benchmark_platform == "bird_dev" and self.db_type != DBType.SQLITE:
                 raise DatusException(code=ErrorCode.COMMON_UNSUPPORTED, message="bird_dev only support sqlite")
-            benchmark_path = kwargs.get("benchmark_path", "")
-            if benchmark_path:
-                self.benchmark_paths[benchmark_platform] = benchmark_path
 
-        if kwargs.get("output_dir", ""):
-            self._output_dir = kwargs["output_dir"]
-        if kwargs.get("trajectory_dir", ""):
-            self._trajectory_dir = kwargs["trajectory_dir"]
+        # output_dir parameter has been deprecated - save path is now fixed at {agent.home}/save
+        if "output_dir" in kwargs and kwargs["output_dir"] is not None:
+            logger.warning(
+                "The --output_dir parameter is deprecated and will be ignored. "
+                "Save path is now fixed at {agent.home}/save. "
+                "Configure agent.home in agent.yml to change the root directory."
+            )
+
+        # trajectory_dir parameter has been deprecated - trajectory path is now fixed at {agent.home}/trajectory
+        if "trajectory_dir" in kwargs and kwargs["trajectory_dir"] is not None:
+            logger.warning(
+                "The --trajectory_dir parameter is deprecated and will be ignored. "
+                "Trajectory path is now fixed at {agent.home}/trajectory. "
+                "Configure agent.home in agent.yml to change the root directory."
+            )
         if kwargs.get("save_llm_trace", False):
             # Update all model configs to enable tracing if command line flag is set
             for model_config in self.models.values():
@@ -389,12 +419,27 @@ class AgentConfig:
                 code=ErrorCode.COMMON_FIELD_REQUIRED,
                 message="Benchmark name is required, please run with --benchmark <benchmark>",
             )
-        if name not in self.benchmark_paths:
+
+        # Supported benchmark names
+        supported_benchmarks = ["bird_dev", "spider2", "semantic_layer"]
+        if name not in supported_benchmarks:
             raise DatusException(
                 code=ErrorCode.COMMON_UNSUPPORTED,
                 message_args={"field_name": "benchmark", "your_value": name},
             )
-        return self.benchmark_paths[name]
+
+        # Return fixed path: {agent.home}/benchmark/{name}
+        from datus.utils.path_manager import get_path_manager
+
+        # Map benchmark names to subdirectories
+        benchmark_subdirs = {
+            "bird_dev": "bird",
+            "spider2": "spider2",
+            "semantic_layer": "semantic_layer",
+        }
+
+        subdir = benchmark_subdirs[name]
+        return str(get_path_manager().benchmark_dir / subdir)
 
     def _current_db_config(self) -> Dict[str, DbConfig]:
         if not self._current_namespace:

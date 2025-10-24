@@ -8,7 +8,6 @@ This module provides a class to handle all agent-related commands.
 """
 
 import asyncio
-import os.path
 import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Tuple
 
@@ -284,7 +283,7 @@ class AgentCommands:
                 task_description = args
                 # Use current_db_name from CLI context
                 database_name = self.cli_context.current_db_name or self.cli.args.db_path
-                output_dir = "output"
+                output_dir = self.cli.agent_config.output_dir
                 external_knowledge = ""
                 current_date = ""
             else:  # If no input, use a prompt to get the task info
@@ -308,8 +307,8 @@ class AgentCommands:
                     self.console.print("[bold red]Error:[/] Database name is required")
                     return
 
-                # Output directory - optional input
-                output_dir = "output"
+                # Output directory - use agent config
+                output_dir = self.cli.agent_config.output_dir
 
                 # External knowledge - optional input
                 external_knowledge = self.cli.prompt_input("Enter external knowledge (optional)", default="")
@@ -592,9 +591,11 @@ class AgentCommands:
         file_type = self.cli.prompt_input(
             "Enter file type (json/csv/sql/all)", default="all", choices=["json", "csv", "sql", "all"]
         )
-        target_dir = self.cli.prompt_input(
-            "Enter output directory (optional)", default=os.path.expanduser("~/.datus/output")
-        )
+
+        from datus.utils.path_manager import get_path_manager
+
+        default_save_dir = str(get_path_manager().save_dir)
+        target_dir = self.cli.prompt_input("Enter save directory (optional)", default=default_save_dir)
         from datetime import datetime
 
         file_name = self.cli.prompt_input("Enter file name(optional)", default=datetime.now().strftime("%Y%m%d%H%M%S"))
