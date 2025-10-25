@@ -16,8 +16,8 @@ from datus.agent.node.agentic_node import AgenticNode
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.sql_summary_agentic_node_models import SqlSummaryNodeInput, SqlSummaryNodeResult
-from datus.tools.filesystem_tools.filesystem_tool import FilesystemFuncTool
-from datus.tools.generation_tools import GenerationTools
+from datus.tools.func_tool.filesystem_tool import FilesystemFuncTool
+from datus.tools.func_tool.generation_tools import GenerationTools
 from datus.utils.loggings import get_logger
 from datus.utils.path_manager import get_path_manager
 
@@ -109,7 +109,7 @@ class SqlSummaryAgenticNode(AgenticNode):
     def _setup_specific_generation_tools(self):
         """Setup specific generation tools: prepare_sql_summary_context and generate_sql_summary_id."""
         try:
-            from datus.tools.tools import trans_to_function_tool
+            from datus.tools.func_tool import trans_to_function_tool
 
             self.generation_tools = GenerationTools(self.agent_config)
             self.tools.append(trans_to_function_tool(self.generation_tools.prepare_sql_summary_context))
@@ -120,7 +120,7 @@ class SqlSummaryAgenticNode(AgenticNode):
     def _setup_specific_filesystem_tool(self):
         """Setup specific filesystem tools"""
         try:
-            from datus.tools.tools import trans_to_function_tool
+            from datus.tools.func_tool import trans_to_function_tool
 
             self.filesystem_func_tool = FilesystemFuncTool(root_path=self.sql_summary_dir)
 

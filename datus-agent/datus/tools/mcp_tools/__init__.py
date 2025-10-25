@@ -20,6 +20,13 @@ from .mcp_config import (
     STDIOServerConfig,
 )
 from .mcp_manager import MCPManager
+from .mcp_server import (
+    MCPServer,
+    MCPServerStdioParams,
+    SilentMCPServerStdio,
+    check_filesystem_mcp_installed,
+    find_mcp_directory,
+)
 from .mcp_tool import MCPTool, parse_command_string
 
 __all__ = [
@@ -32,4 +39,9 @@ __all__ = [
     "SSEServerConfig",
     "STDIOServerConfig",
     "parse_command_string",
+    "SilentMCPServerStdio",
+    "MCPServer",
+    "MCPServerStdioParams",
+    "find_mcp_directory",
+    "check_filesystem_mcp_installed",
 ]

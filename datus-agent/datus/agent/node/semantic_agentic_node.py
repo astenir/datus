@@ -17,10 +17,10 @@ from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.semantic_agentic_node_models import SemanticNodeInput, SemanticNodeResult
 from datus.tools.db_tools.db_manager import db_manager_instance
-from datus.tools.filesystem_tools.filesystem_tool import FilesystemFuncTool
-from datus.tools.generation_tools import GenerationTools
-from datus.tools.mcp_server import MCPServer
-from datus.tools.tools import DBFuncTool
+from datus.tools.func_tool import DBFuncTool
+from datus.tools.func_tool.filesystem_tool import FilesystemFuncTool
+from datus.tools.func_tool.generation_tools import GenerationTools
+from datus.tools.mcp_tools.mcp_server import MCPServer
 from datus.utils.loggings import get_logger
 from datus.utils.path_manager import get_path_manager
 
@@ -142,7 +142,7 @@ class SemanticAgenticNode(AgenticNode):
     def _setup_filesystem_tools(self):
         """Setup filesystem tools (specific methods only)."""
         try:
-            from datus.tools.tools import trans_to_function_tool
+            from datus.tools.func_tool import trans_to_function_tool
 
             self.filesystem_func_tool = FilesystemFuncTool(root_path=self.semantic_model_dir)
 
@@ -160,7 +160,7 @@ class SemanticAgenticNode(AgenticNode):
     def _setup_generation_tools(self):
         """Setup generation tools based on node type."""
         try:
-            from datus.tools.tools import trans_to_function_tool
+            from datus.tools.func_tool import trans_to_function_tool
 
             self.generation_tools = GenerationTools(self.agent_config)
 

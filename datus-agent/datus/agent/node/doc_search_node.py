@@ -1,20 +1,51 @@
 # Copyright 2025-present DatusAI, Inc.
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
-
 from typing import AsyncGenerator, Dict, Optional
 
 from datus.agent.node import Node
 from datus.agent.workflow import Workflow
+from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.doc_search_node_models import DocSearchInput, DocSearchResult
+from datus.storage.document import DocumentStore
+from datus.storage.document.store import document_store
 from datus.tools.search_tools import SearchTool
+from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
 
 
 class DocSearchNode(Node):
+    def __init__(
+        self,
+        node_id: str,
+        description: str,
+        node_type: str,
+        input_data: DocSearchInput = None,
+        agent_config: Optional[AgentConfig] = None,
+    ):
+        super().__init__(
+            node_id=node_id,
+            description=description,
+            node_type=node_type,
+            input_data=input_data,
+            agent_config=agent_config,
+        )
+        self._document_store = None
+
+    @property
+    def document_store(self) -> DocumentStore:
+        """Lazy initialize document store"""
+        if self._document_store is None:
+            if not self.agent_config:
+                raise DatusException(
+                    ErrorCode.COMMON_CONFIG_ERROR, "AgentConfig is required to initialize DocumentStore"
+                )
+            self._document_store = document_store(self.agent_config.rag_storage_path())
+        return self._document_store
+
     def execute(self):
         self.result = self._execute_document()
 
@@ -26,7 +57,7 @@ class DocSearchNode(Node):
             yield action
 
     def setup_input(self, workflow: Workflow) -> Dict:
-        next_input = DocSearchInput(keywords=workflow.context.doc_search_keywords, top_n=3, method="external")
+        next_input = DocSearchInput(keywords=workflow.context.doc_search_keywords, top_n=3, method="internal")
         self.input = next_input
         return {"success": True, "message": "Document appears valid", "suggestions": [next_input]}
 
@@ -42,11 +73,8 @@ class DocSearchNode(Node):
             return {"success": False, "message": f"Document search context update failed: {str(e)}"}
 
     def _execute_document(self) -> DocSearchResult:
-        tool = SearchTool(self.agent_config)
-        if not tool:
-            return DocSearchResult(success=False, error="Document search tool not found", docs={})
-
-        return tool.execute(self.input)
+        """Execute document search based on method"""
+        return SearchTool(self.agent_config).execute(self.input)
 
     async def _doc_search_stream(
         self, action_history_manager: Optional[ActionHistoryManager] = None
