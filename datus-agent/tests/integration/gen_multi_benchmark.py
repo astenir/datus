@@ -19,8 +19,8 @@ def get_benchmark_file_path(config, benchmark, workdir):
     # Benchmark paths are now fixed at {agent.home}/benchmark/{name}
     # Map benchmark names to subdirectories
     benchmark_subdirs = {
-        "bird_dev": "bird",
-        "spider2": "spider2",
+        "bird_dev": "bird/dev_20240627",
+        "spider2": "spider2/spider2-snow",
         "semantic_layer": "semantic_layer",
     }
 

@@ -16,7 +16,7 @@ from datus.cli.blocking_input_manager import blocking_input_manager
 from datus.cli.execution_state import execution_controller
 from datus.configuration.agent_config import AgentConfig
 from datus.storage.metric.llm_text_generator import generate_metric_llm_text
-from datus.storage.sql_history import SqlHistoryRAG
+from datus.storage.reference_sql.store import ReferenceSqlRAG
 from datus.utils.json_utils import to_str
 from datus.utils.loggings import get_logger
 from datus.utils.traceable_utils import optional_traceable
@@ -180,7 +180,7 @@ class GenerationHooks(AgentHooks):
             file_path = ""
             if isinstance(result, dict):
                 result_msg = result.get("result", "")
-                if "File written successfully" in str(result_msg) or "SQL history file written successfully" in str(
+                if "File written successfully" in str(result_msg) or "Reference SQL file written successfully" in str(
                     result_msg
                 ):
                     parts = str(result_msg).split(": ")
@@ -188,7 +188,7 @@ class GenerationHooks(AgentHooks):
                         file_path = parts[-1].strip()
             elif hasattr(result, "result"):
                 result_msg = result.result
-                if "File written successfully" in str(result_msg) or "SQL history file written successfully" in str(
+                if "File written successfully" in str(result_msg) or "Reference SQL file written successfully" in str(
                     result_msg
                 ):
                     parts = str(result_msg).split(": ")
@@ -227,7 +227,7 @@ class GenerationHooks(AgentHooks):
 
             # Display generated YAML with syntax highlighting
             self.console.print("\n" + "=" * 60)
-            self.console.print("[bold green]Generated SQL History YAML[/]")
+            self.console.print("[bold green]Generated Reference SQL YAML[/]")
             self.console.print(f"[dim]File: {file_path}[/]")
             self.console.print("=" * 60)
 
@@ -315,11 +315,15 @@ class GenerationHooks(AgentHooks):
             loop = asyncio.get_event_loop()
 
             if self._is_semantic_yaml(yaml_content):
-                result = await loop.run_in_executor(None, self._sync_semantic_to_db, file_path)
+                result = await loop.run_in_executor(
+                    None, GenerationHooks._sync_semantic_to_db, file_path, self.agent_config
+                )
                 item_type = "semantic model and metrics"
-            elif self._is_sql_history_yaml(yaml_content):
-                result = await loop.run_in_executor(None, self._sync_sql_history_to_db, file_path)
-                item_type = "SQL history"
+            elif self._is_reference_sql_yaml(yaml_content):
+                result = await loop.run_in_executor(
+                    None, GenerationHooks._sync_reference_sql_to_db, file_path, self.agent_config
+                )
+                item_type = "reference SQL"
             else:
                 self.console.print("[yellow]Unknown YAML type, cannot determine sync method[/]")
                 self.console.print(f"[yellow]YAML saved to file: {file_path}[/]")
@@ -385,17 +389,17 @@ class GenerationHooks(AgentHooks):
         except Exception:
             return False
 
-    def _is_sql_history_yaml(self, yaml_content: str) -> bool:
+    def _is_reference_sql_yaml(self, yaml_content: str) -> bool:
         """Check if YAML content is Reference SQL (contains reference_sql or has id+sql+summary fields)."""
         import yaml
 
         try:
             doc = yaml.safe_load(yaml_content)
             if isinstance(doc, dict):
-                # Check for explicit sql_history key
-                if "sql_history" in doc:
+                # Check for explicit reference_sql key
+                if "reference_sql" in doc:
                     return True
-                # Check for characteristic fields of SQL history
+                # Check for characteristic fields of reference SQL
                 has_sql = "sql" in doc
                 has_id = "id" in doc
                 has_summary = "summary" in doc or "comment" in doc
@@ -404,7 +408,8 @@ class GenerationHooks(AgentHooks):
         except Exception:
             return False
 
-    def _sync_semantic_to_db(self, file_path: str) -> dict:
+    @staticmethod
+    def _sync_semantic_to_db(file_path: str, agent_config: AgentConfig) -> dict:
         """
         Sync semantic model and metrics from YAML file to Knowledge Base.
 
@@ -413,6 +418,7 @@ class GenerationHooks(AgentHooks):
 
         Args:
             file_path: Path to the YAML file containing semantic model and/or metrics
+            agent_config: Agent configuration
 
         Returns:
             dict: Sync result with success, error, and message fields
@@ -423,7 +429,7 @@ class GenerationHooks(AgentHooks):
             import yaml
 
             from datus.configuration.agent_config import MetricMeta
-            from datus.storage.metric.init_utils import exists_semantic_metrics, gen_metric_id, gen_semantic_model_id
+            from datus.storage.metric.init_utils import existing_semantic_metrics, gen_metric_id, gen_semantic_model_id
             from datus.storage.metric.store import SemanticMetricsRAG
 
             # Load YAML file
@@ -443,19 +449,18 @@ class GenerationHooks(AgentHooks):
                 return {"success": False, "error": "No data_source or metrics found in YAML file"}
 
             # Get storage
-            storage = SemanticMetricsRAG(self.agent_config)
+            storage = SemanticMetricsRAG(agent_config)
 
-            # Get existing semantic models and metrics
-            existing_semantic_models, existing_metrics = exists_semantic_metrics(storage, build_mode="incremental")
+            existing_semantic_models, existing_metrics = existing_semantic_metrics(storage)
 
             # Get database config
-            current_db_config = self.agent_config.current_db_config()
+            current_db_config = agent_config.current_db_config()
 
             # Get domain/layer info - use default MetricMeta if not configured
-            if hasattr(self.agent_config, "metric_meta") and self.agent_config.metric_meta:
+            if hasattr(agent_config, "metric_meta") and agent_config.metric_meta:
                 # Use the first available metric_meta
-                first_meta_name = next(iter(self.agent_config.metric_meta.keys()))
-                current_metric_meta = self.agent_config.metric_meta[first_meta_name]
+                first_meta_name = next(iter(agent_config.metric_meta.keys()))
+                current_metric_meta = agent_config.metric_meta[first_meta_name]
             else:
                 # Use default values
                 current_metric_meta = MetricMeta()
@@ -556,12 +561,15 @@ class GenerationHooks(AgentHooks):
             logger.error(f"Error syncing semantic model and metrics to DB: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
-    def _sync_sql_history_to_db(self, file_path: str) -> dict:
+    @staticmethod
+    def _sync_reference_sql_to_db(file_path: str, agent_config: AgentConfig, build_mode: str = "incremental") -> dict:
         """
-        Sync SQL history YAML file to Knowledge Base.
+        Sync reference SQL YAML file to Knowledge Base.
 
         Args:
-            file_path: Path to the SQL history YAML file
+            file_path: Path to the reference SQL YAML file
+            agent_config: Agent configuration
+            build_mode: "overwrite" or "incremental" (default: "incremental")
 
         Returns:
             dict: Sync result with success, error, and message fields
@@ -569,62 +577,62 @@ class GenerationHooks(AgentHooks):
         try:
             import yaml
 
-            from datus.storage.sql_history.init_utils import exists_sql_history, gen_sql_history_id
+            from datus.storage.reference_sql.init_utils import exists_reference_sql, gen_reference_sql_id
 
             # Load YAML file
             with open(file_path, "r", encoding="utf-8") as f:
                 doc = yaml.safe_load(f)
 
-            # Extract sql_history data
-            if "sql_history" in doc:
-                sql_history_data = doc["sql_history"]
+            # Extract reference_sql data
+            if "reference_sql" in doc:
+                reference_sql_data = doc["reference_sql"]
             elif isinstance(doc, dict) and "sql" in doc:
-                # Direct format without sql_history wrapper
-                sql_history_data = doc
+                # Direct format without reference_sql wrapper
+                reference_sql_data = doc
             else:
                 return {"success": False, "error": "No reference_sql data found in YAML file"}
 
             # Generate ID if not present or if it's a placeholder
-            sql_query = sql_history_data.get("sql", "")
-            comment = sql_history_data.get("comment", "")
-            item_id = sql_history_data.get("id", "")
+            sql_query = reference_sql_data.get("sql", "")
+            comment = reference_sql_data.get("comment", "")
+            item_id = reference_sql_data.get("id", "")
 
             if not item_id or item_id == "auto_generated":
-                item_id = gen_sql_history_id(sql_query, comment)
-                sql_history_data["id"] = item_id
+                item_id = gen_reference_sql_id(sql_query, comment)
+                reference_sql_data["id"] = item_id
 
             # Get storage and check if item already exists
-            storage = SqlHistoryRAG(self.agent_config)
-            existing_ids = exists_sql_history(storage, build_mode="incremental")
+            storage = ReferenceSqlRAG(agent_config)
+            existing_ids = exists_reference_sql(storage, build_mode=build_mode)
 
             # Check for duplicate
             if item_id in existing_ids:
                 logger.info(f"Reference SQL {item_id} already exists in Knowledge Base, skipping")
                 return {
                     "success": True,
-                    "message": f"Reference SQL '{sql_history_data.get('name', '')}' already exists, skipped",
+                    "message": f"Reference SQL '{reference_sql_data.get('name', '')}' already exists, skipped",
                 }
 
             # Ensure all required fields are present
-            sql_history_dict = {
+            reference_sql_dict = {
                 "id": item_id,
-                "name": sql_history_data.get("name", ""),
+                "name": reference_sql_data.get("name", ""),
                 "sql": sql_query,
                 "comment": comment,
-                "summary": sql_history_data.get("summary", ""),
-                "filepath": sql_history_data.get("filepath", ""),
-                "domain": sql_history_data.get("domain", ""),
-                "layer1": sql_history_data.get("layer1", ""),
-                "layer2": sql_history_data.get("layer2", ""),
-                "tags": sql_history_data.get("tags", ""),
+                "summary": reference_sql_data.get("summary", ""),
+                "filepath": reference_sql_data.get("filepath", ""),
+                "domain": reference_sql_data.get("domain", ""),
+                "layer1": reference_sql_data.get("layer1", ""),
+                "layer2": reference_sql_data.get("layer2", ""),
+                "tags": reference_sql_data.get("tags", ""),
             }
 
             # Store to Knowledge Base
-            storage.store_batch([sql_history_dict])
+            storage.store_batch([reference_sql_dict])
 
-            logger.info(f"Successfully synced SQL history {item_id} to Knowledge Base")
-            return {"success": True, "message": f"Synced SQL history: {sql_history_dict['name']}"}
+            logger.info(f"Successfully synced reference SQL {item_id} to Knowledge Base")
+            return {"success": True, "message": f"Synced reference SQL: {reference_sql_dict['name']}"}
 
         except Exception as e:
-            logger.error(f"Error syncing SQL history to DB: {e}", exc_info=True)
+            logger.error(f"Error syncing reference SQL to DB: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
