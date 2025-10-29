@@ -2,30 +2,16 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 import os.path
-
-#  Copyright (c) 2023. LanceDB Developers
-#
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
 from typing import Any, List, Optional, Union
 
 import numpy as np
 from fastembed import TextEmbedding
-from fastembed.common.utils import define_cache_dir
 from fastembed.text.text_embedding_base import TextEmbeddingBase
-from huggingface_hub import snapshot_download
 from huggingface_hub.errors import LocalEntryNotFoundError
 from lancedb.embeddings.base import TextEmbeddingFunction
 from lancedb.embeddings.registry import register
 from lancedb.embeddings.utils import weak_lru
+from pydantic import Field
 
 from datus.storage.embedding_models import get_embedding_device
 from datus.utils.loggings import get_logger
@@ -68,7 +54,8 @@ class FastEmbedEmbeddings(TextEmbeddingFunction):
     normalize: bool = True
     trust_remote_code: bool = True
     batch_size: int = 256
-    cache_dir: str = "~/.cache/huggingface/fastembed"
+    # Do NOT persist cache_dir into LanceDB metadata to keep artifacts portable
+    cache_dir: Optional[str] = Field(default=None, exclude=True, repr=False)
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -81,13 +68,10 @@ class FastEmbedEmbeddings(TextEmbeddingFunction):
         # Allow batch size and cache_dir overrides
         batch_size = kwargs.get("batch_size", self.batch_size)
         object.__setattr__(self, "batch_size", int(batch_size))
-
-        cache_dir_override = kwargs.get("cache_dir", self.cache_dir)
-        object.__setattr__(self, "cache_dir", cache_dir_override)
-        if cache_dir_override:
-            self.cache_dir = os.path.expanduser(cache_dir_override)
-        self.cache_dir = str(define_cache_dir(self.cache_dir))
-
+        self.cache_dir = str(_resolve_cache_dir())
+        # If not provided via kwargs, compute a portable default cache dir.
+        if not getattr(self, "cache_dir", None):
+            object.__setattr__(self, "cache_dir", self.cache_dir)
         if self.device not in {"cpu", "cuda"}:
             logger.debug(f"fastembed does not support device '{self.device}', falling back to CPU.")
             self.device = "cpu"
@@ -161,6 +145,22 @@ class FastEmbedEmbeddings(TextEmbeddingFunction):
             raise
 
 
+def _resolve_cache_dir() -> str:
+    """
+    Define the cache directory for fastembed
+    """
+
+    from pathlib import Path
+
+    if cache_path := os.getenv("FASTEMBED_CACHE_PATH"):
+        cache_path = Path(cache_path)
+    else:
+        home = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
+        cache_path = (home / "fastembed").resolve()
+    logger.debug(f"Final fastembed cache_dir is: {cache_path}")
+    return str(cache_path)
+
+
 def check_snapshot(model_name: str, cache_dir: str) -> None:
     """
     Ensure the required model artifacts are present in the fastembed cache.
@@ -187,8 +187,14 @@ def check_snapshot(model_name: str, cache_dir: str) -> None:
         # Some fastembed models only ship via the GCS mirror; defer to fastembed.
         return
 
+    from huggingface_hub import snapshot_download
+    from huggingface_hub.utils import disable_progress_bars
+
+    disable_progress_bars()
+
     try:
         snapshot_download(repo_id, cache_dir=cache_dir, local_files_only=True)
     except LocalEntryNotFoundError:
         logger.info(f"Downloading {repo_id} to {cache_dir} via huggingface_hub")
         snapshot_download(repo_id, cache_dir=cache_dir, local_files_only=False)
+        logger.info(f"Model {repo_id} has been downloaded via huggingface_hub to {cache_dir}.")

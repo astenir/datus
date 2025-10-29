@@ -81,7 +81,7 @@ class DatusCLI:
         self.configuration_manager = configuration_manager()
 
         if args.history_file:
-            history_file = Path(args.history_file)
+            history_file = Path(args.history_file).expanduser().resolve()
         else:
             from datus.utils.path_manager import get_path_manager
 
@@ -1046,6 +1046,7 @@ Type '.help' for a list of commands or '.exit' to quit.
                 self.cli_context.update_database_context(db_name=self.db_connector.database_name, db_logic_name=db_name)
             else:
                 self.cli_context.update_database_context(
+                    catalog=self.db_connector.catalog_name,
                     db_name=self.db_connector.database_name,
                     db_logic_name=db_name or self.db_connector.database_name or self.agent_config.current_namespace,
                 )

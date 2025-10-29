@@ -44,6 +44,18 @@ jobs:
           done < .env
           echo "Environment variables loaded successfully"
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Build test data
+        run: |
+          echo "Building test data before running pytest..."
+          chmod +x build_scripts/build_test_data.sh
+          ./build_scripts/build_test_data.sh || exit 1
+          echo "Test data build completed"
+
       - name: run pytest
         run: |
           python -m pytest -m acceptance  tests/
