@@ -69,11 +69,19 @@ class SemanticAgenticNode(AgenticNode):
         path_manager = get_path_manager()
         self.semantic_model_dir = str(path_manager.semantic_model_path(agent_config.current_namespace))
 
+        from datus.configuration.node_type import NodeType
+
+        node_type = NodeType.TYPE_SEMANTIC
+
         # Call parent constructor first to set up node_config
         super().__init__(
+            node_id=f"{node_name}_node",
+            description=f"Semantic model generation node: {node_name}",
+            node_type=node_type,
+            input_data=None,
+            agent_config=agent_config,
             tools=[],
             mcp_servers={},  # Initialize empty, will setup after parent init
-            agent_config=agent_config,
         )
 
         # Initialize MCP servers based on hardcoded configuration
@@ -301,18 +309,25 @@ class SemanticAgenticNode(AgenticNode):
             ) from e
 
     async def execute_stream(
-        self, user_input: SemanticNodeInput, action_history_manager: Optional[ActionHistoryManager] = None
+        self,
+        user_input: Optional[SemanticNodeInput] = None,
+        action_history_manager: Optional[ActionHistoryManager] = None,
     ) -> AsyncGenerator[ActionHistory, None]:
         """
         Execute the semantic node interaction with streaming support.
 
         Args:
-            user_input: Customized input containing user message and context
+            user_input: Customized input containing user message and context (optional, can use self.input)
             action_history_manager: Optional action history manager
 
         Yields:
             ActionHistory: Progress updates during execution
         """
+        # Support both direct parameter and self.input
+        if user_input is None:
+            if self.input is None:
+                raise ValueError("Semantic input not set. Provide user_input parameter or set self.input.")
+            user_input = self.input
         if not action_history_manager:
             action_history_manager = ActionHistoryManager()
 

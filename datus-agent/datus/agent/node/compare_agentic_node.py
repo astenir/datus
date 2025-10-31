@@ -28,22 +28,40 @@ class CompareAgenticNode(AgenticNode):
 
     def __init__(
         self,
-        node_name: str,
+        node_name: str = "compare",
         agent_config: Optional[AgentConfig] = None,
     ):
-        # Consider None or empty list as "not provided"
+        """
+        Initialize CompareAgenticNode.
+
+        Args:
+            node_name: Name of the node configuration in agent.yml (default: "compare")
+            agent_config: Agent configuration
+        """
         self.configured_node_name = node_name
+
+        # Use TYPE_COMPARE as the node type
+        from datus.configuration.node_type import NodeType
+
+        node_type = NodeType.TYPE_COMPARE
+
+        # Call parent constructor with all required Node parameters
         super().__init__(
+            node_id=f"{node_name}_node",
+            description=f"SQL comparison node: {node_name}",
+            node_type=node_type,
+            input_data=None,
+            agent_config=agent_config,
             tools=[],
             mcp_servers={},
-            agent_config=agent_config,
         )
 
-        config_max_turns = self.node_config.get("max_turns")
-        if config_max_turns:
-            self.max_turns = config_max_turns
-        else:
-            self.max_turns = 30
+        # Get max_turns from agentic_nodes configuration, default to 30
+        self.max_turns = 30
+        if agent_config and hasattr(agent_config, "agentic_nodes") and node_name in agent_config.agentic_nodes:
+            agentic_node_config = agent_config.agentic_nodes[node_name]
+            if isinstance(agentic_node_config, dict):
+                self.max_turns = agentic_node_config.get("max_turns", 30)
 
         self.setup_tools()
 
@@ -158,6 +176,13 @@ class CompareAgenticNode(AgenticNode):
     ) -> AsyncGenerator[ActionHistory, None]:
         """
         Execute SQL comparison with streaming support and action history tracking.
+
+        Args:
+            user_input: Compare input containing SQL task and expectation
+            action_history_manager: Optional action history manager
+
+        Yields:
+            ActionHistory: Progress updates during execution
         """
         if not isinstance(user_input, CompareInput):
             raise ValueError("Input must be a CompareInput instance")
