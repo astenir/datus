@@ -250,6 +250,24 @@ def generate_workflow(
 
     for node in nodes:
         workflow.add_node(node)
+    if task.tables and agent_config is not None:
+        from datus.storage.schema_metadata import SchemaWithValueRAG
+
+        try:
+            rag = SchemaWithValueRAG(agent_config=agent_config)
+            schemas, values = rag.search_tables(
+                task.tables, task.catalog_name, task.database_name, task.schema_name, dialect=task.database_type
+            )
+            if len(schemas) != len(task.tables):
+                schema_table_names = [item.table_name for item in schemas]
+                logger.warning(
+                    f"The obtained table schema is: {schema_table_names}; "
+                    f"The table required for the task is: {schemas}"
+                )
+            logger.debug(f"Use task tables: {schemas}")
+            workflow.context.update_schema_and_values(schemas, values)
+        except Exception as e:
+            logger.warning(f"Failed to obtain the schema corresponding to {task.tables}: {e}")
 
     logger.info(f"Generated workflow with {len(nodes)} nodes")
     return workflow

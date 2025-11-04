@@ -38,7 +38,9 @@ class SqlTask(BaseModel):
     schema_name: str = Field(default="", description="Schema name for context")
     output_dir: str = Field(default="output", description="Output directory path")
     external_knowledge: str = Field(default="", description="External knowledge for the input")
+    tables: Optional[List[str]] = Field(default=[], description="List of table names to use")
     schema_linking_type: TABLE_TYPE = Field(default="table", description="Schema linking type for the task")
+
     current_date: Optional[str] = Field(
         default=None, description="Current date reference for relative time expressions"
     )
@@ -505,6 +507,12 @@ class Context(BaseModel):
     selection_metadata: Optional[Dict[str, Any]] = Field(default=None, description="Metadata about selection process")
 
     def update_schema_and_values(self, table_schemas: List[TableSchema], table_values: List[TableValue]):
+        """
+        Update the table schema and sample data to be used in the context.
+        ⚠️⚠️⚠️Special note: If this method is called, it will have the following effects:
+            1. `schema_linking_node` will always return the updated value and will not match it in the vector library.
+            2. It will be expanded and spliced into user questions in `agentic_node`
+        """
         self.table_schemas = table_schemas
         self.table_values = table_values
 
