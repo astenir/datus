@@ -1,0 +1,30 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "datus-snowflake"
+version = "0.1.0"
+description = "Snowflake adapter for Datus Agent"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {file = "../LICENSE"}
+authors = [
+    {name = "Datus Team"}
+]
+dependencies = [
+    "datus-agent>=0.2.2",
+    "snowflake-connector-python>=3.6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[project.entry-points."datus.adapters"]
+snowflake = "datus_snowflake:register"
+
+[tool.hatch.build.targets.wheel]
+packages = ["datus_snowflake"]
