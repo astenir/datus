@@ -126,19 +126,30 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         Returns:
             List of metadata dictionaries with catalog_name properly set
         """
+        # Determine the target catalog
+        current_catalog = self.reset_catalog_to_default(catalog_name or self.catalog_name)
+
+        # Switch to the correct catalog before querying
+        self._before_metadata_query(catalog_name=current_catalog, database_name=database_name)
+
         # Get base metadata from parent
         result = super()._get_metadata(table_type, catalog_name, database_name)
 
-        # Set the correct catalog_name for StarRocks
-        current_catalog = self.reset_catalog_to_default(catalog_name or self.catalog_name)
+        # Set the correct catalog_name and filter results by catalog as safety check
+        filtered_result = []
         for item in result:
+            # Filter by catalog if the item has catalog_name set
+            if "catalog_name" in item and item["catalog_name"] and item["catalog_name"] != current_catalog:
+                continue
+
             item["catalog_name"] = current_catalog
             # Update identifier to include catalog
             item["identifier"] = self.identifier(
                 catalog_name=current_catalog, database_name=item["database_name"], table_name=item["table_name"]
             )
+            filtered_result.append(item)
 
-        return result
+        return filtered_result
 
     @override
     def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:

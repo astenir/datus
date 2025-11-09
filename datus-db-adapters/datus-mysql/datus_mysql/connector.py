@@ -321,6 +321,17 @@ class MySQLConnector(SQLAlchemyConnector):
         table_type: TABLE_TYPE = "table",
     ) -> List[Dict[str, str]]:
         """Get sample rows from tables."""
+        # Delegate to base class for unsupported table types (e.g., "full")
+        if table_type == "full" or table_type not in METADATA_DICT:
+            return super().get_sample_rows(
+                tables=tables,
+                top_n=top_n,
+                catalog_name=catalog_name,
+                database_name=database_name,
+                schema_name=schema_name,
+                table_type=table_type,
+            )
+
         self.connect()
         database_name = database_name or self.database_name
         result = []

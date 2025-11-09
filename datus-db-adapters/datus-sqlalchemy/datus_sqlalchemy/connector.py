@@ -84,13 +84,13 @@ class SQLAlchemyConnector(BaseSqlConnector):
                     self.connection_string,
                     pool_size=3,
                     max_overflow=5,
-                    pool_timeout=self.timeout_seconds * 1000,
+                    pool_timeout=self.timeout_seconds,
                     pool_recycle=3600,
                 )
             else:
                 self.engine = create_engine(self.connection_string)
 
-            self.connection = self.engine.connect().execution_options(statement_timeout=self.timeout_seconds * 1000)
+            self.connection = self.engine.connect()
             self._owns_engine = True
 
         except Exception as e:
@@ -283,6 +283,7 @@ class SQLAlchemyConnector(BaseSqlConnector):
         try:
             self.connect()
             res = self.connection.execute(text(sql))
+            self.connection.commit()
 
             # Get inserted primary key or row count
             inserted_pk = None
@@ -297,6 +298,7 @@ class SQLAlchemyConnector(BaseSqlConnector):
 
             return ExecuteSQLResult(success=True, sql_query=sql, sql_return=str(return_value), row_count=res.rowcount)
         except Exception as e:
+            self._safe_rollback()
             ex = e if isinstance(e, DatusException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql, sql_return="", row_count=0)
 
@@ -306,8 +308,10 @@ class SQLAlchemyConnector(BaseSqlConnector):
         try:
             self.connect()
             res = self.connection.execute(text(sql))
+            self.connection.commit()
             return ExecuteSQLResult(success=True, sql_query=sql, sql_return=str(res.rowcount), row_count=res.rowcount)
         except Exception as e:
+            self._safe_rollback()
             ex = e if isinstance(e, DatusException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql, sql_return="", row_count=0)
 
@@ -317,8 +321,10 @@ class SQLAlchemyConnector(BaseSqlConnector):
         try:
             self.connect()
             res = self.connection.execute(text(sql))
+            self.connection.commit()
             return ExecuteSQLResult(success=True, sql_query=sql, sql_return=str(res.rowcount), row_count=res.rowcount)
         except Exception as e:
+            self._safe_rollback()
             ex = e if isinstance(e, DatusException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql, sql_return="", row_count=0)
 
@@ -328,8 +334,10 @@ class SQLAlchemyConnector(BaseSqlConnector):
         try:
             self.connect()
             res = self.connection.execute(text(sql))
+            self.connection.commit()
             return ExecuteSQLResult(success=True, sql_query=sql, sql_return=str(res.rowcount), row_count=res.rowcount)
         except Exception as e:
+            self._safe_rollback()
             ex = e if isinstance(e, DatusException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, sql_query=sql, error=str(ex))
 
@@ -388,6 +396,7 @@ class SQLAlchemyConnector(BaseSqlConnector):
         self.connect()
         try:
             self.connection.execute(text(sql))
+            self.connection.commit()
 
             # Update context if applicable
             if self.dialect != DBType.SQLITE.value:
@@ -431,6 +440,7 @@ class SQLAlchemyConnector(BaseSqlConnector):
                         results.append(result.rowcount)
                     else:
                         results.append(None)
+            self.connection.commit()
         except SQLAlchemyError as e:
             self._safe_rollback()
             raise self._handle_exception(e, "\n".join(queries), "batch query") from e

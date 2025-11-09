@@ -38,11 +38,11 @@ class MyDatabaseConnector(SQLAlchemyConnector):
 
 ## Requirements
 
-- Python >= 3.10
-- datus-agent >= 0.3.0
-- sqlalchemy >= 2.0.0
-- pyarrow >= 14.0.0
-- pandas >= 2.0.0
+- Python >= 3.12
+- datus-agent >= 0.2.2
+- sqlalchemy >= 2.0.23
+- pyarrow >= 14.0.0, < 19.0.0
+- pandas >= 2.1.4
 
 ## License
 
