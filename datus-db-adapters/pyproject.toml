@@ -1,0 +1,26 @@
+# This is a workspace configuration for development only.
+# End users should install individual adapter packages:
+#   pip install datus-mysql
+#   pip install datus-snowflake
+# etc.
+
+[project]
+name = "datus-adapters"
+version = "0.1.0"
+description = "Datus database adapters workspace (development only)"
+requires-python = ">=3.12"
+license = {file = "LICENSE"}
+
+[tool.uv.workspace]
+members = ["datus-mysql", "datus-sqlalchemy", "datus-starrocks", "datus-snowflake"]
+
+[tool.uv.sources]
+datus-agent = { path = "../Datus-agent", editable = true }
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
