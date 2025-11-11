@@ -32,20 +32,24 @@ class PromptManager:
         Falls back to built-in prompt_templates/ directory if user template not found.
         Configure agent.home in agent.yml to change the root directory.
         """
+        self.default_templates_dir = Path(__file__).parent / "prompt_templates"
+        self._env = None
+
+    @property
+    def user_templates_dir(self) -> Path:
+        """Get user templates directory from path_manager (dynamic)."""
         from datus.utils.path_manager import get_path_manager
 
-        self.user_templates_dir = get_path_manager().template_dir
-        self.default_templates_dir = Path(__file__).parent / "prompt_templates"
+        return get_path_manager().template_dir
 
-        # Use user template directory if it exists, otherwise use default
-        if self.user_templates_dir.exists():
-            self.templates_dir = self.user_templates_dir
-            logger.info(f"Using user template directory: {self.user_templates_dir}")
-        else:
-            self.templates_dir = self.default_templates_dir
-            logger.info(f"Using default template directory: {self.default_templates_dir}")
-
-        self._env = Environment(loader=FileSystemLoader(str(self.templates_dir)), trim_blocks=True, lstrip_blocks=True)
+    def _get_env(self) -> Environment:
+        """Get Jinja2 environment with multi-directory search path."""
+        if self._env is None:
+            # Search user directory first, then fallback to default directory
+            search_paths = [str(self.user_templates_dir), str(self.default_templates_dir)]
+            self._env = Environment(loader=FileSystemLoader(search_paths), trim_blocks=True, lstrip_blocks=True)
+            logger.debug(f"Template search paths: {search_paths}")
+        return self._env
 
     def _get_template_path(self, template_name: str, version: Optional[str] = None) -> Path:
         """
@@ -71,22 +75,12 @@ class PromptManager:
         user_file_path = self.user_templates_dir / filename
 
         if user_file_path.exists():
-            # Update the environment to use user templates directory
-            self.templates_dir = self.user_templates_dir
-            self._env = Environment(
-                loader=FileSystemLoader(str(self.templates_dir)), trim_blocks=True, lstrip_blocks=True
-            )
             logger.debug(f"Loading template from user directory: {user_file_path}")
             return user_file_path
 
         # Fallback to default templates directory
         default_file_path = self.default_templates_dir / filename
         if default_file_path.exists():
-            # Update the environment to use default templates directory
-            self.templates_dir = self.default_templates_dir
-            self._env = Environment(
-                loader=FileSystemLoader(str(self.templates_dir)), trim_blocks=True, lstrip_blocks=True
-            )
             logger.debug(f"Loading template from default directory: {default_file_path}")
             return default_file_path
 
@@ -121,7 +115,7 @@ class PromptManager:
             Jinja2 Template object
         """
         filename = self._get_template_filename(template_name, version)
-        return self._env.get_template(filename)
+        return self._get_env().get_template(filename)
 
     def render_template(self, template_name: str, version: Optional[str] = None, **kwargs) -> str:
         """
@@ -149,8 +143,7 @@ class PromptManager:
         Returns:
             Raw template string
         """
-        filename = self._get_template_filename(template_name, version)
-        template_path = self.templates_dir / filename
+        template_path = self._get_template_path(template_name, version)
 
         with open(template_path, "r", encoding="utf-8") as f:
             return f.read()
@@ -247,22 +240,21 @@ class PromptManager:
         if base_version is None:
             base_version = self.get_latest_version(template_name)
 
-        source_filename = f"{template_name}_{base_version}.j2"
-        source_path = self.templates_dir / source_filename
+        source_path = self._get_template_path(template_name, base_version)
 
-        if not source_path.exists():
-            raise FileNotFoundError(f"Source template '{source_filename}' not found")
-
-        # Create new file
+        # Create new file in user templates directory
         new_filename = f"{template_name}_{new_version}.j2"
-        new_path = self.templates_dir / new_filename
+        new_path = self.user_templates_dir / new_filename
 
         if new_path.exists():
             raise ValueError(f"Version '{new_version}' already exists for template '{template_name}'")
 
+        # Ensure user templates directory exists
+        self.user_templates_dir.mkdir(parents=True, exist_ok=True)
+
         # Copy content
         shutil.copy2(source_path, new_path)
-        print(f"Created {new_filename} based on {source_filename}")
+        print(f"Created {new_filename} based on {source_path.name}")
 
     def template_exists(self, template_name: str, version: Optional[str] = None) -> bool:
         """
