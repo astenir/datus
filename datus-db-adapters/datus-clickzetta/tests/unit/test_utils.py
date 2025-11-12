@@ -7,31 +7,11 @@
 import pytest
 import pandas as pd
 from unittest.mock import MagicMock, patch
-import sys
 
 
+@pytest.mark.usefixtures("mock_datus_modules")
 class TestUtilityFunctions:
     """Test suite for standalone utility functions."""
-
-    @pytest.fixture(autouse=True)
-    def setup_mocks(self):
-        """Setup mock environment for testing."""
-        # Mock datus modules to avoid import errors
-        mock_datus = MagicMock()
-
-        # Mock required modules
-        sys.modules['datus'] = mock_datus
-        sys.modules['datus.schemas'] = MagicMock()
-        sys.modules['datus.schemas.base'] = MagicMock()
-        sys.modules['datus.schemas.node_models'] = MagicMock()
-        sys.modules['datus.tools'] = MagicMock()
-        sys.modules['datus.tools.db_tools'] = MagicMock()
-        sys.modules['datus.tools.db_tools.base'] = MagicMock()
-        sys.modules['datus.utils'] = MagicMock()
-        sys.modules['datus.utils.constants'] = MagicMock()
-        sys.modules['datus.utils.exceptions'] = MagicMock()
-        sys.modules['datus.utils.loggings'] = MagicMock()
-        sys.modules['datus.utils.sql_utils'] = MagicMock()
 
     def test_safe_escape(self):
         """Test SQL string escaping function."""

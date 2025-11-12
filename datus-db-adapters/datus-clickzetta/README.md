@@ -1,6 +1,8 @@
 # Datus ClickZetta Adapter
 
-This package provides a [ClickZetta](https://www.singdata.com/) is developed by [Singdata](https://www.singdata.com/) and [Yunqi](https://www.yunqi.tech/) Lakehouse adapter for [Datus](https://github.com/datusai/datus-agent), enabling seamless integration with ClickZetta Lakehouse analytics platform.
+This package provides a [ClickZetta](https://www.singdata.com/) Lakehouse adapter for [Datus](https://github.com/datusai/datus-agent), enabling seamless integration with ClickZetta analytics platform.
+
+[ClickZetta](https://www.singdata.com/) is developed by [Singdata](https://www.singdata.com/) and [Yunqi](https://www.yunqi.tech/).
 
 ## Installation
 
@@ -118,7 +120,7 @@ This adapter includes comprehensive test coverage with multiple test types and e
 
 ### Test Structure
 
-```
+```text
 tests/
 ├── unit/                     # Unit tests for individual components
 ├── integration/              # Integration tests with mocked dependencies

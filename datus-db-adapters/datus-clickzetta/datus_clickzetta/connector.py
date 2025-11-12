@@ -165,7 +165,7 @@ class ClickZettaConnector(BaseSqlConnector):
             if self.vcluster:
                 escaped_vc = _safe_escape_identifier(self.vcluster.upper())
                 self._session.sql(f"USE VCLUSTER `{escaped_vc}`")
-        except Exception as exc:
+        except (ImportError, ConnectionError, OSError, ValueError) as exc:
             raise DatusException(
                 ErrorCode.DB_CONNECTION_FAILED,
                 message_args={"error_message": str(exc)},
@@ -211,8 +211,10 @@ class ClickZettaConnector(BaseSqlConnector):
             try:
                 escaped_schema = _safe_escape_identifier(schema_name.upper())
                 session.sql(f"USE SCHEMA `{escaped_schema}`")
+                # Update the connector's schema state after successful execution
+                self.schema_name = schema_name
                 logger.info(f"Switched to schema: {schema_name}")
-            except Exception as exc:
+            except (OSError, ValueError, RuntimeError) as exc:
                 escaped_schema = _safe_escape_identifier(schema_name.upper())
                 self._wrap_exception(exc, f"USE SCHEMA `{escaped_schema}`", ErrorCode.DB_EXECUTION_ERROR)
 
@@ -229,7 +231,7 @@ class ClickZettaConnector(BaseSqlConnector):
                 return result.to_pandas()
             # Fallback to empty DataFrame if result has no tabular output
             return pd.DataFrame()
-        except Exception as exc:
+        except (OSError, ValueError, RuntimeError) as exc:
             self._wrap_exception(exc, sql)
 
     def _run_command(self, sql: str) -> pd.DataFrame:
@@ -239,10 +241,10 @@ class ClickZettaConnector(BaseSqlConnector):
             if hasattr(result, "to_pandas"):
                 try:
                     return result.to_pandas()
-                except Exception:
+                except (AttributeError, TypeError, ValueError):
                     return pd.DataFrame()
             return pd.DataFrame()
-        except Exception as exc:
+        except (OSError, ValueError, RuntimeError) as exc:
             self._wrap_exception(exc, sql)
 
     @staticmethod
@@ -303,7 +305,7 @@ class ClickZettaConnector(BaseSqlConnector):
         result = session.sql(list_sql)
         try:
             df = result.to_pandas()
-        except Exception:
+        except (AttributeError, TypeError, ValueError):
             df = pd.DataFrame()
 
         if df.empty:
@@ -338,7 +340,7 @@ class ClickZettaConnector(BaseSqlConnector):
             if field in df.columns:
                 try:
                     return int(df[field].iloc[0])
-                except Exception as exc:
+                except (KeyError, IndexError, ValueError, TypeError) as exc:
                     # Log and continue to try other common row count fields
                     logger.debug(f"Failed to extract row count from field '{field}': {exc}")
                     continue

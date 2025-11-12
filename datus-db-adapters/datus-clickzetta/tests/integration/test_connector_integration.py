@@ -9,10 +9,11 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 
 
+@pytest.mark.usefixtures("mock_datus_modules")
 class TestConnectorInitialization:
     """Test connector initialization and configuration."""
 
-    def test_connector_creation(self, mock_datus_modules, clickzetta_test_config):
+    def test_connector_creation(self, clickzetta_test_config):
         """Test basic connector creation with valid configuration."""
         from datus_clickzetta.connector import ClickZettaConnector
 
@@ -30,7 +31,7 @@ class TestConnectorInitialization:
 
             connector.close()
 
-    def test_connector_with_missing_dependency(self, mock_datus_modules):
+    def test_connector_with_missing_dependency(self):
         """Test connector behavior when ClickZetta dependencies are missing."""
         from datus_clickzetta.connector import ClickZettaConnector
 
@@ -47,7 +48,7 @@ class TestConnectorInitialization:
             # Should raise DatusException for missing dependency
             assert "ClickZetta connector requires" in str(exc_info.value)
 
-    def test_connector_missing_required_fields(self, mock_datus_modules):
+    def test_connector_missing_required_fields(self):
         """Test connector with missing required configuration fields."""
         from datus_clickzetta.connector import ClickZettaConnector
 
@@ -64,11 +65,12 @@ class TestConnectorInitialization:
             assert exc_info.value is not None
 
 
+@pytest.mark.usefixtures("mock_datus_modules")
 class TestConnectorOperations:
     """Test connector SQL operations."""
 
     @patch('datus_clickzetta.connector.Session')
-    def test_connection_management(self, mock_session_class, mock_datus_modules, clickzetta_test_config):
+    def test_connection_management(self, mock_session_class, clickzetta_test_config):
         """Test connection creation and management."""
         from datus_clickzetta.connector import ClickZettaConnector
 
@@ -92,7 +94,7 @@ class TestConnectorOperations:
         connector.close()
 
     @patch('datus_clickzetta.connector.Session')
-    def test_query_execution(self, mock_session_class, mock_datus_modules, clickzetta_test_config):
+    def test_query_execution(self, mock_session_class, clickzetta_test_config):
         """Test SQL query execution."""
         from datus_clickzetta.connector import ClickZettaConnector
 
@@ -115,7 +117,7 @@ class TestConnectorOperations:
         connector.close()
 
     @patch('datus_clickzetta.connector.Session')
-    def test_ddl_operations(self, mock_session_class, mock_datus_modules, clickzetta_test_config):
+    def test_ddl_operations(self, mock_session_class, clickzetta_test_config):
         """Test DDL operations like CREATE TABLE."""
         from datus_clickzetta.connector import ClickZettaConnector
 
@@ -145,7 +147,7 @@ class TestConnectorOperations:
         connector.close()
 
     @patch('datus_clickzetta.connector.Session')
-    def test_context_switching(self, mock_session_class, mock_datus_modules, clickzetta_test_config):
+    def test_context_switching(self, mock_session_class, clickzetta_test_config):
         """Test database context switching."""
         from datus_clickzetta.connector import ClickZettaConnector
 
@@ -168,11 +170,12 @@ class TestConnectorOperations:
         connector.close()
 
 
+@pytest.mark.usefixtures("mock_datus_modules")
 class TestMetadataOperations:
     """Test metadata discovery operations."""
 
     @patch('datus_clickzetta.connector.Session')
-    def test_get_tables(self, mock_session_class, mock_datus_modules, clickzetta_test_config):
+    def test_get_tables(self, mock_session_class, clickzetta_test_config):
         """Test getting table list."""
         from datus_clickzetta.connector import ClickZettaConnector
 
@@ -201,7 +204,7 @@ class TestMetadataOperations:
         connector.close()
 
     @patch('datus_clickzetta.connector.Session')
-    def test_get_views(self, mock_session_class, mock_datus_modules, clickzetta_test_config):
+    def test_get_views(self, mock_session_class, clickzetta_test_config):
         """Test getting view list."""
         from datus_clickzetta.connector import ClickZettaConnector
 
@@ -230,11 +233,12 @@ class TestMetadataOperations:
         connector.close()
 
 
+@pytest.mark.usefixtures("mock_datus_modules")
 class TestVolumeOperations:
     """Test volume/stage operations."""
 
     @patch('datus_clickzetta.connector.Session')
-    def test_list_volume_files(self, mock_session_class, mock_datus_modules, clickzetta_test_config):
+    def test_list_volume_files(self, mock_session_class, clickzetta_test_config):
         """Test listing files in volumes."""
         from datus_clickzetta.connector import ClickZettaConnector
 

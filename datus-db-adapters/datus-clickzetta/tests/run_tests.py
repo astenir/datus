@@ -119,7 +119,7 @@ def main():
             subprocess.run([sys.executable, '-m', 'pip', 'install', 'coverage'], check=True)
 
         # Run tests with coverage
-        cmd = [sys.executable, '-m', 'coverage', 'run', '-m', 'pytest'] + base_cmd[2:]
+        cmd = [sys.executable, '-m', 'coverage', 'run', '-m', 'pytest'] + base_cmd[3:]
         if args.markers:
             cmd.extend(['-m', args.markers])
         exit_codes.append(run_command(cmd, "Tests with Coverage"))

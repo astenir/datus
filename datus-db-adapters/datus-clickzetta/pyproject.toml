@@ -18,7 +18,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "datus-agent>=0.2.2",
+    "datus-agent>=0.2.1",
     "clickzetta-connector-python",
     "clickzetta-zettapark-python",
     "pandas>=2.0.0",
