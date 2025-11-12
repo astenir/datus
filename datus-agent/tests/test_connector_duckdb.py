@@ -2,13 +2,15 @@ import uuid
 
 import pytest
 
+from datus.tools.db_tools.config import DuckDBConfig
 from datus.tools.db_tools.duckdb_connector import DuckdbConnector
 from datus.utils.exceptions import DatusException, ErrorCode
 
 
 @pytest.fixture
 def duckdb_connector() -> DuckdbConnector:
-    return DuckdbConnector(db_path="tests/duckdb-demo.duckdb")
+    config = DuckDBConfig(db_path="tests/duckdb-demo.duckdb")
+    return DuckdbConnector(config)
 
 
 @pytest.mark.acceptance
@@ -56,7 +58,7 @@ def test_execute_query(duckdb_connector: DuckdbConnector):
 
     res = duckdb_connector.execute_query("select * from unexist_table")
     assert not res.success
-    assert ErrorCode.DB_EXECUTION_ERROR.code in res.error
+    assert ErrorCode.DB_TABLE_NOT_EXISTS.code in res.error
 
 
 @pytest.mark.acceptance

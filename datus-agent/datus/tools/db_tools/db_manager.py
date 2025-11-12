@@ -11,12 +11,8 @@ from sqlalchemy.engine.url import URL, make_url
 
 from datus.configuration.agent_config import DbConfig
 from datus.tools.db_tools.base import BaseSqlConnector
-from datus.tools.db_tools.duckdb_connector import DuckdbConnector
-from datus.tools.db_tools.mysql_connector import MySQLConnector
-from datus.tools.db_tools.snowflake_connector import SnowflakeConnector
-from datus.tools.db_tools.sqlalchemy_connector import SQLAlchemyConnector
-from datus.tools.db_tools.sqlite_connector import SQLiteConnector
-from datus.tools.db_tools.starrocks_connector import StarRocksConnector
+from datus.tools.db_tools.config import ConnectionConfig, DuckDBConfig, SQLiteConfig
+from datus.tools.db_tools.registry import connector_registry
 from datus.utils.constants import DBType
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
@@ -313,63 +309,89 @@ class DBManager:
         return {name: db.uri for name, db in dbs.items()}
 
     def _init_conn(self, namespace: str, db_config: DbConfig, database_name: Optional[str] = None) -> BaseSqlConnector:
-        if db_config.type == DBType.SQLITE:
-            conn: BaseSqlConnector = SQLiteConnector(db_config.uri, database_name=db_config.database)
-        elif db_config.type == DBType.DUCKDB:
-            conn = DuckdbConnector(db_config.uri, database_name=db_config.database)
-        elif db_config.type == DBType.SNOWFLAKE:
-            conn = SnowflakeConnector(
-                account=db_config.account,
-                user=db_config.username,
-                password=db_config.password,
-                warehouse=db_config.warehouse,
-                database=db_config.database,
-                schema=db_config.schema,
-            )
-        elif db_config.type == DBType.MYSQL:
-            conn = MySQLConnector(
-                host=db_config.host,
-                port=int(db_config.port) if db_config.port else 0,
-                user=db_config.username,
-                password=db_config.password,
-                database=db_config.database,
-            )
-        elif db_config.type == DBType.STARROCKS:
-            conn = StarRocksConnector(
-                host=db_config.host,
-                port=int(db_config.port) if db_config.port else 0,
-                user=db_config.username,
-                password=db_config.password,
-                catalog=db_config.catalog or "default_catalog",
-                database=db_config.database,
-            )
-        else:
-            connection_uri = db_config.uri
-            if not connection_uri:
-                connection_uri = gen_uri(db_config)
-                dialect = _normalize_dialect_name(db_config.type)
-                catalog_name = db_config.catalog or ""
-                inferred_database = db_config.database or ""
-                inferred_schema = db_config.schema or ""
-            else:
-                dialect, catalog_name, inferred_database, inferred_schema = _resolve_connection_context(
-                    db_config, connection_uri
-                )
-            if not dialect:
-                dialect = _normalize_dialect_name(db_config.type)
-            conn = SQLAlchemyConnector(connection_uri, dialect=dialect)
-            if catalog_name:
-                conn.catalog_name = catalog_name
-            if inferred_database:
-                conn.database_name = inferred_database
-            if inferred_schema:
-                conn.schema_name = inferred_schema
+        """Initialize connection using the registry
 
+        Args:
+            namespace: Namespace identifier
+            db_config: Database configuration
+            database_name: Optional database name for multi-database setup
+
+        Returns:
+            Initialized connector instance
+        """
+        # Convert DbConfig to ConnectionConfig
+        connection_config = self._db_config_to_connection_config(db_config)
+
+        # Use registry to create connector
+        conn = connector_registry.create_connector(db_config.type, connection_config)
+
+        # Store connection
         if database_name:
             self._conn_dict[namespace][database_name] = conn
         else:
             self._conn_dict[namespace] = conn
+
         return conn
+
+    def _db_config_to_connection_config(self, db_config: DbConfig) -> Union[ConnectionConfig, dict]:
+        """Convert DbConfig to appropriate ConnectionConfig subclass or dict.
+
+        Args:
+            db_config: Database configuration from agent config
+
+        Returns:
+            ConnectionConfig instance for built-in databases or dict for adapters
+        """
+        db_type = _normalize_dialect_name(db_config.type)
+        timeout_seconds = 30  # Default timeout
+
+        if db_type == DBType.SQLITE:
+            # SQLite uses file path - prioritize uri over database field
+            db_path = db_config.uri or db_config.database
+            if db_path.startswith("sqlite:///"):
+                db_path = db_path.replace("sqlite:///", "")
+            return SQLiteConfig(
+                db_path=db_path,
+                timeout_seconds=timeout_seconds,
+                database_name=None,  # Let connector extract from file path
+            )
+
+        elif db_type == DBType.DUCKDB:
+            # DuckDB uses file path - prioritize uri over database field
+            db_path = db_config.uri or db_config.database
+            if db_path.startswith("duckdb:///"):
+                db_path = db_path.replace("duckdb:///", "")
+            return DuckDBConfig(
+                db_path=db_path,
+                timeout_seconds=timeout_seconds,
+                database_name=None,  # Let connector extract from file path
+            )
+
+        else:
+            # For adapters, convert DbConfig to dict and filter out empty values
+            # This allows adapters to receive all configuration parameters they need
+            config_dict = db_config.to_dict()
+
+            # Add standard connection parameters
+            config_dict["timeout_seconds"] = timeout_seconds
+
+            # Remove None and empty string values, and internal fields
+            # Keep False, 0, and empty containers to allow explicit configuration
+            filtered_config = {
+                k: v
+                for k, v in config_dict.items()
+                if not (v is None or (isinstance(v, str) and v.strip() == ""))
+                and k not in ["type", "path_pattern", "logic_name"]
+            }
+
+            # Convert port to int if present
+            if "port" in filtered_config:
+                try:
+                    filtered_config["port"] = int(filtered_config["port"])
+                except (ValueError, TypeError):
+                    pass
+
+            return filtered_config
 
     def close(self):
         """Close all database connections."""
