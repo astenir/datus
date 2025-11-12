@@ -104,9 +104,8 @@ def main():
         cmd = base_cmd + ['./unit/']
         exit_codes.append(run_command(cmd, "Unit Tests"))
 
-        cmd = base_cmd + ['./integration/', '-m', 'not slow']
-        if args.markers:
-            cmd.extend(['-m', f'not slow and ({args.markers})'])
+        marker_expr = f'not slow and ({args.markers})' if args.markers else 'not slow'
+        cmd = base_cmd + ['./integration/', '-m', marker_expr]
         exit_codes.append(run_command(cmd, "Fast Integration Tests"))
 
     elif args.mode == 'coverage':
