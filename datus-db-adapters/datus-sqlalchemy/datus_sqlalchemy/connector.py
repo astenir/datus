@@ -605,23 +605,6 @@ class SQLAlchemyConnector(BaseSqlConnector):
 
     # ==================== Streaming Methods ====================
 
-    def execute_arrow_iterator(self, sql: str, max_rows: int = 100) -> Iterator[Tuple]:
-        """Execute query and return results as tuples in batches."""
-        self.connect()
-        try:
-            result = self.connection.execute(text(sql).execution_options(stream_results=True, max_row_buffer=max_rows))
-            if result.returns_rows:
-                while True:
-                    batch_rows = result.fetchmany(max_rows)
-                    if not batch_rows:
-                        break
-                    for row in batch_rows:
-                        yield row
-            else:
-                yield from []
-        except Exception as e:
-            raise (e if isinstance(e, DatusException) else self._handle_exception(e)) from e
-
     def execute_csv_iterator(self, sql: str, max_rows: int = 100, with_header: bool = True) -> Iterator[Tuple]:
         """Execute query and return CSV rows in batches."""
         self.connect()
