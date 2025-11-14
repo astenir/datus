@@ -78,7 +78,14 @@ def main():
         workspace = os.getenv('CLICKZETTA_WORKSPACE')
         schema = os.getenv('CLICKZETTA_SCHEMA')
 
-        # Get table list
+        # Validate identifiers to prevent injection (basic alphanumeric + underscore)
+        import re
+        if not workspace or not re.match(r'^[a-zA-Z0-9_]+$', workspace):
+            raise ValueError(f"Invalid workspace name: {workspace}")
+        if not schema or not re.match(r'^[a-zA-Z0-9_]+$', schema):
+            raise ValueError(f"Invalid schema name: {schema}")
+
+        # Get table list (now safely validated)
         cursor.execute(f'SHOW TABLES IN `{workspace}`.`{schema}`')
         tables = cursor.fetchall()
         table_count = len(tables) if tables else 0
