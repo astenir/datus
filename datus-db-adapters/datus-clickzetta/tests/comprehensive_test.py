@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """ClickZetta Connector Comprehensive Functional Test Script"""
 
 import os
@@ -7,6 +6,8 @@ import sys
 def main():
     print('=== ClickZetta Connector Comprehensive Functionality Test ===')
     print()
+
+    all_ok = True
 
     # Test environment variable loading
     print('1. 📋 Environment Variable Validation')
@@ -67,6 +68,7 @@ def main():
         cursor.close()
     except Exception as e:
         print(f'   ❌ SQL query failed: {e}')
+        all_ok = False
 
     # Test metadata retrieval
     print()
@@ -88,6 +90,7 @@ def main():
         cursor.close()
     except Exception as e:
         print(f'   ❌ Metadata query failed: {e}')
+        all_ok = False
 
     # Removed use_workspace related tests since this feature is not supported by design
 
@@ -98,10 +101,13 @@ def main():
         print('   ✅ Connection closed')
     except Exception as e:
         print(f'   ❌ Connection closure failed: {e}')
+        all_ok = False
 
     print()
     print('🎉 Real connection testing completed!')
-    return True
+    if not all_ok:
+        print('Some steps failed; see messages above.')
+    return all_ok
 
 if __name__ == '__main__':
     success = main()
