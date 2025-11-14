@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""ClickZetta 连接器完整功能测试脚本"""
+"""ClickZetta Connector Comprehensive Functional Test Script"""
 
 import os
 import sys
 
 def main():
-    print('=== ClickZetta 连接器完整功能测试 ===')
+    print('=== ClickZetta Connector Comprehensive Functionality Test ===')
     print()
 
-    # 测试环境变量加载
-    print('1. 📋 环境变量验证')
+    # Test environment variable loading
+    print('1. 📋 Environment Variable Validation')
     required_vars = [
         'CLICKZETTA_SERVICE', 'CLICKZETTA_USERNAME', 'CLICKZETTA_PASSWORD',
         'CLICKZETTA_INSTANCE', 'CLICKZETTA_WORKSPACE', 'CLICKZETTA_SCHEMA', 'CLICKZETTA_VCLUSTER'
@@ -25,13 +25,13 @@ def main():
             missing_vars.append(var)
 
     if missing_vars:
-        print(f'   ❌ 缺少必需的环境变量: {missing_vars}')
+        print(f'   ❌ Missing required environment variables: {missing_vars}')
         return False
 
     print()
 
-    # 测试基本连接
-    print('2. 🔌 基本连接测试')
+    # Test basic connection
+    print('2. 🔌 Basic Connection Test')
     try:
         import clickzetta
         connection = clickzetta.connect(
@@ -43,64 +43,64 @@ def main():
             schema=os.getenv('CLICKZETTA_SCHEMA'),
             vcluster=os.getenv('CLICKZETTA_VCLUSTER')
         )
-        print('   ✅ ClickZetta SDK 连接成功')
+        print('   ✅ ClickZetta SDK connection successful')
     except Exception as e:
-        print(f'   ❌ ClickZetta SDK 连接失败: {e}')
+        print(f'   ❌ ClickZetta SDK connection failed: {e}')
         return False
 
-    # 测试 SQL 查询
+    # Test SQL queries
     print()
-    print('3. 📊 SQL 查询测试')
+    print('3. 📊 SQL Query Test')
     try:
         cursor = connection.cursor()
 
-        # 测试简单查询
+        # Test simple query
         cursor.execute('SELECT 1 as test_number, "Hello ClickZetta" as message')
         results = cursor.fetchall()
-        print(f'   ✅ 基本查询成功: {results}')
+        print(f'   ✅ Basic query successful: {results}')
 
-        # 测试当前时间查询
+        # Test current timestamp query
         cursor.execute('SELECT current_timestamp();')
         time_results = cursor.fetchall()
-        print(f'   ✅ 时间查询成功: {time_results[0] if time_results else "无结果"}')
+        print(f'   ✅ Time query successful: {time_results[0] if time_results else "No results"}')
 
         cursor.close()
     except Exception as e:
-        print(f'   ❌ SQL 查询失败: {e}')
+        print(f'   ❌ SQL query failed: {e}')
 
-    # 测试元数据获取
+    # Test metadata retrieval
     print()
-    print('4. 🗂️ 元数据查询测试')
+    print('4. 🗂️ Metadata Query Test')
     try:
         cursor = connection.cursor()
         workspace = os.getenv('CLICKZETTA_WORKSPACE')
         schema = os.getenv('CLICKZETTA_SCHEMA')
 
-        # 获取表列表
+        # Get table list
         cursor.execute(f'SHOW TABLES IN `{workspace}`.`{schema}`')
         tables = cursor.fetchall()
         table_count = len(tables) if tables else 0
-        print(f'   ✅ 表列表获取成功: 发现 {table_count} 个表')
+        print(f'   ✅ Table list retrieval successful: Found {table_count} tables')
 
         if table_count > 0:
-            print(f'   📝 示例表名: {tables[0][0] if tables else "无"}')
+            print(f'   📝 Example table name: {tables[0][0] if tables else "None"}')
 
         cursor.close()
     except Exception as e:
-        print(f'   ❌ 元数据查询失败: {e}')
+        print(f'   ❌ Metadata query failed: {e}')
 
-    # 删除use_workspace相关测试，因为本来就不支持这个功能
+    # Removed use_workspace related tests since this feature is not supported by design
 
     print()
-    print('5. 🧹 资源清理')
+    print('5. 🧹 Resource Cleanup')
     try:
         connection.close()
-        print('   ✅ 连接已关闭')
+        print('   ✅ Connection closed')
     except Exception as e:
-        print(f'   ❌ 连接关闭失败: {e}')
+        print(f'   ❌ Connection closure failed: {e}')
 
     print()
-    print('🎉 真实连接测试完成！')
+    print('🎉 Real connection testing completed!')
     return True
 
 if __name__ == '__main__':

@@ -30,13 +30,15 @@ def mock_datus_modules():
     mock_node_models = MagicMock()
 
     class MockExecuteSQLResult:
-        def __init__(self, success=True, error="", sql_query="", sql_return="", row_count=0, result_format="csv"):
+        def __init__(self, success=True, error="", sql_query="", sql_return="", row_count=0, result_format="csv", data=None, error_message=None):
             self.success = success
             self.error = error
             self.sql_query = sql_query
             self.sql_return = sql_return
             self.row_count = row_count
             self.result_format = result_format
+            self.data = data
+            self.error_message = error_message
 
     mock_node_models.ExecuteSQLResult = MockExecuteSQLResult
 
@@ -61,14 +63,22 @@ def mock_datus_modules():
         CLICKZETTA = "clickzetta"
         value = "clickzetta"
 
+    class MockSQLType:
+        SELECT = "SELECT"
+        INSERT = "INSERT"
+        UPDATE = "UPDATE"
+        DELETE = "DELETE"
+        DDL = "DDL"
+
     mock_constants = MagicMock()
     mock_constants.DBType = MockDBType
-    mock_constants.SQLType = MagicMock()
+    mock_constants.SQLType = MockSQLType
 
     # Mock exceptions
     class MockDatusException(Exception):
-        def __init__(self, code, message="", message_args=None):
-            self.code = code
+        def __init__(self, code=None, message="", message_args=None, error_code=None):
+            self.code = error_code or code  # Support both parameter names
+            self.error_code = error_code or code
             self.message = message
             self.message_args = message_args or {}
             super().__init__(str(message))
@@ -78,6 +88,7 @@ def mock_datus_modules():
         COMMON_CONFIG_ERROR = "COMMON_CONFIG_ERROR"
         DB_CONNECTION_FAILED = "DB_CONNECTION_FAILED"
         DB_EXECUTION_ERROR = "DB_EXECUTION_ERROR"
+        SQL_EXECUTION_ERROR = "SQL_EXECUTION_ERROR"
 
     mock_exceptions = MagicMock()
     mock_exceptions.DatusException = MockDatusException

@@ -60,13 +60,14 @@ namespaces:
 
 ## Usage
 
-Once installed and configured, the adapter is automatically available in Datus:
+Once installed and configured, use the ClickZetta adapter with Datus:
 
 ```python
-from datus import DatusAgent
+# Execute queries
+result = agent.query("SELECT * FROM my_table LIMIT 10")
 
-agent = DatusAgent()
-result = agent.execute_query("SELECT * FROM my_table LIMIT 10")
+# Get table information
+tables = agent.get_tables("my_schema")
 ```
 
 ## Volume Operations

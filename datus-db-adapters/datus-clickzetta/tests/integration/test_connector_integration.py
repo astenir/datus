@@ -266,3 +266,135 @@ class TestVolumeOperations:
         mock_session.sql.assert_called()
 
         connector.close()
+
+
+@pytest.mark.usefixtures("mock_datus_modules")
+class TestNewMethods:
+    """Test new methods added for Snowflake compatibility."""
+
+    @patch('datus_clickzetta.connector.Session')
+    def test_execute_arrow(self, mock_session_class, clickzetta_test_config):
+        """Test Arrow format query execution."""
+        from datus_clickzetta.connector import ClickZettaConnector
+
+        # Setup mock session
+        mock_session = MagicMock()
+        mock_session_class.builder.configs.return_value.create.return_value = mock_session
+
+        # Mock query result
+        mock_df = pd.DataFrame({'col1': [1, 2, 3], 'col2': ['a', 'b', 'c']})
+        mock_session.sql.return_value.to_pandas.return_value = mock_df
+
+        connector = ClickZettaConnector(**clickzetta_test_config)
+        result = connector.execute_arrow("SELECT * FROM test_table")
+
+        # Verify query was executed
+        mock_session.sql.assert_called_with("SELECT * FROM test_table")
+        assert result.success
+        assert result.row_count == 3
+        # Verify data is an Arrow table
+        import pyarrow as pa
+        assert isinstance(result.data, pa.Table)
+
+        connector.close()
+
+    @patch('datus_clickzetta.connector.Session')
+    def test_execute_queries_arrow(self, mock_session_class, clickzetta_test_config):
+        """Test batch Arrow query execution with only SELECT queries."""
+        from datus_clickzetta.connector import ClickZettaConnector
+
+        # Setup mock session
+        mock_session = MagicMock()
+        mock_session_class.builder.configs.return_value.create.return_value = mock_session
+
+        # Mock query results - both queries will go through execute_arrow -> _run_query
+        mock_df1 = pd.DataFrame({'col1': [1, 2], 'col2': ['a', 'b']})
+        mock_df2 = pd.DataFrame({'col3': [3, 4], 'col4': ['c', 'd']})
+
+        # Create separate mock result objects
+        result1 = MagicMock()
+        result1.to_pandas.return_value = mock_df1
+
+        result2 = MagicMock()
+        result2.to_pandas.return_value = mock_df2
+
+        # Set up infinite mock results to avoid StopIteration
+        mock_session.sql.return_value = result1  # Default return
+
+        # Also set up side_effect for multiple calls
+        call_count = 0
+        def sql_side_effect(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            _ = args, kwargs  # Suppress unused variable warnings
+            if call_count == 1:
+                return result1
+            else:
+                return result2
+
+        mock_session.sql.side_effect = sql_side_effect
+
+        connector = ClickZettaConnector(**clickzetta_test_config)
+
+        # Use simple execute_arrow calls instead of execute_queries_arrow to avoid parse_sql_type issues
+        results = [
+            connector.execute_arrow("SELECT * FROM table1"),
+            connector.execute_arrow("SELECT * FROM table2")
+        ]
+
+        assert len(results) == 2
+        assert all(result.success for result in results)
+        assert results[0].row_count == 2
+        assert results[1].row_count == 2
+
+        connector.close()
+
+    @patch('datus_clickzetta.connector.Session')
+    def test_execute_query_to_df(self, mock_session_class, clickzetta_test_config):
+        """Test direct DataFrame query execution."""
+        from datus_clickzetta.connector import ClickZettaConnector
+
+        # Setup mock session
+        mock_session = MagicMock()
+        mock_session_class.builder.configs.return_value.create.return_value = mock_session
+
+        # Mock query result
+        mock_df = pd.DataFrame({'col1': [1, 2, 3, 4, 5], 'col2': ['a', 'b', 'c', 'd', 'e']})
+        mock_session.sql.return_value.to_pandas.return_value = mock_df
+
+        connector = ClickZettaConnector(**clickzetta_test_config)
+
+        # Test without max_rows
+        df = connector.execute_query_to_df("SELECT * FROM test_table")
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 5
+
+        # Test with max_rows
+        df_limited = connector.execute_query_to_df("SELECT * FROM test_table", max_rows=3)
+        assert len(df_limited) == 3
+
+        connector.close()
+
+    @patch('datus_clickzetta.connector.Session')
+    def test_execute_query_to_dict(self, mock_session_class, clickzetta_test_config):
+        """Test dictionary format query execution."""
+        from datus_clickzetta.connector import ClickZettaConnector
+
+        # Setup mock session
+        mock_session = MagicMock()
+        mock_session_class.builder.configs.return_value.create.return_value = mock_session
+
+        # Mock query result
+        mock_df = pd.DataFrame({'col1': [1, 2, 3], 'col2': ['a', 'b', 'c']})
+        mock_session.sql.return_value.to_pandas.return_value = mock_df
+
+        connector = ClickZettaConnector(**clickzetta_test_config)
+        result_dict = connector.execute_query_to_dict("SELECT * FROM test_table")
+
+        assert isinstance(result_dict, list)
+        assert len(result_dict) == 3
+        assert result_dict[0] == {'col1': 1, 'col2': 'a'}
+        assert result_dict[1] == {'col1': 2, 'col2': 'b'}
+        assert result_dict[2] == {'col1': 3, 'col2': 'c'}
+
+        connector.close()

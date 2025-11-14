@@ -1,164 +1,164 @@
-# ClickZetta 连接器完整测试报告 (最终版)
+# ClickZetta Connector Comprehensive Test Report (Final Version)
 
-**测试日期**: 2025年11月12日
-**测试环境**: ClickZetta cn-shanghai-alicloud.api.clickzetta.com
-**测试实例**: ******
-**工作空间**: quick_start
-**模式**: mcp_demo
+**Test Date**: November 12, 2025
+**Test Environment**: ClickZetta cn-shanghai-alicloud.api.clickzetta.com
+**Test Instance**: ******
+**Workspace**: quick_start
+**Schema**: mcp_demo
 
-## 📋 测试概述
+## 📋 Test Overview
 
-本次测试对 ClickZetta 连接器进行了完整的功能验证，包括单元测试、集成测试和真实环境连接测试。经过修复和验证，所有核心测试均已通过。
+This comprehensive test validates the ClickZetta connector functionality, including unit tests, integration tests, and real environment connection tests. After fixes and verification, all core tests have passed.
 
-## ✅ 测试结果总览
+## ✅ Test Results Summary
 
-| 测试类型 | 测试项目 | 状态 | 通过率 | 详情 |
-|---------|---------|------|-------|------|
-| **单元测试** | 配置验证和工具函数 | ✅ 完全通过 | 13/13 | 100% 配置验证成功 |
-| **集成测试** | 连接器集成测试 | ✅ 完全通过 | 10/10 | 所有mock测试通过 |
-| **真实连接** | 实际环境连接 | ✅ 完全通过 | 5/5 | 核心功能全部正常 |
+| Test Type | Test Items | Status | Pass Rate | Details |
+|-----------|------------|---------|-----------|---------|
+| **Unit Tests** | Configuration & utility functions | ✅ Fully Passed | 13/13 | 100% configuration validation success |
+| **Integration Tests** | Connector integration tests | ✅ Fully Passed | 10/10 | All mock tests passed |
+| **Real Connection** | Actual environment connection | ✅ Fully Passed | 5/5 | All core features working |
 
-## 🔧 详细测试结果
+## 🔧 Detailed Test Results
 
-### 1. 单元测试 (✅ 100% 通过)
+### 1. Unit Tests (✅ 100% Pass)
 
-**执行命令**: `python3 run_tests.py --mode unit -v`
-**结果**: 13 passed in 0.64s
+**Command**: `python3 run_tests.py --mode unit -v`
+**Result**: 13 passed in 0.64s
 
-**测试覆盖**:
-- ✅ ClickZettaConfig 配置类验证
-- ✅ 字段类型和必填验证
-- ✅ 默认值和序列化
-- ✅ SQL安全转义函数
-- ✅ Volume URI 规范化
-- ✅ DDL构建工具
+**Test Coverage**:
+- ✅ ClickZettaConfig configuration class validation
+- ✅ Field types and required validation
+- ✅ Default values and serialization
+- ✅ SQL security escape functions
+- ✅ Volume URI normalization
+- ✅ DDL building utilities
 
-### 2. 集成测试 (✅ 100% 通过)
+### 2. Integration Tests (✅ 100% Pass)
 
-**执行命令**: `python3 run_tests.py --mode integration -v`
-**结果**: 10 passed in 0.61s
+**Command**: `python3 run_tests.py --mode integration -v`
+**Result**: 10 passed in 0.61s
 
-**修复的问题**:
-- ✅ 修复Session builder mock配置
-- ✅ 修复元数据查询的DataFrame结构
-- ✅ 纠正volume方法名称 (`list_volume_files` vs `list_files`)
-- ✅ 修复依赖缺失测试逻辑
+**Issues Fixed**:
+- ✅ Fixed Session builder mock configuration
+- ✅ Fixed metadata query DataFrame structure
+- ✅ Corrected volume method names (`list_volume_files` vs `list_files`)
+- ✅ Fixed missing dependency test logic
 
-**通过的测试**:
-- ✅ 连接器创建和配置
-- ✅ 依赖缺失处理
-- ✅ 必填字段验证
-- ✅ 连接管理
-- ✅ SQL查询执行
-- ✅ DDL操作
-- ✅ 上下文切换
-- ✅ 表和视图列表获取
-- ✅ Volume文件列表操作
+**Passed Tests**:
+- ✅ Connector creation and configuration
+- ✅ Missing dependency handling
+- ✅ Required field validation
+- ✅ Connection management
+- ✅ SQL query execution
+- ✅ DDL operations
+- ✅ Context switching
+- ✅ Tables and views listing
+- ✅ Volume file listing operations
 
-### 3. 真实连接测试 (✅ 100% 通过)
+### 3. Real Connection Tests (✅ 100% Pass)
 
-**执行命令**: `python3 comprehensive_test.py`
+**Command**: `python3 comprehensive_test.py`
 
-#### 3.1 环境配置验证 ✅
-- 所有7个必需的环境变量成功加载
-- 连接参数配置正确
+#### 3.1 Environment Configuration Verification ✅
+- All 7 required environment variables successfully loaded
+- Connection parameters configured correctly
 
-#### 3.2 连接建立 ✅
-- ClickZetta SDK v0.8.106 连接正常
-- 连接时间约2-3秒
+#### 3.2 Connection Establishment ✅
+- ClickZetta SDK v0.8.106 connection normal
+- Connection time approximately 2-3 seconds
 
-#### 3.3 SQL查询测试 ✅
+#### 3.3 SQL Query Tests ✅
 ```sql
--- 基本查询测试
+-- Basic query test
 SELECT 1 as test_number, "Hello ClickZetta" as message
--- 结果: [(1, 'Hello ClickZetta')]
+-- Result: [(1, 'Hello ClickZetta')]
 
--- 时间函数测试
+-- Time function test
 SELECT current_timestamp();
--- 结果: (datetime.datetime(2025, 11, 12, 19, 30, 25, 258030, tzinfo=zoneinfo.ZoneInfo(key='Asia/Shanghai')),)
+-- Result: (datetime.datetime(2025, 11, 12, 19, 30, 25, 258030, tzinfo=zoneinfo.ZoneInfo(key='Asia/Shanghai')),)
 ```
 
-#### 3.4 元数据发现 ✅
+#### 3.4 Metadata Discovery ✅
 ```sql
 SHOW TABLES IN `quick_start`.`mcp_demo`
 ```
-- ✅ 成功发现 90 个表
-- ✅ 元数据访问正常
+- ✅ Successfully discovered 90 tables
+- ✅ Metadata access working normally
 
-#### 3.5 资源清理 ✅
-- 连接正常关闭
-- 资源释放完整
+#### 3.5 Resource Cleanup ✅
+- Connection closed properly
+- Complete resource release
 
-## 🔍 重要澄清
+## 🔍 Important Clarifications
 
-### ❌ 之前的误解纠正
+### ❌ Previous Misunderstandings Corrected
 
-1. **use_workspace 方法**:
-   - **错误认知**: "SDK有bug，方法不可用"
-   - **实际情况**: ClickZetta连接器本来就不支持运行时workspace切换
-   - **正确做法**: 在连接建立时指定正确的workspace
+1. **use_workspace method**:
+   - **Wrong assumption**: "SDK has bug, method unavailable"
+   - **Actual situation**: ClickZetta connector doesn't support runtime workspace switching by design
+   - **Correct approach**: Specify correct workspace during connection establishment
 
-2. **current_timestamp() 函数**:
-   - **错误认知**: "语法不支持"
-   - **实际情况**: 完全支持，之前测试脚本SQL语法错误
-   - **正确语法**: `SELECT current_timestamp();` ✅
+2. **current_timestamp() function**:
+   - **Wrong assumption**: "Syntax not supported"
+   - **Actual situation**: Fully supported, previous test script had SQL syntax error
+   - **Correct syntax**: `SELECT current_timestamp();` ✅
 
-### ✅ 验证的核心功能
+### ✅ Validated Core Features
 
-1. **连接建立**: 使用真实凭据建立稳定连接
-2. **SQL查询**: 基本查询和内置函数均正常
-3. **元数据访问**: 表和视图列表获取完整
-4. **配置验证**: 参数验证和错误处理正确
-5. **资源管理**: 连接生命周期管理正常
+1. **Connection Establishment**: Stable connection using real credentials
+2. **SQL Queries**: Basic queries and built-in functions work normally
+3. **Metadata Access**: Complete table and view listing
+4. **Configuration Validation**: Parameter validation and error handling correct
+5. **Resource Management**: Connection lifecycle management normal
 
-## 📊 性能数据
+## 📊 Performance Data
 
-- **连接建立**: 2-3 秒
-- **简单查询**: < 1 秒
-- **元数据查询**: 发现90个表
-- **单元测试**: 13个测试 0.64秒
-- **集成测试**: 10个测试 0.61秒
+- **Connection Establishment**: 2-3 seconds
+- **Simple Query**: < 1 second
+- **Metadata Query**: Discovered 90 tables
+- **Unit Tests**: 13 tests in 0.64s
+- **Integration Tests**: 10 tests in 0.61s
 
-## 🔧 技术栈验证
+## 🔧 Technology Stack Validation
 
-### ✅ 依赖包状态
+### ✅ Dependency Status
 - **ClickZetta SDK**: v0.8.106 ✅
-- **PyArrow**: v22.0.0 ✅ (编译问题已解决)
+- **PyArrow**: v22.0.0 ✅ (compilation issues resolved)
 - **Python**: 3.13.3 ✅
 - **Pytest**: 9.0.0 ✅
 
-### ✅ 架构兼容性
-- **Datus 框架**: 集成测试通过
-- **Native SDK**: 直接使用ClickZetta官方SDK
-- **配置管理**: Pydantic验证正常
-- **错误处理**: DatusException集成完整
+### ✅ Architecture Compatibility
+- **Datus Framework**: Integration tests passed
+- **Native SDK**: Direct use of official ClickZetta SDK
+- **Configuration Management**: Pydantic validation normal
+- **Error Handling**: Complete DatusException integration
 
-## 🎯 结论
+## 🎯 Conclusion
 
-### ✅ 生产就绪状态
+### ✅ Production Ready Status
 
-**ClickZetta连接器已通过全面测试验证，核心功能完整，可投入生产使用。**
+**ClickZetta connector has passed comprehensive testing validation, with complete core functionality, ready for production use.**
 
-**验证的功能**:
-- ✅ 稳定的连接建立
-- ✅ 完整的SQL查询支持
-- ✅ 可靠的元数据发现
-- ✅ 正确的配置管理
-- ✅ 健壮的错误处理
+**Validated Features**:
+- ✅ Stable connection establishment
+- ✅ Complete SQL query support
+- ✅ Reliable metadata discovery
+- ✅ Correct configuration management
+- ✅ Robust error handling
 
-**性能表现**:
-- ✅ 快速的连接建立 (2-3秒)
-- ✅ 高效的查询执行 (<1秒)
-- ✅ 完整的测试覆盖 (100%通过率)
+**Performance**:
+- ✅ Fast connection establishment (2-3 seconds)
+- ✅ Efficient query execution (<1 second)
+- ✅ Complete test coverage (100% pass rate)
 
-### 🎉 最终评估
+### 🎉 Final Assessment
 
-ClickZetta连接器功能完整，测试覆盖全面，性能表现良好，满足Datus生产环境的所有要求。之前的"问题"实际上是对功能设计的误解，经过正确的测试和验证，连接器工作完全正常。
+The ClickZetta connector is feature-complete, has comprehensive test coverage, and demonstrates good performance, meeting all requirements for Datus production environment. The previous "issues" were actually misunderstandings of functional design. After proper testing and validation, the connector works perfectly.
 
-## 📋 测试环境
+## 📋 Test Environment
 
-- **操作系统**: macOS Darwin 24.6.0
+- **Operating System**: macOS Darwin 24.6.0
 - **Python**: 3.13.3
-- **测试框架**: pytest 9.0.0
-- **连接环境**: ClickZetta 阿里云服务
-- **网络**: 公网连接稳定
+- **Test Framework**: pytest 9.0.0
+- **Connection Environment**: ClickZetta Alibaba Cloud Service
+- **Network**: Stable public internet connection

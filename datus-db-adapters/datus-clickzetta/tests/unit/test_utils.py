@@ -203,5 +203,131 @@ class TestVolumeOperations:
         assert uri == "volume:user://vol/dir1/dir2/file.txt"
 
 
+class TestNewMethods:
+    """Test suite for new methods added for Snowflake compatibility."""
+
+    @patch('datus_clickzetta.connector.Session')
+    def test_execute_arrow_empty_result(self, mock_session_class):
+        """Test execute_arrow with empty result."""
+        from datus_clickzetta.connector import ClickZettaConnector
+
+        # Setup mock session
+        mock_session = MagicMock()
+        mock_session_class.builder.configs.return_value.create.return_value = mock_session
+
+        # Mock empty DataFrame
+        empty_df = pd.DataFrame()
+        mock_session.sql.return_value.to_pandas.return_value = empty_df
+
+        connector = ClickZettaConnector(
+            service="service", username="user", password="pass",
+            instance="instance", workspace="workspace"
+        )
+
+        result = connector.execute_arrow("SELECT * FROM empty_table")
+
+        assert result.success
+        assert result.row_count == 0
+        import pyarrow as pa
+        assert isinstance(result.data, pa.Table)
+        assert result.data.num_rows == 0
+
+        connector.close()
+
+    @patch('datus_clickzetta.connector.Session')
+    def test_execute_query_to_df_max_rows(self, mock_session_class):
+        """Test execute_query_to_df with max_rows parameter."""
+        from datus_clickzetta.connector import ClickZettaConnector
+
+        # Setup mock session
+        mock_session = MagicMock()
+        mock_session_class.builder.configs.return_value.create.return_value = mock_session
+
+        # Mock large DataFrame
+        large_df = pd.DataFrame({
+            'id': range(100),
+            'value': [f'value_{i}' for i in range(100)]
+        })
+        mock_session.sql.return_value.to_pandas.return_value = large_df
+
+        connector = ClickZettaConnector(
+            service="service", username="user", password="pass",
+            instance="instance", workspace="workspace"
+        )
+
+        # Test with max_rows limitation
+        df = connector.execute_query_to_df("SELECT * FROM large_table", max_rows=10)
+
+        assert isinstance(df, pd.DataFrame)
+        assert len(df) == 10
+        assert list(df['id']) == list(range(10))
+
+        connector.close()
+
+    @patch('datus_clickzetta.connector.Session')
+    def test_execute_query_to_dict_empty(self, mock_session_class):
+        """Test execute_query_to_dict with empty result."""
+        from datus_clickzetta.connector import ClickZettaConnector
+
+        # Setup mock session
+        mock_session = MagicMock()
+        mock_session_class.builder.configs.return_value.create.return_value = mock_session
+
+        # Mock empty DataFrame
+        empty_df = pd.DataFrame()
+        mock_session.sql.return_value.to_pandas.return_value = empty_df
+
+        connector = ClickZettaConnector(
+            service="service", username="user", password="pass",
+            instance="instance", workspace="workspace"
+        )
+
+        result = connector.execute_query_to_dict("SELECT * FROM empty_table")
+
+        assert isinstance(result, list)
+        assert len(result) == 0
+
+        connector.close()
+
+    @patch('datus_clickzetta.connector.Session')
+    def test_execute_arrow_data_conversion(self, mock_session_class):
+        """Test execute_arrow data conversion to Arrow format."""
+        from datus_clickzetta.connector import ClickZettaConnector
+
+        # Setup mock session
+        mock_session = MagicMock()
+        mock_session_class.builder.configs.return_value.create.return_value = mock_session
+
+        # Mock query result
+        mock_df = pd.DataFrame({
+            'int_col': [1, 2, 3],
+            'str_col': ['a', 'b', 'c'],
+            'float_col': [1.1, 2.2, 3.3]
+        })
+        mock_session.sql.return_value.to_pandas.return_value = mock_df
+
+        connector = ClickZettaConnector(
+            service="service", username="user", password="pass",
+            instance="instance", workspace="workspace"
+        )
+
+        result = connector.execute_arrow("SELECT * FROM test_table")
+
+        assert result.success
+        assert result.row_count == 3
+
+        # Verify data is an Arrow table with correct structure
+        import pyarrow as pa
+        assert isinstance(result.data, pa.Table)
+        assert result.data.num_rows == 3
+        assert result.data.num_columns == 3
+
+        # Verify column names are preserved
+        expected_columns = ['int_col', 'str_col', 'float_col']
+        assert result.data.schema.names == expected_columns
+
+        connector.close()
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

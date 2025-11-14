@@ -440,6 +440,35 @@ class ClickZettaConnector(BaseSqlConnector):
             result.row_count = len(result.sql_return)
         return result
 
+    def execute_query_to_df(self, sql: str, max_rows: Optional[int] = None) -> pd.DataFrame:
+        """Execute query and directly return pandas DataFrame for convenience."""
+        try:
+            df = self._run_query(sql)
+            if max_rows is not None and len(df) > max_rows:
+                df = df.head(max_rows)
+            return df
+        except Exception as e:
+            logger.error(f"Error executing query to DataFrame: {sql}, error: {str(e)}")
+            raise DatusException(
+                error_code=ErrorCode.SQL_EXECUTION_ERROR,
+                message=f"Failed to execute query to DataFrame: {str(e)}"
+            ) from e
+
+    def execute_query_to_dict(self, sql: str) -> List[Dict[str, Any]]:
+        """Execute query and return result as list of dictionaries for JSON serialization."""
+        try:
+            df = self._run_query(sql)
+            if df.empty:
+                return []
+            # Convert DataFrame to list of dictionaries with records orientation
+            return df.to_dict(orient="records")
+        except Exception as e:
+            logger.error(f"Error executing query to dict: {sql}, error: {str(e)}")
+            raise DatusException(
+                error_code=ErrorCode.SQL_EXECUTION_ERROR,
+                message=f"Failed to execute query to dict: {str(e)}"
+            ) from e
+
     def execute_ddl(self, sql: str) -> ExecuteSQLResult:
         try:
             self._run_command(sql)
@@ -451,12 +480,31 @@ class ClickZettaConnector(BaseSqlConnector):
         result = self.execute_query(sql, result_format="csv")
         return result
 
-    def execute_arrow_iterator(self, sql: str, max_rows: int = 100) -> Iterator[pa.Table]:
-        df = self._run_query(sql)
-        if df.empty:
-            return iter(())
-        table = pa.Table.from_pandas(df)
-        return iter([table.slice(0, max_rows)])
+    def execute_arrow(self, sql: str) -> ExecuteSQLResult:
+        """Execute query and return result with Arrow data format for high performance."""
+        try:
+            df = self._run_query(sql)
+            if df.empty:
+                return ExecuteSQLResult(
+                    success=True,
+                    data=pa.Table.from_pandas(df),
+                    row_count=0
+                )
+
+            # Convert pandas DataFrame to Arrow Table
+            arrow_table = pa.Table.from_pandas(df)
+
+            return ExecuteSQLResult(
+                success=True,
+                data=arrow_table,
+                row_count=len(df)
+            )
+        except Exception as e:
+            logger.error(f"Error executing Arrow query: {sql}, error: {str(e)}")
+            raise DatusException(
+                error_code=ErrorCode.SQL_EXECUTION_ERROR,
+                message=f"Failed to execute Arrow query: {str(e)}"
+            ) from e
 
     def test_connection(self):
         self._run_query("SELECT 1")
@@ -470,6 +518,35 @@ class ClickZettaConnector(BaseSqlConnector):
             else:
                 command_df = self._run_command(query)
                 results.append(self._extract_row_count(command_df))
+        return results
+
+    def execute_queries_arrow(self, queries: List[str]) -> List[ExecuteSQLResult]:
+        """Execute multiple queries and return results in Arrow format for batch processing performance."""
+        results: List[ExecuteSQLResult] = []
+        for query in queries:
+            try:
+                if parse_sql_type(query, self.dialect) == SQLType.SELECT:
+                    # Use execute_arrow for SELECT queries to get Arrow data
+                    result = self.execute_arrow(query)
+                    results.append(result)
+                else:
+                    # For non-SELECT queries, use standard execution
+                    command_df = self._run_command(query)
+                    row_count = self._extract_row_count(command_df)
+                    results.append(ExecuteSQLResult(
+                        success=True,
+                        data=None,  # No data for non-SELECT queries
+                        row_count=row_count
+                    ))
+            except Exception as e:
+                logger.error(f"Error executing query in batch: {query}, error: {str(e)}")
+                # Add failed result to maintain query order
+                results.append(ExecuteSQLResult(
+                    success=False,
+                    data=None,
+                    row_count=0,
+                    error_message=str(e)
+                ))
         return results
 
     def execute_content_set(self, sql_query: str) -> ExecuteSQLResult:
