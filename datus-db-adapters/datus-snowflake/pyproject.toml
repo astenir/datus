@@ -8,12 +8,12 @@ version = "0.1.0"
 description = "Snowflake adapter for Datus Agent"
 readme = "README.md"
 requires-python = ">=3.8"
-license = {file = "../LICENSE"}
+license = {text = "Apache-2.0"}
 authors = [
-    {name = "Datus Team"}
+    {name = "DatusAI", email = "support@datus.ai"}
 ]
 dependencies = [
-    "datus-agent>=0.2.2",
+    "datus-agent>=0.2.2rc3",
     "snowflake-connector-python>=3.6.0",
 ]
 

@@ -18,7 +18,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "datus-agent>=0.2.2",
+    "datus-agent>=0.2.2rc3",
     "datus-sqlalchemy>=0.1.0",
     "pymysql>=1.1.1",
 ]
