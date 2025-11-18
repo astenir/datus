@@ -1,6 +1,6 @@
 # Datus ClickZetta Adapter
 
-This package provides a [ClickZetta](https://www.singdata.com/) Lakehouse adapter for [Datus](https://github.com/datusai/datus-agent), enabling seamless integration with ClickZetta analytics platform.
+This package provides a [ClickZetta](https://www.singdata.com/) Lakehouse adapter for [Datus](https://github.com/Datus-ai/datus-agent), enabling seamless integration with ClickZetta analytics platform.
 
 [ClickZetta](https://www.singdata.com/) is developed by [Singdata](https://www.singdata.com/) and [Yunqi](https://www.yunqi.tech/).
 
@@ -21,18 +21,17 @@ This adapter requires the following ClickZetta Python packages:
 Configure ClickZetta connection in your Datus configuration:
 
 ```yaml
-namespaces:
-  - name: "clickzetta_prod"
-    connector: "clickzetta"
-    config:
-      service: "your-service-endpoint.clickzetta.com"
-      username: "your-username"
-      password: "your-password"
-      instance: "your-instance-id"
-      workspace: "your-workspace"
-      schema: "PUBLIC"  # optional, defaults to PUBLIC
-      vcluster: "DEFAULT_AP"  # optional, defaults to DEFAULT_AP
-      secure: true  # optional
+namespace:
+  clickzetta_prod:
+    type: clickzetta
+    service: "your-service-endpoint.clickzetta.com"
+    username: "your-username"
+    password: "your-password"
+    instance: "your-instance-id"
+    workspace: "your-workspace"
+    schema: "PUBLIC"  # optional, defaults to PUBLIC
+    vcluster: "DEFAULT_AP"  # optional, defaults to DEFAULT_AP
+    secure: false  # optional
 ```
 
 ### Configuration Parameters
@@ -87,12 +86,14 @@ files = connector.list_volume_files("volume:user://my_volume", "config/", suffix
 You can customize ClickZetta connection behavior using hints:
 
 ```yaml
-config:
-  # ... other config
-  hints:
-    sdk.job.timeout: 600
-    query_tag: "Datus Analytics Query"
-    cz.storage.parquet.vector.index.read.memory.cache: "true"
+namespace:
+  clickzetta_prod:
+    type: clickzetta
+    # ... other connection parameters
+    hints:
+      sdk.job.timeout: 600
+      query_tag: "Datus Analytics Query"
+      cz.storage.parquet.vector.index.read.memory.cache: "true"
 ```
 
 ## Error Handling
@@ -189,11 +190,11 @@ export CLICKZETTA_VCLUSTER="your-vcluster"
 
 ## License
 
-This project is licensed under the Apache 2.0 License - see the [LICENSE](../../LICENSE) file for details.
+This project is licensed under the Apache 2.0 License - see the [LICENSE](../LICENSE) file for details.
 
 ## Support
 
 For issues and questions:
-- [GitHub Issues](https://github.com/datusai/Datus-adapters/issues)
+- [GitHub Issues](https://github.com/Datus-ai/datus-db-adapters/issues)
 - [Datus Documentation](https://docs.datus.ai/)
 - [ClickZetta Documentation](https://www.yunqi.tech/documents)
