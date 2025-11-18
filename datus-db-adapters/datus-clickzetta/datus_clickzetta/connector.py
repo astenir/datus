@@ -934,7 +934,7 @@ class ClickZettaConnector:
                     rows=rows,
                     row_count=len(rows),
                     execution_time_ms=0.0,
-                    sql_type=parse_sql_type(sql_query)
+                    sql_type=parse_sql_type(sql_query, self.dialect)
                 )
             else:
                 # Default to CSV format
