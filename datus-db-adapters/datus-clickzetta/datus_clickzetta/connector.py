@@ -886,6 +886,63 @@ class ClickZettaConnector:
             dialect=self.dialect,
         )
 
+    def execute(self, input_params: Any, result_format: str = "csv") -> ExecuteSQLResult:
+        """Execute a SQL query against the database.
+
+        This method provides compatibility with the BaseSqlConnector interface.
+
+        Args:
+            input_params: Dictionary containing input parameters including sql_query,
+                         or ExecuteSQLInput object, or string SQL query
+            result_format: The format of the result to return ("csv", "arrow", "pandas", "list")
+
+        Returns:
+            ExecuteSQLResult containing the query results
+        """
+        # Handle different input types
+        if isinstance(input_params, str):
+            sql_query = input_params
+        elif hasattr(input_params, 'sql_query'):
+            sql_query = input_params.sql_query
+        elif isinstance(input_params, dict):
+            sql_query = input_params.get('sql_query', '')
+        else:
+            raise DatusException(
+                ErrorCode.COMMON_INVALID_PARAMETER,
+                message=f"Invalid input_params type: {type(input_params)}"
+            )
+
+        if not sql_query:
+            raise DatusException(
+                ErrorCode.COMMON_INVALID_PARAMETER,
+                message="sql_query cannot be empty"
+            )
+
+        # Execute query based on result format
+        try:
+            if result_format == "csv":
+                return self.execute_csv(sql_query)
+            elif result_format == "arrow":
+                return self.execute_arrow(sql_query)
+            elif result_format == "pandas":
+                return self.execute_pandas(sql_query)
+            elif result_format == "list":
+                # Use execute_query_to_dict for list format
+                rows = self.execute_query_to_dict(sql_query)
+                return ExecuteSQLResult(
+                    columns=[],
+                    rows=rows,
+                    row_count=len(rows),
+                    execution_time_ms=0.0,
+                    sql_type=parse_sql_type(sql_query)
+                )
+            else:
+                # Default to CSV format
+                return self.execute_csv(sql_query)
+        except Exception as e:
+            logger.error(f"Error executing query: {e}")
+            raise
+
     def __len__(self) -> int:
         """Return a length value for compatibility with system expectations.
 
