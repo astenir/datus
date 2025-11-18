@@ -456,7 +456,7 @@ class ClickZettaConnector:
         except Exception as e:
             logger.error(f"Error executing query to DataFrame: {sql}, error: {str(e)}")
             raise DatusException(
-                error_code=ErrorCode.DB_EXECUTION_ERROR,
+                code=ErrorCode.DB_EXECUTION_ERROR,
                 message=f"Failed to execute query to DataFrame: {str(e)}"
             ) from e
 
@@ -471,7 +471,7 @@ class ClickZettaConnector:
         except Exception as e:
             logger.error(f"Error executing query to dict: {sql}, error: {str(e)}")
             raise DatusException(
-                error_code=ErrorCode.DB_EXECUTION_ERROR,
+                code=ErrorCode.DB_EXECUTION_ERROR,
                 message=f"Failed to execute query to dict: {str(e)}"
             ) from e
 
@@ -508,7 +508,7 @@ class ClickZettaConnector:
         except Exception as e:
             logger.error(f"Error executing Arrow query: {sql}, error: {str(e)}")
             raise DatusException(
-                error_code=ErrorCode.DB_EXECUTION_ERROR,
+                code=ErrorCode.DB_EXECUTION_ERROR,
                 message=f"Failed to execute Arrow query: {str(e)}"
             ) from e
 
