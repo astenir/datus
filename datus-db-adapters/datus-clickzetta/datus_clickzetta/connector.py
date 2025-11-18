@@ -186,9 +186,7 @@ class ClickZettaConnector:
             finally:
                 self._session = None
                 self.connection = None
-        super().close()
 
-    @override
     def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
         """Execute context switching in ClickZetta session.
 
