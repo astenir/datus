@@ -165,11 +165,11 @@ export DEEPSEEK_API_KEY="your-deepseek-key"
 
 #### Step 4: Create ClickZetta Configuration
 
-In your Datus agent directory, create a ClickZetta configuration file:
+In your Datus agent directory, create a ClickZetta configuration file using the provided example:
 
 ```bash
 # In datus-agent directory
-cp conf/agent.yml.example conf/agent.clickzetta.yml
+cp ../datus-db-adapters/datus-clickzetta/examples/agent.clickzetta.yml.example conf/agent.clickzetta.yml
 ```
 
 Update `conf/agent.clickzetta.yml` with ClickZetta settings:
