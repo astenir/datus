@@ -887,7 +887,7 @@ class ClickZettaConnector:
     def execute(self, input_params: Any, result_format: str = "csv") -> ExecuteSQLResult:
         """Execute a SQL query against the database.
 
-        This method provides compatibility with the BaseSqlConnector interface.
+        This method provides compatibility with the Datus CLI interface for SQL execution.
 
         Args:
             input_params: Dictionary containing input parameters including sql_query,
