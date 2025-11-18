@@ -18,7 +18,7 @@ This adapter requires the following ClickZetta Python packages:
 
 ## Configuration
 
-Configure ClickZetta connection in your Datus configuration:
+Configure ClickZetta connection in your Datus configuration. A complete example is available at [`examples/agent.clickzetta.yml.example`](examples/agent.clickzetta.yml.example).
 
 ```yaml
 namespace:
