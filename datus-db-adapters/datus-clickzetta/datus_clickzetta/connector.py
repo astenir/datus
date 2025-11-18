@@ -930,11 +930,11 @@ class ClickZettaConnector:
                 # Use execute_query_to_dict for list format
                 rows = self.execute_query_to_dict(sql_query)
                 return ExecuteSQLResult(
-                    columns=[],
-                    rows=rows,
+                    success=True,
+                    sql_query=sql_query,
+                    sql_return=rows,
                     row_count=len(rows),
-                    execution_time_ms=0.0,
-                    sql_type=parse_sql_type(sql_query, self.dialect)
+                    result_format=result_format
                 )
             else:
                 # Default to CSV format
