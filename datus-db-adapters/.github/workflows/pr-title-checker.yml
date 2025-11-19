@@ -1,10 +1,6 @@
 name: "PR Title Checker"
 on:
   workflow_call:
-    outputs:
-      build-artifact:
-        description: "Built artifact path"
-        value: ${{ jobs.build.outputs.build-artifact }}
 
 jobs:
   title-check:
