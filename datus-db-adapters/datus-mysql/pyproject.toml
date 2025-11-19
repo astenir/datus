@@ -18,15 +18,15 @@ classifiers = [
 ]
 
 dependencies = [
-    "datus-agent>=0.2.2",
+    "datus-agent>=0.2.2rc3",
     "datus-sqlalchemy>=0.1.0",
     "pymysql>=1.1.1",
 ]
 
 [project.urls]
-Homepage = "https://github.com/datusai/Datus-adapters"
-Repository = "https://github.com/datusai/Datus-adapters"
-Issues = "https://github.com/datusai/Datus-adapters/issues"
+Homepage = "https://github.com/Datus-ai/datus-db-adapters"
+Repository = "https://github.com/Datus-ai/datus-db-adapters"
+Issues = "https://github.com/Datus-ai/datus-db-adapters/issues"
 
 [project.entry-points."datus.adapters"]
 mysql = "datus_mysql:register"
