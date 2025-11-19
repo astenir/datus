@@ -13,7 +13,7 @@ authors = [
     {name = "DatusAI", email = "support@datus.ai"}
 ]
 dependencies = [
-    "datus-agent>=0.2.2rc3",
+    "datus-agent>0.2.1",
     "snowflake-connector-python>=3.6.0",
 ]
 
