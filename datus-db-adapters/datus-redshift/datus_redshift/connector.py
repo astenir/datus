@@ -5,6 +5,9 @@
 # Import type hints for better code documentation and IDE support
 from typing import Any, Dict, List, Literal, Optional, Sequence, Set, Union, override
 
+# Standard library imports
+import re
+
 # PyArrow is used for efficient data handling (columnar format)
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -97,6 +100,43 @@ def _handle_redshift_exception(e: Exception, sql: str = "") -> DatusException:
         return DatusException(
             ErrorCode.DB_FAILED, 
             message_args={"error_message": str(e)}
+        )
+
+
+def _validate_sql_identifier(identifier: str, identifier_type: str = "identifier") -> None:
+    """
+    Validate SQL identifier to prevent SQL injection.
+    
+    Redshift identifiers must follow these rules:
+    - Start with a letter (a-z, A-Z) or underscore (_)
+    - Contain only letters, digits (0-9), underscores (_), or dollar signs ($)
+    - Be 1-127 characters long
+    - Cannot be a reserved word (but we allow it since it might be quoted)
+    
+    Args:
+        identifier: The identifier to validate (schema, table, database name, etc.)
+        identifier_type: Type of identifier for error messages (e.g., "schema", "table")
+        
+    Raises:
+        ValueError: If identifier is invalid or contains potentially malicious characters
+    """
+    if not identifier:
+        return  # Empty identifiers are allowed (means "not specified")
+    
+    # Check length (Redshift limit is 127 characters)
+    if len(identifier) > 127:
+        raise ValueError(
+            f"Invalid {identifier_type} name: '{identifier}'. "
+            f"Maximum length is 127 characters, got {len(identifier)}."
+        )
+    
+    # Check for valid characters: letters, digits, underscore, dollar sign
+    # Pattern: Must start with letter or underscore, then any combination of alphanumeric, underscore, or dollar
+    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_$]*$', identifier):
+        raise ValueError(
+            f"Invalid {identifier_type} name: '{identifier}'. "
+            f"Must start with a letter or underscore and contain only "
+            f"alphanumeric characters, underscores, or dollar signs."
         )
 
 
@@ -238,11 +278,17 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             catalog_name: Catalog name (not used in Redshift)
             database_name: Database name to switch to
             schema_name: Schema name to switch to
+            
+        Raises:
+            ValueError: If schema_name or database_name contains invalid characters
         """
         try:
             with self.connection.cursor() as cursor:
                 # If schema_name is provided, set the search_path
                 if schema_name:
+                    # Validate schema name to prevent SQL injection
+                    _validate_sql_identifier(schema_name, "schema")
+                    
                     # SET search_path changes which schema is used by default
                     sql = f'SET search_path TO "{schema_name}"'
                     cursor.execute(sql)
@@ -251,10 +297,16 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                 # Note: Redshift doesn't support switching databases within a connection
                 # You need to create a new connection to switch databases
                 if database_name and database_name != self.database_name:
+                    # Validate database name even though we're just warning
+                    _validate_sql_identifier(database_name, "database")
+                    
                     logger.warning(
                         f"Cannot switch database from {self.database_name} to {database_name} "
                         f"in existing connection. Create a new connection to change databases."
                     )
+        except ValueError as e:
+            # Re-raise validation errors as-is
+            raise e
         except Exception as e:
             raise _handle_redshift_exception(e, schema_name or database_name) from e
 

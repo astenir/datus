@@ -273,6 +273,61 @@ class TestRedshiftMetadata:
         assert "mytable" in identifier
 
 
+class TestSQLInjectionPrevention:
+    """Test cases for SQL injection prevention."""
+    
+    def test_valid_schema_names(self, connector):
+        """Test that valid schema names are accepted."""
+        # These should all work without raising errors
+        valid_names = [
+            "public",
+            "my_schema",
+            "schema123",
+            "Schema_With_Underscores",
+            "_private_schema",
+            "schema$with$dollar",
+        ]
+        
+        for schema_name in valid_names:
+            # Should not raise ValueError
+            try:
+                # We're just testing validation, the actual switch may fail if schema doesn't exist
+                # But it should not fail with ValueError for valid names
+                from datus_redshift.connector import _validate_sql_identifier
+                _validate_sql_identifier(schema_name, "schema")
+            except ValueError as e:
+                pytest.fail(f"Valid schema name '{schema_name}' was rejected: {e}")
+    
+    def test_invalid_schema_names(self):
+        """Test that invalid schema names are rejected."""
+        from datus_redshift.connector import _validate_sql_identifier
+        
+        # These should all raise ValueError
+        invalid_names = [
+            "schema; DROP TABLE users--",  # SQL injection attempt
+            "schema' OR '1'='1",           # SQL injection attempt
+            "schema with spaces",          # Spaces not allowed
+            "123schema",                   # Cannot start with digit
+            "schema-name",                 # Hyphens not allowed (only underscore)
+            "schema.name",                 # Dots not allowed
+            "schema;name",                 # Semicolons not allowed
+            "schema'name",                 # Quotes not allowed
+            "a" * 128,                     # Too long (>127 chars)
+        ]
+        
+        for invalid_name in invalid_names:
+            with pytest.raises(ValueError, match="Invalid"):
+                _validate_sql_identifier(invalid_name, "schema")
+    
+    def test_empty_identifier_allowed(self):
+        """Test that empty identifiers are allowed (means 'not specified')."""
+        from datus_redshift.connector import _validate_sql_identifier
+        
+        # Empty string should not raise error
+        _validate_sql_identifier("", "schema")
+        _validate_sql_identifier(None, "schema") if None else None  # Handle None gracefully
+
+
 def test_manual_connection():
     """
     Manual test function that can be run independently.
