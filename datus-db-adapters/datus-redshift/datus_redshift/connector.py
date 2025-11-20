@@ -1238,19 +1238,25 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         """
         Build fully qualified table name.
         
-        Format: "schema_name"."table_name" or just "table_name"
+        Format: "database_name"."schema_name"."table_name", "schema_name"."table_name", or just "table_name"
+        
+        Amazon Redshift supports cross-database queries using three-part qualification:
+        database.schema.table (available on RA3 node types and serverless).
         
         Args:
             catalog_name: Catalog name (not used)
-            database_name: Database name (not used in name, as we're connected to one database)
+            database_name: Database name (for cross-database queries)
             schema_name: Schema name
             table_name: Table name
             
         Returns:
             Fully qualified table name with proper quoting
         """
-        # If schema provided, use schema.table format
-        if schema_name:
+        # If database and schema provided, use database.schema.table format (three-part qualification)
+        if database_name and schema_name:
+            return f'"{database_name}"."{schema_name}"."{table_name}"'
+        # If only schema provided, use schema.table format (two-part qualification)
+        elif schema_name:
             return f'"{schema_name}"."{table_name}"'
         else:
             # Just table name (will use current schema from search_path)

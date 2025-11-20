@@ -200,7 +200,7 @@ for view in views_with_ddl:
 ## Requirements
 
 - Python >= 3.8
-- datus-agent >= 0.2.2
+- datus-agent >= 0.2.1
 - redshift_connector >= 2.0.0
 - pyarrow (installed with datus-agent)
 - pandas (installed with datus-agent)
