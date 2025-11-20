@@ -566,18 +566,19 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                 result.result_format = result_format
             return result
 
-    def execute_arrow(self, sql: str) -> ExecuteSQLResult:
+    def execute_arrow(self, sql: str, params: Optional[Sequence[Any] | dict[Any, Any]] = None) -> ExecuteSQLResult:
         """
         Execute query and return results as Arrow table.
         
         Args:
             sql: SQL query to execute
+            params: Optional query parameters for parameterized queries
             
         Returns:
             ExecuteSQLResult with Arrow table
         """
         try:
-            arrow_table, row_count = self._do_execute_arrow(sql)
+            arrow_table, row_count = self._do_execute_arrow(sql, params)
             
             # Handle empty results
             if arrow_table is None:

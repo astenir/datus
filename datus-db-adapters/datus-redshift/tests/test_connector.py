@@ -120,7 +120,7 @@ class TestRedshiftConfig:
         assert config.region == "us-west-2"
     
     def test_config_with_dict(self):
-        """Test that connector can be created from dict config."""
+        """Test that RedshiftConfig can be created from dict."""
         config_dict = {
             "host": "my-cluster.us-west-2.redshift.amazonaws.com",
             "username": "testuser",
@@ -128,10 +128,13 @@ class TestRedshiftConfig:
             "database": "testdb"
         }
         
-        # This should work without errors
-        connector = RedshiftConnector(config_dict)
-        assert connector is not None
-        connector.close()
+        # Test that config can be created from dict (no connection attempted)
+        config = RedshiftConfig(**config_dict)
+        assert config is not None
+        assert config.host == "my-cluster.us-west-2.redshift.amazonaws.com"
+        assert config.username == "testuser"
+        assert config.password == "testpass"
+        assert config.database == "testdb"
 
 
 class TestRedshiftConnector:
