@@ -874,6 +874,11 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
 
         # Get tables if requested
         if table_type in ("table", "full"):
+            # Validate all table names if provided to prevent SQL injection
+            if tables:
+                for table in tables:
+                    _validate_sql_identifier(table, "table")
+            
             # Query pg_class for tables (relkind = 'r')
             sql = f"""
                 SELECT n.nspname as schema_name, c.relname as table_name
@@ -908,6 +913,11 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
 
         # Get views if requested
         if table_type in ("view", "full"):
+            # Validate all view names if provided to prevent SQL injection
+            if tables:
+                for table in tables:
+                    _validate_sql_identifier(table, "view")
+            
             # Query pg_class for views (relkind = 'v')
             sql = f"""
                 SELECT n.nspname as schema_name, c.relname as table_name
@@ -941,6 +951,11 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
 
         # Get materialized views if requested
         if table_type in ("mv", "full"):
+            # Validate all materialized view names if provided to prevent SQL injection
+            if tables:
+                for table in tables:
+                    _validate_sql_identifier(table, "materialized view")
+            
             # Query pg_class for materialized views (relkind = 'm')
             sql = f"""
                 SELECT n.nspname as schema_name, c.relname as table_name
@@ -999,11 +1014,6 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             return []
 
         schema_name = schema_name or self.schema_name
-
-        # Build fully qualified name
-        full_name = self.full_name(
-            catalog_name=catalog_name, database_name=database_name, schema_name=schema_name, table_name=table_name
-        )
 
         # Validate identifiers to prevent SQL injection
         _validate_sql_identifier(schema_name, "schema")
