@@ -1084,6 +1084,10 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             DDL statement as string
         """
         try:
+            # Validate identifiers to prevent SQL injection
+            _validate_sql_identifier(schema_name, "schema")
+            _validate_sql_identifier(table_name, "table")
+            
             if object_type.upper() in ("VIEW", "MATERIALIZED VIEW"):
                 # Use pg_get_viewdef to get view definition
                 sql = f"SELECT pg_get_viewdef('{schema_name}.{table_name}', true)"
@@ -1321,6 +1325,14 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         Returns:
             Fully qualified table name with proper quoting
         """
+        # Validate all provided identifiers to prevent SQL injection
+        if database_name:
+            _validate_sql_identifier(database_name, "database")
+        if schema_name:
+            _validate_sql_identifier(schema_name, "schema")
+        if table_name:
+            _validate_sql_identifier(table_name, "table")
+        
         # If database and schema provided, use database.schema.table format (three-part qualification)
         if database_name and schema_name:
             return f'"{database_name}"."{schema_name}"."{table_name}"'
