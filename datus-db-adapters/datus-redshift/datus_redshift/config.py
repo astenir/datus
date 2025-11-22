@@ -1,7 +1,7 @@
 
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class RedshiftConfig(BaseModel):
@@ -26,9 +26,9 @@ class RedshiftConfig(BaseModel):
     
     username: str = Field(..., description="Redshift username")
 
-    # The password for authentication
+    # The password for authentication (optional when using IAM authentication)
     
-    password: str = Field(..., description="Redshift password")
+    password: Optional[str] = Field(default=None, description="Redshift password (required unless using IAM authentication)")
 
     # Optional fields (have default values)
 
@@ -71,3 +71,23 @@ class RedshiftConfig(BaseModel):
     
     access_key_id: Optional[str] = Field(default=None, description="AWS access key ID for IAM auth")
     secret_access_key: Optional[str] = Field(default=None, description="AWS secret access key for IAM auth")
+    
+    @model_validator(mode='after')
+    def validate_authentication(self):
+        """
+        Validate that either password or IAM authentication is properly configured.
+        
+        Rules:
+        - If IAM is False, password must be provided
+        - If IAM is True, password is optional (IAM auth will be used)
+        
+        Raises:
+            ValueError: If validation fails
+        """
+        if not self.iam and not self.password:
+            raise ValueError(
+                "Password is required when IAM authentication is disabled. "
+                "Either provide a password or set iam=True for IAM authentication."
+            )
+        
+        return self

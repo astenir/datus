@@ -864,6 +864,8 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
 
         # Build the WHERE clause for schema filtering
         if schema_name:
+            # Validate schema name to prevent SQL injection
+            _validate_sql_identifier(schema_name, "schema")
             schema_filter = f"n.nspname = '{schema_name}'"
         else:
             # Exclude system schemas
@@ -1003,6 +1005,10 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             catalog_name=catalog_name, database_name=database_name, schema_name=schema_name, table_name=table_name
         )
 
+        # Validate identifiers to prevent SQL injection
+        _validate_sql_identifier(schema_name, "schema")
+        _validate_sql_identifier(table_name, "table")
+        
         # Query information_schema to get column information
         sql = f"""
             SELECT 
