@@ -399,8 +399,12 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             
             # Convert Arrow to pandas DataFrame
             return arrow_table.to_pandas()
+        except DatusException:
+            # Already normalized by _do_execute_arrow, just bubble up
+            raise
         except Exception as e:
-            raise _handle_redshift_exception(e, sql)
+            # Normalize any new driver/runtime exceptions
+            raise _handle_redshift_exception(e, sql) from e
 
     def execute_query_to_dict(self, sql: str) -> List[Dict[str, Any]]:
         """
@@ -671,9 +675,14 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                 error=None,
                 result_format="pandas",
             )
-        except Exception as e:
-            ex = _handle_redshift_exception(e, sql)
-            return ExecuteSQLResult(success=False, sql_query=sql, result_format="pandas", error=str(ex))
+        except DatusException as e:
+            # Already normalized, just convert to result
+            return ExecuteSQLResult(
+                success=False,
+                sql_query=sql,
+                result_format="pandas",
+                error=str(e)
+            )
 
     def execute_csv(self, query: str) -> ExecuteSQLResult:
         """
