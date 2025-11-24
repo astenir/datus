@@ -2,20 +2,22 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-# Import type hints for better code documentation and IDE support
-from typing import Any, Dict, List, Literal, Optional, Sequence, Set, Union, override
-
 # Standard library imports
 import re
 
+# Import type hints for better code documentation and IDE support
+from typing import Any, Dict, List, Literal, Optional, Sequence, Set, Union, override
+
 # PyArrow is used for efficient data handling (columnar format)
 import pyarrow as pa
-import pyarrow.compute as pc
+
+# Import Redshift connector library
+import redshift_connector
 
 # Import Datus base classes and types
 from datus.schemas.base import TABLE_TYPE
 from datus.schemas.node_models import ExecuteSQLResult
-from datus.tools.db_tools.base import BaseSqlConnector, _to_sql_literal, list_to_in_str
+from datus.tools.db_tools.base import BaseSqlConnector
 from datus.tools.db_tools.config import ConnectionConfig
 from datus.tools.db_tools.mixins import MaterializedViewSupportMixin, SchemaNamespaceMixin
 from datus.utils.constants import DBType
@@ -25,9 +27,6 @@ from datus.utils.sql_utils import parse_context_switch
 
 # Pandas is used for DataFrame operations
 from pandas import DataFrame
-
-# Import Redshift connector library
-import redshift_connector
 from redshift_connector.error import (
     DatabaseError,
     DataError,
@@ -48,91 +47,73 @@ logger = get_logger(__name__)
 def _handle_redshift_exception(e: Exception, sql: str = "") -> DatusException:
     """
     Handle Redshift exceptions and map them to appropriate Datus ErrorCode.
-    
+
     This function takes a Redshift-specific exception and converts it into
     a standardized DatusException with appropriate error codes and messages.
-    
+
     Args:
         e: The exception raised by Redshift
         sql: The SQL query that caused the exception (for error messages)
-        
+
     Returns:
         DatusException with appropriate error code and message
     """
-    
+
     # ProgrammingError = syntax errors, invalid SQL statements
     if isinstance(e, ProgrammingError):
-        return DatusException(
-            ErrorCode.DB_EXECUTION_SYNTAX_ERROR, 
-            message_args={"sql": sql, "error_message": str(e)}
-        )
-    
+        return DatusException(ErrorCode.DB_EXECUTION_SYNTAX_ERROR, message_args={"sql": sql, "error_message": str(e)})
+
     # OperationalError/DatabaseError = runtime errors (connection issues, query execution problems)
     elif isinstance(e, (OperationalError, DatabaseError)):
-        return DatusException(
-            ErrorCode.DB_EXECUTION_ERROR, 
-            message_args={"sql": sql, "error_message": str(e)}
-        )
-    
+        return DatusException(ErrorCode.DB_EXECUTION_ERROR, message_args={"sql": sql, "error_message": str(e)})
+
     # IntegrityError = constraint violations (unique key, foreign key, etc.)
     elif isinstance(e, IntegrityError):
-        return DatusException(
-            ErrorCode.DB_CONSTRAINT_VIOLATION, 
-            message_args={"sql": sql, "error_message": str(e)}
-        )
-    
+        return DatusException(ErrorCode.DB_CONSTRAINT_VIOLATION, message_args={"sql": sql, "error_message": str(e)})
+
     # InterfaceError/InternalError = connection-level problems
     elif isinstance(e, (InterfaceError, InternalError)):
-        return DatusException(
-            ErrorCode.DB_CONNECTION_FAILED, 
-            message_args={"error_message": str(e)}
-        )
-    
+        return DatusException(ErrorCode.DB_CONNECTION_FAILED, message_args={"error_message": str(e)})
+
     # DataError = data-related errors (invalid data types, overflow, etc.)
     elif isinstance(e, DataError):
-        return DatusException(
-            ErrorCode.DB_EXECUTION_ERROR, 
-            message_args={"sql": sql, "error_message": str(e)}
-        )
-    
+        return DatusException(ErrorCode.DB_EXECUTION_ERROR, message_args={"sql": sql, "error_message": str(e)})
+
     # Catch-all for any other exceptions
     else:
-        return DatusException(
-            ErrorCode.DB_FAILED, 
-            message_args={"error_message": str(e)}
-        )
+        return DatusException(ErrorCode.DB_FAILED, message_args={"error_message": str(e)})
 
 
 def _validate_sql_identifier(identifier: str, identifier_type: str = "identifier") -> None:
     """
     Validate SQL identifier to prevent SQL injection.
-    
+
     Redshift identifiers must follow these rules:
     - Start with a letter (a-z, A-Z) or underscore (_)
     - Contain only letters, digits (0-9), underscores (_), or dollar signs ($)
     - Be 1-127 characters long
     - Cannot be a reserved word (but we allow it since it might be quoted)
-    
+
     Args:
         identifier: The identifier to validate (schema, table, database name, etc.)
         identifier_type: Type of identifier for error messages (e.g., "schema", "table")
-        
+
     Raises:
         ValueError: If identifier is invalid or contains potentially malicious characters
     """
     if not identifier:
         return  # Empty identifiers are allowed (means "not specified")
-    
+
     # Check length (Redshift limit is 127 characters)
     if len(identifier) > 127:
         raise ValueError(
             f"Invalid {identifier_type} name: '{identifier}'. "
             f"Maximum length is 127 characters, got {len(identifier)}."
         )
-    
+
     # Check for valid characters: letters, digits, underscore, dollar sign
     # Pattern: Must start with letter or underscore, then any combination of alphanumeric, underscore, or dollar
-    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_$]*$', identifier):
+    if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_$]*$", identifier):
         raise ValueError(
             f"Invalid {identifier_type} name: '{identifier}'. "
             f"Must start with a letter or underscore and contain only "
@@ -143,13 +124,13 @@ def _validate_sql_identifier(identifier: str, identifier_type: str = "identifier
 class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedViewSupportMixin):
     """
     Connector for Amazon Redshift databases using native Redshift SDK.
-    
+
     This connector provides full support for Redshift features including:
     - Multi-database and schema support (schemas are the main namespace in Redshift)
     - Tables, views, and materialized views
     - Efficient metadata retrieval using system tables
     - Connection with standard credentials or IAM authentication
-    
+
     Inherits from:
     - BaseSqlConnector: Base functionality for SQL databases
     - SchemaNamespaceMixin: Support for database.schema.table naming
@@ -159,14 +140,14 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def __init__(self, config: Union[RedshiftConfig, dict]):
         """
         Initialize Redshift connector.
-        
+
         Args:
             config: RedshiftConfig object or dict with configuration parameters
-            
+
         Raises:
             TypeError: If config is not RedshiftConfig or dict
         """
-        
+
         # Convert dict to RedshiftConfig if needed (allows flexible initialization)
         if isinstance(config, dict):
             config = RedshiftConfig(**config)
@@ -178,34 +159,36 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
 
         # Create connection configuration for the base class
         conn_config = ConnectionConfig(timeout_seconds=config.timeout_seconds)
-        
+
         # Initialize the base class with Redshift dialect
         super().__init__(config=conn_config, dialect=DBType.REDSHIFT)
-        
+
         # Build connection parameters dictionary
         connection_params = {
-            'host': config.host,
-            'port': config.port,
-            'user': config.username,
-            'password': config.password,
-            'database': config.database if config.database else 'dev',  # 'dev' is default Redshift database
-            'timeout': config.timeout_seconds,
-            'ssl': config.ssl,
+            "host": config.host,
+            "port": config.port,
+            "user": config.username,
+            "password": config.password,
+            "database": config.database if config.database else "dev",  # 'dev' is default Redshift database
+            "timeout": config.timeout_seconds,
+            "ssl": config.ssl,
         }
-        
+
         # Add IAM authentication parameters if IAM is enabled
         if config.iam:
-            connection_params.update({
-                'iam': True,
-                'cluster_identifier': config.cluster_identifier,
-                'region': config.region,
-                'access_key_id': config.access_key_id,
-                'secret_access_key': config.secret_access_key,
-            })
-        
+            connection_params.update(
+                {
+                    "iam": True,
+                    "cluster_identifier": config.cluster_identifier,
+                    "region": config.region,
+                    "access_key_id": config.access_key_id,
+                    "secret_access_key": config.secret_access_key,
+                }
+            )
+
         # Establish the connection to Redshift
         self.connection = redshift_connector.connect(**connection_params)
-        
+
         # Store current context (database and schema)
         self.database_name = config.database or "dev"
         self.schema_name = config.schema_name or "public"
@@ -213,7 +196,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def test_connection(self) -> Dict[str, Any]:
         """
         Test the database connection by executing a simple query.
-        
+
         Returns:
             Dictionary with success status and message
         """
@@ -239,7 +222,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def get_type(self) -> str:
         """
         Return the database type identifier.
-        
+
         Returns:
             String identifier for Redshift
         """
@@ -248,9 +231,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def _sys_databases(self) -> Set[str]:
         """
         Return set of system databases to filter out from listings.
-        
+
         These are Redshift system databases that should be hidden from users.
-        
+
         Returns:
             Set of system database names
         """
@@ -259,9 +242,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def _sys_schemas(self) -> Set[str]:
         """
         Return set of system schemas to filter out from listings.
-        
+
         These are Redshift system schemas that should be hidden from users.
-        
+
         Returns:
             Set of system schema names
         """
@@ -270,15 +253,15 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
         """
         Switch database or schema context.
-        
+
         This changes the current working database/schema. Subsequent queries
         without fully-qualified names will use this context.
-        
+
         Args:
             catalog_name: Catalog name (not used in Redshift)
             database_name: Database name to switch to
             schema_name: Schema name to switch to
-            
+
         Raises:
             ValueError: If schema_name or database_name contains invalid characters
         """
@@ -288,18 +271,18 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                 if schema_name:
                     # Validate schema name to prevent SQL injection
                     _validate_sql_identifier(schema_name, "schema")
-                    
+
                     # SET search_path changes which schema is used by default
                     sql = f'SET search_path TO "{schema_name}"'
                     cursor.execute(sql)
                     self.schema_name = schema_name
-                
+
                 # Note: Redshift doesn't support switching databases within a connection
                 # You need to create a new connection to switch databases
                 if database_name and database_name != self.database_name:
                     # Validate database name even though we're just warning
                     _validate_sql_identifier(database_name, "database")
-                    
+
                     logger.warning(
                         f"Cannot switch database from {self.database_name} to {database_name} "
                         f"in existing connection. Create a new connection to change databases."
@@ -313,16 +296,16 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def validate_input(self, input_params: Dict[str, Any]):
         """
         Validate input parameters before executing queries.
-        
+
         Args:
             input_params: Dictionary of parameters to validate
-            
+
         Raises:
             ValueError: If parameters are invalid
         """
         # Call base class validation first
         super().validate_input(input_params)
-        
+
         # Additional validation: if params are provided, they must be a sequence or dict
         if "params" in input_params:
             if not isinstance(input_params["params"], Sequence) and not isinstance(input_params["params"], dict):
@@ -333,16 +316,16 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     ) -> tuple[pa.Table, int]:
         """
         Execute SQL query and return results in Apache Arrow format.
-        
+
         Arrow format is efficient for large datasets and enables fast data processing.
-        
+
         Args:
             sql_query: SQL query to execute
             params: Optional query parameters for parameterized queries
-            
+
         Returns:
             Tuple of (Arrow Table with results, row count)
-            
+
         Raises:
             DatusException: If query execution fails
         """
@@ -353,28 +336,28 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                     cursor.execute(sql_query, params)
                 else:
                     cursor.execute(sql_query)
-                
+
                 # Fetch all results
                 results = cursor.fetchall()
-                
+
                 # Get column names from cursor description
                 column_names = [desc[0] for desc in cursor.description] if cursor.description else []
-                
+
                 # Convert results to Arrow table
                 if results and column_names:
                     # Transpose rows to columns for Arrow
                     columns = list(zip(*results)) if results else [[] for _ in column_names]
-                    
+
                     # Create Arrow arrays for each column
                     arrow_arrays = [pa.array(col) for col in columns]
-                    
+
                     # Create Arrow table
                     arrow_table = pa.Table.from_arrays(arrow_arrays, names=column_names)
                     return arrow_table, len(results)
                 else:
                     # Return empty table if no results
                     return pa.table([]), 0
-                    
+
         except Exception as e:
             raise _handle_redshift_exception(e, sql_query)
 
@@ -385,18 +368,18 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     ) -> DataFrame:
         """
         Execute query and return results as pandas DataFrame.
-        
+
         Args:
             sql: SQL query to execute
             params: Optional query parameters
-            
+
         Returns:
             Pandas DataFrame with query results
         """
         try:
             # Get Arrow table first
             arrow_table, _ = self._do_execute_arrow(sql, params)
-            
+
             # Convert Arrow to pandas DataFrame
             return arrow_table.to_pandas()
         except DatusException:
@@ -409,12 +392,12 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def execute_query_to_dict(self, sql: str) -> List[Dict[str, Any]]:
         """
         Execute query and return results as list of dictionaries.
-        
+
         Each dictionary represents one row, with column names as keys.
-        
+
         Args:
             sql: SQL query to execute
-            
+
         Returns:
             List of dictionaries, one per row
         """
@@ -422,14 +405,14 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             with self.connection.cursor() as cursor:
                 cursor.execute(sql)
                 results = cursor.fetchall()
-                
+
                 # If no results, return empty list
                 if not results:
                     return []
-                
+
                 # Get column names
                 column_names = [desc[0] for desc in cursor.description]
-                
+
                 # Convert each row to dictionary
                 result = []
                 for row in results:
@@ -437,7 +420,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                     for i, col_name in enumerate(column_names):
                         row_dict[col_name] = row[i]
                     result.append(row_dict)
-                
+
                 return result
         except Exception as e:
             raise _handle_redshift_exception(e, sql)
@@ -446,12 +429,12 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def execute_ddl(self, sql: str) -> ExecuteSQLResult:
         """
         Execute DDL (Data Definition Language) statement.
-        
+
         DDL statements include CREATE, ALTER, DROP, etc.
-        
+
         Args:
             sql: DDL statement to execute
-            
+
         Returns:
             ExecuteSQLResult with execution status
         """
@@ -461,10 +444,10 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def execute_insert(self, sql: str) -> ExecuteSQLResult:
         """
         Execute INSERT statement.
-        
+
         Args:
             sql: INSERT statement to execute
-            
+
         Returns:
             ExecuteSQLResult with number of rows inserted
         """
@@ -473,7 +456,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                 cursor.execute(sql)
                 # Commit the transaction
                 self.connection.commit()
-                
+
                 # Get number of rows affected
                 rowcount = cursor.rowcount if cursor.rowcount else 0
 
@@ -498,10 +481,10 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def execute_update(self, sql: str) -> ExecuteSQLResult:
         """
         Execute UPDATE statement.
-        
+
         Args:
             sql: UPDATE statement to execute
-            
+
         Returns:
             ExecuteSQLResult with number of rows updated
         """
@@ -511,10 +494,10 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def execute_delete(self, sql: str) -> ExecuteSQLResult:
         """
         Execute DELETE statement.
-        
+
         Args:
             sql: DELETE statement to execute
-            
+
         Returns:
             ExecuteSQLResult with number of rows deleted
         """
@@ -523,12 +506,12 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def _execute_update_or_delete(self, sql: str) -> ExecuteSQLResult:
         """
         Execute UPDATE, DELETE, or DDL statement.
-        
+
         Internal method to handle all statements that modify data or schema.
-        
+
         Args:
             sql: SQL statement to execute
-            
+
         Returns:
             ExecuteSQLResult with execution status
         """
@@ -537,7 +520,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                 cursor.execute(sql)
                 # Commit the transaction
                 self.connection.commit()
-                
+
                 # Get number of rows affected
                 rowcount = cursor.rowcount if cursor.rowcount else 0
 
@@ -562,17 +545,17 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def execute_content_set(self, sql_query: str) -> ExecuteSQLResult:
         """
         Execute context switch statement (SET search_path, etc.).
-        
+
         Args:
             sql_query: Context switch SQL statement
-            
+
         Returns:
             ExecuteSQLResult with execution status
         """
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute(sql_query)
-            
+
             # Parse the context switch to update internal state
             switch_context = parse_context_switch(sql=sql_query, dialect=self.dialect)
             if switch_context:
@@ -582,7 +565,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                     self.database_name = database_name
                 if schema_name := switch_context.get("schema_name"):
                     self.schema_name = schema_name
-            
+
             return ExecuteSQLResult(
                 success=True,
                 sql_query=sql_query,
@@ -599,11 +582,11 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     ) -> ExecuteSQLResult:
         """
         Execute query and return results in specified format.
-        
+
         Args:
             sql: SQL query to execute
             result_format: Desired output format (csv, arrow, pandas, or list)
-            
+
         Returns:
             ExecuteSQLResult with results in requested format
         """
@@ -625,17 +608,17 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def execute_arrow(self, sql: str, params: Optional[Sequence[Any] | dict[Any, Any]] = None) -> ExecuteSQLResult:
         """
         Execute query and return results as Arrow table.
-        
+
         Args:
             sql: SQL query to execute
             params: Optional query parameters for parameterized queries
-            
+
         Returns:
             ExecuteSQLResult with Arrow table
         """
         try:
             arrow_table, row_count = self._do_execute_arrow(sql, params)
-            
+
             # Handle empty results
             if arrow_table is None:
                 logger.debug(f"Arrow table is None for query. Row count: {row_count}")
@@ -658,10 +641,10 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def execute_pandas(self, sql: str) -> ExecuteSQLResult:
         """
         Execute query and return results as pandas DataFrame.
-        
+
         Args:
             sql: SQL query to execute
-            
+
         Returns:
             ExecuteSQLResult with pandas DataFrame
         """
@@ -677,20 +660,15 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             )
         except DatusException as e:
             # Already normalized, just convert to result
-            return ExecuteSQLResult(
-                success=False,
-                sql_query=sql,
-                result_format="pandas",
-                error=str(e)
-            )
+            return ExecuteSQLResult(success=False, sql_query=sql, result_format="pandas", error=str(e))
 
     def execute_csv(self, query: str) -> ExecuteSQLResult:
         """
         Execute query and return results as CSV string.
-        
+
         Args:
             query: SQL query to execute
-            
+
         Returns:
             ExecuteSQLResult with CSV formatted results
         """
@@ -704,10 +682,10 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def execute_queries(self, queries: List[str]) -> List[ExecuteSQLResult]:
         """
         Execute multiple queries in sequence.
-        
+
         Args:
             queries: List of SQL queries to execute
-            
+
         Returns:
             List of ExecuteSQLResult, one per query
         """
@@ -716,10 +694,10 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def execute_queries_arrow(self, queries: List[str]) -> List[ExecuteSQLResult]:
         """
         Execute multiple queries and return Arrow results.
-        
+
         Args:
             queries: List of SQL queries to execute
-            
+
         Returns:
             List of ExecuteSQLResult with Arrow tables
         """
@@ -729,29 +707,29 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def get_databases(self, catalog_name: str = "", include_sys: bool = False) -> List[str]:
         """
         Get list of databases in the Redshift cluster.
-        
+
         Args:
             catalog_name: Catalog name (not used in Redshift)
             include_sys: Whether to include system databases
-            
+
         Returns:
             List of database names
         """
         # Query system catalog to get database list
         sql = "SELECT datname FROM pg_database WHERE datistemplate = false"
-        
+
         try:
             databases = []
             with self.connection.cursor() as cursor:
                 cursor.execute(sql)
                 results = cursor.fetchall()
-                
+
                 for row in results:
                     db_name = row[0]
                     # Filter out system databases if requested
                     if include_sys or db_name not in self._sys_databases():
                         databases.append(db_name)
-            
+
             return databases
         except Exception as e:
             raise _handle_redshift_exception(e, sql)
@@ -760,35 +738,35 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def get_schemas(self, catalog_name: str = "", database_name: str = "", include_sys: bool = False) -> List[str]:
         """
         Get list of schemas in the current database.
-        
+
         Args:
             catalog_name: Catalog name (not used in Redshift)
             database_name: Database name (must match current database)
             include_sys: Whether to include system schemas
-            
+
         Returns:
             List of schema names
         """
         # Query system catalog to get schema list
         sql = """
-            SELECT nspname 
-            FROM pg_namespace 
-            WHERE nspname NOT LIKE 'pg_temp_%' 
+            SELECT nspname
+            FROM pg_namespace
+            WHERE nspname NOT LIKE 'pg_temp_%'
             AND nspname NOT LIKE 'pg_toast%'
         """
-        
+
         try:
             schemas = []
             with self.connection.cursor() as cursor:
                 cursor.execute(sql)
                 results = cursor.fetchall()
-                
+
                 for row in results:
                     schema_name = row[0]
                     # Filter out system schemas if requested
                     if include_sys or schema_name not in self._sys_schemas():
                         schemas.append(schema_name)
-            
+
             return schemas
         except Exception as e:
             raise _handle_redshift_exception(e, sql)
@@ -797,12 +775,12 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """
         Get list of table names.
-        
+
         Args:
             catalog_name: Catalog name (not used)
             database_name: Database name (not used, uses current connection)
             schema_name: Schema name to query (default: current schema)
-            
+
         Returns:
             List of table names
         """
@@ -814,12 +792,12 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def get_views(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """
         Get list of view names.
-        
+
         Args:
             catalog_name: Catalog name (not used)
             database_name: Database name (not used)
             schema_name: Schema name to query
-            
+
         Returns:
             List of view names
         """
@@ -833,12 +811,12 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     ) -> List[str]:
         """
         Get list of materialized view names.
-        
+
         Args:
             catalog_name: Catalog name (not used)
             database_name: Database name (not used)
             schema_name: Schema name to query
-            
+
         Returns:
             List of materialized view names
         """
@@ -857,14 +835,14 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     ) -> List[Dict[str, str]]:
         """
         Get table metadata from a schema.
-        
+
         Args:
             catalog_name: Catalog name (not used)
             database_name: Database name (not used)
             schema_name: Schema name to query
             tables: Optional list of specific tables to retrieve
             table_type: Type of objects to retrieve (table, view, mv, or full for all)
-            
+
         Returns:
             List of metadata dictionaries
         """
@@ -887,7 +865,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             if tables:
                 for table in tables:
                     _validate_sql_identifier(table, "table")
-            
+
             # Query pg_class for tables (relkind = 'r')
             sql = f"""
                 SELECT n.nspname as schema_name, c.relname as table_name
@@ -895,28 +873,30 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                 JOIN pg_namespace n ON n.oid = c.relnamespace
                 WHERE c.relkind = 'r' AND {schema_filter}
             """
-            
+
             # Add table name filter if specific tables requested
             if tables:
                 tables_str = ", ".join([f"'{t}'" for t in tables])
                 sql += f" AND c.relname IN ({tables_str})"
-            
+
             try:
                 with self.connection.cursor() as cursor:
                     cursor.execute(sql)
                     for row in cursor.fetchall():
-                        result.append({
-                            "catalog_name": "",
-                            "database_name": self.database_name,
-                            "schema_name": row[0],
-                            "table_name": row[1],
-                            "table_type": "table",
-                            "identifier": self.identifier(
-                                database_name=self.database_name,
-                                schema_name=row[0],
-                                table_name=row[1],
-                            ),
-                        })
+                        result.append(
+                            {
+                                "catalog_name": "",
+                                "database_name": self.database_name,
+                                "schema_name": row[0],
+                                "table_name": row[1],
+                                "table_type": "table",
+                                "identifier": self.identifier(
+                                    database_name=self.database_name,
+                                    schema_name=row[0],
+                                    table_name=row[1],
+                                ),
+                            }
+                        )
             except Exception as e:
                 logger.warning(f"Failed to get tables: {e}")
 
@@ -926,7 +906,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             if tables:
                 for table in tables:
                     _validate_sql_identifier(table, "view")
-            
+
             # Query pg_class for views (relkind = 'v')
             sql = f"""
                 SELECT n.nspname as schema_name, c.relname as table_name
@@ -934,27 +914,29 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                 JOIN pg_namespace n ON n.oid = c.relnamespace
                 WHERE c.relkind = 'v' AND {schema_filter}
             """
-            
+
             if tables:
                 tables_str = ", ".join([f"'{t}'" for t in tables])
                 sql += f" AND c.relname IN ({tables_str})"
-            
+
             try:
                 with self.connection.cursor() as cursor:
                     cursor.execute(sql)
                     for row in cursor.fetchall():
-                        result.append({
-                            "catalog_name": "",
-                            "database_name": self.database_name,
-                            "schema_name": row[0],
-                            "table_name": row[1],
-                            "table_type": "view",
-                            "identifier": self.identifier(
-                                database_name=self.database_name,
-                                schema_name=row[0],
-                                table_name=row[1],
-                            ),
-                        })
+                        result.append(
+                            {
+                                "catalog_name": "",
+                                "database_name": self.database_name,
+                                "schema_name": row[0],
+                                "table_name": row[1],
+                                "table_type": "view",
+                                "identifier": self.identifier(
+                                    database_name=self.database_name,
+                                    schema_name=row[0],
+                                    table_name=row[1],
+                                ),
+                            }
+                        )
             except Exception as e:
                 logger.warning(f"Failed to get views: {e}")
 
@@ -964,7 +946,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             if tables:
                 for table in tables:
                     _validate_sql_identifier(table, "materialized view")
-            
+
             # Query pg_class for materialized views (relkind = 'm')
             sql = f"""
                 SELECT n.nspname as schema_name, c.relname as table_name
@@ -972,27 +954,29 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                 JOIN pg_namespace n ON n.oid = c.relnamespace
                 WHERE c.relkind = 'm' AND {schema_filter}
             """
-            
+
             if tables:
                 tables_str = ", ".join([f"'{t}'" for t in tables])
                 sql += f" AND c.relname IN ({tables_str})"
-            
+
             try:
                 with self.connection.cursor() as cursor:
                     cursor.execute(sql)
                     for row in cursor.fetchall():
-                        result.append({
-                            "catalog_name": "",
-                            "database_name": self.database_name,
-                            "schema_name": row[0],
-                            "table_name": row[1],
-                            "table_type": "mv",
-                            "identifier": self.identifier(
-                                database_name=self.database_name,
-                                schema_name=row[0],
-                                table_name=row[1],
-                            ),
-                        })
+                        result.append(
+                            {
+                                "catalog_name": "",
+                                "database_name": self.database_name,
+                                "schema_name": row[0],
+                                "table_name": row[1],
+                                "table_type": "mv",
+                                "identifier": self.identifier(
+                                    database_name=self.database_name,
+                                    schema_name=row[0],
+                                    table_name=row[1],
+                                ),
+                            }
+                        )
             except Exception as e:
                 logger.warning(f"Failed to get materialized views: {e}")
 
@@ -1008,14 +992,14 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     ) -> List[Dict[str, Any]]:
         """
         Get schema information (columns) for a table/view/materialized view.
-        
+
         Args:
             catalog_name: Catalog name (not used)
             database_name: Database name (not used)
             schema_name: Schema name
             table_name: Table name
             table_type: Type of object
-            
+
         Returns:
             List of column information dictionaries
         """
@@ -1027,10 +1011,10 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         # Validate identifiers to prevent SQL injection
         _validate_sql_identifier(schema_name, "schema")
         _validate_sql_identifier(table_name, "table")
-        
+
         # Query information_schema to get column information
         sql = f"""
-            SELECT 
+            SELECT
                 column_name,
                 data_type,
                 is_nullable,
@@ -1045,17 +1029,17 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         try:
             schemas = []
             columns_list = []
-            
+
             with self.connection.cursor() as cursor:
                 cursor.execute(sql)
                 results = cursor.fetchall()
-                
+
                 for idx, row in enumerate(results):
                     column_name = row[0]
                     data_type = row[1]
-                    nullable = row[2] == 'YES'
+                    nullable = row[2] == "YES"
                     default_value = row[3]
-                    
+
                     column_info = {
                         "cid": idx,
                         "name": column_name,
@@ -1065,16 +1049,18 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                         "default_value": default_value,
                         "comment": None,
                     }
-                    
+
                     schemas.append(column_info)
                     columns_list.append({"name": column_name, "type": data_type})
 
             # Add summary information
-            schemas.append({
-                "table": table_name,
-                "columns": columns_list,
-                "table_type": table_type.lower(),
-            })
+            schemas.append(
+                {
+                    "table": table_name,
+                    "columns": columns_list,
+                    "table_type": table_type.lower(),
+                }
+            )
 
             return schemas
         except Exception as e:
@@ -1083,12 +1069,12 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     def _fetch_object_ddl(self, object_type: str, schema_name: str, table_name: str) -> str:
         """
         Retrieve DDL for a database object using pg_get_viewdef or similar.
-        
+
         Args:
             object_type: Type of object (TABLE, VIEW, MATERIALIZED VIEW)
             schema_name: Schema name
             table_name: Object name
-            
+
         Returns:
             DDL statement as string
         """
@@ -1096,7 +1082,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             # Validate identifiers to prevent SQL injection
             _validate_sql_identifier(schema_name, "schema")
             _validate_sql_identifier(table_name, "table")
-            
+
             if object_type.upper() in ("VIEW", "MATERIALIZED VIEW"):
                 # Use pg_get_viewdef to get view definition
                 sql = f"SELECT pg_get_viewdef('{schema_name}.{table_name}', true)"
@@ -1105,7 +1091,8 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                     row = cursor.fetchone()
                     if row:
                         view_def = row[0]
-                        return f"CREATE {'MATERIALIZED ' if 'MATERIALIZED' in object_type.upper() else ''}VIEW {schema_name}.{table_name} AS\n{view_def}"
+                        mat_view = "MATERIALIZED " if "MATERIALIZED" in object_type.upper() else ""
+                        return f"CREATE {mat_view}VIEW {schema_name}.{table_name} AS\n{view_def}"
             else:
                 # For tables, we'd need to reconstruct DDL from system catalogs
                 # This is complex, so we'll return a placeholder
@@ -1124,13 +1111,13 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     ) -> List[Dict[str, str]]:
         """
         Get table metadata with DDL definitions.
-        
+
         Args:
             catalog_name: Catalog name (not used)
             database_name: Database name (not used)
             schema_name: Schema name
             tables: Optional list of specific tables
-            
+
         Returns:
             List of table metadata with DDL
         """
@@ -1147,11 +1134,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
 
         # Add DDL to each entry
         for entry in table_entries:
-            entry["definition"] = self._fetch_object_ddl(
-                "TABLE", 
-                entry["schema_name"], 
-                entry["table_name"]
-            )
+            entry["definition"] = self._fetch_object_ddl("TABLE", entry["schema_name"], entry["table_name"])
 
         return table_entries
 
@@ -1160,12 +1143,12 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     ) -> List[Dict[str, str]]:
         """
         Get view metadata with DDL definitions.
-        
+
         Args:
             catalog_name: Catalog name (not used)
             database_name: Database name (not used)
             schema_name: Schema name
-            
+
         Returns:
             List of view metadata with DDL
         """
@@ -1181,11 +1164,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
 
         # Add DDL to each entry
         for entry in view_entries:
-            entry["definition"] = self._fetch_object_ddl(
-                "VIEW",
-                entry["schema_name"],
-                entry["table_name"]
-            )
+            entry["definition"] = self._fetch_object_ddl("VIEW", entry["schema_name"], entry["table_name"])
 
         return view_entries
 
@@ -1194,12 +1173,12 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     ) -> List[Dict[str, str]]:
         """
         Get materialized view metadata with DDL definitions.
-        
+
         Args:
             catalog_name: Catalog name (not used)
             database_name: Database name (not used)
             schema_name: Schema name
-            
+
         Returns:
             List of materialized view metadata with DDL
         """
@@ -1215,11 +1194,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
 
         # Add DDL to each entry
         for entry in mv_entries:
-            entry["definition"] = self._fetch_object_ddl(
-                "MATERIALIZED VIEW",
-                entry["schema_name"],
-                entry["table_name"]
-            )
+            entry["definition"] = self._fetch_object_ddl("MATERIALIZED VIEW", entry["schema_name"], entry["table_name"])
 
         return mv_entries
 
@@ -1235,7 +1210,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     ) -> List[Dict[str, Any]]:
         """
         Get sample rows from tables.
-        
+
         Args:
             tables: Optional list of specific tables
             top_n: Number of rows to sample per table
@@ -1243,14 +1218,14 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             database_name: Database name (not used)
             schema_name: Schema name
             table_type: Type of objects to sample
-            
+
         Returns:
             List of dictionaries with sample data
         """
         result = []
         schema_name = schema_name or self.schema_name
 
-        with self.connection.cursor() as cursor:
+        with self.connection.cursor():
             # If specific tables provided, sample those
             if tables:
                 for table in tables:
@@ -1261,23 +1236,25 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                         table_name=table,
                     )
                     sql = f"SELECT * FROM {full_name} LIMIT {top_n}"
-                    
+
                     try:
                         df = self.execute_query_to_df(sql)
                         if not df.empty:
-                            result.append({
-                                "identifier": self.identifier(
-                                    database_name=self.database_name,
-                                    schema_name=schema_name,
-                                    table_name=table,
-                                ),
-                                "catalog_name": "",
-                                "database_name": self.database_name,
-                                "schema_name": schema_name,
-                                "table_name": table,
-                                "table_type": table_type,
-                                "sample_rows": df.to_csv(index=False),
-                            })
+                            result.append(
+                                {
+                                    "identifier": self.identifier(
+                                        database_name=self.database_name,
+                                        schema_name=schema_name,
+                                        table_name=table,
+                                    ),
+                                    "catalog_name": "",
+                                    "database_name": self.database_name,
+                                    "schema_name": schema_name,
+                                    "table_name": table,
+                                    "table_type": table_type,
+                                    "sample_rows": df.to_csv(index=False),
+                                }
+                            )
                     except Exception as e:
                         logger.warning(f"Failed to get sample rows for {full_name}: {e}")
             else:
@@ -1289,28 +1266,30 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                     table_type=table_type,
                 ):
                     full_table_name = self.full_name(
-                        catalog_name=t["catalog_name"], 
-                        database_name=t["database_name"], 
-                        schema_name=t["schema_name"], 
-                        table_name=t["table_name"]
+                        catalog_name=t["catalog_name"],
+                        database_name=t["database_name"],
+                        schema_name=t["schema_name"],
+                        table_name=t["table_name"],
                     )
                     sql = f"SELECT * FROM {full_table_name} LIMIT {top_n}"
-                    
+
                     try:
                         df = self.execute_query_to_df(sql)
                         if not df.empty:
-                            result.append({
-                                "identifier": t["identifier"],
-                                "catalog_name": t["catalog_name"],
-                                "database_name": t["database_name"],
-                                "schema_name": t["schema_name"],
-                                "table_name": t["table_name"],
-                                "table_type": t["table_type"],
-                                "sample_rows": df.to_csv(index=False),
-                            })
+                            result.append(
+                                {
+                                    "identifier": t["identifier"],
+                                    "catalog_name": t["catalog_name"],
+                                    "database_name": t["database_name"],
+                                    "schema_name": t["schema_name"],
+                                    "table_name": t["table_name"],
+                                    "table_type": t["table_type"],
+                                    "sample_rows": df.to_csv(index=False),
+                                }
+                            )
                     except Exception as e:
                         logger.warning(f"Failed to get sample rows for {full_table_name}: {e}")
-                        
+
         return result
 
     @override
@@ -1319,18 +1298,18 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     ) -> str:
         """
         Build fully qualified table name.
-        
+
         Format: "database_name"."schema_name"."table_name", "schema_name"."table_name", or just "table_name"
-        
+
         Amazon Redshift supports cross-database queries using three-part qualification:
         database.schema.table (available on RA3 node types and serverless).
-        
+
         Args:
             catalog_name: Catalog name (not used)
             database_name: Database name (for cross-database queries)
             schema_name: Schema name
             table_name: Table name
-            
+
         Returns:
             Fully qualified table name with proper quoting
         """
@@ -1341,7 +1320,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             _validate_sql_identifier(schema_name, "schema")
         if table_name:
             _validate_sql_identifier(table_name, "table")
-        
+
         # If database and schema provided, use database.schema.table format (three-part qualification)
         if database_name and schema_name:
             return f'"{database_name}"."{schema_name}"."{table_name}"'
@@ -1351,4 +1330,3 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         else:
             # Just table name (will use current schema from search_path)
             return f'"{table_name}"'
-
