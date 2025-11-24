@@ -23,7 +23,7 @@ __all__ = ["RedshiftConnector", "RedshiftConfig", "register"]
 def register():
     """
     Register Redshift connector with Datus registry.
-    
+
     This function registers the RedshiftConnector class with the Datus connector
     registry under the name "redshift". This allows Datus to automatically discover
     and use this connector when configured to connect to Redshift databases.
@@ -36,4 +36,3 @@ def register():
 # Auto-register when this module is imported
 # This means the connector is automatically available when you install this package
 register()
-
