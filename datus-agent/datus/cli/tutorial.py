@@ -140,7 +140,8 @@ class BenchmarkTutorial:
                 f"--sql_dir {str(california_schools_path / 'reference_sql')} "
                 f'--subject_tree "'
                 "california_schools/Continuation/Free_Rate,"
-                "california_schools/Charter/Education_Location/,"
+                "california_schools/Charter/Education_Location,"
+                "california_schools/Charter-Fund/Phone,"
                 "california_schools/SAT_Score/Average,"
                 "california_schools/SAT_Score/Excellence_Rate,"
                 "california_schools/FRPM_Enrollment/Rate,"
@@ -152,16 +153,29 @@ class BenchmarkTutorial:
                 sql_dir=str(california_schools_path / "reference_sql"),
                 subject_tree="california_schools/Continuation/Free_Rate,"
                 "california_schools/Charter/Education_Location,"
+                "california_schools/Charter-Fund/Phone,"
                 "california_schools/SAT_Score/Average,"
                 "california_schools/SAT_Score/Excellence_Rate,"
                 "california_schools/FRPM_Enrollment/Rate,"
                 "california_schools/Enrollment/Total",
                 config_path=self.config_path,
             )
-            console.print("[bold yellow][5/5] Building sub-agents: [/bold yellow]")
+            console.print("[bold yellow][5/5] Building sub-agents and workflows: [/bold yellow]")
 
-            with console.status("Sub-Agents Building..."):
+            with console.status("Sub-Agents Building...") as status:
                 self.add_sub_agents()
+                status.update("Workflows Building...")
+                self.add_workflows()
+
+                console.print(
+                    "[bold cyan]The sub-agents and workflow are now configured. "
+                    "You can use them in the following ways:\n"
+                    "  1. Conduct multi-turn conversations in the CLI via `/datus_schools <your question>` or  "
+                    "`/datus_schools_context <your question>`\n"
+                    "  2. Use them in benchmark by running the command "
+                    "`datus-agent benchmark --workflow datus_schools`.[/]"
+                )
+
             console.print(" 🎉 [bold green]Now you can start with the benchmarking section of the guidance document[/]")
             return 0
         except Exception as e:
@@ -241,13 +255,18 @@ class BenchmarkTutorial:
             "It can work using metrics, relevant SQL and database tools."
         )
 
-        console.print(
-            "[bold cyan]The sub-agents are now configured. You can use them in the following ways:\n"
-            "  1. Conduct multi-turn conversations in the CLI via `/datus_schools <your question>` or  "
-            "`/datus_schools_context <your question>`\n"
-            f"  2. After configuring the sub-agents in the workflow in {self.config_path}, perform benchmarking and "
-            "evaluation.[/]"
+    def add_workflows(self):
+        config_manager = configuration_manager(self.config_path, reload=True)
+        config_manager.update_item(
+            "workflow",
+            value={
+                "datus_schools": ["datus_schools", "execute_sql", "output"],
+                "datus_schools_context": ["datus_schools_context", "execute_sql", "output"],
+            },
+            delete_old_key=False,
+            save=True,
         )
+        console.print("  ✅ Workflow `datus_schools` and `datus_schools_context` have been added.")
 
 
 def dict_to_yaml_str(data: Dict[str, Any]) -> str:
