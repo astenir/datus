@@ -318,16 +318,14 @@ def compute_table_matches(actual_tables: Iterable[str], expected_tables: Iterabl
     compare_len = min(len(trailing_actual), len(trailing_expected))
     if compare_len <= 0:
         return []
-
-    actual_slice = trailing_actual[-compare_len:]
-    expected_slice = trailing_expected[-compare_len:]
-
     backward_matches: list[str] = []
-    for actual_table, expected_table in zip(reversed(actual_slice), reversed(expected_slice)):
-        if _tables_equivalent(actual_table, expected_table):
-            backward_matches.append(expected_table)
 
-    backward_matches.reverse()
+    for expected_table in expected_list:
+        for actual_table in actual_list:
+            if _tables_equivalent(actual_table, expected_table):
+                backward_matches.append(expected_table)
+                break
+
     return _unique_preserve_order(backward_matches)
 
 
