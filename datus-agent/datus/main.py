@@ -300,6 +300,16 @@ def create_parser() -> argparse.ArgumentParser:
     )
     evaluation_parser.add_argument("--task_ids", type=str, nargs="+", help="Specific benchmark task IDs to run")
     evaluation_parser.add_argument("--output_file", help="Output file name, if not set, the report file is not output")
+    evaluation_parser.add_argument(
+        "--run_id",
+        type=str,
+        help="Specific run ID to evaluate. If not provided, evaluates the latest run for the namespace",
+    )
+    evaluation_parser.add_argument(
+        "--summary_report_file",
+        type=str,
+        help="Path to summary report file. Reports will be appended to this file.",
+    )
 
     # tutorial command
     subparsers.add_parser(

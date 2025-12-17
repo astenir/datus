@@ -555,8 +555,43 @@ class ResultProvider(Protocol):
 
 
 class CsvPerTaskResultProvider(ResultProvider):
-    def __init__(self, directory: str):
-        self.directory = Path(directory)
+    def __init__(self, directory: str, namespace: Optional[str] = None, run_id: Optional[str] = None):
+        """
+        Initialize CSV result provider with hierarchical directory structure.
+
+        Args:
+            directory: Base directory path
+            namespace: Optional namespace subdirectory. If None, uses directory directly.
+            run_id: Optional run_id subdirectory. If None and namespace is provided, uses latest run.
+        """
+        self.base_directory = Path(directory)
+        self.namespace = namespace
+        self.run_id = run_id
+
+        # Determine actual search directory
+        if namespace:
+            namespace_dir = self.base_directory / namespace
+            if run_id:
+                # Specific namespace and run
+                self.directory = namespace_dir / run_id
+            else:
+                # Auto-select latest run
+                if namespace_dir.exists() and namespace_dir.is_dir():
+                    run_dirs = sorted(
+                        [d for d in namespace_dir.iterdir() if d.is_dir()], key=lambda d: d.name, reverse=True
+                    )
+                    if run_dirs:
+                        self.directory = run_dirs[0]
+                        logger.info(f"Auto-selected latest run: {run_dirs[0].name}")
+                    else:
+                        # No run subdirectories found
+                        self.directory = namespace_dir
+                else:
+                    # Namespace directory doesn't exist yet
+                    self.directory = namespace_dir
+        else:
+            # No namespace - use directory directly (for gold results)
+            self.directory = self.base_directory
 
     def fetch(self, task_id: str) -> ResultData:
         csv_path = self.directory / f"{task_id}.csv"
@@ -922,9 +957,47 @@ class AgentResultSqlProvider(SqlProvider):
     Parser for JSON files output by Datus-Agent
     """
 
-    def __init__(self, result_dir: str, dialect: str = DBType.SNOWFLAKE):
-        self.result_dir = Path(result_dir)
+    def __init__(
+        self,
+        result_dir: str,
+        namespace: str,
+        run_id: Optional[str] = None,
+        dialect: str = DBType.SNOWFLAKE,
+    ):
+        """
+        Initialize agent result SQL provider with hierarchical directory structure.
+
+        Args:
+            result_dir: Base result directory path
+            namespace: Namespace subdirectory (required)
+            run_id: Optional run_id subdirectory. If None, uses latest run.
+            dialect: SQL dialect
+        """
+        self.base_result_dir = Path(result_dir)
         self.dialect = dialect
+        self.namespace = namespace
+        self.run_id = run_id
+
+        # Determine actual search directory
+        namespace_dir = self.base_result_dir / namespace
+        if run_id:
+            # Specific namespace and run
+            self.result_dir = namespace_dir / run_id
+        else:
+            # Auto-select latest run
+            if namespace_dir.exists() and namespace_dir.is_dir():
+                run_dirs = sorted(
+                    [d for d in namespace_dir.iterdir() if d.is_dir()], key=lambda d: d.name, reverse=True
+                )
+                if run_dirs:
+                    self.result_dir = run_dirs[0]
+                    logger.info(f"Auto-selected latest run for SQL: {run_dirs[0].name}")
+                else:
+                    # No run subdirectories found
+                    self.result_dir = namespace_dir
+            else:
+                # Namespace directory doesn't exist yet
+                self.result_dir = namespace_dir
 
     def fetch(self, task_id: str) -> SqlData:
         if not self.result_dir.exists():
@@ -1310,6 +1383,13 @@ class EvaluationReportBuilder:
         empty_result_task_ids: set[str] = set()
         comparison_error_task_ids: set[str] = set()
 
+        # Metrics comparison tracking
+        total_with_expected_metrics = 0
+        metrics_matched_count = 0
+        metrics_mismatched_count = 0
+        metrics_matched_task_ids: set[str] = set()
+        metrics_mismatched_task_ids: set[str] = set()
+
         for task_id, evaluation in evaluations.items():
             analysis = evaluation.analysis
 
@@ -1343,8 +1423,25 @@ class EvaluationReportBuilder:
                     mismatches += 1
                     mismatched_task_ids.add(task_id)
 
+                # Check metrics comparison
+                if outcome.tools_comparison:
+                    metrics_info = outcome.tools_comparison.get("expected_metrics", {})
+                    expected = metrics_info.get("expected", [])
+                    if expected:
+                        total_with_expected_metrics += 1
+                        match = metrics_info.get("match", False)
+                        if match:
+                            metrics_matched_count += 1
+                            metrics_matched_task_ids.add(task_id)
+                        else:
+                            metrics_mismatched_count += 1
+                            metrics_mismatched_task_ids.add(task_id)
+
         success_rate = (total_output_success / total_output_nodes * 100) if total_output_nodes else 0.0
         match_rate = (match_count / total_comparisons * 100) if total_comparisons else 0.0
+        metrics_match_rate = (
+            (metrics_matched_count / total_with_expected_metrics * 100) if total_with_expected_metrics else 0.0
+        )
 
         summary = {
             "total_files": total_files,
@@ -1360,6 +1457,14 @@ class EvaluationReportBuilder:
                 "comparison_error_task_ids": ",".join(map(str, sorted(comparison_error_task_ids))),
                 "empty_result_count": empty_result_count,
                 "match_rate": round(match_rate, 2),
+            },
+            "metrics_summary": {
+                "total_with_expected_metrics": total_with_expected_metrics,
+                "metrics_matched_count": metrics_matched_count,
+                "metrics_mismatched_count": metrics_mismatched_count,
+                "metrics_match_rate": round(metrics_match_rate, 2),
+                "metrics_matched_task_ids": ",".join(map(str, sorted(metrics_matched_task_ids))),
+                "metrics_mismatched_task_ids": ",".join(map(str, sorted(metrics_mismatched_task_ids))),
             },
         }
 
@@ -1401,8 +1506,14 @@ class BenchmarkEvaluator:
         self.comparator = comparator or TableComparator()
         self.report_builder = report_builder or EvaluationReportBuilder()
 
-    def evaluate_directory(self, trajectory_dir: str, target_task_ids: Iterable[str]) -> EvaluationReport:
-        trajectories = collect_latest_trajectory_files(trajectory_dir)
+    def evaluate_directory(
+        self,
+        trajectory_dir: str,
+        target_task_ids: Iterable[str],
+        namespace: str,
+        run_id: Optional[str] = None,
+    ) -> EvaluationReport:
+        trajectories = collect_latest_trajectory_files(trajectory_dir, namespace, run_id)
         target_ids = {str(task_id) for task_id in target_task_ids}
         trajectories = {task_id: path for task_id, path in trajectories.items() if task_id in target_ids}
 
@@ -1602,17 +1713,123 @@ class BenchmarkEvaluator:
         outcome.tools_comparison = artifact_results
 
 
-def collect_latest_trajectory_files(save_dir: str) -> Dict[str, Path]:
+def list_trajectory_runs(trajectory_dir: str, namespace: Optional[str] = None) -> Dict[str, List[str]]:
+    """
+    List all available run IDs in the trajectory directory.
+
+    Args:
+        trajectory_dir: Base trajectory directory
+        namespace: Optional namespace to filter by
+
+    Returns:
+        Dict mapping namespace to list of run_ids (sorted by name, newest first)
+    """
+    directory = Path(trajectory_dir)
+    if not directory.exists():
+        return {}
+
+    runs: Dict[str, List[str]] = {}
+
+    if namespace:
+        # List runs for specific namespace
+        namespace_dir = directory / namespace
+        if namespace_dir.exists() and namespace_dir.is_dir():
+            run_dirs = sorted([d.name for d in namespace_dir.iterdir() if d.is_dir()], reverse=True)
+            if run_dirs:
+                runs[namespace] = run_dirs
+    else:
+        # List runs for all namespaces
+        for ns_dir in directory.iterdir():
+            if ns_dir.is_dir():
+                ns_name = ns_dir.name
+                run_dirs = sorted([d.name for d in ns_dir.iterdir() if d.is_dir()], reverse=True)
+                if run_dirs:
+                    runs[ns_name] = run_dirs
+
+    return runs
+
+
+def list_save_runs(save_dir: str, namespace: Optional[str] = None) -> Dict[str, List[str]]:
+    """
+    List all available run IDs in the save directory.
+
+    Args:
+        save_dir: Base save directory
+        namespace: Optional namespace to filter by
+
+    Returns:
+        Dict mapping namespace to list of run_ids (sorted by name, newest first)
+    """
+    directory = Path(save_dir)
+    if not directory.exists():
+        return {}
+
+    runs: Dict[str, List[str]] = {}
+
+    if namespace:
+        # List runs for specific namespace
+        namespace_dir = directory / namespace
+        if namespace_dir.exists() and namespace_dir.is_dir():
+            run_dirs = sorted([d.name for d in namespace_dir.iterdir() if d.is_dir()], reverse=True)
+            if run_dirs:
+                runs[namespace] = run_dirs
+    else:
+        # List runs for all namespaces
+        for ns_dir in directory.iterdir():
+            if ns_dir.is_dir():
+                ns_name = ns_dir.name
+                run_dirs = sorted([d.name for d in ns_dir.iterdir() if d.is_dir()], reverse=True)
+                if run_dirs:
+                    runs[ns_name] = run_dirs
+
+    return runs
+
+
+def collect_latest_trajectory_files(save_dir: str, namespace: str, run_id: Optional[str] = None) -> Dict[str, Path]:
+    """
+    Collect latest trajectory files from directory.
+
+    Uses hierarchical structure: {save_dir}/{namespace}/{run_id}/*.yaml
+
+    Args:
+        save_dir: Base trajectory directory
+        namespace: Namespace to filter by (required)
+        run_id: Optional run_id to filter by. If None, uses latest run.
+
+    Returns:
+        Dict mapping task_id to latest trajectory file path
+    """
     directory = Path(save_dir)
     if not directory.exists():
         return {}
 
     file_groups: dict[str, list[tuple[float, Path]]] = defaultdict(list)
 
-    for filepath in directory.glob("*.yaml"):
-        task_id, timestamp = parse_trajectory_filename(filepath.name)
-        if task_id and timestamp is not None:
-            file_groups[task_id].append((timestamp, filepath))
+    # Determine search path
+    namespace_dir = directory / namespace
+    if run_id:
+        # Specific namespace and run
+        search_path = namespace_dir / run_id
+    else:
+        # Auto-select latest run
+        if namespace_dir.exists() and namespace_dir.is_dir():
+            run_dirs = sorted([d for d in namespace_dir.iterdir() if d.is_dir()], key=lambda d: d.name, reverse=True)
+            if run_dirs:
+                search_path = run_dirs[0]
+                logger.info(f"Auto-selected latest run for trajectories: {run_dirs[0].name}")
+            else:
+                # No run subdirectories found
+                search_path = namespace_dir
+        else:
+            # Namespace directory doesn't exist
+            return {}
+
+    # Collect trajectory files from search path
+    if search_path.exists():
+        for filepath in search_path.glob("*.yaml"):
+            task_id, timestamp = parse_trajectory_filename(filepath.name)
+            if task_id and timestamp is not None:
+                file_groups[task_id].append((timestamp, filepath))
 
     latest_files: Dict[str, Path] = {}
     for task_id, files in file_groups.items():
@@ -1876,12 +2093,9 @@ def evaluate_benchmark(
     agent_config: AgentConfig,
     benchmark_platform: str,
     target_task_ids: Optional[Iterable[str]] = None,
+    run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
-    result_directory = Path(agent_config.output_dir)
-    if not result_directory.exists():
-        logger.warning(f"Result directory not found at {result_directory}")
-        return {}
-
+    namespace = agent_config.current_namespace
     trajectory_directory = Path(agent_config.trajectory_dir)
 
     try:
@@ -1911,8 +2125,12 @@ def evaluate_benchmark(
     if not dialect:
         dialect = _default_sql_dialect(benchmark_platform)
 
-    agent_result_provider = CsvPerTaskResultProvider(str(result_directory))
-    result_sql_provider = AgentResultSqlProvider(str(result_directory), dialect=dialect)
+    # Use base save directory for providers, they will handle subdirectories
+    save_base_dir = Path(agent_config._save_dir)
+    agent_result_provider = CsvPerTaskResultProvider(str(save_base_dir), namespace=namespace, run_id=run_id)
+    result_sql_provider = AgentResultSqlProvider(
+        str(save_base_dir), namespace=namespace, run_id=run_id, dialect=dialect
+    )
     try:
         gold_sql_provider = _build_gold_sql_provider(benchmark_config, benchmark_root, question_file_path, dialect)
         gold_result_provider = _build_gold_result_provider(
@@ -1934,7 +2152,9 @@ def evaluate_benchmark(
         gold_sql_provider=gold_sql_provider,
     )
 
-    report = evaluator.evaluate_directory(str(trajectory_directory), target_task_ids)
+    report = evaluator.evaluate_directory(
+        str(trajectory_directory), target_task_ids, namespace=namespace, run_id=run_id
+    )
     return report.to_dict()
 
 
@@ -1944,16 +2164,19 @@ def evaluate_benchmark_and_report(
     target_task_ids: Optional[Iterable[str]] = None,
     output_file: Optional[str] = None,
     log_summary: bool = True,
+    run_id: Optional[str] = None,
+    summary_report_file: Optional[str] = None,
 ) -> Dict[str, Any]:
     accuracy_report = evaluate_benchmark(
         agent_config=agent_config,
         benchmark_platform=benchmark_platform,
         target_task_ids=target_task_ids,
+        run_id=run_id,
     )
 
     if accuracy_report.get("status") == "success":
         if log_summary:
-            _log_accuracy_summary(accuracy_report)
+            _log_accuracy_summary(accuracy_report, summary_report_file=summary_report_file)
         if output_file:
             with open(output_file, "w", encoding="utf-8") as handle:
                 json.dump(accuracy_report, handle, ensure_ascii=False, indent=2)
@@ -1966,7 +2189,7 @@ def evaluate_benchmark_and_report(
     return accuracy_report
 
 
-def _log_accuracy_summary(accuracy_report: Dict[str, Any]) -> None:
+def _log_accuracy_summary(accuracy_report: Dict[str, Any], summary_report_file: Optional[str] = None) -> None:
     summary = accuracy_report.get("summary", {})
     task_ids_section = accuracy_report.get("task_ids", {})
     details_section = accuracy_report.get("details", {})
@@ -2124,6 +2347,18 @@ def _log_accuracy_summary(accuracy_report: Dict[str, Any]) -> None:
         list_text = ", ".join(values) if values else "None"
         return f"{label:<40}{list_text}"
 
+    # Extract metrics summary
+    metrics_summary = summary.get("metrics_summary", {})
+    total_with_metrics = metrics_summary.get("total_with_expected_metrics", 0)
+    metrics_matched = metrics_summary.get("metrics_matched_count", 0)
+    metrics_mismatched = metrics_summary.get("metrics_mismatched_count", 0)
+    metrics_match_rate = metrics_summary.get("metrics_match_rate", 0.0)
+    metrics_matched_ids_str = metrics_summary.get("metrics_matched_task_ids", "")
+    metrics_mismatched_ids_str = metrics_summary.get("metrics_mismatched_task_ids", "")
+
+    metrics_matched_ids = set(_parse_task_ids(metrics_matched_ids_str))
+    metrics_mismatched_ids = set(_parse_task_ids(metrics_mismatched_ids_str))
+
     separator = "─" * 80
     report_lines = [
         separator,
@@ -2137,18 +2372,60 @@ def _log_accuracy_summary(accuracy_report: Dict[str, Any]) -> None:
         _format_stat_line("         - Row Count Mismatch:", missmatch_row_count),
         _format_stat_line("         - Column Value Mismatch:", missmatch_column_count),
         separator,
-        "",
-        _format_list_line(" Passed Queries:", matched_ids),
-        _format_list_line(" No SQL / Empty Result Queries:", empty_result_ids),
-        _format_list_line(" Failed (Table Mismatch):", table_mismatch_ids),
-        _format_list_line(" Failed (Row Count Mismatch):", row_count_mismatch_ids),
-        _format_list_line(" Failed (Column Value Mismatch):", column_value_mismatch_ids),
-        "",
-        separator,
-        "",
     ]
 
-    logger.info(f'\n\n{"\n".join(report_lines)}')
+    # Add metrics summary if there are tasks with expected metrics
+    if total_with_metrics > 0:
+        report_lines.extend(
+            [
+                f" Metrics Evaluation (Total with Expected Metrics: {total_with_metrics})",
+                separator,
+                _format_stat_line(" ✅ Metrics Matched:", metrics_matched),
+                _format_stat_line(" ❌ Metrics Mismatched:", metrics_mismatched),
+                f" Metrics Match Rate: {metrics_match_rate:.2f}%",
+                separator,
+            ]
+        )
+
+    report_lines.extend(
+        [
+            "",
+            _format_list_line(" Passed Queries:", matched_ids),
+            _format_list_line(" No SQL / Empty Result Queries:", empty_result_ids),
+            _format_list_line(" Failed (Table Mismatch):", table_mismatch_ids),
+            _format_list_line(" Failed (Row Count Mismatch):", row_count_mismatch_ids),
+            _format_list_line(" Failed (Column Value Mismatch):", column_value_mismatch_ids),
+        ]
+    )
+
+    # Add metrics task IDs if available
+    if total_with_metrics > 0:
+        report_lines.extend(
+            [
+                "",
+                _format_list_line(" Metrics Matched Queries:", metrics_matched_ids),
+                _format_list_line(" Metrics Mismatched Queries:", metrics_mismatched_ids),
+            ]
+        )
+
+    report_lines.extend(["", separator, ""])
+
+    report_content = "\n".join(report_lines)
+    logger.info(f"\n\n{report_content}")
+
+    # Write to summary report file if specified (append mode)
+    if summary_report_file:
+        try:
+            from datetime import datetime
+
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open(summary_report_file, "a", encoding="utf-8") as f:
+                f.write(f"\n\n### Report generated at {timestamp}\n")
+                f.write(report_content)
+                f.write("\n")
+            logger.info(f" Summary report appended to: {summary_report_file}")
+        except Exception as e:
+            logger.warning(f" Failed to write summary report to file: {e}")
 
 
 def _ensure_task_identifier(task: Dict[str, Any], task_id_key: str, position: int) -> Dict[str, Any]:

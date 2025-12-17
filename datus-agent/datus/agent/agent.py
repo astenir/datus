@@ -113,15 +113,23 @@ class Agent:
 
         logger.info(f"Storage modules initialized: {list(self.storage_modules.keys())}")
 
-    def create_workflow_runner(self, check_db: bool = True) -> WorkflowRunner:
+    def create_workflow_runner(self, check_db: bool = True, run_id: Optional[str] = None) -> WorkflowRunner:
         """Create a workflow runner that can safely execute in isolation."""
-        return WorkflowRunner(self.args, self.global_config, pre_run_callable=self.check_db if check_db else None)
+        return WorkflowRunner(
+            self.args, self.global_config, pre_run_callable=self.check_db if check_db else None, run_id=run_id
+        )
 
-    def run(self, sql_task: Optional[SqlTask] = None, check_storage: bool = False, check_db: bool = True) -> dict:
+    def run(
+        self,
+        sql_task: Optional[SqlTask] = None,
+        check_storage: bool = False,
+        check_db: bool = True,
+        run_id: Optional[str] = None,
+    ) -> dict:
         """
         Execute a workflow synchronously via a dedicated runner.
         """
-        runner = self.create_workflow_runner(check_db=check_db)
+        runner = self.create_workflow_runner(check_db=check_db, run_id=run_id)
         return runner.run(sql_task=sql_task, check_storage=check_storage)
 
     async def run_stream(
@@ -451,23 +459,31 @@ class Agent:
         target_task_ids = getattr(self.args, "benchmark_task_ids", [])
         target_task_ids = set(target_task_ids) if target_task_ids else None
         import time
+        from datetime import datetime
+
+        # Generate a shared run_id for this benchmark run
+        benchmark_run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        logger.info(f"Benchmark run_id: {benchmark_run_id}")
 
         start = time.perf_counter()
         if benchmark_platform == "semantic_layer":
             self.global_config.check_init_storage_config("metric")
-            result = self.benchmark_semantic_layer(benchmark_path, target_task_ids)
+            result = self.benchmark_semantic_layer(benchmark_path, target_task_ids, run_id=benchmark_run_id)
         else:
             self.global_config.check_init_storage_config("database")
             self.global_config.check_init_storage_config("metric")
-            result = self.do_benchmark(benchmark_platform, target_task_ids)
+            result = self.do_benchmark(benchmark_platform, target_task_ids, run_id=benchmark_run_id)
         end = time.perf_counter()
 
         time_spends = end - start
         result["time_spends"] = format_duration_human(time_spends)
         result["time_spends_seconds"] = str(time_spends)
+        result["run_id"] = benchmark_run_id
         return result
 
-    def do_benchmark(self, benchmark_platform: str, target_task_ids: Optional[Set[str]] = None):
+    def do_benchmark(
+        self, benchmark_platform: str, target_task_ids: Optional[Set[str]] = None, run_id: Optional[str] = None
+    ):
         _, conn = db_manager_instance(self.global_config.namespaces).first_conn_with_name(
             self.global_config.current_namespace
         )
@@ -486,13 +502,16 @@ class Agent:
             logger.info(f"start benchmark with {task_id}: {task}")
             use_tables = None if not benchmark_config.use_tables_key else task_item.get(benchmark_config.use_tables_key)
 
+            # Use hierarchical save directory structure
+            output_dir = self.global_config.get_save_run_dir(run_id) if run_id else self.global_config.output_dir
+
             result = self.run(
                 SqlTask(
                     id=task_id,
                     database_type=conn.dialect,
                     task=task,
                     database_name=database_name,
-                    output_dir=self.global_config.output_dir,
+                    output_dir=output_dir,
                     current_date=self.args.current_date,
                     tables=use_tables,
                     external_knowledge=""
@@ -502,10 +521,9 @@ class Agent:
                 ),
                 check_storage=False,
                 check_db=False,
+                run_id=run_id,
             )
-            logger.info(
-                f"Finish benchmark with {task_id}, " f"file saved in {self.global_config.output_dir}/{task_id}.csv."
-            )
+            logger.info(f"Finish benchmark with {task_id}, " f"file saved in {output_dir}/{task_id}.csv.")
             return task_id, result
 
         max_workers = getattr(self.args, "max_workers", 1) or 1
@@ -538,7 +556,9 @@ class Agent:
         logger.info("Benchmark execution completed.")
         return {"status": "success", "message": "Benchmark tasks executed successfully"}
 
-    def benchmark_semantic_layer(self, benchmark_path: str, target_task_ids: Optional[Set[str]] = None):
+    def benchmark_semantic_layer(
+        self, benchmark_path: str, target_task_ids: Optional[Set[str]] = None, run_id: Optional[str] = None
+    ):
         task_file = self.args.testing_set
         self._check_benchmark_file(task_file)
 
@@ -580,6 +600,9 @@ class Agent:
                     # Use only file knowledge if metric_meta doesn't have any
                     combined_ext_knowledge = task["external_knowledge"]
 
+            # Use hierarchical save directory structure
+            output_dir = self.global_config.get_save_run_dir(run_id) if run_id else self.global_config.output_dir
+
             self.run(
                 SqlTask(
                     id=task_id,
@@ -590,15 +613,14 @@ class Agent:
                     domain=metric_meta.domain,
                     layer1=metric_meta.layer1,
                     layer2=metric_meta.layer2,
-                    output_dir=self.global_config.output_dir,
+                    output_dir=output_dir,
                     external_knowledge=combined_ext_knowledge,
                     current_date=self.args.current_date,
-                )
+                ),
+                run_id=run_id,
             )
 
-            logger.info(
-                f"Finish benchmark with {task_id}, " f"file saved in {self.global_config.output_dir}/{task_id}.csv."
-            )
+            logger.info(f"Finish benchmark with {task_id}, " f"file saved in {output_dir}/{task_id}.csv.")
 
         return {"status": "success", "message": "Benchmark tasks executed successfully"}
 
@@ -645,12 +667,16 @@ class Agent:
 
         from datus.utils.benchmark_utils import evaluate_benchmark_and_report
 
+        run_id = getattr(self.args, "run_id", None)
+        summary_report_file = getattr(self.args, "summary_report_file", None)
         evaluation_result = evaluate_benchmark_and_report(
             agent_config=self.global_config,
             benchmark_platform=benchmark_platform,
             target_task_ids=self.args.task_ids,
             output_file=self.args.output_file,
             log_summary=log_summary,
+            run_id=run_id,
+            summary_report_file=summary_report_file,
         )
         return {
             "status": evaluation_result.get("status"),
