@@ -14,15 +14,45 @@ Handles all display-related functionality including:
 """
 
 import hashlib
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
+import pandas as pd
+import plotly.express as px
 import streamlit as st
 import structlog
+from pandas.core.dtypes.common import is_numeric_dtype
 
 from datus.cli.action_history_display import ActionContentGenerator
+from datus.configuration.agent_config import AgentConfig
+from datus.models.base import LLMBaseModel
 from datus.schemas.action_history import ActionHistory, ActionRole
+from datus.schemas.node_models import ExecuteSQLResult
+from datus.schemas.visualization import VisualizationInput, VisualizationOutput
+from datus.tools.llms_tools.visualization_tool import VisualizationTool
 
 logger = structlog.get_logger(__name__)
+
+
+def _sql_union_id(sql: str) -> str:
+    if not sql:
+        return ""
+
+    history = st.session_state.setdefault("_sql_render_history", [])
+    pointer = st.session_state.get("_sql_render_pointer", 0)
+
+    if pointer < len(history) and history[pointer]["sql"] == sql:
+        sql_id = history[pointer]["id"]
+    else:
+        sql_hash = hashlib.md5(sql.encode()).hexdigest()[:8]
+        sql_id = f"{sql_hash}_{pointer}"
+        entry = {"sql": sql, "id": sql_id}
+        if pointer < len(history):
+            history[pointer] = entry
+        else:
+            history.append(entry)
+
+    st.session_state["_sql_render_pointer"] = pointer + 1
+    return sql_id
 
 
 class UIComponents:
@@ -38,6 +68,8 @@ class UIComponents:
         """
         self.server_host = server_host
         self.server_port = server_port
+        cli_instance = st.session_state.get("cli_instance")
+        self.agent_config: AgentConfig | None = getattr(cli_instance, "agent_config", None) if cli_instance else None
 
     @staticmethod
     def safe_update_query_params(new_params: dict):
@@ -252,27 +284,271 @@ class UIComponents:
             st.markdown("---")
             st.info("💡 **Tip**: Bookmark subagent URLs for direct access!")
 
-    def display_sql_with_copy(self, sql: str, user_message: str, readonly_mode: bool, save_callback) -> None:
-        """Display SQL with syntax highlighting and save button."""
-        if not sql:
+    def display_success_button(self, sql: str, user_message: str, sql_id, save_callback):
+        # Create unique ID for this SQL block
+        if st.button("👍 Success", key=f"save_{sql_id}", help="Save this query as a success story"):
+            save_callback(sql, user_message)
+
+    @staticmethod
+    def reset_sql_display_state():
+        """Reset SQL render pointer to ensure stable widget keys each rerun."""
+        st.session_state["_sql_render_pointer"] = 0
+
+    def _get_visualization_cache(self) -> Dict[str, Dict[str, Any]]:
+        """Return visualization recommendations stored in session state."""
+        return st.session_state.setdefault("visualization_cache", {})
+
+    def _get_visualization_tool(self) -> VisualizationTool:
+        """Return (and cache) a VisualizationTool instance backed by the active LLM."""
+        cache_key = "_visualization_tool_instance"
+        agent_config = self.agent_config
+        if agent_config is None:
+            cli_instance = st.session_state.get("cli_instance")
+            agent_config = getattr(cli_instance, "agent_config", None) if cli_instance else None
+
+        cached_tool = st.session_state.get(cache_key)
+        current_config_id = id(agent_config) if agent_config else None
+        cached_config_id = getattr(cached_tool, "_agent_config_id", None) if cached_tool else None
+
+        if cached_tool and current_config_id == cached_config_id:
+            return cached_tool
+
+        model = None
+        if agent_config:
+            try:
+                model = LLMBaseModel.create_model(agent_config=agent_config)
+            except Exception as exc:
+                logger.warning(f"Unable to initialize visualization model: {exc}")
+
+        tool = VisualizationTool(agent_config=agent_config, model=model)
+        tool._agent_config_id = current_config_id  # type: ignore[attr-defined]
+        st.session_state[cache_key] = tool
+        return tool
+
+    def _ensure_dataframe(self, data: Any) -> Optional[pd.DataFrame]:
+        """Best-effort conversion of incoming result data to a pandas DataFrame."""
+        if data is None:
+            return None
+        if isinstance(data, pd.DataFrame):
+            return data.copy()
+        if hasattr(data, "to_pandas"):
+            try:
+                return data.to_pandas()
+            except Exception as exc:
+                logger.warning(f"Failed to convert data via to_pandas(): {exc}")
+        try:
+            return pd.DataFrame(data)
+        except Exception as exc:
+            logger.error(f"Unable to convert result to DataFrame: {exc}")
+            return None
+
+    def _apply_chart_defaults(self, state_id: str, df: pd.DataFrame, result: VisualizationOutput) -> None:
+        """Seed Streamlit widget defaults based on AI chart recommendation."""
+        chart_key = f"chart_type_{state_id}"
+        if result.chart_type:
+            st.session_state[chart_key] = result.chart_type
+
+        x_key = f"x_col_{state_id}"
+        if result.x_col and result.x_col in df.columns:
+            st.session_state[x_key] = result.x_col
+
+        y_key = f"y_cols_{state_id}"
+        valid_y = [col for col in result.y_cols if col in df.columns]
+        if valid_y:
+            st.session_state[y_key] = valid_y
+
+    def pre_render_chart(self, state_id: str, data: Any):
+        """Callback for AI chart preparation button."""
+        cache = self._get_visualization_cache()
+        df = self._ensure_dataframe(data)
+
+        if df is None or df.empty:
+            cache[state_id] = {
+                "success": False,
+                "error": "No rows available for visualization",
+                "chart_type": "Unknown",
+                "x_col": "",
+                "y_cols": [],
+                "reason": "Dataset is empty",
+            }
             return
 
-        st.markdown("### 🔧 Generated SQL")
+        try:
+            viz_input = VisualizationInput(data=df)
+        except Exception as exc:
+            logger.error(f"Failed to prepare visualization input: {exc}")
+            cache[state_id] = {
+                "success": False,
+                "error": str(exc),
+                "chart_type": "Unknown",
+                "x_col": "",
+                "y_cols": [],
+                "reason": "Unable to interpret dataset",
+            }
+            return
 
-        # Display SQL with syntax highlighting
-        st.code(sql, language="sql")
+        tool = self._get_visualization_tool()
+        try:
+            result = tool.execute(viz_input)
+        except Exception as exc:
+            logger.error(f"Visualization tool execution failed: {exc}")
+            cache[state_id] = {
+                "success": False,
+                "error": str(exc),
+                "chart_type": "Unknown",
+                "x_col": "",
+                "y_cols": [],
+                "reason": "Visualization analysis failed",
+            }
+            return
 
-        # Save button (only show if not in readonly mode)
-        if not readonly_mode:
-            # Create unique ID using current timestamp to ensure uniqueness across duplicate SQLs
-            import time
+        cache[state_id] = result.model_dump()
 
-            sql_hash = hashlib.md5(sql.encode()).hexdigest()[:8]
-            timestamp = str(time.time()).replace(".", "_")  # Use timestamp for uniqueness
-            unique_key = f"save_{sql_hash}_{timestamp}"
+        if result.success:
+            self._apply_chart_defaults(state_id, df, result)
 
-            if st.button("👍 Success", key=unique_key, help="Save this query as a success story"):
-                save_callback(sql, user_message)
+    def display_sql(self, sql, data: ExecuteSQLResult) -> str:
+        if not sql:
+            return ""
+        sql_id = _sql_union_id(sql)
+        state_id = hashlib.md5(sql.encode()).hexdigest()
+        result_df = data.sql_return if isinstance(data.sql_return, pd.DataFrame) else None
+        tab1, tab2, tab3 = st.tabs(["🔧Generated SQL", "📊Execute Result", "📈Chart"])
+        with tab1:
+            # Display SQL with syntax highlighting
+            st.code(sql, language="sql")
+        if data.success:
+            with tab2:
+                if result_df is not None and not result_df.empty:
+                    st.dataframe(result_df)
+                else:
+                    st.warning("No data return")
+
+            with tab3:
+                if result_df is not None and not result_df.empty:
+                    viz_result = self._get_visualization_cache().get(state_id)
+
+                    if not (viz_result and viz_result.get("success")):
+                        st.button(
+                            label="Chart by AI",
+                            key=f"prepare_chart_{sql_id}",
+                            on_click=self.pre_render_chart,
+                            args=[state_id, result_df],
+                        )
+
+                    if viz_result:
+                        if viz_result.get("success"):
+                            chart_type = viz_result.get("chart_type", "Bar Chart")
+                            reason = viz_result.get("reason") or "AI provided a visualization suggestion."
+                            st.caption(f"🤖 AI suggestion: **{chart_type}** — {reason}")
+                            self.render_dynamic_chart_in_tab(result_df, state_id, chart_type)
+                        else:
+                            error_msg = viz_result.get("error") or viz_result.get("reason") or "Unknown error"
+                            st.error(f"Chart suggestion failed: {error_msg}")
+                else:
+                    st.warning("No data return")
+        else:
+            with tab2:
+                st.error("SQL execution failed")
+                st.markdown(data.error)
+            with tab3:
+                st.error("SQL execution failed")
+                st.markdown(data.error)
+        return sql_id
+
+    def render_dynamic_chart_in_tab(self, df: pd.DataFrame, state_id: str, chart_type: str):
+        """
+        Render a configurable dynamic chart inside Tab, and the configuration items are located in st.popover.
+
+        Parameters:
+            df (pd.DataFrame): DataFrame of SQL query results.
+            state_id (str): Stable identifier used for widget state caching.
+            chart_type (str): Suggested chart type from visualization tool.
+        """
+        if df.empty:
+            st.error("The data is empty and the chart cannot be generated.")
+            return
+
+        # 1. Data column analysis
+        all_cols = df.columns.tolist()
+        numeric_cols = [col for col in all_cols if is_numeric_dtype(df[col])]
+
+        chart_options = {"Bar Chart": "bar", "Line Chart": "line", "Scatter Plot": "scatter", "Pie Chart": "pie"}
+        chart_key = f"chart_type_{state_id}"
+        if chart_key not in st.session_state or st.session_state[chart_key] not in chart_options:
+            default_chart = chart_type if chart_type in chart_options else list(chart_options.keys())[0]
+            st.session_state[chart_key] = default_chart
+
+        # --- Configuration panel (st.popover) ---
+        with st.popover("⚙️ Chart Configuration"):
+            st.write("**Select chart type and axis mapping**")
+            selected_chart_name = st.selectbox("Chart Type", list(chart_options.keys()), key=chart_key)
+            chart_func_name = chart_options[selected_chart_name]
+
+            x_key = f"x_col_{state_id}"
+            if x_key not in st.session_state or st.session_state[x_key] not in all_cols:
+                st.session_state[x_key] = all_cols[0]
+            x_col = st.selectbox("X-axis (dimension/grouping)", all_cols, key=x_key)
+
+            y_key = f"y_cols_{state_id}"
+            if y_key not in st.session_state:
+                st.session_state[y_key] = numeric_cols[:2] if numeric_cols else []
+            else:
+                st.session_state[y_key] = [col for col in st.session_state[y_key] if col in numeric_cols]
+            y_cols = st.multiselect(
+                "Y-axis (indicator/value)",
+                numeric_cols,
+                key=y_key,
+            )
+
+        # Dynamic rendering logic
+        if not y_cols:
+            st.info("Please click the '⚙️ Configure Chart' button above to select at least one Y-axis indicator.")
+            return
+
+        # Special treatment for pie charts
+        if chart_func_name == "pie":
+            if len(y_cols) > 1:
+                st.warning("Only one indicator (Y-axis) can be selected for pie charts.")
+
+            y_col_single = y_cols[0]
+            fig = px.pie(df, names=x_col, values=y_col_single, title=f"{y_col_single} by {x_col}")
+
+        # Other charts (bar, line, scatter)
+        else:
+            # Convert wide table to long table (core processing of multiple Y axes)
+            if len(y_cols) > 1:
+                id_vars = [x_col]
+
+                df_long = pd.melt(
+                    df, id_vars=id_vars, value_vars=y_cols, var_name="IndicatorType", value_name="NumericalValue"
+                )
+
+                # Plotly unified call (long table after using Melt)
+                fig_func = getattr(px, chart_func_name)
+                fig = fig_func(
+                    df_long,
+                    x=x_col,
+                    y="NumericalValue",
+                    color="IndicatorType",
+                    title=f"{selected_chart_name}：{', '.join(y_cols)} vs {x_col}",
+                )
+                fig.update_layout(barmode="group")
+            else:
+                # Single Y-axis, no Melt required
+                fig_func = getattr(px, chart_func_name)
+                fig = fig_func(df, x=x_col, y=y_cols[0], title=f"{selected_chart_name}: {y_cols[0]} vs {x_col}")
+
+        # unified rendering
+        st.plotly_chart(fig, config={"width": "content"})
+
+    def display_download(
+        self, sql: str, output_md: str, execute_result: ExecuteSQLResult, display_column, sql_id, download_callback
+    ):
+        if not sql:
+            return
+        if st.button("⏬ Download", key=f"download_{sql_id}", help="Prepare data for download"):
+            download_callback(sql, output_md, execute_result, sql_id, display_column)
 
     def display_markdown_response(self, response: str) -> None:
         """Display clean response as formatted markdown."""
@@ -281,6 +557,54 @@ class UIComponents:
 
         st.markdown("### 💬 AI Response")
         st.markdown(response)
+
+    def render_action_item(
+        self, chat_id: str, index: int, action: ActionHistory, content_generator: ActionContentGenerator
+    ):
+        with st.container():
+            # Action header with status indicator
+            dot = content_generator._get_action_dot(action)
+
+            # Format title based on action type
+            if action.role == ActionRole.TOOL:
+                function_name = "unknown"
+                if action.input and isinstance(action.input, dict):
+                    function_name = action.input.get("function_name", "unknown")
+                title = f"Step {index}: {dot} Tool call - {function_name}"
+            else:
+                title = f"Step {index}: {dot} {action.messages}"
+
+            # Nested expander for each action
+            with st.expander(title, expanded=False):
+                # Two-column layout for input/output
+                col1, col2 = st.columns([1, 1])
+
+                with col1:
+                    st.markdown("**Input:**")
+                    if action.input:
+                        if isinstance(action.input, dict):
+                            st.json(action.input)
+                        else:
+                            st.text(str(action.input))
+                    else:
+                        st.caption("(no input)")
+
+                with col2:
+                    st.markdown("**Output:**")
+                    if action.output:
+                        if isinstance(action.output, dict):
+                            st.json(action.output)
+                        else:
+                            st.text(str(action.output))
+                    else:
+                        st.caption("(no output)")
+
+                # Timing information
+                if action.start_time and action.end_time:
+                    duration = (action.end_time - action.start_time).total_seconds()
+                    st.caption(f"⏱️ Started: {action.start_time.strftime('%H:%M:%S')} | Duration: {duration:.2f}s")
+                elif action.start_time:
+                    st.caption(f"⏱️ Started: {action.start_time.strftime('%H:%M:%S')}")
 
     def render_action_history(self, actions: List[ActionHistory], chat_id: str = None, expanded: bool = False) -> None:
         """Render complete action history with full details.
@@ -302,53 +626,4 @@ class UIComponents:
             content_generator = ActionContentGenerator(enable_truncation=False)
 
             for i, action in enumerate(actions, 1):
-                with st.container():
-                    # Action header with status indicator
-                    dot = content_generator._get_action_dot(action)
-
-                    # Format title based on action type
-                    if action.role == ActionRole.TOOL:
-                        function_name = "unknown"
-                        if action.input and isinstance(action.input, dict):
-                            function_name = action.input.get("function_name", "unknown")
-                        title = f"Step {i}: {dot} Tool call - {function_name}"
-                    else:
-                        title = f"Step {i}: {dot} {action.messages}"
-
-                    # Nested expander for each action
-                    with st.expander(title, expanded=False):
-                        # Two-column layout for input/output
-                        col1, col2 = st.columns([1, 1])
-
-                        with col1:
-                            st.markdown("**Input:**")
-                            if action.input:
-                                if isinstance(action.input, dict):
-                                    st.json(action.input)
-                                else:
-                                    st.text(str(action.input))
-                            else:
-                                st.caption("(no input)")
-
-                        with col2:
-                            st.markdown("**Output:**")
-                            if action.output:
-                                if isinstance(action.output, dict):
-                                    st.json(action.output)
-                                else:
-                                    st.text(str(action.output))
-                            else:
-                                st.caption("(no output)")
-
-                        # Timing information
-                        if action.start_time and action.end_time:
-                            duration = (action.end_time - action.start_time).total_seconds()
-                            st.caption(
-                                f"⏱️ Started: {action.start_time.strftime('%H:%M:%S')} | Duration: {duration:.2f}s"
-                            )
-                        elif action.start_time:
-                            st.caption(f"⏱️ Started: {action.start_time.strftime('%H:%M:%S')}")
-
-                    # Add divider between actions
-                    if i < len(actions):
-                        st.divider()
+                self.render_action_item(chat_id, i, action, content_generator)
