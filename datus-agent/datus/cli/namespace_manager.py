@@ -127,76 +127,89 @@ class NamespaceManager:
             console.print(f"❌ Namespace '{namespace_name}' already exists")
             return 1
 
+        # Get available adapters dynamically
+        from datus.tools.db_tools import connector_registry
+
+        available_adapters = connector_registry.list_available_adapters()
+        if not available_adapters:
+            console.print("❌ No database adapters available. Please install at least one adapter.")
+            return 1
+
         # Database type selection
-        db_types = ["sqlite", "duckdb", "snowflake", "mysql", "starrocks"]
-        db_type = Prompt.ask("- Database type", choices=db_types, default="duckdb")
+        db_types = sorted(available_adapters.keys())
+        default_type = "duckdb" if "duckdb" in db_types else db_types[0]
+        db_type = Prompt.ask("- Database type", choices=db_types, default=default_type)
 
-        # Connection configuration based on database type
-        if db_type in ["starrocks", "mysql"]:
-            # Host-based database configuration (StarRocks/MySQL)
-            host = Prompt.ask("- Host", default="127.0.0.1")
-            default_port = "9030" if db_type == "starrocks" else "3306"
-            port = Prompt.ask("- Port", default=default_port)
-            valid, error_msg = _validate_port(port)
-            if not valid:
-                console.print(f"❌ {error_msg}")
-                return 1
-            username = Prompt.ask("- Username")
-            password = getpass("- Password: ")
-            database = Prompt.ask("- Database")
+        # Get adapter metadata
+        adapter_metadata = available_adapters[db_type]
+        config_fields = adapter_metadata.get_config_fields()
 
-            # Store configuration
-            config_data = {
-                "type": db_type,
-                "name": database,  # Use database name as logical name
-                "host": host,
-                "port": int(port),
-                "username": username,
-                "password": password,
-                "database": database,
-            }
+        # Initialize config data
+        config_data = {"type": db_type}
+        logical_name = namespace_name  # Default logical name
 
-            # Add StarRocks-specific catalog field
-            if db_type == "starrocks":
-                config_data["catalog"] = "default_catalog"
+        # If adapter provides config schema, use it to prompt for fields
+        if not config_fields:
+            console.print(f"❌ Adapter '{db_type}' does not have a configuration schema registered.")
+            return 1
 
-        elif db_type == "snowflake":
-            # Snowflake specific configuration
-            username = Prompt.ask("- Username")
-            account = Prompt.ask("- Account")
-            warehouse = Prompt.ask("- Warehouse")
-            password = getpass("- Password: ")
-            database = Prompt.ask("- Database", default="")
-            schema = Prompt.ask("- Schema", default="")
+        for field_name, field_info in config_fields.items():
+            # Skip type field
+            if field_name == "type":
+                continue
 
-            # Store Snowflake-specific configuration
-            # Use database name as logical name, or namespace_name if database is empty
-            logical_name = database if database else namespace_name
-            config_data = {
-                "type": db_type,
-                "name": logical_name,
-                "account": account,
-                "username": username,
-                "password": password,
-                "warehouse": warehouse,
-                "database": database,
-                "schema": schema,
-            }
-        else:
-            # For file-based databases (sqlite, duckdb), use connection string
-            if db_type == "duckdb":
-                default_conn_string = str(get_path_manager().sample_dir / "duckdb-demo.duckdb")
-                conn_string = Prompt.ask("- Connection string", default=default_conn_string)
+            # Determine prompt label and default value
+            label = f"- {field_name.replace('_', ' ').capitalize()}"
+            required = field_info.get("required", False)
+            default_value = field_info.get("default")
+            input_type = field_info.get("input_type", "text")
+
+            # Handle input based on input_type metadata
+            if input_type == "password" or field_name == "password":
+                value = getpass(f"{label}: ")
+            elif input_type == "file_path":
+                # Handle file path inputs
+                sample_file = field_info.get("default_sample")
+                if sample_file:
+                    default_path = str(get_path_manager().sample_dir / sample_file)
+                    value = Prompt.ask(label, default=default_path)
+                else:
+                    value = Prompt.ask(label, default=str(default_value) if default_value else "")
+            elif field_info.get("type") == "int" or field_name == "port":
+                # Handle integer inputs
+                value_str = Prompt.ask(label, default=str(default_value) if default_value else "")
+                if value_str:
+                    if field_name == "port":
+                        valid, error_msg = _validate_port(value_str)
+                        if not valid:
+                            console.print(f"❌ {error_msg}")
+                            return 1
+                    try:
+                        value = int(value_str)
+                    except ValueError:
+                        console.print(f"❌ Invalid integer value: '{value_str}'. Please enter a valid number.")
+                        return 1
+                else:
+                    value = default_value
+            elif not required and default_value is not None:
+                value = Prompt.ask(label, default=str(default_value))
+            elif not required:
+                value = Prompt.ask(label, default="")
             else:
-                conn_string = Prompt.ask("- Connection string")
+                value = Prompt.ask(label)
 
-            # Use file stem as logical name for file-based databases
-            logical_name = file_stem_from_uri(conn_string)
-            config_data = {
-                "type": db_type,
-                "name": logical_name,
-                "uri": conn_string,
-            }
+            # Only add non-empty values
+            if value != "" and value is not None:
+                config_data[field_name] = value
+
+                # Determine logical name from database or uri
+                if field_name == "database" and value:
+                    logical_name = value
+                elif field_name == "uri" and value:
+                    logical_name = file_stem_from_uri(value)
+
+        # Add logical name to config
+        config_data["name"] = logical_name
 
         # Test database connectivity
         console.print("→ Testing database connectivity...")

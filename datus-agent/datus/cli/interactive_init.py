@@ -243,68 +243,91 @@ class InteractiveInit:
             console.print("❌ Namespace name cannot be empty")
             return False
 
+        # Get available adapters dynamically
+        from datus.tools.db_tools import connector_registry
+
+        available_adapters = connector_registry.list_available_adapters()
+        if not available_adapters:
+            console.print("❌ No database adapters available. Please install at least one adapter.")
+            return False
+
         # Database type selection
-        db_types = ["sqlite", "duckdb", "snowflake", "mysql", "starrocks"]
-        db_type = Prompt.ask("- Database type", choices=db_types, default="duckdb")
+        db_types = sorted(available_adapters.keys())
+        default_type = "duckdb" if "duckdb" in db_types else db_types[0]
+        db_type = Prompt.ask("- Database type", choices=db_types, default=default_type)
 
-        # Connection configuration based on database type
-        if db_type in ["starrocks", "mysql"]:
-            # Host-based database configuration (StarRocks/MySQL)
-            host = Prompt.ask("- Host", default="127.0.0.1")
-            port = Prompt.ask("- Port", default="9030")
-            username = Prompt.ask("- Username")
-            password = getpass("- Password: ")
-            database = Prompt.ask("- Database")
+        # Get adapter metadata
+        adapter_metadata = available_adapters[db_type]
+        config_fields = adapter_metadata.get_config_fields()
 
-            # Store configuration
-            config_data = {
-                "type": db_type,
-                "name": self.namespace_name,
-                "host": host,
-                "port": int(port),
-                "username": username,
-                "password": password,
-                "database": database,
-            }
+        # Collect configuration based on adapter's config schema
+        config_data = {
+            "type": db_type,
+            "name": self.namespace_name,
+        }
 
-            # Add StarRocks-specific catalog field
-            if db_type == "starrocks":
-                config_data["catalog"] = "default_catalog"
+        # If adapter provides config schema, use it to prompt for fields
+        if not config_fields:
+            console.print(f"❌ Adapter '{db_type}' does not have a configuration schema registered.")
+            return False
 
-            self.config["agent"]["namespace"][self.namespace_name] = config_data
-        elif db_type == "snowflake":
-            # Snowflake specific configuration
-            username = Prompt.ask("- Username")
-            account = Prompt.ask("- Account")
-            warehouse = Prompt.ask("- Warehouse")
-            password = getpass("- Password: ")
-            database = Prompt.ask("- Database", default="")
-            schema = Prompt.ask("- Schema", default="")
+        for field_name, field_info in config_fields.items():
+            # Skip type and name fields
+            if field_name in ["type", "name"]:
+                continue
 
-            # Store Snowflake-specific configuration
-            self.config["agent"]["namespace"][self.namespace_name] = {
-                "type": db_type,
-                "name": self.namespace_name,
-                "account": account,
-                "username": username,
-                "password": password,
-                "warehouse": warehouse,
-                "database": database,
-                "schema": schema,
-            }
-        else:
-            # For other database types (sqlite, duckdb), use connection string
-            if db_type == "duckdb":
-                default_conn_string = str(self.sample_dir / "duckdb-demo.duckdb")
-                conn_string = Prompt.ask("- Connection string", default=default_conn_string)
+            # Determine prompt label and default value
+            label = f"- {field_name.replace('_', ' ').capitalize()}"
+            required = field_info.get("required", False)
+            default_value = field_info.get("default")
+            input_type = field_info.get("input_type", "text")
+
+            # Handle input based on input_type metadata
+            if input_type == "password" or field_name == "password":
+                value = getpass(f"{label}: ")
+            elif input_type == "file_path":
+                # Handle file path inputs
+                sample_file = field_info.get("default_sample")
+                if sample_file:
+                    default_path = str(self.sample_dir / sample_file)
+                    value = Prompt.ask(label, default=default_path)
+                else:
+                    value = Prompt.ask(label, default=str(default_value) if default_value else "")
+            elif field_info.get("type") == "int" or field_name == "port":
+                # Handle integer inputs with validation
+                while True:
+                    value_str = Prompt.ask(label, default=str(default_value) if default_value else "")
+
+                    # Use default if empty string
+                    if not value_str:
+                        value = default_value
+                        break
+
+                    # Try to convert to int
+                    try:
+                        value = int(value_str)
+
+                        # Validate port range
+                        if field_name == "port":
+                            if not (1 <= value <= 65535):
+                                console.print("[yellow]Port must be between 1 and 65535. Please try again.[/yellow]")
+                                continue
+
+                        break
+                    except ValueError:
+                        console.print("[yellow]Invalid integer value. Please enter a valid number.[/yellow]")
+            elif not required and default_value is not None:
+                value = Prompt.ask(label, default=str(default_value))
+            elif not required:
+                value = Prompt.ask(label, default="")
             else:
-                conn_string = Prompt.ask("- Connection string")
+                value = Prompt.ask(label)
 
-            self.config["agent"]["namespace"][self.namespace_name] = {
-                "type": db_type,
-                "name": self.namespace_name,
-                "uri": conn_string,
-            }
+            # Only add non-empty values
+            if value != "" and value is not None:
+                config_data[field_name] = value
+
+        self.config["agent"]["namespace"][self.namespace_name] = config_data
         # Test database connectivity
         console.print("→ Testing database connectivity...")
         success, error_msg = detect_db_connectivity(
