@@ -14,7 +14,7 @@ class SnowflakeConfig(BaseModel):
 
     account: str = Field(..., description="Snowflake account identifier")
     username: str = Field(..., description="Snowflake username")
-    password: str = Field(..., description="Snowflake password")
+    password: str = Field(..., description="Snowflake password", json_schema_extra={"input_type": "password"})
     warehouse: str = Field(..., description="Snowflake warehouse name")
     database: Optional[str] = Field(default=None, description="Default database name")
     schema_name: Optional[str] = Field(default=None, alias="schema", description="Default schema name")
