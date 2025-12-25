@@ -695,11 +695,21 @@ class OpenAICompatibleModel(LLMBaseModel):
                                         "arguments": arguments,
                                         "args_display": args_str,
                                     }
-
+                                    start_action = ActionHistory(
+                                        action_id=call_id,
+                                        role=ActionRole.TOOL,
+                                        messages=f"Tool call: {tool_name}('{args_str}...')",
+                                        action_type=tool_name,
+                                        input={"function_name": tool_name, "arguments": arguments},
+                                        output={},
+                                        status=ActionStatus.PROCESSING,
+                                    )
+                                    action_history_manager.add_action(start_action)
                                     logger.debug(
                                         f"Stored tool call: {tool_name} "
                                         f"(call_id={call_id[:20] if call_id else 'None'}...)"
                                     )
+                                    yield start_action
 
                             # Handle tool call completion
                             elif item_type == "tool_call_output_item":
@@ -740,29 +750,25 @@ class OpenAICompatibleModel(LLMBaseModel):
 
                                     # Create complete action with both input and output
                                     # Put result_summary as the status message to replace default "Success"
-                                    complete_action = ActionHistory(
-                                        action_id=call_id,
-                                        role=ActionRole.TOOL,
-                                        messages=f"Tool call: {tool_name}('{args_display}...')",
-                                        action_type=tool_name,
-                                        input={"function_name": tool_name, "arguments": tool_info["arguments"]},
-                                        output={
-                                            "success": True,
-                                            "raw_output": output_content,  # Add raw output for action_display_app
-                                            "summary": result_summary,
-                                            "status_message": result_summary,
-                                        },
-                                        status=ActionStatus.SUCCESS,
-                                    )
-                                    complete_action.end_time = datetime.now()
-
+                                    output_data = {
+                                        "success": True,
+                                        "raw_output": output_content,  # Add raw output for action_display_app
+                                        "summary": result_summary,
+                                        "status_message": result_summary,
+                                    }
                                     logger.debug(
                                         f"Matched tool: {tool_name}({args_display[:30]}...) -> {result_summary}"
                                     )
 
-                                    # Add to action_history_manager before yielding (consistent with thinking messages)
-                                    action_history_manager.add_action(complete_action)
-                                    yield complete_action
+                                    # update action_history_manager before yielding (consistent with thinking messages)
+                                    action_history_manager.update_action_by_id(
+                                        call_id,
+                                        output=output_data,
+                                        end_time=datetime.now(),
+                                        status=ActionStatus.SUCCESS,
+                                    )
+                                    updated_action = action_history_manager.find_action_by_id(call_id)
+                                    yield updated_action
 
                                     # Remove from temp storage to avoid duplicates
                                     del temp_tool_calls[call_id]
