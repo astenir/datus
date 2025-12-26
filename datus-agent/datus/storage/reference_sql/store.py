@@ -9,10 +9,7 @@ import pyarrow as pa
 
 from datus.configuration.agent_config import AgentConfig
 from datus.storage.base import EmbeddingModel
-from datus.storage.subject_tree.store import (
-    BaseSubjectEmbeddingStore,
-    base_schema_columns,
-)
+from datus.storage.subject_tree.store import BaseSubjectEmbeddingStore, base_schema_columns
 
 logger = logging.getLogger(__file__)
 
@@ -36,12 +33,13 @@ class ReferenceSqlStorage(BaseSubjectEmbeddingStore):
                     pa.field("sql", pa.string()),
                     pa.field("comment", pa.string()),
                     pa.field("summary", pa.string()),
+                    pa.field("search_text", pa.string()),
                     pa.field("filepath", pa.string()),
                     pa.field("tags", pa.string()),
                     pa.field("vector", pa.list_(pa.float32(), list_size=embedding_model.dim_size)),
                 ]
             ),
-            vector_source_name="summary",
+            vector_source_name="search_text",
         )
         self.reranker = None
 
@@ -59,19 +57,20 @@ class ReferenceSqlStorage(BaseSubjectEmbeddingStore):
         self.create_subject_index()
 
         # Create FTS index for reference SQL-specific fields
-        self.create_fts_index(["sql", "name", "comment", "summary", "tags"])
+        self.create_fts_index(["sql", "name", "comment", "summary", "tags", "search_text"])
 
     def batch_store_sql(self, sql_items: List[Dict[str, Any]], subject_path_field: str = "subject_path") -> None:
         """Store multiple reference SQL items in batch with subject path processing.
 
         Args:
             sql_items: List of SQL item dictionaries, each containing:
-                - name: str - SQL name/title
-                - sql: str - SQL query content
+                - name: str - SQL name/title (required)
+                - sql: str - SQL query content (required)
                 - comment: str - Optional comment
-                - summary: str - Optional summary for embedding
+                - summary: str - Summary for embedding (required)
+                - search_text: str - Text for vector search (required, used for embedding generation)
                 - filepath: str - File path where SQL is stored
-                - subject_path: List[str] - Subject hierarchy path (e.g., ['Finance', 'Revenue'])
+                - subject_path: List[str] - Subject hierarchy path (required, e.g., ['Finance', 'Revenue'])
                 - tags: str - Optional tags
                 - created_at: str - Creation timestamp (optional, will auto-generate if not provided)
             subject_path_field: Field name containing subject_path in each item
@@ -86,10 +85,14 @@ class ReferenceSqlStorage(BaseSubjectEmbeddingStore):
             name = item.get("name", "")
             sql = item.get("sql", "")
             summary = item.get("summary", "")
+            search_text = item.get("search_text", "")
 
-            # Validate required fields
-            if not all([subject_path, name, sql, summary]):
-                logger.warning(f"Skipping SQL item with missing required fields: {item}")
+            # Validate required fields including search_text (used for embedding generation)
+            if not all([subject_path, name, sql, summary, search_text]):
+                logger.warning(
+                    f"Skipping SQL item with missing required fields "
+                    f"(subject_path, name, sql, summary, search_text): {item.get('name', 'unknown')}"
+                )
                 continue
 
             valid_items.append(item)
@@ -102,6 +105,7 @@ class ReferenceSqlStorage(BaseSubjectEmbeddingStore):
         query_text: Optional[str] = None,
         subject_path: Optional[List[str]] = None,
         top_n: Optional[int] = 5,
+        selected_fields: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Search reference SQL by query text with optional subject path filtering.
 
@@ -117,6 +121,7 @@ class ReferenceSqlStorage(BaseSubjectEmbeddingStore):
             query_text=query_text,
             subject_path=subject_path,
             top_n=top_n,
+            selected_fields=selected_fields,
         )
 
     def search_all_reference_sql(
@@ -166,8 +171,12 @@ class ReferenceSqlRAG:
         """Get total number of reference SQL entries."""
         return self.reference_sql_storage.table_size()
 
-    def search_reference_sql_by_summary(
-        self, query_text: str, subject_path: Optional[List[str]] = None, top_n: int = 5
+    def search_reference_sql(
+        self,
+        query_text: str,
+        subject_path: Optional[List[str]] = None,
+        top_n: int = 5,
+        selected_fields: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Search reference SQL by summary using vector search.
 
@@ -175,12 +184,13 @@ class ReferenceSqlRAG:
             query_text: Query text to search for
             subject_path: Optional subject hierarchy path (e.g., ['Finance', 'Revenue'])
             top_n: Number of results to return
+            selected_fields: Optional list of fields to return
 
         Returns:
-            List of matching reference SQL entries with distance scores
+            List of matching reference SQL entries with selected fields
         """
         return self.reference_sql_storage.search_reference_sql(
-            query_text=query_text, subject_path=subject_path, top_n=top_n
+            query_text=query_text, subject_path=subject_path, top_n=top_n, selected_fields=selected_fields
         )
 
     def get_reference_sql_detail(self, subject_path: List[str], name: str) -> List[Dict[str, Any]]:

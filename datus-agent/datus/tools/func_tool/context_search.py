@@ -227,8 +227,11 @@ class ContextSearchTools:
                     - 'file_path'
         """
         try:
-            result = self.reference_sql_store.search_reference_sql_by_summary(
-                query_text=query_text, subject_path=subject_path, top_n=top_n
+            result = self.reference_sql_store.search_reference_sql(
+                query_text=query_text,
+                subject_path=subject_path,
+                top_n=top_n,
+                selected_fields=["name", "sql", "comment", "summary", "tags"],
             )
             return FuncToolResult(success=1, error=None, result=result)
         except Exception as e:
