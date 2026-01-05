@@ -255,15 +255,15 @@ def test_full_name_without_database():
 
 
 def test_full_name_with_special_characters():
-    """Test full_name with special characters (not escaped in this method)."""
+    """Test full_name with special characters (backticks are escaped)."""
     config = MySQLConfig(username="user")
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = MySQLConnector(config)
         full_name = connector.full_name(database_name="my`db", table_name="my`table")
 
-        # full_name doesn't escape backticks, just wraps with backticks
-        assert full_name == "`my`db`.`my`table`"
+        # full_name escapes backticks by doubling them
+        assert full_name == "`my``db`.`my``table`"
 
 
 def test_identifier_with_database():

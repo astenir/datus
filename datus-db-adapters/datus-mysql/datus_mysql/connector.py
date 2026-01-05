@@ -321,6 +321,7 @@ class MySQLConnector(SQLAlchemyConnector):
         if database_name:
             with self.engine.connect() as conn:
                 conn.execute(text(f"USE {self._quote_identifier(database_name)}"))
+            self.database_name = database_name
 
     # ==================== Sample Data ====================
 
@@ -399,8 +400,8 @@ class MySQLConnector(SQLAlchemyConnector):
     ) -> str:
         """Build fully-qualified table name."""
         if database_name:
-            return f"`{database_name}`.`{table_name}`"
-        return f"`{table_name}`"
+            return f"{self._quote_identifier(database_name)}.{self._quote_identifier(table_name)}"
+        return self._quote_identifier(table_name)
 
     @override
     def _reset_filter_tables(
