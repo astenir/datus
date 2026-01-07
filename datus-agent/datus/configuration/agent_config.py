@@ -138,6 +138,16 @@ class BenchmarkConfig:
             )
 
 
+@dataclass
+class DashboardConfig:
+    platform: str
+    # use login or api_key
+    username: str = ""
+    password: str = ""
+    api_key: str = ""
+    extra: Optional[Dict[str, Any]] = field(default_factory=dict, init=True)
+
+
 logger = get_logger(__name__)
 
 DEFAULT_REFLECTION_NODES = {
@@ -204,6 +214,8 @@ class AgentConfig:
         self.nodes = nodes
         self.export_config: Dict[str, Any] = kwargs.get("export", {})
         self.agentic_nodes = kwargs.get("agentic_nodes", {})
+        self.dashboard_config: Dict[str, DashboardConfig] = {}
+        self.init_dashboard(kwargs.get("dashboard", {}))
 
         for name, raw_config in self.agentic_nodes.items():
             if not raw_config.get("system_prompt"):
@@ -640,6 +652,26 @@ class AgentConfig:
         benchmark_config.validate()
 
         return benchmark_config
+
+    def init_dashboard(self, param: Dict[str, Any]):
+        if not isinstance(param, dict):
+            return
+        for platform, auth_params in param.items():
+            if not isinstance(auth_params, dict):
+                continue
+            username_raw = auth_params.get("username", "")
+            password_raw = auth_params.get("password", "")
+            api_key_raw = auth_params.get("api_key", "")
+            username = resolve_env(str(username_raw)) if username_raw else ""
+            password = resolve_env(str(password_raw)) if password_raw else ""
+            api_key = resolve_env(str(api_key_raw)) if api_key_raw else ""
+            self.dashboard_config[platform] = DashboardConfig(
+                platform=platform,
+                username=username,
+                password=password,
+                api_key=api_key,
+                extra=auth_params.get("extra", {}),
+            )
 
 
 def rag_storage_path(namespace: str, rag_base_path: str = "data") -> str:

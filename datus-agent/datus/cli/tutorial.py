@@ -2,10 +2,16 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+import argparse
+import os
+import shutil
 from pathlib import Path
 from typing import Any, Dict
 
-from datus.cli.interactive_init import console, create_agent
+from rich.console import Console
+from rich.markup import escape
+
+from datus.cli.interactive_init import parse_subject_tree
 from datus.configuration.agent_config_loader import configuration_manager, load_agent_config
 from datus.schemas.agent_models import SubAgentConfig
 from datus.utils.loggings import get_logger, print_rich_exception
@@ -19,9 +25,7 @@ class BenchmarkTutorial:
     def __init__(self, config_path: str) -> None:
         self.config_path = config_path
         self.namespace_name = "california_schools"
-        path_manager = get_path_manager()
-        self.benchmark_path = path_manager.benchmark_dir
-        path_manager.ensure_dirs("sample")
+        self.console = Console(log_path=False)
 
     def _ensure_files(self):
         if not self.benchmark_path.exists():
@@ -37,13 +41,15 @@ class BenchmarkTutorial:
         )
 
     def _ensure_config(self) -> bool:
-        if not self.config_path or not Path(self.config_path).expanduser().resolve().exists():
-            console.print(
+        if self.config_path and not Path(self.config_path).expanduser().resolve().exists():
+            self.console.print(
                 f" ❌Configuration file `{self.config_path}` not found, "
                 "please check it or run `datus-agent init` first."
             )
             return False
         agent_config = load_agent_config(config=self.config_path)
+        path_manager = get_path_manager(datus_home=agent_config.home)
+        self.benchmark_path = path_manager.benchmark_dir
         if (
             self.namespace_name not in agent_config.benchmark_configs
             or self.namespace_name not in agent_config.namespaces
@@ -64,11 +70,11 @@ class BenchmarkTutorial:
                 delete_old_key=False,
                 save=False,
             )
-            console.print("Namespace configuration added:")
+            self.console.print("Namespace configuration added:")
 
             from rich.syntax import Syntax
 
-            console.print(Syntax(dict_to_yaml_str(namespace_config), lexer="yaml"))
+            self.console.print(Syntax(dict_to_yaml_str(namespace_config), lexer="yaml"))
 
             benchmark_config = {
                 self.namespace_name: {
@@ -88,40 +94,44 @@ class BenchmarkTutorial:
                 delete_old_key=False,
                 save=True,
             )
-            console.print("Benchmark configuration added:")
+            self.console.print("Benchmark configuration added:")
 
-            console.print(Syntax(dict_to_yaml_str(benchmark_config), lexer="yaml"))
+            self.console.print(Syntax(dict_to_yaml_str(benchmark_config), lexer="yaml"))
         return True
 
     def run(self):
         try:
-            console.print("[bold cyan]Welcome to Datus benchmark data preparation tutorial 🎉[/bold cyan]")
-            console.print(
+            self.console.print("[bold cyan]Welcome to Datus benchmark data preparation tutorial 🎉[/bold cyan]")
+            self.console.print(
                 "Let's start learning how to prepare for benchmarking step by step using a dataset "
                 "from California schools."
             )
-            console.print("[bold yellow][1/5] Ensure data files and configuration[/bold yellow]")
-            with console.status("Ensuring...") as status:
-                self._ensure_files()
-                console.print("Data files are ready.")
-                status.update("Ensuring configuration...")
+            self.console.print("[bold yellow][1/5] Ensure data files and configuration[/bold yellow]")
+            with self.console.status("Ensuring...") as status:
                 if not self._ensure_config():
                     return 1
-            console.print("Configuration is ready.")
+                self._ensure_files()
+                self.console.print("Data files are ready.")
+                status.update("Ensuring configuration...")
+            self.console.print("Configuration is ready.")
             california_schools_path = self.benchmark_path / self.namespace_name
             from datus.cli.interactive_init import init_metadata_and_log_result, init_sql_and_log_result
 
-            console.print("[bold yellow][2/5] Initialize Metadata using command: [/bold yellow]")
-            console.print(
+            self.console.print("[bold yellow][2/5] Initialize Metadata using command: [/bold yellow]")
+            self.console.print(
                 f"    [bold green]datus-agent[/] [bold]bootstrap-kb --config {self.config_path} "
                 "--namespace california_schools "
                 "--components metadata --kb_update_strategy overwrite[/]"
             )
-            init_metadata_and_log_result(namespace_name=self.namespace_name, config_path=self.config_path)
+            init_metadata_and_log_result(
+                namespace_name=self.namespace_name,
+                config_path=self.config_path,
+                console=self.console,
+            )
 
-            console.print("[bold yellow][3/5] Initialize Metrics using command: [/bold yellow]")
+            self.console.print("[bold yellow][3/5] Initialize Metrics using command: [/bold yellow]")
             success_path = self.benchmark_path / self.namespace_name / "success_story.csv"
-            console.print(
+            self.console.print(
                 f"    [bold green]datus-agent[/] [bold]bootstrap-kb --config {self.config_path} "
                 f"--namespace california_schools "
                 f"--components metrics --kb_update_strategy overwrite --success_story {success_path} "
@@ -129,11 +139,10 @@ class BenchmarkTutorial:
                 'california_schools/Charter/Education_Location"'
                 "[/]"
             )
-            with console.status("Metrics initializing..."):
-                self._init_metrics(success_path)
+            self._init_metrics(success_path)
 
-            console.print("[bold yellow][4/5] Initialize Reference SQL using command: [/bold yellow]")
-            console.print(
+            self.console.print("[bold yellow][4/5] Initialize Reference SQL using command: [/bold yellow]")
+            self.console.print(
                 f"    [bold green]datus-agent[/] [bold]bootstrap-kb --config {self.config_path} "
                 "--namespace california_schools --components reference_sql --kb_update_strategy overwrite "
                 f"--sql_dir {str(california_schools_path / 'reference_sql')} "
@@ -158,15 +167,16 @@ class BenchmarkTutorial:
                 "california_schools/FRPM_Enrollment/Rate,"
                 "california_schools/Enrollment/Total",
                 config_path=self.config_path,
+                console=self.console,
             )
-            console.print("[bold yellow][5/5] Building sub-agents and workflows: [/bold yellow]")
+            self.console.print("[bold yellow][5/5] Building sub-agents and workflows: [/bold yellow]")
 
-            with console.status("Sub-Agents Building...") as status:
+            with self.console.status("Sub-Agents Building...") as status:
                 self.add_sub_agents()
                 status.update("Workflows Building...")
                 self.add_workflows()
 
-                console.print(
+                self.console.print(
                     "[bold cyan]The sub-agents and workflow are now configured. "
                     "You can use them in the following ways:\n"
                     "  1. Conduct multi-turn conversations in the CLI via `/datus_schools <your question>` or  "
@@ -175,47 +185,118 @@ class BenchmarkTutorial:
                     "`datus-agent benchmark --workflow datus_schools`.[/]"
                 )
 
-            console.print(" 🎉 [bold green]Now you can start with the benchmarking section of the guidance document[/]")
+            self.console.print(
+                " 🎉 [bold green]Now you can start with the benchmarking section of the guidance document[/]"
+            )
             return 0
         except Exception as e:
-            print_rich_exception(console, e, "Tutorial failed", logger)
+            print_rich_exception(self.console, e, "Tutorial failed", logger)
             return 1
 
     def _init_metrics(self, success_path: Path):
         """Initialize metrics using success stories."""
+        from datus.schemas.batch_events import BatchEvent, BatchStage
+        from datus.storage.metric.metrics_init import init_success_story_metrics
+        from datus.utils.stream_output import StreamOutputManager
+
         logger.info(f"Metrics initialization with {self.benchmark_path}/{self.namespace_name}/success_story.csv")
         try:
-            agent = create_agent(
-                namespace_name=self.namespace_name,
-                components=["metrics"],
-                success_story=success_path,
-                validate_only=False,
-                config_path=self.config_path,
-                subject_tree="california_schools/Continuation_School/Free_Rate,"
-                "california_schools/Charter/Education_Location",
+            agent_config = load_agent_config(reload=True, config=self.config_path)
+            agent_config.current_namespace = self.namespace_name
+
+            storage_path = agent_config.rag_storage_path()
+            semantic_model_path = os.path.join(storage_path, "semantic_model.lance")
+            metrics_path = os.path.join(storage_path, "metrics.lance")
+            if os.path.exists(semantic_model_path):
+                shutil.rmtree(semantic_model_path)
+                logger.info(f"Deleted existing directory {semantic_model_path}")
+            if os.path.exists(metrics_path):
+                shutil.rmtree(metrics_path)
+                logger.info(f"Deleted existing directory {metrics_path}")
+            agent_config.save_storage_config("metric")
+
+            subject_tree = parse_subject_tree(
+                "california_schools/Continuation_School/Free_Rate," "california_schools/Charter/Education_Location"
             )
-            result = agent.bootstrap_kb()
-            if result.get("status") == "success":
-                metrics_size = 0 if not agent.metrics_store else agent.metrics_store.get_metrics_size()
-                if metrics_size > 0:
-                    console.print(f"  → Processed {metrics_size} metrics")
-                    if err := result.get("error"):
-                        console.print(" ⚠️ [bold]The metrics has not been fully initialised successfully: [/]")
-                        console.print(f"    {err}")
+
+            # Create StreamOutputManager
+            output_mgr = StreamOutputManager(
+                console=self.console,
+                max_message_lines=10,
+                show_progress=True,
+                title="Metrics Initialization",
+            )
+
+            def emit(event: BatchEvent) -> None:
+                stage = event.stage
+
+                if stage == BatchStage.TASK_STARTED:
+                    total_items = event.total_items or 0
+                    output_mgr.start(total_items=total_items, description="Initializing metrics")
+                    return
+
+                if stage == BatchStage.ITEM_STARTED:
+                    payload = event.payload or {}
+                    row_idx = payload.get("row_idx")
+                    question = str(payload.get("question") or "")
+                    output_mgr.start_task(f"Row {row_idx}: {question}")
+
+                    table_name = payload.get("table_name")
+                    if table_name:
+                        output_mgr.add_message(f"Table: {escape(str(table_name))}", style="cyan")
+                    return
+
+                if stage == BatchStage.ITEM_PROCESSING:
+                    payload = event.payload or {}
+                    messages = payload.get("messages")
+                    if messages:
+                        output_mgr.add_llm_output(str(messages))
+                    return
+
+                if stage == BatchStage.ITEM_COMPLETED:
+                    output_mgr.complete_task(success=True)
+                    output_mgr.update_progress(advance=1)
+                    return
+
+                if stage == BatchStage.ITEM_FAILED:
+                    payload = event.payload or {}
+                    row_idx = payload.get("row_idx")
+                    error = event.error or "unknown error"
+                    output_mgr.error(f"Row {row_idx}: {escape(str(error))}")
+                    output_mgr.update_progress(advance=1)
+                    return
+
+                if stage == BatchStage.TASK_COMPLETED:
+                    completed = event.completed_items or 0
+                    failed = event.failed_items or 0
+                    if failed > 0:
+                        output_mgr.warning(f"Completed: {completed} successful, {failed} failed")
                     else:
-                        console.print(" ✅ Metrics initialized")
-                else:
-                    if err := result.get("error"):
-                        console.print(" ❌[bold]There are some errors in the processing:[/]")
-                        console.print(f"    {err}")
-                    else:
-                        console.print(" ⚠️No metrics initialized")
+                        output_mgr.success(f"All {completed} rows processed successfully")
+                    return
+
+            args = argparse.Namespace(success_story=str(success_path))
+
+            try:
+                successful, error_message = init_success_story_metrics(
+                    args,
+                    agent_config,
+                    subject_tree,
+                    emit=emit,
+                    pool_size=1,
+                )
+            finally:
+                output_mgr.stop()
+
+            if successful:
+                self.console.print(" [green]OK[/] Metrics initialized")
+                return True
             else:
-                console.print(" ❌[bold]Metrics initialization failed:[/]")
-                console.print(f"    {result.get('message')}")
-            return True
+                self.console.print(" [red]Error:[/] Metrics initialization failed:")
+                self.console.print(f"    {escape(str(error_message))}")
+                return False
         except Exception as e:
-            print_rich_exception(console, e, "Metrics initialization failed", logger)
+            print_rich_exception(self.console, e, "Metrics initialization failed", logger)
             return False
 
     def add_sub_agents(self):
@@ -236,7 +317,7 @@ class BenchmarkTutorial:
             ),
             previous_name="datus_schools",
         )
-        console.print("  ✅ Sub-agent `datus_schools` have been added. It can work using database tools.")
+        self.console.print("  ✅ Sub-agent `datus_schools` have been added. It can work using database tools.")
 
         manager.save_agent(
             SubAgentConfig(
@@ -249,7 +330,7 @@ class BenchmarkTutorial:
             ),
             previous_name="datus_schools_context",
         )
-        console.print(
+        self.console.print(
             "  ✅ Sub-agent `datus_schools_context` have been added. "
             "It can work using metrics, relevant SQL and database tools."
         )
@@ -265,7 +346,7 @@ class BenchmarkTutorial:
             delete_old_key=False,
             save=True,
         )
-        console.print("  ✅ Workflow `datus_schools` and `datus_schools_context` have been added.")
+        self.console.print("  ✅ Workflow `datus_schools` and `datus_schools_context` have been added.")
 
 
 def dict_to_yaml_str(data: Dict[str, Any]) -> str:
