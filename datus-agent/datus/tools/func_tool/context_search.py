@@ -9,8 +9,9 @@ from agents import Tool
 
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.agent_models import SubAgentConfig
-from datus.storage.metric.store import SemanticMetricsRAG
+from datus.storage.metric.store import MetricRAG
 from datus.storage.reference_sql.store import ReferenceSqlRAG
+from datus.storage.semantic_model.store import SemanticModelRAG
 from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
 from datus.utils.loggings import get_logger
 
@@ -21,17 +22,19 @@ _NAME_METRICS = "context_search_tools.search_metrics"
 _NAME_GET_METRICS = "context_search_tools.get_metrics"
 _NAME_SQL = "context_search_tools.search_reference_sql"
 _NAME_GET_SQL = "context_search_tools.get_reference_sql"
+_NAME_SEMANTIC = "context_search_tools.search_semantic_objects"
 
 
 class ContextSearchTools:
     def __init__(self, agent_config: AgentConfig, sub_agent_name: Optional[str] = None):
         self.agent_config = agent_config
         self.sub_agent_name = sub_agent_name
-        self.metric_rag = SemanticMetricsRAG(agent_config, sub_agent_name)
+        self.metric_rag = MetricRAG(agent_config, sub_agent_name)
+        self.semantic_rag = SemanticModelRAG(agent_config, sub_agent_name)
         self.reference_sql_store = ReferenceSqlRAG(agent_config, sub_agent_name)
 
         # Initialize SubjectTreeStore for domain hierarchy
-        self.subject_tree = self.metric_rag.metric_storage.subject_tree
+        self.subject_tree = self.metric_rag.storage.subject_tree
 
         if sub_agent_name:
             self.sub_agent_config = SubAgentConfig.model_validate(self.agent_config.sub_agent_config(sub_agent_name))
@@ -39,6 +42,7 @@ class ContextSearchTools:
             self.sub_agent_config = None
         self.has_metrics = self.metric_rag.get_metrics_size() > 0
         self.has_reference_sql = self.reference_sql_store.get_reference_sql_size() > 0
+        self.has_semantic_objects = self.semantic_rag.get_size() > 0
 
     def _show_metrics(self):
         return self.has_metrics and (
@@ -54,6 +58,13 @@ class ContextSearchTools:
             or _NAME in self.sub_agent_config.tool_list
             or _NAME_SQL in self.sub_agent_config.tool_list
             or _NAME_GET_SQL in self.sub_agent_config.tool_list
+        )
+
+    def _show_semantic_objects(self):
+        return self.has_semantic_objects and (
+            not self.sub_agent_config
+            or _NAME in self.sub_agent_config.tool_list
+            or _NAME_SEMANTIC in self.sub_agent_config.tool_list
         )
 
     @staticmethod
@@ -78,6 +89,10 @@ class ContextSearchTools:
                 tools.append(trans_to_function_tool(self.list_subject_tree))
             tools.append(trans_to_function_tool(self.search_reference_sql))
             tools.append(trans_to_function_tool(self.get_reference_sql))
+
+        if self._show_semantic_objects():
+            tools.append(trans_to_function_tool(self.search_semantic_objects))
+
         return tools
 
     def list_subject_tree(self) -> FuncToolResult:
@@ -197,6 +212,7 @@ class ContextSearchTools:
     ) -> FuncToolResult:
         """
         Search for reference SQL queries using natural language queries.
+        MUST call `list_subject_tree` first to get the subject path.
 
         Args:
             query_text: The natural language query text representing the desired SQL intent.
@@ -252,6 +268,42 @@ class ContextSearchTools:
             return FuncToolResult(success=0, error="No matched result", result=None)
         except Exception as e:
             logger.error(f"Failed to get reference SQL for `{'/'.join(subject_path)}/{name}`: {e}")
+            return FuncToolResult(success=0, error=str(e))
+
+    def search_semantic_objects(
+        self,
+        query_text: str,
+        kinds: Optional[List[str]] = None,
+        top_n: int = 5,
+    ) -> FuncToolResult:
+        """
+        Search for semantic objects (metrics, columns, tables) using unified storage.
+
+        Args:
+            query_text: Natural language query describing what you're looking for
+            kinds: List of object kinds to filter by. Options: ["metric", "column", "table", "entity"]
+                   If None, searches all kinds
+            top_n: Maximum number of results to return (default 5)
+
+        Returns:
+            FuncToolResult with list of matching objects containing:
+                - kind: Type of object ("metric", "column", "table", "entity")
+                - name: Object name
+                - description: Detailed description
+                - _distance: Similarity score (lower is better)
+                - Additional fields specific to object kind (e.g., available_dimensions for metrics)
+        """
+        try:
+            results = self.semantic_rag.storage.search_objects(
+                query_text=query_text,
+                kinds=kinds,
+                top_n=top_n,
+            )
+
+            logger.debug(f"search_semantic_objects results: {results}")
+            return FuncToolResult(success=1, error=None, result=results)
+        except Exception as e:
+            logger.error(f"Failed to search semantic objects for '{query_text}': {str(e)}")
             return FuncToolResult(success=0, error=str(e))
 
 

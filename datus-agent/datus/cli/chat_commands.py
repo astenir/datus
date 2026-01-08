@@ -98,13 +98,21 @@ class ChatCommands:
     def _create_new_node(self, subagent_name: str = None):
         """Create new node based on subagent_name."""
         if subagent_name:
-            # Use SemanticAgenticNode for gen_semantic_model and gen_metrics
-            if subagent_name in ["gen_semantic_model", "gen_metrics"]:
-                from datus.agent.node.semantic_agentic_node import SemanticAgenticNode
+            # Use GenSemanticModelAgenticNode for gen_semantic_model
+            if subagent_name == "gen_semantic_model":
+                from datus.agent.node.gen_semantic_model_agentic_node import GenSemanticModelAgenticNode
 
                 self.console.print(f"[dim]Creating new {subagent_name} session...[/]")
-                return SemanticAgenticNode(
-                    node_name=subagent_name,
+                return GenSemanticModelAgenticNode(
+                    agent_config=self.cli.agent_config,
+                    execution_mode="interactive",
+                )
+            # Use GenMetricsAgenticNode for gen_metrics
+            elif subagent_name == "gen_metrics":
+                from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
+
+                self.console.print(f"[dim]Creating new {subagent_name} session...[/]")
+                return GenMetricsAgenticNode(
                     agent_config=self.cli.agent_config,
                     execution_mode="interactive",
                 )
@@ -148,11 +156,12 @@ class ChatCommands:
         self, user_message: str, current_node, at_tables, at_metrics, at_sqls, plan_mode: bool = False
     ):
         """Create node input based on node type - shared logic for CLI and web"""
+        from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
+        from datus.agent.node.gen_semantic_model_agentic_node import GenSemanticModelAgenticNode
         from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode
-        from datus.agent.node.semantic_agentic_node import SemanticAgenticNode
         from datus.agent.node.sql_summary_agentic_node import SqlSummaryAgenticNode
 
-        if isinstance(current_node, SemanticAgenticNode):
+        if isinstance(current_node, (GenSemanticModelAgenticNode, GenMetricsAgenticNode)):
             from datus.schemas.semantic_agentic_node_models import SemanticNodeInput
 
             return (
@@ -340,10 +349,10 @@ class ChatCommands:
                     if sql:
                         self._display_sql_with_copy(sql)
 
-                    # Check for semantic_model field (from SemanticAgenticNode)
-                    semantic_model = final_action.output.get("semantic_model")
-                    if semantic_model:
-                        self._display_semantic_model(semantic_model)
+                    # Check for semantic_models field (from SemanticAgenticNode)
+                    semantic_models = final_action.output.get("semantic_models")
+                    if semantic_models:
+                        self._display_semantic_model(semantic_models)
 
                     # Check for sql_summary_file field (from SqlSummaryAgenticNode)
                     sql_summary_file = final_action.output.get("sql_summary_file")
@@ -441,21 +450,32 @@ class ChatCommands:
             # Fallback to plain text display
             self.console.print(f"\n[bold blue]Assistant:[/] {response}")
 
-    def _display_semantic_model(self, semantic_model: str):
+    def _display_semantic_model(self, semantic_models: Optional[List[str]]):
         """
-        Display semantic model file path.
+        Display semantic model file paths.
 
         Args:
-            semantic_model: Semantic model file path
+            semantic_models: List of semantic model file paths, or None
         """
         try:
             self.console.print()
-            self.console.print(f"[bold magenta]Semantic Model File:[/] [cyan]{semantic_model}[/]")
+            if not semantic_models:
+                self.console.print("[bold magenta]Semantic Model Files:[/] None")
+            elif len(semantic_models) == 1:
+                self.console.print(f"[bold magenta]Semantic Model File:[/] [cyan]{semantic_models[0]}[/]")
+            else:
+                self.console.print("[bold magenta]Semantic Model Files:[/]")
+                for model_file in semantic_models:
+                    self.console.print(f"  [cyan]{model_file}[/]")
 
         except Exception as e:
-            logger.error(f"Error displaying semantic model: {e}")
+            logger.error(f"Error displaying semantic models: {e}")
             # Fallback to simple display
-            self.console.print(f"\n[bold magenta]Semantic Model File:[/] {semantic_model}")
+            if semantic_models:
+                models_str = ", ".join(semantic_models)
+                self.console.print(f"\n[bold magenta]Semantic Model Files:[/] {models_str}")
+            else:
+                self.console.print("\n[bold magenta]Semantic Model Files:[/] None")
 
     def _display_sql_summary_file(self, sql_summary_file: str):
         """
