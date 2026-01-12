@@ -12,7 +12,6 @@ from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus_sqlalchemy import SQLAlchemyConnector
 from pydantic import BaseModel, Field
-from sqlalchemy import text
 
 from .config import PostgreSQLConfig
 
@@ -71,12 +70,13 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         self.password = config.password
         database = config.database or "postgres"
 
-        # URL encode password to handle special characters
+        # URL encode username and password to handle special characters
+        encoded_username = quote_plus(self.username) if self.username else ""
         encoded_password = quote_plus(self.password) if self.password else ""
 
         # Build connection string
         connection_string = (
-            f"postgresql+psycopg2://{self.username}:{encoded_password}@{self.host}:{self.port}/"
+            f"postgresql+psycopg2://{encoded_username}:{encoded_password}@{self.host}:{self.port}/"
             f"{database}?sslmode={config.sslmode}"
         )
 
@@ -426,11 +426,12 @@ class PostgreSQLConnector(SQLAlchemyConnector):
 
     @override
     def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        """Switch schema context using SET search_path."""
+        """Switch schema context by updating self.schema_name.
+
+        Note: All queries use explicit schema qualification via full_name(),
+        so we only need to update self.schema_name here.
+        """
         if schema_name:
-            with self.engine.connect() as conn:
-                conn.execute(text(f"SET search_path TO {self._quote_identifier(schema_name)}"))
-                conn.commit()
             self.schema_name = schema_name
 
     # ==================== Sample Data ====================
