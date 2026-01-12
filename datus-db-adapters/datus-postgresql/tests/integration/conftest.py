@@ -25,6 +25,7 @@ def config() -> PostgreSQLConfig:
 @pytest.fixture
 def connector(config: PostgreSQLConfig) -> Generator[PostgreSQLConnector, None, None]:
     """Create and cleanup PostgreSQL connector for integration tests."""
+    conn = None
     try:
         conn = PostgreSQLConnector(config)
         if not conn.test_connection():
@@ -33,7 +34,8 @@ def connector(config: PostgreSQLConfig) -> Generator[PostgreSQLConnector, None, 
     except Exception as e:
         pytest.skip(f"Database not available: {e}")
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass

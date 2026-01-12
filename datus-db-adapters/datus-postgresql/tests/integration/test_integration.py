@@ -153,10 +153,10 @@ def test_get_views_with_ddl(connector: PostgreSQLConnector, config: PostgreSQLCo
     """
     )
 
-    # Create view
-    connector.execute_ddl(f"CREATE VIEW {view_name} AS SELECT * FROM {table_name}")
-
     try:
+        # Create view
+        connector.execute_ddl(f"CREATE VIEW {view_name} AS SELECT * FROM {table_name}")
+
         views = connector.get_views_with_ddl(schema_name=config.schema_name)
 
         if len(views) > 0:
@@ -225,17 +225,17 @@ def test_get_sample_rows(connector: PostgreSQLConnector, config: PostgreSQLConfi
     """
     )
 
-    # Insert test data
-    connector.execute_insert(
-        f"""
-        INSERT INTO {table_name} (name) VALUES
-        ('Alice'),
-        ('Bob'),
-        ('Charlie')
-    """
-    )
-
     try:
+        # Insert test data
+        connector.execute_insert(
+            f"""
+            INSERT INTO {table_name} (name) VALUES
+            ('Alice'),
+            ('Bob'),
+            ('Charlie')
+        """
+        )
+
         sample_rows = connector.get_sample_rows(schema_name=config.schema_name, tables=[table_name], top_n=2)
 
         assert len(sample_rows) == 1

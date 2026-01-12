@@ -197,7 +197,7 @@ def test_config_special_characters_in_database():
 
 def test_config_unicode_in_username():
     """Test config with unicode characters in username."""
-    unicode_user = "user_name"
+    unicode_user = "usér_nâmé_тест"
     config = PostgreSQLConfig(username=unicode_user)
 
     assert config.username == unicode_user
