@@ -11,7 +11,7 @@ from datus.schemas.action_history import ActionHistory, ActionHistoryManager, Ac
 from datus.schemas.base import BaseInput
 from datus.schemas.node_models import TableSchema, TableValue
 from datus.schemas.schema_linking_node_models import SchemaLinkingInput, SchemaLinkingResult
-from datus.storage.ext_knowledge.store import ExtKnowledgeStore
+from datus.storage.ext_knowledge.store import ExtKnowledgeRAG
 from datus.tools.lineage_graph_tools.schema_lineage import SchemaLineageTool
 from datus.utils.loggings import get_logger
 
@@ -189,24 +189,21 @@ class SchemaLinkingNode(Node):
         """
         try:
             # Initialize ExtKnowledgeStore
-            storage_path = self.agent_config.rag_storage_path()
-            ext_knowledge_store = ExtKnowledgeStore(storage_path)
+            knowledge_rag = ExtKnowledgeRAG(self.agent_config)
 
             # Check if ext_knowledge table exists
-            if ext_knowledge_store.table_size() == 0:
+            if knowledge_rag.get_knowledge_size() == 0:
                 logger.debug("External knowledge store is empty, skipping search")
                 return ""
 
             # Execute semantic search
-            search_results = ext_knowledge_store.search_knowledge(
-                query_text=user_query, subject_path=subject_path, top_n=5
-            )
+            search_results = knowledge_rag.query_knowledge(query_text=user_query, subject_path=subject_path, top_n=5)
 
             # Format search results
             if search_results:
                 knowledge_items = []
                 for result in search_results:
-                    knowledge_items.append(f"- {result['terminology']}: {result['explanation']}")
+                    knowledge_items.append(f"- {result['search_text']}: {result['explanation']}")
 
                 formatted_knowledge = "\n".join(knowledge_items)
                 logger.info(f"Found {len(knowledge_items)} relevant knowledge entries")
