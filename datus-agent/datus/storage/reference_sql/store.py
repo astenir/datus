@@ -57,7 +57,7 @@ class ReferenceSqlStorage(BaseSubjectEmbeddingStore):
         self.create_subject_index()
 
         # Create FTS index for reference SQL-specific fields
-        self.create_fts_index(["sql", "name", "comment", "summary", "tags", "search_text"])
+        self.create_fts_index(["sql", "name", "summary", "tags", "search_text"])
 
     def batch_store_sql(self, sql_items: List[Dict[str, Any]], subject_path_field: str = "subject_path") -> None:
         """Store multiple reference SQL items in batch with subject path processing.
@@ -196,15 +196,21 @@ class ReferenceSqlRAG:
             query_text=query_text, subject_path=subject_path, top_n=top_n, selected_fields=selected_fields
         )
 
-    def get_reference_sql_detail(self, subject_path: List[str], name: str) -> List[Dict[str, Any]]:
+    def get_reference_sql_detail(
+        self,
+        subject_path: List[str],
+        name: str,
+        selected_fields: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
         """Get reference SQL detail by subject path and name.
 
         Args:
             subject_path: Subject hierarchy path (e.g., ['Finance', 'Revenue', 'Q1'])
             name: Reference SQL name
+            selected_fields: Optional list of fields to return
 
         Returns:
             List containing the matching reference SQL entry details
         """
         full_path = list(subject_path) + [name]
-        return self.reference_sql_storage.search_all_reference_sql(full_path)
+        return self.reference_sql_storage.search_all_reference_sql(full_path, select_fields=selected_fields)
