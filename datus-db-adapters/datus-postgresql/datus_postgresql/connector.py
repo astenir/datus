@@ -80,7 +80,7 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             f"{database}?sslmode={config.sslmode}"
         )
 
-        super().__init__(connection_string, dialect=DBType.POSTGRESQL)
+        super().__init__(connection_string, dialect=DBType.POSTGRESQL, timeout_seconds=config.timeout_seconds)
         self.database_name = database
         self.schema_name = config.schema_name or "public"
 
