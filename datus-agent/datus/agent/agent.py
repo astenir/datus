@@ -43,6 +43,7 @@ from datus.utils.constants import SYS_SUB_AGENTS
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.json_utils import to_str
 from datus.utils.loggings import get_logger
+from datus.utils.path_manager import get_path_manager
 from datus.utils.time_utils import format_duration_human
 
 logger = get_logger(__name__)
@@ -462,6 +463,12 @@ class Agent:
                     if os.path.exists(semantic_model_path):
                         shutil.rmtree(semantic_model_path)
                         logger.info(f"Deleted existing directory {semantic_model_path}")
+                    # Also clear semantic_models/{namespace} directory (YAML files)
+                    path_manager = get_path_manager(datus_home=self.global_config.home)
+                    semantic_yaml_dir = path_manager.semantic_model_path(self.global_config.current_namespace)
+                    if semantic_yaml_dir.exists():
+                        shutil.rmtree(semantic_yaml_dir)
+                        logger.info(f"Deleted existing semantic YAML directory {semantic_yaml_dir}")
                     self.global_config.save_storage_config("semantic_model")
                 else:
                     self.global_config.check_init_storage_config("semantic_model")
@@ -500,6 +507,12 @@ class Agent:
                     if os.path.exists(metrics_path):
                         shutil.rmtree(metrics_path)
                         logger.info(f"Deleted existing directory {metrics_path}")
+                    # Also clear semantic_models/{namespace} directory (YAML files)
+                    path_manager = get_path_manager(datus_home=self.global_config.home)
+                    semantic_yaml_dir = path_manager.semantic_model_path(self.global_config.current_namespace)
+                    if semantic_yaml_dir.exists():
+                        shutil.rmtree(semantic_yaml_dir)
+                        logger.info(f"Deleted existing semantic YAML directory {semantic_yaml_dir}")
                     self.global_config.save_storage_config("metric")  # Keep compatibility
                 else:
                     self.global_config.check_init_storage_config("metric")
@@ -551,6 +564,12 @@ class Agent:
                     if os.path.exists(ext_knowledge_path):
                         shutil.rmtree(ext_knowledge_path)
                         logger.info(f"Deleted existing directory {ext_knowledge_path}")
+                    # Also clear ext_knowledge/{namespace} directory
+                    path_manager = get_path_manager(datus_home=self.global_config.home)
+                    ext_knowledge_dir = path_manager.ext_knowledge_path(self.global_config.current_namespace)
+                    if ext_knowledge_dir.exists():
+                        shutil.rmtree(ext_knowledge_dir)
+                        logger.info(f"Deleted existing ext_knowledge directory {ext_knowledge_dir}")
                     self.global_config.save_storage_config("ext_knowledge")
                 else:
                     self.global_config.check_init_storage_config("ext_knowledge")
@@ -582,6 +601,12 @@ class Agent:
                     if os.path.exists(reference_sql_path):
                         shutil.rmtree(reference_sql_path)
                         logger.info(f"Deleted existing directory {reference_sql_path}")
+                    # Also clear sql_summaries/{namespace} directory (YAML files)
+                    path_manager = get_path_manager(datus_home=self.global_config.home)
+                    sql_summary_dir = path_manager.sql_summary_path(self.global_config.current_namespace)
+                    if sql_summary_dir.exists():
+                        shutil.rmtree(sql_summary_dir)
+                        logger.info(f"Deleted existing SQL summary directory {sql_summary_dir}")
                     self.global_config.save_storage_config("reference_sql")
                 else:
                     self.global_config.check_init_storage_config("reference_sql")
