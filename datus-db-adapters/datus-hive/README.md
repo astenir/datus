@@ -51,7 +51,7 @@ namespace:
       spark.hadoop.fs.oss.download.buffer.size: 262144
       spark.shuffle.compress: true
       spark.shuffle.spill.compress: true
-    spark.io.compression.codec: lz4
+      spark.io.compression.codec: lz4
 ```
 
 Or use programmatically:
