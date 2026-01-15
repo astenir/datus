@@ -96,7 +96,7 @@ class GenerationHooks(AgentHooks):
         Handle end_semantic_model_generation tool result.
 
         Args:
-            result: Tool result containing filepaths list
+            result: Tool result containing semantic_model_files list
         """
         try:
             file_paths = self._extract_filepaths_from_result(result)
@@ -152,7 +152,7 @@ class GenerationHooks(AgentHooks):
 
     def _extract_filepaths_from_result(self, result) -> list:
         """
-        Extract filepaths list from tool result.
+        Extract semantic_model_files list from tool result.
 
         Args:
             result: Tool result (dict or FuncToolResult object)
@@ -167,7 +167,7 @@ class GenerationHooks(AgentHooks):
             result_dict = result.result
 
         if isinstance(result_dict, dict):
-            filepaths = result_dict.get("filepaths", [])
+            filepaths = result_dict.get("semantic_model_files", [])
             if filepaths and isinstance(filepaths, list):
                 return filepaths
 
@@ -693,10 +693,17 @@ class GenerationHooks(AgentHooks):
                 with open(temp_file, "w", encoding="utf-8") as f:
                     yaml.safe_dump_all(combined_docs, f, allow_unicode=True, sort_keys=False)
 
-                # Sync the combined file
+                # Sync the combined file - only sync metrics, not semantic objects (avoid duplicates)
                 result = await loop.run_in_executor(
                     None,
-                    lambda: GenerationHooks._sync_semantic_to_db(temp_file, self.agent_config, metric_sqls=metric_sqls),
+                    lambda: GenerationHooks._sync_semantic_to_db(
+                        temp_file,
+                        self.agent_config,
+                        include_semantic_objects=False,  # Semantic model already synced separately
+                        include_metrics=True,
+                        metric_sqls=metric_sqls,
+                        original_yaml_path=metric_file,  # Use original metric file path, not temp file
+                    ),
                 )
 
                 if result.get("success"):
@@ -815,6 +822,7 @@ class GenerationHooks(AgentHooks):
         include_semantic_objects: bool = True,
         include_metrics: bool = True,
         metric_sqls: dict = None,
+        original_yaml_path: Optional[str] = None,
     ) -> dict:
         """
         Sync semantic objects and/or metrics from YAML file to Knowledge Base.
@@ -825,9 +833,13 @@ class GenerationHooks(AgentHooks):
             include_semantic_objects: Whether to sync tables/columns/entities
             include_metrics: Whether to sync metrics
             metric_sqls: Optional dict mapping metric names to generated SQL (from dry_run)
+            original_yaml_path: Original YAML file path to store
+                (if different from file_path, e.g., when using temp files)
 
         Now parses tables, columns, metrics, and entities as individual 'semantic_objects'.
         """
+        # Use original_yaml_path if provided, otherwise use file_path
+        yaml_path_to_store = original_yaml_path if original_yaml_path else file_path
         try:
             # Load YAML file
             with open(file_path, "r", encoding="utf-8") as f:
@@ -918,7 +930,7 @@ class GenerationHooks(AgentHooks):
                     "fq_name": table_fq_name,
                     "table_name": table_name,
                     "description": data_source.get("description", ""),
-                    "yaml_path": file_path,
+                    "yaml_path": yaml_path_to_store,
                     "updated_at": datetime.now().replace(microsecond=0),
                     # Database hierarchy
                     "catalog_name": catalog_name,
@@ -943,6 +955,15 @@ class GenerationHooks(AgentHooks):
                         return
 
                     col_desc = col_def.get("description", "")
+                    # Strip backticks from expr since YAML may contain quoted column names like `County Name`
+                    raw_expr = col_def.get("expr", col_name)  # Default to column name if no expr
+                    col_expr = raw_expr.strip("`") if raw_expr else raw_expr
+
+                    # Extract time_granularity from type_params for TIME dimensions
+                    time_granularity = ""
+                    if is_dim and col_def.get("type") == "TIME":
+                        type_params = col_def.get("type_params", {})
+                        time_granularity = type_params.get("time_granularity", "")
 
                     col_obj = {
                         "id": f"column:{table_name}.{col_name}",
@@ -955,13 +976,26 @@ class GenerationHooks(AgentHooks):
                         "is_measure": is_meas,
                         "is_entity_key": is_ent,
                         "is_deprecated": False,
-                        "yaml_path": file_path,
+                        "yaml_path": yaml_path_to_store,
                         "updated_at": datetime.now().replace(microsecond=0),
                         # Database hierarchy
                         "catalog_name": catalog_name,
                         "database_name": database_name,
                         "schema_name": schema_name,
                         "semantic_model_name": table_name,
+                        "expr": col_expr,
+                        "column_type": col_def.get(
+                            "type", ""
+                        ),  # CATEGORICAL/TIME for dims, PRIMARY/FOREIGN etc for idents
+                        # Measure specific (empty for non-measures)
+                        "agg": col_def.get("agg", "") if is_meas else "",
+                        "create_metric": col_def.get("create_metric", False) if is_meas else False,
+                        "agg_time_dimension": col_def.get("agg_time_dimension", "") if is_meas else "",
+                        # Dimension specific (empty/false for non-dimensions)
+                        "is_partition": col_def.get("is_partition", False) if is_dim else False,
+                        "time_granularity": time_granularity,
+                        # Identifier specific (empty for non-identifiers)
+                        "entity": col_def.get("entity", "") if is_ent else "",
                     }
                     semantic_objects.append(col_obj)
 
@@ -1107,15 +1141,15 @@ class GenerationHooks(AgentHooks):
                     metric_objects.append(metric_obj)
                     synced_items.append(f"metric:{m_name}")
 
-            # Store all objects using the unified interface
+            # Store all objects using upsert (update if id exists, insert if not)
             all_objects = semantic_objects + metric_objects
             if all_objects:
                 if semantic_objects:
-                    semantic_rag.store_batch(semantic_objects)
+                    semantic_rag.upsert_batch(semantic_objects)
                     semantic_rag.create_indices()
 
                 if metric_objects:
-                    metric_rag.store_batch(metric_objects)
+                    metric_rag.upsert_batch(metric_objects)
                     metric_rag.create_indices()
                 return {
                     "success": True,
