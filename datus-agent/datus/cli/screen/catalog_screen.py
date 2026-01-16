@@ -776,7 +776,14 @@ class CatalogScreen(ContextScreen):
             if not parsed_data:
                 return "[dim]Empty list[/dim]"
 
-            nested_table = Table(show_header=True, box=box.ROUNDED, border_style="dim", padding=(0, 0), expand=True)
+            nested_table = Table(
+                show_header=True,
+                box=box.ROUNDED,
+                border_style="dim",
+                padding=(0, 0),
+                expand=True,
+                row_styles=["on grey15", "on grey23"],
+            )
             if parsed_data and isinstance(parsed_data[0], dict):
                 # Collect all unique keys from all items to handle heterogeneous dicts
                 all_keys = []
@@ -805,7 +812,14 @@ class CatalogScreen(ContextScreen):
             if not parsed_data:
                 return "[dim]Empty object[/dim]"
 
-            nested_table = Table(show_header=True, box=box.ROUNDED, border_style="dim", padding=(0, 1), expand=True)
+            nested_table = Table(
+                show_header=True,
+                box=box.ROUNDED,
+                border_style="dim",
+                padding=(0, 1),
+                expand=True,
+                row_styles=["on grey15", "on grey23"],
+            )
             nested_table.add_column("Property", style="bright_cyan", width=15)
             nested_table.add_column("Value", style="bright_yellow")
 
@@ -832,6 +846,7 @@ class CatalogScreen(ContextScreen):
             header_style="bold cyan",
             expand=True,
             padding=(0, 1),
+            row_styles=["on grey15", "on grey23"],
         )
 
         table.add_column("#", style="dim", width=3, justify="left")
