@@ -397,18 +397,25 @@ class ChatCommands:
                         # No SQL, extracted_output is dict: get raw_output from dict
                         clean_output = extracted_output.get("raw_output", str(extracted_output))
                     else:
-                        # No SQL, no extracted_output: try to parse raw_output from response string
-                        try:
-                            import ast
+                        # No SQL, no extracted_output: try to parse response
+                        # First try to extract 'report' field from gen_report JSON format
+                        clean_output = self._extract_report_from_json(response)
+                        if not clean_output:
+                            # Fallback: try to parse raw_output from response string
+                            if response is None:
+                                clean_output = ""
+                            else:
+                                try:
+                                    import ast
 
-                            response_dict = ast.literal_eval(response)
-                            clean_output = (
-                                response_dict.get("raw_output", response)
-                                if isinstance(response_dict, dict)
-                                else response
-                            )
-                        except (ValueError, SyntaxError):
-                            clean_output = response
+                                    response_dict = ast.literal_eval(response)
+                                    clean_output = (
+                                        response_dict.get("raw_output", response)
+                                        if isinstance(response_dict, dict)
+                                        else response
+                                    )
+                                except (ValueError, SyntaxError, TypeError):
+                                    clean_output = response
 
                     # Display using simple, focused methods
                     if sql:
@@ -506,10 +513,21 @@ class ChatCommands:
         """
         Display clean response content as formatted markdown.
 
+        Skip JSON responses since they are for backend processing only.
+
         Args:
             response: Clean response text to display as markdown
         """
         try:
+            # Handle JSON responses - try to extract user-facing content
+            stripped = response.strip()
+            if stripped.startswith("{") and stripped.endswith("}"):
+                # Try to extract report field from JSON
+                extracted = self._extract_report_from_json(response)
+                if extracted:
+                    response = extracted
+                # If extraction fails, fall through to display raw content
+
             # Display as markdown with proper formatting
             markdown_content = Markdown(response)
             self.console.print()  # Add spacing
@@ -578,6 +596,43 @@ class ChatCommands:
             logger.error(f"Error displaying external knowledge file: {e}")
             # Fallback to simple display
             self.console.print(f"\n[bold green]External Knowledge File:[/] {ext_knowledge_file}")
+
+    def _extract_report_from_json(self, response: str) -> Optional[str]:
+        """
+        Extract 'report' field from gen_report JSON format response.
+
+        Args:
+            response: Response string that may contain JSON with 'report' field
+
+        Returns:
+            Extracted report content or None if not found
+        """
+        if not response:
+            return None
+
+        try:
+            import json_repair
+
+            from datus.utils.json_utils import strip_json_str
+
+            # First try to extract JSON from code blocks or other wrappers
+            stripped = response.strip()
+            cleaned_json = strip_json_str(stripped)
+            if not cleaned_json:
+                return None
+            # Check if cleaned content looks like JSON
+            if not (cleaned_json.startswith("{") and cleaned_json.endswith("}")):
+                return None
+
+            parsed = json_repair.loads(cleaned_json)
+            if isinstance(parsed, dict) and "report" in parsed:
+                return parsed.get("report", "")
+        except ValueError as e:
+            logger.debug(f"Failed to extract report from JSON: {e}")
+        except TypeError as e:
+            logger.debug(f"Invalid input type for JSON extraction: {e}")
+
+        return None
 
     def _extract_sql_and_output_from_content(self, content: str) -> Tuple[Optional[str], Optional[str]]:
         """
