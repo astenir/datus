@@ -39,9 +39,12 @@ from datus.tools.db_tools.db_manager import db_manager_instance
 from datus.tools.func_tool.semantic_tools import SemanticTools
 from datus.utils.constants import SYS_SUB_AGENTS
 from datus.utils.exceptions import DatusException, ErrorCode
+from datus.utils.loggings import get_logger
 from datus.utils.path_manager import get_path_manager
 from datus.utils.stream_output import StreamOutputManager
 from datus.utils.sub_agent_manager import SubAgentManager
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from datus.cli.repl import DatusCLI
@@ -86,6 +89,7 @@ class BiDashboardCommands:
             self.console.print("\n[yellow]Cancelled.[/]")
             return
         except Exception as exc:
+            logger.error("Failed to initialize BI dashboard options", exc_info=True)
             self.console.print(f"[bold red]Error:[/] {exc}")
             return
 
@@ -264,6 +268,10 @@ class BiDashboardCommands:
                 with self.console.status("Loading dashboard..."):
                     dashboard = adaptor.get_dashboard_info(dashboard_id)
             except Exception as exc:
+                # Sanitize URL to avoid leaking sensitive query parameters in logs
+                parsed = urlparse(dashboard_url)
+                safe_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+                logger.error(f"Failed to load dashboard from {safe_url}", exc_info=True)
                 self.console.print(f"[bold red]Failed to load dashboard:[/] {exc}")
                 dashboard = None
 
@@ -370,6 +378,7 @@ class BiDashboardCommands:
                 try:
                     chart_detail = adaptor.get_chart(chart_meta.id, dashboard_id)
                 except Exception as exc:
+                    logger.warning(f"Failed to load chart {chart_meta.id}: {exc}")
                     self.console.print(f"[yellow]Failed to load chart {chart_meta.id}:[/] {exc}")
                     chart_detail = None
                 charts.append(chart_detail or chart_meta)
@@ -648,6 +657,9 @@ class BiDashboardCommands:
         )
         output_mgr.stop()
 
+        # Render markdown summary for the last 1 processed items
+        output_mgr.render_markdown_summary(title="Reference SQL Summary", last_n=1)
+
         # Print statistics
         valid_entries = result.get("valid_entries", 0)
         invalid_entries = result.get("invalid_entries", 0)
@@ -899,6 +911,7 @@ class BiDashboardCommands:
             return True
 
         except Exception as exc:
+            logger.error(f"Metadata generation failed for tables: {table_names}", exc_info=True)
             self.console.log(f"[yellow]Metadata generation failed: {exc}[/]")
             return False
 
@@ -937,6 +950,7 @@ class BiDashboardCommands:
             return True
 
         except Exception as exc:
+            logger.warning(f"Semantic model validation check failed: {exc}")
             self.console.log(f"[yellow]Validation check failed: {exc}[/]")
             return False
 

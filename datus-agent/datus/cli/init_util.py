@@ -143,6 +143,9 @@ def init_metrics(
         finally:
             output_mgr.stop()
 
+        # Render markdown summary after Live display stops
+        output_mgr.render_markdown_summary(title="Metrics Summary")
+
         if successful:
             console.print("[green]Metrics initialized[/]")
             return True, metrics_result
@@ -232,6 +235,9 @@ def init_semantic_model(
             successful, error_message = init_success_story_semantic_model(args, agent_config, emit=emit)
         finally:
             output_mgr.stop()
+
+        # Render markdown summary after Live display stops
+        output_mgr.render_markdown_summary(title="Semantic Model Summary")
 
         if successful:
             console.print("[green]Semantic model initialized[/]")
