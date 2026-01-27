@@ -14,7 +14,7 @@ class ClickZettaConfig(BaseModel):
 
     service: str = Field(..., description="ClickZetta service endpoint")
     username: str = Field(..., description="ClickZetta username")
-    password: str = Field(..., description="ClickZetta password")
+    password: str = Field(..., description="ClickZetta password", json_schema_extra={"input_type": "password"})
     instance: str = Field(..., description="ClickZetta instance identifier")
     workspace: str = Field(..., description="ClickZetta workspace name")
     schema_name: str = Field(default="PUBLIC", description="Default schema name", alias="schema")

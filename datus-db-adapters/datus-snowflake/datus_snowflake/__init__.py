@@ -11,7 +11,7 @@ __all__ = ["SnowflakeConnector", "SnowflakeConfig", "register"]
 
 def register():
     """Register Snowflake connector with Datus registry."""
-    connector_registry.register("snowflake", SnowflakeConnector)
+    connector_registry.register("snowflake", SnowflakeConnector, config_class=SnowflakeConfig)
 
 
 # Auto-register when imported

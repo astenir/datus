@@ -28,7 +28,9 @@ class RedshiftConfig(BaseModel):
     # The password for authentication (optional when using IAM authentication)
 
     password: Optional[str] = Field(
-        default=None, description="Redshift password (required unless using IAM authentication)"
+        default=None,
+        description="Redshift password (required unless using IAM authentication)",
+        json_schema_extra={"input_type": "password"},
     )
 
     # Optional fields (have default values)
@@ -70,7 +72,11 @@ class RedshiftConfig(BaseModel):
     # AWS credentials (needed for IAM authentication)
 
     access_key_id: Optional[str] = Field(default=None, description="AWS access key ID for IAM auth")
-    secret_access_key: Optional[str] = Field(default=None, description="AWS secret access key for IAM auth")
+    secret_access_key: Optional[str] = Field(
+        default=None,
+        description="AWS secret access key for IAM auth",
+        json_schema_extra={"input_type": "password"},
+    )
 
     @model_validator(mode="after")
     def validate_authentication(self):

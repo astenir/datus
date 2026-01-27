@@ -13,4 +13,4 @@ def register():
     """Register MySQL connector with Datus registry."""
     from datus.tools.db_tools import connector_registry
 
-    connector_registry.register("mysql", MySQLConnector)
+    connector_registry.register("mysql", MySQLConnector, config_class=MySQLConfig)
