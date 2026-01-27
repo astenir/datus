@@ -33,12 +33,7 @@ METADATA_DICT: Dict[TABLE_TYPE, TableMetadataNames] = {
     "table": TableMetadataNames(
         show_table="TABLES", show_create_table="TABLE", info_table="TABLES", table_types=[1, 3]
     ),
-    "view": TableMetadataNames(
-        show_table="VIEWS",
-        show_create_table="VIEW",
-        info_table="VIEWS",
-        table_types=[2, 5]
-    ),
+    "view": TableMetadataNames(show_table="VIEWS", show_create_table="VIEW", info_table="VIEWS", table_types=[2, 5]),
 }
 
 
@@ -128,7 +123,8 @@ class ClickHouseConnector(SQLAlchemyConnector):
 
         # Build WHERE clause
         if database_name:
-            where = f"table_schema = '{database_name}'"
+            safe_db = database_name.replace("'", "''")
+            where = f"table_schema = '{safe_db}'"
         else:
             where = f"{list_to_in_str('table_schema not in', list(self._sys_databases()))}"
 
