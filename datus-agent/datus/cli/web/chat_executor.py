@@ -101,9 +101,37 @@ class ChatExecutor:
                 async def run_stream():
                     """Wrapper to iterate the async generator to completion"""
                     try:
-                        async for action in current_node.execute_stream(cli.actions):
+                        async for action in current_node.execute_stream_with_interactions(cli.actions):
                             if action.role == ActionRole.TOOL and action.status == ActionStatus.PROCESSING:
                                 continue
+
+                            # Auto-submit default choice for PROCESSING interactions (Web mode)
+                            if (
+                                action.role == ActionRole.INTERACTION
+                                and action.action_type == "request_choice"
+                                and action.status == ActionStatus.PROCESSING
+                            ):
+                                # Get default choice and auto-submit
+                                input_data = action.input or {}
+                                choices = input_data.get("choices", {})  # dict: {key: display_text}
+                                default_choice = input_data.get("default_choice", "")  # str key
+                                broker = current_node.interaction_broker
+                                if broker:
+                                    if choices and default_choice:
+                                        # Has choices: submit default key
+                                        await broker.submit(action.action_id, default_choice)
+                                        logger.info(f"Web auto-submitted default choice: {default_choice}")
+                                    elif not choices:
+                                        # Free-text input: submit empty string
+                                        await broker.submit(action.action_id, "")
+                                    elif choices:
+                                        # Choices exist but no default - submit first key
+                                        first_key = next(iter(choices.keys()))
+                                        await broker.submit(action.action_id, first_key)
+                                        logger.info(f"Web auto-submitted first choice (no default): {first_key}")
+                                continue  # Don't yield PROCESSING to UI
+
+                            # SUCCESS interactions are yielded for UI rendering
                             incremental_actions.append(action)
                             yield action
                         self.last_actions = incremental_actions
