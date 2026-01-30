@@ -366,5 +366,3 @@ metric:
 ```
 
 For more details about metrics: [Metrics](./metrics/metrics.md)
-
-
