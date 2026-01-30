@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -35,31 +36,60 @@ ROUND_DURATION_ROW_LABEL = "Round Duration"
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run multi-round benchmark + evaluation cycles.")
     parser.add_argument("--config", default="", help="Path to agent config file.")
+    parser.add_argument("--debug", action="store_true", help="Debug mode.")
+    setup_base_parser_args(parser)
+    return parser.parse_args()
+
+
+def setup_base_parser_args(parser: argparse.ArgumentParser):
     parser.add_argument("--namespace", required=True, help="Namespace to benchmark, e.g. bird_sqlite.")
     parser.add_argument("--benchmark", required=True, help="Benchmark name, e.g. bird_dev.")
-    parser.add_argument("--workflow", default="reflection", help="Workflow plan to execute.")
-    parser.add_argument("--max_steps", type=int, default=20, help="Total number of steps to execute.")
-    parser.add_argument("--max_round", type=int, default=4, help="Total benchmark rounds to run.")
-    parser.add_argument("--debug", action="store_true", help="Debug mode.")
+    parser.add_argument("--workflow", default="reflection", help="Workflow plan to execute (default: reflection)")
+    parser.add_argument(
+        "--max_steps", "--max-steps", type=int, default=30, help="Maximum steps per workflow execution (default: 30)"
+    )
+    parser.add_argument(
+        "--round",
+        "--max_round",
+        "--max-round",
+        type=int,
+        default=4,
+        help="Number of benchmark iterations to run (default: 4)",
+    )
     parser.add_argument(
         "--group_name",
+        "--group-name",
         type=str,
         help="The name of the integration test group. If it is empty, the name of the workflow will be used.",
     )
     parser.add_argument(
         "--task_ids",
+        "--task-ids",
         nargs="*",
         default=None,
         help="Explicit task ids to benchmark and evaluate (space/comma separated)",
     )
-    parser.add_argument("--max_workers", type=int, default=1, help="Concurrent workers for benchmark execution.")
+    parser.add_argument(
+        "--workers",
+        "--max_workers",
+        "--max-workers",
+        type=int,
+        default=1,
+        help="Number of parallel workers for task execution (default: 1)",
+    )
     parser.add_argument(
         "--summary_report_file",
+        "--summary-report-file",
         type=str,
         default=None,
         help="Path to summary report file. Reports will be appended to this file for each round.",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--delete_history",
+        "--delete-history",
+        action="store_true",
+        help="Delete existing round output directory before each round starts",
+    )
 
 
 def sanitize_group_name(workflow: str) -> str:
@@ -111,8 +141,9 @@ def build_agent_args(
     task_ids: Sequence[str],
     round_dir: Path,
     round_idx: int,
+    run_id: str,
 ) -> argparse.Namespace:
-    evaluation_file = round_dir / f"evaluation_round_{round_idx}.json"
+    evaluation_file = round_dir / f"evaluation_round_{run_id}_{round_idx}.json"
     target_task_ids = None if not task_ids else list(task_ids)
     common_kwargs = {
         # "components": ["metrics", "metadata", "table_lineage", "document"],
@@ -128,7 +159,7 @@ def build_agent_args(
         "current_date": None,
         "workflow": cli_args.workflow,
         "output_file": str(evaluation_file),
-        "max_workers": cli_args.max_workers,
+        "max_workers": cli_args.workers,
         "summary_report_file": cli_args.summary_report_file,
     }
     return argparse.Namespace(**common_kwargs)
@@ -146,26 +177,27 @@ def _parse_duration_seconds(value: Optional[Any]) -> Optional[float]:
 def run_single_round(
     agent_config: AgentConfig,
     round_idx: int,
-    cli_args: argparse.Namespace,
+    args: argparse.Namespace,
     base_home: str,
     group_slug: str,
     target_task_ids: Sequence[str],
+    run_id: str,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
     integration_root = Path(base_home) / "integration"
     integration_root.mkdir(parents=True, exist_ok=True)
     round_dir = integration_root / f"{group_slug}_{round_idx}"
-    if round_dir.exists():
+    if round_dir.exists() and args.delete_history:
         shutil.rmtree(round_dir)
-    round_dir.mkdir(parents=True)
+    round_dir.mkdir(parents=True, exist_ok=True)
 
     override_round_paths(agent_config, round_dir)
 
-    agent_args = build_agent_args(cli_args, target_task_ids, round_dir, round_idx)
+    agent_args = build_agent_args(args, target_task_ids, round_dir, round_idx, run_id)
     db_manager = db_manager_instance(agent_config.namespaces)
     agent = Agent(args=agent_args, agent_config=agent_config, db_manager=db_manager)
 
     print(f"[Round {round_idx}] Starting benchmark -> {round_dir}")
-    benchmark_result = agent.benchmark() or {}
+    benchmark_result = agent.benchmark(run_id=run_id) or {}
     benchmark_duration = _parse_duration_seconds(benchmark_result.get("time_spends_seconds"))
     print(f"[Round {round_idx}] Finished benchmark: {benchmark_result}")
     print(f"[Round {round_idx}] Benchmark finished, running evaluation...")
@@ -253,6 +285,7 @@ def export_summary_excel(
     integration_root: Path,
     workflow_slug: str,
     round_durations: Sequence[Optional[float]],
+    run_id: str,
 ) -> Path:
     def normalize_statuses(statuses: List[str]) -> List[str]:
         normalized: List[str] = []
@@ -299,16 +332,12 @@ def export_summary_excel(
         duration_row[TASK_SUCCESS_RATE_HEADER] = ""
         rows.append(duration_row)
     df = pd.DataFrame(rows)
-    excel_path = integration_root / f"{workflow_slug}_summary.xlsx"
+    excel_path = integration_root / f"{workflow_slug}_summary_{run_id}.xlsx"
     df.to_excel(excel_path, index=False)
     return excel_path
 
 
-def main():
-    args = parse_args()
-    from datus.utils.loggings import configure_logging
-
-    configure_logging(args.debug)
+def multi_benchmark(args: argparse.Namespace):
     initial_config = load_agent_config(**vars(args))
     base_home = str(Path(initial_config.home if initial_config.home else "~/.datus").expanduser())
     group_slug = sanitize_group_name(args.group_name or args.workflow)
@@ -324,15 +353,17 @@ def main():
 
     reports: List[Optional[Dict[str, object]]] = []
     round_durations: List[Optional[float]] = []
-    for round_idx in range(args.max_round):
+    run_id = datetime.now().strftime("%Y%m%d_%H%M")
+    for round_idx in range(args.round):
         try:
             report, duration = run_single_round(
                 agent_config=initial_config,
                 round_idx=round_idx,
-                cli_args=args,
+                args=args,
                 base_home=base_home,
                 group_slug=group_slug,
                 target_task_ids=target_task_ids,
+                run_id=run_id,
             )
         except Exception as exc:  # pragma: no cover - surfaced for manual runs
             print(f"[Round {round_idx}] Failed with error: {exc}")
@@ -343,8 +374,18 @@ def main():
         round_durations.append(duration)
 
     status_matrix = build_status_matrix(reports, target_task_ids)
-    summary_path = export_summary_excel(status_matrix, len(reports), integration_root, group_slug, round_durations)
+    summary_path = export_summary_excel(
+        status_matrix, len(reports), integration_root, group_slug, round_durations, run_id
+    )
     print(f"Multi-round summary exported to {summary_path}")
+
+
+def main():
+    args = parse_args()
+    from datus.utils.loggings import configure_logging
+
+    configure_logging(args.debug)
+    multi_benchmark(args)
 
 
 if __name__ == "__main__":
