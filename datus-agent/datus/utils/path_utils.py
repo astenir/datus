@@ -4,13 +4,83 @@
 
 import glob
 import os.path
+import shutil
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Union
 
 from datus.utils.constants import DBType
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
+
+
+def safe_rmtree(
+    path: Union[str, Path],
+    description: str = "directory",
+    force: bool = False,
+) -> bool:
+    """Safely remove a directory tree with optional confirmation.
+
+    This function is intended for directories containing user data that cannot
+    be automatically rebuilt. For .lance directories (which can be rebuilt),
+    use shutil.rmtree directly.
+
+    Args:
+        path: Path to the directory to remove
+        description: Human-readable description of what's being deleted (for the prompt)
+        force: If True, skip confirmation and delete directly
+
+    Returns:
+        bool: True if directory was deleted, False if user cancelled, directory doesn't exist,
+              or deletion failed
+    """
+    import sys
+
+    path = Path(path) if isinstance(path, str) else path
+
+    if not path.exists():
+        return False
+
+    if not path.is_dir():
+        logger.warning(f"Path is not a directory: {path}")
+        return False
+
+    def _do_delete() -> bool:
+        try:
+            shutil.rmtree(path)
+            logger.info(f"Deleted {description}: {path}")
+            return True
+        except OSError as e:
+            logger.error(f"Failed to delete {description} at {path}: {e}")
+            return False
+
+    if force:
+        return _do_delete()
+
+    # Check for non-interactive mode
+    if not sys.stdin.isatty():
+        logger.warning(f"Non-interactive mode, skipping deletion of {description}: {path}")
+        return False
+
+    # Show confirmation prompt
+    print(f"\n[WARNING] About to delete {description}")
+    print(f"   Path: {path}")
+
+    # List contents summary
+    try:
+        items = list(path.iterdir())
+        file_count = sum(1 for item in items if item.is_file())
+        dir_count = sum(1 for item in items if item.is_dir())
+        print(f"   Contents: {file_count} files, {dir_count} subdirectories")
+    except Exception:
+        pass
+
+    response = input("   Continue? [y/N]: ").strip().lower()
+    if response in ("y", "yes"):
+        return _do_delete()
+    else:
+        logger.info(f"Cancelled deletion of {description}: {path}")
+        return False
 
 
 def has_glob_pattern(path: str) -> bool:

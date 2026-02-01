@@ -26,6 +26,13 @@ from datus.utils.loggings import get_logger
 logger = get_logger(__name__)
 
 
+def _normalize_null(value):
+    """Convert string 'null' to None for LLM compatibility."""
+    if value == "null" or value == "None":
+        return None
+    return value
+
+
 def _run_async(coro):
     """
     Run async coroutine safely, handling both sync and async contexts.
@@ -201,6 +208,8 @@ class SemanticTools:
         Returns:
             FuncToolResult with matching metrics
         """
+        # Normalize null values from LLM
+        subject_path = _normalize_null(subject_path)
         try:
             results = self.metric_rag.search_metrics(
                 query_text=query_text,
@@ -258,6 +267,8 @@ class SemanticTools:
         Returns:
             FuncToolResult with list of metrics
         """
+        # Normalize null values from LLM
+        path = _normalize_null(path)
         try:
             # Try storage first
             all_metrics = self.metric_rag.search_all_metrics()
@@ -339,8 +350,18 @@ class SemanticTools:
         Returns:
             FuncToolResult with list of dimension names
         """
+        # Normalize null values from LLM
+        path = _normalize_null(path)
         try:
-            # Try to get from storage first
+            # Get dimensions from adapter (MetricFlow) to ensure consistency with query execution
+            if self.adapter:
+                dimensions = _run_async(self.adapter.get_dimensions(metric_name=metric_name, path=path))
+                return FuncToolResult(
+                    success=1,
+                    result=dimensions,
+                )
+
+            # Fallback to storage if no adapter configured
             metric_details = None
             if path:
                 metric_details_list = self.metric_rag.storage.search_all_metrics(subject_path=path)
@@ -361,18 +382,9 @@ class SemanticTools:
                     result=dimensions,
                 )
 
-            # Fallback to adapter
-            if self.adapter:
-                logger.info(f"Metric '{metric_name}' not in storage, querying adapter")
-                dimensions = _run_async(self.adapter.get_dimensions(metric_name=metric_name, path=path))
-                return FuncToolResult(
-                    success=1,
-                    result=dimensions,
-                )
-
             return FuncToolResult(
                 success=0,
-                error=f"Metric '{metric_name}' not found",
+                error=f"Metric '{metric_name}' not found and no adapter configured",
                 result=[],
             )
 
@@ -401,14 +413,16 @@ class SemanticTools:
 
         Args:
             metrics: List of metric names to query
-            dimensions: Optional list of dimensions to group by
-            path: Optional subject tree path
+            dimensions: Optional list of dimensions to group by (from get_dimensions)
+            path: Optional subject tree path (from list_subject_tree)
             time_start: Optional start time (ISO format like '2024-01-01' or relative like '-7d')
             time_end: Optional end time (ISO format like '2024-01-31' or relative like 'now')
             time_granularity: Optional time granularity for aggregation ('day', 'week', 'month', 'quarter', 'year')
             where: Optional SQL WHERE clause (without WHERE keyword)
             limit: Optional maximum number of rows
-            order_by: Optional list of fields to sort by
+            order_by: Optional list of columns to sort by. Use column name for ascending,
+                      prefix with '-' for descending. Examples: ['metric_time__day'] for ascending,
+                      ['-message_count'] for descending. Do NOT use 'asc'/'desc' keywords.
             dry_run: If True, only validate and return query plan
 
         Returns:
@@ -522,8 +536,8 @@ class SemanticTools:
         root cause analysis of metric anomalies.
 
         Args:
-            metric_name: Metric to analyze (e.g., "payment_amount", "revenue")
-            candidate_dimensions: List of dimensions to evaluate (e.g., ["region", "product", "channel"])
+            metric_name: Metric to analyze(from list_metrics/search_metrics)
+            candidate_dimensions: List of dimensions to evaluate (from get_dimensions)
             baseline_start: Baseline period start date (e.g., "2026-01-01")
             baseline_end: Baseline period end date (e.g., "2026-01-01")
             current_start: Current period start date (e.g., "2026-01-08")
