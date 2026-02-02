@@ -31,9 +31,9 @@ class TableMetadataNames(BaseModel):
 # Metadata configuration for ClickHouse objects
 METADATA_DICT: Dict[TABLE_TYPE, TableMetadataNames] = {
     "table": TableMetadataNames(
-        show_table="TABLES", show_create_table="TABLE", info_table="TABLES", table_types=[1, 3]
+        show_table="TABLES", show_create_table="TABLE", info_table="TABLES", table_types=['BASE TABLE']
     ),
-    "view": TableMetadataNames(show_table="VIEWS", show_create_table="VIEW", info_table="VIEWS", table_types=[2, 5]),
+    "view": TableMetadataNames(show_table="VIEWS", show_create_table="VIEW", info_table="VIEWS", table_types=None),
 }
 
 
@@ -84,7 +84,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
     @override
     def _sys_databases(self) -> Set[str]:
         """System databases to filter out."""
-        return {"default", "INFORMATION_SCHEMA", "system"}
+        return {"INFORMATION_SCHEMA", "information_schema", "system"}
 
     @override
     def _sys_schemas(self) -> Set[str]:
@@ -132,7 +132,9 @@ class ClickHouseConnector(SQLAlchemyConnector):
         metadata_config = _get_metadata_config(table_type)
 
         # Build and execute query
-        type_filter = list_to_in_str("and table_type in ", metadata_config.table_types)
+        type_filter = ""
+        if metadata_config.table_types:
+            type_filter = list_to_in_str("and table_type in ", metadata_config.table_types)
         query = (
             f"SELECT TABLE_SCHEMA, TABLE_NAME "
             f"FROM information_schema.{metadata_config.info_table} "
@@ -388,3 +390,10 @@ class ClickHouseConnector(SQLAlchemyConnector):
         """Reset filter tables with full names."""
         database_name = database_name or self.database_name
         return super()._reset_filter_tables(tables, "", database_name, "")
+
+    @override
+    def identifier(
+        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+    ) -> str:
+        """Build identifier for table."""
+        return f"{catalog_name}.{database_name}.{table_name}" if catalog_name else f"{database_name}.{table_name}"
