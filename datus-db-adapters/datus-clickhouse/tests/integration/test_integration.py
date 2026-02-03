@@ -4,53 +4,30 @@
 
 import os
 import uuid
-from typing import Generator
-
 import pytest
-from datus.utils.exceptions import DatusException
-from sympy.codegen.cnodes import restrict
 
 from datus_clickhouse import ClickHouseConfig, ClickHouseConnector
 
 
-@pytest.fixture
-def config() -> ClickHouseConfig:
-    """Create ClickHouse configuration from environment or defaults."""
-    return ClickHouseConfig(
-        host=os.getenv("CLICKHOUSE_HOST", "localhost"),
-        port=int(os.getenv("CLICKHOUSE_PORT", "8123")),
-        username=os.getenv("CLICKHOUSE_USER", "default"),
-        password=os.getenv("CLICKHOUSE_PASSWORD", ""),
-        database=os.getenv("CLICKHOUSE_DATABASE", "default"),
-    )
-
-
-@pytest.fixture
-def connector(config: ClickHouseConfig) -> Generator[ClickHouseConnector, None, None]:
-    """Create and cleanup ClickHouse connector."""
-    conn = ClickHouseConnector(config)
-    yield conn
-    conn.close()
-
-
 # ==================== Connection Tests ====================
 
-
+@pytest.mark.integration
+@pytest.mark.acceptance
 def test_connection_with_config_object(config: ClickHouseConfig):
     """Test connection using config object."""
     conn = ClickHouseConnector(config)
     assert conn.test_connection()
     conn.close()
 
-
+@pytest.mark.integration
 def test_connection_with_dict():
     """Test connection using dict config."""
     conn = ClickHouseConnector(
         {
             "host": os.getenv("CLICKHOUSE_HOST", "localhost"),
             "port": int(os.getenv("CLICKHOUSE_PORT", "8123")),
-            "username": os.getenv("CLICKHOUSE_USER", "default"),
-            "password": os.getenv("CLICKHOUSE_PASSWORD", ""),
+            "username": os.getenv("CLICKHOUSE_USER", "default_user"),
+            "password": os.getenv("CLICKHOUSE_PASSWORD", "default_test"),
         }
     )
     assert conn.test_connection()
@@ -59,14 +36,15 @@ def test_connection_with_dict():
 
 # ==================== Database Tests ====================
 
-
+@pytest.mark.integration
+@pytest.mark.acceptance
 def test_get_databases(connector: ClickHouseConnector):
     """Test getting list of databases."""
     databases = connector.get_databases()
     assert isinstance(databases, list)
     assert len(databases) > 0
 
-
+@pytest.mark.integration
 def test_get_databases_exclude_system(connector: ClickHouseConnector):
     """Test that system databases are excluded by default."""
     databases = connector.get_databases(include_sys=False)
@@ -77,13 +55,14 @@ def test_get_databases_exclude_system(connector: ClickHouseConnector):
 
 # ==================== Table Metadata Tests ====================
 
-
+@pytest.mark.integration
+@pytest.mark.acceptance
 def test_get_tables(connector: ClickHouseConnector, config: ClickHouseConfig):
     """Test getting table list."""
     tables = connector.get_tables(database_name=config.database)
     assert isinstance(tables, list)
 
-
+@pytest.mark.integration
 def test_get_tables_with_ddl(connector: ClickHouseConnector, config: ClickHouseConfig):
     """Test getting tables with DDL."""
     # Create a test table first
@@ -116,13 +95,13 @@ def test_get_tables_with_ddl(connector: ClickHouseConnector, config: ClickHouseC
 
 # ==================== View Tests ====================
 
-
+@pytest.mark.integration
 def test_get_views(connector: ClickHouseConnector, config: ClickHouseConfig):
     """Test getting view list."""
     views = connector.get_views(database_name=config.database)
     assert isinstance(views, list)
 
-
+@pytest.mark.integration
 def test_get_views_with_ddl(connector: ClickHouseConnector, config: ClickHouseConfig):
     """Test getting views with DDL."""
     # Create a test view first
@@ -159,7 +138,7 @@ def test_get_views_with_ddl(connector: ClickHouseConnector, config: ClickHouseCo
 
 # ==================== Schema Tests ====================
 
-
+@pytest.mark.integration
 def test_get_schema(connector: ClickHouseConnector, config: ClickHouseConfig):
     """Test getting table schema."""
     suffix = uuid.uuid4().hex[:8]
@@ -198,7 +177,7 @@ def test_get_schema(connector: ClickHouseConnector, config: ClickHouseConfig):
 
 # ==================== Sample Data Tests ====================
 
-
+@pytest.mark.integration
 def test_get_sample_rows(connector: ClickHouseConnector, config: ClickHouseConfig):
     """Test getting sample rows."""
     suffix = uuid.uuid4().hex[:8]
@@ -233,7 +212,7 @@ def test_get_sample_rows(connector: ClickHouseConnector, config: ClickHouseConfi
 
 # ==================== SQL Execution Tests ====================
 
-
+@pytest.mark.integration
 def test_execute_select(connector: ClickHouseConnector):
     """Test executing SELECT query."""
     result = connector.execute({"sql_query": "SELECT 1 as num"}, result_format="list")
@@ -241,7 +220,7 @@ def test_execute_select(connector: ClickHouseConnector):
     assert not result.error
     assert result.sql_return == [{"num": 1}]
 
-
+@pytest.mark.integration
 def test_execute_ddl(connector: ClickHouseConnector, config: ClickHouseConfig):
     """Test DDL operations."""
     suffix = uuid.uuid4().hex[:8]
@@ -267,7 +246,7 @@ def test_execute_ddl(connector: ClickHouseConnector, config: ClickHouseConfig):
     finally:
         connector.execute_ddl(f"DROP TABLE IF EXISTS {table_name}")
 
-
+@pytest.mark.integration
 def test_execute_insert(connector: ClickHouseConnector, config: ClickHouseConfig):
     """Test INSERT operation."""
     suffix = uuid.uuid4().hex[:8]
@@ -294,7 +273,7 @@ def test_execute_insert(connector: ClickHouseConnector, config: ClickHouseConfig
     finally:
         connector.execute_ddl(f"DROP TABLE IF EXISTS {table_name}")
 
-
+@pytest.mark.integration
 def test_execute_update(connector: ClickHouseConnector, config: ClickHouseConfig):
     """Test UPDATE operation."""
     suffix = uuid.uuid4().hex[:8]
@@ -326,7 +305,7 @@ def test_execute_update(connector: ClickHouseConnector, config: ClickHouseConfig
     finally:
         connector.execute_ddl(f"DROP TABLE IF EXISTS {table_name}")
 
-
+@pytest.mark.integration
 def test_execute_delete(connector: ClickHouseConnector, config: ClickHouseConfig):
     """Test DELETE operation."""
     suffix = uuid.uuid4().hex[:8]
@@ -358,14 +337,14 @@ def test_execute_delete(connector: ClickHouseConnector, config: ClickHouseConfig
 
 # ==================== Error Handling Tests ====================
 
-
+@pytest.mark.integration
 def test_exception_on_syntax_error(connector: ClickHouseConnector):
     """Test exception on SQL syntax error."""
     result = connector.execute({"sql_query": "INVALID SQL SYNTAX"})
     assert result.error == "Unknown type of SQL"
 
 
-
+@pytest.mark.integration
 def test_exception_on_nonexistent_table(connector: ClickHouseConnector):
     """Test exception on non-existent table."""
     result = connector.execute({"sql_query": f"SELECT * FROM nonexistent_table_{uuid.uuid4().hex}"})
@@ -376,19 +355,19 @@ def test_exception_on_nonexistent_table(connector: ClickHouseConnector):
 
 # ==================== Utility Tests ====================
 
-
+@pytest.mark.integration
 def test_full_name_with_database(connector: ClickHouseConnector):
     """Test full_name with database."""
     full_name = connector.full_name(database_name="mydb", table_name="mytable")
     assert full_name == "`mydb`.`mytable`"
 
-
+@pytest.mark.integration
 def test_full_name_without_database(connector: ClickHouseConnector):
     """Test full_name without database."""
     full_name = connector.full_name(table_name="mytable")
     assert full_name == "`mytable`"
 
-
+@pytest.mark.integration
 def test_identifier(connector: ClickHouseConnector):
     """Test identifier generation."""
     identifier = connector.identifier(database_name="mydb", table_name="mytable")

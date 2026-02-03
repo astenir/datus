@@ -12,8 +12,8 @@ class ClickHouseConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    host: str = Field(..., description="ClickHouse server host")
-    port: int = Field(default=9000, description="ClickHouse server port")
+    host: str = Field(default="localhost", description="ClickHouse server host")
+    port: int = Field(default=8123, description="ClickHouse server port")
     username: str = Field(..., description="ClickHouse username")
     password: str = Field(default="", description="ClickHouse password")
     database: Optional[str] = Field(default=None, description="Default database name")

@@ -396,4 +396,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
         self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
     ) -> str:
         """Build identifier for table."""
-        return f"{catalog_name}.{database_name}.{table_name}" if catalog_name else f"{database_name}.{table_name}"
+        if not catalog_name and not database_name and not schema_name:
+            return table_name
+        else:
+            return f"{catalog_name}.{database_name}.{table_name}" if catalog_name else f"{database_name}.{table_name}"
