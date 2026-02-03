@@ -31,7 +31,7 @@ class TableMetadataNames(BaseModel):
 # Metadata configuration for ClickHouse objects
 METADATA_DICT: Dict[TABLE_TYPE, TableMetadataNames] = {
     "table": TableMetadataNames(
-        show_table="TABLES", show_create_table="TABLE", info_table="TABLES", table_types=['BASE TABLE']
+        show_table="TABLES", show_create_table="TABLE", info_table="TABLES", table_types=["BASE TABLE"]
     ),
     "view": TableMetadataNames(show_table="VIEWS", show_create_table="VIEW", info_table="VIEWS", table_types=None),
 }
@@ -76,7 +76,11 @@ class ClickHouseConnector(SQLAlchemyConnector):
             f"{database}?charset={config.charset}&autocommit={'true' if config.autocommit else 'false'}"
         )
 
-        super().__init__(connection_string, dialect=DBType.CLICKHOUSE)
+        super().__init__(
+            connection_string,
+            dialect=DBType.CLICKHOUSE,
+            timeout_seconds=config.timeout_seconds,
+        )
         self.database_name = database
 
     # ==================== System Resources ====================

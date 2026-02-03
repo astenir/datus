@@ -5,11 +5,10 @@
 import os
 import uuid
 import pytest
-
 from datus_clickhouse import ClickHouseConfig, ClickHouseConnector
 
-
 # ==================== Connection Tests ====================
+
 
 @pytest.mark.integration
 @pytest.mark.acceptance
@@ -18,6 +17,7 @@ def test_connection_with_config_object(config: ClickHouseConfig):
     conn = ClickHouseConnector(config)
     assert conn.test_connection()
     conn.close()
+
 
 @pytest.mark.integration
 def test_connection_with_dict():
@@ -36,6 +36,7 @@ def test_connection_with_dict():
 
 # ==================== Database Tests ====================
 
+
 @pytest.mark.integration
 @pytest.mark.acceptance
 def test_get_databases(connector: ClickHouseConnector):
@@ -43,6 +44,7 @@ def test_get_databases(connector: ClickHouseConnector):
     databases = connector.get_databases()
     assert isinstance(databases, list)
     assert len(databases) > 0
+
 
 @pytest.mark.integration
 def test_get_databases_exclude_system(connector: ClickHouseConnector):
@@ -55,12 +57,14 @@ def test_get_databases_exclude_system(connector: ClickHouseConnector):
 
 # ==================== Table Metadata Tests ====================
 
+
 @pytest.mark.integration
 @pytest.mark.acceptance
 def test_get_tables(connector: ClickHouseConnector, config: ClickHouseConfig):
     """Test getting table list."""
     tables = connector.get_tables(database_name=config.database)
     assert isinstance(tables, list)
+
 
 @pytest.mark.integration
 def test_get_tables_with_ddl(connector: ClickHouseConnector, config: ClickHouseConfig):
@@ -95,11 +99,13 @@ def test_get_tables_with_ddl(connector: ClickHouseConnector, config: ClickHouseC
 
 # ==================== View Tests ====================
 
+
 @pytest.mark.integration
 def test_get_views(connector: ClickHouseConnector, config: ClickHouseConfig):
     """Test getting view list."""
     views = connector.get_views(database_name=config.database)
     assert isinstance(views, list)
+
 
 @pytest.mark.integration
 def test_get_views_with_ddl(connector: ClickHouseConnector, config: ClickHouseConfig):
@@ -137,6 +143,7 @@ def test_get_views_with_ddl(connector: ClickHouseConnector, config: ClickHouseCo
 
 
 # ==================== Schema Tests ====================
+
 
 @pytest.mark.integration
 def test_get_schema(connector: ClickHouseConnector, config: ClickHouseConfig):
@@ -177,6 +184,7 @@ def test_get_schema(connector: ClickHouseConnector, config: ClickHouseConfig):
 
 # ==================== Sample Data Tests ====================
 
+
 @pytest.mark.integration
 def test_get_sample_rows(connector: ClickHouseConnector, config: ClickHouseConfig):
     """Test getting sample rows."""
@@ -212,6 +220,7 @@ def test_get_sample_rows(connector: ClickHouseConnector, config: ClickHouseConfi
 
 # ==================== SQL Execution Tests ====================
 
+
 @pytest.mark.integration
 def test_execute_select(connector: ClickHouseConnector):
     """Test executing SELECT query."""
@@ -219,6 +228,7 @@ def test_execute_select(connector: ClickHouseConnector):
     assert result.success
     assert not result.error
     assert result.sql_return == [{"num": 1}]
+
 
 @pytest.mark.integration
 def test_execute_ddl(connector: ClickHouseConnector, config: ClickHouseConfig):
@@ -245,6 +255,7 @@ def test_execute_ddl(connector: ClickHouseConnector, config: ClickHouseConfig):
 
     finally:
         connector.execute_ddl(f"DROP TABLE IF EXISTS {table_name}")
+
 
 @pytest.mark.integration
 def test_execute_insert(connector: ClickHouseConnector, config: ClickHouseConfig):
@@ -273,6 +284,7 @@ def test_execute_insert(connector: ClickHouseConnector, config: ClickHouseConfig
     finally:
         connector.execute_ddl(f"DROP TABLE IF EXISTS {table_name}")
 
+
 @pytest.mark.integration
 def test_execute_update(connector: ClickHouseConnector, config: ClickHouseConfig):
     """Test UPDATE operation."""
@@ -294,7 +306,9 @@ def test_execute_update(connector: ClickHouseConnector, config: ClickHouseConfig
         connector.execute_insert(f"INSERT INTO {table_name} (id, name) VALUES (1, 'Alice'), (2, 'Bob')")
 
         # Update
-        update_result = connector.execute_update(f"UPDATE {table_name} SET name = 'Alice Updated' WHERE id = 1")
+        update_result = connector.execute_update(
+            f"UPDATE {table_name} SET name = 'Alice Updated' WHERE id = 1 SETTINGS mutations_sync = 1"
+        )
         assert update_result.success
 
         # Verify
@@ -304,6 +318,7 @@ def test_execute_update(connector: ClickHouseConnector, config: ClickHouseConfig
         assert query_result.sql_return == [{"name": "Alice Updated"}]
     finally:
         connector.execute_ddl(f"DROP TABLE IF EXISTS {table_name}")
+
 
 @pytest.mark.integration
 def test_execute_delete(connector: ClickHouseConnector, config: ClickHouseConfig):
@@ -325,7 +340,9 @@ def test_execute_delete(connector: ClickHouseConnector, config: ClickHouseConfig
         connector.execute_insert(f"INSERT INTO {table_name} (id, name) VALUES (1, 'Alice'), (2, 'Bob')")
 
         # Delete
-        delete_result = connector.execute_delete(f"DELETE FROM {table_name} WHERE id = 2")
+        delete_result = connector.execute_delete(
+            f"DELETE FROM {table_name} WHERE id = 2 SETTINGS lightweight_deletes_sync = 1"
+        )
         assert delete_result.success
 
         # Verify
@@ -336,6 +353,7 @@ def test_execute_delete(connector: ClickHouseConnector, config: ClickHouseConfig
 
 
 # ==================== Error Handling Tests ====================
+
 
 @pytest.mark.integration
 def test_exception_on_syntax_error(connector: ClickHouseConnector):
@@ -351,9 +369,8 @@ def test_exception_on_nonexistent_table(connector: ClickHouseConnector):
     assert "Unknown table expression" in result.error
 
 
-
-
 # ==================== Utility Tests ====================
+
 
 @pytest.mark.integration
 def test_full_name_with_database(connector: ClickHouseConnector):
@@ -361,11 +378,13 @@ def test_full_name_with_database(connector: ClickHouseConnector):
     full_name = connector.full_name(database_name="mydb", table_name="mytable")
     assert full_name == "`mydb`.`mytable`"
 
+
 @pytest.mark.integration
 def test_full_name_without_database(connector: ClickHouseConnector):
     """Test full_name without database."""
     full_name = connector.full_name(table_name="mytable")
     assert full_name == "`mytable`"
+
 
 @pytest.mark.integration
 def test_identifier(connector: ClickHouseConnector):

@@ -24,6 +24,7 @@ def config() -> ClickHouseConfig:
 @pytest.fixture
 def connector(config: ClickHouseConfig) -> Generator[ClickHouseConnector, None, None]:
     """Create and cleanup ClickHouse connector for integration tests."""
+    conn = None
     try:
         conn = ClickHouseConnector(config)
         if not conn.test_connection():
@@ -32,7 +33,8 @@ def connector(config: ClickHouseConfig) -> Generator[ClickHouseConnector, None, 
     except Exception as e:
         pytest.skip(f"Database not available: {e}")
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
