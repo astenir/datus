@@ -218,16 +218,6 @@ class CompareAgenticNode(AgenticNode):
                     f"New comparison request:\n{user_prompt}"
                 )
 
-            assistant_action = ActionHistory.create_action(
-                role=ActionRole.ASSISTANT,
-                action_type="llm_generation",
-                messages="Analyzing SQL comparison with tools...",
-                input_data={"prompt": user_prompt, "system": system_instruction},
-                status=ActionStatus.PROCESSING,
-            )
-            action_history_manager.add_action(assistant_action)
-            yield assistant_action
-
             response_content: Any = ""
             last_successful_output: Optional[Dict[str, Any]] = None
 
@@ -274,13 +264,6 @@ class CompareAgenticNode(AgenticNode):
                 explanation=result_dict.get("explanation", "No explanation provided"),
                 suggest=result_dict.get("suggest", "No suggestions provided"),
                 tokens_used=tokens_used,
-            )
-
-            action_history_manager.update_action_by_id(
-                assistant_action.action_id,
-                status=ActionStatus.SUCCESS,
-                output=result.model_dump(),
-                messages="Comparison completed successfully.",
             )
 
             self.actions.extend(action_history_manager.get_actions())

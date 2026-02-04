@@ -534,8 +534,6 @@ class GenSQLAgenticNode(AgenticNode):
                 self.plan_hooks = PlanModeHooks(broker=broker, session=session, auto_mode=auto_mode)
                 logger.info(f"Plan mode activated (auto_mode={auto_mode})")
 
-            system_instruction = self._get_system_prompt(conversation_summary, user_input.prompt_version)
-
             # Add context to user message if provided
             enhanced_message = build_enhanced_message(
                 user_message=user_input.user_message,
@@ -554,17 +552,6 @@ class GenSQLAgenticNode(AgenticNode):
             sql_content = None
             tokens_used = 0
             last_successful_output = None
-
-            # Create assistant action for processing
-            assistant_action = ActionHistory.create_action(
-                role=ActionRole.ASSISTANT,
-                action_type="llm_generation",
-                messages="Generating response with tools...",
-                input_data={"prompt": enhanced_message, "system": system_instruction},
-                status=ActionStatus.PROCESSING,
-            )
-            action_history_manager.add_action(assistant_action)
-            yield assistant_action
 
             logger.debug(f"Tools available : {len(self.tools)} tools - {[tool.name for tool in self.tools]}")
             logger.debug(f"MCP servers available : {len(self.mcp_servers)} servers - {list(self.mcp_servers.keys())}")

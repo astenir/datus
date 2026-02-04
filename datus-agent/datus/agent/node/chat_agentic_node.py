@@ -230,10 +230,6 @@ class ChatAgenticNode(GenSQLAgenticNode):
             # Get or create session and any available summary
             session, conversation_summary = self._get_or_create_session()
 
-            # Get system instruction from template, passing summary and prompt version if available
-            prompt_version = user_input.prompt_version or self.node_config.get("prompt_version")
-            system_instruction = self._get_system_prompt(conversation_summary, prompt_version)
-
             # Add database context to user message if provided
             from datus.agent.node.gen_sql_agentic_node import build_enhanced_message
 
@@ -254,17 +250,6 @@ class ChatAgenticNode(GenSQLAgenticNode):
             sql_content = None
             tokens_used = 0
             last_successful_output = None
-
-            # Create assistant action for processing
-            assistant_action = ActionHistory.create_action(
-                role=ActionRole.ASSISTANT,
-                action_type="llm_generation",
-                messages="Generating response with tools...",
-                input_data={"prompt": enhanced_message, "system": system_instruction},
-                status=ActionStatus.PROCESSING,
-            )
-            action_history_manager.add_action(assistant_action)
-            yield assistant_action
 
             # Determine execution mode and start unified recursive execution
             execution_mode = "plan" if is_plan_mode and self.plan_hooks else "normal"
