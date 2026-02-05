@@ -433,7 +433,7 @@ class BiDashboardCommands:
 
     def _review_tables(self, tables: Sequence) -> List:
         if not tables:
-            return list(tables)
+            return []
 
         table_view = Table(title="Tables")
         table_view.add_column("#", style="cyan", width=4)
@@ -761,9 +761,9 @@ class BiDashboardCommands:
         layer2 = parts[2] if len(parts) > 2 else ""
         return domain, layer1, layer2
 
-    def _gen_metrics(self, sqls: List[SelectedSqlCandidate], platform: str, dashboard: DashboardInfo):
+    def _gen_metrics(self, sqls: List[SelectedSqlCandidate], platform: str, dashboard: DashboardInfo) -> List[str]:
         if not sqls:
-            return None
+            return []
         target_file = self._ensure_file_name(platform, dashboard, suffix=".csv")
         file_data = []
         for sql_item in sqls:
