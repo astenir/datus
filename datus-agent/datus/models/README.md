@@ -21,7 +21,8 @@ The module uses a factory pattern for dynamic model instantiation, supports both
 - Unified error handling and retry logic with exponential backoff
 - MCP server integration with connection management
 - Streaming support with action history tracking
-- Token counting and model info retrieval
+- LiteLLM integration for unified token counting (supports 100+ models)
+- Model info retrieval and context length management
 
 ### Provider Implementations
 
@@ -29,27 +30,27 @@ Currently, only Claude uses a separate implementation; all other models inherit 
 
 **`openai_model.py`** - OpenAI GPT models
 - Inherits from `OpenAICompatibleModel`
-- Uses tiktoken for accurate token counting
+- Uses LiteLLM for unified token counting across all providers
 - Supports structured output and reasoning content
 
-**`claude_model.py`** - Anthropic Claude models  
+**`claude_model.py`** - Anthropic Claude models
 - Custom implementation for Claude's native API
 - Anthropic tool format conversion for MCP integration
 - Prompt caching support for improved performance
-- Using prompt cache mannually
+- Using prompt cache manually
 
 **`deepseek_model.py`** - DeepSeek models
-- OpenAI-compatible implementation with custom token counting
+- OpenAI-compatible implementation via LiteLLM
 - LLM trace saving functionality for debugging
 - Support for reasoning models (DeepSeek R1)
 
 **`qwen_model.py`** - Qwen models
-- Transformers tokenizer integration for accurate token counting
+- LiteLLM integration for unified token counting
 - Dashscope API integration
 
 **`gemini_model.py`** - Google Gemini models
 - Google Generative AI client integration
-- Native token counting using Gemini API
+- LiteLLM integration for unified token counting
 
 ### Utility Modules
 
@@ -73,7 +74,7 @@ Currently, only Claude uses a separate implementation; all other models inherit 
 ### `generate_with_json_output(prompt, **kwargs) -> Dict`
 ### async `generate_with_tools(prompt, mcp_servers=None, tools=None, **kwargs) -> Dict`
 
-### async `generate_with_tools_stream(promptr, tools, mcp_servers, instruction, output_type, 
+### async `generate_with_tools_stream(prompt, tools, mcp_servers, instruction, output_type,
         max_turns, action_history_manager, **kwargs) -> AsyncGenerator[ActionHistory, None]:
 )
 
@@ -113,7 +114,7 @@ from agents.mcp import MCPServerStdio
 async def use_mcp_tools():
     # Initialize model
     model = LLMBaseModel.create_model(config, "claude-3-5-sonnet")
-    
+
     # Setup MCP servers (database tools, etc.)
     mcp_servers = {
         "snowflake": MCPServerStdio(
@@ -121,7 +122,7 @@ async def use_mcp_tools():
             env={"SNOWFLAKE_USER": "user", "SNOWFLAKE_PASSWORD": "pass"}
         )
     }
-    
+
     # Generate with tool access
     result = await model.generate_with_tools(
         prompt="Show me the top 10 customers by revenue",
@@ -130,13 +131,58 @@ async def use_mcp_tools():
         output_type=str,
         max_turns=10
     )
-    
+
     print("Response:", result["content"])
     print("SQL Contexts:", result["sql_contexts"])
 
 # Run async function
 asyncio.run(use_mcp_tools())
 ```
+
+### Structured Output with Pydantic Models
+
+The SDK 0.7.0 supports structured output using Pydantic models. This provides automatic validation and eliminates the need for JSON format instructions in prompts.
+
+```python
+import asyncio
+from datus.models.base import LLMBaseModel
+from datus.schemas import GenSqlOutput
+
+async def generate_sql_with_structure():
+    model = LLMBaseModel.create_model(config, "gpt-4")
+
+    # Use Pydantic model for structured output
+    result = await model.generate_with_tools(
+        prompt="Generate a query for top 10 customers by revenue",
+        output_type=GenSqlOutput,  # Pydantic model
+        strict_json_schema=True,  # Enable strict JSON mode (default)
+        instruction="You are a SQL expert. Generate SQL queries.",
+        max_turns=10
+    )
+
+    # result["content"] is now a GenSqlOutput object
+    sql_result = result["content"]
+    print(f"SQL: {sql_result.sql}")
+    print(f"Explanation: {sql_result.explanation}")
+    print(f"Tables: {sql_result.tables}")
+
+asyncio.run(generate_sql_with_structure())
+```
+
+**Benefits of Structured Output**:
+- No need for JSON format instructions in prompts
+- Automatic response validation against Pydantic schema
+- Type-safe output handling
+- Better error messages when output doesn't match schema
+
+**Available Output Types** (from `datus.schemas`):
+- `GenSqlOutput` - SQL generation with explanation and tables
+- `SemanticModelGenerationOutput` - Semantic model generation
+- `MetricGenerationOutput` - Metric generation
+- `SqlSummaryGenerationOutput` - SQL summary generation
+- `ReportGenerationOutput` - Report generation
+- `ExtKnowledgeGenerationOutput` - External knowledge generation
+- `CompareOutput` - SQL comparison analysis
 
 ### Required Environment Variables
 
@@ -190,19 +236,19 @@ from datus.models.openai_compatible import OpenAICompatibleModel
 class NewModelModel(OpenAICompatibleModel):
     def __init__(self, model_config: ModelConfig, **kwargs):
         super().__init__(model_config, **kwargs)
-    
+
     def _get_api_key(self) -> str:
         api_key = self.model_config.api_key or os.environ.get("NEWMODEL_API_KEY")
         if not api_key:
             raise ValueError("NewModel API key required")
         return api_key
-    
+
     def _get_base_url(self) -> str:
         return self.model_config.base_url or "https://api.newmodel.com/v1"
-    
-    def token_count(self, prompt: str) -> int:
-        # Implement model-specific tokenization
-        return len(prompt) // 4  # Simple approximation
+
+    # No need to override token_count - it's inherited from OpenAICompatibleModel
+    # which uses LiteLLM's unified token counter for accurate counting
+    # across all model providers
 ```
 
 2. **Update the base model registry**:
@@ -211,7 +257,7 @@ class NewModelModel(OpenAICompatibleModel):
 # datus/models/base.py - Add to MODEL_TYPE_MAP
 MODEL_TYPE_MAP: ClassVar[Dict[str, str]] = {
     LLMProvider.DEEPSEEK: "DeepSeekModel",
-    LLMProvider.QWEN: "QwenModel", 
+    LLMProvider.QWEN: "QwenModel",
     LLMProvider.OPENAI: "OpenAIModel",
     LLMProvider.CLAUDE: "ClaudeModel",
     LLMProvider.GEMINI: "GeminiModel",
@@ -266,11 +312,11 @@ from datus.configuration.agent_config import ModelConfig
 def test_newmodel_basic_generation():
     config = ModelConfig(
         type="newmodel",
-        model="newmodel-1.0", 
+        model="newmodel-1.0",
         api_key="test-key"
     )
     model = NewModelModel(config)
-    
+
     # Mock the API call for testing
     response = model.generate("Hello, world!")
     assert isinstance(response, str)

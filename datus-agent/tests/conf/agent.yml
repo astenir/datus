@@ -36,11 +36,11 @@ agent:
       #model: claude-3-7-sonnet-latest
       model: claude-haiku-4-5
     kimi-k2:
-      type: openai
-      vendor: openai
+      type: kimi
+      vendor: kimi
       base_url: https://api.moonshot.cn/v1
       api_key: ${KIMI_API_KEY}
-      model: kimi-k2-0711-preview
+      model: kimi-k2.5
     openai-4o-mini:
       type: openai
       vendor: openai
