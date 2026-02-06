@@ -33,6 +33,7 @@ from datus.agent.node.gen_sql_agentic_node import prepare_template_context
 from datus.cli.autocomplete import TableCompleter
 from datus.prompts.prompt_manager import prompt_manager
 from datus.schemas.agent_models import ScopedContext, SubAgentConfig
+from datus.tools.func_tool import PlatformDocSearchTool
 from datus.tools.mcp_tools import MCPTool
 from datus.utils.constants import SYS_SUB_AGENTS, DBType
 from datus.utils.loggings import get_logger
@@ -1418,9 +1419,8 @@ class SubAgentWizard:
         """Validate current step's data."""
         if self.step == 0:
             name = self.name_buffer.text.strip()
-            description = self.description_area.text.strip()
-            if not name or not description:
-                self._show_error_dialog("Agent Name and Description are required.")
+            if not name:
+                self._show_error_dialog("Agent Name is required.")
                 return False
             if not re.match(r"^[a-zA-Z][a-zA-Z0-9_]*$", name):
                 self._show_error_dialog(f"Invalid Agent Name: {name}. Must match: ^[a-zA-Z][a-zA-Z0-9_]*$")
@@ -1862,6 +1862,7 @@ class SubAgentWizard:
         return {
             "db_tools": DBFuncTool.all_tools_name(),
             "context_search_tools": ContextSearchTools.all_tools_name(),
+            "platform_doc_tools": PlatformDocSearchTool.all_tools_name(),
             "semantic_tools": SemanticTools.all_tools_name(),
             "date_parsing_tools": ["parse_temporal_expressions", "get_current_date"],
         }

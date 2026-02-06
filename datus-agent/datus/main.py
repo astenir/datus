@@ -112,7 +112,6 @@ def create_parser() -> argparse.ArgumentParser:
             "metadata",
             "semantic_model",
             "table_lineage",
-            "document",
             "ext_knowledge",
             "reference_sql",
         ],
@@ -184,6 +183,92 @@ def create_parser() -> argparse.ArgumentParser:
         "--yes",
         action="store_true",
         help="Skip confirmation prompts and automatically confirm deletions (useful for CI/CD)",
+    )
+
+    # platform-doc command
+    platform_doc_parser = subparsers.add_parser(
+        "platform-doc",
+        help="Initialize platform documentation",
+        parents=[global_parser],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    platform_doc_parser.add_argument(
+        "--platform",
+        type=str,
+        help="Platform name for documents (e.g., snowflake, postgresql, starrocks, polaris)",
+    )
+    platform_doc_parser.add_argument(
+        "--version",
+        type=str,
+        help="Specific version for documents (auto-detected if not provided)",
+    )
+    platform_doc_parser.add_argument(
+        "--update_strategy",
+        "--update-strategy",
+        type=str,
+        choices=["check", "overwrite"],
+        default="check",
+        help="Documentation update strategy: check (verify status) or overwrite (re-import)",
+    )
+    platform_doc_parser.add_argument(
+        "--pool_size",
+        "--pool-size",
+        type=int,
+        default=4,
+        help="Number of threads to initialize platform-doc, default is 4",
+    )
+    platform_doc_parser.add_argument(
+        "--source",
+        type=str,
+        help="Source location for documents (GitHub repo 'owner/repo', website URL, or local path)",
+    )
+    platform_doc_parser.add_argument(
+        "--source-type",
+        type=str,
+        choices=["github", "website", "local"],
+        default=None,
+        help="Source type for documents (default: local)",
+    )
+    platform_doc_parser.add_argument(
+        "--github-ref",
+        type=str,
+        default=None,
+        help="Git ref (branch or tag) to fetch from for GitHub source type. "
+        "Examples: '3.4.0' (tag), 'versioned-docs' (branch). "
+        "If omitted, fetches from the default branch.",
+    )
+    platform_doc_parser.add_argument(
+        "--paths",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Paths to fetch for GitHub source type (default: docs README.md)",
+    )
+    platform_doc_parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=None,
+        help="Target chunk size in characters for documents (default: 1024)",
+    )
+    platform_doc_parser.add_argument(
+        "--max-depth",
+        type=int,
+        default=None,
+        help="Maximum crawl depth for website source type (default: 1)",
+    )
+    platform_doc_parser.add_argument(
+        "--include-patterns",
+        type=str,
+        nargs="+",
+        default=None,
+        help="File/URL patterns to include (e.g., '*.md' for local, regex for website)",
+    )
+    platform_doc_parser.add_argument(
+        "--exclude-patterns",
+        type=str,
+        nargs="+",
+        default=None,
+        help="File/URL patterns to exclude (e.g., 'CHANGELOG.md' for local, regex for website)",
     )
 
     # benchmark command
@@ -428,6 +513,15 @@ def main():
         from datus.cli.bi_dashboard import BiDashboardCommands
 
         return BiDashboardCommands(agent_config).cmd()
+
+    if args.action == "platform-doc":
+        # platform-doc is namespace-independent; handled before Agent init
+        from datus.agent.agent import bootstrap_platform_doc
+
+        result = bootstrap_platform_doc(args, agent_config)
+        if result:
+            logger.info(f"platform-doc result: {result}")
+        return 0
 
     # Initialize agent with both args and config
     agent = Agent(args, agent_config)
