@@ -273,8 +273,10 @@ class SQLAlchemyConnector(BaseSqlConnector):
             rows = result.fetchall()
             return [row._asdict() for row in rows]
         except DatusException:
+            self._safe_rollback()
             raise
         except Exception as e:
+            self._safe_rollback()
             raise self._handle_exception(e, sql, "query") from e
 
     @override
