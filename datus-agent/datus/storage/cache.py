@@ -34,11 +34,11 @@ class StorageCacheHolder[T: BaseEmbeddingStore]:
         self,
         storage_factory: Callable[[str, EmbeddingModel], T],
         agent_config: AgentConfig,
-        storage_name: str,
+        embedding_model_conf_name: str,
         check_scope_attr: str,
     ):
         self.storage_factory = storage_factory
-        self.storage_name = storage_name
+        self.embedding_model_conf_name = embedding_model_conf_name
         self._agent_config = agent_config
         self.check_scope_attr = check_scope_attr
 
@@ -55,9 +55,12 @@ class StorageCacheHolder[T: BaseEmbeddingStore]:
                     )
                 )
                 return self.storage_factory(
-                    self._agent_config.sub_agent_storage_path(sub_agent_name), get_embedding_model(self.storage_name)
+                    self._agent_config.sub_agent_storage_path(sub_agent_name),
+                    get_embedding_model(self.embedding_model_conf_name),
                 )
-        return _cached_storage(self.storage_factory, self._agent_config.rag_storage_path(), self.storage_name)
+        return _cached_storage(
+            self.storage_factory, self._agent_config.rag_storage_path(), self.embedding_model_conf_name
+        )
 
 
 class StorageCache:
@@ -76,9 +79,11 @@ class StorageCache:
         self._schema_holder = StorageCacheHolder(SchemaStorage, agent_config, "database", "tables")
         self._sample_data_holder = StorageCacheHolder(SchemaValueStorage, agent_config, "database", "tables")
         self._metric_holder = StorageCacheHolder(MetricStorage, agent_config, "metric", "metrics")
-        self._semantic_holder = StorageCacheHolder(SemanticModelStorage, agent_config, "metric", "semantic_models")
-        self._reference_sql_holder = StorageCacheHolder(ReferenceSqlStorage, agent_config, "metric", "sqls")
-        self._ext_knowledge_holder = StorageCacheHolder(ExtKnowledgeStore, agent_config, "document", "ext_knowledge")
+        self._semantic_holder = StorageCacheHolder(SemanticModelStorage, agent_config, "semantic_model", "tables")
+        self._reference_sql_holder = StorageCacheHolder(ReferenceSqlStorage, agent_config, "reference_sql", "sqls")
+        self._ext_knowledge_holder = StorageCacheHolder(
+            ExtKnowledgeStore, agent_config, "ext_knowledge", "ext_knowledge"
+        )
         self._subject_tree_store = None
 
     def schema_storage(self, sub_agent_name: Optional[str] = None) -> SchemaStorage:

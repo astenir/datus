@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass
 from getpass import getpass
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional, Sequence, Union
+from typing import TYPE_CHECKING, List, Optional, Sequence, Tuple, Union
 from urllib.parse import urlparse
 
 import pandas as pd
@@ -41,6 +41,8 @@ from datus.utils.constants import SYS_SUB_AGENTS
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.path_manager import get_path_manager
+from datus.utils.reference_paths import quote_path_segment
+from datus.utils.sql_utils import metadata_identifier, parse_table_name_parts
 from datus.utils.stream_output import StreamOutputManager
 from datus.utils.sub_agent_manager import SubAgentManager
 from datus.utils.traceable_utils import optional_traceable
@@ -65,12 +67,16 @@ def _parse_subject_path_for_metrics(tags: List[str]) -> Optional[str]:
         return None
     for tag in tags:
         if tag.startswith("subject_tree:"):
-            return ".".join(tag[13:].strip().split("/"))
+            parts = [p.strip() for p in tag[13:].strip().split("/") if p.strip()]
+            if parts:
+                return ".".join(parts)
     return None
 
 
 class BiDashboardCommands:
-    def __init__(self, agent_config: AgentConfig | "DatusCLI", console: Optional[Console] = None) -> None:
+    def __init__(
+        self, agent_config: AgentConfig | "DatusCLI", console: Optional[Console] = None, force: bool = False
+    ) -> None:
         self.cli: Optional["DatusCLI"] = None
         if hasattr(agent_config, "agent_config"):
             self.cli = agent_config
@@ -82,6 +88,16 @@ class BiDashboardCommands:
             self.console = console or Console(log_path=False)
             self._configuration_manager = None
         self._adaptor_registry = self._discover_adaptors()
+        self._force = force
+        self.db_manager = db_manager_instance(self.agent_config.namespaces)
+
+    def current_database_context(self) -> Tuple[str, str, str]:
+        current_con = self.db_manager.get_conn(self.agent_config.current_namespace)
+        return (
+            getattr(current_con, "catalog_name", ""),
+            getattr(current_con, "database_name", ""),
+            getattr(current_con, "schema_name", ""),
+        )
 
     @optional_traceable(name="bootstrap_bi")
     def cmd(self, args: str = "") -> None:
@@ -464,7 +480,7 @@ class BiDashboardCommands:
             self.console.print(f"[bold red]Error:[/] '{sub_agent_name}' is reserved for built-in sub-agents.")
             return
         table_names = self._dedupe_values([table for table in result.tables if table])
-
+        table_names = self._qualify_table_names(table_names)
         # Generate metadata first (before semantic model)
         self.console.log("[bold cyan]Start building metadata[/]")
         self._gen_metadata(table_names)
@@ -550,10 +566,16 @@ class BiDashboardCommands:
             result = sub_agent_manager.bootstrap_agent(
                 sub_agent, components=["metadata", "semantic_model", "metrics", "reference_sql"]
             )
-            if result.should_bootstrap:
-                self.console.log(f"[bold green]{log_prefix} bootstrapped.")
+            if not result.should_bootstrap:
+                self.console.log(f"[bold yellow]{log_prefix} bootstrap skipped: {result.reason}[/]")
+                return
+
+            errors = [r for r in result.results if r.status == "error"]
+            if errors:
+                for err in errors:
+                    self.console.log(f"[bold red]{log_prefix} bootstrap [{err.component}] error: {err.message}[/]")
             else:
-                self.console.log(f"[bold yellow] {log_prefix} bootstrap failed: {result.reason}[/]")
+                self.console.log(f"[bold green]{log_prefix} bootstrapped.")
 
     def _refresh_agent_config(self, manager: SubAgentManager) -> None:
         try:
@@ -625,6 +647,38 @@ class BiDashboardCommands:
             deduped.append(cleaned)
         return deduped
 
+    def _qualify_table_names(self, table_names: List[str]) -> List[str]:
+        """Qualify under-qualified table names using the current database context.
+
+        Uses ``parse_table_name_parts`` to split each name according to the
+        dialect's field hierarchy, fills in missing qualifier fields (catalog,
+        database, schema) from the live connection, then rebuilds via
+        ``metadata_identifier`` so the bootstrap's right-alignment matches.
+        """
+        catalog, database, schema = self.current_database_context()
+        dialect = self.agent_config.db_type or ""
+        qualified: List[str] = []
+        for name in table_names:
+            if not (name or "").strip():
+                continue
+            parts = parse_table_name_parts(name, dialect)
+            if not parts.get("catalog_name") and catalog:
+                parts["catalog_name"] = catalog
+            if not parts.get("database_name") and database:
+                parts["database_name"] = database
+            if not parts.get("schema_name") and schema:
+                parts["schema_name"] = schema
+            qualified.append(
+                metadata_identifier(
+                    catalog_name=parts.get("catalog_name", ""),
+                    database_name=parts.get("database_name", ""),
+                    schema_name=parts.get("schema_name", ""),
+                    table_name=parts.get("table_name", ""),
+                    dialect=dialect,
+                )
+            )
+        return qualified
+
     def _gen_reference_sqls(
         self, reference_sqls: List[SelectedSqlCandidate], platform: str, dashboard: DashboardInfo
     ) -> List[str]:
@@ -681,12 +735,12 @@ class BiDashboardCommands:
             for item in result.get("processed_items", []):
                 subject_tree = item.get("subject_tree")
                 if subject_tree:
-                    parts = subject_tree.split("/")
-                    domain = parts[0].strip() if len(parts) > 0 else ""
-                    layer1 = parts[1].strip() if len(parts) > 1 else ""
-                    layer2 = parts[2].strip() if len(parts) > 2 else ""
-                    layers = f"{domain}.{layer1}.{layer2}.{item.get('name')}"
-                    subject_trees.add(layers)
+                    parts = [p.strip() for p in subject_tree.split("/") if p.strip()]
+                    name = (item.get("name") or "").strip()
+                    if name:
+                        parts.append(quote_path_segment(name))
+                    if parts:
+                        subject_trees.add(".".join(parts))
             ref_sqls.extend(subject_trees)
         return ref_sqls
 
@@ -822,7 +876,7 @@ class BiDashboardCommands:
                         name = meta.get("name")
                         subject_tree = _parse_subject_path_for_metrics(meta.get("locked_metadata", {}).get("tags", []))
                         if name and subject_tree:
-                            metrics.add(f"{subject_tree}.{name}")
+                            metrics.add(f"{subject_tree}.{quote_path_segment(name)}")
 
         return list(metrics)
 
@@ -860,7 +914,11 @@ class BiDashboardCommands:
                 pd.DataFrame(file_data, columns=["question", "sql"]).to_csv(target_f, index=False)
 
         successful, result = init_semantic_model(
-            target_file, agent_config=self.agent_config, console=self.console, build_mode="incremental"
+            target_file,
+            agent_config=self.agent_config,
+            console=self.console,
+            build_mode="incremental",
+            force=self._force,
         )
 
         if successful:
