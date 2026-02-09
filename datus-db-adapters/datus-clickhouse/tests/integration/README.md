@@ -8,6 +8,11 @@ Integration tests require a real ClickHouse database to validate end-to-end func
 # Start ClickHouse container
 docker-compose up -d
 
+# Create test database
+docker exec clickhouse clickhouse-client \
+  --user default_user --password default_test \
+  -q "CREATE DATABASE IF NOT EXISTS default_test"
+
 # Run integration tests
 uv run pytest tests/integration/ -m integration -v
 
@@ -27,9 +32,17 @@ ClickHouse container is pre-configured in `docker-compose.yml`:
 - Password: `default_test`
 
 ```bash
-# Start and wait for health check
+# Start and wait for service to be ready
 docker-compose up -d
-docker-compose ps  # Should show "healthy"
+docker-compose ps  # Should show "Up"
+
+# Create test database
+docker exec clickhouse clickhouse-client \
+  --user default_user --password default_test \
+  -q "CREATE DATABASE IF NOT EXISTS default_test"
+
+# Run integration tests
+uv run pytest tests/integration/ -m integration -v
 
 # View logs if needed
 docker-compose logs clickhouse

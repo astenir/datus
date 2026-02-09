@@ -76,8 +76,6 @@ def test_connector_connection_string_basic():
         connection_string = call_args[0][0]
 
         assert "clickhouse://user:pass@localhost:8123/db" in connection_string
-        assert "charset=utf8mb4" in connection_string
-        assert "autocommit=true" in connection_string
 
 
 @pytest.mark.acceptance
@@ -137,46 +135,6 @@ def test_connector_connection_string_no_database():
         connection_string = call_args[0][0]
 
         assert "clickhouse://user:pass@localhost:8123/" in connection_string
-
-
-def test_connector_connection_string_custom_charset():
-    """Test connection string with custom charset."""
-    config = ClickHouseConfig(
-        host="localhost",
-        port=8123,
-        username="user",
-        password="pass",
-        database="db",
-        charset="utf8",
-    )
-
-    with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__") as mock_init:
-        ClickHouseConnector(config)
-
-        call_args = mock_init.call_args
-        connection_string = call_args[0][0]
-
-        assert "charset=utf8" in connection_string
-
-
-def test_connector_connection_string_autocommit_false():
-    """Test connection string with autocommit disabled."""
-    config = ClickHouseConfig(
-        host="localhost",
-        port=8123,
-        username="user",
-        password="pass",
-        database="db",
-        autocommit=False,
-    )
-
-    with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__") as mock_init:
-        ClickHouseConnector(config)
-
-        call_args = mock_init.call_args
-        connection_string = call_args[0][0]
-
-        assert "autocommit=false" in connection_string
 
 
 @pytest.mark.acceptance

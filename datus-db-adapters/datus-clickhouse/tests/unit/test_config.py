@@ -18,8 +18,6 @@ def test_config_with_all_required_fields():
     assert config.username == "default_user"
     assert config.password == ""
     assert config.database is None
-    assert config.charset == "utf8mb4"
-    assert config.autocommit is True
     assert config.timeout_seconds == 30
 
 
@@ -32,8 +30,6 @@ def test_config_with_custom_values():
         username="admin",
         password="secret123",
         database="mydb",
-        charset="utf8",
-        autocommit=False,
         timeout_seconds=60,
     )
 
@@ -42,8 +38,6 @@ def test_config_with_custom_values():
     assert config.username == "admin"
     assert config.password == "secret123"
     assert config.database == "mydb"
-    assert config.charset == "utf8"
-    assert config.autocommit is False
     assert config.timeout_seconds == 60
 
 
@@ -75,15 +69,6 @@ def test_config_invalid_timeout_type():
 
     errors = exc_info.value.errors()
     assert any(error["loc"] == ("timeout_seconds",) for error in errors)
-
-
-def test_config_invalid_autocommit_type():
-    """Test that validation fails for invalid autocommit type."""
-    with pytest.raises(ValidationError) as exc_info:
-        ClickHouseConfig(username="default_user", autocommit="invalid")
-
-    errors = exc_info.value.errors()
-    assert any(error["loc"] == ("autocommit",) for error in errors)
 
 
 @pytest.mark.acceptance
@@ -122,20 +107,6 @@ def test_config_default_port():
     config = ClickHouseConfig(username="default_user")
 
     assert config.port == 8123
-
-
-def test_config_default_charset():
-    """Test default charset value."""
-    config = ClickHouseConfig(username="default_user")
-
-    assert config.charset == "utf8mb4"
-
-
-def test_config_default_autocommit():
-    """Test default autocommit value."""
-    config = ClickHouseConfig(username="default_user")
-
-    assert config.autocommit is True
 
 
 def test_config_default_timeout():
@@ -181,8 +152,6 @@ def test_config_to_dict():
     assert config_dict["username"] == "root"
     assert config_dict["password"] == "pass123"
     assert config_dict["database"] == "testdb"
-    assert config_dict["charset"] == "utf8mb4"
-    assert config_dict["autocommit"] is True
     assert config_dict["timeout_seconds"] == 30
 
 

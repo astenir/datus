@@ -73,7 +73,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
         # Build connection string
         connection_string = (
             f"clickhouse://{self.username}:{encoded_password}@{self.host}:{self.port}/"
-            f"{database}?charset={config.charset}&autocommit={'true' if config.autocommit else 'false'}"
+            f"{database}"
         )
 
         super().__init__(
@@ -128,9 +128,9 @@ class ClickHouseConnector(SQLAlchemyConnector):
         # Build WHERE clause
         if database_name:
             safe_db = database_name.replace("'", "''")
-            where = f"table_schema = '{safe_db}'"
+            where = f"TABLE_SCHEMA = '{safe_db}'"
         else:
-            where = f"{list_to_in_str('table_schema not in', list(self._sys_databases()))}"
+            where = f"{list_to_in_str('TABLE_SCHEMA not in', list(self._sys_databases()))}"
 
         # Get metadata configuration
         metadata_config = _get_metadata_config(table_type)
@@ -304,7 +304,8 @@ class ClickHouseConnector(SQLAlchemyConnector):
     def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
         """Switch database context using USE statement."""
         if database_name:
-            self.connection.execute(text(f"USE {self._quote_identifier(database_name)}"))
+            with self.engine.connect() as connection:
+                connection.execute(text(f"USE {self._quote_identifier(database_name)}"))
             self.database_name = database_name
 
     # ==================== Sample Data ====================

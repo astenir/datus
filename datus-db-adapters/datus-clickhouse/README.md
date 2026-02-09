@@ -21,7 +21,7 @@ The adapter is automatically registered with Datus when installed. Configure you
 database:
   type: clickhouse
   host: localhost
-  port: 9000
+  port: 8123
   username: root
   password: your_password
   database: your_database
@@ -35,7 +35,7 @@ from datus_clickhouse import ClickHouseConfig,ClickHouseConnector
 # Create connector
 config = ClickHouseConfig(
     host="localhost",
-    port=9000,
+    port=8123,
     username="root",
     password="your_password",
     database="mydb",
