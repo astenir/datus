@@ -1,4 +1,4 @@
-name: Run Integration Tests
+name: Run BI Integration Tests
 
 on:
   schedule:
@@ -21,9 +21,11 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
           pip install datus-postgresql
           pip install datus-semantic-metricflow
+          pip uninstall -y datus-agent
+          pip install -r requirements.txt
+          pip check
 
       - name: Setup config file
         run: |
