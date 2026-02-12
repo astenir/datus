@@ -1038,29 +1038,50 @@ class Agent:
         }
 
 
-def bootstrap_platform_doc(args: argparse.Namespace, agent_config: AgentConfig) -> dict:
+def bootstrap_platform_doc(args: argparse.Namespace, agent_config: AgentConfig):
     """Initialize platform documentation (namespace-independent).
 
     Standalone function that uses AgentConfig for path resolution but does NOT
     require a valid namespace or Agent instance.
 
     Parameters are resolved with: CLI args > YAML config (agent.document.{platform}) > defaults.
+
+    Returns:
+        InitResult on success/failure, or None if no document source is configured.
     """
     from datus.configuration.agent_config import DocumentConfig
-    from datus.storage.document import init_platform_docs
+    from datus.storage.document import infer_platform_from_source, init_platform_docs
 
     update_strategy = getattr(args, "update_strategy", "check")
     pool_size = getattr(args, "pool_size", 4) or 4
-    doc_platform = getattr(args, "platform", None) or "default"
+    doc_platform = getattr(args, "platform", None)
 
     # Merge: YAML config as base, CLI args override non-None values
+    # If platform is not specified, try to resolve from YAML config or source
+    if not doc_platform:
+        source_from_cli = getattr(args, "source", None)
+        if source_from_cli:
+            doc_platform = infer_platform_from_source(source_from_cli)
+        if not doc_platform:
+            # Try single-entry YAML config: if only one platform is configured, use it
+            if len(agent_config.document_configs) == 1:
+                doc_platform = next(iter(agent_config.document_configs))
+            else:
+                print(
+                    "\n[ERROR] Cannot determine platform name."
+                    "\n  Use --platform <name> to specify, or provide --source to auto-detect."
+                    "\n  Examples: --platform polaris, --platform snowflake"
+                )
+                return None
+
     base_cfg = agent_config.document_configs.get(doc_platform, DocumentConfig())
     cfg = base_cfg.merge_cli_args(args)
 
     dir_path = agent_config.document_storage_path(doc_platform)
 
     if not cfg.source:
-        return {"status": "success", "message": "no document source provided, skipped"}
+        print(f"\nPlatform Doc: skipped (no document source configured for '{doc_platform}')")
+        return None
 
     logger.info(f"Initializing document from {cfg.source} (type: {cfg.type})")
 
@@ -1071,14 +1092,43 @@ def bootstrap_platform_doc(args: argparse.Namespace, agent_config: AgentConfig) 
         build_mode=update_strategy,
         pool_size=pool_size,
     )
+    _print_platform_doc_result(result, update_strategy)
 
+    return result
+
+
+def _print_platform_doc_result(result, mode: str) -> None:
+    """Pretty-print platform-doc result for the user."""
+    if result is None:
+        print("\nPlatform Doc: skipped (no document source configured)")
+        return
+
+    label = "Check" if mode == "check" else "Bootstrap"
     if result.success:
-        return {
-            "status": "success",
-            "message": f"document bootstrap completed, "
-            f"platform={result.platform}, "
-            f"version={result.version}, "
-            f"docs={result.total_docs}, "
-            f"chunks={result.total_chunks}",
-        }
-    return {"status": "failed", "message": f"document bootstrap failed: {', '.join(result.errors)}"}
+        print(f"\n[OK] Platform Doc {label} Complete")
+        print(f"  Platform:   {result.platform}")
+
+        if result.version_details:
+            if len(result.version_details) == 1:
+                vd = result.version_details[0]
+                print(f"  Version:    {vd.version}")
+                print(f"  Documents:  {vd.doc_count}")
+                print(f"  Chunks:     {vd.chunk_count}")
+            else:
+                print(f"  Versions:   {len(result.version_details)}")
+                for vd in result.version_details:
+                    print(f"    - {vd.version:20s}  docs: {vd.doc_count:<6d}  chunks: {vd.chunk_count}")
+                print(f"  Total:      {result.total_docs} docs, {result.total_chunks} chunks")
+        else:
+            print(f"  Version:    {result.version}")
+            print(f"  Documents:  {result.total_docs}")
+            print(f"  Chunks:     {result.total_chunks}")
+
+        if mode != "check":
+            print(f"  Source:     {result.source}")
+            print(f"  Duration:   {result.duration_seconds:.1f}s")
+    else:
+        print(f"\n[FAILED] Platform Doc {label} Failed")
+        print(f"  Platform:   {result.platform}")
+        for err in result.errors:
+            print(f"  Error:      {err}")

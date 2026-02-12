@@ -227,7 +227,9 @@ def create_parser() -> argparse.ArgumentParser:
         type=str,
         choices=["github", "website", "local"],
         default=None,
-        help="Source type for documents (default: local)",
+        help="Source type for documents (default: local). "
+        "Supported file types — local/github: .md, .markdown, .html, .htm, .rst, .txt; "
+        "website: HTML pages only.",
     )
     platform_doc_parser.add_argument(
         "--github-ref",
@@ -248,7 +250,12 @@ def create_parser() -> argparse.ArgumentParser:
         "--chunk-size",
         type=int,
         default=None,
-        help="Target chunk size in characters for documents (default: 1024)",
+        help="Target chunk size in characters for document splitting (default: 1024). "
+        "This is a soft limit: individual paragraphs and code blocks may exceed it "
+        "(up to the hard max of 2048 chars) to preserve semantic integrity. "
+        "Chunks smaller than 256 chars are automatically merged with neighbors. "
+        "Larger values produce fewer, coarser chunks; smaller values produce more, finer-grained chunks. "
+        "Recommended range: 512-2048.",
     )
     platform_doc_parser.add_argument(
         "--max-depth",
@@ -518,9 +525,7 @@ def main():
         # platform-doc is namespace-independent; handled before Agent init
         from datus.agent.agent import bootstrap_platform_doc
 
-        result = bootstrap_platform_doc(args, agent_config)
-        if result:
-            logger.info(f"platform-doc result: {result}")
+        bootstrap_platform_doc(args, agent_config)
         return 0
 
     # Initialize agent with both args and config
