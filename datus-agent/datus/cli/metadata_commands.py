@@ -60,9 +60,9 @@ class MetadataCommands:
                     is_current = db_config.logic_name == self.cli.cli_context.current_logic_db_name
                     result.append(
                         {
-                            "logic_name": db_config.logic_name
-                            if not is_current
-                            else f"[bold green]{db_config.logic_name}[/]",
+                            "logic_name": (
+                                db_config.logic_name if not is_current else f"[bold green]{db_config.logic_name}[/]"
+                            ),
                             "name": db_config.database,
                             "uri": db_config.uri,
                         }
@@ -73,9 +73,11 @@ class MetadataCommands:
                     ):
                         result.append(
                             {
-                                "name": db_name
-                                if db_name != self.cli.cli_context.current_db_name
-                                else f"[bold green]{db_name}[/]"
+                                "name": (
+                                    db_name
+                                    if db_name != self.cli.cli_context.current_db_name
+                                    else f"[bold green]{db_name}[/]"
+                                )
                             }
                         )
 

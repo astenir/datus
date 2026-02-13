@@ -65,9 +65,10 @@ class TestDatabaseConnectivity:
             "database": "test_db",
         }
 
-        with patch("datus.tools.db_tools.db_manager.DBManager") as mock_db_manager, patch(
-            "datus.cli.init_util.logger"
-        ) as mock_logger:
+        with (
+            patch("datus.tools.db_tools.db_manager.DBManager") as mock_db_manager,
+            patch("datus.cli.init_util.logger") as mock_logger,
+        ):
             # Mock exception during connection test
             mock_db_manager.side_effect = Exception("Connection refused")
 

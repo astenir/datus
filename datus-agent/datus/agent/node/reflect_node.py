@@ -190,9 +190,11 @@ class ReflectNode(Node):
                 action_type="reflection_analysis",
                 input={
                     "sql_contexts_count": len(self.input.sql_context) if hasattr(self.input, "sql_context") else 0,
-                    "task_description": getattr(self.input.task_description, "task", "")
-                    if hasattr(self.input, "task_description")
-                    else "",
+                    "task_description": (
+                        getattr(self.input.task_description, "task", "")
+                        if hasattr(self.input, "task_description")
+                        else ""
+                    ),
                 },
                 status=ActionStatus.PROCESSING,
             )

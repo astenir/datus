@@ -736,9 +736,11 @@ class Agent:
                     output_dir=output_dir,
                     current_date=self.args.current_date,
                     tables=use_tables,
-                    external_knowledge=""
-                    if not benchmark_config.ext_knowledge_key
-                    else task_item.get(benchmark_config.ext_knowledge_key, ""),
+                    external_knowledge=(
+                        ""
+                        if not benchmark_config.ext_knowledge_key
+                        else task_item.get(benchmark_config.ext_knowledge_key, "")
+                    ),
                     schema_linking_type="full",
                 ),
                 check_storage=False,

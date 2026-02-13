@@ -316,9 +316,11 @@ Do NOT give up. Continue iterating until verify_sql returns success=1.
                 result={
                     "message": "SQL verification PASSED!",
                     "match_rate": 1.0,
-                    "your_result_shape": f"{result.user_df.shape[0]} rows x {result.user_df.shape[1]} columns"
-                    if result.user_df is not None
-                    else "N/A",
+                    "your_result_shape": (
+                        f"{result.user_df.shape[0]} rows x {result.user_df.shape[1]} columns"
+                        if result.user_df is not None
+                        else "N/A"
+                    ),
                 },
             )
 
@@ -402,9 +404,9 @@ Do NOT give up. Continue iterating until verify_sql returns success=1.
             # Build SqlTask from agent_config
             sql_task = SqlTask(
                 database_type=self.agent_config.database_type if hasattr(self.agent_config, "database_type") else "",
-                database_name=self.agent_config.current_database
-                if hasattr(self.agent_config, "current_database")
-                else "",
+                database_name=(
+                    self.agent_config.current_database if hasattr(self.agent_config, "current_database") else ""
+                ),
                 task=getattr(self, "_current_question", "SQL verification task"),
                 external_knowledge=str(generated_knowledge) if generated_knowledge else "",
             )
@@ -660,7 +662,10 @@ Rules:
             # Use prompt manager to render the template
             from datus.prompts.prompt_manager import prompt_manager
 
-            return prompt_manager.render_template(template_name=template_name, version=prompt_version, **template_vars)
+            base_prompt = prompt_manager.render_template(
+                template_name=template_name, version=prompt_version, **template_vars
+            )
+            return self._finalize_system_prompt(base_prompt)
 
         except FileNotFoundError as e:
             # Template not found - throw DatusException

@@ -8,7 +8,6 @@ Unit tests for SkillFuncTool.
 Tests the load_skill native tool functionality.
 """
 
-
 import pytest
 
 from datus.tools.permission.permission_config import (

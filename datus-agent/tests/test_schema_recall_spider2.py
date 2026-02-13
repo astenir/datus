@@ -150,7 +150,7 @@ def do_recall(
 
     # print(task_id, schema)
 
-    (schema_tables, schema_values) = rag.search_similar(
+    schema_tables, schema_values = rag.search_similar(
         query_text=task, top_n=top_n, database_name=db_id, use_rerank=use_rerank
     )
     table_count = len(rag.search_all_schemas(database_name=db_id))

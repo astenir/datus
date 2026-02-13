@@ -9,6 +9,7 @@ Manages prompt templates with simple file-based versioning.
 Template files follow the pattern: {template_name}_{version}.j2
 No configuration file needed - versions are determined by scanning files.
 """
+
 import re
 import shutil
 from pathlib import Path

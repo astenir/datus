@@ -21,8 +21,9 @@ from rich.syntax import Syntax
 from rich.table import Table
 
 from datus.agent.node.chat_agentic_node import ChatAgenticNode
+from datus.cli._cli_utils import select_choice
 from datus.cli.action_history_display import ActionHistoryDisplay
-from datus.cli.blocking_input_manager import blocking_input_manager, suppress_keyboard_input
+from datus.cli.blocking_input_manager import suppress_keyboard_input
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.schemas.node_models import SQLContext
 from datus.utils.loggings import get_logger
@@ -656,31 +657,23 @@ class ChatCommands:
 
             # Handle choice selection mode (choices is non-empty dict)
             keys = list(choices.keys())
-            self.console.print("\n[bold cyan]Options:[/]")
-            for key, display in choices.items():
-                marker = "→" if key == default_choice else " "
-                self.console.print(f"  {marker} [{key}] {display}")
-            self.console.print()
-
-            # Get default key for display
             default_key = default_choice if default_choice in keys else keys[0]
 
-            # Get user input using blocking_input_manager with retry loop
-            def get_input():
-                prompt = f"Your choice [{default_key}]: "
-                return blocking_input_manager.get_blocking_input(lambda: input(prompt).strip() or default_key)
+            # Use run_in_executor to run interactive selector in a separate thread
+            # This avoids "asyncio.run() cannot be called from a running event loop" error
+            loop = asyncio.get_running_loop()
+            choice_str = await loop.run_in_executor(
+                None,
+                lambda: select_choice(
+                    self.console,
+                    choices=choices,
+                    default=default_key,
+                ),
+            )
 
-            while True:
-                choice_str = get_input()
-
-                # Check if input matches a key
-                if choice_str in keys:
-                    self.console.print(f"[dim]Selected: {choices[choice_str]}[/]")
-                    return choice_str
-
-                # Invalid input - show error and retry
-                valid_options = ", ".join(keys)
-                self.console.print(f"[yellow]Invalid choice. Valid options: {valid_options}[/]")
+            if choice_str in choices:
+                self.console.print(f"[dim]Selected: {choices[choice_str]}[/]")
+            return choice_str or default_key
 
         except Exception as e:
             logger.error(f"Error handling CLI interaction: {e}")

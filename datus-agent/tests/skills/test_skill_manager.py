@@ -8,7 +8,6 @@ Unit tests for SkillManager.
 Tests skill coordination, permission integration, and XML generation.
 """
 
-
 import pytest
 
 from datus.tools.permission.permission_config import (

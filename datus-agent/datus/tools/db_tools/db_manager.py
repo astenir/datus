@@ -432,7 +432,7 @@ def db_manager_instance(
     db_configs: Optional[Dict[str, Dict[str, DbConfig]]] = None,
 ) -> DBManager:
     global _INSTANCE
-    if _INSTANCE is None:
+    if _INSTANCE is None or db_configs is not None:
         _INSTANCE = _db_manager(db_configs)
     return _INSTANCE
 

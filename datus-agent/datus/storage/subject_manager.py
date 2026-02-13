@@ -5,6 +5,7 @@
 """
 Used to manage editing operations related to Subject
 """
+
 from typing import Any, Dict, List
 
 from datus.configuration.agent_config import AgentConfig

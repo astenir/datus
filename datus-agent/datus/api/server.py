@@ -7,6 +7,7 @@
 Datus Agent FastAPI server startup script.
 Supports foreground and daemon (background) modes with start/stop/restart/status.
 """
+
 import argparse
 import atexit
 import multiprocessing

@@ -238,7 +238,7 @@ class SchemaWithValueRAG:
     def __init__(
         self,
         agent_config: AgentConfig,
-        sub_agent_name: Optional[str] = None
+        sub_agent_name: Optional[str] = None,
         # use_rerank: bool = False,
     ):
         from datus.storage.cache import get_storage_cache_instance

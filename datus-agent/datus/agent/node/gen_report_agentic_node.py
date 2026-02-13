@@ -295,14 +295,16 @@ class GenReportAgenticNode(AgenticNode):
         from datus.prompts.prompt_manager import prompt_manager
 
         try:
-            return prompt_manager.render_template(template_name=template_name, version=version, **context)
+            base_prompt = prompt_manager.render_template(template_name=template_name, version=version, **context)
 
         except FileNotFoundError:
             # Template not found - use default gen_report template
             logger.warning(
                 f"Failed to render system prompt '{system_prompt_name}', using the default gen_report template"
             )
-            return prompt_manager.render_template(template_name="gen_report_system", version=version, **context)
+            base_prompt = prompt_manager.render_template(template_name="gen_report_system", version=version, **context)
+
+        return self._finalize_system_prompt(base_prompt)
 
     def _build_enhanced_message(self, user_input: GenReportNodeInput) -> str:
         """

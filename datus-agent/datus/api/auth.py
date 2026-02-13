@@ -5,6 +5,7 @@
 """
 Authentication module for Datus Agent API.
 """
+
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path

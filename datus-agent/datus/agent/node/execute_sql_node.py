@@ -123,9 +123,11 @@ class ExecuteSQLNode(Node):
                 action_type="database_connection",
                 input={
                     "database_name": self.input.database_name if hasattr(self.input, "database_name") else "",
-                    "sql_query_preview": self.input.sql_query[:50] + "..."
-                    if hasattr(self.input, "sql_query") and len(self.input.sql_query) > 50
-                    else getattr(self.input, "sql_query", ""),
+                    "sql_query_preview": (
+                        self.input.sql_query[:50] + "..."
+                        if hasattr(self.input, "sql_query") and len(self.input.sql_query) > 50
+                        else getattr(self.input, "sql_query", "")
+                    ),
                 },
                 status=ActionStatus.PROCESSING,
             )

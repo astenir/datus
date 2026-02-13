@@ -138,9 +138,9 @@ class SearchMetricsNode(Node):
                 input={
                     "input_text": getattr(self.input, "input_text", ""),
                     "matching_rate": getattr(self.input, "matching_rate", "medium"),
-                    "database_name": getattr(self.input.sql_task, "database_name", "")
-                    if hasattr(self.input, "sql_task")
-                    else "",
+                    "database_name": (
+                        getattr(self.input.sql_task, "database_name", "") if hasattr(self.input, "sql_task") else ""
+                    ),
                 },
                 status=ActionStatus.PROCESSING,
             )

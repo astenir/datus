@@ -3,6 +3,7 @@
 This module implements a tree structure using the adjacency list model,
 following the pattern established by TaskStore for consistency.
 """
+
 import fnmatch
 import os
 import sqlite3

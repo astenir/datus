@@ -9,6 +9,7 @@ Interactive initialization command for Datus Agent.
 This module provides an interactive CLI for setting up the basic configuration
 without requiring users to manually write conf/agent.yml files.
 """
+
 import os
 import shutil
 import sys

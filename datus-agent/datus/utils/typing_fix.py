@@ -5,6 +5,7 @@
 """
 Typing compatibility fixes for agents library in Python 3.12+
 """
+
 import sys
 
 

@@ -484,12 +484,14 @@ class GenSQLAgenticNode(AgenticNode):
         from datus.prompts.prompt_manager import prompt_manager
 
         try:
-            return prompt_manager.render_template(template_name=template_name, version=prompt_version, **context)
+            base_prompt = prompt_manager.render_template(template_name=template_name, version=prompt_version, **context)
+            return self._finalize_system_prompt(base_prompt)
 
         except FileNotFoundError:
             # Template not found - throw DatusException
             logger.warning(f"Failed to render system prompt '{system_prompt_name}', using the default template instead")
-            return prompt_manager.render_template(template_name="sql_system", version=None, **context)
+            base_prompt = prompt_manager.render_template(template_name="sql_system", version=None, **context)
+            return self._finalize_system_prompt(base_prompt)
         except Exception as e:
             # Other template errors - wrap in DatusException
             logger.error(f"Template loading error for '{template_name}': {e}")

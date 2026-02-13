@@ -38,9 +38,11 @@ def mock_save_configuration():
 @pytest.fixture
 def mock_prompt():
     """Mock the rich prompt for user input."""
-    with patch("datus.cli.namespace_manager.Prompt.ask") as mock_ask, patch(
-        "datus.cli.namespace_manager.getpass"
-    ) as mock_getpass, patch("datus.cli.namespace_manager.Confirm.ask") as mock_confirm:
+    with (
+        patch("datus.cli.namespace_manager.Prompt.ask") as mock_ask,
+        patch("datus.cli.namespace_manager.getpass") as mock_getpass,
+        patch("datus.cli.namespace_manager.Confirm.ask") as mock_confirm,
+    ):
         # Default mocks
         mock_ask.return_value = "non_exsited_namespace"
         mock_getpass.return_value = "test_password"

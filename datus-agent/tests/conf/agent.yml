@@ -75,6 +75,23 @@ agent:
     reflect:
     output:
       check_result: true
+  # ── Skills configuration ──
+  skills:
+    directories:
+      - tests/data/skills
+    warn_duplicates: true
+
+  # ── Unified permission configuration ──
+  permissions:
+    default: allow
+    rules:
+      - tool: skills
+        pattern: "admin-*"
+        permission: deny
+      - tool: skills
+        pattern: "sql-*"
+        permission: ask
+
   agentic_nodes:
     gen_semantic_model:
       max_turns: 40
@@ -91,6 +108,33 @@ agent:
         - Always check reference SQL files(*.sql) in allowed directory for similar patterns before writing new queries
         - If context is provided, use the tables/metrics/sqls in user prompt
         - Try to use database specific dialect
+    # ── Integration test nodes with skill/permission configuration ──
+    school_sql:
+      model: deepseek
+      system_prompt: gen_sql
+      prompt_language: en
+      tools: db_tools.*, context_search_tools.*
+      skills: "sql-*"
+      agent_description: "SQL agent with sql-* skills only"
+    school_report:
+      model: deepseek
+      system_prompt: gen_sql
+      prompt_language: en
+      tools: db_tools.*, context_search_tools.*
+      skills: "report-*, data-*"
+      agent_description: "Report agent with report/data skills only"
+    school_all:
+      model: deepseek
+      system_prompt: gen_sql
+      prompt_language: en
+      tools: db_tools.*, context_search_tools.*
+      skills: "*"
+      permissions:
+        rules:
+          - tool: skills
+            pattern: "admin-*"
+            permission: allow
+      agent_description: "Agent with all skills and admin override"
   schema_linking_rate: medium
 
   # Benchmark data is stored at {agent.home}/benchmark/{name}

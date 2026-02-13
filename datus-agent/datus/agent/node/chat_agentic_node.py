@@ -8,6 +8,7 @@ ChatAgenticNode implementation for flexible CLI chat interactions.
 This module provides a concrete implementation of GenSQLAgenticNode specifically
 designed for chat interactions with database and filesystem tool support.
 """
+
 from typing import AsyncGenerator, Optional, override
 
 from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode
@@ -190,9 +191,31 @@ class ChatAgenticNode(GenSQLAgenticNode):
     def _setup_skill_tools(self):
         """Setup skill discovery and loading tools with permission control."""
         try:
+            # Build permission config with default ASK rule for skill bash execution.
+            # Prepend (lowest priority) so user-configured rules can override.
+            from datus.tools.permission.permission_config import PermissionConfig, PermissionLevel, PermissionRule
+
+            base_config = self.agent_config.permissions_config
+            if base_config is not None:
+                base_config = base_config.model_copy(deep=True)
+            else:
+                base_config = PermissionConfig()
+
+            # Add default ASK for skill_execute_command (bash) at position 0 (lowest priority)
+            has_bash_rule = any(r.tool == "skills" and r.pattern == "skill_execute_command" for r in base_config.rules)
+            if not has_bash_rule:
+                base_config.rules.insert(
+                    0,
+                    PermissionRule(
+                        tool="skills",
+                        pattern="skill_execute_command",
+                        permission=PermissionLevel.ASK,
+                    ),
+                )
+
             # Create PermissionManager from agent config
             self.permission_manager = PermissionManager(
-                global_config=self.agent_config.permissions_config,
+                global_config=base_config,
                 node_overrides=self._get_node_permission_overrides(),
             )
 
@@ -349,32 +372,6 @@ class ChatAgenticNode(GenSQLAgenticNode):
         # Add skill tools
         if self.skill_func_tool:
             self.tools.extend(self.skill_func_tool.available_tools())
-
-    @override
-    def _get_system_prompt(
-        self,
-        conversation_summary: Optional[str] = None,
-        prompt_version: Optional[str] = None,
-    ) -> str:
-        """Get system prompt with available skills injected.
-
-        Args:
-            conversation_summary: Optional summary from previous conversation compact
-            prompt_version: Optional prompt version to use
-
-        Returns:
-            System prompt string with available skills XML appended
-        """
-        # Call parent to get base prompt
-        base_prompt = super()._get_system_prompt(conversation_summary, prompt_version)
-
-        # Generate available skills XML and append to prompt
-        if self.skill_manager and self.skill_manager.get_skill_count() > 0:
-            skills_xml = self.skill_manager.generate_available_skills_xml(node_name="chat")
-            if skills_xml:
-                base_prompt = base_prompt + "\n\n" + skills_xml
-
-        return base_prompt
 
     async def execute_stream(
         self, action_history_manager: Optional[ActionHistoryManager] = None

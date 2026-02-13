@@ -50,7 +50,6 @@ class BaseFetcher(ABC):
         Returns:
             List of fetched documents
         """
-        pass
 
     @abstractmethod
     def fetch_single(self, path: str, **kwargs) -> Optional[FetchedDocument]:
@@ -63,7 +62,6 @@ class BaseFetcher(ABC):
         Returns:
             Fetched document or None if not found
         """
-        pass
 
     def _is_doc_file(self, filename: str) -> bool:
         """Check if a file is a documentation file.

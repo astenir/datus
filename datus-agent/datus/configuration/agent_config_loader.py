@@ -174,7 +174,7 @@ def load_agent_config(reload: bool = False, **kwargs) -> AgentConfig:
     except Exception:
         pass
 
-    agent_raw = configuration_manager(config_path=kwargs.get("config", ""), reload=reload).data
+    agent_raw = dict(configuration_manager(config_path=kwargs.get("config", ""), reload=reload).data)
     nodes = {}
     if "nodes" in agent_raw:
         nodes_raw = agent_raw["nodes"]

@@ -207,7 +207,7 @@ class PermissionHooks(AgentHooks):
                         return
 
                 # Request user confirmation via InteractionBroker
-                approved = await self._request_user_confirmation(category, pattern_name, context)
+                approved = await self._request_user_confirmation(category, pattern_name, context, tool_name=tool_name)
 
                 if not approved:
                     logger.info(f"User rejected tool '{tool_name}'")
@@ -281,6 +281,7 @@ class PermissionHooks(AgentHooks):
         category: str,
         pattern_name: str,
         context: Any,
+        tool_name: Optional[str] = None,
     ) -> bool:
         """Request user confirmation via InteractionBroker.
 
@@ -291,6 +292,7 @@ class PermissionHooks(AgentHooks):
             category: Tool category (e.g., "skills", "mcp.filesystem")
             pattern_name: Specific tool/skill name
             context: Tool context for additional info
+            tool_name: Original tool function name (e.g., "load_skill")
 
         Returns:
             True if user approved, False otherwise
@@ -321,6 +323,11 @@ class PermissionHooks(AgentHooks):
             if choice == "a":
                 # Approve for session - all future calls to this tool are auto-approved
                 self.permission_manager.approve_for_session(category, pattern_name)
+                # Also cache tool-level key so all future calls of the same tool type are auto-approved
+                # e.g., load_skill("report-generator") also caches "skills.load_skill"
+                # so load_skill("sql-analysis") is auto-approved without a second prompt
+                if tool_name and tool_name != pattern_name:
+                    self.permission_manager.approve_for_session(category, tool_name)
                 await callback(f"**{category}.{pattern_name}** approved for session")
                 return True
             elif choice == "y":

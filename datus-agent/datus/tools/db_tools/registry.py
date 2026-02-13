@@ -54,9 +54,11 @@ class AdapterMetadata:
                     "required": field_info.is_required(),
                     "default": field_info.default if not field_info.is_required() else None,
                     "description": field_info.description or "",
-                    "type": field_info.annotation.__name__
-                    if hasattr(field_info.annotation, "__name__")
-                    else str(field_info.annotation),
+                    "type": (
+                        field_info.annotation.__name__
+                        if hasattr(field_info.annotation, "__name__")
+                        else str(field_info.annotation)
+                    ),
                 }
 
                 # Extract json_schema_extra metadata for special handling

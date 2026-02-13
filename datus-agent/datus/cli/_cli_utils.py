@@ -1,9 +1,91 @@
+from typing import Dict
+
 from prompt_toolkit.styles import Style
 from rich.console import Console
 
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
+
+
+def select_choice(
+    console: Console,
+    choices: Dict[str, str],
+    default: str = "",
+) -> str:
+    """Interactive choice selector with arrow-key navigation.
+
+    Uses prompt_toolkit Application for proper terminal handling.
+    Up/Down arrows to navigate, Enter to confirm, or press shortcut key directly.
+
+    Args:
+        console: Rich Console (used for fallback output on error)
+        choices: Ordered dict of {key: display_text}
+                 e.g. {"y": "Allow (once)", "a": "Always allow (session)", "n": "Deny"}
+        default: Default choice key (pre-selected on start)
+
+    Returns:
+        Selected choice key string
+    """
+    try:
+        from prompt_toolkit import Application
+        from prompt_toolkit.key_binding import KeyBindings
+        from prompt_toolkit.layout import Layout
+        from prompt_toolkit.layout.containers import Window
+        from prompt_toolkit.layout.controls import FormattedTextControl
+
+        keys = list(choices.keys())
+        selected = [keys.index(default) if default in keys else 0]
+
+        kb = KeyBindings()
+
+        @kb.add("up")
+        def _move_up(event):
+            selected[0] = (selected[0] - 1) % len(keys)
+
+        @kb.add("down")
+        def _move_down(event):
+            selected[0] = (selected[0] + 1) % len(keys)
+
+        @kb.add("enter")
+        def _confirm(event):
+            event.app.exit(result=keys[selected[0]])
+
+        @kb.add("c-c")
+        def _cancel(event):
+            event.app.exit(result=default)
+
+        # Direct shortcut keys (press y/a/n to pick immediately)
+        for _i, _key in enumerate(keys):
+
+            @kb.add(_key)
+            def _select_direct(event, k=_key):
+                event.app.exit(result=k)
+
+        def _get_formatted_text():
+            lines = []
+            for i, (key, display) in enumerate(choices.items()):
+                if i == selected[0]:
+                    lines.append(("ansicyan bold", f"  \u2192 [{key}] {display}\n"))
+                else:
+                    lines.append(("", f"    [{key}] {display}\n"))
+            return lines
+
+        app = Application(
+            layout=Layout(Window(FormattedTextControl(_get_formatted_text))),
+            key_bindings=kb,
+            full_screen=False,
+        )
+
+        return app.run()
+
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n[yellow]Input cancelled[/]")
+        return default
+    except Exception as e:
+        logger.error(f"Interactive select error: {e}")
+        console.print(f"[bold red]Selection error:[/] {str(e)}")
+        return default
 
 
 def prompt_input(
