@@ -31,9 +31,17 @@ class TableMetadataNames(BaseModel):
 # Metadata configuration for ClickHouse objects
 METADATA_DICT: Dict[TABLE_TYPE, TableMetadataNames] = {
     "table": TableMetadataNames(
-        show_table="TABLES", show_create_table="TABLE", info_table="TABLES", table_types=["BASE TABLE"]
+        show_table="TABLES",
+        show_create_table="TABLE",
+        info_table="TABLES",
+        table_types=["BASE TABLE"],
     ),
-    "view": TableMetadataNames(show_table="VIEWS", show_create_table="VIEW", info_table="VIEWS", table_types=None),
+    "view": TableMetadataNames(
+        show_table="VIEWS",
+        show_create_table="VIEW",
+        info_table="VIEWS",
+        table_types=None,
+    ),
 }
 
 
@@ -71,10 +79,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
         encoded_password = quote_plus(self.password) if self.password else ""
 
         # Build connection string
-        connection_string = (
-            f"clickhouse://{self.username}:{encoded_password}@{self.host}:{self.port}/"
-            f"{database}"
-        )
+        connection_string = f"clickhouse://{self.username}:{encoded_password}@{self.host}:{self.port}/" f"{database}"
 
         super().__init__(
             connection_string,
@@ -230,7 +235,11 @@ class ClickHouseConnector(SQLAlchemyConnector):
 
     @override
     def get_tables_with_ddl(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", tables: Optional[List[str]] = None
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        tables: Optional[List[str]] = None,
     ) -> List[Dict[str, str]]:
         """Get tables with DDL statements."""
         return self._get_objects_with_ddl("table", tables, catalog_name, database_name)
@@ -244,7 +253,11 @@ class ClickHouseConnector(SQLAlchemyConnector):
 
     @override
     def get_schema(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> List[Dict[str, Any]]:
         """
         Get table schema using DESCRIBE.
@@ -275,7 +288,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
                     "cid": i,
                     "name": query_result["name"][i],
                     "type": query_result["type"][i],
-                    "nullable": True if "Nullable" in query_result["type"][i] else False,
+                    "nullable": (True if "Nullable" in query_result["type"][i] else False),
                     "default_value": query_result["default_expression"][i],
                     "pk": False,
                 }
@@ -339,7 +352,9 @@ class ClickHouseConnector(SQLAlchemyConnector):
         if tables:
             for table_name in tables:
                 full_name = self.full_name(
-                    catalog_name=catalog_name, database_name=database_name, table_name=table_name
+                    catalog_name=catalog_name,
+                    database_name=database_name,
+                    table_name=table_name,
                 )
                 sql = f"SELECT * FROM {full_name} LIMIT {top_n}"
                 df = self._execute_pandas(sql)
@@ -347,7 +362,9 @@ class ClickHouseConnector(SQLAlchemyConnector):
                     result.append(
                         {
                             "identifier": self.identifier(
-                                catalog_name=catalog_name, database_name=database_name, table_name=table_name
+                                catalog_name=catalog_name,
+                                database_name=database_name,
+                                table_name=table_name,
                             ),
                             "catalog_name": catalog_name,
                             "database_name": database_name,
@@ -381,7 +398,11 @@ class ClickHouseConnector(SQLAlchemyConnector):
 
     @override
     def full_name(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> str:
         """Build fully-qualified table name."""
         if database_name:
@@ -390,7 +411,11 @@ class ClickHouseConnector(SQLAlchemyConnector):
 
     @override
     def _reset_filter_tables(
-        self, tables: Optional[List[str]] = None, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+        self,
+        tables: Optional[List[str]] = None,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
     ) -> List[str]:
         """Reset filter tables with full names."""
         database_name = database_name or self.database_name
@@ -398,7 +423,11 @@ class ClickHouseConnector(SQLAlchemyConnector):
 
     @override
     def identifier(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> str:
         """Build identifier for table."""
         if not catalog_name and not database_name and not schema_name:

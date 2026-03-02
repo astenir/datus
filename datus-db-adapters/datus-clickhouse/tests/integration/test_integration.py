@@ -4,6 +4,7 @@
 
 import os
 import uuid
+
 import pytest
 from datus_clickhouse import ClickHouseConfig, ClickHouseConnector
 
@@ -74,13 +75,15 @@ def test_get_tables_with_ddl(connector: ClickHouseConnector, config: ClickHouseC
     table_name = f"test_table_{suffix}"
 
     connector.switch_context(database_name=config.database)
-    connector.execute_ddl(f"""
+    connector.execute_ddl(
+        f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
             `id` Int64,
             `name` Nullable(String)
             ) ENGINE = MergeTree()
             ORDER BY id
-    """)
+    """
+    )
 
     try:
         tables = connector.get_tables_with_ddl(database_name=config.database, tables=[table_name])
@@ -118,13 +121,15 @@ def test_get_views_with_ddl(connector: ClickHouseConnector, config: ClickHouseCo
     connector.switch_context(database_name=config.database)
 
     # Create base table
-    connector.execute_ddl(f"""
+    connector.execute_ddl(
+        f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
              `id` Int64,
             `name` Nullable(String)
             ) ENGINE = MergeTree()
             ORDER BY id
-    """)
+    """
+    )
 
     # Create view
     connector.execute_ddl(f"CREATE VIEW {view_name} AS SELECT * FROM {table_name}")
@@ -152,7 +157,8 @@ def test_get_schema(connector: ClickHouseConnector, config: ClickHouseConfig):
     table_name = f"test_schema_{suffix}"
 
     connector.switch_context(database_name=config.database)
-    connector.execute_ddl(f"""
+    connector.execute_ddl(
+        f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
             `id` String,
             `type` Nullable(String),
@@ -162,7 +168,8 @@ def test_get_schema(connector: ClickHouseConnector, config: ClickHouseConfig):
             `dt` String DEFAULT '1971-01-01'
         ) ENGINE = MergeTree()
         ORDER BY id
-    """)
+    """
+    )
 
     try:
         schema = connector.get_schema(database_name=config.database, table_name=table_name)
@@ -192,21 +199,25 @@ def test_get_sample_rows(connector: ClickHouseConnector, config: ClickHouseConfi
     table_name = f"test_sample_{suffix}"
 
     connector.switch_context(database_name=config.database)
-    connector.execute_ddl(f"""
+    connector.execute_ddl(
+        f"""
         CREATE TABLE IF NOT EXISTS {table_name} (
              `id` Int64,
             `name` Nullable(String)
             ) ENGINE = MergeTree()
             ORDER BY id
-    """)
+    """
+    )
 
     # Insert test data
-    connector.execute_insert(f"""
+    connector.execute_insert(
+        f"""
         INSERT INTO {table_name} (id, name) VALUES
         (1, 'Alice'),
         (2, 'Bob'),
         (3, 'Charlie')
-    """)
+    """
+    )
 
     try:
         sample_rows = connector.get_sample_rows(database_name=config.database, tables=[table_name], top_n=2)
@@ -240,13 +251,15 @@ def test_execute_ddl(connector: ClickHouseConnector, config: ClickHouseConfig):
 
     try:
         # CREATE
-        create_result = connector.execute_ddl(f"""
+        create_result = connector.execute_ddl(
+            f"""
             CREATE TABLE {table_name} (
             `id` Int64,
             `name` Nullable(String)
             ) ENGINE = MergeTree()
             ORDER BY id
-        """)
+        """
+        )
         assert create_result.success
 
         # ALTER
@@ -264,13 +277,15 @@ def test_execute_insert(connector: ClickHouseConnector, config: ClickHouseConfig
     table_name = f"test_insert_{suffix}"
 
     connector.switch_context(database_name=config.database)
-    connector.execute_ddl(f"""
+    connector.execute_ddl(
+        f"""
         CREATE TABLE {table_name} (
             `id` Int64,
             `name` Nullable(String)
         ) ENGINE = MergeTree()
         ORDER BY id
-    """)
+    """
+    )
 
     try:
         insert_result = connector.execute_insert(f"INSERT INTO {table_name} (id, name) VALUES (1, 'Alice'), (2, 'Bob')")
@@ -278,9 +293,13 @@ def test_execute_insert(connector: ClickHouseConnector, config: ClickHouseConfig
 
         # Verify
         query_result = connector.execute(
-            {"sql_query": f"SELECT id, name FROM {table_name} ORDER BY id"}, result_format="list"
+            {"sql_query": f"SELECT id, name FROM {table_name} ORDER BY id"},
+            result_format="list",
         )
-        assert query_result.sql_return == [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+        assert query_result.sql_return == [
+            {"id": 1, "name": "Alice"},
+            {"id": 2, "name": "Bob"},
+        ]
     finally:
         connector.execute_ddl(f"DROP TABLE IF EXISTS {table_name}")
 
@@ -292,14 +311,16 @@ def test_execute_update(connector: ClickHouseConnector, config: ClickHouseConfig
     table_name = f"test_update_{suffix}"
 
     connector.switch_context(database_name=config.database)
-    connector.execute_ddl(f"""
+    connector.execute_ddl(
+        f"""
         CREATE TABLE {table_name} (
             `id` Int64,
             `name` Nullable(String)
         ) ENGINE = MergeTree()
         ORDER BY id
         SETTINGS enable_block_number_column = 1, enable_block_offset_column = 1
-    """)
+    """
+    )
 
     try:
         # Insert initial data
@@ -313,7 +334,8 @@ def test_execute_update(connector: ClickHouseConnector, config: ClickHouseConfig
 
         # Verify
         query_result = connector.execute(
-            {"sql_query": f"SELECT name FROM {table_name} WHERE id = 1"}, result_format="list"
+            {"sql_query": f"SELECT name FROM {table_name} WHERE id = 1"},
+            result_format="list",
         )
         assert query_result.sql_return == [{"name": "Alice Updated"}]
     finally:
@@ -327,13 +349,15 @@ def test_execute_delete(connector: ClickHouseConnector, config: ClickHouseConfig
     table_name = f"test_delete_{suffix}"
 
     connector.switch_context(database_name=config.database)
-    connector.execute_ddl(f"""
+    connector.execute_ddl(
+        f"""
         CREATE TABLE {table_name} (
             `id` Int64,
             `name` Nullable(String)
         ) ENGINE = MergeTree()
         ORDER BY id
-    """)
+    """
+    )
 
     try:
         # Insert initial data
