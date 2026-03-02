@@ -1,71 +1,33 @@
+#!/usr/bin/env python3
 # Copyright 2025-present DatusAI, Inc.
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-import json
-import os
-from typing import Generator
+"""
+Initialize TPC-H sample data in Hive.
 
-import pytest
-from datus_hive import HiveConfig, HiveConnector
+Usage:
+    # Start Hive first:
+    cd datus-hive && docker compose up -d
 
+    # Then run this script:
+    uv run python scripts/init_tpch_data.py
 
-def _load_configuration() -> dict:
-    raw = os.getenv("HIVE_CONFIGURATION_JSON")
-    if not raw:
-        return {}
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        pytest.skip(f"Invalid HIVE_CONFIGURATION_JSON: {exc}")
-    if not isinstance(data, dict):
-        pytest.skip("HIVE_CONFIGURATION_JSON must be a JSON object")
-    return data
+    # With custom connection:
+    uv run python scripts/init_tpch_data.py --host localhost --port 10000 --username hive
 
+    # Drop existing tables first (clean re-init):
+    uv run python scripts/init_tpch_data.py --drop
+"""
 
-def _build_hive_config() -> HiveConfig:
-    """Build HiveConfig from environment variables."""
-    auth = os.getenv("HIVE_AUTH")
-    return HiveConfig(
-        host=os.getenv("HIVE_HOST", "localhost"),
-        port=int(os.getenv("HIVE_PORT", "10000")),
-        database=os.getenv("HIVE_DATABASE", "default"),
-        username=os.getenv("HIVE_USERNAME", "hive"),
-        password=os.getenv("HIVE_PASSWORD", ""),
-        auth=auth if auth else None,
-        configuration=_load_configuration(),
-    )
+import argparse
+import logging
+import sys
 
+# Suppress adapter registry warnings in workspace dev environment
+logging.getLogger("datus.tools.db_tools.registry").setLevel(logging.ERROR)
 
-@pytest.fixture
-def config() -> HiveConfig:
-    """Create Hive configuration for integration tests from environment or defaults."""
-    return _build_hive_config()
-
-
-@pytest.fixture
-def connector(config: HiveConfig) -> Generator[HiveConnector, None, None]:
-    """Create and cleanup Hive connector for integration tests."""
-    conn = None
-    try:
-        conn = HiveConnector(config)
-        if not conn.test_connection():
-            pytest.skip("Database connection test failed")
-    except Exception as exc:
-        pytest.skip(f"Database not available: {exc}")
-    try:
-        yield conn
-    finally:
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-
-# ==================== TPC-H Test Data ====================
-
-TPCH_TABLES = ["tpch_region", "tpch_nation", "tpch_customer", "tpch_orders", "tpch_supplier"]
+from datus_hive import HiveConfig, HiveConnector  # noqa: E402
 
 TPCH_DDL = [
     """
@@ -194,42 +156,71 @@ TPCH_DATA = [
     """,
 ]
 
+TPCH_TABLES = ["tpch_region", "tpch_nation", "tpch_customer", "tpch_orders", "tpch_supplier"]
+ROW_COUNTS = [5, 25, 10, 15, 5]
 
-@pytest.fixture(scope="session")
-def tpch_setup() -> Generator[HiveConnector, None, None]:
-    """Session-scoped fixture: create TPC-H tables, insert data, yield connector, cleanup."""
-    hive_config = _build_hive_config()
 
-    conn = None
-    try:
-        conn = HiveConnector(hive_config)
-        if not conn.test_connection():
-            pytest.skip("Database connection test failed")
+def main():
+    parser = argparse.ArgumentParser(description="Initialize TPC-H sample data in Hive")
+    parser.add_argument("--host", default="localhost", help="Hive host (default: localhost)")
+    parser.add_argument("--port", type=int, default=10000, help="HiveServer2 port (default: 10000)")
+    parser.add_argument("--username", default="hive", help="Username (default: hive)")
+    parser.add_argument("--password", default="", help="Password (default: empty)")
+    parser.add_argument("--database", default="default", help="Database (default: default)")
+    parser.add_argument("--drop", action="store_true", help="Drop existing TPC-H tables before creating")
+    args = parser.parse_args()
 
-        # Drop existing tables first to ensure clean state
+    print(f"Connecting to Hive at {args.host}:{args.port}...")
+    config = HiveConfig(
+        host=args.host,
+        port=args.port,
+        username=args.username,
+        password=args.password,
+        database=args.database,
+    )
+    conn = HiveConnector(config)
+
+    if not conn.test_connection():
+        print("Failed to connect to Hive. Is the server running?")
+        print("  Start it with: cd datus-hive && docker compose up -d")
+        sys.exit(1)
+
+    print("Connected successfully!")
+
+    if args.drop:
+        print("\nDropping existing TPC-H tables...")
         for table in TPCH_TABLES:
             conn.execute_ddl(f"DROP TABLE IF EXISTS {table}")
+            print(f"  Dropped {table}")
 
-        # Create tables
-        for ddl in TPCH_DDL:
-            conn.execute_ddl(ddl)
+    print("\nCreating TPC-H tables...")
+    for i, ddl in enumerate(TPCH_DDL):
+        conn.execute_ddl(ddl)
+        print(f"  Created {TPCH_TABLES[i]}")
 
-        # Insert data
-        for data in TPCH_DATA:
-            conn.execute_insert(data)
+    print("\nInserting TPC-H data...")
+    for i, data in enumerate(TPCH_DATA):
+        conn.execute_insert(data)
+        print(f"  Inserted {ROW_COUNTS[i]} rows into {TPCH_TABLES[i]}")
 
-        yield conn
+    # Verify
+    print("\nVerifying data...")
+    for i, table in enumerate(TPCH_TABLES):
+        result = conn.execute(
+            {"sql_query": f"SELECT COUNT(*) AS cnt FROM {table}"},
+            result_format="list",
+        )
+        count = result.sql_return[0]["cnt"]
+        expected = ROW_COUNTS[i]
+        status = "OK" if count >= expected else "MISMATCH"
+        print(f"  {table}: {count} rows [{status}]")
 
-    except Exception as exc:
-        pytest.skip(f"TPC-H setup failed: {exc}")
-    finally:
-        if conn is not None:
-            try:
-                for table in TPCH_TABLES:
-                    conn.execute_ddl(f"DROP TABLE IF EXISTS {table}")
-            except Exception:
-                pass
-            try:
-                conn.close()
-            except Exception:
-                pass
+    conn.close()
+    print("\nDone! TPC-H data is ready for use in Datus.")
+    print("\nExample queries:")
+    print("  SELECT * FROM tpch_region")
+    print("  SELECT n.name, r.name FROM tpch_nation n JOIN tpch_region r ON n.regionkey = r.regionkey")
+
+
+if __name__ == "__main__":
+    main()
