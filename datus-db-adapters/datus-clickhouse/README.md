@@ -30,7 +30,7 @@ database:
 Or use programmatically:
 
 ```python
-from datus_clickhouse import ClickHouseConfig,ClickHouseConnector
+from datus_clickhouse import ClickHouseConfig, ClickHouseConnector
 
 # Create connector
 config = ClickHouseConfig(
@@ -47,7 +47,7 @@ connector = ClickHouseConnector(config)
 connector.test_connection()
 
 # Execute query
-result = connector.execute_query("SELECT * FROM users LIMIT 10")
+result = connector.execute({"sql_query": "SELECT * FROM users LIMIT 10"})
 print(result.sql_return)
 
 # Get table list
@@ -72,9 +72,9 @@ for column in schema:
 
 ## Requirements
 
-- Python >= 3.10
+- Python >= 3.12
 - ClickHouse >= 20.1
-- datus-agent >= 0.3.0
+- datus-agent > 0.2.1
 - datus-sqlalchemy >= 0.1.0
 - clickhouse-sqlalchemy >= 0.3.2
 

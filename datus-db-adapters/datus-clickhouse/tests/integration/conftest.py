@@ -26,9 +26,22 @@ def connector(config: ClickHouseConfig) -> Generator[ClickHouseConnector, None, 
     """Create and cleanup ClickHouse connector for integration tests."""
     conn = None
     try:
-        conn = ClickHouseConnector(config)
-        if not conn.test_connection():
+        # Connect without database first to ensure test database exists
+        init_config = ClickHouseConfig(
+            host=config.host,
+            port=config.port,
+            username=config.username,
+            password=config.password,
+            database=None,
+        )
+        init_conn = ClickHouseConnector(init_config)
+        if not init_conn.test_connection():
             pytest.skip("Database connection test failed")
+        if config.database:
+            init_conn.execute_ddl(f"CREATE DATABASE IF NOT EXISTS `{config.database}`")
+        init_conn.close()
+
+        conn = ClickHouseConnector(config)
         yield conn
     except Exception as e:
         pytest.skip(f"Database not available: {e}")
