@@ -35,7 +35,6 @@ class HiveConnector(SQLAlchemyConnector):
         self.host = config.host
         self.port = config.port
         self.username = config.username
-        self.password = config.password
         self.auth = config.auth
         self.configuration = config.configuration or {}
 
@@ -46,6 +45,7 @@ class HiveConnector(SQLAlchemyConnector):
 
         super().__init__(connection_string, dialect=DBType.HIVE, timeout_seconds=config.timeout_seconds)
 
+        self.config = config
         self.database_name = database
         self._connect_args = self._build_connect_args(config)
 
@@ -85,18 +85,15 @@ class HiveConnector(SQLAlchemyConnector):
 
             connect_args = dict(self._connect_args)
 
-            if self.dialect not in (DBType.DUCKDB, DBType.SQLITE):
-                self.engine = create_engine(
-                    self.connection_string,
-                    pool_size=10,
-                    max_overflow=20,
-                    pool_timeout=self.timeout_seconds,
-                    pool_recycle=3600,
-                    pool_pre_ping=True,
-                    connect_args=connect_args,
-                )
-            else:
-                self.engine = create_engine(self.connection_string, connect_args=connect_args)
+            self.engine = create_engine(
+                self.connection_string,
+                pool_size=10,
+                max_overflow=20,
+                pool_timeout=self.timeout_seconds,
+                pool_recycle=3600,
+                pool_pre_ping=True,
+                connect_args=connect_args,
+            )
 
             self.connection = self.engine.connect()
             self._owns_engine = True
@@ -129,9 +126,10 @@ class HiveConnector(SQLAlchemyConnector):
             return databases
         return [db for db in databases if db.lower() not in sys_dbs]
 
+    @override
     def _sys_databases(self) -> Set[str]:
-        """Hive system databases to filter out (if any)."""
-        return set()
+        """Hive system databases to filter out."""
+        return {"information_schema", "sys"}
 
     @override
     def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
@@ -294,7 +292,7 @@ class HiveConnector(SQLAlchemyConnector):
             return []
 
         column_map = {str(col).lower(): col for col in result.columns}
-        for name in ("tablename", "tab_name", "table_name", "name"):
+        for name in ("tablename", "tab_name", "table_name", "viewname", "name"):
             if name in column_map:
                 col = column_map[name]
                 return [str(value) for value in result[col].tolist()]
