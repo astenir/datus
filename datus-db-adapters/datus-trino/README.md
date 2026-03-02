@@ -76,11 +76,11 @@ for column in schema:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| host | str | "localhost" | Trino server host |
+| host | str | "127.0.0.1" | Trino server host |
 | port | int | 8080 | Trino server port |
-| username | str | "trino" | Username |
+| username | str | (required) | Username |
 | password | str | "" | Password |
-| catalog | str | "memory" | Default catalog |
+| catalog | str | "hive" | Default catalog |
 | schema_name | str | "default" | Default schema |
 | http_scheme | str | "http" | HTTP scheme (http/https) |
 | verify | bool | True | Verify SSL certificates |

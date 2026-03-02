@@ -1,6 +1,6 @@
 services:
   trino:
-    image: trinodb/trino:latest
+    image: trinodb/trino:479
     container_name: datus-trino-test
     ports:
       - "8080:8080"  # HTTP port

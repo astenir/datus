@@ -31,9 +31,10 @@ def connector(config: TrinoConfig) -> Generator[TrinoConnector, None, None]:
         conn = TrinoConnector(config)
         if not conn.test_connection():
             pytest.skip("Database connection test failed")
-        yield conn
     except Exception as e:
         pytest.skip(f"Database not available: {e}")
+    else:
+        yield conn
     finally:
         if conn is not None:
             try:
@@ -53,15 +54,18 @@ def tpch_connector(config: TrinoConfig) -> Generator[TrinoConnector, None, None]
         catalog="tpch",
         schema_name="tiny",
         http_scheme=config.http_scheme,
+        verify=config.verify,
+        timeout_seconds=config.timeout_seconds,
     )
     conn = None
     try:
         conn = TrinoConnector(tpch_config)
         if not conn.test_connection():
             pytest.skip("TPC-H connection test failed")
-        yield conn
     except Exception as e:
         pytest.skip(f"TPC-H catalog not available: {e}")
+    else:
+        yield conn
     finally:
         if conn is not None:
             try:

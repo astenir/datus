@@ -43,8 +43,9 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
         self.user = config.username
 
         # Build connection string: trino://user:pass@host:port/catalog/schema
+        encoded_user = quote_plus(config.username)
         encoded_password = quote_plus(config.password) if config.password else ""
-        auth_part = f"{config.username}:{encoded_password}@" if config.password else f"{config.username}@"
+        auth_part = f"{encoded_user}:{encoded_password}@" if config.password else f"{encoded_user}@"
 
         connection_string = (
             f"trino://{auth_part}{config.host}:{config.port}"
@@ -226,7 +227,7 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
         Trino format: "catalog"."schema"."table"
         """
         catalog = catalog_name or self.catalog_name
-        schema = schema_name or database_name
+        schema = schema_name or database_name or self.schema_name
 
         if catalog and schema:
             return (
