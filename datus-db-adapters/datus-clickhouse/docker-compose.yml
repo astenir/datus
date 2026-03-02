@@ -1,6 +1,6 @@
 services:
   clickhouse:
-    image: clickhouse/clickhouse-server:25.8-lts
+    image: clickhouse/clickhouse-server:24.8
     container_name: datus-clickhouse-test
     ports:
       - "8123:8123"
