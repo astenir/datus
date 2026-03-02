@@ -35,11 +35,13 @@ def connector(config: ClickHouseConfig) -> Generator[ClickHouseConnector, None, 
             database=None,
         )
         init_conn = ClickHouseConnector(init_config)
-        if not init_conn.test_connection():
-            pytest.skip("Database connection test failed")
-        if config.database:
-            init_conn.execute_ddl(f"CREATE DATABASE IF NOT EXISTS `{config.database}`")
-        init_conn.close()
+        try:
+            if not init_conn.test_connection():
+                pytest.skip("Database connection test failed")
+            if config.database:
+                init_conn.execute_ddl(f"CREATE DATABASE IF NOT EXISTS `{config.database}`")
+        finally:
+            init_conn.close()
 
         conn = ClickHouseConnector(config)
     except Exception as e:
@@ -208,11 +210,13 @@ def tpch_setup() -> Generator[ClickHouseConnector, None, None]:
             database=None,
         )
         init_conn = ClickHouseConnector(init_config)
-        if not init_conn.test_connection():
-            pytest.skip("Database connection test failed")
-        if config.database:
-            init_conn.execute_ddl(f"CREATE DATABASE IF NOT EXISTS `{config.database}`")
-        init_conn.close()
+        try:
+            if not init_conn.test_connection():
+                pytest.skip("Database connection test failed")
+            if config.database:
+                init_conn.execute_ddl(f"CREATE DATABASE IF NOT EXISTS `{config.database}`")
+        finally:
+            init_conn.close()
 
         conn = ClickHouseConnector(config)
 
