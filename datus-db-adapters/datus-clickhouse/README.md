@@ -22,7 +22,7 @@ database:
   type: clickhouse
   host: localhost
   port: 8123
-  username: default_user
+  username: default
   password: your_password
   database: your_database
 ```
@@ -36,7 +36,7 @@ from datus_clickhouse import ClickHouseConfig, ClickHouseConnector
 config = ClickHouseConfig(
     host="localhost",
     port=8123,
-    username="default_user",
+    username="default",
     password="your_password",
     database="mydb",
 )
@@ -46,7 +46,7 @@ connector = ClickHouseConnector(config)
 connector = ClickHouseConnector({
     "host": "localhost",
     "port": 8123,
-    "username": "default_user",
+    "username": "default",
     "password": "your_password",
     "database": "mydb",
 })

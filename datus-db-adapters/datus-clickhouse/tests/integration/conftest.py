@@ -42,9 +42,10 @@ def connector(config: ClickHouseConfig) -> Generator[ClickHouseConnector, None, 
         init_conn.close()
 
         conn = ClickHouseConnector(config)
-        yield conn
     except Exception as e:
         pytest.skip(f"Database not available: {e}")
+    else:
+        yield conn
     finally:
         if conn is not None:
             try:
@@ -215,6 +216,10 @@ def tpch_setup() -> Generator[ClickHouseConnector, None, None]:
 
         conn = ClickHouseConnector(config)
 
+        # Drop tables first for deterministic setup
+        for table in TPCH_TABLES:
+            conn.execute_ddl(f"DROP TABLE IF EXISTS `{table}`")
+
         # Create tables
         for ddl in TPCH_DDL:
             conn.execute_ddl(ddl)
@@ -223,10 +228,10 @@ def tpch_setup() -> Generator[ClickHouseConnector, None, None]:
         for data in TPCH_DATA:
             conn.execute_insert(data)
 
-        yield conn
-
     except Exception as e:
         pytest.skip(f"TPC-H setup failed: {e}")
+    else:
+        yield conn
     finally:
         if conn is not None:
             try:
