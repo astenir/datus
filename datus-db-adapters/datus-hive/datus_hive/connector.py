@@ -339,6 +339,7 @@ class HiveConnector(SQLAlchemyConnector):
         """Switch database context using USE statement."""
         if database_name:
             self.execute_ddl(f"USE {self._quote_identifier(database_name)}")
+            self.database_name = database_name
 
     @classmethod
     def from_carrier_map(cls, carrier_map: Mapping[str, Any], prefix: str) -> "HiveConnector":
