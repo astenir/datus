@@ -185,6 +185,7 @@ class SparkConnector(SQLAlchemyConnector):
 
             with self.engine.connect() as conn:
                 conn.execute(text(f"USE {self._quote_identifier(database_name)}"))
+                conn.commit()
             self.database_name = database_name
 
     # ==================== Utility Methods ====================
