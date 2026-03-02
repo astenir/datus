@@ -218,10 +218,10 @@ def tpch_setup() -> Generator[HiveConnector, None, None]:
         for data in TPCH_DATA:
             conn.execute_insert(data)
 
-        yield conn
-
     except Exception as exc:
         pytest.skip(f"TPC-H setup failed: {exc}")
+    else:
+        yield conn
     finally:
         if conn is not None:
             try:

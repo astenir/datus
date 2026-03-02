@@ -186,36 +186,43 @@ def main():
         sys.exit(1)
 
     print("Connected successfully!")
+    try:
+        if args.drop:
+            print("\nDropping existing TPC-H tables...")
+            for table in TPCH_TABLES:
+                conn.execute_ddl(f"DROP TABLE IF EXISTS {table}")
+                print(f"  Dropped {table}")
 
-    if args.drop:
-        print("\nDropping existing TPC-H tables...")
-        for table in TPCH_TABLES:
-            conn.execute_ddl(f"DROP TABLE IF EXISTS {table}")
-            print(f"  Dropped {table}")
+        print("\nCreating TPC-H tables...")
+        for i, ddl in enumerate(TPCH_DDL):
+            conn.execute_ddl(ddl)
+            print(f"  Created {TPCH_TABLES[i]}")
 
-    print("\nCreating TPC-H tables...")
-    for i, ddl in enumerate(TPCH_DDL):
-        conn.execute_ddl(ddl)
-        print(f"  Created {TPCH_TABLES[i]}")
+        print("\nInserting TPC-H data...")
+        for i, data in enumerate(TPCH_DATA):
+            conn.execute_insert(data)
+            print(f"  Inserted {ROW_COUNTS[i]} rows into {TPCH_TABLES[i]}")
 
-    print("\nInserting TPC-H data...")
-    for i, data in enumerate(TPCH_DATA):
-        conn.execute_insert(data)
-        print(f"  Inserted {ROW_COUNTS[i]} rows into {TPCH_TABLES[i]}")
+        # Verify
+        print("\nVerifying data...")
+        has_mismatch = False
+        for i, table in enumerate(TPCH_TABLES):
+            result = conn.execute(
+                {"sql_query": f"SELECT COUNT(*) AS cnt FROM {table}"},
+                result_format="list",
+            )
+            count = result.sql_return[0]["cnt"]
+            expected = ROW_COUNTS[i]
+            status = "OK" if count == expected else "MISMATCH"
+            if count != expected:
+                has_mismatch = True
+            print(f"  {table}: {count} rows [{status}]")
 
-    # Verify
-    print("\nVerifying data...")
-    for i, table in enumerate(TPCH_TABLES):
-        result = conn.execute(
-            {"sql_query": f"SELECT COUNT(*) AS cnt FROM {table}"},
-            result_format="list",
-        )
-        count = result.sql_return[0]["cnt"]
-        expected = ROW_COUNTS[i]
-        status = "OK" if count >= expected else "MISMATCH"
-        print(f"  {table}: {count} rows [{status}]")
-
-    conn.close()
+        if has_mismatch:
+            print("\nVerification failed. Re-run with --drop for a clean re-init.")
+            sys.exit(2)
+    finally:
+        conn.close()
     print("\nDone! TPC-H data is ready for use in Datus.")
     print("\nExample queries:")
     print("  SELECT * FROM tpch_region")

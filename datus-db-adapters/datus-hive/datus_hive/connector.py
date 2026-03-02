@@ -266,7 +266,7 @@ class HiveConnector(SQLAlchemyConnector):
         for table_name in tables_to_scan:
             try:
                 full_name = self.full_name(database_name=database_name, table_name=table_name)
-                query = f"SELECT * FROM {full_name} LIMIT {top_n}"
+                query = f"SELECT * FROM {full_name} LIMIT {int(top_n)}"
                 df = self._execute_pandas(query)
                 if not df.empty:
                     result.append(
