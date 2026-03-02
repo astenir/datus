@@ -173,9 +173,7 @@ def test_get_sample_rows(connector: HiveConnector, config: HiveConfig):
 
     try:
         try:
-            connector.execute_insert(
-                f"INSERT INTO {table_name} VALUES (1, 'alpha'), (2, 'beta')"
-            )
+            connector.execute_insert(f"INSERT INTO {table_name} VALUES (1, 'alpha'), (2, 'beta')")
         except Exception as exc:
             pytest.skip(f"Insert not supported in this environment: {exc}")
 
