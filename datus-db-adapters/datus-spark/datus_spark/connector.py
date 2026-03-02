@@ -43,11 +43,12 @@ class SparkConnector(SQLAlchemyConnector):
         database = config.database or "default"
 
         # Build connection string: hive://user:pass@host:port/database
+        encoded_username = quote_plus(config.username)
         encoded_password = quote_plus(config.password) if config.password else ""
         if config.password:
-            auth_part = f"{config.username}:{encoded_password}@"
+            auth_part = f"{encoded_username}:{encoded_password}@"
         else:
-            auth_part = f"{config.username}@"
+            auth_part = f"{encoded_username}@"
 
         # Build connection string with auth mechanism
         connection_string = f"hive://{auth_part}{config.host}:{config.port}/{database}"

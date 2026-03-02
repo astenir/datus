@@ -163,44 +163,51 @@ def main():
 
     print(f"Connecting to Spark at {args.host}:{args.port}...")
     conn = SparkConnector(config)
+    try:
+        if not conn.test_connection():
+            print("Failed to connect to Spark. Is the Thrift Server running?")
+            print("  Start it with: cd datus-spark && docker compose up -d")
+            sys.exit(1)
 
-    if not conn.test_connection():
-        print("Failed to connect to Spark. Is the Thrift Server running?")
-        print("  Start it with: cd datus-spark && docker compose up -d")
-        sys.exit(1)
+        print("Connected successfully!")
 
-    print("Connected successfully!")
+        if args.drop:
+            print("\nDropping existing TPC-H tables...")
+            for table in TPCH_TABLES:
+                conn.execute_ddl(f"DROP TABLE IF EXISTS `default`.`{table}`")
+                print(f"  Dropped {table}")
 
-    if args.drop:
-        print("\nDropping existing TPC-H tables...")
-        for table in TPCH_TABLES:
-            conn.execute_ddl(f"DROP TABLE IF EXISTS `default`.`{table}`")
-            print(f"  Dropped {table}")
+        print("\nCreating TPC-H tables...")
+        for i, ddl in enumerate(TPCH_DDL):
+            conn.execute_ddl(ddl)
+            print(f"  Created {TPCH_TABLES[i]}")
 
-    print("\nCreating TPC-H tables...")
-    for i, ddl in enumerate(TPCH_DDL):
-        conn.execute_ddl(ddl)
-        print(f"  Created {TPCH_TABLES[i]}")
+        print("\nInserting TPC-H data...")
+        row_counts = [5, 25, 10, 15, 5]
+        for i, data in enumerate(TPCH_DATA):
+            conn.execute_ddl(data)
+            print(f"  Inserted {row_counts[i]} rows into {TPCH_TABLES[i]}")
 
-    print("\nInserting TPC-H data...")
-    row_counts = [5, 25, 10, 15, 5]
-    for i, data in enumerate(TPCH_DATA):
-        conn.execute_ddl(data)
-        print(f"  Inserted {row_counts[i]} rows into {TPCH_TABLES[i]}")
+        # Verify
+        print("\nVerifying data...")
+        has_mismatch = False
+        for i, table in enumerate(TPCH_TABLES):
+            result = conn.execute(
+                {"sql_query": f"SELECT COUNT(*) AS cnt FROM `default`.`{table}`"},
+                result_format="list",
+            )
+            count = result.sql_return[0]["cnt"]
+            expected = row_counts[i]
+            status = "OK" if count == expected else "MISMATCH"
+            if count != expected:
+                has_mismatch = True
+            print(f"  {table}: {count} rows [{status}]")
 
-    # Verify
-    print("\nVerifying data...")
-    for i, table in enumerate(TPCH_TABLES):
-        result = conn.execute(
-            {"sql_query": f"SELECT COUNT(*) AS cnt FROM `default`.`{table}`"},
-            result_format="list",
-        )
-        count = result.sql_return[0]["cnt"]
-        expected = row_counts[i]
-        status = "OK" if count >= expected else "MISMATCH"
-        print(f"  {table}: {count} rows [{status}]")
-
-    conn.close()
+        if has_mismatch:
+            print("\nVerification failed. Re-run with --drop for a clean re-init.")
+            sys.exit(2)
+    finally:
+        conn.close()
     print("\nDone! TPC-H data is ready for use in Datus.")
     print("\nExample queries:")
     print("  SELECT * FROM `default`.`tpch_region`")

@@ -30,9 +30,10 @@ def connector(config: SparkConfig) -> Generator[SparkConnector, None, None]:
         conn = SparkConnector(config)
         if not conn.test_connection():
             pytest.skip("Database connection test failed")
-        yield conn
     except Exception as e:
         pytest.skip(f"Database not available: {e}")
+    else:
+        yield conn
     finally:
         if conn is not None:
             try:
@@ -179,10 +180,10 @@ def tpch_setup():
             conn.execute_ddl(ddl)
         for data in TPCH_DATA:
             conn.execute_ddl(data)
-
-        yield conn
     except Exception as e:
         pytest.skip(f"TPC-H setup failed: {e}")
+    else:
+        yield conn
     finally:
         # Cleanup: drop all TPC-H tables
         if conn is not None:

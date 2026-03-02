@@ -75,12 +75,12 @@ for column in schema:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| host | str | "localhost" | Spark Thrift Server host |
+| host | str | "127.0.0.1" | Spark Thrift Server host |
 | port | int | 10000 | Spark Thrift Server port |
-| username | str | "spark" | Username |
+| username | str | (required) | Username |
 | password | str | "" | Password |
-| database | str | "default" | Default database |
-| auth_mechanism | str | "NONE" | Authentication mechanism (NONE, PLAIN, LDAP, KERBEROS) |
+| database | str | None | Default database (falls back to `default`) |
+| auth_mechanism | str | "NONE" | Authentication mechanism (NONE, PLAIN, KERBEROS) |
 | timeout_seconds | int | 30 | Connection timeout |
 
 ## Features
