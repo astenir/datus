@@ -3,9 +3,8 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import pytest
-from pydantic import ValidationError
-
 from datus_clickhouse import ClickHouseConfig
+from pydantic import ValidationError
 
 
 @pytest.mark.acceptance
