@@ -12,7 +12,6 @@ from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus_sqlalchemy import SQLAlchemyConnector
 from pydantic import BaseModel, Field
-from sqlalchemy import text
 
 from .config import ClickHouseConfig
 
@@ -64,11 +63,10 @@ class ClickHouseConnector(SQLAlchemyConnector):
         self.host = config.host
         self.port = config.port
         self.username = config.username
-        self.password = config.password
         database = config.database or ""
 
         # URL encode password to handle special characters
-        encoded_password = quote_plus(self.password) if self.password else ""
+        encoded_password = quote_plus(config.password) if config.password else ""
 
         # Build connection string
         connection_string = f"clickhouse://{self.username}:{encoded_password}@{self.host}:{self.port}/" f"{database}"
@@ -143,6 +141,9 @@ class ClickHouseConnector(SQLAlchemyConnector):
         )
 
         query_result = self._execute_pandas(query)
+
+        # Normalize column names to handle case variations across ClickHouse versions
+        query_result.columns = [c.upper() for c in query_result.columns]
 
         # Format results
         result = []
@@ -288,6 +289,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
 
     @override
     def get_schemas(self, catalog_name: str = "", database_name: str = "", include_sys: bool = False) -> List[str]:
+        """ClickHouse has no schema layer; databases serve as schemas. Use get_databases() instead."""
         return []
 
     @override
@@ -299,10 +301,8 @@ class ClickHouseConnector(SQLAlchemyConnector):
 
     @override
     def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        """Switch database context using USE statement."""
+        """Switch database context. Updates default database for subsequent full_name() calls."""
         if database_name:
-            with self.engine.connect() as connection:
-                connection.execute(text(f"USE {self._quote_identifier(database_name)}"))
             self.database_name = database_name
 
     # ==================== Sample Data ====================

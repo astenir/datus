@@ -322,9 +322,9 @@ def test_execute_update(connector: ClickHouseConnector, config: ClickHouseConfig
         # Insert initial data
         connector.execute_insert(f"INSERT INTO {table_name} (id, name) VALUES (1, 'Alice'), (2, 'Bob')")
 
-        # Update
+        # Update (ClickHouse uses ALTER TABLE ... UPDATE syntax)
         update_result = connector.execute_update(
-            f"UPDATE {table_name} SET name = 'Alice Updated' WHERE id = 1 SETTINGS mutations_sync = 1"
+            f"ALTER TABLE {table_name} UPDATE name = 'Alice Updated' WHERE id = 1 SETTINGS mutations_sync = 1"
         )
         assert update_result.success
 

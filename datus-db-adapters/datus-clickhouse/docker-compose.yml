@@ -1,24 +1,22 @@
-version: '3.8'
-
 services:
   clickhouse:
-    image: clickhouse/clickhouse-server:latest
-    container_name: clickhouse
+    image: clickhouse/clickhouse-server:24.8
+    container_name: datus-clickhouse-test
     ports:
       - "8123:8123"
       - "9000:9000"
     environment:
       - CLICKHOUSE_USER=default_user
       - CLICKHOUSE_PASSWORD=default_test
-    restart: unless-stopped
+      - CLICKHOUSE_DB=default_test
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "default_user", "--password", "default_test", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
     volumes:
       - clickhouse_data:/var/lib/clickhouse
-    networks:
-      - clickhouse_network
 
 volumes:
   clickhouse_data:
-
-networks:
-  clickhouse_network:
-    driver: bridge
