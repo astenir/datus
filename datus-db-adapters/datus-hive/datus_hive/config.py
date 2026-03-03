@@ -14,8 +14,8 @@ def _extract_prefixed_config(carrier_map: Mapping[str, Any], prefix: str) -> Dic
 
     for key, value in carrier_map.items():
         if key.startswith(prefix):
-            kyuubi_key = key[prefix_len:]
-            hive_config[kyuubi_key] = value
+            hive_key = key[prefix_len:]
+            hive_config[hive_key] = value
 
     configuration_params: Dict[str, Any] = {}
     base_params: Dict[str, Any] = {}

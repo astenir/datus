@@ -54,17 +54,17 @@ def test_config_forbids_extra_fields():
 
 def test_config_from_carrier_map_prefix():
     carrier_map = {
-        "old_lackhouse.host": "10.85.24.173",
-        "old_lackhouse.port": "10009",
-        "old_lackhouse.database": "test",
-        "old_lackhouse.username": "hue",
-        "old_lackhouse.password": "pass",
-        "old_lackhouse.auth": "CUSTOM",
-        "old_lackhouse.configuration.spark.app.name": "datacenter_carrier",
-        "old_lackhouse.configuration.spark.executor.instances": "1",
+        "my_hive.host": "10.85.24.173",
+        "my_hive.port": "10009",
+        "my_hive.database": "test",
+        "my_hive.username": "hue",
+        "my_hive.password": "pass",
+        "my_hive.auth": "CUSTOM",
+        "my_hive.configuration.spark.app.name": "datacenter_carrier",
+        "my_hive.configuration.spark.executor.instances": "1",
     }
 
-    config = HiveConfig.from_config_map(carrier_map, prefix="old_lackhouse.")
+    config = HiveConfig.from_config_map(carrier_map, prefix="my_hive.")
 
     assert config.host == "10.85.24.173"
     assert config.port == 10009
