@@ -49,7 +49,7 @@ def connector(config: HiveConfig) -> Generator[HiveConnector, None, None]:
     except Exception as exc:
         pytest.skip(f"Database not available: {exc}")
     try:
-       yield conn
+        yield conn
     finally:
         if conn is not None:
             try:

@@ -71,10 +71,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
         encoded_password = quote_plus(self.password) if self.password else ""
 
         # Build connection string
-        connection_string = (
-            f"clickhouse://{self.username}:{encoded_password}@{self.host}:{self.port}/"
-            f"{database}"
-        )
+        connection_string = f"clickhouse://{self.username}:{encoded_password}@{self.host}:{self.port}/" f"{database}"
 
         super().__init__(
             connection_string,
