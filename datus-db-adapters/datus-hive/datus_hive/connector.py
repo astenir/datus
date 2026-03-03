@@ -31,11 +31,9 @@ class HiveConnector(SQLAlchemyConnector):
         elif not isinstance(config, HiveConfig):
             raise TypeError(f"config must be HiveConfig or dict, got {type(config)}")
 
-        self.config = config
         self.host = config.host
         self.port = config.port
         self.username = config.username
-        self.password = config.password
         self.auth = config.auth
         self.configuration = config.configuration or {}
 
@@ -46,6 +44,7 @@ class HiveConnector(SQLAlchemyConnector):
 
         super().__init__(connection_string, dialect=DBType.HIVE, timeout_seconds=config.timeout_seconds)
 
+        self.config = config
         self.database_name = database
         self._connect_args = self._build_connect_args(config)
 
@@ -85,20 +84,16 @@ class HiveConnector(SQLAlchemyConnector):
 
             connect_args = dict(self._connect_args)
 
-            if self.dialect not in (DBType.DUCKDB, DBType.SQLITE):
-                self.engine = create_engine(
-                    self.connection_string,
-                    pool_size=10,
-                    max_overflow=20,
-                    pool_timeout=self.timeout_seconds,
-                    pool_recycle=3600,
-                    pool_pre_ping=True,
-                    connect_args=connect_args,
-                )
-            else:
-                self.engine = create_engine(self.connection_string, connect_args=connect_args)
+            self.engine = create_engine(
+                self.connection_string,
+                pool_size=10,
+                max_overflow=20,
+                pool_timeout=self.timeout_seconds,
+                pool_recycle=3600,
+                pool_pre_ping=True,
+                connect_args=connect_args,
+            )
 
-            self.connection = self.engine.connect()
             self._owns_engine = True
 
         except Exception as e:
@@ -129,9 +124,10 @@ class HiveConnector(SQLAlchemyConnector):
             return databases
         return [db for db in databases if db.lower() not in sys_dbs]
 
+    @override
     def _sys_databases(self) -> Set[str]:
-        """Hive system databases to filter out (if any)."""
-        return set()
+        """Hive system databases to filter out."""
+        return {"information_schema", "sys"}
 
     @override
     def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
@@ -161,6 +157,7 @@ class HiveConnector(SQLAlchemyConnector):
             return []
         return self._extract_table_names(result)
 
+    @override
     def get_schema(
         self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
     ) -> List[Dict[str, Any]]:
@@ -183,8 +180,10 @@ class HiveConnector(SQLAlchemyConnector):
             name = str(result[col_name][i]).strip() if result[col_name][i] is not None else ""
             if not name or name.startswith("#"):
                 break
-            data_type = str(result[type_col][i]).strip() if type_col else ""
-            comment = str(result[comment_col][i]).strip() if comment_col else None
+            raw_type = result[type_col][i] if type_col else None
+            data_type = str(raw_type).strip() if raw_type is not None else ""
+            raw_comment = result[comment_col][i] if comment_col else None
+            comment = str(raw_comment).strip() if raw_comment is not None else None
             rows.append(
                 {
                     "cid": i,
@@ -198,6 +197,7 @@ class HiveConnector(SQLAlchemyConnector):
             )
         return rows
 
+    @override
     def get_tables_with_ddl(
         self, catalog_name: str = "", database_name: str = "", schema_name: str = "", tables: Optional[List[str]] = None
     ) -> List[Dict[str, str]]:
@@ -224,6 +224,7 @@ class HiveConnector(SQLAlchemyConnector):
             )
         return result
 
+    @override
     def get_views_with_ddl(
         self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
     ) -> List[Dict[str, str]]:
@@ -247,6 +248,7 @@ class HiveConnector(SQLAlchemyConnector):
             )
         return result
 
+    @override
     def get_sample_rows(
         self,
         tables: Optional[List[str]] = None,
@@ -262,21 +264,24 @@ class HiveConnector(SQLAlchemyConnector):
         result: List[Dict[str, Any]] = []
         tables_to_scan = tables or self.get_tables(database_name=database_name)
         for table_name in tables_to_scan:
-            full_name = self.full_name(database_name=database_name, table_name=table_name)
-            query = f"SELECT * FROM {full_name} LIMIT {top_n}"
-            df = self._execute_pandas(query)
-            if not df.empty:
-                result.append(
-                    {
-                        "identifier": self.identifier(database_name=database_name, table_name=table_name),
-                        "catalog_name": "",
-                        "database_name": database_name,
-                        "schema_name": "",
-                        "table_name": table_name,
-                        "table_type": table_type,
-                        "sample_rows": df.to_csv(index=False),
-                    }
-                )
+            try:
+                full_name = self.full_name(database_name=database_name, table_name=table_name)
+                query = f"SELECT * FROM {full_name} LIMIT {int(top_n)}"
+                df = self._execute_pandas(query)
+                if not df.empty:
+                    result.append(
+                        {
+                            "identifier": self.identifier(database_name=database_name, table_name=table_name),
+                            "catalog_name": "",
+                            "database_name": database_name,
+                            "schema_name": "",
+                            "table_name": table_name,
+                            "table_type": table_type,
+                            "sample_rows": df.to_csv(index=False),
+                        }
+                    )
+            except Exception as exc:
+                logger.warning("Failed to get sample rows for %s: %s", table_name, exc)
         return result
 
     def _show_create(self, full_name: str) -> str:
@@ -294,7 +299,7 @@ class HiveConnector(SQLAlchemyConnector):
             return []
 
         column_map = {str(col).lower(): col for col in result.columns}
-        for name in ("tablename", "tab_name", "table_name", "name"):
+        for name in ("tablename", "tab_name", "table_name", "viewname", "name"):
             if name in column_map:
                 col = column_map[name]
                 return [str(value) for value in result[col].tolist()]
@@ -320,6 +325,7 @@ class HiveConnector(SQLAlchemyConnector):
         escaped = identifier.replace("`", "``")
         return f"`{escaped}`"
 
+    @override
     def full_name(
         self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
     ) -> str:
@@ -332,7 +338,7 @@ class HiveConnector(SQLAlchemyConnector):
     def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
         """Switch database context using USE statement."""
         if database_name:
-            self._execute_query(f"USE {self._quote_identifier(database_name)}")
+            self.execute_ddl(f"USE {self._quote_identifier(database_name)}")
             self.database_name = database_name
 
     @classmethod

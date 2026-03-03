@@ -1,17 +1,20 @@
-# datus-clickhouse
+# datus-spark
 
-ClickHouse database adapter for Datus.
+Spark SQL database adapter for Datus, connecting via HiveServer2/Thrift protocol.
 
 ## Installation
 
 ```bash
-pip install datus-clickhouse
+pip install datus-spark
 ```
 
 This will automatically install the required dependencies:
 - `datus-agent`
 - `datus-sqlalchemy`
-- `clickhouse-sqlalchemy`
+- `pyhive`
+- `thrift`
+- `thrift-sasl`
+- `pure-sasl`
 
 ## Usage
 
@@ -19,51 +22,51 @@ The adapter is automatically registered with Datus when installed. Configure you
 
 ```yaml
 database:
-  type: clickhouse
+  type: spark
   host: localhost
-  port: 8123
-  username: default
-  password: your_password
-  database: your_database
+  port: 10000
+  username: spark
+  database: default
+  auth_mechanism: NONE
 ```
 
 Or use programmatically:
 
 ```python
-from datus_clickhouse import ClickHouseConfig, ClickHouseConnector
+from datus_spark import SparkConnector, SparkConfig
 
 # Using config object
-config = ClickHouseConfig(
+config = SparkConfig(
     host="localhost",
-    port=8123,
-    username="default",
-    password="your_password",
-    database="mydb",
+    port=10000,
+    username="spark",
+    password="",
+    database="default",
+    auth_mechanism="NONE",
 )
-connector = ClickHouseConnector(config)
+connector = SparkConnector(config)
 
 # Or using dict
-connector = ClickHouseConnector({
+connector = SparkConnector({
     "host": "localhost",
-    "port": 8123,
-    "username": "default",
-    "password": "your_password",
-    "database": "mydb",
+    "port": 10000,
+    "username": "spark",
+    "database": "default",
 })
 
 # Test connection
 connector.test_connection()
 
 # Execute query
-result = connector.execute({"sql_query": "SELECT * FROM users LIMIT 10"})
+result = connector.execute({"sql_query": "SELECT * FROM `default`.`my_table` LIMIT 10"})
 print(result.sql_return)
 
 # Get table list
-tables = connector.get_tables()
+tables = connector.get_tables(database_name="default")
 print(f"Tables: {tables}")
 
 # Get table schema
-schema = connector.get_schema(table_name="users")
+schema = connector.get_schema(database_name="default", table_name="my_table")
 for column in schema:
     print(f"{column['name']}: {column['type']}")
 ```
@@ -72,45 +75,45 @@ for column in schema:
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| host | str | "localhost" | ClickHouse server host |
-| port | int | 8123 | ClickHouse HTTP port |
+| host | str | "127.0.0.1" | Spark Thrift Server host |
+| port | int | 10000 | Spark Thrift Server port |
 | username | str | (required) | Username |
 | password | str | "" | Password |
-| database | str | None | Default database |
+| database | str | None | Default database (falls back to `default`) |
+| auth_mechanism | str | "NONE" | Authentication mechanism (NONE, PLAIN, KERBEROS) |
 | timeout_seconds | int | 30 | Connection timeout |
 
 ## Features
 
-- Query execution via ClickHouse SQL (SELECT)
+- Query execution via Spark SQL (SELECT)
 - DDL execution (CREATE, ALTER, DROP)
-- DML operations (INSERT, ALTER TABLE UPDATE, DELETE)
 - Metadata retrieval (databases, tables, views, columns)
 - Sample data extraction
 - Multiple result formats (pandas, arrow, csv, list)
 - Connection pooling and management
-- Comprehensive error handling
+- Context manager support
 
 ## Testing
 
 ### Quick Start
 
 ```bash
-cd datus-clickhouse
+cd datus-spark
 
 # Unit tests (no database required)
 uv run pytest tests/ -m "not integration" -v
 
 # All tests with coverage
-uv run pytest tests/ -v --cov=datus_clickhouse --cov-report=term-missing
+uv run pytest tests/ -v --cov=datus_spark --cov-report=term-missing
 ```
 
-### Integration Tests (Requires ClickHouse Server)
+### Integration Tests (Requires Spark Thrift Server)
 
 ```bash
-# Start ClickHouse container
+# Start Spark Thrift Server container
 docker compose up -d
 
-# Wait for container to become healthy (~15s)
+# Wait for container to become healthy (~60s)
 docker compose ps
 
 # Run integration tests
@@ -122,7 +125,7 @@ uv run pytest tests/integration/test_tpch.py -v
 # Run acceptance tests (core functionality)
 uv run pytest tests/ -m acceptance -v
 
-# Stop ClickHouse
+# Stop Spark
 docker compose down
 ```
 
@@ -152,21 +155,20 @@ uv run python scripts/init_tpch_data.py
 uv run python scripts/init_tpch_data.py --drop
 
 # Custom connection
-uv run python scripts/init_tpch_data.py --host 192.168.1.100 --port 8123 --username admin --password secret
+uv run python scripts/init_tpch_data.py --host 192.168.1.100 --port 10000
 ```
 
 ### Test Statistics
 
-- **Unit Tests**: 45 tests (config validation, connector logic, identifiers)
-- **Integration Tests**: 20 tests (connection, metadata, SQL execution)
-- **TPC-H Tests**: 9 tests (metadata queries, joins, aggregations, CSV format)
-- **Total**: 74 tests
+- **Unit Tests**: 46 tests (config validation, connector logic, identifiers)
+- **Integration Tests**: 24 tests (connection, metadata, SQL execution, TPC-H)
+- **Total**: 70 tests
 
 ### Test Markers
 
 | Marker | Description |
 |--------|-------------|
-| `integration` | Requires running ClickHouse server |
+| `integration` | Requires running Spark Thrift Server |
 | `acceptance` | Core functionality validation for CI/CD |
 
 ## Development
@@ -184,27 +186,17 @@ uv pip install -e .
 ### Code Quality
 
 ```bash
-black datus_clickhouse tests
-isort datus_clickhouse tests
-ruff check datus_clickhouse tests
+black datus_spark tests
+isort datus_spark tests
+ruff check datus_spark tests
 ```
-
-## ClickHouse SQL Notes
-
-ClickHouse has some syntax differences from standard SQL:
-
-- **UPDATE**: Use `ALTER TABLE <table> UPDATE ... WHERE ...` instead of `UPDATE <table> SET ...`
-- **DELETE**: Supports lightweight deletes with `DELETE FROM <table> WHERE ...`
-- **Identifiers**: Use backticks for quoting: `` `database`.`table` ``
-- **No schema layer**: Databases serve as schemas; there is no separate schema concept
 
 ## Requirements
 
 - Python >= 3.12
-- ClickHouse >= 20.1
+- Apache Spark >= 3.0 with Thrift Server enabled
 - datus-agent > 0.2.1
 - datus-sqlalchemy >= 0.1.0
-- clickhouse-sqlalchemy >= 0.3.2
 
 ## License
 

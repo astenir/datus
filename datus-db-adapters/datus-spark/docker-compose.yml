@@ -1,0 +1,25 @@
+services:
+  spark-thrift:
+    image: apache/spark:3.5.0
+    container_name: datus-spark-test
+    command: >
+      /opt/spark/sbin/start-thriftserver.sh
+      --master local[*]
+      --hiveconf hive.server2.thrift.port=10000
+      --hiveconf hive.server2.thrift.bind.host=0.0.0.0
+    ports:
+      - "10000:10000"  # Thrift port
+      - "4040:4040"    # Spark UI
+    environment:
+      - SPARK_NO_DAEMONIZE=true
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '(echo > /dev/tcp/localhost/10000) 2>/dev/null || exit 1'"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 60s
+    volumes:
+      - spark_data:/opt/spark/work-dir
+
+volumes:
+  spark_data:

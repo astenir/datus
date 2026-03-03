@@ -293,9 +293,13 @@ def test_execute_insert(connector: ClickHouseConnector, config: ClickHouseConfig
 
         # Verify
         query_result = connector.execute(
-            {"sql_query": f"SELECT id, name FROM {table_name} ORDER BY id"}, result_format="list"
+            {"sql_query": f"SELECT id, name FROM {table_name} ORDER BY id"},
+            result_format="list",
         )
-        assert query_result.sql_return == [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+        assert query_result.sql_return == [
+            {"id": 1, "name": "Alice"},
+            {"id": 2, "name": "Bob"},
+        ]
     finally:
         connector.execute_ddl(f"DROP TABLE IF EXISTS {table_name}")
 
@@ -322,15 +326,16 @@ def test_execute_update(connector: ClickHouseConnector, config: ClickHouseConfig
         # Insert initial data
         connector.execute_insert(f"INSERT INTO {table_name} (id, name) VALUES (1, 'Alice'), (2, 'Bob')")
 
-        # Update
+        # Update (ClickHouse uses ALTER TABLE ... UPDATE syntax)
         update_result = connector.execute_update(
-            f"UPDATE {table_name} SET name = 'Alice Updated' WHERE id = 1 SETTINGS mutations_sync = 1"
+            f"ALTER TABLE {table_name} UPDATE name = 'Alice Updated' WHERE id = 1 SETTINGS mutations_sync = 1"
         )
         assert update_result.success
 
         # Verify
         query_result = connector.execute(
-            {"sql_query": f"SELECT name FROM {table_name} WHERE id = 1"}, result_format="list"
+            {"sql_query": f"SELECT name FROM {table_name} WHERE id = 1"},
+            result_format="list",
         )
         assert query_result.sql_return == [{"name": "Alice Updated"}]
     finally:

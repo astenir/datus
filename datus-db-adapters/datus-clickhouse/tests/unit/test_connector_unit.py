@@ -27,7 +27,7 @@ def test_connector_initialization_with_config_object():
         assert connector.host == "localhost"
         assert connector.port == 8123
         assert connector.username == "test_user"
-        assert connector.password == "test_pass"
+        assert connector.config.password == "test_pass"
         assert connector.database_name == "testdb"
 
 
@@ -48,7 +48,7 @@ def test_connector_initialization_with_dict():
         assert connector.host == "192.168.1.100"
         assert connector.port == 8123
         assert connector.username == "admin"
-        assert connector.password == "secret"
+        assert connector.config.password == "secret"
         assert connector.database_name == "mydb"
 
 
