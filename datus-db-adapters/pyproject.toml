@@ -5,14 +5,14 @@
 # etc.
 
 [project]
-name = "datus-adapters"
+name = "datus-db-adapters"
 version = "0.1.0"
 description = "Datus database adapters workspace (development only)"
 requires-python = ">=3.12"
 license = {file = "LICENSE"}
 
 [tool.uv.workspace]
-members = ["datus-mysql", "datus-sqlalchemy", "datus-starrocks", "datus-snowflake"]
+members = ["datus-mysql", "datus-postgresql", "datus-sqlalchemy", "datus-starrocks", "datus-snowflake", "datus-clickzetta", "datus-clickhouse", "datus-hive", "datus-redshift", "datus-spark", "datus-trino"]
 
 [tool.uv]
 dev-dependencies = [
@@ -20,4 +20,6 @@ dev-dependencies = [
     "pytest-cov>=4.0.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
+    "flake8>=7.3.0",
+    "isort>=6.0.1",
 ]

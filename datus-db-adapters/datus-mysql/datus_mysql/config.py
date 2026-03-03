@@ -12,10 +12,10 @@ class MySQLConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    host: str = Field(..., description="MySQL server host")
+    host: str = Field(default="127.0.0.1", description="MySQL server host")
     port: int = Field(default=3306, description="MySQL server port")
     username: str = Field(..., description="MySQL username")
-    password: str = Field(default="", description="MySQL password")
+    password: str = Field(default="", description="MySQL password", json_schema_extra={"input_type": "password"})
     database: Optional[str] = Field(default=None, description="Default database name")
     charset: str = Field(default="utf8mb4", description="Character set to use")
     autocommit: bool = Field(default=True, description="Enable autocommit mode")

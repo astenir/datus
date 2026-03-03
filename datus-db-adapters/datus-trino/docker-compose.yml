@@ -1,0 +1,18 @@
+services:
+  trino:
+    image: trinodb/trino:479
+    container_name: datus-trino-test
+    ports:
+      - "8080:8080"  # HTTP port
+    healthcheck:
+      test: ["CMD-SHELL", "trino --execute 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    volumes:
+      - ./etc/catalog/tpch.properties:/etc/trino/catalog/tpch.properties
+      - trino_data:/data/trino
+
+volumes:
+  trino_data:
