@@ -59,24 +59,28 @@ def _handle_redshift_exception(e: Exception, sql: str = "") -> DatusException:
         DatusException with appropriate error code and message
     """
 
+    # Check subclasses before parent classes to ensure correct error mapping.
+    # IntegrityError, InternalError, DataError are all subclasses of DatabaseError,
+    # so they must be checked first.
+
     # ProgrammingError = syntax errors, invalid SQL statements
     if isinstance(e, ProgrammingError):
         return DatusException(ErrorCode.DB_EXECUTION_SYNTAX_ERROR, message_args={"sql": sql, "error_message": str(e)})
-
-    # OperationalError/DatabaseError = runtime errors (connection issues, query execution problems)
-    elif isinstance(e, (OperationalError, DatabaseError)):
-        return DatusException(ErrorCode.DB_EXECUTION_ERROR, message_args={"sql": sql, "error_message": str(e)})
 
     # IntegrityError = constraint violations (unique key, foreign key, etc.)
     elif isinstance(e, IntegrityError):
         return DatusException(ErrorCode.DB_CONSTRAINT_VIOLATION, message_args={"sql": sql, "error_message": str(e)})
 
+    # DataError = data-related errors (invalid data types, overflow, etc.)
+    elif isinstance(e, DataError):
+        return DatusException(ErrorCode.DB_EXECUTION_ERROR, message_args={"sql": sql, "error_message": str(e)})
+
     # InterfaceError/InternalError = connection-level problems
     elif isinstance(e, (InterfaceError, InternalError)):
         return DatusException(ErrorCode.DB_CONNECTION_FAILED, message_args={"error_message": str(e)})
 
-    # DataError = data-related errors (invalid data types, overflow, etc.)
-    elif isinstance(e, DataError):
+    # OperationalError/DatabaseError = runtime errors (connection issues, query execution problems)
+    elif isinstance(e, (OperationalError, DatabaseError)):
         return DatusException(ErrorCode.DB_EXECUTION_ERROR, message_args={"sql": sql, "error_message": str(e)})
 
     # Catch-all for any other exceptions
