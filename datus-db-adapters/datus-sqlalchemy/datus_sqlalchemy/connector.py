@@ -51,7 +51,7 @@ class SQLAlchemyConnector(BaseSqlConnector):
         # Auto-detect dialect from connection string if not provided
         if not dialect:
             prefix = connection_string.split(":")[0] if isinstance(connection_string, str) else "unknown"
-            dialect = DBType.MYSQL if prefix == "mysql+pymysql" else prefix
+            dialect = "mysql" if prefix == "mysql+pymysql" else prefix
 
         config = ConnectionConfig(timeout_seconds=timeout_seconds)
         super().__init__(config, dialect)
@@ -399,7 +399,7 @@ class SQLAlchemyConnector(BaseSqlConnector):
             self.connection.commit()
 
             # Update context if applicable
-            if self.dialect != DBType.SQLITE.value:
+            if self.dialect != "sqlite":
                 context = parse_context_switch(sql=sql, dialect=self.dialect)
                 if context:
                     if catalog := context.get("catalog_name"):

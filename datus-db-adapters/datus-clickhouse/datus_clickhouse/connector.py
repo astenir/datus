@@ -11,15 +11,14 @@ from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus_sqlalchemy import SQLAlchemyConnector
 from pydantic import BaseModel, Field
-from sqlalchemy import text
 
-from .config import MySQLConfig
+from .config import ClickHouseConfig
 
 logger = get_logger(__name__)
 
 
 class TableMetadataNames(BaseModel):
-    """Metadata configuration for different MySQL object types."""
+    """Metadata configuration for different ClickHouse object types."""
 
     show_table: str = Field(..., description="SHOW command keyword")
     show_create_table: str = Field(..., description="SHOW CREATE command keyword")
@@ -27,20 +26,19 @@ class TableMetadataNames(BaseModel):
     table_types: Optional[List[str]] = Field(default=None, description="TABLE_TYPE values in INFORMATION_SCHEMA")
 
 
-# Metadata configuration for MySQL objects
+# Metadata configuration for ClickHouse objects
 METADATA_DICT: Dict[TABLE_TYPE, TableMetadataNames] = {
     "table": TableMetadataNames(
-        show_table="TABLES", show_create_table="TABLE", info_table="TABLES", table_types=["TABLE", "BASE TABLE"]
+        show_table="TABLES",
+        show_create_table="TABLE",
+        info_table="TABLES",
+        table_types=["BASE TABLE"],
     ),
     "view": TableMetadataNames(
         show_table="VIEWS",
         show_create_table="VIEW",
         info_table="VIEWS",
-    ),
-    "mv": TableMetadataNames(
-        show_table="MATERIALIZED VIEWS",
-        show_create_table="MATERIALIZED VIEW",
-        info_table="MATERIALIZED_VIEWS",
+        table_types=None,
     ),
 }
 
@@ -52,39 +50,39 @@ def _get_metadata_config(table_type: TABLE_TYPE) -> TableMetadataNames:
     return METADATA_DICT[table_type]
 
 
-class MySQLConnector(SQLAlchemyConnector):
-    """MySQL database connector."""
+class ClickHouseConnector(SQLAlchemyConnector):
+    """ClickHouse database connector."""
 
-    def __init__(self, config: Union[MySQLConfig, dict]):
+    def __init__(self, config: Union[ClickHouseConfig, dict]):
         """
-        Initialize MySQL connector.
+        Initialize ClickHouse connector.
 
         Args:
-            config: MySQLConfig object or dict with configuration
+            config: ClickHouseConfig object or dict with configuration
         """
         # Handle config object or dict
         if isinstance(config, dict):
-            config = MySQLConfig(**config)
-        elif not isinstance(config, MySQLConfig):
-            raise TypeError(f"config must be MySQLConfig or dict, got {type(config)}")
+            config = ClickHouseConfig(**config)
+        elif not isinstance(config, ClickHouseConfig):
+            raise TypeError(f"config must be ClickHouseConfig or dict, got {type(config)}")
 
         self.config = config
         self.host = config.host
         self.port = config.port
         self.username = config.username
-        self.password = config.password
         database = config.database or ""
 
         # URL encode password to handle special characters
-        encoded_password = quote_plus(self.password) if self.password else ""
+        encoded_password = quote_plus(config.password) if config.password else ""
 
         # Build connection string
-        connection_string = (
-            f"mysql+pymysql://{self.username}:{encoded_password}@{self.host}:{self.port}/"
-            f"{database}?charset={config.charset}&autocommit={'true' if config.autocommit else 'false'}"
-        )
+        connection_string = f"clickhouse://{self.username}:{encoded_password}@{self.host}:{self.port}/" f"{database}"
 
-        super().__init__(connection_string, dialect="mysql")
+        super().__init__(
+            connection_string,
+            dialect="clickhouse",
+            timeout_seconds=config.timeout_seconds,
+        )
         self.database_name = database
 
     # ==================== System Resources ====================
@@ -92,18 +90,18 @@ class MySQLConnector(SQLAlchemyConnector):
     @override
     def _sys_databases(self) -> Set[str]:
         """System databases to filter out."""
-        return {"sys", "information_schema", "performance_schema", "mysql"}
+        return {"INFORMATION_SCHEMA", "information_schema", "system"}
 
     @override
     def _sys_schemas(self) -> Set[str]:
-        """System schemas to filter out (same as databases for MySQL)."""
+        """System schemas to filter out (same as databases for ClickHouse)."""
         return self._sys_databases()
 
     # ==================== Utility Methods ====================
 
     @staticmethod
     def _quote_identifier(identifier: str) -> str:
-        """Safely wrap identifiers with backticks for MySQL-compatible dialects."""
+        """Safely wrap identifiers with backticks for ClickHouse-compatible dialects."""
         escaped = identifier.replace("`", "``")
         return f"`{escaped}`"
 
@@ -120,7 +118,7 @@ class MySQLConnector(SQLAlchemyConnector):
 
         Args:
             table_type: Type of object (table, view, mv)
-            catalog_name: Catalog name (unused in MySQL)
+            catalog_name: Catalog name (unused in ClickHouse)
             database_name: Database name to query
 
         Returns:
@@ -131,7 +129,8 @@ class MySQLConnector(SQLAlchemyConnector):
 
         # Build WHERE clause
         if database_name:
-            where = f"TABLE_SCHEMA = '{database_name}'"
+            safe_db = database_name.replace("'", "''")
+            where = f"TABLE_SCHEMA = '{safe_db}'"
         else:
             where = f"{list_to_in_str('TABLE_SCHEMA not in', list(self._sys_databases()))}"
 
@@ -139,7 +138,9 @@ class MySQLConnector(SQLAlchemyConnector):
         metadata_config = _get_metadata_config(table_type)
 
         # Build and execute query
-        type_filter = list_to_in_str("and TABLE_TYPE in ", metadata_config.table_types)
+        type_filter = ""
+        if metadata_config.table_types:
+            type_filter = list_to_in_str("and table_type in ", metadata_config.table_types)
         query = (
             f"SELECT TABLE_SCHEMA, TABLE_NAME "
             f"FROM information_schema.{metadata_config.info_table} "
@@ -147,6 +148,9 @@ class MySQLConnector(SQLAlchemyConnector):
         )
 
         query_result = self._execute_pandas(query)
+
+        # Normalize column names to handle case variations across ClickHouse versions
+        query_result.columns = [c.upper() for c in query_result.columns]
 
         # Format results
         result = []
@@ -231,7 +235,11 @@ class MySQLConnector(SQLAlchemyConnector):
 
     @override
     def get_tables_with_ddl(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", tables: Optional[List[str]] = None
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        tables: Optional[List[str]] = None,
     ) -> List[Dict[str, str]]:
         """Get tables with DDL statements."""
         return self._get_objects_with_ddl("table", tables, catalog_name, database_name)
@@ -245,7 +253,11 @@ class MySQLConnector(SQLAlchemyConnector):
 
     @override
     def get_schema(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> List[Dict[str, Any]]:
         """
         Get table schema using DESCRIBE.
@@ -274,11 +286,11 @@ class MySQLConnector(SQLAlchemyConnector):
             result.append(
                 {
                     "cid": i,
-                    "name": query_result["Field"][i],
-                    "type": query_result["Type"][i],
-                    "nullable": query_result["Null"][i] == "YES",
-                    "default_value": query_result["Default"][i],
-                    "pk": query_result["Key"][i] == "PRI",
+                    "name": query_result["name"][i],
+                    "type": query_result["type"][i],
+                    "nullable": (True if "Nullable" in query_result["type"][i] else False),
+                    "default_value": query_result["default_expression"][i],
+                    "pk": False,
                 }
             )
         return result
@@ -287,26 +299,26 @@ class MySQLConnector(SQLAlchemyConnector):
 
     @override
     def get_databases(self, catalog_name: str = "", include_sys: bool = False) -> List[str]:
-        """Get list of databases (MySQL uses schemas as databases)."""
+        """Get list of databases (ClickHouse uses schemas as databases)."""
         return super().get_schemas(catalog_name=catalog_name, include_sys=include_sys)
 
     @override
     def get_schemas(self, catalog_name: str = "", database_name: str = "", include_sys: bool = False) -> List[str]:
-        """MySQL doesn't have separate schemas, return empty list."""
+        """ClickHouse has no schema layer; databases serve as schemas. Use get_databases() instead."""
         return []
 
     @override
     def _sqlalchemy_schema(
         self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
     ) -> Optional[str]:
-        """Get schema name for SQLAlchemy Inspector (database name in MySQL)."""
+        """Get schema name for SQLAlchemy Inspector (database name in ClickHouse)."""
         return database_name or self.database_name
 
     @override
     def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        """Switch database context using USE statement."""
+        """Switch database context. Updates default database for subsequent full_name() calls."""
         if database_name:
-            self.connection.execute(text(f"USE {self._quote_identifier(database_name)}"))
+            self.database_name = database_name
 
     # ==================== Sample Data ====================
 
@@ -339,7 +351,9 @@ class MySQLConnector(SQLAlchemyConnector):
         if tables:
             for table_name in tables:
                 full_name = self.full_name(
-                    catalog_name=catalog_name, database_name=database_name, table_name=table_name
+                    catalog_name=catalog_name,
+                    database_name=database_name,
+                    table_name=table_name,
                 )
                 sql = f"SELECT * FROM {full_name} LIMIT {top_n}"
                 df = self._execute_pandas(sql)
@@ -347,7 +361,9 @@ class MySQLConnector(SQLAlchemyConnector):
                     result.append(
                         {
                             "identifier": self.identifier(
-                                catalog_name=catalog_name, database_name=database_name, table_name=table_name
+                                catalog_name=catalog_name,
+                                database_name=database_name,
+                                table_name=table_name,
                             ),
                             "catalog_name": catalog_name,
                             "database_name": database_name,
@@ -381,17 +397,39 @@ class MySQLConnector(SQLAlchemyConnector):
 
     @override
     def full_name(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> str:
         """Build fully-qualified table name."""
         if database_name:
-            return f"`{database_name}`.`{table_name}`"
-        return f"`{table_name}`"
+            return f"{self._quote_identifier(database_name)}.{self._quote_identifier(table_name)}"
+        return self._quote_identifier(table_name)
 
     @override
     def _reset_filter_tables(
-        self, tables: Optional[List[str]] = None, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+        self,
+        tables: Optional[List[str]] = None,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
     ) -> List[str]:
         """Reset filter tables with full names."""
         database_name = database_name or self.database_name
         return super()._reset_filter_tables(tables, "", database_name, "")
+
+    @override
+    def identifier(
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
+    ) -> str:
+        """Build identifier for table."""
+        if not catalog_name and not database_name and not schema_name:
+            return table_name
+        else:
+            return f"{catalog_name}.{database_name}.{table_name}" if catalog_name else f"{database_name}.{table_name}"
