@@ -6,44 +6,30 @@ import os
 from typing import Generator
 
 import pytest
-from datus_clickhouse import ClickHouseConfig, ClickHouseConnector
+from datus_spark import SparkConfig, SparkConnector
 
 
 @pytest.fixture
-def config() -> ClickHouseConfig:
-    """Create ClickHouse configuration from environment or defaults."""
-    return ClickHouseConfig(
-        host=os.getenv("CLICKHOUSE_HOST", "localhost"),
-        port=int(os.getenv("CLICKHOUSE_PORT", "8123")),
-        username=os.getenv("CLICKHOUSE_USER", "default_user"),
-        password=os.getenv("CLICKHOUSE_PASSWORD", "default_test"),
-        database=os.getenv("CLICKHOUSE_DATABASE", "default_test"),
+def config() -> SparkConfig:
+    """Create Spark configuration from environment or defaults for integration tests."""
+    return SparkConfig(
+        host=os.getenv("SPARK_HOST", "localhost"),
+        port=int(os.getenv("SPARK_PORT", "10000")),
+        username=os.getenv("SPARK_USER", "spark"),
+        password=os.getenv("SPARK_PASSWORD", ""),
+        database=os.getenv("SPARK_DATABASE", "default"),
+        auth_mechanism=os.getenv("SPARK_AUTH_MECHANISM", "NONE"),
     )
 
 
 @pytest.fixture
-def connector(config: ClickHouseConfig) -> Generator[ClickHouseConnector, None, None]:
-    """Create and cleanup ClickHouse connector for integration tests."""
+def connector(config: SparkConfig) -> Generator[SparkConnector, None, None]:
+    """Create and cleanup Spark connector for integration tests."""
     conn = None
     try:
-        # Connect without database first to ensure test database exists
-        init_config = ClickHouseConfig(
-            host=config.host,
-            port=config.port,
-            username=config.username,
-            password=config.password,
-            database=None,
-        )
-        init_conn = ClickHouseConnector(init_config)
-        try:
-            if not init_conn.test_connection():
-                pytest.skip("Database connection test failed")
-            if config.database:
-                init_conn.execute_ddl(f"CREATE DATABASE IF NOT EXISTS `{config.database}`")
-        finally:
-            init_conn.close()
-
-        conn = ClickHouseConnector(config)
+        conn = SparkConnector(config)
+        if not conn.test_connection():
+            pytest.skip("Database connection test failed")
     except Exception as e:
         pytest.skip(f"Database not available: {e}")
     else:
@@ -62,52 +48,36 @@ TPCH_TABLES = ["tpch_region", "tpch_nation", "tpch_customer", "tpch_orders", "tp
 
 TPCH_DDL = [
     """
-    CREATE TABLE IF NOT EXISTS `tpch_region` (
-        `regionkey` Int32,
-        `name` String,
-        `comment` String
-    ) ENGINE = MergeTree() ORDER BY regionkey
+    CREATE TABLE IF NOT EXISTS `default`.`tpch_region` (
+        regionkey INT, name STRING, comment STRING
+    ) USING PARQUET
     """,
     """
-    CREATE TABLE IF NOT EXISTS `tpch_nation` (
-        `nationkey` Int32,
-        `name` String,
-        `regionkey` Int32,
-        `comment` String
-    ) ENGINE = MergeTree() ORDER BY nationkey
+    CREATE TABLE IF NOT EXISTS `default`.`tpch_nation` (
+        nationkey INT, name STRING, regionkey INT, comment STRING
+    ) USING PARQUET
     """,
     """
-    CREATE TABLE IF NOT EXISTS `tpch_customer` (
-        `custkey` Int32,
-        `name` String,
-        `nationkey` Int32,
-        `acctbal` Float64,
-        `mktsegment` String
-    ) ENGINE = MergeTree() ORDER BY custkey
+    CREATE TABLE IF NOT EXISTS `default`.`tpch_customer` (
+        custkey INT, name STRING, nationkey INT, acctbal DOUBLE, mktsegment STRING
+    ) USING PARQUET
     """,
     """
-    CREATE TABLE IF NOT EXISTS `tpch_orders` (
-        `orderkey` Int32,
-        `custkey` Int32,
-        `orderstatus` String,
-        `totalprice` Float64,
-        `orderdate` String
-    ) ENGINE = MergeTree() ORDER BY orderkey
+    CREATE TABLE IF NOT EXISTS `default`.`tpch_orders` (
+        orderkey INT, custkey INT, orderstatus STRING, totalprice DOUBLE, orderdate STRING
+    ) USING PARQUET
     """,
     """
-    CREATE TABLE IF NOT EXISTS `tpch_supplier` (
-        `suppkey` Int32,
-        `name` String,
-        `nationkey` Int32,
-        `acctbal` Float64
-    ) ENGINE = MergeTree() ORDER BY suppkey
+    CREATE TABLE IF NOT EXISTS `default`.`tpch_supplier` (
+        suppkey INT, name STRING, nationkey INT, acctbal DOUBLE
+    ) USING PARQUET
     """,
 ]
 
 TPCH_DATA = [
     # region: 5 rows (standard TPC-H)
     """
-    INSERT INTO `tpch_region` VALUES
+    INSERT INTO `default`.`tpch_region` VALUES
     (0, 'AFRICA', 'special Tiresias about the furiously even'),
     (1, 'AMERICA', 'hs use ironic, even requests'),
     (2, 'ASIA', 'ges. thinly even pinto beans ca'),
@@ -116,7 +86,7 @@ TPCH_DATA = [
     """,
     # nation: 25 rows (standard TPC-H)
     """
-    INSERT INTO `tpch_nation` VALUES
+    INSERT INTO `default`.`tpch_nation` VALUES
     (0, 'ALGERIA', 0, 'haggle. carefully final deposits'),
     (1, 'ARGENTINA', 1, 'al foxes promise slyly'),
     (2, 'BRAZIL', 1, 'y alongside of the pending deposits'),
@@ -145,7 +115,7 @@ TPCH_DATA = [
     """,
     # customer: 10 rows (simplified)
     """
-    INSERT INTO `tpch_customer` VALUES
+    INSERT INTO `default`.`tpch_customer` VALUES
     (1, 'Customer#001', 0, 711.56, 'BUILDING'),
     (2, 'Customer#002', 1, 121.65, 'AUTOMOBILE'),
     (3, 'Customer#003', 2, 7498.12, 'AUTOMOBILE'),
@@ -159,7 +129,7 @@ TPCH_DATA = [
     """,
     # orders: 15 rows (simplified)
     """
-    INSERT INTO `tpch_orders` VALUES
+    INSERT INTO `default`.`tpch_orders` VALUES
     (1, 1, 'O', 173665.47, '1996-01-02'),
     (2, 2, 'O', 46929.18, '1996-12-01'),
     (3, 3, 'F', 193846.25, '1993-10-14'),
@@ -178,7 +148,7 @@ TPCH_DATA = [
     """,
     # supplier: 5 rows (simplified)
     """
-    INSERT INTO `tpch_supplier` VALUES
+    INSERT INTO `default`.`tpch_supplier` VALUES
     (1, 'Supplier#001', 0, 5755.94),
     (2, 'Supplier#002', 1, 4032.68),
     (3, 'Supplier#003', 8, 4192.40),
@@ -189,60 +159,39 @@ TPCH_DATA = [
 
 
 @pytest.fixture(scope="session")
-def tpch_setup() -> Generator[ClickHouseConnector, None, None]:
-    """Session-scoped fixture: create TPC-H tables, insert data, yield connector, cleanup."""
-    config = ClickHouseConfig(
-        host=os.getenv("CLICKHOUSE_HOST", "localhost"),
-        port=int(os.getenv("CLICKHOUSE_PORT", "8123")),
-        username=os.getenv("CLICKHOUSE_USER", "default_user"),
-        password=os.getenv("CLICKHOUSE_PASSWORD", "default_test"),
-        database=os.getenv("CLICKHOUSE_DATABASE", "default_test"),
+def tpch_setup():
+    """Create TPC-H tables with sample data for integration tests (session-scoped)."""
+    config = SparkConfig(
+        host=os.getenv("SPARK_HOST", "localhost"),
+        port=int(os.getenv("SPARK_PORT", "10000")),
+        username=os.getenv("SPARK_USER", "spark"),
+        password=os.getenv("SPARK_PASSWORD", ""),
+        database=os.getenv("SPARK_DATABASE", "default"),
+        auth_mechanism=os.getenv("SPARK_AUTH_MECHANISM", "NONE"),
     )
-
     conn = None
     try:
-        # Ensure database exists
-        init_config = ClickHouseConfig(
-            host=config.host,
-            port=config.port,
-            username=config.username,
-            password=config.password,
-            database=None,
-        )
-        init_conn = ClickHouseConnector(init_config)
-        try:
-            if not init_conn.test_connection():
-                pytest.skip("Database connection test failed")
-            if config.database:
-                init_conn.execute_ddl(f"CREATE DATABASE IF NOT EXISTS `{config.database}`")
-        finally:
-            init_conn.close()
+        conn = SparkConnector(config)
+        if not conn.test_connection():
+            pytest.skip("Database connection test failed for TPC-H setup")
 
-        conn = ClickHouseConnector(config)
-
-        # Drop tables first for deterministic setup
-        for table in TPCH_TABLES:
-            conn.execute_ddl(f"DROP TABLE IF EXISTS `{table}`")
-
-        # Create tables
+        # Create tables and insert data
         for ddl in TPCH_DDL:
             conn.execute_ddl(ddl)
-
-        # Insert data
         for data in TPCH_DATA:
-            conn.execute_insert(data)
-
+            conn.execute_ddl(data)
     except Exception as e:
         pytest.skip(f"TPC-H setup failed: {e}")
     else:
         yield conn
     finally:
+        # Cleanup: drop all TPC-H tables
         if conn is not None:
-            try:
-                for table in TPCH_TABLES:
-                    conn.execute_ddl(f"DROP TABLE IF EXISTS `{table}`")
-            except Exception:
-                pass
+            for table in TPCH_TABLES:
+                try:
+                    conn.execute_ddl(f"DROP TABLE IF EXISTS `default`.`{table}`")
+                except Exception:
+                    pass
             try:
                 conn.close()
             except Exception:
