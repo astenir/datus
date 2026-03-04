@@ -234,7 +234,7 @@ def main():
         if args.drop:
             print("\nDropping existing TPC-H tables...")
             for table in TPCH_TABLES:
-                conn.execute_ddl(f"DROP TABLE IF EXISTS `{table}`")
+                conn.execute_ddl(f"DROP TABLE IF EXISTS `{table}`")  # noqa: S608
                 print(f"  Dropped {table}")
 
         print("\nCreating TPC-H tables...")
@@ -252,7 +252,7 @@ def main():
         has_mismatch = False
         for i, table in enumerate(TPCH_TABLES):
             result = conn.execute(
-                {"sql_query": f"SELECT COUNT(*) AS cnt FROM `{table}`"},
+                {"sql_query": f"SELECT COUNT(*) AS cnt FROM `{table}`"},  # noqa: S608
                 result_format="list",
             )
             count = result.sql_return[0]["cnt"]

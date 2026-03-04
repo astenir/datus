@@ -2,11 +2,14 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+import logging
 import os
 from typing import Generator
 
 import pytest
 from datus_starrocks import StarRocksConfig, StarRocksConnector
+
+logger = logging.getLogger(__name__)
 
 
 @pytest.fixture
@@ -38,7 +41,7 @@ def connector(config: StarRocksConfig) -> Generator[StarRocksConnector, None, No
             try:
                 conn.close()
             except Exception:
-                pass
+                logger.warning("Failed to close connector during teardown", exc_info=True)
 
 
 # ==================== TPC-H Test Data ====================
@@ -225,8 +228,8 @@ def tpch_setup() -> Generator[StarRocksConnector, None, None]:
                 for table in TPCH_TABLES:
                     conn.execute_ddl(f"DROP TABLE IF EXISTS `{table}`")
             except Exception:
-                pass
+                logger.warning("Failed to drop TPC-H tables during teardown", exc_info=True)
             try:
                 conn.close()
             except Exception:
-                pass
+                logger.warning("Failed to close connection during teardown", exc_info=True)

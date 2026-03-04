@@ -226,7 +226,7 @@ Tests use these default values (automatically set by `./scripts/test.sh`):
 
 ## Code Structure
 
-```
+```text
 datus-starrocks/
 ├── datus_starrocks/
 │   ├── __init__.py          # Package exports
