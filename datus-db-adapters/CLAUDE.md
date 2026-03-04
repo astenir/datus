@@ -49,11 +49,17 @@ When working on multiple adapters that each need independent branches and PRs:
 
 ## Adapter Patterns
 
-### SQLAlchemy-Based Adapters (MySQL, PostgreSQL, Redshift, Snowflake)
+### SQLAlchemy-Based Adapters (MySQL, PostgreSQL, Redshift, Snowflake, ClickHouse, Spark, Hive)
 
 - Use `Config` object (Pydantic BaseModel) + `Connector` class
 - Execute via `connector.execute({"sql_query": "..."}, result_format="list")`
 - Inherit from `SQLAlchemyConnector`
+
+### SQLAlchemy-Based with Catalog Support (StarRocks, Trino)
+
+- Same pattern as above but with catalog-level addressing
+- StarRocks: extends MySQL connector, uses `ENGINE=OLAP`, `DISTRIBUTED BY HASH`, `PROPERTIES` in DDL
+- Trino: uses catalog.schema.table addressing, connects via `trino://` SQLAlchemy dialect
 
 ### Independent Adapters (ClickZetta)
 
@@ -61,20 +67,19 @@ When working on multiple adapters that each need independent branches and PRs:
 - Execute via `connector.execute_query(sql, result_format)`
 - Does NOT inherit from SQLAlchemyConnector
 
-### StarRocks
-
-- Extends MySQL connector with catalog support
-- Uses `ENGINE=OLAP`, `DISTRIBUTED BY HASH`, `PROPERTIES` in DDL
-
 ### SQL Dialect Differences
 
 | Database | Identifier Quoting | Schema Qualification |
 |----------|-------------------|---------------------|
 | MySQL | backticks `` ` `` | `` `database`.`table` `` |
 | StarRocks | backticks `` ` `` | `` `catalog`.`database`.`table` `` |
+| Trino | double quotes `"` | `"catalog"."schema"."table"` |
 | PostgreSQL | double quotes `"` | `"schema"."table"` |
-| ClickZetta | double quotes `"` | `"schema"."table"` |
 | Redshift | double quotes `"` | `"schema"."table"` |
+| ClickHouse | double quotes `"` | `"database"."table"` |
+| Spark | backticks `` ` `` | `` `database`.`table` `` |
+| Hive | backticks `` ` `` | `` `database`.`table` `` |
+| ClickZetta | double quotes `"` | `"schema"."table"` |
 
 ## Testing
 
