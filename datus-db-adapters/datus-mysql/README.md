@@ -147,7 +147,7 @@ uv run python scripts/init_tpch_data.py --drop
 - **Unit Tests**: 50 tests (config, connector, identifiers)
 - **Integration Tests**: 31 tests (20 functional + 11 TPC-H)
 - **Acceptance Tests**: 23 marked tests (subset of unit + integration)
-- **Total**: 81+ tests
+- **Total**: 81 tests
 
 ### Test Markers
 
