@@ -201,12 +201,18 @@ def tpch_setup() -> Generator[StarRocksConnector, None, None]:
     )
 
     conn = None
+    # Only skip on connection failures; DDL/DML errors should propagate and fail
+    # the suite so they are not silently hidden.
     try:
         conn = StarRocksConnector(tpch_config)
         if not conn.test_connection():
             pytest.skip("Database connection test failed")
+    except Exception as e:
+        pytest.skip(f"Database not available: {e}")
 
-        # Drop tables first for deterministic setup
+    try:
+        # Drop tables first for deterministic setup.
+        # Errors here are real failures and must not be swallowed.
         for table in TPCH_TABLES:
             conn.execute_ddl(f"DROP TABLE IF EXISTS `{table}`")
 
@@ -218,9 +224,6 @@ def tpch_setup() -> Generator[StarRocksConnector, None, None]:
         for data in TPCH_DATA:
             conn.execute_insert(data)
 
-    except Exception as e:
-        pytest.skip(f"TPC-H setup failed: {e}")
-    else:
         yield conn
     finally:
         if conn is not None:
