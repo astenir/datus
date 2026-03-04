@@ -161,7 +161,7 @@ result = connector.execute_query(f"SELECT * FROM {full_name} LIMIT 10")
 
 ```bash
 # 1. Start StarRocks test container
-docker-compose up -d && sleep 60
+docker compose up -d && sleep 60
 docker exec datus-starrocks-test mysql -h127.0.0.1 -P9030 -uroot \
   -e "CREATE DATABASE IF NOT EXISTS test;"
 
@@ -172,21 +172,79 @@ docker exec datus-starrocks-test mysql -h127.0.0.1 -P9030 -uroot \
 ./scripts/test.sh all          # All tests
 ```
 
+### TPC-H Integration Tests
+
+TPC-H integration tests use a simplified TPC-H dataset (5 tables: region, nation, customer, orders, supplier) to validate end-to-end query execution, JOIN operations, aggregations, and multi-format output.
+
+```bash
+# Start StarRocks and create test database
+docker compose up -d && sleep 60
+docker exec datus-starrocks-test mysql -h127.0.0.1 -P9030 -uroot \
+  -e "CREATE DATABASE IF NOT EXISTS test;"
+
+# Initialize TPC-H test data
+uv run python scripts/init_tpch_data.py
+
+# Run TPC-H integration tests
+uv run pytest tests/integration/test_tpch.py -m integration -v
+
+# Clean re-init (drop and recreate tables)
+uv run python scripts/init_tpch_data.py --drop
+```
+
+**TPC-H Tables:**
+
+| Table | Rows | Description |
+|-------|------|-------------|
+| `tpch_region` | 5 | Standard TPC-H regions |
+| `tpch_nation` | 25 | Standard TPC-H nations |
+| `tpch_customer` | 10 | Simplified customer data |
+| `tpch_orders` | 15 | Simplified order data |
+| `tpch_supplier` | 5 | Simplified supplier data |
+
+Tables use `ENGINE=OLAP` with `PRIMARY KEY` and `DISTRIBUTED BY HASH` for StarRocks-optimized storage.
+
 ### Test Types
 
 - **Unit tests** (60): Configuration and connector logic with Mocks (no database needed)
-- **Integration tests** (35): Real database operations (catalog, materialized views, SQL)
+- **Integration tests** (35+): Real database operations (catalog, materialized views, SQL)
+- **TPC-H tests** (11): Metadata, queries, JOINs, aggregations, multi-format output
 - **Acceptance tests** (28): Critical functionality subset for CI/CD
 
 ### Environment Variables
 
 Tests use these default values (automatically set by `./scripts/test.sh`):
 
-- `STARROCKS_HOST=localhost`
-- `STARROCKS_PORT=9030`
-- `STARROCKS_USER=root`
-- `STARROCKS_PASSWORD=""`
-- `STARROCKS_DATABASE=test`
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `STARROCKS_HOST` | `localhost` | StarRocks host |
+| `STARROCKS_PORT` | `9030` | MySQL protocol port |
+| `STARROCKS_USER` | `root` | Username |
+| `STARROCKS_PASSWORD` | (empty) | Password |
+| `STARROCKS_CATALOG` | `default_catalog` | Catalog |
+| `STARROCKS_DATABASE` | `test` | Database |
+
+## Code Structure
+
+```text
+datus-starrocks/
+├── datus_starrocks/
+│   ├── __init__.py          # Package exports
+│   ├── config.py            # StarRocksConfig model
+│   └── connector.py         # StarRocksConnector (extends MySQLConnector)
+├── tests/
+│   ├── unit/                # Unit tests (no database required)
+│   └── integration/
+│       ├── conftest.py      # Fixtures (config, connector, tpch_setup)
+│       ├── test_connector.py # Core integration tests
+│       └── test_tpch.py     # TPC-H benchmark tests
+├── scripts/
+│   ├── test.sh              # Test runner script
+│   └── init_tpch_data.py    # Manual TPC-H data initialization
+├── docker-compose.yml       # StarRocks 3.3.0 test container
+├── pyproject.toml
+└── README.md
+```
 
 ## Connection Cleanup
 
