@@ -311,10 +311,13 @@ This adapter includes comprehensive test coverage with multiple test types and e
 ```text
 tests/
 ├── unit/                     # Unit tests for individual components
-├── integration/              # Integration tests with mocked dependencies
-├── run_tests.py             # Main test runner with multiple modes
+├── integration/
+│   ├── conftest.py           # TPC-H fixtures and test data
+│   ├── test_connector_integration.py  # Connector integration tests
+│   └── test_tpch.py          # TPC-H benchmark tests
+├── run_tests.py              # Main test runner with multiple modes
 ├── comprehensive_test.py     # Real connection testing script
-└── conftest.py              # Shared test fixtures and configuration
+└── conftest.py               # Shared test fixtures and configuration
 ```
 
 ### Running Tests
@@ -348,31 +351,66 @@ pytest integration/             # Integration tests
 pytest -k "test_config"        # Specific test patterns
 ```
 
-### Test Requirements
+### TPC-H Integration Tests
 
-- **Unit Tests**: No external dependencies, run with mocked components
-- **Integration Tests**: Mocked ClickZetta SDK, test connector logic
-- **Real Connection Tests**: Require actual ClickZetta credentials
+TPC-H integration tests use a simplified TPC-H dataset (5 tables: region, nation, customer, orders, supplier) to validate end-to-end query execution, JOIN operations, aggregations, and multi-format output.
 
-Set environment variables for real connection testing:
 ```bash
+# Set ClickZetta credentials
 export CLICKZETTA_SERVICE="your-service.clickzetta.com"
 export CLICKZETTA_USERNAME="your-username"
 export CLICKZETTA_PASSWORD="your-password"
 export CLICKZETTA_INSTANCE="your-instance"
 export CLICKZETTA_WORKSPACE="your-workspace"
-export CLICKZETTA_SCHEMA="your-schema"
-export CLICKZETTA_VCLUSTER="your-vcluster"
+
+# Initialize TPC-H test data
+uv run python scripts/init_tpch_data.py
+
+# Run TPC-H integration tests
+uv run pytest tests/integration/test_tpch.py -m integration -v
+
+# Clean re-init (drop and recreate tables)
+uv run python scripts/init_tpch_data.py --drop
 ```
+
+**TPC-H Tables:**
+
+| Table | Rows | Description |
+|-------|------|-------------|
+| `tpch_region` | 5 | Standard TPC-H regions |
+| `tpch_nation` | 25 | Standard TPC-H nations |
+| `tpch_customer` | 10 | Simplified customer data |
+| `tpch_orders` | 15 | Simplified order data |
+| `tpch_supplier` | 5 | Simplified supplier data |
+
+### Test Requirements
+
+- **Unit Tests**: No external dependencies, run with mocked components
+- **Integration Tests**: Mocked ClickZetta SDK, test connector logic
+- **TPC-H Tests**: Require actual ClickZetta credentials
+- **Real Connection Tests**: Require actual ClickZetta credentials
+
+**Environment Variables:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CLICKZETTA_SERVICE` | (required) | ClickZetta service endpoint |
+| `CLICKZETTA_USERNAME` | (required) | ClickZetta username |
+| `CLICKZETTA_PASSWORD` | (required) | ClickZetta password |
+| `CLICKZETTA_INSTANCE` | (required) | ClickZetta instance ID |
+| `CLICKZETTA_WORKSPACE` | (required) | ClickZetta workspace |
+| `CLICKZETTA_SCHEMA` | `PUBLIC` | Default schema |
+| `CLICKZETTA_VCLUSTER` | `DEFAULT_AP` | Virtual cluster |
 
 ### Test Coverage
 
-- ✅ Configuration validation and error handling
-- ✅ SQL query execution and result processing
-- ✅ Metadata discovery (tables, views, schemas)
-- ✅ Connection management and lifecycle
-- ✅ Volume operations and file listing
-- ✅ Error handling and exception cases
+- Configuration validation and error handling
+- SQL query execution and result processing
+- Metadata discovery (tables, views, schemas)
+- Connection management and lifecycle
+- Volume operations and file listing
+- Error handling and exception cases
+- TPC-H benchmark queries (JOINs, aggregations, multi-format output)
 
 ## License
 
