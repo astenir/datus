@@ -16,7 +16,7 @@ TPCH_SCHEMA = "public"
 
 TPCH_DDL = {
     "tpch_region": """
-        CREATE TABLE IF NOT EXISTS "public"."tpch_region" (
+        CREATE TABLE IF NOT EXISTS "{schema}"."tpch_region" (
             "r_regionkey" INTEGER NOT NULL,
             "r_name" VARCHAR(25) NOT NULL,
             "r_comment" VARCHAR(152),
@@ -24,7 +24,7 @@ TPCH_DDL = {
         )
     """,
     "tpch_nation": """
-        CREATE TABLE IF NOT EXISTS "public"."tpch_nation" (
+        CREATE TABLE IF NOT EXISTS "{schema}"."tpch_nation" (
             "n_nationkey" INTEGER NOT NULL,
             "n_name" VARCHAR(25) NOT NULL,
             "n_regionkey" INTEGER NOT NULL,
@@ -33,7 +33,7 @@ TPCH_DDL = {
         )
     """,
     "tpch_supplier": """
-        CREATE TABLE IF NOT EXISTS "public"."tpch_supplier" (
+        CREATE TABLE IF NOT EXISTS "{schema}"."tpch_supplier" (
             "s_suppkey" INTEGER NOT NULL,
             "s_name" VARCHAR(25) NOT NULL,
             "s_address" VARCHAR(40) NOT NULL,
@@ -45,7 +45,7 @@ TPCH_DDL = {
         )
     """,
     "tpch_customer": """
-        CREATE TABLE IF NOT EXISTS "public"."tpch_customer" (
+        CREATE TABLE IF NOT EXISTS "{schema}"."tpch_customer" (
             "c_custkey" INTEGER NOT NULL,
             "c_name" VARCHAR(25) NOT NULL,
             "c_address" VARCHAR(40) NOT NULL,
@@ -58,7 +58,7 @@ TPCH_DDL = {
         )
     """,
     "tpch_orders": """
-        CREATE TABLE IF NOT EXISTS "public"."tpch_orders" (
+        CREATE TABLE IF NOT EXISTS "{schema}"."tpch_orders" (
             "o_orderkey" INTEGER NOT NULL,
             "o_custkey" INTEGER NOT NULL,
             "o_orderstatus" CHAR(1) NOT NULL,
@@ -362,17 +362,27 @@ def tpch_setup():
     except Exception as e:
         pytest.skip(f"Database not available: {e}")
 
+    schema = cfg.schema_name or TPCH_SCHEMA
+
+    def _escape_value(v) -> str:
+        """Escape a value for SQL insertion."""
+        if v is None:
+            return "NULL"
+        if isinstance(v, str):
+            return "'" + v.replace("'", "''") + "'"
+        return str(v)
+
     try:
         # Create tables
         for table_name, ddl in TPCH_DDL.items():
-            conn.execute({"sql_query": f'DROP TABLE IF EXISTS "public"."{table_name}" CASCADE'})
-            conn.execute({"sql_query": ddl})
+            conn.execute({"sql_query": f'DROP TABLE IF EXISTS "{schema}"."{table_name}" CASCADE'})
+            conn.execute({"sql_query": ddl.format(schema=schema)})
 
         # Insert data
         for table_name, rows in TPCH_DATA.items():
             for row in rows:
-                placeholders = ", ".join(f"'{v}'" if isinstance(v, str) else str(v) for v in row)
-                conn.execute({"sql_query": f'INSERT INTO "public"."{table_name}" VALUES ({placeholders})'})
+                values = ", ".join(_escape_value(v) for v in row)
+                conn.execute({"sql_query": f'INSERT INTO "{schema}"."{table_name}" VALUES ({values})'})
 
         yield conn
 
@@ -380,7 +390,7 @@ def tpch_setup():
         # Cleanup: drop tables in reverse order (foreign key safety)
         for table_name in reversed(list(TPCH_DDL.keys())):
             try:
-                conn.execute({"sql_query": f'DROP TABLE IF EXISTS "public"."{table_name}" CASCADE'})
+                conn.execute({"sql_query": f'DROP TABLE IF EXISTS "{schema}"."{table_name}" CASCADE'})
             except Exception:
                 pass
         try:
