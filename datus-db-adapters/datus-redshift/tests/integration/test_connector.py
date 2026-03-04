@@ -16,42 +16,19 @@ Set these environment variables to run the tests:
 import os
 
 import pytest
-from datus_redshift import RedshiftConfig, RedshiftConnector
+from datus_redshift import RedshiftConnector
 
 pytestmark = pytest.mark.skipif(
     not os.getenv("REDSHIFT_HOST"), reason="Redshift credentials not available in environment variables"
 )
 
 
-@pytest.fixture
-def redshift_config():
-    """Create a Redshift configuration from environment variables."""
-    return RedshiftConfig(
-        host=os.getenv("REDSHIFT_HOST"),
-        username=os.getenv("REDSHIFT_USERNAME"),
-        password=os.getenv("REDSHIFT_PASSWORD"),
-        database=os.getenv("REDSHIFT_DATABASE", "dev"),
-        port=int(os.getenv("REDSHIFT_PORT", "5439")),
-        schema=os.getenv("REDSHIFT_SCHEMA", "public"),
-        ssl=True,
-        timeout_seconds=30,
-    )
-
-
-@pytest.fixture
-def connector(redshift_config):
-    """Create a RedshiftConnector instance for testing."""
-    conn = RedshiftConnector(redshift_config)
-    yield conn
-    conn.close()
-
-
 class TestRedshiftConnector:
     """Integration test cases for RedshiftConnector class."""
 
-    def test_connector_creation(self, redshift_config):
+    def test_connector_creation(self, config):
         """Test that connector can be created successfully."""
-        connector = RedshiftConnector(redshift_config)
+        connector = RedshiftConnector(config)
         assert connector is not None
         assert connector.get_type() == "redshift"
         connector.close()
