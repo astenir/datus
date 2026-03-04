@@ -206,15 +206,21 @@ def tpch_setup() -> Generator[RedshiftConnector, None, None]:
 
         # Drop tables first for deterministic setup
         for table in TPCH_TABLES:
-            conn.execute_ddl(f"DROP TABLE IF EXISTS {schema}.{table}")
+            drop_result = conn.execute_ddl(f"DROP TABLE IF EXISTS {schema}.{table}")
+            if not drop_result.success:
+                pytest.fail(f"Failed to drop table {schema}.{table}: {drop_result.error}")
 
         # Create tables
-        for ddl in TPCH_DDL:
-            conn.execute_ddl(ddl.format(schema=schema))
+        for i, ddl in enumerate(TPCH_DDL):
+            ddl_result = conn.execute_ddl(ddl.format(schema=schema))
+            if not ddl_result.success:
+                pytest.fail(f"Failed to create table {schema}.{TPCH_TABLES[i]}: {ddl_result.error}")
 
         # Insert data
-        for data in TPCH_DATA:
-            conn.execute_insert(data.format(schema=schema))
+        for i, data in enumerate(TPCH_DATA):
+            ins_result = conn.execute_insert(data.format(schema=schema))
+            if not ins_result.success:
+                pytest.fail(f"Failed to insert data into {schema}.{TPCH_TABLES[i]}: {ins_result.error}")
 
     except (InterfaceError, OperationalError, OSError) as e:
         # Skip on connection-related errors only; let other exceptions
