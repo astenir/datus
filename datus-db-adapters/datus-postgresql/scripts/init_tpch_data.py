@@ -24,6 +24,7 @@ Environment variables (used as defaults):
 
 import argparse
 import os
+import re
 import sys
 
 # ---------------------------------------------------------------------------
@@ -341,6 +342,10 @@ def main():
     parser.add_argument("--drop", action="store_true", help="Drop existing tables before creating")
     args = parser.parse_args()
 
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.schema):
+        print("ERROR: --schema must be a valid SQL identifier (letters, digits, underscores).")
+        sys.exit(1)
+
     try:
         from datus_postgresql import PostgreSQLConfig, PostgreSQLConnector
     except ImportError:
@@ -385,7 +390,9 @@ def main():
         for table_name, rows in TPCH_DATA.items():
             for row in rows:
                 values = ", ".join(_escape_value(v) for v in row)
-                conn.execute({"sql_query": f'INSERT INTO "{schema}"."{table_name}" VALUES ({values})'})
+                conn.execute(
+                    {"sql_query": f'INSERT INTO "{schema}"."{table_name}" VALUES ({values}) ON CONFLICT DO NOTHING'}
+                )
             print(f"  Inserted {len(rows)} rows into {table_name}")
 
         # Verify
