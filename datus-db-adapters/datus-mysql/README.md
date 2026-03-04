@@ -83,11 +83,9 @@ for column in schema:
 ### Quick Start
 
 ```bash
-# Unit tests (no database required, < 0.1s)
-uv run pytest tests/ -m "not integration" -v
-
-# Acceptance tests (core functionality, < 1s)
-uv run pytest tests/ -m "acceptance and not integration" -v
+# Unit tests (no database required)
+cd datus-mysql
+uv run pytest tests/unit/ -v
 
 # All tests with coverage
 uv run pytest tests/ -v --cov=datus_mysql --cov-report=term-missing
@@ -97,26 +95,89 @@ uv run pytest tests/ -v --cov=datus_mysql --cov-report=term-missing
 
 ```bash
 # Start MySQL container
-docker-compose up -d
+cd datus-mysql
+docker compose up -d
 
 # Run integration tests
 uv run pytest tests/integration/ -m integration -v
+
+# Run TPC-H tests only
+uv run pytest tests/integration/test_tpch.py -m integration -v
 
 # Run all acceptance tests (unit + integration)
 uv run pytest tests/ -m acceptance -v
 
 # Stop MySQL
-docker-compose down
+docker compose down
+```
+
+### TPC-H Test Data
+
+The integration tests include TPC-H benchmark data for comprehensive testing:
+
+| Table | Rows | Description |
+|-------|------|-------------|
+| `tpch_region` | 5 | Standard TPC-H regions |
+| `tpch_nation` | 25 | Standard TPC-H nations |
+| `tpch_customer` | 10 | Simplified customer data |
+| `tpch_orders` | 15 | Simplified order data |
+| `tpch_supplier` | 5 | Simplified supplier data |
+
+The `tpch_setup` fixture (session-scoped) automatically creates tables, inserts data, and cleans up after tests complete.
+
+### Initialize TPC-H Data Manually
+
+You can also initialize TPC-H data manually using the provided script:
+
+```bash
+cd datus-mysql
+
+# Using defaults (from docker-compose.yml)
+uv run python scripts/init_tpch_data.py
+
+# With custom connection
+uv run python scripts/init_tpch_data.py --host localhost --port 3306 --username test_user --password test_password
+
+# Drop existing tables first (clean re-init)
+uv run python scripts/init_tpch_data.py --drop
 ```
 
 ### Test Statistics
 
 - **Unit Tests**: 50 tests (config, connector, identifiers)
 - **Integration Tests**: 20 tests (connection, CRUD, DDL, metadata)
-- **Acceptance Tests**: 21 tests (15 unit + 6 integration)
-- **Total**: 70 tests
+- **TPC-H Tests**: 11 tests (metadata, queries, joins, aggregations, multi-format output)
+- **Acceptance Tests**: 21+ tests (unit + integration)
+- **Total**: 81+ tests
 
-For more details, see [tests/integration/README.md](tests/integration/README.md).
+### Test Markers
+
+| Marker | Description |
+|--------|-------------|
+| `integration` | Requires a running MySQL instance |
+| `acceptance` | Core functionality tests (subset of unit + integration) |
+
+## Code Structure
+
+```
+datus-mysql/
+├── datus_mysql/
+│   ├── __init__.py          # Package exports
+│   ├── config.py            # MySQLConfig model
+│   └── connector.py         # MySQLConnector implementation
+├── tests/
+│   ├── unit/
+│   │   └── ...              # Unit tests (no database required)
+│   └── integration/
+│       ├── conftest.py      # Fixtures (config, connector, tpch_setup)
+│       ├── test_integration.py  # Core integration tests
+│       └── test_tpch.py     # TPC-H benchmark tests
+├── scripts/
+│   └── init_tpch_data.py    # Manual TPC-H data initialization
+├── docker-compose.yml       # MySQL 8.0 test container
+├── pyproject.toml
+└── README.md
+```
 
 ## Development
 
@@ -134,7 +195,7 @@ uv pip install -e .
 
 ```bash
 # Fast unit tests
-uv run pytest tests/ -m "not integration" -v
+uv run pytest tests/unit/ -v
 
 # With coverage
 uv run pytest tests/ --cov=datus_mysql --cov-report=html
