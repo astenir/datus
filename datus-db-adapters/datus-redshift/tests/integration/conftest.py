@@ -7,6 +7,7 @@ from typing import Generator
 
 import pytest
 from datus_redshift import RedshiftConfig, RedshiftConnector
+from redshift_connector.error import InterfaceError, OperationalError
 
 
 @pytest.fixture
@@ -32,7 +33,10 @@ def connector(config: RedshiftConfig) -> Generator[RedshiftConnector, None, None
         conn = RedshiftConnector(config)
         if not conn.test_connection():
             pytest.skip("Database connection test failed")
-    except Exception as e:
+    except (InterfaceError, OperationalError, OSError) as e:
+        # Skip on connection-related errors only (network, auth, DNS).
+        # Other exceptions (e.g. programming errors) should propagate
+        # so real bugs are not silently masked in CI.
         pytest.skip(f"Database not available: {e}")
     else:
         yield conn
@@ -212,8 +216,10 @@ def tpch_setup() -> Generator[RedshiftConnector, None, None]:
         for data in TPCH_DATA:
             conn.execute_insert(data.format(schema=schema))
 
-    except Exception as e:
-        pytest.skip(f"TPC-H setup failed: {e}")
+    except (InterfaceError, OperationalError, OSError) as e:
+        # Skip on connection-related errors only; let other exceptions
+        # propagate so real bugs surface during test runs.
+        pytest.skip(f"TPC-H setup failed (connection error): {e}")
     else:
         yield conn
     finally:

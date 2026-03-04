@@ -217,17 +217,26 @@ def main():
         if args.drop:
             print("\nDropping existing TPC-H tables...")
             for table in TPCH_TABLES:
-                conn.execute_ddl(f"DROP TABLE IF EXISTS {schema}.{table}")
-                print(f"  Dropped {table}")
+                result = conn.execute_ddl(f"DROP TABLE IF EXISTS {schema}.{table}")
+                if not result.success:
+                    print(f"  Warning: Failed to drop {table}: {result.error}")
+                else:
+                    print(f"  Dropped {table}")
 
         print("\nCreating TPC-H tables...")
         for i, ddl in enumerate(TPCH_DDL):
-            conn.execute_ddl(ddl.format(schema=schema))
+            result = conn.execute_ddl(ddl.format(schema=schema))
+            if not result.success:
+                print(f"  Error creating {TPCH_TABLES[i]}: {result.error}")
+                sys.exit(1)
             print(f"  Created {TPCH_TABLES[i]}")
 
         print("\nInserting TPC-H data...")
         for i, data in enumerate(TPCH_DATA):
-            conn.execute_insert(data.format(schema=schema))
+            result = conn.execute_insert(data.format(schema=schema))
+            if not result.success:
+                print(f"  Error inserting into {TPCH_TABLES[i]}: {result.error}")
+                sys.exit(1)
             print(f"  Inserted {ROW_COUNTS[i]} rows into {TPCH_TABLES[i]}")
 
         # Verify

@@ -18,9 +18,12 @@ import os
 import pytest
 from datus_redshift import RedshiftConnector
 
-pytestmark = pytest.mark.skipif(
-    not os.getenv("REDSHIFT_HOST"), reason="Redshift credentials not available in environment variables"
-)
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not os.getenv("REDSHIFT_HOST"), reason="Redshift credentials not available in environment variables"
+    ),
+]
 
 
 class TestRedshiftConnector:

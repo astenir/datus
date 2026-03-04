@@ -7,9 +7,14 @@ import os
 import pytest
 from datus_redshift import RedshiftConnector
 
+from .conftest import TPCH_SCHEMA
+
 pytestmark = pytest.mark.skipif(
     not os.getenv("REDSHIFT_HOST"), reason="Redshift credentials not available in environment variables"
 )
+
+# Schema-qualified table names for Redshift (uses double-quoted identifiers)
+S = TPCH_SCHEMA
 
 # ==================== Metadata Tests ====================
 
@@ -55,7 +60,7 @@ def test_tpch_get_columns_nation(tpch_setup: RedshiftConnector):
 def test_tpch_query_region(tpch_setup: RedshiftConnector):
     """Test querying tpch_region - should have 5 regions."""
     result = tpch_setup.execute(
-        {"sql_query": "SELECT * FROM tpch_region"},
+        {"sql_query": f"SELECT * FROM {S}.tpch_region"},
         result_format="list",
     )
     assert result.success
@@ -67,7 +72,7 @@ def test_tpch_query_region(tpch_setup: RedshiftConnector):
 def test_tpch_query_nation(tpch_setup: RedshiftConnector):
     """Test querying tpch_nation - should have 25 nations."""
     result = tpch_setup.execute(
-        {"sql_query": "SELECT * FROM tpch_nation"},
+        {"sql_query": f"SELECT * FROM {S}.tpch_nation"},
         result_format="list",
     )
     assert result.success
@@ -80,10 +85,10 @@ def test_tpch_query_join(tpch_setup: RedshiftConnector):
     result = tpch_setup.execute(
         {
             "sql_query": (
-                "SELECT n.name AS nation_name, r.name AS region_name "
-                "FROM tpch_nation n "
-                "JOIN tpch_region r ON n.regionkey = r.regionkey "
-                "ORDER BY n.nationkey"
+                f"SELECT n.name AS nation_name, r.name AS region_name "
+                f"FROM {S}.tpch_nation n "
+                f"JOIN {S}.tpch_region r ON n.regionkey = r.regionkey "
+                f"ORDER BY n.nationkey"
             )
         },
         result_format="list",
@@ -102,11 +107,11 @@ def test_tpch_query_aggregation(tpch_setup: RedshiftConnector):
     result = tpch_setup.execute(
         {
             "sql_query": (
-                "SELECT r.name AS region_name, COUNT(n.nationkey) AS nation_count "
-                "FROM tpch_region r "
-                "JOIN tpch_nation n ON r.regionkey = n.regionkey "
-                "GROUP BY r.name "
-                "ORDER BY r.name"
+                f"SELECT r.name AS region_name, COUNT(n.nationkey) AS nation_count "
+                f"FROM {S}.tpch_region r "
+                f"JOIN {S}.tpch_nation n ON r.regionkey = n.regionkey "
+                f"GROUP BY r.name "
+                f"ORDER BY r.name"
             )
         },
         result_format="list",
@@ -123,13 +128,13 @@ def test_tpch_query_customer_orders(tpch_setup: RedshiftConnector):
     result = tpch_setup.execute(
         {
             "sql_query": (
-                "SELECT c.name, COUNT(o.orderkey) AS order_count, "
-                "SUM(o.totalprice) AS total_spent "
-                "FROM tpch_customer c "
-                "JOIN tpch_orders o ON c.custkey = o.custkey "
-                "GROUP BY c.name "
-                "ORDER BY order_count DESC "
-                "LIMIT 5"
+                f"SELECT c.name, COUNT(o.orderkey) AS order_count, "
+                f"SUM(o.totalprice) AS total_spent "
+                f"FROM {S}.tpch_customer c "
+                f"JOIN {S}.tpch_orders o ON c.custkey = o.custkey "
+                f"GROUP BY c.name "
+                f"ORDER BY order_count DESC "
+                f"LIMIT 5"
             )
         },
         result_format="list",
@@ -144,7 +149,7 @@ def test_tpch_query_customer_orders(tpch_setup: RedshiftConnector):
 def test_tpch_query_csv_format(tpch_setup: RedshiftConnector):
     """Test CSV result format with TPC-H data."""
     result = tpch_setup.execute(
-        {"sql_query": "SELECT regionkey, name FROM tpch_region ORDER BY regionkey"},
+        {"sql_query": f"SELECT regionkey, name FROM {S}.tpch_region ORDER BY regionkey"},
         result_format="csv",
     )
     assert result.success
@@ -156,7 +161,7 @@ def test_tpch_query_csv_format(tpch_setup: RedshiftConnector):
 def test_tpch_query_arrow_format(tpch_setup: RedshiftConnector):
     """Test Arrow result format with TPC-H data."""
     result = tpch_setup.execute(
-        {"sql_query": "SELECT regionkey, name FROM tpch_region ORDER BY regionkey"},
+        {"sql_query": f"SELECT regionkey, name FROM {S}.tpch_region ORDER BY regionkey"},
         result_format="arrow",
     )
     assert result.success
@@ -167,7 +172,7 @@ def test_tpch_query_arrow_format(tpch_setup: RedshiftConnector):
 def test_tpch_query_pandas_format(tpch_setup: RedshiftConnector):
     """Test Pandas result format with TPC-H data."""
     result = tpch_setup.execute(
-        {"sql_query": "SELECT regionkey, name FROM tpch_region ORDER BY regionkey"},
+        {"sql_query": f"SELECT regionkey, name FROM {S}.tpch_region ORDER BY regionkey"},
         result_format="pandas",
     )
     assert result.success

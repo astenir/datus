@@ -19,9 +19,9 @@ The adapter is automatically registered with Datus when installed. Configure you
 ```yaml
 database:
   type: redshift
-  host: my-cluster.abc123.us-west-2.redshift.amazonaws.com
+  host: your-cluster.xxx.us-west-2.redshift.amazonaws.com
   port: 5439
-  username: admin
+  username: your_username
   password: your_password
   database: dev
   schema: public
@@ -34,8 +34,8 @@ from datus_redshift import RedshiftConfig, RedshiftConnector
 
 # Using config object
 config = RedshiftConfig(
-    host="my-cluster.abc123.us-west-2.redshift.amazonaws.com",
-    username="admin",
+    host="your-cluster.xxx.us-west-2.redshift.amazonaws.com",
+    username="your_username",
     password="your_password",
     database="dev",
     schema="public",
@@ -48,7 +48,7 @@ connector = RedshiftConnector(config)
 connector.test_connection()
 
 # Execute query
-result = connector.execute({"sql_query": "SELECT * FROM users LIMIT 10"})
+result = connector.execute_query("SELECT * FROM users LIMIT 10", result_format="list")
 print(result.sql_return)
 
 # Get table list
@@ -66,16 +66,23 @@ connector.close()
 
 ### IAM Authentication
 
+> **Recommended**: Use IAM role-based authentication instead of embedding static
+> credentials. When running on EC2/ECS/Lambda with an attached IAM role, omit
+> `access_key_id` and `secret_access_key` -- the SDK will use the instance
+> profile credentials automatically.
+
 ```python
 config = RedshiftConfig(
-    host="my-cluster.abc123.us-west-2.redshift.amazonaws.com",
-    username="iam_user",
+    host="your-cluster.xxx.us-west-2.redshift.amazonaws.com",
+    username="your_iam_user",
     database="dev",
     iam=True,
-    cluster_identifier="my-cluster",
+    cluster_identifier="your-cluster-identifier",
     region="us-west-2",
-    access_key_id="YOUR_ACCESS_KEY",
-    secret_access_key="YOUR_SECRET_KEY",
+    # Omit access_key_id/secret_access_key when using IAM role-based auth.
+    # Only set these for local development with static credentials:
+    # access_key_id="YOUR_ACCESS_KEY",
+    # secret_access_key="YOUR_SECRET_KEY",
 )
 connector = RedshiftConnector(config)
 ```
