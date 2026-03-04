@@ -22,6 +22,7 @@ Usage:
 """
 
 import argparse
+import getpass
 import logging
 import os
 import sys
@@ -161,7 +162,6 @@ def main():
     parser = argparse.ArgumentParser(description="Initialize TPC-H sample data in ClickZetta")
     parser.add_argument("--service", default=os.getenv("CLICKZETTA_SERVICE", ""))
     parser.add_argument("--username", default=os.getenv("CLICKZETTA_USERNAME", ""))
-    parser.add_argument("--password", default=os.getenv("CLICKZETTA_PASSWORD", ""))
     parser.add_argument("--instance", default=os.getenv("CLICKZETTA_INSTANCE", ""))
     parser.add_argument("--workspace", default=os.getenv("CLICKZETTA_WORKSPACE", ""))
     parser.add_argument("--schema", default=os.getenv("CLICKZETTA_SCHEMA", "PUBLIC"))
@@ -169,11 +169,15 @@ def main():
     parser.add_argument("--drop", action="store_true", help="Drop existing TPC-H tables before creating")
     args = parser.parse_args()
 
+    password = os.getenv("CLICKZETTA_PASSWORD", "")
+    if not password:
+        password = getpass.getpass("ClickZetta password: ")
+
     # Validate required fields
     required = {
         "service": args.service,
         "username": args.username,
-        "password": args.password,
+        "password": password,
         "instance": args.instance,
         "workspace": args.workspace,
     }
@@ -192,7 +196,7 @@ def main():
     conn = ClickZettaConnector(
         service=args.service,
         username=args.username,
-        password=args.password,
+        password=password,
         instance=args.instance,
         workspace=args.workspace,
         schema=args.schema,
@@ -240,7 +244,12 @@ def main():
                 print(f"  {table}: query failed [{result.error}]")
                 has_mismatch = True
                 continue
-            count = result.sql_return[0]["cnt"]
+            if result.sql_return and isinstance(result.sql_return[0], dict) and "cnt" in result.sql_return[0]:
+                count = int(result.sql_return[0]["cnt"])
+            else:
+                print(f"  {table}: unexpected query result")
+                has_mismatch = True
+                continue
             expected = ROW_COUNTS[i]
             status = "OK" if count == expected else "MISMATCH"
             if count != expected:
