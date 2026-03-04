@@ -1,77 +1,97 @@
+#!/usr/bin/env python3
 # Copyright 2025-present DatusAI, Inc.
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+"""Initialize TPC-H sample data in PostgreSQL for Datus integration testing.
+
+This script creates five TPC-H tables (region, nation, supplier, customer,
+orders) and populates them with a small representative dataset.
+
+Usage:
+    python scripts/init_tpch_data.py \\
+        --host localhost --port 5432 \\
+        --username test_user --password test_password \\
+        --database test --schema public
+
+    # Drop existing tables first, then recreate
+    python scripts/init_tpch_data.py --drop
+
+Environment variables (used as defaults):
+    POSTGRESQL_HOST, POSTGRESQL_PORT, POSTGRESQL_USER, POSTGRESQL_PASSWORD,
+    POSTGRESQL_DATABASE, POSTGRESQL_SCHEMA
+"""
+
+import argparse
 import os
-from typing import Generator
-
-import pytest
-from datus_postgresql import PostgreSQLConfig, PostgreSQLConnector
+import sys
 
 # ---------------------------------------------------------------------------
-# TPC-H DDL & Data (PostgreSQL syntax)
+# TPC-H DDL (PostgreSQL syntax)
 # ---------------------------------------------------------------------------
-
-TPCH_SCHEMA = "public"
 
 TPCH_DDL = {
     "tpch_region": """
-        CREATE TABLE IF NOT EXISTS "public"."tpch_region" (
+        CREATE TABLE IF NOT EXISTS "{schema}"."tpch_region" (
             "r_regionkey" INTEGER NOT NULL,
-            "r_name" VARCHAR(25) NOT NULL,
-            "r_comment" VARCHAR(152),
+            "r_name"      VARCHAR(25) NOT NULL,
+            "r_comment"   VARCHAR(152),
             PRIMARY KEY ("r_regionkey")
         )
     """,
     "tpch_nation": """
-        CREATE TABLE IF NOT EXISTS "public"."tpch_nation" (
-            "n_nationkey" INTEGER NOT NULL,
-            "n_name" VARCHAR(25) NOT NULL,
-            "n_regionkey" INTEGER NOT NULL,
-            "n_comment" VARCHAR(152),
+        CREATE TABLE IF NOT EXISTS "{schema}"."tpch_nation" (
+            "n_nationkey"  INTEGER NOT NULL,
+            "n_name"       VARCHAR(25) NOT NULL,
+            "n_regionkey"  INTEGER NOT NULL,
+            "n_comment"    VARCHAR(152),
             PRIMARY KEY ("n_nationkey")
         )
     """,
     "tpch_supplier": """
-        CREATE TABLE IF NOT EXISTS "public"."tpch_supplier" (
-            "s_suppkey" INTEGER NOT NULL,
-            "s_name" VARCHAR(25) NOT NULL,
-            "s_address" VARCHAR(40) NOT NULL,
+        CREATE TABLE IF NOT EXISTS "{schema}"."tpch_supplier" (
+            "s_suppkey"  INTEGER NOT NULL,
+            "s_name"     VARCHAR(25) NOT NULL,
+            "s_address"  VARCHAR(40) NOT NULL,
             "s_nationkey" INTEGER NOT NULL,
-            "s_phone" VARCHAR(15) NOT NULL,
-            "s_acctbal" DECIMAL(15,2) NOT NULL,
-            "s_comment" VARCHAR(101),
+            "s_phone"    VARCHAR(15) NOT NULL,
+            "s_acctbal"  DECIMAL(15,2) NOT NULL,
+            "s_comment"  VARCHAR(101),
             PRIMARY KEY ("s_suppkey")
         )
     """,
     "tpch_customer": """
-        CREATE TABLE IF NOT EXISTS "public"."tpch_customer" (
-            "c_custkey" INTEGER NOT NULL,
-            "c_name" VARCHAR(25) NOT NULL,
-            "c_address" VARCHAR(40) NOT NULL,
-            "c_nationkey" INTEGER NOT NULL,
-            "c_phone" VARCHAR(15) NOT NULL,
-            "c_acctbal" DECIMAL(15,2) NOT NULL,
+        CREATE TABLE IF NOT EXISTS "{schema}"."tpch_customer" (
+            "c_custkey"    INTEGER NOT NULL,
+            "c_name"       VARCHAR(25) NOT NULL,
+            "c_address"    VARCHAR(40) NOT NULL,
+            "c_nationkey"  INTEGER NOT NULL,
+            "c_phone"      VARCHAR(15) NOT NULL,
+            "c_acctbal"    DECIMAL(15,2) NOT NULL,
             "c_mktsegment" VARCHAR(10) NOT NULL,
-            "c_comment" VARCHAR(117),
+            "c_comment"    VARCHAR(117),
             PRIMARY KEY ("c_custkey")
         )
     """,
     "tpch_orders": """
-        CREATE TABLE IF NOT EXISTS "public"."tpch_orders" (
-            "o_orderkey" INTEGER NOT NULL,
-            "o_custkey" INTEGER NOT NULL,
-            "o_orderstatus" CHAR(1) NOT NULL,
-            "o_totalprice" DECIMAL(15,2) NOT NULL,
-            "o_orderdate" DATE NOT NULL,
+        CREATE TABLE IF NOT EXISTS "{schema}"."tpch_orders" (
+            "o_orderkey"      INTEGER NOT NULL,
+            "o_custkey"       INTEGER NOT NULL,
+            "o_orderstatus"   CHAR(1) NOT NULL,
+            "o_totalprice"    DECIMAL(15,2) NOT NULL,
+            "o_orderdate"     DATE NOT NULL,
             "o_orderpriority" VARCHAR(15) NOT NULL,
-            "o_clerk" VARCHAR(15) NOT NULL,
-            "o_shippriority" INTEGER NOT NULL,
-            "o_comment" VARCHAR(79),
+            "o_clerk"         VARCHAR(15) NOT NULL,
+            "o_shippriority"  INTEGER NOT NULL,
+            "o_comment"       VARCHAR(79),
             PRIMARY KEY ("o_orderkey")
         )
     """,
 }
+
+# ---------------------------------------------------------------------------
+# TPC-H Sample Data
+# ---------------------------------------------------------------------------
 
 TPCH_DATA = {
     "tpch_region": [
@@ -301,89 +321,90 @@ TPCH_DATA = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+def _escape_value(v) -> str:
+    """Escape a value for SQL insertion."""
+    if v is None:
+        return "NULL"
+    if isinstance(v, str):
+        return "'" + v.replace("'", "''") + "'"
+    return str(v)
 
 
-@pytest.fixture
-def config() -> PostgreSQLConfig:
-    """Create PostgreSQL configuration for integration tests from environment or defaults."""
-    return PostgreSQLConfig(
-        host=os.getenv("POSTGRESQL_HOST", "localhost"),
-        port=int(os.getenv("POSTGRESQL_PORT", "5432")),
-        username=os.getenv("POSTGRESQL_USER", "test_user"),
-        password=os.getenv("POSTGRESQL_PASSWORD", "test_password"),
-        database=os.getenv("POSTGRESQL_DATABASE", "test"),
-        schema_name=os.getenv("POSTGRESQL_SCHEMA", "public"),
+def main():
+    parser = argparse.ArgumentParser(description="Initialize TPC-H data in PostgreSQL")
+    parser.add_argument("--host", default=os.getenv("POSTGRESQL_HOST", "localhost"))
+    parser.add_argument("--port", type=int, default=int(os.getenv("POSTGRESQL_PORT", "5432")))
+    parser.add_argument("--username", default=os.getenv("POSTGRESQL_USER", "test_user"))
+    parser.add_argument("--password", default=os.getenv("POSTGRESQL_PASSWORD", "test_password"))
+    parser.add_argument("--database", default=os.getenv("POSTGRESQL_DATABASE", "test"))
+    parser.add_argument("--schema", default=os.getenv("POSTGRESQL_SCHEMA", "public"))
+    parser.add_argument("--drop", action="store_true", help="Drop existing tables before creating")
+    args = parser.parse_args()
+
+    try:
+        from datus_postgresql import PostgreSQLConfig, PostgreSQLConnector
+    except ImportError:
+        print("ERROR: datus-postgresql is not installed.")
+        print("  pip install -e ../datus-postgresql")
+        sys.exit(1)
+
+    config = PostgreSQLConfig(
+        host=args.host,
+        port=args.port,
+        username=args.username,
+        password=args.password,
+        database=args.database,
+        schema_name=args.schema,
     )
 
+    conn = PostgreSQLConnector(config)
+    schema = args.schema
 
-@pytest.fixture
-def connector(config: PostgreSQLConfig) -> Generator[PostgreSQLConnector, None, None]:
-    """Create and cleanup PostgreSQL connector for integration tests."""
-    conn = None
     try:
-        conn = PostgreSQLConnector(config)
         if not conn.test_connection():
-            pytest.skip("Database connection test failed")
-        yield conn
-    except Exception as e:
-        pytest.skip(f"Database not available: {e}")
-    finally:
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            print("ERROR: Connection test failed.")
+            sys.exit(1)
+        print(f"Connected to PostgreSQL at {args.host}:{args.port}/{args.database}")
 
+        # Drop tables if requested
+        if args.drop:
+            print("\nDropping existing TPC-H tables...")
+            for table_name in reversed(list(TPCH_DDL.keys())):
+                conn.execute({"sql_query": f'DROP TABLE IF EXISTS "{schema}"."{table_name}" CASCADE'})
+                print(f"  Dropped {table_name}")
 
-@pytest.fixture(scope="session")
-def tpch_setup():
-    """Set up TPC-H tables and data for integration tests (session-scoped).
-
-    Creates tables, inserts sample data, yields for tests, then drops tables.
-    Skips all tests if the database is not available.
-    """
-    cfg = PostgreSQLConfig(
-        host=os.getenv("POSTGRESQL_HOST", "localhost"),
-        port=int(os.getenv("POSTGRESQL_PORT", "5432")),
-        username=os.getenv("POSTGRESQL_USER", "test_user"),
-        password=os.getenv("POSTGRESQL_PASSWORD", "test_password"),
-        database=os.getenv("POSTGRESQL_DATABASE", "test"),
-        schema_name=os.getenv("POSTGRESQL_SCHEMA", "public"),
-    )
-
-    conn = None
-    try:
-        conn = PostgreSQLConnector(cfg)
-        if not conn.test_connection():
-            pytest.skip("Database connection test failed")
-    except Exception as e:
-        pytest.skip(f"Database not available: {e}")
-
-    try:
         # Create tables
+        print("\nCreating TPC-H tables...")
         for table_name, ddl in TPCH_DDL.items():
-            conn.execute({"sql_query": f'DROP TABLE IF EXISTS "public"."{table_name}" CASCADE'})
-            conn.execute({"sql_query": ddl})
+            conn.execute({"sql_query": ddl.format(schema=schema)})
+            print(f"  Created {table_name}")
 
         # Insert data
+        print("\nInserting TPC-H data...")
         for table_name, rows in TPCH_DATA.items():
             for row in rows:
-                placeholders = ", ".join(f"'{v}'" if isinstance(v, str) else str(v) for v in row)
-                conn.execute({"sql_query": f'INSERT INTO "public"."{table_name}" VALUES ({placeholders})'})
+                values = ", ".join(_escape_value(v) for v in row)
+                conn.execute({"sql_query": f'INSERT INTO "{schema}"."{table_name}" VALUES ({values})'})
+            print(f"  Inserted {len(rows)} rows into {table_name}")
 
-        yield conn
+        # Verify
+        print("\nVerification:")
+        for table_name in TPCH_DDL:
+            result = conn.execute(
+                {"sql_query": f'SELECT COUNT(*) AS cnt FROM "{schema}"."{table_name}"'},
+                result_format="list",
+            )
+            count = result.sql_return[0]["cnt"]
+            print(f"  {table_name}: {count} rows")
+
+        print("\nTPC-H data initialization complete!")
 
     finally:
-        # Cleanup: drop tables in reverse order (foreign key safety)
-        for table_name in reversed(list(TPCH_DDL.keys())):
-            try:
-                conn.execute({"sql_query": f'DROP TABLE IF EXISTS "public"."{table_name}" CASCADE'})
-            except Exception:
-                pass
         try:
             conn.close()
         except Exception:
             pass
+
+
+if __name__ == "__main__":
+    main()
