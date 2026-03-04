@@ -206,17 +206,26 @@ def main():
         if args.drop:
             print("\nDropping existing TPC-H tables...")
             for table in TPCH_TABLES:
-                conn.execute_ddl(f"DROP TABLE IF EXISTS `{table}`")
+                drop_result = conn.execute_ddl(f"DROP TABLE IF EXISTS `{table}`")
+                if not drop_result.success:
+                    print(f"  Failed dropping {table}: {drop_result.error}")
+                    sys.exit(2)
                 print(f"  Dropped {table}")
 
         print("\nCreating TPC-H tables...")
         for i, ddl in enumerate(TPCH_DDL):
-            conn.execute_ddl(ddl)
+            ddl_result = conn.execute_ddl(ddl)
+            if not ddl_result.success:
+                print(f"  Failed creating {TPCH_TABLES[i]}: {ddl_result.error}")
+                sys.exit(2)
             print(f"  Created {TPCH_TABLES[i]}")
 
         print("\nInserting TPC-H data...")
         for i, data in enumerate(TPCH_DATA):
-            conn.execute_insert(data)
+            insert_result = conn.execute_insert(data)
+            if not insert_result.success:
+                print(f"  Failed inserting into {TPCH_TABLES[i]}: {insert_result.error}")
+                sys.exit(2)
             print(f"  Inserted {ROW_COUNTS[i]} rows into {TPCH_TABLES[i]}")
 
         # Verify
@@ -227,6 +236,10 @@ def main():
                 f"SELECT COUNT(*) AS cnt FROM `{table}`",
                 result_format="list",
             )
+            if not result.success:
+                print(f"  {table}: query failed [{result.error}]")
+                has_mismatch = True
+                continue
             count = result.sql_return[0]["cnt"]
             expected = ROW_COUNTS[i]
             status = "OK" if count == expected else "MISMATCH"

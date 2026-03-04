@@ -3,6 +3,7 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import os
+import warnings
 from typing import Generator
 
 import pytest
@@ -164,18 +165,24 @@ def tpch_setup() -> Generator:
 
         # Drop tables first for deterministic setup
         for table in TPCH_TABLES:
-            conn.execute_ddl(f"DROP TABLE IF EXISTS `{table}`")
+            drop_result = conn.execute_ddl(f"DROP TABLE IF EXISTS `{table}`")
+            if not drop_result.success:
+                raise RuntimeError(f"Failed dropping {table}: {drop_result.error}")
 
         # Create tables
-        for ddl in TPCH_DDL:
-            conn.execute_ddl(ddl)
+        for i, ddl in enumerate(TPCH_DDL):
+            ddl_result = conn.execute_ddl(ddl)
+            if not ddl_result.success:
+                raise RuntimeError(f"Failed creating table {TPCH_TABLES[i]}: {ddl_result.error}")
 
         # Insert data
-        for data in TPCH_DATA:
-            conn.execute_insert(data)
+        for i, data in enumerate(TPCH_DATA):
+            insert_result = conn.execute_insert(data)
+            if not insert_result.success:
+                raise RuntimeError(f"Failed inserting into {TPCH_TABLES[i]}: {insert_result.error}")
 
     except Exception as e:
-        pytest.skip(f"TPC-H setup failed: {e}")
+        pytest.fail(f"TPC-H setup failed: {e}")
     else:
         yield conn
     finally:
@@ -183,9 +190,17 @@ def tpch_setup() -> Generator:
             try:
                 for table in TPCH_TABLES:
                     conn.execute_ddl(f"DROP TABLE IF EXISTS `{table}`")
-            except Exception:
-                pass
+            except Exception as e:
+                warnings.warn(
+                    f"TPC-H cleanup (drop tables) failed: {e}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
             try:
                 conn.close()
-            except Exception:
-                pass
+            except Exception as e:
+                warnings.warn(
+                    f"TPC-H cleanup (close connection) failed: {e}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
