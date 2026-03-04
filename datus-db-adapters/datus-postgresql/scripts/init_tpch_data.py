@@ -357,10 +357,11 @@ def main():
         schema_name=args.schema,
     )
 
-    conn = PostgreSQLConnector(config)
+    conn = None
     schema = args.schema
 
     try:
+        conn = PostgreSQLConnector(config)
         if not conn.test_connection():
             print("ERROR: Connection test failed.")
             sys.exit(1)
@@ -400,10 +401,11 @@ def main():
         print("\nTPC-H data initialization complete!")
 
     finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
