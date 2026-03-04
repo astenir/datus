@@ -145,9 +145,8 @@ uv run python scripts/init_tpch_data.py --drop
 ### Test Statistics
 
 - **Unit Tests**: 50 tests (config, connector, identifiers)
-- **Integration Tests**: 20 tests (connection, CRUD, DDL, metadata)
-- **TPC-H Tests**: 11 tests (metadata, queries, joins, aggregations, multi-format output)
-- **Acceptance Tests**: 21+ tests (unit + integration)
+- **Integration Tests**: 31 tests (20 functional + 11 TPC-H)
+- **Acceptance Tests**: 23 marked tests (subset of unit + integration)
 - **Total**: 81+ tests
 
 ### Test Markers
@@ -159,7 +158,7 @@ uv run python scripts/init_tpch_data.py --drop
 
 ## Code Structure
 
-```
+```text
 datus-mysql/
 ├── datus_mysql/
 │   ├── __init__.py          # Package exports
