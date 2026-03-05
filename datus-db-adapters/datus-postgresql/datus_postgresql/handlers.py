@@ -51,14 +51,16 @@ def _extract_schema_from_pg_options(options: str) -> str:
 
 
 def build_postgresql_uri(db_config) -> str:
+    sslmode = _value_or_none(getattr(db_config, "sslmode", None))
     return str(
         URL.create(
-            drivername="postgresql+psycopg",
+            drivername="postgresql+psycopg2",
             username=_value_or_none(db_config.username),
             password=_value_or_none(db_config.password),
             host=_value_or_none(db_config.host),
             port=_port_or_none(db_config.port),
             database=_value_or_none(db_config.database),
+            query={"sslmode": sslmode} if sslmode else {},
         )
     )
 
@@ -66,12 +68,13 @@ def build_postgresql_uri(db_config) -> str:
 def resolve_postgresql_context(db_config, uri: str) -> Tuple[str, str, str, str]:
     url = make_url(uri)
     query_params: Dict[str, str] = {k: _clean_str(v) for k, v in url.query.items()}
-    database = _clean_str(url.database) or _clean_str(db_config.database)
+    database = _clean_str(url.database) or _clean_str(db_config.database) or "postgres"
+    config_schema = _clean_str(getattr(db_config, "schema_name", None) or getattr(db_config, "schema", None))
     schema = (
         query_params.get("currentSchema")
         or query_params.get("schema")
         or _extract_schema_from_pg_options(query_params.get("options", ""))
-        or _clean_str(db_config.schema)
+        or config_schema
         or "public"
     )
     return "postgresql", "", database, schema

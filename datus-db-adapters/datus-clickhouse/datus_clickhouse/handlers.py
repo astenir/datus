@@ -51,6 +51,6 @@ def build_clickhouse_uri(db_config) -> str:
 def resolve_clickhouse_context(db_config, uri: str) -> Tuple[str, str, str, str]:
     url = make_url(uri)
     database = _clean_str(url.database) or _clean_str(db_config.database) or "default"
-    schema = _clean_str(db_config.schema)
-    catalog = _clean_str(db_config.catalog)
+    schema = _clean_str(getattr(db_config, "schema", None))
+    catalog = _clean_str(getattr(db_config, "catalog", None))
     return "clickhouse", catalog, database, schema
