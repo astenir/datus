@@ -6,7 +6,6 @@
 """Interaction broker for async user interaction flow control."""
 
 import asyncio
-import queue
 import threading
 import uuid
 from dataclasses import dataclass, field
@@ -17,6 +16,37 @@ from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
+
+
+class ExecutionInterrupted(Exception):
+    """Raised when the user interrupts the current execution."""
+
+    pass
+
+
+class InterruptController:
+    """Thread-safe interrupt controller for graceful execution cancellation."""
+
+    def __init__(self):
+        self._interrupted = threading.Event()
+
+    def interrupt(self):
+        """Signal that execution should be interrupted."""
+        self._interrupted.set()
+
+    @property
+    def is_interrupted(self) -> bool:
+        """Check if interrupt has been signaled."""
+        return self._interrupted.is_set()
+
+    def check(self):
+        """Raise ExecutionInterrupted if interrupted."""
+        if self._interrupted.is_set():
+            raise ExecutionInterrupted("Execution interrupted by user")
+
+    def reset(self):
+        """Clear the interrupt signal for a new execution cycle."""
+        self._interrupted.clear()
 
 
 @dataclass
@@ -73,25 +103,29 @@ class InteractionBroker:
 
     def __init__(self):
         self._pending: Dict[str, PendingInteraction] = {}
-        # Use thread-safe queue.Queue to share across different event loops
-        self._output_queue: queue.Queue[ActionHistory] = queue.Queue()
+        self._output_queue: asyncio.Queue[ActionHistory] = asyncio.Queue()
         # Use threading.Lock for thread-safe access to _pending
         self._lock: threading.Lock = threading.Lock()
 
+    def reset_queue(self) -> None:
+        """Recreate the asyncio.Queue bound to the current event loop.
+
+        Must be called inside an async context (i.e. within asyncio.run())
+        before each execution cycle. This ensures the queue is always bound
+        to the active event loop, preventing 'bound to a different event loop'
+        errors when a node is reused across separate asyncio.run() calls.
+        """
+        self._output_queue = asyncio.Queue()
+
     async def _queue_put(self, item: ActionHistory) -> None:
-        """Put item into queue (non-blocking, thread-safe)."""
+        """Put item into queue (non-blocking)."""
         self._output_queue.put_nowait(item)
 
     async def _queue_get(self, timeout: float = 0.1) -> Optional[ActionHistory]:
         """Get item from queue with timeout, returns None if empty."""
-        loop = asyncio.get_running_loop()
         try:
-            # Run blocking get in executor to avoid blocking the event loop
-            return await asyncio.wait_for(
-                loop.run_in_executor(None, self._output_queue.get, True, timeout),
-                timeout=timeout + 0.1,
-            )
-        except (queue.Empty, asyncio.TimeoutError):
+            return await asyncio.wait_for(self._output_queue.get(), timeout=timeout)
+        except asyncio.TimeoutError:
             return None
 
     async def request(
