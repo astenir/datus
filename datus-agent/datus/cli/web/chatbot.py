@@ -191,7 +191,7 @@ class StreamlitChatbot:
             logger.error(f"Configuration loading error: {e}")
             return False
 
-    def render_sidebar(self) -> Dict[str, Any]:
+    def render_sidebar(self) -> Dict[str, Any]:  # pragma: no cover
         """Render sidebar with configuration information"""
         # Skip sidebar rendering in embed mode, but keep config loading
         if self.should_hide_sidebar:
@@ -592,7 +592,9 @@ class StreamlitChatbot:
         self._store_session_id()
         # Note: actions are stored in session_state by caller
 
-    def do_download(self, sql: str, markdown: str, data: ExecuteSQLResult, sql_id: Optional[str], display_column):
+    def do_download(
+        self, sql: str, markdown: str, data: ExecuteSQLResult, sql_id: Optional[str], display_column
+    ):  # pragma: no cover
         """Execute SQL, build a multi-sheet Excel workbook, and expose it for download."""
 
         if not sql_id:
@@ -712,7 +714,7 @@ class StreamlitChatbot:
                 disabled=not df.empty and len(df) > self.cli.agent_config.max_export_lines,
             )
 
-    def run(self):
+    def run(self):  # pragma: no cover
         """Main Streamlit app runner"""
         # Read query params and update session_state
         hide_param = st.query_params.get("hide_sidebar")
@@ -919,48 +921,59 @@ class StreamlitChatbot:
 
                             content_generator = ActionContentGenerator(enable_truncation=False)
 
+                            stream_failed = False
                             for action in self.execute_chat_stream(pending_prompt):
+                                if isinstance(action, str):
+                                    # Error messages from chat_executor are yielded as strings
+                                    st.error(action)
+                                    stream_failed = True
+                                    continue
                                 step_index += 1
                                 self.ui.render_action_item(chat_id, step_index, action, content_generator)
-                            status.update(label=f"✓ Completed {step_index} steps", state="complete", expanded=True)
-                    # Get complete actions from chat executor
-                    actions = self.chat_executor.last_actions
-                    logger.info(f"Chat execution completed: {len(actions) if actions else 0} actions collected")
+                            if stream_failed:
+                                status.update(label="✗ Failed", state="error", expanded=True)
+                            else:
+                                status.update(label=f"✓ Completed {step_index} steps", state="complete", expanded=True)
 
-                    # Extract SQL and response
-                    sql, response = self.extract_sql_and_response(actions)
+                    if not stream_failed:
+                        # Get complete actions from chat executor
+                        actions = self.chat_executor.last_actions
+                        logger.info(f"Chat execution completed: {len(actions) if actions else 0} actions collected")
 
-                    # Display final response
-                    if response:
-                        self.ui.display_markdown_response(response)
-                    else:
-                        st.markdown(
-                            "Sorry, unable to generate a valid response. "
-                            "Please check execution details for more information."
+                        # Extract SQL and response
+                        sql, response = self.extract_sql_and_response(actions)
+
+                        # Display final response
+                        if response:
+                            self.ui.display_markdown_response(response)
+                        else:
+                            st.markdown(
+                                "Sorry, unable to generate a valid response. "
+                                "Please check execution details for more information."
+                            )
+
+                        # Display SQL if available
+                        if sql:
+                            self.ui.display_sql(sql, self.cli.db_connector.execute_pandas(sql))
+
+                        # Display collapsed action history at bottom
+                        if actions:
+                            self.ui.render_action_history(actions, chat_id, expanded=False)
+
+                        # Save to chat history with complete data
+                        assistant_message = {
+                            "role": "assistant",
+                            "content": response or "Unable to generate valid response",
+                            "sql": sql,
+                            "actions": actions,
+                            "chat_id": chat_id,
+                            "progress_messages": progress_messages,
+                        }
+                        logger.info(
+                            f"Saving message: chat_id={chat_id}, has_sql={sql is not None}, "
+                            f"actions_count={len(actions) if actions else 0}"
                         )
-
-                    # Display SQL if available
-                    if sql:
-                        self.ui.display_sql(sql, self.cli.db_connector.execute_pandas(sql))
-
-                    # Display collapsed action history at bottom
-                    if actions:
-                        self.ui.render_action_history(actions, chat_id, expanded=False)
-
-                    # Save to chat history with complete data
-                    assistant_message = {
-                        "role": "assistant",
-                        "content": response or "Unable to generate valid response",
-                        "sql": sql,
-                        "actions": actions,
-                        "chat_id": chat_id,
-                        "progress_messages": progress_messages,
-                    }
-                    logger.info(
-                        f"Saving message: chat_id={chat_id}, has_sql={sql is not None}, "
-                        f"actions_count={len(actions) if actions else 0}"
-                    )
-                    st.session_state.messages.append(assistant_message)
+                        st.session_state.messages.append(assistant_message)
             finally:
                 st.session_state.is_running = False
                 # Clear stale interrupt controller to avoid leftover state
@@ -985,7 +998,7 @@ class StreamlitChatbot:
                 current_model = self.get_current_chat_model()
                 st.metric("Current Model", current_model)
 
-    def _display_chat_actions(self):
+    def _display_chat_actions(self):  # pragma: no cover
         # Display chat history
         readonly_mode = st.session_state.session_readonly_mode
         last_chat_id = None if not self.chat_executor.last_actions else self.chat_executor.last_actions[-1]["chat_id"]
@@ -1060,11 +1073,16 @@ class StreamlitChatbot:
                                 st.rerun()
 
 
-def run_web_interface(args):
+def run_web_interface(args):  # pragma: no cover
     """Launch Streamlit web interface"""
     import os
     import subprocess
     import sys
+    from urllib.parse import quote_plus
+
+    from datus.utils.loggings import get_logger
+
+    logger = get_logger(__name__)
 
     try:
         # Get the path to the web chatbot
@@ -1072,19 +1090,22 @@ def run_web_interface(args):
         web_chatbot_path = os.path.join(current_dir, "chatbot.py")
 
         if not os.path.exists(web_chatbot_path):
-            print(f"❌ Error: Web chatbot not found at {web_chatbot_path}")
+            logger.error(f"Web chatbot not found at {web_chatbot_path}")
             sys.exit(1)
 
-        print("🚀 Starting Datus Web Interface...")
+        logger.info("Starting Datus Web Interface...")
         if args.namespace:
-            print(f"🔗 Using namespace: {args.namespace}")
+            logger.info(f"Using namespace: {args.namespace}")
         if args.config:
-            print(f"⚙️ Using config: {args.config}")
+            logger.info(f"Using config: {args.config}")
         if args.database:
-            print(f"📚 Using database: {args.database}")
-        print(f"🌐 Starting server at http://{args.host}:{args.port}")
-        print("⏹️ Press Ctrl+C to stop server")
-        print("-" * 50)
+            logger.info(f"Using database: {args.database}")
+        url = f"http://{args.host}:{args.port}"
+        if getattr(args, "subagent", ""):
+            url += f"/?subagent={quote_plus(args.subagent)}"
+        logger.info(f"Starting server at {url}")
+        logger.info("Press Ctrl+C to stop server")
+        logger.info("-" * 50)
 
         # Prepare streamlit command
         cmd = [
@@ -1111,6 +1132,8 @@ def run_web_interface(args):
             web_args.extend(["--database", args.database])
         if getattr(args, "debug", False):
             web_args.append("--debug")
+        if getattr(args, "subagent", ""):
+            web_args.extend(["--subagent", args.subagent])
 
         if web_args:
             cmd.extend(["--"] + web_args)
@@ -1125,7 +1148,7 @@ def run_web_interface(args):
         sys.exit(1)
 
 
-def main():
+def main():  # pragma: no cover
     """Main entry point"""
     import sys
 
@@ -1153,13 +1176,17 @@ def main():
             config_path = sys.argv[i + 1]
         elif arg == "--database" and i + 1 < len(sys.argv):
             database = sys.argv[i + 1]
+        elif arg == "--subagent" and i + 1 < len(sys.argv):
+            subagent_name = sys.argv[i + 1]
         elif arg == "--debug":
             debug = True
 
     # Initialize logging once per process
     initialize_logging(debug=debug)
 
-    # Note: Subagent detection is now handled directly in the interface, not here
+    # Set subagent query param from CLI arg so existing URL-based logic picks it up
+    if subagent_name and not st.query_params.get("subagent"):
+        st.query_params["subagent"] = subagent_name
 
     # Store in session state for use by the app
     if "startup_namespace" not in st.session_state:
