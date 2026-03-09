@@ -2,7 +2,7 @@ from pathlib import Path
 
 from datus.configuration.agent_config import AgentConfig
 from datus.storage.cache import StorageCache, clear_cache
-from datus.storage.lancedb_conditions import build_where
+from datus.storage.conditions import build_where
 from datus.utils.exceptions import DatusException
 
 
@@ -41,17 +41,14 @@ def test_global_instances_are_cached(tmp_path):
     schema_first = cache.schema_storage()
     schema_second = cache.schema_storage()
     assert schema_first is schema_second
-    assert schema_first.db_path == str(tmp_path / "global")
 
     metrics_first = cache.metric_storage()
     metrics_second = cache.metric_storage()
     assert metrics_first is metrics_second
-    assert metrics_first.db_path == str(tmp_path / "global")
 
     sql_first = cache.reference_sql_storage()
     sql_second = cache.reference_sql_storage()
     assert sql_first is sql_second
-    assert sql_first.db_path == str(tmp_path / "global")
 
 
 def test_sub_agent_instances_are_cached_per_name(tmp_path):
@@ -67,8 +64,6 @@ def test_sub_agent_instances_are_cached_per_name(tmp_path):
     # Without scoped_context, all sub agents use the same global cached instance
     assert first is second
     assert first is third
-    assert first.db_path == str(tmp_path / "global")
-    assert third.db_path == str(tmp_path / "global")
 
 
 def test_invalidate_resets_scope(tmp_path):
@@ -83,8 +78,6 @@ def test_invalidate_resets_scope(tmp_path):
     refreshed = cache.schema_storage("team_a")
 
     assert original is not refreshed
-    # Sub-agents now use the global storage path with a WHERE scope filter
-    assert refreshed.db_path == str(tmp_path / "global")
 
 
 def test_ext_knowledge_global_instances_are_cached(tmp_path):
@@ -93,7 +86,6 @@ def test_ext_knowledge_global_instances_are_cached(tmp_path):
     first = cache.ext_knowledge_storage()
     second = cache.ext_knowledge_storage()
     assert first is second
-    assert first.db_path == str(tmp_path / "global")
 
 
 def test_ext_knowledge_scoped_fails_close_without_subject_tree(tmp_path):
@@ -126,7 +118,6 @@ def test_table_scoped_storage_has_scope_filter(tmp_path):
     cache = StorageCache(agent_config=config)
 
     storage = cache.schema_storage("team_a")
-    assert storage.db_path == str(tmp_path / "global")
     # The scope filter should be set because 'tables' was specified
     assert storage._scope_filter is not None
     clause = build_where(storage._scope_filter)
@@ -152,7 +143,6 @@ def test_semantic_scoped_storage_has_scope_filter(tmp_path):
     cache = StorageCache(agent_config=config)
 
     storage = cache.semantic_storage("team_a")
-    assert storage.db_path == str(tmp_path / "global")
     assert storage._scope_filter is not None
     clause = build_where(storage._scope_filter)
     assert "orders" in clause

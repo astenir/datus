@@ -4,7 +4,7 @@
 
 """Tests for BaseEmbeddingStore._apply_scope_filter method."""
 
-from datus.storage.lancedb_conditions import Node, build_where, eq
+from datus.storage.conditions import Node, build_where, eq
 from datus.storage.schema_metadata import SchemaStorage
 
 
@@ -15,7 +15,7 @@ class TestApplyScopeFilter:
         """Create a minimal SchemaStorage instance for testing."""
         from datus.storage.embedding_models import get_db_embedding_model
 
-        return SchemaStorage(str(tmp_path), get_db_embedding_model())
+        return SchemaStorage(get_db_embedding_model())
 
     def test_no_scope_filter_returns_where_as_is(self, tmp_path):
         """With no scope filter, the original where is returned unchanged."""
