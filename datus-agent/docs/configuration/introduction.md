@@ -7,9 +7,11 @@ The Agent is the central configuration unit in Datus. It defines how your agent 
 - **Flexibility at scale**: Configure multiple models, connect to multiple databases, and define node strategies or workflow rules
 - **Agent configuration file**: `agent.yml` is the primary configuration file for both datus-agent and datus-cli
 - **Startup priority**:
-  1. File specified by `-f`
-  2. `./conf/agent.yml`
-  3. `~/.datus/conf/agent.yml`
+
+    1. File specified by `-f`
+    2. `./conf/agent.yml`
+    3. `~/.datus/conf/agent.yml`
+
 - **Separation of concerns**: MCP (Model Context Protocol) configuration is stored in `.mcp.json`, not in `agent.yml`, ensuring a clear boundary between agent settings and MCP server management
 
 With this structure, agents in Datus remain modular, portable, and easy to maintain, giving you full control over how they run across different environments.
@@ -34,14 +36,17 @@ Here's a high-level summary of each module and how they relate:
 The main configuration file follows a hierarchical structure:
 
 ```yaml
-# Global model configurations
+# Global agent target
+agent:
+  target: openai                     # Default model provider key
+
+# Model providers
 models:
-  default: "openai:gpt-4"
-  providers:
-    openai:
-      type: "openai"
-      base_url: "https://api.openai.com/v1"
-      api_key: "${OPENAI_API_KEY}"
+  openai:
+    type: "openai"
+    base_url: "https://api.openai.com/v1"
+    api_key: "${OPENAI_API_KEY}"
+    model: "gpt-4-turbo"
 
 # Database connections
 namespace:
@@ -53,10 +58,9 @@ namespace:
 
 # Workflow execution plans
 workflow:
-  default: "reflection"
-  plans:
-    reflection:
-      - schema_linking
+  plan: reflection
+  reflection:
+    - schema_linking
       - generate_sql
       - execute_sql
       - reflect
@@ -65,19 +69,26 @@ workflow:
 # Node-specific configurations
 nodes:
   schema_linking:
-    model: "openai:gpt-3.5-turbo"
-    similarity_threshold: 0.7
+    model: openai                    # References the provider key in models
+    matching_rate: fast
 
 # Storage and embeddings
 storage:
-  embedding_model: "sentence-transformers/all-MiniLM-L6-v2"
-  vector_store_path: "./data/vector_store"
+  database:
+    registry_name: sentence-transformers
+    model_name: all-MiniLM-L6-v2
+    dim_size: 384
+  document:
+    model_name: intfloat/multilingual-e5-large-instruct
+    dim_size: 1024
+  metric:
+    model_name: all-MiniLM-L6-v2
+    dim_size: 384
 
 # Benchmark datasets
 benchmark:
-  bird_dev:
-    path: "./benchmark/bird/dev_20240627"
-    database_pattern: "**/*.sqlite"
+  my_custom_benchmark:
+    benchmark_path: benchmark/my_custom
 ```
 
 ## Environment Variable Support
@@ -88,18 +99,18 @@ All configuration values support environment variable expansion with default val
 # Direct environment variable reference
 api_key: ${OPENAI_API_KEY}
 
-# Environment variable with default value
-timeout: ${API_TIMEOUT:-30}
+# Environment variable with fallback
+timeout: ${API_TIMEOUT}
 
 # Complex string interpolation
-connection_string: "postgresql://${DB_USER}:${DB_PASS}@${DB_HOST}:${DB_PORT:-5432}/${DB_NAME}"
+connection_string: "postgresql://${DB_USER}:${DB_PASS}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
 ```
 
 ## Multi-Environment Configuration
 
 Configure different environments using separate configuration files:
 
-```
+```text
 conf/
 ├── agent.yml              # Main configuration
 ├── agent.yml.dev          # Development overrides
@@ -114,6 +125,7 @@ Explore the detailed configuration for each component:
 
 - **[Agent Settings](agent.md)**: Configure models, providers, and global settings
 - **[Database Namespaces](namespace.md)**: Set up multi-database connections
+- **[Database Adapters](../adapters/db_adapters.md)**: Install additional database connectors
 - **[Workflow Definitions](workflow.md)**: Define custom execution patterns
 - **[Node Configuration](nodes.md)**: Customize individual node behavior
 - **[Storage Settings](storage.md)**: Configure knowledge base and vector storage

@@ -38,9 +38,7 @@ agent:
 
 ## Output Format
 
-Trace files are saved in the `{agent.home}/trajectory/{task_id}/` directory (default: `~/.datus/trajectory/`), with each node generating a `{node_id}.yml` file.
-
-The trajectory directory path is fixed and cannot be configured. To change the location, update `agent.home` in your `agent.yml` configuration file.
+Trace files are saved in the `trajectory_dir/{task_id}/` directory (`trajectory_dir` is the configured trace output base directory, typically `{agent.home}/trajectory/{namespace}/{timestamp}/`), with each node generating a `{node_id}.yml` file.
 
 ### YAML File Structure
 
@@ -68,8 +66,10 @@ Currently, LLM trace functionality is primarily implemented in DeepSeek models:
 
 ## File Organization
 
+Below, `<trajectory_dir>` represents the configured trace output base directory:
+
 ```
-{agent.home}/trajectory/    # Default: ~/.datus/trajectory/
+<trajectory_dir>/
 └── task_123_20240101/
     ├── node_1.yml          # Schema Linking node
     ├── node_2.yml          # Generate SQL node
@@ -112,7 +112,7 @@ python datus/main.py run --namespace bird_sqlite --task "Complex query" --save_l
 1. **Storage Space**: Enabling tracing will increase storage usage, especially for long conversations
 2. **Sensitive Information**: Trace files may contain sensitive data, please handle with care
 3. **Performance Impact**: File writing operations may slightly affect performance
-4. **Directory Permissions**: The trajectory directory is automatically created at `{agent.home}/trajectory/` with appropriate permissions
+4. **Directory Permissions**: Ensure the `trajectory_dir` directory has write permissions
 
 ## Example Outputs
 
@@ -144,39 +144,39 @@ reason_content: |
   Instruction: You are a snowflake expert. Generate SQL queries and execute them.
   User Prompt: Find recent transactions
   Max Turns: 10
-  
+
   === MCP Server Started ===
   Agent created: MCP_Agent
   Output type: <class 'str'>
-  
+
   === Agent Execution Started ===
-  
+
   === Result Analysis ===
   Result type: <class 'agents.runner.Result'>
   Result attributes: ['final_output', 'messages', 'run_id', 'iteration_count', 'total_cost']
-  
+
   === Conversation Messages ===
   Message 1 (user):
     Content: Find recent transactions from the database
-  
+
   Message 2 (assistant):
     Content: I'll help you find recent transactions. Let me query the database.
     Tool Calls:
       1. read_query({"query": "SELECT * FROM transactions WHERE created_at >= CURRENT_DATE - INTERVAL '7 days' ORDER BY created_at DESC LIMIT 100"})
-  
+
   Message 3 (user):
     Content: Tool result: [transaction data...]
-  
+
   === Tool Execution Results ===
   Tool Output 1:
     Content: SELECT * FROM transactions WHERE created_at >= CURRENT_DATE - INTERVAL '7 days' ORDER BY created_at DESC LIMIT 100
     Results: [{"id": 1, "amount": 100.00, "created_at": "2024-01-15"}...]
-  
+
   === Agent Execution Completed ===
   Final Output: Here are the recent transactions from the last 7 days: [results summary]
-  
+
   Run ID: run_123456
   Iteration count: 3
   Total cost: 0.025
 output_content: "Here are the recent transactions from the last 7 days: [results summary]"
-``` 
+```
