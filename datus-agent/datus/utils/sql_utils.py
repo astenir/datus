@@ -15,29 +15,29 @@ from datus.utils.loggings import get_logger
 logger = get_logger(__name__)
 
 
-def parse_read_dialect(dialect: str = DBType.SNOWFLAKE) -> str:
+def parse_read_dialect(dialect: str = "snowflake") -> str:
     """Map SQL dialect to the appropriate read dialect for sqlglot parsing."""
     db = (dialect or "").strip().lower()
-    if db in (DBType.POSTGRES, DBType.POSTGRESQL, "redshift", "greenplum"):
-        return DBType.POSTGRES
-    if db in ("spark", "databricks", DBType.HIVE, DBType.STARROCKS):
-        return DBType.HIVE
-    if db in (DBType.MSSQL, DBType.SQLSERVER):
+    if db in ("postgres", "postgresql", "redshift", "greenplum"):
+        return "postgres"
+    if db in ("spark", "databricks", "hive", "starrocks"):
+        return "hive"
+    if db in ("mssql", "sqlserver"):
         return "tsql"
     return dialect
 
 
-def parse_dialect(dialect: str = DBType.SNOWFLAKE) -> str:
+def parse_dialect(dialect: str = "snowflake") -> str:
     """Map SQL dialect to the dialect for sqlglot parsing."""
     db = (dialect or "").strip().lower()
-    if db in (DBType.POSTGRES, DBType.POSTGRESQL):
-        return DBType.POSTGRES
-    if db in (DBType.MSSQL, DBType.SQLSERVER):
+    if db in ("postgres", "postgresql"):
+        return "postgres"
+    if db in ("mssql", "sqlserver"):
         return "tsql"
     return dialect
 
 
-def parse_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE) -> Dict[str, Any]:
+def parse_metadata_from_ddl(sql: str, dialect: str = "snowflake") -> Dict[str, Any]:
     """
     Parse SQL CREATE TABLE statement and return structured table and column information.
 
@@ -106,7 +106,7 @@ def parse_metadata_from_ddl(sql: str, dialect: str = DBType.SNOWFLAKE) -> Dict[s
         return {"table": {"name": ""}, "columns": []}
 
 
-def extract_table_names(sql, dialect=DBType.SNOWFLAKE, ignore_empty=False) -> List[str]:
+def extract_table_names(sql, dialect="snowflake", ignore_empty=False) -> List[str]:
     """
     Extract fully qualified table names (database.schema.table) from SQL.
     Returns a list of unique table names with original case preserved.
@@ -139,7 +139,7 @@ def extract_table_names(sql, dialect=DBType.SNOWFLAKE, ignore_empty=False) -> Li
             continue
         full_name = []
 
-        if dialect in [DBType.MYSQL, DBType.ORACLE, DBType.POSTGRES, DBType.POSTGRESQL]:
+        if dialect in ["mysql", "oracle", "postgres", "postgresql"]:
             if not ignore_empty or schema:
                 full_name.append(schema)
         elif dialect not in (DBType.SQLITE,):
@@ -159,31 +159,31 @@ def metadata_identifier(
     database_name: str = "",
     schema_name: str = "",
     table_name: str = "",
-    dialect: str = DBType.SNOWFLAKE,
+    dialect: str = "snowflake",
 ) -> str:
     """
     Generate a unique identifier for a table based on its metadata.
     """
+    from datus.tools.db_tools.registry import connector_registry
+
+    # Built-in connectors
     if dialect == DBType.SQLITE:
         return f"{database_name}.{table_name}" if database_name else table_name
-    elif dialect == DBType.DUCKDB:
+    if dialect == DBType.DUCKDB:
         return f"{database_name}.{schema_name}.{table_name}"
-    elif dialect in (DBType.MYSQL, DBType.STARROCKS):
-        return f"{catalog_name}.{database_name}.{table_name}" if catalog_name else f"{database_name}.{table_name}"
-    elif dialect in (DBType.ORACLE, DBType.POSTGRESQL, DBType.POSTGRES):
-        return f"{database_name}.{schema_name}.{table_name}"
-    elif dialect == DBType.SNOWFLAKE:
-        return (
-            f"{catalog_name}.{database_name}.{schema_name}.{table_name}"
-            if catalog_name
-            else f"{database_name}.{schema_name}.{table_name}"
-        )
-    elif dialect == "databricks":
-        return f"{catalog_name}.{schema_name}.{table_name}" if catalog_name else f"{schema_name}.{table_name}"
-    return table_name
+    # External dialects: build identifier from registry capabilities
+    parts = []
+    if connector_registry.support_catalog(dialect) and catalog_name:
+        parts.append(catalog_name)
+    if connector_registry.support_database(dialect) and database_name:
+        parts.append(database_name)
+    if connector_registry.support_schema(dialect) and schema_name:
+        parts.append(schema_name)
+    parts.append(table_name)
+    return ".".join(parts)
 
 
-def parse_table_name_parts(full_table_name: str, dialect: str = DBType.SNOWFLAKE) -> Dict[str, str]:
+def parse_table_name_parts(full_table_name: str, dialect: str = "snowflake") -> Dict[str, str]:
     """
     Parse a full table name into its component parts (catalog, database, schema, table).
 
@@ -201,16 +201,27 @@ def parse_table_name_parts(full_table_name: str, dialect: str = DBType.SNOWFLAKE
         - "database.schema.table" -> {"catalog_name": "", "database_name": "database",
                                       "schema_name": "schema", "table_name": "table"}
     """
-    # Database-specific field mapping configurations
-    # Each list represents the field order from left to right in the table name
-    DB_FIELD_MAPPINGS = {
-        DBType.DUCKDB.value: ["database_name", "schema_name", "table_name"],  # max 3 parts
-        DBType.SQLITE.value: ["database_name", "table_name"],  # max 2 parts
-        DBType.STARROCKS.value: ["catalog_name", "database_name", "table_name"],  # max 3 parts, no schema
-        DBType.SNOWFLAKE.value: ["catalog_name", "database_name", "schema_name", "table_name"],  # max 4 parts
-    }
-
     dialect = parse_dialect(dialect)
+
+    # Build field mapping dynamically from registry capabilities
+    def _build_field_mapping(d: str) -> list:
+        from datus.tools.db_tools.registry import connector_registry
+
+        # Built-in connectors
+        if d == DBType.SQLITE:
+            return ["database_name", "table_name"]
+        if d == DBType.DUCKDB:
+            return ["database_name", "schema_name", "table_name"]
+        # External dialects: derive from registry
+        fields = []
+        if connector_registry.support_catalog(d):
+            fields.append("catalog_name")
+        if connector_registry.support_database(d):
+            fields.append("database_name")
+        if connector_registry.support_schema(d):
+            fields.append("schema_name")
+        fields.append("table_name")
+        return fields
 
     # Split the table name by dots
     # Handle different quote styles: `backticks`, "double quotes", [brackets]
@@ -255,9 +266,12 @@ def parse_table_name_parts(full_table_name: str, dialect: str = DBType.SNOWFLAKE
     # Initialize result with empty strings
     result = {"catalog_name": "", "database_name": "", "schema_name": "", "table_name": ""}
 
+    if not parts:
+        return result
+
     # Get field mapping for the dialect, or use default mapping
-    if dialect in DB_FIELD_MAPPINGS:
-        field_mapping = DB_FIELD_MAPPINGS[dialect]
+    field_mapping = _build_field_mapping(dialect)
+    if len(field_mapping) > 1:
         max_parts = len(field_mapping)
 
         # If we have more parts than expected, take the last N parts
@@ -283,7 +297,7 @@ def parse_table_name_parts(full_table_name: str, dialect: str = DBType.SNOWFLAKE
     return result
 
 
-def parse_table_names_parts(full_table_names: List[str], dialect: str = DBType.SNOWFLAKE) -> List[Dict[str, str]]:
+def parse_table_names_parts(full_table_names: List[str], dialect: str = "snowflake") -> List[Dict[str, str]]:
     """
     Parse a list of full table names into their component parts.
 
@@ -545,7 +559,7 @@ def parse_sql_type(sql: str, dialect: str) -> SQLType:
             first_statement, dialect=dialect_name, error_level=sqlglot.ErrorLevel.IGNORE
         )
         if parsed_expression is None:
-            if dialect_name == DBType.STARROCKS.value and _metadata_pattern().match(first_statement):
+            if dialect_name == "starrocks" and _metadata_pattern().match(first_statement):
                 return SQLType.METADATA_SHOW
             inferred = _fallback_sql_type(first_statement)
             return inferred if inferred else SQLType.UNKNOWN
@@ -718,7 +732,7 @@ def parse_context_switch(sql: str, dialect: str) -> Optional[Dict[str, Any]]:
             return result
 
         # Dialect-specific fallbacks when the kind keyword is omitted
-        if normalized_dialect == DBType.DUCKDB.value:
+        if normalized_dialect == "duckdb":
             if database:
                 result["database_name"] = database
                 result["schema_name"] = identifier
@@ -729,12 +743,12 @@ def parse_context_switch(sql: str, dialect: str) -> Optional[Dict[str, Any]]:
                 result["fuzzy"] = True
             return result
 
-        if normalized_dialect == DBType.MYSQL.value:
+        if normalized_dialect == "mysql":
             result["database_name"] = identifier
             result["target"] = "database"
             return result
 
-        if normalized_dialect == DBType.STARROCKS.value:
+        if normalized_dialect == "starrocks":
             if catalog or (database and not catalog):
                 result["catalog_name"] = catalog or database
                 result["database_name"] = identifier
@@ -743,7 +757,7 @@ def parse_context_switch(sql: str, dialect: str) -> Optional[Dict[str, Any]]:
             result["target"] = "database"
             return result
 
-        if normalized_dialect == DBType.SNOWFLAKE.value:
+        if normalized_dialect == "snowflake":
             if catalog:
                 result["catalog_name"] = catalog
                 result["database_name"] = database
@@ -806,7 +820,7 @@ def parse_context_switch(sql: str, dialect: str) -> Optional[Dict[str, Any]]:
             result["catalog_name"] = catalog
             result["database_name"] = database
             result["schema_name"] = identifier
-            if normalized_dialect == DBType.DUCKDB.value and not database:
+            if normalized_dialect == "duckdb" and not database:
                 # DuckDB SET SCHEMA mirrors USE without database context.
                 result["fuzzy"] = False
             return result

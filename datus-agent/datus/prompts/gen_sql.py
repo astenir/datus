@@ -5,7 +5,6 @@
 from typing import Dict, List, Union
 
 from datus.schemas.node_models import Metric, TableSchema, TableValue
-from datus.utils.constants import DBType
 from datus.utils.loggings import get_logger
 from datus.utils.message_utils import MessagePart, build_structured_content
 
@@ -67,13 +66,11 @@ def get_sql_prompt(
     # Add Snowflake specific notes
     database_notes = ""
     knowledge_content = "" if not external_knowledge else f"External Knowledge:\n{external_knowledge}"
-    if database_type.lower() == DBType.SNOWFLAKE.value.lower():
+    if database_type.lower() == "snowflake":
         database_notes = (
             "\nEnclose all column names in double quotes to comply with Snowflake syntax requirements and avoid erros. "
             "When referencing table names in Snowflake SQL, you must include both the database_name and schema_name."
         )
-    elif database_type.lower() == DBType.STARROCKS.value.lower():
-        database_notes = ""
 
     processed_metrics = ""
     if metrics:

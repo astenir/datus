@@ -4,6 +4,8 @@
 
 """Tests for datus.storage.scoped_filter — LanceDB WHERE filter builder."""
 
+import pytest
+
 from datus.storage.conditions import build_where
 from datus.storage.scoped_filter import (
     ScopedFilterBuilder,
@@ -14,7 +16,22 @@ from datus.storage.scoped_filter import (
     _table_condition_for_token,
     _value_condition,
 )
-from datus.utils.constants import DBType
+from datus.tools.db_tools import connector_registry
+
+
+@pytest.fixture(autouse=True)
+def _register_test_capabilities():
+    """Register capabilities for dialects used in tests, with snapshot/restore for isolation."""
+    attrs = ("_capabilities", "_uri_builders", "_context_resolvers")
+    from datus.tools.db_tools.registry import ConnectorRegistry
+
+    snapshots = {a: getattr(ConnectorRegistry, a).copy() for a in attrs}
+    connector_registry.register_handlers("postgresql", capabilities={"database", "schema"})
+    connector_registry.register_handlers("snowflake", capabilities={"catalog", "database", "schema"})
+    yield
+    for a, snap in snapshots.items():
+        setattr(ConnectorRegistry, a, snap)
+
 
 # ---------------------------------------------------------------------------
 # TestReplaceWildcard
@@ -164,14 +181,14 @@ class TestTableConditionForToken:
 
     def test_schema_dot_table_with_postgres(self):
         """schema.table for PostgreSQL maps to schema_name and table_name."""
-        node = _table_condition_for_token("public.users", DBType.POSTGRESQL)
+        node = _table_condition_for_token("public.users", "postgresql")
         clause = build_where(node)
         assert "schema_name = 'public'" in clause
         assert "table_name = 'users'" in clause
 
     def test_database_dot_table_with_sqlite(self):
         """database.table for SQLite maps to database_name and table_name."""
-        node = _table_condition_for_token("main.users", DBType.SQLITE)
+        node = _table_condition_for_token("main.users", "sqlite")
         clause = build_where(node)
         assert "database_name = 'main'" in clause
         assert "table_name = 'users'" in clause
@@ -193,7 +210,7 @@ class TestTableConditionForToken:
 
     def test_three_part_with_snowflake(self):
         """Three-part name with Snowflake maps catalog.database.schema.table."""
-        node = _table_condition_for_token("mydb.public.users", DBType.SNOWFLAKE)
+        node = _table_condition_for_token("mydb.public.users", "snowflake")
         clause = build_where(node)
         assert "table_name = 'users'" in clause
         assert "schema_name = 'public'" in clause
@@ -233,7 +250,7 @@ class TestBuildTableFilter:
 
     def test_with_dialect(self):
         """Dialect is passed through to table condition builder."""
-        node = ScopedFilterBuilder.build_table_filter("public.users", DBType.POSTGRESQL)
+        node = ScopedFilterBuilder.build_table_filter("public.users", "postgresql")
         clause = build_where(node)
         assert "schema_name = 'public'" in clause
         assert "table_name = 'users'" in clause
