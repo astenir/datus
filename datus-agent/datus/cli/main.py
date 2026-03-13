@@ -73,13 +73,22 @@ class ArgumentParser:
             help="Enable saving LLM input/output traces to YAML files",
         )
 
-        # Web interface settings
-        self.parser.add_argument(
+        # Execution mode: --web and --prompt are mutually exclusive
+        mode_group = self.parser.add_mutually_exclusive_group()
+        mode_group.add_argument(
             "--web",
             action="store_true",
             help="Launch web-based Streamlit chatbot interface",
         )
+        mode_group.add_argument(
+            "-p",
+            "--prompt",
+            type=str,
+            default=None,
+            help="Run a single prompt non-interactively and print the result to stdout",
+        )
 
+        # Web interface settings
         self.parser.add_argument(
             "--port",
             type=int,
@@ -118,7 +127,10 @@ class Application:
             self.arg_parser.parser.print_help()
             return
 
-        if args.web:
+        if args.prompt is not None:
+            cli = DatusCLI(args, interactive=False)
+            cli.run_prompt(args.prompt)
+        elif args.web:
             self._run_web_interface(args)
         else:
             cli = DatusCLI(args)

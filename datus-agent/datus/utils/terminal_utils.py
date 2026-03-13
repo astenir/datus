@@ -105,13 +105,17 @@ class EscapeGuard:
 
 
 @contextmanager
-def interrupt_on_escape(interrupt_controller):
+def interrupt_on_escape(interrupt_controller, key_callbacks=None):
     """Listen for ESC key and trigger interrupt_controller when detected.
 
     Starts a daemon thread that puts the terminal in non-canonical, no-echo
     mode and polls stdin for ESC (\\x1b). On detection, calls
     interrupt_controller.interrupt(). Ctrl+C (\\x03) sends SIGINT to
     preserve the original KeyboardInterrupt behavior.
+
+    Additional key callbacks can be registered via key_callbacks dict,
+    mapping raw byte values to callables. These callbacks are invoked
+    without breaking the listener loop (e.g. Ctrl+O = b"\\x0f").
 
     Yields an EscapeGuard that can temporarily pause listening during
     interactive prompts (e.g. prompt_toolkit) to avoid intercepting
@@ -121,6 +125,8 @@ def interrupt_on_escape(interrupt_controller):
 
     Args:
         interrupt_controller: InterruptController instance to signal on ESC
+        key_callbacks: Optional dict mapping bytes to callables, invoked
+            when the corresponding key is detected (without breaking the loop).
     """
     try:
         import termios
@@ -143,8 +149,11 @@ def interrupt_on_escape(interrupt_controller):
         try:
             # Set terminal to raw-like mode: non-canonical, no echo
             new_settings = termios.tcgetattr(fd)
-            # Turn off ICANON and ECHO in lflag
-            new_settings[3] = new_settings[3] & ~(termios.ICANON | termios.ECHO)
+            # Turn off ICANON, ECHO and IEXTEN in lflag.
+            # IEXTEN must be cleared so that Ctrl+O (VDISCARD) and other
+            # extended characters are passed through to os.read() instead
+            # of being intercepted by the terminal driver.
+            new_settings[3] = new_settings[3] & ~(termios.ICANON | termios.ECHO | termios.IEXTEN)
             # Set VMIN=0, VTIME=0 for non-blocking reads
             new_settings[6][termios.VMIN] = 0
             new_settings[6][termios.VTIME] = 0
@@ -167,7 +176,7 @@ def interrupt_on_escape(interrupt_controller):
                     except termios.error:
                         pass
                     new_settings = termios.tcgetattr(fd)
-                    new_settings[3] = new_settings[3] & ~(termios.ICANON | termios.ECHO)
+                    new_settings[3] = new_settings[3] & ~(termios.ICANON | termios.ECHO | termios.IEXTEN)
                     new_settings[6][termios.VMIN] = 0
                     new_settings[6][termios.VTIME] = 0
                     termios.tcsetattr(fd, termios.TCSANOW, new_settings)
@@ -180,16 +189,39 @@ def interrupt_on_escape(interrupt_controller):
                         ch = os.read(fd, 1)
                     except OSError:
                         break
-                    if ch == b"\x1b":  # ESC
-                        logger.info("ESC key detected, triggering interrupt")
-                        interrupt_controller.interrupt()
-                        break
+                    if ch == b"\x1b":  # ESC byte received
+                        # Arrow keys and other special keys send escape sequences
+                        # starting with \x1b (e.g. \x1b[A for Up). Wait briefly to
+                        # check if more bytes follow. If they do, it's an escape
+                        # sequence (not a standalone ESC press) — consume and ignore.
+                        follow_ready, _, _ = select.select([fd], [], [], 0.05)
+                        if follow_ready:
+                            # More bytes available — this is an escape sequence, not ESC.
+                            # Drain the remaining bytes of the sequence.
+                            try:
+                                os.read(fd, 16)
+                            except OSError:
+                                pass
+                        elif not interrupt_controller.is_interrupted:
+                            # No follow-up bytes and not already interrupted
+                            # — genuine ESC key press
+                            logger.info("ESC key detected, triggering interrupt")
+                            interrupt_controller.interrupt()
+                            # Do NOT break here: keep the listener alive so that
+                            # key_callbacks (e.g. Ctrl+O for verbose toggle) remain
+                            # functional while the interrupt propagates through the
+                            # async execution stack.
                     elif ch == b"\x03":  # Ctrl+C
                         # Send SIGINT to preserve original behavior
                         import signal
 
                         os.kill(os.getpid(), signal.SIGINT)
                         break
+                    elif key_callbacks and ch in key_callbacks:
+                        try:
+                            key_callbacks[ch]()
+                        except Exception:
+                            logger.exception("Key callback failed", extra={"key": ch.hex()})
         except Exception:
             # Silently ignore errors in the listener thread
             pass
