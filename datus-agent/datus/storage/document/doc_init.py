@@ -23,6 +23,7 @@ from datus.storage.document.fetcher import GitHubFetcher, LocalFetcher, RateLimi
 from datus.storage.document.schemas import SOURCE_TYPE_GITHUB, SOURCE_TYPE_LOCAL
 from datus.storage.document.store import document_store
 from datus.storage.document.streaming_processor import StreamingDocProcessor
+from datus.utils.exceptions import DatusException
 from datus.utils.loggings import get_logger
 
 if TYPE_CHECKING:
@@ -197,11 +198,11 @@ def _make_empty_result(platform: str, version: str, source: str, start_time, err
 
 
 def init_platform_docs(
-    db_path: str,
     platform: str,
     cfg: "DocumentConfig",
     build_mode: str = "overwrite",
     pool_size: int = 4,
+    db_path: str = "",
 ) -> InitResult:
     """Initialize platform documentation knowledge base.
 
@@ -217,16 +218,26 @@ def init_platform_docs(
          d. Create indices
 
     Args:
-        db_path: Path to vector store database
         platform: Target platform (snowflake, duckdb, postgresql, etc.)
         cfg: DocumentConfig with source, version, paths, chunk_size,
             include_patterns, exclude_patterns, etc.
         build_mode: Build mode ("check" or "overwrite")
         pool_size: Thread pool size for parallel processing
+        db_path: Deprecated — ignored.  Kept for backward compatibility.
 
     Returns:
         InitResult with statistics and status
     """
+    if db_path:
+        import warnings
+
+        warnings.warn(
+            "db_path is deprecated and ignored; document_store now uses namespace-based isolation",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        logger.warning("db_path is deprecated and ignored; document_store now uses namespace-based isolation")
+
     source = cfg.source or ""
     source_type = cfg.type
     version = cfg.version
@@ -235,7 +246,10 @@ def init_platform_docs(
 
     logger.info(f"Initializing {platform} documentation from {source} ({source_type})")
 
-    store = document_store(db_path)
+    try:
+        store = document_store(platform)
+    except DatusException as exc:
+        return _make_empty_result(platform, version, source, start_time, errors=[str(exc)])
 
     # ==================================================================
     # Check mode: return existing store stats without any I/O or fetching
