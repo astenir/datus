@@ -8,24 +8,32 @@ from datus.utils.loggings import get_logger
 logger = get_logger(__name__)
 
 
+_FREE_TEXT_SENTINEL = "__free_text__"
+
+
 def select_choice(
     console: Console,
     choices: Dict[str, str],
     default: str = "",
+    allow_free_text: bool = False,
 ) -> str:
     """Interactive choice selector with arrow-key navigation.
 
     Uses prompt_toolkit Application for proper terminal handling.
     Up/Down arrows to navigate, Enter to confirm, or press shortcut key directly.
+    When ``allow_free_text`` is True, a "Type custom answer..." entry is appended.
+    Choosing it, or pressing ``/``, opens the standard multiline input prompt so
+    paste works reliably.
 
     Args:
         console: Rich Console (used for fallback output on error)
         choices: Ordered dict of {key: display_text}
                  e.g. {"y": "Allow (once)", "a": "Always allow (session)", "n": "Deny"}
         default: Default choice key (pre-selected on start)
+        allow_free_text: When True, append a free-text option and allow ``/`` shortcut.
 
     Returns:
-        Selected choice key string
+        Selected choice key string, or the user's free-text input.
     """
     try:
         from prompt_toolkit import Application
@@ -34,7 +42,11 @@ def select_choice(
         from prompt_toolkit.layout.containers import Window
         from prompt_toolkit.layout.controls import FormattedTextControl
 
-        keys = list(choices.keys())
+        display_choices = dict(choices)
+        if allow_free_text:
+            display_choices[_FREE_TEXT_SENTINEL] = "Type custom answer..."
+
+        keys = list(display_choices.keys())
         selected = [keys.index(default) if default in keys else 0]
 
         kb = KeyBindings()
@@ -49,7 +61,8 @@ def select_choice(
 
         @kb.add("enter")
         def _confirm(event):
-            event.app.exit(result=keys[selected[0]])
+            sel = keys[selected[0]]
+            event.app.exit(result=sel)
 
         @kb.add("c-c")
         def _cancel(event):
@@ -57,18 +70,31 @@ def select_choice(
 
         # Direct shortcut keys (press y/a/n to pick immediately)
         for _i, _key in enumerate(keys):
+            if _key == _FREE_TEXT_SENTINEL:
+                continue
 
             @kb.add(_key)
             def _select_direct(event, k=_key):
                 event.app.exit(result=k)
 
+        if allow_free_text:
+
+            @kb.add("/")
+            def _free_text_shortcut(event):
+                event.app.exit(result=_FREE_TEXT_SENTINEL)
+
         def _get_formatted_text():
             lines = []
-            for i, (key, display) in enumerate(choices.items()):
-                if i == selected[0]:
-                    lines.append(("ansicyan bold", f"  \u2192 [{key}] {display}\n"))
+            for i, (key, display) in enumerate(display_choices.items()):
+                is_sel = i == selected[0]
+                if key == _FREE_TEXT_SENTINEL:
+                    label = f"  [/] {display}"
                 else:
-                    lines.append(("", f"    [{key}] {display}\n"))
+                    label = f"  [{key}] {display}"
+                if is_sel:
+                    lines.append(("ansicyan bold", f"  \u2192{label}\n"))
+                else:
+                    lines.append(("", f"    {label}\n"))
             return lines
 
         app = Application(
@@ -77,7 +103,12 @@ def select_choice(
             full_screen=False,
         )
 
-        return app.run()
+        result = app.run()
+        if allow_free_text and result == _FREE_TEXT_SENTINEL:
+            console.print()
+            console.print("[dim](Paste supported. Escape+Enter or Alt+Enter to submit)[/]")
+            return prompt_input(console, message="Your input", multiline=True)
+        return result
 
     except (KeyboardInterrupt, EOFError):
         console.print("\n[yellow]Input cancelled[/]")
