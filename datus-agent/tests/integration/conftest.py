@@ -9,19 +9,18 @@ Provides reusable AgentConfig, SkillManager, and PermissionManager fixtures
 that load from tests/conf/agent.yml — mirroring the real agent startup flow.
 """
 
+import copy
 import os
 import shutil
+import time
+from argparse import Namespace
 from pathlib import Path
 
 import pytest
 
 from datus.configuration.agent_config import AgentConfig
 from datus.configuration.agent_config_loader import load_agent_config
-from datus.tools.permission.permission_config import (
-    PermissionConfig,
-    PermissionLevel,
-    PermissionRule,
-)
+from datus.tools.permission.permission_config import PermissionConfig, PermissionLevel, PermissionRule
 from datus.tools.permission.permission_manager import PermissionManager
 from datus.tools.skill_tools import SkillConfig, SkillFuncTool, SkillManager
 
@@ -129,10 +128,32 @@ def skill_manager(skill_config) -> SkillManager:
 
 
 def pytest_collection_modifyitems(items):
-    """Automatically mark all tests under integration/ with the 'integration' marker."""
+    """Automatically mark all tests under integration/ with the 'integration' marker.
+
+    Also reorder gen_* agent tests to respect logical dependencies:
+    semantic_model → metrics → ext_knowledge
+    (metrics reference measures defined in semantic models)
+    """
     for item in items:
         if "integration" in str(item.fspath) and "unit_tests" not in str(item.fspath):
             item.add_marker(pytest.mark.integration)
+
+    # Reorder gen_* agent tests by dependency (lower = runs first)
+    gen_test_order = {
+        "test_gen_semantic_model_agentic": 0,
+        "test_gen_metrics_agentic": 1,
+        "test_gen_ext_knowledge_agentic": 2,
+    }
+
+    gen_items = [(i, item) for i, item in enumerate(items) if item.fspath.purebasename in gen_test_order]
+    if gen_items:
+        indices = [i for i, _ in gen_items]
+        sorted_gen = sorted(
+            [item for _, item in gen_items],
+            key=lambda x: (gen_test_order[x.fspath.purebasename], x.name),
+        )
+        for idx, item in zip(indices, sorted_gen):
+            items[idx] = item
 
 
 @pytest.fixture
@@ -186,3 +207,69 @@ def llm_agent_config(tmp_path_factory) -> AgentConfig:
         yes=True,
     )
     return config
+
+
+# ── CLI shared fixtures ──
+
+
+@pytest.fixture
+def mock_args():
+    """Provides default mock arguments for initializing DatusCLI."""
+    return Namespace(
+        history_file="~/.datus/reference_sql",
+        debug=False,
+        namespace="bird_school",
+        database="california_schools",
+        config=str(CONF_DIR / "agent.yml"),
+        storage_path="tests/data",
+    )
+
+
+def wait_for_agent(cli, timeout=120):
+    """Wait for agent to be ready with timeout."""
+    start_time = time.time()
+    while not cli.agent_ready:
+        if time.time() - start_time > timeout:
+            pytest.fail("Agent initialization timed out.")
+        time.sleep(0.5)
+
+
+# ── Sub-agent cleanup fixtures ──
+
+NIGHTLY_SUB_AGENT_NAMES = ["nightly_test", "nightly_n7_test"]
+
+
+@pytest.fixture
+def nightly_agent_config() -> AgentConfig:
+    """Load acceptance config for nightly sub-agent tests.
+
+    Function-scoped with deepcopy of agentic_nodes to prevent test mutations
+    from leaking into the configuration_manager cache.
+    """
+    from tests.conftest import load_acceptance_config
+
+    config = load_acceptance_config(namespace="bird_school")
+    config.rag_base_path = "tests/data"
+    config.agentic_nodes = copy.deepcopy(config.agentic_nodes)
+    return config
+
+
+@pytest.fixture
+def cleanup_sub_agent_data(nightly_agent_config):
+    """Clean up sub-agent artifacts before and after each test, even on failure.
+
+    Bootstrap tests write LanceDB indexes and other artifacts under
+    ``{rag_base_path}/sub_agents/{name}/``. This fixture ensures stale data
+    from interrupted runs is removed before the test starts, and cleaned up
+    after each test run.
+    """
+
+    def _cleanup():
+        for name in NIGHTLY_SUB_AGENT_NAMES:
+            sub_agent_dir = Path(nightly_agent_config.rag_base_path) / "sub_agents" / name
+            if sub_agent_dir.exists():
+                shutil.rmtree(sub_agent_dir, ignore_errors=True)
+
+    _cleanup()
+    yield
+    _cleanup()

@@ -42,6 +42,9 @@ agent:
       base_url: https://api.moonshot.cn/v1
       api_key: ${KIMI_API_KEY}
       model: kimi-k2.5
+      temperature: 1
+      top_p: 0.95
+      enable_thinking: true
     openai-4o-mini:
       type: openai
       vendor: openai
@@ -97,10 +100,20 @@ agent:
     gen_semantic_model:
       max_turns: 40
       system_prompt: gen_semantic_model
+    gen_metrics:
+      max_turns: 30
+      system_prompt: gen_metrics
+    gen_ext_knowledge:
+      max_turns: 30
+      system_prompt: gen_ext_knowledge
+    gen_sql_summary:
+      max_turns: 30
+      system_prompt: gen_sql_summary
     chatbot:
       model: deepseek
       system_prompt: gen_sql
       prompt_language: en
+      max_turns: 30
       tools: db_tools.*, context_search_tools.*, filesystem_tools.*
       agent_description: "You are a specialized AI assistant for SQL generation"
       rules:

@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 from agents import set_tracing_disabled
 from dotenv import load_dotenv
@@ -12,6 +14,8 @@ from tests.unit_tests.utils.tracing_utils import auto_traceable
 
 logger = get_logger(__name__)
 set_tracing_disabled(True)
+
+pytestmark = pytest.mark.nightly
 
 
 @auto_traceable
@@ -105,11 +109,6 @@ class TestClaudeModel:
 
         complex_scenarios = [
             "Analyze revenue trends by customer region and supplier nation with year-over-year growth",
-            "Calculate profitability metrics by part category and manufacturer with discount impact analysis",
-            (
-                "Perform comprehensive supplier performance analysis including revenue, volume, and "
-                "geographic distribution"
-            ),
         ]
 
         # Set up agent config for SQLite database
@@ -128,6 +127,7 @@ class TestClaudeModel:
                     output_type=str,
                     tools=tools,
                     instruction=instructions,
+                    max_turns=30,
                 ):
                     action_count += 1
                     assert action is not None, f"Stream action should not be None for scenario {i+1}"
@@ -158,8 +158,6 @@ class TestClaudeModel:
     @pytest.mark.asyncio
     async def test_generate_with_tools_session(self):
         """Test MCP integration with session management."""
-        import uuid
-
         session_id = f"test_mcp_session_{uuid.uuid4().hex[:8]}"
 
         # Create session

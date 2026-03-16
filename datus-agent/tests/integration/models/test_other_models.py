@@ -16,6 +16,8 @@ from tests.unit_tests.utils.tracing_utils import auto_traceable
 logger = get_logger(__name__)
 set_tracing_disabled(True)
 
+pytestmark = pytest.mark.nightly
+
 
 @pytest.fixture
 def agent_config() -> AgentConfig:
@@ -219,12 +221,18 @@ class TestKimiModel:
         """Test Kimi model initialization."""
         assert self.model is not None
         assert self.model.model_config is not None
-        assert self.model.model_config.model == "kimi-k2-0711-preview"
+        assert self.model.model_config.model == "kimi-k2.5"
         assert self.model.model_config.base_url == "https://api.moonshot.cn/v1"
 
     def test_generate_basic(self):
         """Test basic text generation functionality."""
-        result = self.model.generate("Say hello in one word", temperature=0.1, max_tokens=10)
+        # Kimi/Moonshot API requires temperature=1 for this model; use model config default
+        # kimi-k2.5 is a reasoning model: reasoning_content is injected into content
+        # by sdk_patches when litellm.completion returns empty content.
+        result = self.model.generate(
+            "Explain what SQL JOIN does in exactly two sentences.",
+            max_tokens=200,
+        )
 
         assert result is not None, "Response should not be None"
         assert isinstance(result, str), "Response should be a string"
@@ -235,7 +243,8 @@ class TestKimiModel:
     def test_generate_with_json_output(self):
         """Test JSON output generation."""
         prompt = "Respond with a JSON object containing 'message': 'hello' and 'language': 'en'"
-        result = self.model.generate_with_json_output(prompt, temperature=0.1)
+        # Kimi/Moonshot API requires temperature=1; don't override model config
+        result = self.model.generate_with_json_output(prompt)
 
         assert result is not None, "Response should not be None"
         assert isinstance(result, dict), "Response should be a dictionary"
@@ -320,12 +329,6 @@ class TestGeminiModel:
         assert len(result) > 0, "Response should not be empty"
 
         logger.debug(f"Gemini generated response: {result}")
-
-    def test_multimodal_capability(self):
-        """Test Gemini's multimodal capabilities (when supported)."""
-        # This is a placeholder for multimodal testing
-        # Implementation depends on Gemini model's multimodal support
-        pytest.skip("Multimodal test to be implemented when Gemini config is added")
 
     def test_generate_with_json_output(self):
         """Test JSON output generation."""

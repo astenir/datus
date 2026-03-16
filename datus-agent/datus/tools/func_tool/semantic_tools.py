@@ -28,8 +28,10 @@ logger = get_logger(__name__)
 
 
 def _normalize_null(value):
-    """Convert string 'null' to None for LLM compatibility."""
-    if value == "null" or value == "None":
+    """Convert string 'null', 'None', empty, or whitespace-only values to None for LLM compatibility."""
+    if value is None:
+        return None
+    if isinstance(value, str) and value.strip().lower() in ("null", "none", ""):
         return None
     return value
 
@@ -435,6 +437,10 @@ class SemanticTools:
                 success=0,
                 error="No semantic adapter configured. Cannot execute queries without adapter.",
             )
+
+        # Sanitize time parameters: LLM may pass string "null"/"None" instead of omitting
+        time_start = _normalize_null(time_start)
+        time_end = _normalize_null(time_end)
 
         try:
             # Execute query via adapter

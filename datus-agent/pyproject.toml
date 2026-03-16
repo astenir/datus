@@ -87,10 +87,6 @@ datus-cli = "datus.cli.main:main"
 datus = "datus.cli.main:main"
 datus-mcp = "datus.mcp_server:main"
 
-[[tool.uv.index]]
-url = "http://mirrors.aliyun.com/pypi/simple"
-default = true
-
 [build-system]
 requires = ["setuptools>=80.9.0", "wheel"]
 build-backend = "setuptools.build_meta"
@@ -124,9 +120,6 @@ exclude = ["benchmark*", "docs*"]
     "sample_data/superset/*.*",
 ]
 
-[tool.uv.pip]
-index-url = "http://mirrors.aliyun.com/pypi/simple"
-
 # uv tool run black
 [tool.black]
 line-length = 120
@@ -145,9 +138,10 @@ max-complexity = 10
 select = "B,C,E,F,W,T4,B9"
 exclude = "mcp/"
 
-[tool.pytest]
+[tool.pytest.ini_options]
 pythonpath = "."
 testpaths = ["tests"]
+# markers are defined in pytest.ini to avoid duplication
 
 [dependency-groups]
 # uv sync --dev
@@ -157,7 +151,9 @@ dev = [
     "black==23.12.1",
     "mypy==1.8.0",
     "tqdm>=4.27.0",
+    "pytest-timeout>=2.3.1",
     "pytest-xdist>=3.7.0",
+    "pytest-rerunfailures>=14.0",
     "pre-commit>=4.2.0",
     "setuptools>=80.9.0",
     "pip>=25.1.1",

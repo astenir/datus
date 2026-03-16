@@ -1,0 +1,245 @@
+name: Run Nightly Tests
+
+on:
+  schedule:
+    - cron: '0 20 * * *' # 20:00 UTC daily (offset from integration at 18:00 UTC)
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  run-nightly:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Clean up stale temp files
+        run: |
+          echo "Cleaning stale pytest temp directories..."
+          find /tmp/pytest-of-* -maxdepth 1 -type d -mtime +1 -exec rm -rf {} + 2>/dev/null || true
+          echo "Cleaning stale .pyc caches..."
+          find "$GITHUB_WORKSPACE" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+          echo "Disk usage: $(df -h /tmp | tail -1 | awk '{print $5, $4}')"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        run: |
+          uv sync
+          uv pip install --upgrade --no-cache-dir datus-semantic-metricflow>=0.1.3 datus-postgresql
+
+      - name: Setup config file
+        run: |
+          cp /home/datus_ci/ci_template/agent.yml conf/agent.yml
+          cp /home/datus_ci/ci_template/ci.env .env
+
+      - name: Isolate test data directory
+        run: |
+          DATUS_TEST_HOME="${GITHUB_WORKSPACE}/.datus_test_data"
+          echo "DATUS_TEST_HOME=$DATUS_TEST_HOME" >> $GITHUB_ENV
+          sed -i "s|home: ~/.datus/tests|home: $DATUS_TEST_HOME|g" tests/conf/agent.yml
+          sed -i "s|workspace_root: ~/.datus/tests/workspace|workspace_root: $DATUS_TEST_HOME/workspace|g" tests/conf/agent.yml
+
+      - name: Load environment variables
+        run: |
+          echo "Loading environment variables from .env file..."
+          while IFS= read -r line || [ -n "$line" ]; do
+            if [[ ! -z "$line" && ! "$line" =~ ^[[:space:]]*# ]]; then
+              var_name=$(echo "$line" | cut -d'=' -f1)
+              var_value=$(echo "$line" | cut -d'=' -f2-)
+              echo "::add-mask::$var_value"
+              echo "Loading variable: $var_name"
+              echo "$line" >> $GITHUB_ENV
+            fi
+          done < .env
+          echo "Environment variables loaded successfully"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Restore knowledge base cache
+        id: kb-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ github.workspace }}/.datus_test_data/data/datus_db_bird_school
+            ${{ github.workspace }}/.datus_test_data/data/datus_db_ssb_sqlite
+          key: ${{ runner.os }}-kb-${{ hashFiles('build_scripts/build_test_data.sh', 'sample_data/**', 'datus/storage/**/*.py') }}
+          restore-keys: |
+            ${{ runner.os }}-kb-
+
+      - name: Build test data
+        id: build-test-data
+        if: steps.kb-cache.outputs.cache-hit != 'true'
+        run: |
+          echo "Building test data before running nightly tests..."
+          chmod +x build_scripts/build_test_data.sh
+          ./build_scripts/build_test_data.sh || exit 1
+          echo "Test data build completed"
+
+      - name: Save knowledge base cache
+        if: steps.build-test-data.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ github.workspace }}/.datus_test_data/data/datus_db_bird_school
+            ${{ github.workspace }}/.datus_test_data/data/datus_db_ssb_sqlite
+          key: ${{ runner.os }}-kb-${{ hashFiles('build_scripts/build_test_data.sh', 'sample_data/**', 'datus/storage/**/*.py') }}
+
+      - name: Verify FEISHU_WEBHOOK_URL
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_NOTIFY_CI_URL }}
+        run: |
+          if [ -n "$FEISHU_WEBHOOK_URL" ]; then
+            echo "FEISHU_WEBHOOK_URL is set (length: ${#FEISHU_WEBHOOK_URL} characters)"
+          else
+            echo "FEISHU_WEBHOOK_URL is not set or empty"
+          fi
+
+      - name: Run nightly tests
+        id: nightly_tests
+        timeout-minutes: 90
+        run: |
+          set -o pipefail
+          LOG_FILE="test_output_nightly_$(date +%Y%m%d_%H%M%S).log"
+          test_exit_code=0
+
+          # Run 3 test groups sequentially to avoid resource contention that
+          # causes MCP server ASGI timeouts and event loop corruption.
+
+          # Group 1: MCP server tests (event loop sensitive, no xdist)
+          echo "=== MCP Server Tests ===" | tee "$LOG_FILE"
+          uv run pytest -m nightly tests/integration/tools/test_mcp_server.py --tb=short --verbose --timeout=60 2>&1 | tee -a "$LOG_FILE" || test_exit_code=$?
+
+          # Group 2: gen_* agent tests in dependency order
+          echo -e "\n=== Gen Agent Tests ===" | tee -a "$LOG_FILE"
+          uv run pytest -m nightly tests/integration/agent/test_gen_semantic_model_agentic.py tests/integration/agent/test_gen_metrics_agentic.py tests/integration/agent/test_gen_ext_knowledge_agentic.py --tb=short --verbose --timeout=600 --reruns 1 --reruns-delay 5 2>&1 | tee -a "$LOG_FILE" || test_exit_code=$?
+
+          # Group 3: Remaining nightly tests with xdist parallel
+          echo -e "\n=== Main Nightly Tests ===" | tee -a "$LOG_FILE"
+          uv run pytest -m nightly tests/ --deselect tests/integration/tools/test_mcp_server.py --deselect tests/integration/agent/test_gen_semantic_model_agentic.py --deselect tests/integration/agent/test_gen_metrics_agentic.py --deselect tests/integration/agent/test_gen_ext_knowledge_agentic.py --tb=short --verbose --timeout=300 --reruns 1 --reruns-delay 5 --dist=loadscope -n auto 2>&1 | tee -a "$LOG_FILE" || test_exit_code=$?
+
+          echo "log_file=$LOG_FILE" >> "$GITHUB_OUTPUT"
+          echo "test_exit_code=$test_exit_code" >> "$GITHUB_OUTPUT"
+          exit "$test_exit_code"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-test-results-${{ github.run_number }}
+          path: test_output_nightly_*.log
+          retention-days: 7
+
+      - name: Send Feishu notification
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_NOTIFY_CI_URL }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            let benchmarkReport = '';
+
+            try {
+              const logFiles = fs.readdirSync('.').filter(file => file.startsWith('test_output_nightly_') && file.endsWith('.log'));
+              const latestLogFile = logFiles.sort().pop();
+
+              const { execSync } = require('child_process');
+              let logContent = '';
+              try {
+                logContent = execSync(`tail -200 "${latestLogFile || 'test_output_nightly.log'}"`, { encoding: 'utf8' });
+              } catch (error) {
+                logContent = fs.readFileSync(latestLogFile || 'test_output_nightly.log', 'utf8');
+              }
+              let separator = '────────────────────────────────────────────────────────────────────────────────'
+              const benchmarkStart = logContent.indexOf(separator);
+              let benchmarkEnd = logContent.lastIndexOf(separator);
+              if (benchmarkStart !== -1) {
+                benchmarkEnd = benchmarkEnd === -1 ? logContent.length : benchmarkEnd + separator.length;
+                benchmarkReport = logContent.substring(benchmarkStart, benchmarkEnd);
+              } else {
+                benchmarkReport = logContent;
+              }
+            } catch (error) {
+              console.log('Could not read test report from log');
+            }
+
+            const testStatus = '${{ steps.nightly_tests.outputs.test_exit_code }}' === '0' ? 'PASSED' : 'FAILED';
+            const today = new Date().toISOString().split('T')[0];
+
+            const messageBody = `## Daily Nightly Test Report - ${today}
+
+            **Status:** ${testStatus}
+            **Runs Details:** [${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+            ### Test Results Summary
+            \`\`\`
+            ${benchmarkReport || 'Test completed - detailed report in artifacts'}
+            \`\`\`
+
+            ---
+            *This is an automated report generated by the nightly test workflow.*
+            `;
+
+            // Send to Feishu
+            const https = require('https');
+
+            const feishuWebhookUrl = process.env.FEISHU_WEBHOOK_URL;
+
+            if (feishuWebhookUrl) {
+              console.log('FEISHU_WEBHOOK_URL is set in JS environment.');
+            } else {
+              console.error('FEISHU_WEBHOOK_URL is not set in JS environment.');
+            }
+
+            if (!feishuWebhookUrl) {
+              console.error('FEISHU_WEBHOOK_URL environment variable is not set');
+              return;
+            }
+
+            const url = new URL(feishuWebhookUrl);
+
+            const data = JSON.stringify({
+              "msg_type": "interactive",
+              "card": {
+                "type": "template",
+                "data": {
+                  "template_id": "AAqz7JC34dHlY",
+                  "template_version_name": "1.0.0",
+                  "template_variable": {
+                    "report_result": messageBody
+                  }
+                }
+              }
+            });
+
+            const options = {
+              hostname: url.hostname,
+              port: url.port || 443,
+              path: url.pathname + url.search,
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(data)
+              }
+            };
+
+            const req = https.request(options, (res) => {
+              console.log('Feishu notification sent:', res.statusCode);
+            });
+
+            req.on('error', (error) => {
+              console.error('Error sending to Feishu:', error);
+            });
+
+            req.write(data);
+            req.end();
