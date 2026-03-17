@@ -1,5 +1,6 @@
 name: "Coverage Check"
 on:
+  workflow_dispatch:
   workflow_call:
 
 jobs:
@@ -9,11 +10,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
 
       - name: Fetch base branch
-        run: git fetch origin ${{ github.event.pull_request.base.ref }}
+        run: git fetch origin ${{ github.event.pull_request.base.ref || github.ref_name }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -40,6 +41,13 @@ jobs:
           cp /home/datus_ci/ci_template/agent.yml conf/agent.yml
           cp /home/datus_ci/ci_template/ci.env .env
 
+      - name: Isolate test data directory
+        run: |
+          DATUS_TEST_HOME="${GITHUB_WORKSPACE}/.datus_test_data"
+          echo "DATUS_TEST_HOME=$DATUS_TEST_HOME" >> $GITHUB_ENV
+          sed -i "s|home: ~/.datus/tests|home: $DATUS_TEST_HOME|g" tests/conf/agent.yml
+          sed -i "s|workspace_root: ~/.datus/tests/workspace|workspace_root: $DATUS_TEST_HOME/workspace|g" tests/conf/agent.yml
+
       - name: Load environment variables
         run: |
           echo "Loading environment variables from .env file..."
@@ -59,7 +67,7 @@ jobs:
 
       - name: Run tests and extract coverage
         id: metrics
-        run: python3 ci/run-tests-and-coverage.py "${{ github.event.pull_request.base.ref }}"
+        run: python3 ci/run-tests-and-coverage.py "${{ github.event.pull_request.base.ref || github.ref_name }}"
 
       - name: Post coverage comment
         if: always() && steps.metrics.outcome != 'cancelled'
