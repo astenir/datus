@@ -7,7 +7,6 @@ from urllib.parse import quote_plus
 
 from datus.schemas.base import TABLE_TYPE
 from datus.tools.db_tools.base import list_to_in_str
-from datus.utils.constants import DBType
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus_sqlalchemy import SQLAlchemyConnector
@@ -81,7 +80,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
 
         super().__init__(
             connection_string,
-            dialect=DBType.CLICKHOUSE,
+            dialect="clickhouse",
             timeout_seconds=config.timeout_seconds,
         )
         self.database_name = database

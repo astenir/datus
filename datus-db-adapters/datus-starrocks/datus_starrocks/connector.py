@@ -6,7 +6,6 @@ from typing import Any, Dict, List, Set, Union, override
 
 from datus.tools.db_tools.base import list_to_in_str
 from datus.tools.db_tools.mixins import CatalogSupportMixin, MaterializedViewSupportMixin
-from datus.utils.constants import DBType
 from datus.utils.loggings import get_logger
 from datus_mysql import MySQLConnector
 
@@ -56,7 +55,7 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         self.catalog_name = config.catalog
 
         # Override dialect to StarRocks
-        self.dialect = DBType.STARROCKS
+        self.dialect = "starrocks"
 
     # ==================== Context Manager Support ====================
 
@@ -322,7 +321,7 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
     def to_dict(self) -> Dict[str, Any]:
         """Convert connector to serializable dictionary."""
         return {
-            "db_type": DBType.STARROCKS,
+            "db_type": "starrocks",
             "host": self.host,
             "port": self.port,
             "user": self.user,
@@ -332,7 +331,7 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
 
     def get_type(self) -> str:
         """Return the database type."""
-        return DBType.STARROCKS
+        return "starrocks"
 
     @override
     def test_connection(self) -> bool:

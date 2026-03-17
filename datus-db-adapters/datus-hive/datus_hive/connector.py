@@ -5,7 +5,6 @@
 from typing import Any, Dict, List, Mapping, Optional, Set, Union, override
 from urllib.parse import quote_plus
 
-from datus.utils.constants import DBType
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus_sqlalchemy import SQLAlchemyConnector
@@ -42,7 +41,7 @@ class HiveConnector(SQLAlchemyConnector):
         encoded_username = quote_plus(self.username) if self.username else ""
         connection_string = f"hive://{encoded_username}@{self.host}:{self.port}/{database}"
 
-        super().__init__(connection_string, dialect=DBType.HIVE, timeout_seconds=config.timeout_seconds)
+        super().__init__(connection_string, dialect="hive", timeout_seconds=config.timeout_seconds)
 
         self.config = config
         self.database_name = database

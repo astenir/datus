@@ -30,7 +30,9 @@ def register():
     """
     # Register our connector with the name "redshift"
     # Now users can specify dialect="redshift" in their Datus configuration
-    connector_registry.register("redshift", RedshiftConnector)
+    connector_registry.register(
+        "redshift", RedshiftConnector, config_class=RedshiftConfig, capabilities={"database", "schema"}
+    )
 
 
 # Auto-register when this module is imported

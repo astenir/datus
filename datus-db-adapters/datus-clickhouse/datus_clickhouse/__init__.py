@@ -13,4 +13,13 @@ def register():
     """Register ClickHouse connector with Datus registry."""
     from datus.tools.db_tools import connector_registry
 
-    connector_registry.register("clickhouse", ClickHouseConnector, config_class=ClickHouseConfig)
+    from .handlers import build_clickhouse_uri, resolve_clickhouse_context
+
+    connector_registry.register(
+        "clickhouse",
+        ClickHouseConnector,
+        config_class=ClickHouseConfig,
+        capabilities={"database"},
+        uri_builder=build_clickhouse_uri,
+        context_resolver=resolve_clickhouse_context,
+    )

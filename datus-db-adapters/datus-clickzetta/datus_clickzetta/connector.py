@@ -15,7 +15,7 @@ from datus.schemas.base import TABLE_TYPE
 from datus.schemas.node_models import ExecuteSQLResult
 
 # Legacy connector - does not inherit from BaseSqlConnector directly
-from datus.utils.constants import DBType, SQLType
+from datus.utils.constants import SQLType
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import metadata_identifier, parse_context_switch, parse_sql_type
@@ -85,8 +85,8 @@ class ClickZettaConnector:
         self.config = ConnectionConfig()
         self.timeout_seconds = 30
         self.connection = None
-        self.dialect = DBType.CLICKZETTA
-        self.db_type = DBType.CLICKZETTA
+        self.dialect = "clickzetta"
+        self.db_type = "clickzetta"
         schema = schema or "PUBLIC"
         vcluster = vcluster or "DEFAULT_AP"
         if Session is None:

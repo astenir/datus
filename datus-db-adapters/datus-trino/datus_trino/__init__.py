@@ -13,4 +13,4 @@ def register():
     """Register Trino connector with Datus registry."""
     from datus.tools.db_tools import connector_registry
 
-    connector_registry.register("trino", TrinoConnector, config_class=TrinoConfig)
+    connector_registry.register("trino", TrinoConnector, config_class=TrinoConfig, capabilities={"catalog", "schema"})

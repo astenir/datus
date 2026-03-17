@@ -11,7 +11,6 @@ from datus.schemas.node_models import ExecuteSQLResult
 from datus.tools.db_tools.base import BaseSqlConnector, _to_sql_literal, list_to_in_str
 from datus.tools.db_tools.config import ConnectionConfig
 from datus.tools.db_tools.mixins import MaterializedViewSupportMixin, SchemaNamespaceMixin
-from datus.utils.constants import DBType
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import parse_context_switch
@@ -97,7 +96,7 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
         self.snowflake_config = config
 
         conn_config = ConnectionConfig(timeout_seconds=config.timeout_seconds)
-        super().__init__(config=conn_config, dialect=DBType.SNOWFLAKE)
+        super().__init__(config=conn_config, dialect="snowflake")
         self.connection: SnowflakeConnection = Connect(
             account=config.account,
             user=config.username,
@@ -129,7 +128,7 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
 
     def get_type(self) -> str:
         """Return the database type."""
-        return DBType.SNOWFLAKE
+        return "snowflake"
 
     def _sys_databases(self) -> Set[str]:
         """Return set of system databases to filter out."""

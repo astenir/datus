@@ -13,4 +13,13 @@ def register():
     """Register PostgreSQL connector with Datus registry."""
     from datus.tools.db_tools import connector_registry
 
-    connector_registry.register("postgresql", PostgreSQLConnector, config_class=PostgreSQLConfig)
+    from .handlers import build_postgresql_uri, resolve_postgresql_context
+
+    connector_registry.register(
+        "postgresql",
+        PostgreSQLConnector,
+        config_class=PostgreSQLConfig,
+        capabilities={"database", "schema"},
+        uri_builder=build_postgresql_uri,
+        context_resolver=resolve_postgresql_context,
+    )

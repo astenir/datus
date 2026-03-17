@@ -44,4 +44,10 @@ def register():
             )
 
     # Register directly with factory - the ClickZetta connector is self-contained
-    connector_registry.register("clickzetta", ClickZettaConnector, clickzetta_factory, config_class=ClickZettaConfig)
+    connector_registry.register(
+        "clickzetta",
+        ClickZettaConnector,
+        clickzetta_factory,
+        config_class=ClickZettaConfig,
+        capabilities={"database", "schema"},
+    )

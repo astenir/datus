@@ -20,7 +20,6 @@ from datus.schemas.node_models import ExecuteSQLResult
 from datus.tools.db_tools.base import BaseSqlConnector
 from datus.tools.db_tools.config import ConnectionConfig
 from datus.tools.db_tools.mixins import MaterializedViewSupportMixin, SchemaNamespaceMixin
-from datus.utils.constants import DBType
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import parse_context_switch
@@ -165,7 +164,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         conn_config = ConnectionConfig(timeout_seconds=config.timeout_seconds)
 
         # Initialize the base class with Redshift dialect
-        super().__init__(config=conn_config, dialect=DBType.REDSHIFT)
+        super().__init__(config=conn_config, dialect="redshift")
 
         # Build connection parameters dictionary
         connection_params = {
@@ -230,7 +229,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         Returns:
             String identifier for Redshift
         """
-        return DBType.REDSHIFT
+        return "redshift"
 
     def _sys_databases(self) -> Set[str]:
         """
