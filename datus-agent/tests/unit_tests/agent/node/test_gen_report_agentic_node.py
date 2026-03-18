@@ -159,6 +159,50 @@ class TestGenReportAgenticNodeInit:
 
 
 # ---------------------------------------------------------------------------
+# Execution Mode Tests
+# ---------------------------------------------------------------------------
+
+
+class TestGenReportAgenticNodeExecutionMode:
+    """Tests for GenReportAgenticNode execution_mode gating of ask_user tool."""
+
+    def test_interactive_mode_has_ask_user_tool(self, real_agent_config, mock_llm_create):
+        """Interactive mode (default) enables ask_user tool."""
+        from datus.agent.node.gen_report_agentic_node import GenReportAgenticNode
+
+        node = GenReportAgenticNode(
+            node_id="report_interactive",
+            description="Test interactive mode",
+            node_type=NodeType.TYPE_GEN_REPORT,
+            agent_config=real_agent_config,
+            node_name="gen_report",
+        )
+
+        assert node.execution_mode == "interactive"
+        assert node.ask_user_tool is not None
+        tool_names = [t.name for t in node.tools]
+        assert "ask_user" in tool_names
+
+    def test_workflow_mode_no_ask_user_tool(self, real_agent_config, mock_llm_create):
+        """Workflow mode disables ask_user tool."""
+        from datus.agent.node.gen_report_agentic_node import GenReportAgenticNode
+
+        node = GenReportAgenticNode(
+            node_id="report_workflow",
+            description="Test workflow mode",
+            node_type=NodeType.TYPE_GEN_REPORT,
+            agent_config=real_agent_config,
+            node_name="gen_report",
+            execution_mode="workflow",
+        )
+
+        assert node.execution_mode == "workflow"
+        assert node.ask_user_tool is None
+        tool_names = [t.name for t in node.tools]
+        assert "ask_user" not in tool_names
+
+
+# ---------------------------------------------------------------------------
 # Execution Tests
 # ---------------------------------------------------------------------------
 
