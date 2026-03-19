@@ -288,11 +288,13 @@ def test_sqlalchemy_schema_with_catalog_and_database():
     """Test _sqlalchemy_schema returns catalog.database format."""
     config = StarRocksConfig(username="test_user")
 
-    with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
+    with (
+        patch("datus_mysql.MySQLConnector.__init__", return_value=None),
+        patch("datus_db_core.registry.ConnectorRegistry.support_catalog", return_value=True),
+    ):
         connector = StarRocksConnector(config)
         connector.database_name = "my_db"
         connector.catalog_name = "my_catalog"
-        connector.support_catalog = MagicMock(return_value=True)
 
         result = connector._sqlalchemy_schema(catalog_name="test_catalog", database_name="test_db")
 
@@ -303,11 +305,13 @@ def test_sqlalchemy_schema_with_catalog_only():
     """Test _sqlalchemy_schema returns None when no database."""
     config = StarRocksConfig(username="test_user")
 
-    with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
+    with (
+        patch("datus_mysql.MySQLConnector.__init__", return_value=None),
+        patch("datus_db_core.registry.ConnectorRegistry.support_catalog", return_value=True),
+    ):
         connector = StarRocksConnector(config)
         connector.database_name = None
         connector.catalog_name = "my_catalog"
-        connector.support_catalog = MagicMock(return_value=True)
 
         result = connector._sqlalchemy_schema(catalog_name="test_catalog")
 
@@ -318,10 +322,12 @@ def test_sqlalchemy_schema_without_catalog_support():
     """Test _sqlalchemy_schema when catalog not supported."""
     config = StarRocksConfig(username="test_user")
 
-    with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
+    with (
+        patch("datus_mysql.MySQLConnector.__init__", return_value=None),
+        patch("datus_db_core.registry.ConnectorRegistry.support_catalog", return_value=False),
+    ):
         connector = StarRocksConnector(config)
         connector.database_name = "my_db"
-        connector.support_catalog = MagicMock(return_value=False)
 
         result = connector._sqlalchemy_schema(database_name="test_db")
 
@@ -332,11 +338,13 @@ def test_sqlalchemy_schema_uses_default_catalog():
     """Test _sqlalchemy_schema uses default catalog when not specified."""
     config = StarRocksConfig(username="test_user")
 
-    with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
+    with (
+        patch("datus_mysql.MySQLConnector.__init__", return_value=None),
+        patch("datus_db_core.registry.ConnectorRegistry.support_catalog", return_value=True),
+    ):
         connector = StarRocksConnector(config)
         connector.database_name = "my_db"
         connector.catalog_name = None
-        connector.support_catalog = MagicMock(return_value=True)
 
         result = connector._sqlalchemy_schema(database_name="test_db")
 
@@ -454,7 +462,7 @@ def test_to_dict_includes_catalog():
         connector = StarRocksConnector(config)
         connector.host = "localhost"
         connector.port = 9030
-        connector.user = "test_user"
+        connector.username = "test_user"
         connector.database_name = "testdb"
 
         result = connector.to_dict()

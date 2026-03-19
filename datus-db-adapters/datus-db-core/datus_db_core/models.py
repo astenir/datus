@@ -60,7 +60,7 @@ class ExecuteSQLInput(BaseInput):
 class ExecuteSQLResult(BaseResult):
     """Result model for SQL execution."""
 
-    model_config = ConfigDict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
 
     sql_query: Optional[str] = Field("", description="The SQL query to execute")
     row_count: Optional[int] = Field(None, description="The number of rows returned")

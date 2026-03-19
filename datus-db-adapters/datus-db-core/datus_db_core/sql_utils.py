@@ -35,7 +35,7 @@ def parse_dialect(dialect: str = "snowflake") -> str:
         return "postgres"
     if db in ("mssql", "sqlserver"):
         return "tsql"
-    return dialect
+    return db
 
 
 def metadata_identifier(

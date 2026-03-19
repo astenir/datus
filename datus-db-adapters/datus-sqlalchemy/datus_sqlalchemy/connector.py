@@ -372,16 +372,17 @@ class SQLAlchemyConnector(BaseSqlConnector):
         """Execute query and return Arrow table."""
         try:
             self.connect()
-            result = self.connection.execute(text(sql))
-            if result.returns_rows:
-                df = DataFrame(result.fetchall(), columns=result.keys())
-                table = Table.from_pandas(df)
+            with self.engine.connect() as conn:
+                result = conn.execute(text(sql))
+                if result.returns_rows:
+                    df = DataFrame(result.fetchall(), columns=result.keys())
+                    table = Table.from_pandas(df)
+                    return ExecuteSQLResult(
+                        success=True, sql_query=sql, sql_return=table, row_count=len(df), result_format="arrow"
+                    )
                 return ExecuteSQLResult(
-                    success=True, sql_query=sql, sql_return=table, row_count=len(df), result_format="arrow"
+                    success=True, sql_query=sql, sql_return=result.rowcount, row_count=0, result_format="arrow"
                 )
-            return ExecuteSQLResult(
-                success=True, sql_query=sql, sql_return=result.rowcount, row_count=0, result_format="arrow"
-            )
         except Exception as e:
             ex = e if isinstance(e, DatusException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(

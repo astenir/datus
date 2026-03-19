@@ -15,6 +15,7 @@ class ErrorCode(Enum):
         "100001",
         "Unexpected value of {field_name}, expected value: {expected_values}, your value: {your_value}",
     )
+    COMMON_INVALID_PARAMETER = ("100002", "Invalid parameter: {error_message}")
     COMMON_FIELD_REQUIRED = ("100003", "Missing required field: {field_name}")
     COMMON_UNSUPPORTED = ("100004", "Unsupported value `{your_value}` for field `{field_name}`")
     COMMON_CONFIG_ERROR = ("100006", "Configuration error: {config_error}")
