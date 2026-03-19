@@ -1,12 +1,31 @@
 [project]
 name = "datus-storage-adapter"
-version = "0.1.0"
+version = "0.1.1"
 description = "Monorepo workspace for Datus storage adapter packages"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+readme = "README.md"
+authors = [
+    { name = "Datus Team", email = "felix.liu@datus.ai" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "datus-storage-base",
     "datus-storage-postgresql",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Datus-ai/datus-storage-adapters"
+Repository = "https://github.com/Datus-ai/datus-storage-adapters"
+
+[build-system]
+requires = ["setuptools>=69.0"]
+build-backend = "setuptools.build_meta"
 
 [tool.uv.sources]
 datus-storage-base = { workspace = true }
