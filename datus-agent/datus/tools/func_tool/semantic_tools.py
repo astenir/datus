@@ -17,7 +17,7 @@ from datus.configuration.agent_config import AgentConfig
 from datus.storage.metric.store import MetricRAG
 from datus.storage.semantic_model.store import SemanticModelRAG
 from datus.tools.func_tool.attribution_utils import DimensionAttributionUtil
-from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
+from datus.tools.func_tool.base import FuncToolResult, normalize_null, trans_to_function_tool
 from datus.tools.semantic_tools.base import BaseSemanticAdapter
 from datus.tools.semantic_tools.models import AnomalyContext
 from datus.tools.semantic_tools.registry import semantic_adapter_registry
@@ -25,15 +25,6 @@ from datus.utils.compress_utils import DataCompressor
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
-
-
-def _normalize_null(value):
-    """Convert string 'null', 'None', empty, or whitespace-only values to None for LLM compatibility."""
-    if value is None:
-        return None
-    if isinstance(value, str) and value.strip().lower() in ("null", "none", ""):
-        return None
-    return value
 
 
 def _run_async(coro):
@@ -64,7 +55,6 @@ class SemanticTools:
     def all_tools_name(cls) -> List[str]:
         """Return list of all tool method names for wizard display."""
         return [
-            "search_metrics",
             "list_metrics",
             "get_dimensions",
             "query_metrics",
@@ -179,7 +169,6 @@ class SemanticTools:
             List of Tool objects for LLM function calling
         """
         tools = [
-            trans_to_function_tool(self.search_metrics),
             trans_to_function_tool(self.list_metrics),
             trans_to_function_tool(self.get_dimensions),
             trans_to_function_tool(self.query_metrics),
@@ -194,65 +183,6 @@ class SemanticTools:
             tools.append(trans_to_function_tool(self.attribution_analyze))
 
         return tools
-
-    def search_metrics(
-        self,
-        query_text: str,
-        subject_path: Optional[List[str]] = None,
-        top_n: int = 5,
-    ) -> FuncToolResult:
-        """
-        Search metrics using vector search in unified storage.
-
-        Args:
-            query_text: Natural language query for metric search
-            subject_path: Optional subject tree path filter (e.g., ["Finance", "Revenue"])
-            top_n: Maximum number of results to return
-
-        Returns:
-            FuncToolResult with matching metrics
-        """
-        # Normalize null values from LLM
-        subject_path = _normalize_null(subject_path)
-        try:
-            results = self.metric_rag.search_metrics(
-                query_text=query_text,
-                subject_path=subject_path,
-                top_n=top_n,
-            )
-
-            if not results:
-                return FuncToolResult(
-                    success=0,
-                    error=f"No metrics found matching '{query_text}'",
-                    result=[],
-                )
-
-            # Format results for LLM
-            formatted_metrics = []
-            for metric in results:
-                formatted_metrics.append(
-                    {
-                        "name": metric.get("name"),
-                        "description": metric.get("description"),
-                        "type": metric.get("metric_type"),
-                        "dimensions": metric.get("dimensions", []),
-                        "measures": metric.get("base_measures", []),
-                        "subject_path": metric.get("subject_path", []),
-                    }
-                )
-
-            return FuncToolResult(
-                success=1,
-                result=self.compressor.compress(formatted_metrics),
-            )
-
-        except Exception as e:
-            logger.error(f"Error searching metrics: {e}")
-            return FuncToolResult(
-                success=0,
-                error=f"Failed to search metrics: {str(e)}",
-            )
 
     def list_metrics(
         self,
@@ -269,10 +199,11 @@ class SemanticTools:
             offset: Number of metrics to skip
 
         Returns:
-            FuncToolResult with list of metrics
+            FuncToolResult with list of metric dicts, each containing:
+                - name, description, type, dimensions, measures, unit, format, path
         """
         # Normalize null values from LLM
-        path = _normalize_null(path)
+        path = normalize_null(path)
         try:
             # Try storage first
             all_metrics = self.metric_rag.search_all_metrics()
@@ -346,16 +277,18 @@ class SemanticTools:
     ) -> FuncToolResult:
         """
         Get available dimensions for a specific metric.
+        When an adapter is configured, returns dimension objects from the adapter.
+        Otherwise falls back to dimension data from storage.
 
         Args:
             metric_name: Name of the metric
             path: Optional subject tree path (e.g., ["Finance", "Revenue"])
 
         Returns:
-            FuncToolResult with list of dimension names
+            FuncToolResult with list of dimensions (names or objects depending on source)
         """
         # Normalize null values from LLM
-        path = _normalize_null(path)
+        path = normalize_null(path)
         try:
             # Get dimensions from adapter (MetricFlow) to ensure consistency with query execution
             if self.adapter:
@@ -439,8 +372,8 @@ class SemanticTools:
             )
 
         # Sanitize time parameters: LLM may pass string "null"/"None" instead of omitting
-        time_start = _normalize_null(time_start)
-        time_end = _normalize_null(time_end)
+        time_start = normalize_null(time_start)
+        time_end = normalize_null(time_end)
 
         try:
             # Execute query via adapter

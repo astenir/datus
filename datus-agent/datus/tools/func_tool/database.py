@@ -21,7 +21,7 @@ from datus.tools.db_tools.db_manager import DBManager, db_manager_instance
 from datus.tools.db_tools.registry import connector_registry
 from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
 from datus.utils.compress_utils import DataCompressor
-from datus.utils.constants import DBType
+from datus.utils.constants import DBType, SQLType
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.mcp_decorators import mcp_tool, mcp_tool_class
@@ -598,8 +598,8 @@ class DBFuncTool:
     ) -> FuncToolResult:
         """
         Retrieve table candidates by semantic similarity over stored schema metadata and optional sample rows.
-        Use this tool  when the agent needs tables matching a natural-language description.
-        This tool  helps find relevant tables by searching through table names, schemas (DDL),
+        Use this tool when the agent needs tables matching a natural-language description.
+        This tool helps find relevant tables by searching through table names, schemas (DDL),
         and sample data using semantic search.
 
         Use this tool when you need to:
@@ -625,16 +625,13 @@ class DBFuncTool:
             simple_sample_data: If True, sample rows omit catalog/database/schema fields for brevity.
 
         Database-specific parameter usage:
-            - PostgreSQL: database + schema_name (e.g., database="mydb", schema_name="public")
-            - MySQL: database only (schema = database)
-            - Snowflake: database + schema_name
-            - StarRocks: catalog + database
-            - SQLite/DuckDB: database only or leave all empty
+            PostgreSQL/Snowflake: database + schema_name |
+            MySQL/StarRocks: database (or catalog + database) |
+            SQLite/DuckDB: database or leave empty
 
         Returns:
             FuncToolResult where:
-                - success=1 with result={"metadata": [...], "sample_data": [...]} when matches remain after filtering.
-                - success=1 with result=[] and error message when no candidates survive the filters.
+                - success=1 with result={"metadata": [...], "sample_data": [...]} (empty lists when no matches).
                 - success=0 with error text if schema storage is unavailable or lookup fails.
         """
         if not self.has_schema:
@@ -665,7 +662,7 @@ class DBFuncTool:
                     ]
                 ).to_pylist()
             if not metadata_rows:
-                return FuncToolResult(success=0, error="No metadata rows found.")
+                return FuncToolResult(success=1, result=result_dict)
 
             current_has_semantic = False
             if self.has_semantic_models:
@@ -716,6 +713,8 @@ class DBFuncTool:
     def list_databases(self, catalog: Optional[str] = "", include_sys: Optional[bool] = False) -> FuncToolResult:
         """
         Enumerate databases accessible through the current connection.
+        Use this when you need to discover what databases are available before querying.
+        For finding specific tables by description, use search_table instead.
 
         Args:
             catalog: Optional catalog to scope the lookup (dialect dependent).
@@ -741,6 +740,8 @@ class DBFuncTool:
     ) -> FuncToolResult:
         """
         List schema names under the supplied catalog/database coordinate.
+        Use this to explore schema structure when working with databases that have multiple schemas
+        (e.g., PostgreSQL, Snowflake).
 
         Args:
             catalog: Optional catalog filter. Leave blank to rely on connector defaults.
@@ -936,25 +937,59 @@ class DBFuncTool:
     @mcp_tool()
     def read_query(self, sql: str, database: Optional[str] = "") -> FuncToolResult:
         """
-        Execute arbitrary SQL and return the result rows (optionally compressed).
+        Execute a read-only SQL query and return the result rows (optionally compressed).
+
+        Only SELECT, SHOW/DESCRIBE, and EXPLAIN statements are allowed.
+        DML (INSERT/UPDATE/DELETE) and DDL (CREATE/ALTER/DROP) are rejected.
 
         Args:
-            sql: SQL text to run, or a .sql file path (e.g. "sql/session_1/query.sql")
-                 to read and execute from the workspace.
+            sql: Read-only SQL text (SELECT, SHOW, DESCRIBE, EXPLAIN), or a .sql file path
+                 (e.g. "sql/session_1/query.sql") to read and execute from the workspace.
             database: Optional database name for multi-database scenarios.
 
         Returns:
             FuncToolResult with result=self.compressor.compress(rows) when successful. On failure success=0 with the
             underlying error message from the connector.
         """
+        from datus.utils.sql_utils import parse_sql_type
+
         try:
             # Support SQL file path: if sql is a simple path ending with .sql, read from file
             sql_stripped = sql.strip()
             if sql_stripped.endswith(".sql") and "\n" not in sql_stripped and " " not in sql_stripped:
                 sql = self._read_sql_from_file(sql_stripped)
 
-            logger.info(f"read_query sql: {sql}")
+            # Reject multi-statement SQL to prevent read-only bypass (e.g. "SELECT 1; DELETE ...")
+            from datus.utils.sql_utils import strip_sql_comments
+
+            cleaned = strip_sql_comments(sql).strip().rstrip(";").strip()
+            if ";" in cleaned:
+                return FuncToolResult(
+                    success=0,
+                    error="Multi-statement SQL is not allowed. Please submit one query at a time.",
+                )
+
+            # Enforce read-only: only SELECT, SHOW/DESCRIBE, and EXPLAIN are allowed
             connector = self._get_connector(database)
+            sql_type = parse_sql_type(sql, connector.dialect)
+            _READONLY_SQL_TYPES = {SQLType.SELECT, SQLType.METADATA_SHOW, SQLType.EXPLAIN}
+            if sql_type not in _READONLY_SQL_TYPES:
+                return FuncToolResult(
+                    success=0,
+                    error=f"Only read-only queries (SELECT, SHOW, DESCRIBE, EXPLAIN) are allowed. "
+                    f"Detected SQL type: {sql_type.value}",
+                )
+
+            # Reject writable PRAGMAs (e.g. "PRAGMA journal_mode=WAL")
+            if sql_type == SQLType.METADATA_SHOW:
+                first_word = cleaned.split()[0].upper() if cleaned else ""
+                if first_word == "PRAGMA" and "=" in cleaned:
+                    return FuncToolResult(
+                        success=0,
+                        error="Writable PRAGMA statements are not allowed in read-only mode.",
+                    )
+
+            logger.info("read_query", sql_type=sql_type.value, database=database or "default")
             result = connector.execute_query(sql, result_format="arrow" if connector.dialect == "snowflake" else "list")
             if result.success:
                 data = result.sql_return
@@ -984,7 +1019,8 @@ class DBFuncTool:
             schema_name: Optional schema override.
 
         Returns:
-            FuncToolResult with result containing identifier/catalog/database/schema/table_name/table_type/definition.
+            FuncToolResult with result dict containing keys:
+                identifier, catalog_name, database_name, schema_name, table_name, table_type, definition.
             Scoped-context mismatches or connector failures surface as success=0 with an explanatory message.
         """
         try:

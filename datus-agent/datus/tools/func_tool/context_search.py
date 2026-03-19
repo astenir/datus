@@ -13,22 +13,11 @@ from datus.storage.ext_knowledge.store import ExtKnowledgeRAG
 from datus.storage.metric.store import MetricRAG
 from datus.storage.reference_sql.store import ReferenceSqlRAG
 from datus.storage.semantic_model.store import SemanticModelRAG
-from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
+from datus.tools.func_tool.base import FuncToolResult, normalize_null, trans_to_function_tool
 from datus.utils.loggings import get_logger
 from datus.utils.mcp_decorators import mcp_tool, mcp_tool_class
 
 logger = get_logger(__name__)
-
-
-def _normalize_null(value: Any) -> Any:
-    """Convert string 'null' to None for LLM compatibility.
-
-    LLMs sometimes output the string 'null' instead of JSON null.
-    This function normalizes such values to Python None.
-    """
-    if value == "null" or value == "None":
-        return None
-    return value
 
 
 _NAME = "context_search_tools"
@@ -177,6 +166,8 @@ class ContextSearchTools:
     def list_subject_tree(self) -> FuncToolResult:
         """
         Get the domain-layer taxonomy from subject_tree store with metrics and SQL counts.
+        Use this as the first step to discover available metrics, reference SQL, and knowledge
+        before calling get_metrics, get_reference_sql, or get_knowledge.
 
         The response has the structure:
         {
@@ -266,7 +257,7 @@ class ContextSearchTools:
             FuncToolResult with list of matching metrics containing name, description, constraint, and sql_query
         """
         # Normalize null values from LLM
-        subject_path = _normalize_null(subject_path)
+        subject_path = normalize_null(subject_path)
         try:
             metrics = self.metric_rag.search_metrics(
                 query_text=query_text,
@@ -282,17 +273,19 @@ class ContextSearchTools:
     @mcp_tool(availability_check="has_metrics")
     def get_metrics(self, subject_path: List[str], name: str = "") -> FuncToolResult:
         """
-        Search for business metrics and KPIs using natural language queries.
+        Get metric details by exact subject path and name.
+        Use `search_metrics` for similarity-based search, use this for precise retrieval
+        when you already know the path.
 
         Args:
-            subject_path: Optional subject hierarchy path (e.g., ['Finance', 'Revenue', 'Q1'])
-            name: The name of the metric
+            subject_path: Subject hierarchy path (e.g., ['Finance', 'Revenue', 'Q1'])
+            name: The exact name of the metric
 
         Returns:
-            FuncToolResult with metrics containing name, description, constraint, and sql_query
+            FuncToolResult with metric detail containing name, description, constraint, and sql_query
         """
         # Normalize null values from LLM
-        name = _normalize_null(name) or ""
+        name = normalize_null(name) or ""
         try:
             metrics = self.metric_rag.get_metrics_detail(
                 subject_path=subject_path,
@@ -321,17 +314,14 @@ class ContextSearchTools:
             top_n: The number of top results to return (default 5).
 
         Returns:
-            dict: A dictionary with keys:
-                - 'success' (int): 1 if the search succeeded, 0 otherwise.
-                - 'error' (str or None): Error message if any.
-                - 'result' (list): On success, a list of matching entries, each containing:
-                    - 'sql'
-                    - 'tags'
-                    - 'summary'
-                    - 'file_path'
+            FuncToolResult with list of matching entries, each containing:
+                - 'name': Reference SQL name
+                - 'sql': The SQL query text
+                - 'summary': Brief description of what the SQL does
+                - 'tags': Associated tags
         """
         # Normalize null values from LLM
-        subject_path = _normalize_null(subject_path)
+        subject_path = normalize_null(subject_path)
         try:
             result = self.reference_sql_store.search_reference_sql(
                 query_text=query_text,
@@ -347,24 +337,22 @@ class ContextSearchTools:
     @mcp_tool(availability_check="has_reference_sql")
     def get_reference_sql(self, subject_path: List[str], name: str = "") -> FuncToolResult:
         """
-        Get reference SQL query for a domain and layer combination.
+        Get reference SQL detail by exact subject path and name.
 
         Args:
-            subject_path: Optional subject hierarchy path (e.g., ['Finance', 'Revenue', 'Q1'])
-            name: The name of the reference SQL intent.
+            subject_path: Subject hierarchy path (e.g., ['Finance', 'Revenue', 'Q1'])
+            name: The exact name of the reference SQL intent.
 
         Returns:
-            dict: A dictionary with keys:
-                - 'success' (int): 1 if the search succeeded, 0 otherwise.
-                - 'error' (str or None): Error message if any.
-                - 'result' (dict): On success, a list of matching entries, each containing:
-                    - 'sql'
-                    - 'tags'
-                    - 'summary'
-                    - 'file_path'
+            FuncToolResult with a single matching entry containing:
+                - 'name': Reference SQL name
+                - 'sql': The SQL query text
+                - 'summary': Brief description of what the SQL does
+                - 'tags': Associated tags
+            Returns success=0 with error="No matched result" if not found.
         """
         # Normalize null values from LLM
-        name = _normalize_null(name) or ""
+        name = normalize_null(name) or ""
         try:
             result = self.reference_sql_store.get_reference_sql_detail(
                 subject_path=subject_path, name=name, selected_fields=["name", "sql", "summary", "tags"]
@@ -401,7 +389,7 @@ class ContextSearchTools:
                 - Additional fields specific to object kind (e.g., available_dimensions for metrics)
         """
         # Normalize null values from LLM
-        kinds = _normalize_null(kinds)
+        kinds = normalize_null(kinds)
         try:
             results = self.semantic_rag.storage.search_objects(
                 query_text=query_text,
@@ -436,7 +424,7 @@ class ContextSearchTools:
                     - 'explanation': Detailed explanation of the search_text
         """
         # Normalize null values from LLM
-        subject_path = _normalize_null(subject_path)
+        subject_path = normalize_null(subject_path)
         try:
             result = self.ext_knowledge_rag.query_knowledge(
                 query_text=query_text,
