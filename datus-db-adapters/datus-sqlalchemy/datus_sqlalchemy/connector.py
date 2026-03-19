@@ -4,14 +4,18 @@
 
 from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple, override
 
-from datus.schemas.base import TABLE_TYPE
-from datus.schemas.node_models import ExecuteSQLResult
-from datus.tools.db_tools.base import BaseSqlConnector
-from datus.tools.db_tools.config import ConnectionConfig
-from datus.utils.constants import DBType, SQLType
-from datus.utils.exceptions import DatusException, ErrorCode
-from datus.utils.loggings import get_logger
-from datus.utils.sql_utils import parse_context_switch, parse_sql_type
+from datus_db_core import (
+    TABLE_TYPE,
+    BaseSqlConnector,
+    ConnectionConfig,
+    DatusException,
+    ErrorCode,
+    ExecuteSQLResult,
+    SQLType,
+    get_logger,
+    parse_context_switch,
+    parse_sql_type,
+)
 from pandas import DataFrame
 from pyarrow import Table
 from sqlalchemy import create_engine, inspect, text
@@ -79,7 +83,7 @@ class SQLAlchemyConnector(BaseSqlConnector):
             self._safe_close()
 
             # Create engine with connection pool
-            if self.dialect not in (DBType.DUCKDB, DBType.SQLITE):
+            if self.dialect not in ("duckdb", "sqlite"):
                 self.engine = create_engine(
                     self.connection_string,
                     pool_size=10,  # Increased for parallel execution

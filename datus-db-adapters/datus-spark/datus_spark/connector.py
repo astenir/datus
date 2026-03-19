@@ -5,7 +5,7 @@
 from typing import Any, Dict, List, Optional, Set, Union, override
 from urllib.parse import quote_plus
 
-from datus.utils.loggings import get_logger
+from datus_db_core import get_logger
 from datus_sqlalchemy import SQLAlchemyConnector
 
 from .config import SparkConfig

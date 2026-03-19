@@ -5,7 +5,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from datus.tools.db_tools.mixins import CatalogSupportMixin
+from datus_db_core import CatalogSupportMixin
 from datus_trino import TrinoConfig, TrinoConnector
 
 # ==================== Initialization Tests ====================
@@ -223,6 +223,7 @@ def test_full_name_table_only():
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = TrinoConnector(config)
         connector.catalog_name = ""
+        connector.schema_name = ""
 
         result = connector.full_name(table_name="my_table")
 

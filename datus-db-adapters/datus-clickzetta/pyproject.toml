@@ -18,7 +18,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "datus-agent>=0.2.1",
+    "datus-db-core>=0.1.0",
     "clickzetta-connector-python",
     "clickzetta-zettapark-python",
     "pandas>=2.0.0",
@@ -33,6 +33,9 @@ Issues = "https://github.com/Datus-ai/datus-db-adapters/issues"
 
 [project.entry-points."datus.adapters"]
 clickzetta = "datus_clickzetta:register"
+
+[tool.uv.sources]
+datus-db-core = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

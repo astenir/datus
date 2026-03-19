@@ -5,8 +5,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from datus.tools.db_tools.mixins import CatalogSupportMixin, MaterializedViewSupportMixin
-from datus.utils.constants import DBType
+from datus_db_core import CatalogSupportMixin, MaterializedViewSupportMixin
 from datus_starrocks import StarRocksConfig, StarRocksConnector
 
 # ==================== Initialization Tests ====================
@@ -29,7 +28,7 @@ def test_connector_initialization_with_config_object():
 
         assert connector.starrocks_config == config
         assert connector.catalog_name == "test_catalog"
-        assert connector.dialect == DBType.STARROCKS
+        assert connector.dialect == "starrocks"
 
 
 @pytest.mark.acceptance
@@ -49,7 +48,7 @@ def test_connector_initialization_with_dict():
 
         assert isinstance(connector.starrocks_config, StarRocksConfig)
         assert connector.catalog_name == "custom_catalog"
-        assert connector.dialect == DBType.STARROCKS
+        assert connector.dialect == "starrocks"
 
 
 def test_connector_initialization_invalid_type():
@@ -460,7 +459,7 @@ def test_to_dict_includes_catalog():
 
         result = connector.to_dict()
 
-        assert result["db_type"] == DBType.STARROCKS
+        assert result["db_type"] == "starrocks"
         assert result["catalog"] == "my_catalog"
         assert result["host"] == "localhost"
         assert result["port"] == 9030
@@ -473,7 +472,7 @@ def test_get_type_returns_starrocks():
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
 
-        assert connector.get_type() == DBType.STARROCKS
+        assert connector.get_type() == "starrocks"
 
 
 def test_context_manager_support():

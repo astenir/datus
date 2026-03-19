@@ -11,6 +11,6 @@ __all__ = ["SparkConnector", "SparkConfig", "register"]
 
 def register():
     """Register Spark connector with Datus registry."""
-    from datus.tools.db_tools import connector_registry
+    from datus_db_core import connector_registry
 
     connector_registry.register("spark", SparkConnector, config_class=SparkConfig, capabilities={"database"})

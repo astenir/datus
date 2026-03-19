@@ -1,7 +1,5 @@
 """Snowflake adapter for Datus Agent."""
 
-from datus.tools.db_tools import connector_registry
-
 from .config import SnowflakeConfig
 from .connector import SnowflakeConnector
 
@@ -11,13 +9,11 @@ __all__ = ["SnowflakeConnector", "SnowflakeConfig", "register"]
 
 def register():
     """Register Snowflake connector with Datus registry."""
+    from datus_db_core import connector_registry
+
     connector_registry.register(
         "snowflake",
         SnowflakeConnector,
         config_class=SnowflakeConfig,
         capabilities={"catalog", "database", "schema"},
     )
-
-
-# Auto-register when imported
-register()

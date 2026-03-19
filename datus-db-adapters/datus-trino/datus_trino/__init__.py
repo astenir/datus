@@ -11,6 +11,6 @@ __all__ = ["TrinoConnector", "TrinoConfig", "register"]
 
 def register():
     """Register Trino connector with Datus registry."""
-    from datus.tools.db_tools import connector_registry
+    from datus_db_core import connector_registry
 
     connector_registry.register("trino", TrinoConnector, config_class=TrinoConfig, capabilities={"catalog", "schema"})

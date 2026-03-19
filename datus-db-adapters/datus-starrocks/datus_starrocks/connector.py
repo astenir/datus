@@ -4,9 +4,7 @@
 
 from typing import Any, Dict, List, Set, Union, override
 
-from datus.tools.db_tools.base import list_to_in_str
-from datus.tools.db_tools.mixins import CatalogSupportMixin, MaterializedViewSupportMixin
-from datus.utils.loggings import get_logger
+from datus_db_core import CatalogSupportMixin, MaterializedViewSupportMixin, get_logger, list_to_in_str
 from datus_mysql import MySQLConnector
 
 from .config import StarRocksConfig

@@ -5,7 +5,7 @@
 from unittest.mock import patch
 
 import pytest
-from datus.utils.exceptions import DatusException
+from datus_db_core import DatusException
 from datus_postgresql import PostgreSQLConfig, PostgreSQLConnector
 
 

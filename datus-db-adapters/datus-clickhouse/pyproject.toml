@@ -18,7 +18,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "datus-agent>0.2.1",
+    "datus-db-core>=0.1.0",
     "datus-sqlalchemy>=0.1.0",
     "clickhouse-sqlalchemy>=0.3.2",
 ]
@@ -32,6 +32,7 @@ Issues = "https://github.com/Datus-ai/datus-db-adapters/issues"
 clickhouse = "datus_clickhouse:register"
 
 [tool.uv.sources]
+datus-db-core = { workspace = true }
 datus-sqlalchemy = { workspace = true }
 
 [build-system]

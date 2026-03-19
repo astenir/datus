@@ -11,14 +11,19 @@ from typing import Any, Dict, List, Literal, Optional
 
 import pandas as pd
 import pyarrow as pa
-from datus.schemas.base import TABLE_TYPE
-from datus.schemas.node_models import ExecuteSQLResult
 
 # Legacy connector - does not inherit from BaseSqlConnector directly
-from datus.utils.constants import SQLType
-from datus.utils.exceptions import DatusException, ErrorCode
-from datus.utils.loggings import get_logger
-from datus.utils.sql_utils import metadata_identifier, parse_context_switch, parse_sql_type
+from datus_db_core import (
+    TABLE_TYPE,
+    DatusException,
+    ErrorCode,
+    ExecuteSQLResult,
+    SQLType,
+    get_logger,
+    metadata_identifier,
+    parse_context_switch,
+    parse_sql_type,
+)
 
 try:
     from clickzetta.zettapark.session import Session
@@ -80,7 +85,7 @@ class ClickZettaConnector:
         extra: Optional[Dict[str, Any]] = None,
     ):
         # Initialize minimal attributes without calling parent's __init__
-        from datus.tools.db_tools.config import ConnectionConfig
+        from datus_db_core import ConnectionConfig
 
         self.config = ConnectionConfig()
         self.timeout_seconds = 30
@@ -488,12 +493,24 @@ class ClickZettaConnector:
         try:
             df = self._run_query(sql)
             if df.empty:
-                return ExecuteSQLResult(success=True, data=pa.Table.from_pandas(df), row_count=0)
+                return ExecuteSQLResult(
+                    success=True,
+                    sql_query=sql,
+                    sql_return=pa.Table.from_pandas(df),
+                    row_count=0,
+                    result_format="arrow",
+                )
 
             # Convert pandas DataFrame to Arrow Table
             arrow_table = pa.Table.from_pandas(df)
 
-            return ExecuteSQLResult(success=True, data=arrow_table, row_count=len(df))
+            return ExecuteSQLResult(
+                success=True,
+                sql_query=sql,
+                sql_return=arrow_table,
+                row_count=len(df),
+                result_format="arrow",
+            )
         except Exception as e:
             logger.error(f"Error executing Arrow query: {sql}, error: {str(e)}")
             raise DatusException(

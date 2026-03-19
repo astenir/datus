@@ -218,10 +218,9 @@ def test_config_large_port_number():
 
 
 def test_config_zero_timeout():
-    """Test that zero timeout is allowed."""
-    config = TrinoConfig(username="test_user", timeout_seconds=0)
-
-    assert config.timeout_seconds == 0
+    """Test that zero timeout is rejected (gt=0 constraint)."""
+    with pytest.raises(ValidationError):
+        TrinoConfig(username="test_user", timeout_seconds=0)
 
 
 def test_config_to_dict():

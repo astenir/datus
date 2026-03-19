@@ -283,7 +283,7 @@ class TestNewMethods:
         # Verify data is an Arrow table
         import pyarrow as pa
 
-        assert isinstance(result.data, pa.Table)
+        assert isinstance(result.sql_return, pa.Table)
 
         connector.close()
 
