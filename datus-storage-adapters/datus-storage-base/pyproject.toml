@@ -1,0 +1,32 @@
+[project]
+name = "datus-storage-base"
+version = "0.1.0"
+description = "Abstract interfaces for Datus storage backends (vector & RDB)"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+readme = "README.md"
+authors = [
+    { name = "Datus Team", email = "felix.liu@datus.ai" }
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.1",
+    "pyarrow>=14.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Datus-ai/datus-storage-adapters"
+Repository = "https://github.com/Datus-ai/datus-storage-adapters"
+
+[build-system]
+requires = ["setuptools>=69.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["datus_storage_base*"]

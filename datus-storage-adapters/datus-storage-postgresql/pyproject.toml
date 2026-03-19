@@ -1,0 +1,59 @@
+[project]
+name = "datus-storage-postgresql"
+version = "0.1.0"
+description = "PostgreSQL RDB and pgvector backend adapters for datus-agent"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+readme = "README.md"
+authors = [
+    { name = "Datus Team", email = "felix.liu@datus.ai" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "datus-storage-base>=0.1.0",
+    "psycopg[binary]>=3.1",
+    "psycopg-pool>=3.1",
+    "pgvector>=0.3.0",
+    "pyarrow",
+    "pandas",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "testcontainers[postgres]>=4.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Datus-ai/datus-storage-adapters"
+Repository = "https://github.com/Datus-ai/datus-storage-adapters"
+
+[project.entry-points."datus.storage.rdb"]
+postgresql = "datus_storage_postgresql.rdb:register"
+
+[project.entry-points."datus.storage.vector"]
+postgresql = "datus_storage_postgresql.vector:register"
+
+[project.entry-points."datus.storage.rdb.testing"]
+postgresql = "datus_storage_postgresql.rdb.testing:create_test_env"
+
+[project.entry-points."datus.storage.vector.testing"]
+postgresql = "datus_storage_postgresql.vector.testing:create_test_env"
+
+[tool.uv.sources]
+datus-storage-base = { workspace = true }
+
+[build-system]
+requires = ["setuptools>=69.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["datus_storage_postgresql*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
