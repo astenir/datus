@@ -6,9 +6,9 @@
 from typing import Dict, List
 
 from agents import Tool
+from datus_storage_base.conditions import And, eq
 
 from datus.configuration.agent_config import AgentConfig
-from datus.storage.conditions import And, build_where, eq
 from datus.storage.metric.store import MetricRAG
 from datus.storage.semantic_model.store import SemanticModelRAG
 from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
@@ -75,14 +75,14 @@ class GenerationTools:
             if kind == "table":
                 # Exact match for table using SQL WHERE condition
                 storage = self.semantic_rag.storage
-                where = build_where(And([eq("kind", "table"), eq("name", target_name)]))
+                where = And([eq("kind", "table"), eq("name", target_name)])
                 results = storage.search_all(where=where, select_fields=["id", "name", "kind"])
                 if results:
                     found_object = results[0]
             elif kind == "metric":
                 # Exact match for metric using SQL WHERE condition
                 storage = self.metric_rag.storage
-                where = build_where(eq("name", target_name))
+                where = eq("name", target_name)
                 results = storage.search_all(where=where, select_fields=["id", "name"])
                 if results:
                     found_object = results[0]

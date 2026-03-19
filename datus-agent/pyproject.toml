@@ -23,6 +23,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
+    "datus-storage-base>=0.1.1",
     "python-dotenv==1.0.0",
     "pandas==2.1.4",
     "sqlalchemy==2.0.23",
@@ -129,7 +130,7 @@ target-version = ["py312"]
 profile = "black"
 line_length = 120
 known_first_party = ["datus"]
-known_third_party = ["mcp"]
+known_third_party = ["mcp", "datus_storage_base"]
 
 [tool.flake8]
 max-line-length = 120

@@ -13,17 +13,14 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from datus.storage.conditions import Node, and_, eq, like, or_
+from datus_storage_base.conditions import Node, and_, eq, like, or_
+
 from datus.tools.db_tools.registry import connector_registry
 from datus.utils.constants import DBType
 from datus.utils.loggings import get_logger
 from datus.utils.reference_paths import split_reference_path
 
 logger = get_logger(__name__)
-
-
-def _replace_wildcard(value: str) -> str:
-    return value.replace("*", "%")
 
 
 class ScopedFilterBuilder:
@@ -149,7 +146,7 @@ def _value_condition(field: str, value: str) -> Node:
     if not value:
         return eq(field, "")
     if "*" in value:
-        return like(field, _replace_wildcard(value))
+        return like(field, value)
     return eq(field, value)
 
 

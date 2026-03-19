@@ -1,8 +1,9 @@
 from pathlib import Path
 
+from datus_storage_base.conditions import build_where
+
 from datus.configuration.agent_config import AgentConfig
 from datus.storage.cache import StorageCache, clear_cache
-from datus.storage.conditions import build_where
 from datus.utils.exceptions import DatusException
 
 
@@ -75,6 +76,12 @@ def test_invalidate_resets_scope(tmp_path):
 
     original = cache.schema_storage("team_a")
     clear_cache()
+    # Re-initialize backends after clear_cache() resets them,
+    # otherwise create_vector_connection() uses empty data_dir
+    # and creates datus_db_ in the working directory.
+    from datus.storage.backend_holder import init_backends
+
+    init_backends(data_dir=str(tmp_path))
     refreshed = cache.schema_storage("team_a")
 
     assert original is not refreshed

@@ -319,7 +319,8 @@ class AgentConfig:
             self.workspace_root = storage_config.get("workspace_root")
 
         # Initialize storage backend configuration (rdb + vector)
-        from datus.storage.backend_config import StorageBackendConfig
+        from datus_storage_base.backend_config import StorageBackendConfig
+
         from datus.storage.backend_holder import init_backends
 
         backend_config = StorageBackendConfig.from_dict(storage_config)

@@ -7,9 +7,10 @@
 import threading
 from typing import Optional
 
-from datus.storage.backend_config import StorageBackendConfig
-from datus.storage.rdb.base import BaseRdbBackend, RdbDatabase
-from datus.storage.vector.base import VectorDatabase
+from datus_storage_base.backend_config import StorageBackendConfig
+from datus_storage_base.rdb.base import BaseRdbBackend, RdbDatabase
+from datus_storage_base.vector.base import VectorDatabase
+
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
@@ -75,7 +76,7 @@ def _get_rdb_backend() -> BaseRdbBackend:
     if not _rdb_initialized:
         with _rdb_lock:
             if not _rdb_initialized:
-                from datus.storage.rdb.registry import RdbRegistry
+                from datus.storage.rdb import RdbRegistry
 
                 cfg = _ensure_config()
                 rdb_config = dict(cfg.rdb.params)
@@ -94,7 +95,7 @@ def get_vector_backend():
     if not _vector_initialized:
         with _vector_lock:
             if not _vector_initialized:
-                from datus.storage.vector.registry import VectorRegistry
+                from datus.storage.vector import VectorRegistry
 
                 cfg = _ensure_config()
                 logger.debug(f"Initializing vector backend: type={cfg.vector.type}")
