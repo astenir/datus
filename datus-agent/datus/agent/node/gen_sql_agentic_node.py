@@ -10,7 +10,6 @@ SQL generation with support for limited context, enhanced template variables,
 and flexible configuration through agent.yml.
 """
 
-
 from typing import Any, AsyncGenerator, Dict, Literal, Optional, Union
 
 from datus.agent.node.agentic_node import AgenticNode
@@ -1136,7 +1135,7 @@ def build_enhanced_message(
         context_parts.append(f"**Database**: {database}")
     if db_schema:
         context_parts.append(f"**Schema**: {db_schema}")
-    context_part_str = f'Context: \n{", ".join(context_parts)}'
+    context_part_str = f"Context: \n{', '.join(context_parts)}"
     enhanced_parts.append(context_part_str)
 
     if schemas:

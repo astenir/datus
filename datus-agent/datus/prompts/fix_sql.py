@@ -2,7 +2,6 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-# flake8：noqa
 from typing import Dict, List
 
 from datus.schemas.node_models import TableSchema

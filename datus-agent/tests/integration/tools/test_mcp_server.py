@@ -1,4 +1,3 @@
-# isort: skip_file
 # Copyright 2025-present DatusAI, Inc.
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
@@ -30,13 +29,13 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 import uvicorn
+from mcp import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.stdio import StdioServerParameters, stdio_client
 from mcp.client.streamable_http import streamablehttp_client
 
 from datus.mcp_server import DatusMCPServer, create_dynamic_app, create_server
 from datus.utils.loggings import get_logger
-from mcp import ClientSession
 
 logger = get_logger(__name__)
 
@@ -433,8 +432,7 @@ class TestStaticModeStdio(StaticModeTestBase):
             stderr = proc.stderr.read().decode(errors="replace")
             stdout = proc.stdout.read().decode(errors="replace")
             pytest.fail(
-                f"MCP stdio subprocess exited with code {exit_code}.\n"
-                f"stderr: {stderr[:1000]}\nstdout: {stdout[:500]}"
+                f"MCP stdio subprocess exited with code {exit_code}.\nstderr: {stderr[:1000]}\nstdout: {stdout[:500]}"
             )
         proc.stdin.close()
         proc.terminate()
@@ -550,9 +548,9 @@ class TestMCPClient:
             data = parse_tool_result(result)
 
             # SQLite returns success with 0 columns for nonexistent tables
-            assert (
-                data["success"] == 1
-            ), f"describe_table should return a valid response, got error: {data.get('error')}"
+            assert data["success"] == 1, (
+                f"describe_table should return a valid response, got error: {data.get('error')}"
+            )
             assert isinstance(data["result"], dict), f"Result should be a dict, got {type(data['result'])}"
             columns = data["result"].get("columns", [])
             assert len(columns) == 0, f"Nonexistent table should have 0 columns, got {len(columns)}"

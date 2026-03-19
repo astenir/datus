@@ -1,4 +1,3 @@
-# flake8: noqa
 """
 Agent Answer Selection Tool
 
