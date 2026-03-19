@@ -39,7 +39,7 @@ class TestParseReadDialect:
 
     def test_empty_and_none(self):
         assert parse_read_dialect("") == ""
-        assert parse_read_dialect(None) is None
+        assert parse_read_dialect(None) == ""
 
 
 class TestParseDialect:

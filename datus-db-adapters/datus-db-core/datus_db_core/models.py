@@ -52,6 +52,8 @@ class BaseResult(BaseModel):
 class ExecuteSQLInput(BaseInput):
     """Input model for SQL execution."""
 
+    model_config = ConfigDict(extra="forbid")
+
     database_name: str = Field(default="", description="The name of the database")
     sql_query: str = Field(..., description="The SQL query to execute")
     result_format: str = Field(default="csv", description="Format of the result: 'csv' or 'arrow' or 'list'")

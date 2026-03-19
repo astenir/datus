@@ -26,7 +26,7 @@ def parse_read_dialect(dialect: str = "snowflake") -> str:
         return "hive"
     if db in ("mssql", "sqlserver"):
         return "tsql"
-    return dialect
+    return db
 
 
 def parse_dialect(dialect: str = "snowflake") -> str:
@@ -53,12 +53,22 @@ def metadata_identifier(
         return ".".join(part for part in (database_name, schema_name, table_name) if part)
 
     parts = []
-    if connector_registry.support_catalog(dialect) and catalog_name:
-        parts.append(catalog_name)
-    if connector_registry.support_database(dialect) and database_name:
-        parts.append(database_name)
-    if connector_registry.support_schema(dialect) and schema_name:
-        parts.append(schema_name)
+    caps_known = connector_registry.has_capabilities(dialect)
+    if caps_known:
+        if connector_registry.support_catalog(dialect) and catalog_name:
+            parts.append(catalog_name)
+        if connector_registry.support_database(dialect) and database_name:
+            parts.append(database_name)
+        if connector_registry.support_schema(dialect) and schema_name:
+            parts.append(schema_name)
+    else:
+        # Fallback: include all non-empty parts when dialect capabilities unknown
+        if catalog_name:
+            parts.append(catalog_name)
+        if database_name:
+            parts.append(database_name)
+        if schema_name:
+            parts.append(schema_name)
     if table_name:
         parts.append(table_name)
     return ".".join(parts)
@@ -118,12 +128,21 @@ def strip_sql_comments(sql: str) -> str:
             continue
 
         if ch == "/" and i + 1 < length and sql[i + 1] == "*":
-            end = sql.find("*/", i + 2)
-            if end == -1:
-                result.append(" ")
-                break
+            depth = 1
+            j = i + 2
+            while j < length - 1 and depth > 0:
+                if sql[j] == "/" and sql[j + 1] == "*":
+                    depth += 1
+                    j += 2
+                elif sql[j] == "*" and sql[j + 1] == "/":
+                    depth -= 1
+                    j += 2
+                else:
+                    j += 1
             result.append(" ")
-            i = end + 2
+            if depth > 0:
+                break
+            i = j
             continue
 
         result.append(ch)

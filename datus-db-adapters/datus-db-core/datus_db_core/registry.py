@@ -211,6 +211,10 @@ class ConnectorRegistry:
             cls._context_resolvers[key] = context_resolver
 
     @classmethod
+    def has_capabilities(cls, db_type: str) -> bool:
+        return cls._resolve_key(db_type) in cls._capabilities
+
+    @classmethod
     def support_catalog(cls, db_type: str) -> bool:
         return "catalog" in cls._capabilities.get(cls._resolve_key(db_type), set())
 

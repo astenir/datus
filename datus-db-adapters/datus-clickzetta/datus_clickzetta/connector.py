@@ -243,6 +243,7 @@ class ClickZettaConnector:
             return pd.DataFrame()
         except (OSError, ValueError, RuntimeError) as exc:
             self._wrap_exception(exc, sql)
+            raise  # unreachable, but satisfies type checkers
 
     def _run_command(self, sql: str) -> pd.DataFrame:
         try:
@@ -256,6 +257,7 @@ class ClickZettaConnector:
             return pd.DataFrame()
         except (OSError, ValueError, RuntimeError) as exc:
             self._wrap_exception(exc, sql)
+            raise  # unreachable, but satisfies type checkers
 
     @staticmethod
     def _normalize_volume_uri(volume: str, relative_path: str) -> str:
@@ -886,7 +888,7 @@ class ClickZettaConnector:
             dialect=self.dialect,
         )
 
-    def execute(self, input_params: Any, result_format: str = "csv") -> ExecuteSQLResult:
+    def execute(self, input_params: Any, result_format: Optional[str] = None) -> ExecuteSQLResult:
         """Execute a SQL query against the database.
 
         This method provides compatibility with the Datus CLI interface for SQL execution.
@@ -913,6 +915,15 @@ class ClickZettaConnector:
 
         if not sql_query:
             raise DatusException(ErrorCode.COMMON_INVALID_PARAMETER, message="sql_query cannot be empty")
+
+        # Resolve result_format from input_params if not explicitly provided
+        if result_format is None:
+            if hasattr(input_params, "result_format"):
+                result_format = input_params.result_format
+            elif isinstance(input_params, dict):
+                result_format = input_params.get("result_format", "csv")
+            else:
+                result_format = "csv"
 
         # Execute query based on result format
         try:

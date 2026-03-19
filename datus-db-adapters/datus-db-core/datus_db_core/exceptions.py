@@ -58,13 +58,13 @@ class DatusException(Exception):
     ):
         self.code = code
         self.message_args = message_args or {}
-        self.message = self._build_msg(message, message_args)
+        self.message = self.build_msg(message, message_args)
         super().__init__(self.message, *args)
 
     def __str__(self):
         return self.message
 
-    def _build_msg(self, message: Optional[str] = None, message_args: Optional[dict[str, Any]] = None) -> str:
+    def build_msg(self, message: Optional[str] = None, message_args: Optional[dict[str, Any]] = None) -> str:
         if message:
             final_message = message
         elif message_args:
