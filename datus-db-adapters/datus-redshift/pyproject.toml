@@ -7,7 +7,7 @@ name = "datus-redshift"
 version = "0.1.0"
 description = "Amazon Redshift adapter for Datus Agent"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 license = {file = "../LICENSE"}
 authors = [
     {name = "Datus Team"}

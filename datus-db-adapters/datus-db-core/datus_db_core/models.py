@@ -9,7 +9,17 @@ from pydantic import BaseModel, ConfigDict, Field
 
 TABLE_TYPE = Literal["table", "view", "mv", "full"]
 
-MAX_SQL_RESULT_LENGTH = int(os.getenv("MAX_SQL_RESULT_LENGTH", 2000))
+
+def _get_max_sql_result_length() -> int:
+    raw_value = os.getenv("MAX_SQL_RESULT_LENGTH", "2000")
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError):
+        return 2000
+    return value if value > 0 else 2000
+
+
+MAX_SQL_RESULT_LENGTH = _get_max_sql_result_length()
 
 
 class BaseInput(BaseModel):

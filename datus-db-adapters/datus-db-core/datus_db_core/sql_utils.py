@@ -50,7 +50,7 @@ def metadata_identifier(
     if dialect == _SQLITE:
         return f"{database_name}.{table_name}" if database_name else table_name
     if dialect == _DUCKDB:
-        return f"{database_name}.{schema_name}.{table_name}"
+        return ".".join(part for part in (database_name, schema_name, table_name) if part)
 
     parts = []
     if connector_registry.support_catalog(dialect) and catalog_name:
@@ -59,14 +59,77 @@ def metadata_identifier(
         parts.append(database_name)
     if connector_registry.support_schema(dialect) and schema_name:
         parts.append(schema_name)
-    parts.append(table_name)
+    if table_name:
+        parts.append(table_name)
     return ".".join(parts)
 
 
 def strip_sql_comments(sql: str) -> str:
-    sql = re.sub(r"/\*.*?\*/", " ", sql, flags=re.DOTALL)
-    sql = re.sub(r"--.*?$", " ", sql, flags=re.MULTILINE)
-    return sql
+    result = []
+    i = 0
+    length = len(sql)
+    in_single_quote = False
+    in_double_quote = False
+
+    while i < length:
+        ch = sql[i]
+
+        if in_single_quote:
+            result.append(ch)
+            if ch == "'" and not _is_escaped(sql, i):
+                if i + 1 < length and sql[i + 1] == "'":
+                    result.append(sql[i + 1])
+                    i += 2
+                    continue
+                in_single_quote = False
+            i += 1
+            continue
+
+        if in_double_quote:
+            result.append(ch)
+            if ch == '"' and not _is_escaped(sql, i):
+                if i + 1 < length and sql[i + 1] == '"':
+                    result.append(sql[i + 1])
+                    i += 2
+                    continue
+                in_double_quote = False
+            i += 1
+            continue
+
+        if ch == "'":
+            in_single_quote = True
+            result.append(ch)
+            i += 1
+            continue
+
+        if ch == '"':
+            in_double_quote = True
+            result.append(ch)
+            i += 1
+            continue
+
+        if ch == "-" and i + 1 < length and sql[i + 1] == "-":
+            end = sql.find("\n", i)
+            if end == -1:
+                result.append(" ")
+                break
+            result.append(" ")
+            i = end
+            continue
+
+        if ch == "/" and i + 1 < length and sql[i + 1] == "*":
+            end = sql.find("*/", i + 2)
+            if end == -1:
+                result.append(" ")
+                break
+            result.append(" ")
+            i = end + 2
+            continue
+
+        result.append(ch)
+        i += 1
+
+    return "".join(result)
 
 
 def _is_escaped(text: str, index: int) -> bool:

@@ -140,8 +140,11 @@ class ConnectorRegistry:
             if hasattr(module, "register"):
                 module.register()
                 logger.info(f"Dynamically loaded adapter: {db_type}")
-        except ImportError:
-            logger.debug(f"No adapter found for: {db_type}")
+        except ImportError as e:
+            if getattr(e, "name", None) == module_name:
+                logger.debug(f"No adapter found for: {db_type}")
+                return
+            raise
         except Exception as e:
             logger.warning(f"Failed to load adapter {db_type}: {e}")
 
@@ -152,26 +155,27 @@ class ConnectorRegistry:
         with cls._lock:
             if cls._initialized:
                 return
-            cls._initialized = True
-
-        try:
-            from importlib.metadata import entry_points
 
             try:
-                adapter_eps = entry_points(group="datus.adapters")
-            except TypeError:
-                eps = entry_points()
-                adapter_eps = eps.get("datus.adapters", [])
+                from importlib.metadata import entry_points
 
-            for ep in adapter_eps:
                 try:
-                    register_func = ep.load()
-                    register_func()
-                    logger.info(f"Discovered adapter: {ep.name}")
-                except Exception as e:
-                    logger.warning(f"Failed to load adapter {ep.name}: {e}")
-        except Exception as e:
-            logger.warning(f"Entry points discovery failed: {e}")
+                    adapter_eps = entry_points(group="datus.adapters")
+                except TypeError:
+                    eps = entry_points()
+                    adapter_eps = eps.get("datus.adapters", [])
+
+                for ep in adapter_eps:
+                    try:
+                        register_func = ep.load()
+                        register_func()
+                        logger.info(f"Discovered adapter: {ep.name}")
+                    except Exception as e:
+                        logger.warning(f"Failed to load adapter {ep.name}: {e}")
+            except Exception as e:
+                logger.warning(f"Entry points discovery failed: {e}")
+            finally:
+                cls._initialized = True
 
     @classmethod
     def list_connectors(cls) -> Dict[str, Type]:

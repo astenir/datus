@@ -149,8 +149,18 @@ class TestTryLoadAdapter:
 
     @patch("importlib.import_module")
     def test_handles_import_error(self, mock_import):
-        mock_import.side_effect = ImportError("No module")
+        err = ImportError("No module")
+        err.name = "datus_missing"
+        mock_import.side_effect = err
         ConnectorRegistry._try_load_adapter("missing")  # Should not raise
+
+    @patch("importlib.import_module")
+    def test_nested_import_error_propagates(self, mock_import):
+        err = ImportError("No module named 'some_dependency'")
+        err.name = "some_dependency"
+        mock_import.side_effect = err
+        with pytest.raises(ImportError):
+            ConnectorRegistry._try_load_adapter("broken_adapter")
 
     @patch("importlib.import_module")
     def test_handles_generic_error(self, mock_import):

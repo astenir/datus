@@ -7,7 +7,7 @@ name = "datus-snowflake"
 version = "0.1.0"
 description = "Snowflake adapter for Datus Agent"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.12"
 license = {text = "Apache-2.0"}
 authors = [
     {name = "DatusAI", email = "support@datus.ai"}
