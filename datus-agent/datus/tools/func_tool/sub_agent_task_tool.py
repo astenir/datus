@@ -53,6 +53,37 @@ NODE_CLASS_MAP = {
 
 # Descriptions for built-in system subagents (used in task tool description for LLM)
 BUILTIN_SUBAGENT_DESCRIPTIONS = {
+    "gen_sql": (
+        "Generate optimized SQL queries. Returns JSON with {sql, response, tokens_used}. "
+        "For complex SQL (50+ lines), returns {sql_file_path, sql_preview, response} instead - "
+        "pass sql_file_path directly to read_query() to execute (no need to read_file() first). "
+        "Modifications return sql_diff in unified diff format. "
+        "Use for data queries, analysis, and report SQL. Prompt: provide the question directly."
+    ),
+    "explore": (
+        "Read-only data exploration. Supports 3 exploration directions:\n"
+        "  * Schema+Sample: database schema structure, table columns, types, "
+        "sample data, date context\n"
+        "    Prompt example: 'Explore schema for tables related to sales: "
+        "list tables, describe columns, sample 10 rows'\n"
+        "  * Knowledge: business metrics, reference SQL patterns, "
+        "domain knowledge, semantic objects\n"
+        "    Prompt example: 'Search knowledge base for sales-related metrics, "
+        "reference SQL, and business rules'\n"
+        "  * File: workspace SQL files, documentation, configuration files\n"
+        "    Prompt example: 'Browse workspace for SQL files and documentation "
+        "related to sales'\n"
+        '  For comprehensive exploration, call task(type="explore") MULTIPLE TIMES '
+        "in PARALLEL with direction-specific prompts.\n"
+        "  Returns JSON with {response, tokens_used}."
+    ),
+    "gen_report": (
+        "Analyze and attribute metrics using reference SQL and semantic layer. "
+        "Use when the question involves metric attribution, root cause analysis, metric trend explanation, "
+        "or analyzing why a metric changed. "
+        "Prompt: provide the metric question, include reference SQL or metric name if available. "
+        "Returns JSON with {response, report_result, tokens_used}."
+    ),
     "gen_semantic_model": (
         "Generate MetricFlow semantic model YAML files from database table structures. "
         "Use when asked to create or update semantic models, define entities, relationships, or dimensions. "
@@ -133,7 +164,7 @@ class SubAgentTaskTool:
                     "description": "A short one-line summary of the task goal (shown in compact display)",
                 },
             },
-            "required": ["type", "prompt"],
+            "required": ["type", "prompt", "description"],
         }
 
         async def _invoke(_tool_ctx, args_str) -> dict:
@@ -225,6 +256,30 @@ class SubAgentTaskTool:
                 agent_config=self.agent_config,
                 execution_mode="interactive",
             )
+        elif subagent_type == "gen_sql":
+            from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode
+
+            return GenSQLAgenticNode(
+                node_id=f"task_gen_sql_{uuid.uuid4().hex[:8]}",
+                description="SQL generation node for gen_sql",
+                node_type="gensql",
+                input_data=None,
+                agent_config=self.agent_config,
+                tools=None,
+                node_name="gen_sql",
+            )
+        elif subagent_type == "gen_report":
+            from datus.agent.node.gen_report_agentic_node import GenReportAgenticNode
+
+            return GenReportAgenticNode(
+                node_id=f"task_gen_report_{uuid.uuid4().hex[:8]}",
+                description="Report generation node for gen_report",
+                node_type="gen_report",
+                input_data=None,
+                agent_config=self.agent_config,
+                tools=None,
+                node_name="gen_report",
+            )
         else:
             raise ValueError(f"Unknown builtin subagent type: {subagent_type}")
 
@@ -247,6 +302,10 @@ class SubAgentTaskTool:
         # Built-in explore type
         if subagent_type == "explore":
             return NodeType.TYPE_EXPLORE, "explore"
+
+        # Built-in gen_report type
+        if subagent_type == "gen_report":
+            return NodeType.TYPE_GEN_REPORT, "gen_report"
 
         # Built-in system subagents (SYS_SUB_AGENTS)
         builtin_type_map = {
@@ -586,39 +645,15 @@ class SubAgentTaskTool:
         available = self._get_available_types()
 
         lines = [
-            "Delegate a specialized task to a subagent for better quality results.",
+            "Delegate a complex task to a specialized subagent. "
+            "Only use this for questions that require deep exploration or multi-step SQL reasoning. "
+            "For simple/direct questions, use your own tools (list_tables, describe_table, read_query, etc.) instead.",
             "",
             "Available types:",
         ]
 
         for t in available:
-            if t == "explore":
-                lines.append(
-                    "- explore: Read-only data exploration. Supports 3 exploration directions:\n"
-                    "  * Schema+Sample: database schema structure, table columns, types, "
-                    "sample data, date context\n"
-                    "    Prompt example: 'Explore schema for tables related to sales: "
-                    "list tables, describe columns, sample 10 rows'\n"
-                    "  * Knowledge: business metrics, reference SQL patterns, "
-                    "domain knowledge, semantic objects\n"
-                    "    Prompt example: 'Search knowledge base for sales-related metrics, "
-                    "reference SQL, and business rules'\n"
-                    "  * File: workspace SQL files, documentation, configuration files\n"
-                    "    Prompt example: 'Browse workspace for SQL files and documentation "
-                    "related to sales'\n"
-                    '  For comprehensive exploration, call task(type="explore") MULTIPLE TIMES '
-                    "in PARALLEL with direction-specific prompts.\n"
-                    "  Returns JSON with {response, tokens_used}."
-                )
-            elif t == "gen_sql":
-                lines.append(
-                    "- gen_sql: Generate optimized SQL queries. Returns JSON with {sql, response, tokens_used}. "
-                    "For complex SQL (50+ lines), returns {sql_file_path, sql_preview, response} instead - "
-                    "pass sql_file_path directly to read_query() to execute (no need to read_file() first). "
-                    "Modifications return sql_diff in unified diff format. "
-                    "Use for data queries, analysis, and report SQL. Prompt: provide the question directly."
-                )
-            elif t in BUILTIN_SUBAGENT_DESCRIPTIONS:
+            if t in BUILTIN_SUBAGENT_DESCRIPTIONS:
                 lines.append(f"- {t}: {BUILTIN_SUBAGENT_DESCRIPTIONS[t]}")
             else:
                 sub_raw = self.agent_config.sub_agent_config(t)
@@ -633,11 +668,14 @@ class SubAgentTaskTool:
             [
                 "",
                 "Guidelines:",
-                '- For comprehensive exploration, call multiple task(type="explore") in PARALLEL, '
-                "each with a direction-specific prompt (schema+sample, knowledge, file)",
+                "- For simple questions, handle directly with your own tools — no need to launch subagents",
+                '- For complex questions requiring deep exploration, call multiple task(type="explore") '
+                "in PARALLEL, each with a direction-specific prompt (schema+sample, knowledge, file)",
                 '- For quick single-direction lookups, call one task(type="explore") with a focused prompt',
-                '- Use task(type="gen_sql") for SQL generation requiring multi-step reasoning',
-                "- Use direct db tools (list_tables, describe_table) for quick one-off schema checks",
+                '- Use task(type="gen_sql") for SQL generation requiring multi-step reasoning, '
+                "complex joins, or domain-specific logic",
+                '- Use task(type="gen_report") for metric attribution, root cause analysis, '
+                "or analyzing why a metric/reference_sql result changed",
                 "- In plan mode, use task() for each SQL sub-step",
                 "- Always provide a short 'description' summarizing the task goal",
             ]
@@ -647,7 +685,7 @@ class SubAgentTaskTool:
 
     def _get_available_types(self) -> List[str]:
         """Discover available subagent types."""
-        types = ["gen_sql", "explore"]
+        types = ["explore"]
 
         # Add built-in system subagents (always available)
         types.extend(sorted(SYS_SUB_AGENTS))
@@ -658,7 +696,7 @@ class SubAgentTaskTool:
         current_namespace = self.agent_config.current_namespace
 
         for name, config in self.agent_config.agentic_nodes.items():
-            if name in ("chat", "gen_sql", "explore") or name in SYS_SUB_AGENTS:
+            if name in ("chat", "explore") or name in SYS_SUB_AGENTS:
                 continue
 
             # If scoped_context is configured, namespace must match current namespace
