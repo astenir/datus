@@ -24,7 +24,7 @@ from rich.table import Table
 from datus.agent.node.chat_agentic_node import ChatAgenticNode
 from datus.cli._cli_utils import select_choice
 from datus.cli.action_display.display import ActionHistoryDisplay
-from datus.cli.execution_state import ExecutionInterrupted
+from datus.cli.execution_state import ExecutionInterrupted, auto_submit_interaction
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.schemas.node_models import SQLContext
 from datus.utils.loggings import get_logger
@@ -482,29 +482,10 @@ class ChatCommands:
                         if action.role == ActionRole.INTERACTION:
                             # In non-interactive mode, auto-submit default choice for
                             # PROCESSING interactions so the node is not left hanging.
-                            if action.action_type == "request_choice" and action.status == ActionStatus.PROCESSING:
+                            if action.status == ActionStatus.PROCESSING:
                                 broker = current_node.interaction_broker
                                 if broker:
-                                    input_data = action.input or {}
-                                    choices = input_data.get("choices", {})
-                                    default_choice = input_data.get("default_choice", "")
-                                    if choices and default_choice:
-                                        await broker.submit(action.action_id, default_choice)
-                                        logger.info(
-                                            f"Non-interactive mode auto-submitted default choice: {default_choice}"
-                                        )
-                                    elif not choices:
-                                        await broker.submit(action.action_id, "")
-                                        logger.info(
-                                            "Non-interactive mode auto-submitted empty string for free-text input"
-                                        )
-                                    elif choices:
-                                        first_key = next(iter(choices.keys()))
-                                        await broker.submit(action.action_id, first_key)
-                                        logger.info(
-                                            "Non-interactive mode auto-submitted first choice "
-                                            f"(no default): {first_key}"
-                                        )
+                                    await auto_submit_interaction(broker, action)
                             continue
                         if action.role == ActionRole.TOOL and action.status == ActionStatus.PROCESSING:
                             continue
@@ -786,40 +767,109 @@ class ChatCommands:
 
         The returned callback is invoked from the daemon thread in InlineStreamingContext
         when an INTERACTION PROCESSING action arrives.
+
+        Reads ``contents`` / ``choices`` / ``default_choices`` from ``action.input``.
+        Single question (len==1) uses select_choice; batch (len>1) iterates.
         """
 
+        def _collect_single_choice(console, choices, default_choice, allow_free_text):
+            """Collect a single choice or free-text answer."""
+            if not choices:
+                console.print()
+                console.print("[dim](Paste supported. Enter to submit)[/]")
+                return self.cli.prompt_input(message="Your input", multiline=True) or ""
+
+            keys = list(choices.keys())
+            default_key = default_choice if default_choice in keys else keys[0]
+            result = select_choice(
+                console,
+                choices=choices,
+                default=default_key,
+                allow_free_text=allow_free_text,
+            )
+            if result in choices:
+                console.print(f"[dim]Selected: {choices[result]}[/]")
+            if allow_free_text and result == "":
+                console.print("[yellow]No input provided.[/]")
+                return ""
+            return result or default_key
+
         def collect(action: ActionHistory, console) -> Optional[str]:
+
             try:
                 input_data = action.input or {}
-                choices = input_data.get("choices", {})
-                default_choice = input_data.get("default_choice", "")
+                contents = input_data.get("contents", [])
+                choices_list = input_data.get("choices", [])
+                default_choices = input_data.get("default_choices", [])
                 allow_free_text = input_data.get("allow_free_text", False)
 
                 with esc_guard.paused():
-                    if not choices:
-                        console.print()
-                        console.print("[dim](Paste supported. Enter to submit)[/]")
-                        return self.cli.prompt_input(message="Your input", multiline=True) or ""
+                    if len(contents) > 1:
+                        return self._collect_batch(console, contents, choices_list)
 
-                    keys = list(choices.keys())
-                    default_key = default_choice if default_choice in keys else keys[0]
-                    result = select_choice(
-                        console,
-                        choices=choices,
-                        default=default_key,
-                        allow_free_text=allow_free_text,
-                    )
-                    if result in choices:
-                        console.print(f"[dim]Selected: {choices[result]}[/]")
-                    if allow_free_text and result == "":
-                        console.print("[yellow]No input provided.[/]")
-                        return ""
-                    return result or default_key
+                    # --- single question ---
+                    ch = choices_list[0] if choices_list else {}
+                    default = default_choices[0] if default_choices else ""
+                    return _collect_single_choice(console, ch, default, allow_free_text)
             except Exception as e:
                 logger.error(f"Error collecting interaction input: {e}")
                 return None
 
         return collect
+
+    def _collect_batch(self, console, contents: list, choices_list: list) -> Optional[str]:
+        """Collect answers for a batch of questions.
+
+        Steps through each question, showing progress (e.g. [1/3]),
+        and returns a JSON-encoded list of answer strings.
+
+        Caller is responsible for holding ``esc_guard.paused()`` context.
+        """
+        if not contents:
+            return json.dumps([])
+
+        answers = []
+        total = len(contents)
+
+        for idx, q_text in enumerate(contents):
+            ch = choices_list[idx] if idx < len(choices_list) else {}
+
+            # Show progress header
+            if total > 1:
+                if answers:
+                    prev_q = contents[idx - 1]
+                    short_q = prev_q[:50] + "..." if len(prev_q) > 50 else prev_q
+                    console.print(f"  [green]\u2705[/green] [dim]{short_q} \u2192 {answers[-1]}[/dim]")
+                console.print(f"\n  [bold bright_cyan][{idx + 1}/{total}][/bold bright_cyan] {q_text}")
+            if not ch:
+                console.print()
+                console.print("[dim](Paste supported. Enter to submit)[/]")
+                answer = self.cli.prompt_input(message="Your input", multiline=True) or ""
+            else:
+                default_key = next(iter(ch.keys()))
+                result = select_choice(
+                    console,
+                    choices=ch,
+                    default=default_key,
+                    allow_free_text=True,
+                )
+                if result in ch:
+                    answer = ch[result]
+                    console.print(f"[dim]Selected: {answer}[/]")
+                else:
+                    answer = result
+
+            answers.append(answer)
+
+        # Show summary for multi-question batch
+        if total > 1:
+            console.print()
+            console.print(f"  [green]\u2705 Answers submitted ({total}/{total})[/green]")
+            for idx, answer in enumerate(answers):
+                short_q = contents[idx][:40] + "..." if len(contents[idx]) > 40 else contents[idx]
+                console.print(f"     [dim]{short_q} \u2192 {answer}[/dim]")
+
+        return json.dumps(answers, ensure_ascii=False)
 
     def _extract_report_from_json(self, response: str) -> Optional[str]:
         """

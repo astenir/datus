@@ -673,3 +673,152 @@ class TestVerboseMarkupRendering:
         for line in lines:
             assert "[bold]" not in line
             assert "[/bold]" not in line
+
+
+# ── render_interaction (batch) ──────────────────────────────────
+
+
+@pytest.mark.ci
+class TestRenderBatchInteractionRequest:
+    """Test batch interaction request rendering (contents/choices format)."""
+
+    def test_single_question_shows_legacy_header(self):
+        """Single question renders with legacy Interaction Request header."""
+        action = _make_action(
+            ActionRole.INTERACTION,
+            ActionStatus.PROCESSING,
+            action_type="request_choice",
+            input_data={
+                "contents": ["Which DB?"],
+                "choices": [{"1": "MySQL", "2": "PG"}],
+                "content_type": "markdown",
+            },
+        )
+        result = _renderer().render_interaction_request(action, verbose=False)
+        text = _plain(result)
+        assert "Interaction Request" in text
+        assert "Which DB?" in text
+
+    def test_multi_question_shows_brief_header(self):
+        """Multiple questions render brief header only (no detailed listing)."""
+        action = _make_action(
+            ActionRole.INTERACTION,
+            ActionStatus.PROCESSING,
+            action_type="request_batch",
+            input_data={
+                "contents": ["Which DB?", "Time range?"],
+                "choices": [{"1": "MySQL", "2": "PG"}, {}],
+            },
+        )
+        result = _renderer().render_interaction_request(action, verbose=False)
+        text = _plain(result)
+        assert "Agent Questions (2 questions)" in text
+        # Individual questions are NOT listed in the overview
+        assert "MySQL / PG" not in text
+
+    def test_empty_contents_fallback(self):
+        """Empty contents list renders header only."""
+        action = _make_action(
+            ActionRole.INTERACTION,
+            ActionStatus.PROCESSING,
+            action_type="request_choice",
+            input_data={"contents": []},
+        )
+        result = _renderer().render_interaction_request(action, verbose=False)
+        text = _plain(result)
+        assert "Interaction Request" in text
+
+    def test_single_question_markdown_content(self):
+        """Single question with markdown content_type renders as Markdown."""
+        action = _make_action(
+            ActionRole.INTERACTION,
+            ActionStatus.PROCESSING,
+            action_type="request_choice",
+            input_data={"contents": ["Legacy question"], "choices": [{}], "content_type": "markdown"},
+        )
+        result = _renderer().render_interaction_request(action, verbose=False)
+        text = _plain(result)
+        assert "Interaction Request" in text
+        assert "Legacy question" in text
+
+
+@pytest.mark.ci
+class TestRenderBatchInteractionSuccess:
+    """Test batch interaction success rendering (contents/choices format)."""
+
+    def test_success_with_contents_and_answers(self):
+        """SUCCESS renders answers matched to contents."""
+        import json
+
+        action = _make_action(
+            ActionRole.INTERACTION,
+            ActionStatus.SUCCESS,
+            action_type="request_batch",
+            input_data={"contents": ["Which DB?", "Time range?"]},
+            output_data={"user_choice": json.dumps(["MySQL", "Last 7 days"])},
+        )
+        result = _renderer().render_interaction_success(action, verbose=False)
+        text = _plain(result)
+        assert "Answers submitted (2/2)" in text
+        assert "Which DB?" in text
+        assert "MySQL" in text
+        assert "Time range?" in text
+        assert "Last 7 days" in text
+
+    def test_success_non_json_user_choice(self):
+        """SUCCESS with non-JSON user_choice wraps as single answer."""
+        action = _make_action(
+            ActionRole.INTERACTION,
+            ActionStatus.SUCCESS,
+            action_type="request_batch",
+            input_data={"contents": ["Q1?", "Q2?"]},
+            output_data={"user_choice": "plain text"},
+        )
+        result = _renderer().render_interaction_success(action, verbose=False)
+        text = _plain(result)
+        assert "Answers submitted (1/2)" in text
+        assert "plain text" in text
+
+    def test_success_multi_question_non_list_json_falls_back(self):
+        """SUCCESS with multiple questions and non-list JSON falls back to raw string."""
+        import json
+
+        action = _make_action(
+            ActionRole.INTERACTION,
+            ActionStatus.SUCCESS,
+            action_type="request_batch",
+            input_data={"contents": ["Q1?", "Q2?"]},
+            output_data={"user_choice": json.dumps("just a string")},
+        )
+        result = _renderer().render_interaction_success(action, verbose=False)
+        text = _plain(result)
+        assert "Answers submitted (1/2)" in text
+
+    def test_success_truncates_long_question(self):
+        """Long question text is truncated to 40 chars."""
+        import json
+
+        long_q = "A" * 60
+        action = _make_action(
+            ActionRole.INTERACTION,
+            ActionStatus.SUCCESS,
+            action_type="request_batch",
+            input_data={"contents": [long_q, "Q2?"]},
+            output_data={"user_choice": json.dumps(["yes", "no"])},
+        )
+        result = _renderer().render_interaction_success(action, verbose=False)
+        text = _plain(result)
+        assert "..." in text
+
+    def test_single_question_success_not_routed_to_batch(self):
+        """Single-question SUCCESS renders as single choice (Selected: y)."""
+        action = _make_action(
+            ActionRole.INTERACTION,
+            ActionStatus.SUCCESS,
+            action_type="request_choice",
+            input_data={"contents": ["Sync?"]},
+            output_data={"user_choice": "y", "content": "Saved", "content_type": "markdown"},
+        )
+        result = _renderer().render_interaction_success(action, verbose=False)
+        text = _plain(result)
+        assert "Selected: y" in text

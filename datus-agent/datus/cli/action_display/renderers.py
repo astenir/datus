@@ -538,32 +538,56 @@ class ActionRenderer:
     def render_interaction_request(self, action: ActionHistory, verbose: bool) -> List[Union[Text, Markdown, Syntax]]:
         """Render INTERACTION PROCESSING -- request content.
 
-        Choices are NOT rendered here since the content field typically already
-        describes available options, and the actual selection UI (select_choice)
-        is handled by the input_collector callback.
+        Reads ``contents`` (list) and ``choices`` (list of dicts) from
+        ``action.input``.  Single-question renders with the legacy header;
+        multiple questions render a numbered overview.
         """
         input_data = action.input or {}
-        content = input_data.get("content", "")
+        contents = input_data.get("contents", [])
         content_type = input_data.get("content_type", "text")
 
         result: List[Union[Text, Markdown, Syntax]] = []
-        result.append(Text.from_markup("[bold bright_yellow]\u2753 Interaction Request[/bold bright_yellow]"))
 
-        if content:
-            if content_type == "yaml":
-                result.append(Syntax(content, "yaml", theme="monokai", line_numbers=True))
-            elif content_type == "sql":
-                result.append(Syntax(content, "sql", theme="monokai", line_numbers=True))
-            elif content_type == "markdown":
-                result.append(Markdown(content))
-            else:
-                result.append(Text(content))
+        if not contents:
+            result.append(Text.from_markup("[bold bright_yellow]\u2753 Interaction Request[/bold bright_yellow]"))
+        elif len(contents) == 1:
+            # Single question
+            result.append(Text.from_markup("[bold bright_yellow]\u2753 Interaction Request[/bold bright_yellow]"))
+            content = contents[0]
+            if content:
+                if content_type == "yaml":
+                    result.append(Syntax(content, "yaml", theme="monokai", line_numbers=True))
+                elif content_type == "sql":
+                    result.append(Syntax(content, "sql", theme="monokai", line_numbers=True))
+                elif content_type == "markdown":
+                    result.append(Markdown(content))
+                else:
+                    result.append(Text(content))
+        else:
+            # Multiple questions — brief header only; individual questions
+            # are shown interactively by _collect_batch during input collection.
+            result.append(
+                Text.from_markup(
+                    f"[bold bright_yellow]\u2753 Agent Questions ({len(contents)} questions)[/bold bright_yellow]"
+                )
+            )
 
         return result
 
     def render_interaction_success(self, action: ActionHistory, verbose: bool) -> List[Union[Text, Markdown, Syntax]]:
-        """Render INTERACTION SUCCESS -- user choice + result content."""
+        """Render INTERACTION SUCCESS -- user choice + result content.
+
+        Reads ``contents`` from ``action.input`` to decide between single
+        and batch rendering.
+        """
+        input_data = action.input or {}
         output_data = action.output or {}
+        contents = input_data.get("contents", [])
+
+        if len(contents) > 1:
+            return self._render_batch_success(contents, output_data)
+
+        # --- single question ---
         content = output_data.get("content", "") or action.messages or ""
         content_type = output_data.get("content_type", "markdown")
         user_choice = output_data.get("user_choice", "")
@@ -585,6 +609,39 @@ class ActionRenderer:
 
         if not result:
             result.append(Text.from_markup("\u2705 [dim]Interaction completed[/dim]"))
+
+        return result
+
+    def _render_batch_success(self, contents: list, output_data: dict) -> List[Union[Text, Markdown, Syntax]]:
+        """Render batch SUCCESS -- answers summary."""
+        user_choice = output_data.get("user_choice", "")
+
+        # Parse the JSON answers
+        answers = []
+        if user_choice:
+            try:
+                parsed = _json.loads(user_choice)
+            except (_json.JSONDecodeError, TypeError):
+                answers = [user_choice]
+            else:
+                if isinstance(parsed, list):
+                    answers = parsed
+                else:
+                    logger.warning(f"Expected list from user_choice JSON, got {type(parsed).__name__}")
+                    answers = [user_choice]
+
+        total = len(contents)
+        answered = len(answers)
+        result: List[Union[Text, Markdown, Syntax]] = []
+        result.append(Text.from_markup(f"\u2705 [dim]Answers submitted ({answered}/{total})[/dim]"))
+
+        lines = []
+        for i, q_text in enumerate(contents):
+            answer = answers[i] if i < len(answers) else ""
+            short_q = q_text[:40] + "..." if len(q_text) > 40 else q_text
+            lines.append(f"  {short_q} \u2192 **{answer}**")
+        if lines:
+            result.append(Markdown("\n".join(lines)))
 
         return result
 
