@@ -14,7 +14,7 @@ from datus.schemas.node_models import TableSchema
 from datus.schemas.schema_linking_node_models import SchemaLinkingInput, SchemaLinkingResult
 from datus.storage.schema_metadata import SchemaStorage
 from datus.tools.base import BaseTool
-from datus.tools.db_tools.registry import connector_registry
+from datus.tools.db_tools import connector_registry
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.json_utils import llm_result2json
 from datus.utils.loggings import get_logger

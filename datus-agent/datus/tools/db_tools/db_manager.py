@@ -5,12 +5,11 @@
 from collections import defaultdict
 from typing import Dict, Optional, Tuple, Union
 
+from datus_db_core import BaseSqlConnector, ConnectionConfig, DatusDbException, connector_registry
 from sqlalchemy.engine.url import URL, make_url
 
 from datus.configuration.agent_config import DbConfig
-from datus.tools.db_tools.base import BaseSqlConnector
-from datus.tools.db_tools.config import ConnectionConfig, DuckDBConfig, SQLiteConfig
-from datus.tools.db_tools.registry import connector_registry
+from datus.tools.db_tools.config import DuckDBConfig, SQLiteConfig
 from datus.utils.constants import DBType
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
@@ -71,7 +70,7 @@ def _resolve_connection_context(db_config: DbConfig, uri: str) -> Tuple[str, str
     if resolver:
         try:
             return resolver(db_config, uri)
-        except DatusException:
+        except DatusDbException:
             raise
         except Exception as exc:
             raise DatusException(
@@ -98,7 +97,7 @@ def gen_uri(db_config: DbConfig) -> str:
     if builder:
         try:
             return builder(db_config)
-        except DatusException:
+        except DatusDbException:
             raise
         except Exception as exc:
             raise DatusException(

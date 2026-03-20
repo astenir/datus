@@ -13,7 +13,7 @@ from datus.schemas.base import TABLE_TYPE
 from datus.schemas.node_models import TableSchema, TableValue
 from datus.storage.base import BaseEmbeddingStore, WhereExpr
 from datus.storage.embedding_models import EmbeddingModel
-from datus.tools.db_tools.registry import connector_registry
+from datus.tools.db_tools import connector_registry
 from datus.utils.constants import DBType
 from datus.utils.json_utils import json2csv
 from datus.utils.loggings import get_logger

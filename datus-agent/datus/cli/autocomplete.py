@@ -20,7 +20,7 @@ from pygments.token import Token
 
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.node_models import Metric, ReferenceSql, TableSchema
-from datus.tools.db_tools.registry import connector_registry
+from datus.tools.db_tools import connector_registry
 from datus.utils.constants import SYS_SUB_AGENTS, DBType
 from datus.utils.loggings import get_logger
 from datus.utils.path_utils import get_file_fuzzy_matches

@@ -580,6 +580,12 @@ class TestDBFuncTool:
         result = db_func_tool.read_query("SELECT * FROM users;")
         assert result.success == 1
 
+    def test_read_query_allows_semicolon_inside_string_literal(self, db_func_tool, mock_connector):
+        """Semicolons inside string literals should not be treated as statement separators."""
+        mock_connector.execute_query.return_value = Mock(success=True, sql_return=[{"x": ";"}])
+        result = db_func_tool.read_query("SELECT ';' AS x")
+        assert result.success == 1
+
     def test_get_table_ddl_success(self, db_func_tool, mock_connector):
         """get_table_ddl should return connector DDL info."""
         mock_connector.get_tables_with_ddl.return_value = [
@@ -627,7 +633,7 @@ class TestDBFuncTool:
 
     def test_catalog_scoped_tables_filter_results(self, monkeypatch):
         """Catalog-qualified scopes should restrict databases, schemas, and tables."""
-        from datus.tools.db_tools.registry import connector_registry
+        from datus_db_core import connector_registry
 
         # Register snowflake capabilities so _determine_field_order includes catalog/database/schema.
         # In production this is done by the external datus_snowflake adapter package.

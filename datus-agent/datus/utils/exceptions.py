@@ -5,7 +5,6 @@
 import sys
 import traceback
 from enum import Enum
-from typing import Any, Optional
 
 from datus.utils.loggings import get_log_manager, get_logger
 
@@ -21,7 +20,7 @@ class ErrorCode(Enum):
         "100001",
         "Unexcepted value of {field_name}, excepted value: {except_values}, your value: {your_value}",
     )
-    COMMON_FILE_NOT_FOUND = ("100002", "{config_name} file not found: {file_name}")
+    COMMON_FILE_NOT_FOUND = ("100011", "{config_name} file not found: {file_name}")
     COMMON_FIELD_REQUIRED = ("100003", "Missing required field: {field_name}")
     COMMON_UNSUPPORTED = ("100004", "Unsupported value `{your_value}` for field `{field_name}`")
     COMMON_ENV = ("100005", "The environment variable {env_var} is not set")
@@ -112,7 +111,7 @@ class ErrorCode(Enum):
 
     # Database errors - Constraints (SQLAlchemy IntegrityError)
     DB_CONSTRAINT_VIOLATION = (
-        "500008",
+        "500011",
         "Database constraint violation occurred. Error details: {error_message}",
     )
 
@@ -133,23 +132,9 @@ class ErrorCode(Enum):
 
 
 class DatusException(Exception):
-    """Datus custom exceptions for standardized printing
+    """Datus agent exception with error code."""
 
-    Args:
-        code: ErrorCode - The error code enum that defines the type and category of the exception
-        message: Optional[str] - Custom error message. If not provided, uses the default message from ErrorCode
-        message_args: Optional[dict[str, Any]] - Arguments to format the error message template from ErrorCode
-        *args: object - Additional arguments passed to the base Exception class
-        Exception (_type_): _description_
-    """
-
-    def __init__(
-        self,
-        code: ErrorCode,
-        message: Optional[str] = None,
-        message_args: Optional[dict[str, Any]] = None,
-        *args: object,
-    ):
+    def __init__(self, code: ErrorCode, message=None, message_args=None, *args):
         self.code = code
         self.message_args = message_args or {}
         self.message = self.build_msg(message, message_args)
@@ -158,11 +143,14 @@ class DatusException(Exception):
     def __str__(self):
         return self.message
 
-    def build_msg(self, message: Optional[str] = None, message_args: Optional[dict[str, Any]] = None) -> str:
+    def build_msg(self, message=None, message_args=None):
         if message:
             final_message = message
         elif message_args:
-            final_message = self.code.desc.format(**message_args)
+            try:
+                final_message = self.code.desc.format(**message_args)
+            except (KeyError, IndexError):
+                final_message = f"{self.code.desc} (args={message_args})"
         else:
             final_message = self.code.desc
         return f"error_code={self.code.code}, error_message={final_message}"

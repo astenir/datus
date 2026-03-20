@@ -14,7 +14,7 @@ from rich.box import SIMPLE_HEAD
 from rich.panel import Panel
 from rich.table import Table
 
-from datus.tools.db_tools.registry import connector_registry
+from datus.tools.db_tools import connector_registry
 from datus.utils.constants import DBType
 from datus.utils.loggings import get_logger
 

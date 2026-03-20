@@ -11,14 +11,13 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Union
 
 from agents import Tool
+from datus_db_core import BaseSqlConnector, connector_registry
 
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.agent_models import SubAgentConfig
 from datus.storage.schema_metadata.store import SchemaWithValueRAG
 from datus.storage.semantic_model.store import SemanticModelRAG
-from datus.tools.db_tools import BaseSqlConnector
 from datus.tools.db_tools.db_manager import DBManager, db_manager_instance
-from datus.tools.db_tools.registry import connector_registry
 from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
 from datus.utils.compress_utils import DataCompressor
 from datus.utils.constants import DBType, SQLType
@@ -951,7 +950,7 @@ class DBFuncTool:
             FuncToolResult with result=self.compressor.compress(rows) when successful. On failure success=0 with the
             underlying error message from the connector.
         """
-        from datus.utils.sql_utils import parse_sql_type
+        from datus.utils.sql_utils import _first_statement, parse_sql_type
 
         try:
             # Support SQL file path: if sql is a simple path ending with .sql, read from file
@@ -962,8 +961,9 @@ class DBFuncTool:
             # Reject multi-statement SQL to prevent read-only bypass (e.g. "SELECT 1; DELETE ...")
             from datus.utils.sql_utils import strip_sql_comments
 
-            cleaned = strip_sql_comments(sql).strip().rstrip(";").strip()
-            if ";" in cleaned:
+            cleaned = strip_sql_comments(sql).strip()
+            normalized_sql = cleaned.rstrip(";").strip()
+            if normalized_sql and _first_statement(normalized_sql) != normalized_sql:
                 return FuncToolResult(
                     success=0,
                     error="Multi-statement SQL is not allowed. Please submit one query at a time.",
