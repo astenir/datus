@@ -68,7 +68,10 @@ class DatusException(Exception):
         if message:
             final_message = message
         elif message_args:
-            final_message = self.code.desc.format(**message_args)
+            try:
+                final_message = self.code.desc.format(**message_args)
+            except (KeyError, IndexError):
+                final_message = f"{self.code.desc} (args={message_args})"
         else:
             final_message = self.code.desc
         return f"error_code={self.code.code}, error_message={final_message}"

@@ -547,13 +547,22 @@ class ClickZettaConnector:
                     command_df = self._run_command(query)
                     row_count = self._extract_row_count(command_df)
                     results.append(
-                        ExecuteSQLResult(success=True, sql_return=None, sql_query=query, row_count=row_count)
+                        ExecuteSQLResult(
+                            success=True, sql_return=None, sql_query=query, row_count=row_count, result_format="arrow"
+                        )
                     )
             except Exception as e:
                 logger.error(f"Error executing query in batch: {query}, error: {str(e)}")
                 # Add failed result to maintain query order
                 results.append(
-                    ExecuteSQLResult(success=False, sql_return=None, sql_query=query, row_count=0, error=str(e))
+                    ExecuteSQLResult(
+                        success=False,
+                        sql_return=None,
+                        sql_query=query,
+                        row_count=0,
+                        error=str(e),
+                        result_format="arrow",
+                    )
                 )
         return results
 
