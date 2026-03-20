@@ -15,7 +15,7 @@ import pyarrow as pa
 # Legacy connector - does not inherit from BaseSqlConnector directly
 from datus_db_core import (
     TABLE_TYPE,
-    DatusException,
+    DatusDbException,
     ErrorCode,
     ExecuteSQLResult,
     SQLType,
@@ -95,7 +95,7 @@ class ClickZettaConnector:
         schema = schema or "PUBLIC"
         vcluster = vcluster or "DEFAULT_AP"
         if Session is None:
-            raise DatusException(
+            raise DatusDbException(
                 ErrorCode.COMMON_MISSING_DEPENDENCY,
                 message=(
                     "ClickZetta connector requires the packages "
@@ -115,7 +115,7 @@ class ClickZettaConnector:
         }
         missing_fields = [name for name, value in required_fields.items() if not value]
         if missing_fields:
-            raise DatusException(
+            raise DatusDbException(
                 ErrorCode.COMMON_CONFIG_ERROR,
                 message_args={
                     "config_error": f"Missing ClickZetta connection fields: {', '.join(sorted(missing_fields))}"
@@ -178,7 +178,7 @@ class ClickZettaConnector:
                 escaped_vc = _safe_escape_identifier(self.vcluster.upper())
                 self._session.sql(f"USE VCLUSTER `{escaped_vc}`")
         except (ImportError, OSError, ValueError) as exc:
-            raise DatusException(
+            raise DatusDbException(
                 ErrorCode.DB_CONNECTION_FAILED,
                 message_args={"error_message": str(exc)},
             ) from exc
@@ -205,7 +205,7 @@ class ClickZettaConnector:
 
         # Reject workspace switching requests
         if database_name and database_name != self.database_name:
-            raise DatusException(
+            raise DatusDbException(
                 ErrorCode.DB_EXECUTION_ERROR,
                 message_args={
                     "error_message": (
@@ -229,9 +229,9 @@ class ClickZettaConnector:
                 self._wrap_exception(exc, f"USE SCHEMA `{escaped_schema}`", ErrorCode.DB_EXECUTION_ERROR)
 
     def _wrap_exception(self, exc: Exception, sql: str = "", error_code: ErrorCode = ErrorCode.DB_EXECUTION_ERROR):
-        if isinstance(exc, DatusException):
+        if isinstance(exc, DatusDbException):
             raise exc
-        raise DatusException(error_code, message_args={"error_message": str(exc), "sql": sql}) from exc
+        raise DatusDbException(error_code, message_args={"error_message": str(exc), "sql": sql}) from exc
 
     def _run_query(self, sql: str) -> pd.DataFrame:
         try:
@@ -406,7 +406,7 @@ class ClickZettaConnector:
                 sql_return=str(row_count),
                 row_count=row_count,
             )
-        except DatusException as exc:
+        except DatusDbException as exc:
             return ExecuteSQLResult(success=False, error=str(exc), sql_query=sql, sql_return="", row_count=0)
 
     def execute_update(self, sql: str) -> ExecuteSQLResult:
@@ -437,7 +437,7 @@ class ClickZettaConnector:
                 row_count=row_count,
                 result_format=result_format,
             )
-        except DatusException as exc:
+        except DatusDbException as exc:
             return ExecuteSQLResult(success=False, error=str(exc), sql_query=sql)
         except Exception as exc:  # Ensure unexpected errors are also surfaced in result
             # Surface unexpected errors in logs while keeping graceful result contract
@@ -461,7 +461,7 @@ class ClickZettaConnector:
             return df
         except Exception as e:
             logger.error(f"Error executing query to DataFrame: {sql}, error: {str(e)}")
-            raise DatusException(
+            raise DatusDbException(
                 code=ErrorCode.DB_EXECUTION_ERROR, message=f"Failed to execute query to DataFrame: {str(e)}"
             ) from e
 
@@ -475,7 +475,7 @@ class ClickZettaConnector:
             return df.to_dict(orient="records")
         except Exception as e:
             logger.error(f"Error executing query to dict: {sql}, error: {str(e)}")
-            raise DatusException(
+            raise DatusDbException(
                 code=ErrorCode.DB_EXECUTION_ERROR, message=f"Failed to execute query to dict: {str(e)}"
             ) from e
 
@@ -483,7 +483,7 @@ class ClickZettaConnector:
         try:
             self._run_command(sql)
             return ExecuteSQLResult(success=True, sql_query=sql, sql_return="Successful", row_count=0)
-        except DatusException as exc:
+        except DatusDbException as exc:
             return ExecuteSQLResult(success=False, error=str(exc), sql_query=sql)
 
     def execute_csv(self, sql: str) -> ExecuteSQLResult:
@@ -515,7 +515,7 @@ class ClickZettaConnector:
             )
         except Exception as e:
             logger.error(f"Error executing Arrow query: {sql}, error: {str(e)}")
-            raise DatusException(
+            raise DatusDbException(
                 code=ErrorCode.DB_EXECUTION_ERROR, message=f"Failed to execute Arrow query: {str(e)}"
             ) from e
 
@@ -578,7 +578,7 @@ class ClickZettaConnector:
                 if schema_name := switch_context.get("schema_name"):
                     self.schema_name = schema_name
             return ExecuteSQLResult(success=True, sql_query=sql_query, sql_return="Successful", row_count=0)
-        except DatusException as exc:
+        except DatusDbException as exc:
             return ExecuteSQLResult(success=False, error=str(exc), sql_query=sql_query)
 
     # ------------------------------------------------------------------ #
@@ -605,7 +605,7 @@ class ClickZettaConnector:
                 return df["catalog_name"].dropna().tolist()
             if "name" in df.columns:
                 return df["name"].dropna().tolist()
-        except DatusException:
+        except DatusDbException:
             logger.debug("SHOW CATALOGS not supported, returning workspace as catalog fallback")
         return [self.database_name] if self.database_name else []
 
@@ -627,7 +627,7 @@ class ClickZettaConnector:
             if not include_sys:
                 schemas = [s for s in schemas if not str(s).startswith("INFORMATION_SCHEMA")]
             return schemas
-        except DatusException:
+        except DatusDbException:
             return [self.schema_name] if self.schema_name else []
 
     def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
@@ -662,7 +662,7 @@ class ClickZettaConnector:
                 return []
             view_types = {"VIEW", "DYNAMIC_TABLE"}
             return [row.table_name for row in df.itertuples() if str(row.table_type).upper() in view_types]
-        except DatusException:
+        except DatusDbException:
             return []
 
     def get_materialized_views(
@@ -682,7 +682,7 @@ class ClickZettaConnector:
             if df.empty:
                 return []
             return [row.table_name for row in df.itertuples() if str(row.table_type).upper() == "MATERIALIZED_VIEW"]
-        except DatusException:
+        except DatusDbException:
             return []
 
     def get_tables_with_ddl(
@@ -730,7 +730,7 @@ class ClickZettaConnector:
             base_query += f" AND table_name IN ({table_list})"
         try:
             tables_df = self._run_query(base_query)
-        except DatusException:
+        except DatusDbException:
             return []
 
         column_query = (
@@ -744,7 +744,7 @@ class ClickZettaConnector:
 
         try:
             columns_df = self._run_query(column_query)
-        except DatusException:
+        except DatusDbException:
             columns_df = pd.DataFrame()
 
         columns_map: Dict[str, List[Dict[str, Any]]] = {}
@@ -855,7 +855,7 @@ class ClickZettaConnector:
             sql = f"SELECT * FROM {table_full_name} LIMIT {top_n}"
             try:
                 df = self._run_query(sql)
-            except DatusException:
+            except DatusDbException:
                 continue
             if df.empty:
                 continue
@@ -918,12 +918,12 @@ class ClickZettaConnector:
         elif isinstance(input_params, dict):
             sql_query = input_params.get("sql_query", "")
         else:
-            raise DatusException(
+            raise DatusDbException(
                 ErrorCode.COMMON_INVALID_PARAMETER, message=f"Invalid input_params type: {type(input_params)}"
             )
 
         if not sql_query:
-            raise DatusException(ErrorCode.COMMON_INVALID_PARAMETER, message="sql_query cannot be empty")
+            raise DatusDbException(ErrorCode.COMMON_INVALID_PARAMETER, message="sql_query cannot be empty")
 
         # Resolve result_format from input_params if not explicitly provided
         if result_format is None:
@@ -934,26 +934,41 @@ class ClickZettaConnector:
             else:
                 result_format = "csv"
 
-        # Execute query based on result format
+        # Route by SQL type first, then by result_format for queries
         try:
-            if result_format == "csv":
-                return self.execute_csv(sql_query)
-            elif result_format == "arrow":
-                return self.execute_arrow(sql_query)
-            elif result_format == "pandas":
-                return self.execute_pandas(sql_query)
-            elif result_format == "list":
-                # Use execute_query_to_dict for list format
-                rows = self.execute_query_to_dict(sql_query)
-                return ExecuteSQLResult(
-                    success=True, sql_query=sql_query, sql_return=rows, row_count=len(rows), result_format=result_format
-                )
+            sql_query = sql_query.strip()
+            sql_type = parse_sql_type(sql_query, self.dialect)
+            if sql_type == SQLType.INSERT:
+                return self.execute_insert(sql_query)
+            elif sql_type in (SQLType.UPDATE, SQLType.MERGE):
+                return self.execute_update(sql_query)
+            elif sql_type == SQLType.DELETE:
+                return self.execute_delete(sql_query)
+            elif sql_type == SQLType.CONTENT_SET:
+                return self.execute_content_set(sql_query)
+            elif sql_type == SQLType.DDL:
+                return self.execute_ddl(sql_query)
+            elif sql_type in (SQLType.SELECT, SQLType.METADATA_SHOW, SQLType.EXPLAIN):
+                return self.execute_query(sql_query, result_format)
             else:
-                # Default to CSV format
-                return self.execute_csv(sql_query)
+                return ExecuteSQLResult(
+                    success=False,
+                    error="Unknown type of SQL",
+                    sql_query=sql_query,
+                    sql_return="",
+                    row_count=0,
+                    result_format=result_format,
+                )
         except Exception as e:
-            logger.error(f"Error executing query: {e}")
-            raise
+            logger.error(f"Executing SQL query failed: {e}")
+            return ExecuteSQLResult(
+                success=False,
+                error=str(e),
+                sql_query=sql_query,
+                sql_return="",
+                row_count=0,
+                result_format=result_format,
+            )
 
     def __len__(self) -> int:
         """Return a length value for compatibility with system expectations.

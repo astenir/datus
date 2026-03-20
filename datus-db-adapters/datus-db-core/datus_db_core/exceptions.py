@@ -46,8 +46,8 @@ class ErrorCode(Enum):
         self.desc = desc
 
 
-class DatusException(Exception):
-    """Datus custom exception with error code."""
+class DatusDbException(Exception):
+    """Datus database exception with error code."""
 
     def __init__(
         self,

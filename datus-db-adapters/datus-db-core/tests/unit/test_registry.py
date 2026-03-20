@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from datus_db_core.config import ConnectionConfig
-from datus_db_core.exceptions import DatusException
+from datus_db_core.exceptions import DatusDbException
 from datus_db_core.registry import AdapterMetadata, ConnectorRegistry
 
 
@@ -120,7 +120,7 @@ class TestCreateConnector:
         assert result == "mock_connector"
 
     def test_create_not_registered_raises(self):
-        with pytest.raises(DatusException) as exc_info:
+        with pytest.raises(DatusDbException) as exc_info:
             ConnectorRegistry.create_connector("nonexistent", {})
         assert "not found" in str(exc_info.value).lower()
 
@@ -132,7 +132,7 @@ class TestCreateConnector:
 
     @patch.object(ConnectorRegistry, "_try_load_adapter")
     def test_create_triggers_lazy_load(self, mock_load):
-        with pytest.raises(DatusException):
+        with pytest.raises(DatusDbException):
             ConnectorRegistry.create_connector("lazydb", {})
         mock_load.assert_called_once_with("lazydb")
 

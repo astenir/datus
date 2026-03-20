@@ -8,7 +8,7 @@ from typing import Any, List, Literal
 from unittest.mock import MagicMock, patch
 
 import pytest
-from datus_db_core.base import BaseSqlConnector, _to_sql_literal, list_to_in_str
+from datus_db_core.base import BaseSqlConnector, list_to_in_str, to_sql_literal
 from datus_db_core.config import ConnectionConfig
 from datus_db_core.constants import SQLType
 from datus_db_core.models import ExecuteSQLInput, ExecuteSQLResult
@@ -354,22 +354,22 @@ class TestListToInStr:
 
 class TestToSqlLiteral:
     def test_none_returns_null(self):
-        assert _to_sql_literal(None) == "NULL"
+        assert to_sql_literal(None) == "NULL"
 
     def test_empty_string_no_quotes(self):
-        assert _to_sql_literal("") == ""
+        assert to_sql_literal("") == ""
 
     def test_empty_string_with_quotes(self):
-        assert _to_sql_literal("", around_with_quotes=True) == "''"
+        assert to_sql_literal("", around_with_quotes=True) == "''"
 
     def test_normal_string_no_quotes(self):
-        assert _to_sql_literal("hello") == "hello"
+        assert to_sql_literal("hello") == "hello"
 
     def test_normal_string_with_quotes(self):
-        assert _to_sql_literal("hello", around_with_quotes=True) == "'hello'"
+        assert to_sql_literal("hello", around_with_quotes=True) == "'hello'"
 
     def test_string_with_single_quote(self):
-        assert _to_sql_literal("it's", around_with_quotes=True) == "'it''s'"
+        assert to_sql_literal("it's", around_with_quotes=True) == "'it''s'"
 
     def test_none_with_quotes(self):
-        assert _to_sql_literal(None, around_with_quotes=True) == "NULL"
+        assert to_sql_literal(None, around_with_quotes=True) == "NULL"

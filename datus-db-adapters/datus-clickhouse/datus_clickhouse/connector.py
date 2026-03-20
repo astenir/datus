@@ -5,7 +5,7 @@
 from typing import Any, Dict, List, Optional, Set, Union, override
 from urllib.parse import quote_plus
 
-from datus_db_core import TABLE_TYPE, DatusException, ErrorCode, get_logger, list_to_in_str
+from datus_db_core import TABLE_TYPE, DatusDbException, ErrorCode, get_logger, list_to_in_str
 from datus_sqlalchemy import SQLAlchemyConnector
 from pydantic import BaseModel, Field
 
@@ -43,7 +43,7 @@ METADATA_DICT: Dict[TABLE_TYPE, TableMetadataNames] = {
 def _get_metadata_config(table_type: TABLE_TYPE) -> TableMetadataNames:
     """Get metadata configuration for given table type."""
     if table_type not in METADATA_DICT:
-        raise DatusException(ErrorCode.COMMON_FIELD_INVALID, f"Invalid table type '{table_type}'")
+        raise DatusDbException(ErrorCode.COMMON_FIELD_INVALID, f"Invalid table type '{table_type}'")
     return METADATA_DICT[table_type]
 
 
@@ -179,8 +179,14 @@ class ClickHouseConnector(SQLAlchemyConnector):
         """
         sql = f"SHOW CREATE {create_type} {full_name}"
         ddl_result = self._execute_pandas(sql)
-        if not ddl_result.empty and len(ddl_result.columns) >= 2:
-            return str(ddl_result.iloc[0, 1])
+        if not ddl_result.empty:
+            column_map = {str(col).lower(): col for col in ddl_result.columns}
+            if "statement" in column_map:
+                return str(ddl_result.iloc[0][column_map["statement"]])
+            if len(ddl_result.columns) >= 2:
+                return str(ddl_result.iloc[0, 1])
+            if len(ddl_result.columns) == 1:
+                return str(ddl_result.iloc[0, 0])
         return f"-- DDL not available for {full_name}"
 
     def _get_objects_with_ddl(

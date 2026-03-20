@@ -10,15 +10,15 @@ from datus_db_core import (
     TABLE_TYPE,
     BaseSqlConnector,
     ConnectionConfig,
-    DatusException,
+    DatusDbException,
     ErrorCode,
     ExecuteSQLResult,
     MaterializedViewSupportMixin,
     SchemaNamespaceMixin,
-    _to_sql_literal,
     get_logger,
     list_to_in_str,
     parse_context_switch,
+    to_sql_literal,
 )
 from pandas import DataFrame
 from snowflake.connector import Connect, SnowflakeConnection
@@ -41,36 +41,38 @@ from .config import SnowflakeConfig
 logger = get_logger(__name__)
 
 
-def _handle_snowflake_exception(e: Exception, sql: str = "") -> DatusException:
+def _handle_snowflake_exception(e: Exception, sql: str = "") -> DatusDbException:
     """Handle Snowflake exceptions and map to appropriate Datus ErrorCode."""
 
     if isinstance(e, ProgrammingError):
-        return DatusException(
+        return DatusDbException(
             ErrorCode.DB_EXECUTION_SYNTAX_ERROR, message_args={"sql": sql, "error_message": e.raw_msg}
         )
 
     elif isinstance(e, (OperationalError, DatabaseError)):
-        return DatusException(ErrorCode.DB_EXECUTION_ERROR, message_args={"sql": sql, "error_message": e.raw_msg})
+        return DatusDbException(ErrorCode.DB_EXECUTION_ERROR, message_args={"sql": sql, "error_message": e.raw_msg})
 
     elif isinstance(e, IntegrityError):
-        return DatusException(ErrorCode.DB_CONSTRAINT_VIOLATION, message_args={"sql": sql, "error_message": e.raw_msg})
+        return DatusDbException(
+            ErrorCode.DB_CONSTRAINT_VIOLATION, message_args={"sql": sql, "error_message": e.raw_msg}
+        )
 
     elif isinstance(e, (RequestTimeoutError, ServiceUnavailableError)):
-        return DatusException(ErrorCode.DB_EXECUTION_TIMEOUT, message_args={"sql": sql, "error_message": e.raw_msg})
+        return DatusDbException(ErrorCode.DB_EXECUTION_TIMEOUT, message_args={"sql": sql, "error_message": e.raw_msg})
 
     elif isinstance(e, (InterfaceError, InternalError)):
-        return DatusException(ErrorCode.DB_CONNECTION_FAILED, message_args={"error_message": e.raw_msg})
+        return DatusDbException(ErrorCode.DB_CONNECTION_FAILED, message_args={"error_message": e.raw_msg})
 
     elif isinstance(e, ForbiddenError):
-        return DatusException(
+        return DatusDbException(
             ErrorCode.DB_PERMISSION_DENIED, message_args={"operation": "query execution", "error_message": e.raw_msg}
         )
 
     elif isinstance(e, (DataError, NotSupportedError)):
-        return DatusException(ErrorCode.DB_EXECUTION_ERROR, message_args={"sql": sql, "error_message": e.raw_msg})
+        return DatusDbException(ErrorCode.DB_EXECUTION_ERROR, message_args={"sql": sql, "error_message": e.raw_msg})
 
     else:
-        return DatusException(ErrorCode.DB_FAILED, message_args={"error_message": str(e)})
+        return DatusDbException(ErrorCode.DB_FAILED, message_args={"error_message": str(e)})
 
 
 class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedViewSupportMixin):
@@ -365,7 +367,7 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
                 error=None,
                 result_format="arrow",
             )
-        except DatusException as e:
+        except DatusDbException as e:
             return ExecuteSQLResult(success=False, sql_query=sql, error=str(e))
 
     def execute_pandas(self, sql: str) -> ExecuteSQLResult:
@@ -594,7 +596,7 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
             FROM {select_table_name} WHERE TABLE_TYPE = '{table_type}'"""
 
             if schema_name:
-                sql += f" AND TABLE_SCHEMA = {_to_sql_literal(schema_name, True)}"
+                sql += f" AND TABLE_SCHEMA = {to_sql_literal(schema_name, True)}"
             if tables:
                 sql += list_to_in_str(prefix=" AND TABLE_NAME IN ", values=tables)
 
@@ -751,9 +753,9 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
 
         for entry in table_entries:
             full_name = (
-                f'{_to_sql_literal(entry["database_name"])}.'
-                f'{_to_sql_literal(entry["schema_name"])}.'
-                f'{_to_sql_literal(entry["table_name"])}'
+                f'{to_sql_literal(entry["database_name"])}.'
+                f'{to_sql_literal(entry["schema_name"])}.'
+                f'{to_sql_literal(entry["table_name"])}'
             ).strip()
             entry["definition"] = self._fetch_object_ddl("TABLE", full_name)
 
@@ -775,9 +777,9 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
 
         for entry in view_entries:
             full_name = (
-                f'{_to_sql_literal(entry["database_name"])}.'
-                f'{_to_sql_literal(entry["schema_name"])}.'
-                f'{_to_sql_literal(entry["table_name"])}'
+                f'{to_sql_literal(entry["database_name"])}.'
+                f'{to_sql_literal(entry["schema_name"])}.'
+                f'{to_sql_literal(entry["table_name"])}'
             ).strip()
             entry["definition"] = self._fetch_object_ddl("VIEW", full_name)
 
@@ -799,9 +801,9 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
 
         for entry in mv_entries:
             full_name = (
-                f'{_to_sql_literal(entry["database_name"])}.'
-                f'{_to_sql_literal(entry["schema_name"])}.'
-                f'{_to_sql_literal(entry["table_name"])}'
+                f'{to_sql_literal(entry["database_name"])}.'
+                f'{to_sql_literal(entry["schema_name"])}.'
+                f'{to_sql_literal(entry["table_name"])}'
             ).strip()
             entry["definition"] = self._fetch_object_ddl("MATERIALIZED VIEW", full_name)
 

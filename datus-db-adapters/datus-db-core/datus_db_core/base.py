@@ -280,7 +280,7 @@ class BaseSqlConnector(ABC):
 def list_to_in_str(prefix: str, values: Optional[List[str]] = None) -> str:
     if not values:
         return ""
-    value_str = ",".join(_to_sql_literal(v, around_with_quotes=True) for v in values)
+    value_str = ",".join(to_sql_literal(v, around_with_quotes=True) for v in values)
     return f"{prefix} ({value_str})"
 
 
@@ -288,7 +288,7 @@ def _escape_sql_string_standard(value: str) -> str:
     return value.replace("'", "''")
 
 
-def _to_sql_literal(value: Optional[str], around_with_quotes: bool = False) -> str:
+def to_sql_literal(value: Optional[str], around_with_quotes: bool = False) -> str:
     if value is None:
         return "NULL"
     if not value:

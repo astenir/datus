@@ -5,7 +5,7 @@
 from unittest.mock import patch
 
 import pytest
-from datus_db_core import DatusException
+from datus_db_core import DatusDbException
 from datus_postgresql import PostgreSQLConfig, PostgreSQLConnector
 
 
@@ -308,7 +308,7 @@ def test_get_metadata_config_invalid_type():
     """Test _get_metadata_config with invalid table type."""
     from datus_postgresql.connector import _get_metadata_config
 
-    with pytest.raises(DatusException, match="Invalid table type"):
+    with pytest.raises(DatusDbException, match="Invalid table type"):
         _get_metadata_config("invalid_type")
 
 

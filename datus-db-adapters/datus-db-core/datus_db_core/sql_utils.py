@@ -260,22 +260,19 @@ def _first_statement(sql: str) -> str:
     return s.strip()
 
 
-_METADATA_RE: re.Pattern | None = None
+_METADATA_RE: re.Pattern = re.compile(
+    r"""(?ix)^\s*
+    (?:
+        show\b(?:\s+create\s+table|\s+catalogs|\s+databases|\s+tables|\s+functions|\s+views|\s+columns|\s+partitions)?
+        |set\s+catalog\b
+        |describe\b
+        |pragma\b
+    )
+""",
+)
 
 
 def _metadata_pattern() -> re.Pattern:
-    global _METADATA_RE
-    if not _METADATA_RE:
-        _METADATA_RE = re.compile(
-            r"""(?ix)^\s*
-        (?:
-            show\b(?:\s+create\s+table|\s+catalogs|\s+databases|\s+tables|\s+functions|\s+views|\s+columns|\s+partitions)?
-            |set\s+catalog\b
-            |describe\b
-            |pragma\b
-        )
-    """,
-        )
     return _METADATA_RE
 
 
@@ -409,7 +406,8 @@ def parse_sql_type(sql: str, dialect: str) -> SQLType:
             return SQLType.INSERT
         if command_name in {"CALL", "EXEC", "EXECUTE"}:
             return SQLType.CONTENT_SET
-        return SQLType.CONTENT_SET
+        mapped = _KEYWORD_SQL_TYPE_MAP.get(command_name)
+        return mapped if mapped else SQLType.CONTENT_SET
     if isinstance(
         normalized_expression,
         (

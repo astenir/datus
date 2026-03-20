@@ -4,13 +4,7 @@
 
 from typing import Any, Dict, List, Set, Union, override
 
-from datus_db_core import (
-    CatalogSupportMixin,
-    ConnectorRegistry,
-    MaterializedViewSupportMixin,
-    get_logger,
-    list_to_in_str,
-)
+from datus_db_core import CatalogSupportMixin, MaterializedViewSupportMixin, get_logger, list_to_in_str
 from datus_mysql import MySQLConnector
 
 from .config import StarRocksConfig
@@ -275,13 +269,10 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         """Get schema name for SQLAlchemy Inspector with catalog support."""
         database_name = database_name or self.database_name
 
-        if ConnectorRegistry.support_catalog("starrocks"):
-            catalog_name = catalog_name or self.catalog_name or self.default_catalog()
-            if database_name:
-                return f"{catalog_name}.{database_name}"
-            return None
-        else:
-            return database_name if database_name else None
+        catalog_name = catalog_name or self.catalog_name or self.default_catalog()
+        if database_name:
+            return f"{catalog_name}.{database_name}"
+        return None
 
     # ==================== Connection Cleanup ====================
 

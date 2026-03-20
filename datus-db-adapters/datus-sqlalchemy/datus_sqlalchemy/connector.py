@@ -8,7 +8,7 @@ from datus_db_core import (
     TABLE_TYPE,
     BaseSqlConnector,
     ConnectionConfig,
-    DatusException,
+    DatusDbException,
     ErrorCode,
     ExecuteSQLResult,
     SQLType,
@@ -75,8 +75,8 @@ class SQLAlchemyConnector(BaseSqlConnector):
 
     @override
     def connect(self):
-        """Initialize the connection pool (engine only, no persistent connection)."""
-        if self.engine and self._owns_engine:
+        """Establish connection to the database."""
+        if self.engine and self.connection and self._owns_engine:
             return
 
         try:
@@ -95,22 +95,26 @@ class SQLAlchemyConnector(BaseSqlConnector):
             else:
                 self.engine = create_engine(self.connection_string)
 
+            self.connection = self.engine.connect()
             self._owns_engine = True
 
         except Exception as e:
             self._force_reset()
             raise self._handle_exception(e, "", "connection") from e
 
-        if not self.engine:
+        if not (self.engine and self.connection):
             self._force_reset()
-            raise DatusException(
+            raise DatusDbException(
                 ErrorCode.DB_CONNECTION_FAILED, message_args={"error_message": "Failed to establish connection"}
             )
 
     @override
     def close(self):
-        """Dispose the connection pool."""
+        """Close the database connection."""
         try:
+            if self.connection:
+                self.connection.close()
+                self.connection = None
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
@@ -128,6 +132,13 @@ class SQLAlchemyConnector(BaseSqlConnector):
     def _force_reset(self):
         """Force reset engine on error."""
         try:
+            self._safe_rollback()
+            if self.connection:
+                try:
+                    self.connection.close()
+                except Exception:
+                    pass
+                self.connection = None
             if self.engine:
                 try:
                     self.engine.dispose()
@@ -141,9 +152,9 @@ class SQLAlchemyConnector(BaseSqlConnector):
 
     # ==================== Error Handling ====================
 
-    def _handle_exception(self, e: Exception, sql: str = "", operation: str = "SQL execution") -> DatusException:
+    def _handle_exception(self, e: Exception, sql: str = "", operation: str = "SQL execution") -> DatusDbException:
         """Map SQLAlchemy exceptions to Datus exceptions."""
-        if isinstance(e, DatusException):
+        if isinstance(e, DatusDbException):
             return e
 
         # Extract error message
@@ -159,11 +170,11 @@ class SQLAlchemyConnector(BaseSqlConnector):
 
         # Syntax errors
         if any(kw in error_msg_lower for kw in ["syntax", "parse error", "sql error"]):
-            return DatusException(ErrorCode.DB_EXECUTION_SYNTAX_ERROR, message_args=message_args)
+            return DatusDbException(ErrorCode.DB_EXECUTION_SYNTAX_ERROR, message_args=message_args)
 
         # Table not found
         if isinstance(e, NoSuchTableError):
-            return DatusException(ErrorCode.DB_TABLE_NOT_EXISTS, message_args={"table_name": str(e)})
+            return DatusDbException(ErrorCode.DB_TABLE_NOT_EXISTS, message_args={"table_name": str(e)})
 
         # Connection and operational errors
         if isinstance(e, (OperationalError, InterfaceError)):
@@ -171,47 +182,47 @@ class SQLAlchemyConnector(BaseSqlConnector):
             if any(kw in error_msg_lower for kw in ["invalid transaction", "can't reconnect"]):
                 logger.warning("Invalid transaction state detected, resetting connection")
                 self._force_reset()
-                return DatusException(ErrorCode.DB_TRANSACTION_FAILED, message_args=message_args)
+                return DatusDbException(ErrorCode.DB_TRANSACTION_FAILED, message_args=message_args)
 
             # Timeout errors
             if any(kw in error_msg_lower for kw in ["timeout", "timed out"]):
-                return DatusException(ErrorCode.DB_CONNECTION_TIMEOUT, message_args=message_args)
+                return DatusDbException(ErrorCode.DB_CONNECTION_TIMEOUT, message_args=message_args)
 
             # Authentication errors
             if any(kw in error_msg_lower for kw in ["authentication", "access denied", "login failed"]):
-                return DatusException(ErrorCode.DB_AUTHENTICATION_FAILED, message_args=message_args)
+                return DatusDbException(ErrorCode.DB_AUTHENTICATION_FAILED, message_args=message_args)
 
             # Permission errors
             if any(kw in error_msg_lower for kw in ["permission denied", "insufficient privilege"]):
                 message_args["operation"] = operation
-                return DatusException(ErrorCode.DB_PERMISSION_DENIED, message_args=message_args)
+                return DatusDbException(ErrorCode.DB_PERMISSION_DENIED, message_args=message_args)
 
             # Connection errors
             if any(kw in error_msg_lower for kw in ["connection refused", "connection failed", "unable to open"]):
-                return DatusException(ErrorCode.DB_CONNECTION_FAILED, message_args=message_args)
+                return DatusDbException(ErrorCode.DB_CONNECTION_FAILED, message_args=message_args)
 
-            return DatusException(ErrorCode.DB_EXECUTION_ERROR, message_args=message_args)
+            return DatusDbException(ErrorCode.DB_EXECUTION_ERROR, message_args=message_args)
 
         # Programming errors
         if isinstance(e, ProgrammingError):
             if any(kw in error_msg_lower for kw in ["syntax", "parse error", "sql error"]):
-                return DatusException(ErrorCode.DB_EXECUTION_SYNTAX_ERROR, message_args=message_args)
-            return DatusException(ErrorCode.DB_EXECUTION_ERROR, message_args=message_args)
+                return DatusDbException(ErrorCode.DB_EXECUTION_SYNTAX_ERROR, message_args=message_args)
+            return DatusDbException(ErrorCode.DB_EXECUTION_ERROR, message_args=message_args)
 
         # Constraint violations
         if isinstance(e, IntegrityError):
-            return DatusException(ErrorCode.DB_CONSTRAINT_VIOLATION, message_args=message_args)
+            return DatusDbException(ErrorCode.DB_CONSTRAINT_VIOLATION, message_args=message_args)
 
         # Timeout errors
         if isinstance(e, TimeoutError):
-            return DatusException(ErrorCode.DB_EXECUTION_TIMEOUT, message_args=message_args)
+            return DatusDbException(ErrorCode.DB_EXECUTION_TIMEOUT, message_args=message_args)
 
         # Other database errors
         if isinstance(e, (DatabaseError, DataError, InternalError, NotSupportedError)):
-            return DatusException(ErrorCode.DB_EXECUTION_ERROR, message_args=message_args)
+            return DatusDbException(ErrorCode.DB_EXECUTION_ERROR, message_args=message_args)
 
         # Fallback
-        return DatusException(ErrorCode.DB_EXECUTION_ERROR, message_args=message_args)
+        return DatusDbException(ErrorCode.DB_EXECUTION_ERROR, message_args=message_args)
 
     # ==================== Core Execute Methods ====================
 
@@ -238,7 +249,7 @@ class SQLAlchemyConnector(BaseSqlConnector):
                 success=True, sql_query=sql, sql_return=result, row_count=row_count, result_format=result_format
             )
         except Exception as e:
-            ex = e if isinstance(e, DatusException) else self._handle_exception(e, sql)
+            ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql)
 
     def _execute_query(self, sql: str) -> List[Dict[str, Any]]:
@@ -251,16 +262,16 @@ class SQLAlchemyConnector(BaseSqlConnector):
             SQLType.CONTENT_SET,
             SQLType.UNKNOWN,
         ):
-            raise DatusException(ErrorCode.DB_EXECUTION_ERROR, message="Only SELECT and metadata queries are supported")
+            raise DatusDbException(
+                ErrorCode.DB_EXECUTION_ERROR, message="Only SELECT and metadata queries are supported"
+            )
 
         self.connect()
         try:
-            # Get connection from pool for this query
-            with self.engine.connect() as conn:
-                result = conn.execute(text(sql))
-                rows = result.fetchall()
-                return [row._asdict() for row in rows]
-        except DatusException:
+            result = self.connection.execute(text(sql))
+            rows = result.fetchall()
+            return [row._asdict() for row in rows]
+        except DatusDbException:
             self._safe_rollback()
             raise
         except Exception as e:
@@ -272,26 +283,24 @@ class SQLAlchemyConnector(BaseSqlConnector):
         """Execute INSERT statement."""
         try:
             self.connect()
-            with self.engine.connect() as conn:
-                res = conn.execute(text(sql))
-                conn.commit()
+            res = self.connection.execute(text(sql))
+            self.connection.commit()
 
-                # Get inserted primary key or row count
-                inserted_pk = None
-                try:
-                    if hasattr(res, "inserted_primary_key") and res.inserted_primary_key:
-                        inserted_pk = res.inserted_primary_key
-                except Exception:
-                    pass
+            # Get inserted primary key or row count
+            inserted_pk = None
+            try:
+                if hasattr(res, "inserted_primary_key") and res.inserted_primary_key:
+                    inserted_pk = res.inserted_primary_key
+            except Exception:
+                pass
 
-                lastrowid = getattr(res, "lastrowid", None)
-                return_value = inserted_pk if inserted_pk else (lastrowid if lastrowid else res.rowcount)
+            lastrowid = getattr(res, "lastrowid", None)
+            return_value = inserted_pk if inserted_pk else (lastrowid if lastrowid else res.rowcount)
 
-                return ExecuteSQLResult(
-                    success=True, sql_query=sql, sql_return=str(return_value), row_count=res.rowcount
-                )
+            return ExecuteSQLResult(success=True, sql_query=sql, sql_return=str(return_value), row_count=res.rowcount)
         except Exception as e:
-            ex = e if isinstance(e, DatusException) else self._handle_exception(e, sql)
+            self._safe_rollback()
+            ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql, sql_return="", row_count=0)
 
     @override
@@ -299,14 +308,12 @@ class SQLAlchemyConnector(BaseSqlConnector):
         """Execute UPDATE statement."""
         try:
             self.connect()
-            with self.engine.connect() as conn:
-                res = conn.execute(text(sql))
-                conn.commit()
-                return ExecuteSQLResult(
-                    success=True, sql_query=sql, sql_return=str(res.rowcount), row_count=res.rowcount
-                )
+            res = self.connection.execute(text(sql))
+            self.connection.commit()
+            return ExecuteSQLResult(success=True, sql_query=sql, sql_return=str(res.rowcount), row_count=res.rowcount)
         except Exception as e:
-            ex = e if isinstance(e, DatusException) else self._handle_exception(e, sql)
+            self._safe_rollback()
+            ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql, sql_return="", row_count=0)
 
     @override
@@ -314,14 +321,12 @@ class SQLAlchemyConnector(BaseSqlConnector):
         """Execute DELETE statement."""
         try:
             self.connect()
-            with self.engine.connect() as conn:
-                res = conn.execute(text(sql))
-                conn.commit()
-                return ExecuteSQLResult(
-                    success=True, sql_query=sql, sql_return=str(res.rowcount), row_count=res.rowcount
-                )
+            res = self.connection.execute(text(sql))
+            self.connection.commit()
+            return ExecuteSQLResult(success=True, sql_query=sql, sql_return=str(res.rowcount), row_count=res.rowcount)
         except Exception as e:
-            ex = e if isinstance(e, DatusException) else self._handle_exception(e, sql)
+            self._safe_rollback()
+            ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql, sql_return="", row_count=0)
 
     @override
@@ -329,14 +334,12 @@ class SQLAlchemyConnector(BaseSqlConnector):
         """Execute DDL statement (CREATE, ALTER, DROP, etc.)."""
         try:
             self.connect()
-            with self.engine.connect() as conn:
-                res = conn.execute(text(sql))
-                conn.commit()
-                return ExecuteSQLResult(
-                    success=True, sql_query=sql, sql_return=str(res.rowcount), row_count=res.rowcount
-                )
+            res = self.connection.execute(text(sql))
+            self.connection.commit()
+            return ExecuteSQLResult(success=True, sql_query=sql, sql_return=str(res.rowcount), row_count=res.rowcount)
         except Exception as e:
-            ex = e if isinstance(e, DatusException) else self._handle_exception(e, sql)
+            self._safe_rollback()
+            ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, sql_query=sql, error=str(ex))
 
     def execute_pandas(self, sql: str) -> ExecuteSQLResult:
@@ -347,7 +350,7 @@ class SQLAlchemyConnector(BaseSqlConnector):
                 success=True, sql_query=sql, sql_return=df, row_count=len(df), result_format="pandas"
             )
         except Exception as e:
-            ex = e if isinstance(e, DatusException) else self._handle_exception(e, sql)
+            ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql)
 
     def _execute_pandas(self, sql: str) -> DataFrame:
@@ -363,7 +366,7 @@ class SQLAlchemyConnector(BaseSqlConnector):
                 success=True, sql_query=sql, sql_return=df.to_csv(index=False), row_count=len(df), result_format="csv"
             )
         except Exception as e:
-            ex = e if isinstance(e, DatusException) else self._handle_exception(e, sql)
+            ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(
                 success=False, sql_query=sql, sql_return="", row_count=0, error=str(ex), result_format="csv"
             )
@@ -372,19 +375,18 @@ class SQLAlchemyConnector(BaseSqlConnector):
         """Execute query and return Arrow table."""
         try:
             self.connect()
-            with self.engine.connect() as conn:
-                result = conn.execute(text(sql))
-                if result.returns_rows:
-                    df = DataFrame(result.fetchall(), columns=result.keys())
-                    table = Table.from_pandas(df)
-                    return ExecuteSQLResult(
-                        success=True, sql_query=sql, sql_return=table, row_count=len(df), result_format="arrow"
-                    )
+            result = self.connection.execute(text(sql))
+            if result.returns_rows:
+                df = DataFrame(result.fetchall(), columns=result.keys())
+                table = Table.from_pandas(df)
                 return ExecuteSQLResult(
-                    success=True, sql_query=sql, sql_return=result.rowcount, row_count=0, result_format="arrow"
+                    success=True, sql_query=sql, sql_return=table, row_count=len(df), result_format="arrow"
                 )
+            return ExecuteSQLResult(
+                success=True, sql_query=sql, sql_return=result.rowcount, row_count=0, result_format="arrow"
+            )
         except Exception as e:
-            ex = e if isinstance(e, DatusException) else self._handle_exception(e, sql)
+            ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(
                 success=False, error=str(ex), sql_query=sql, sql_return="", row_count=0, result_format="arrow"
             )
@@ -394,9 +396,8 @@ class SQLAlchemyConnector(BaseSqlConnector):
         """Execute USE/SET commands."""
         self.connect()
         try:
-            with self.engine.connect() as conn:
-                conn.execute(text(sql))
-                conn.commit()
+            self.connection.execute(text(sql))
+            self.connection.commit()
 
             # Update context if applicable
             if self.dialect != "sqlite":
@@ -411,7 +412,8 @@ class SQLAlchemyConnector(BaseSqlConnector):
 
             return ExecuteSQLResult(success=True, sql_query=sql, sql_return="Successful", row_count=0)
         except Exception as e:
-            ex = e if isinstance(e, DatusException) else self._handle_exception(e, sql)
+            self._safe_rollback()
+            ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql)
 
     def execute_queries(self, queries: List[str]) -> List[Any]:
@@ -419,31 +421,29 @@ class SQLAlchemyConnector(BaseSqlConnector):
         results = []
         self.connect()
         try:
-            with self.engine.connect() as conn:
-                for query in queries:
-                    result = conn.execute(text(query))
-                    if result.returns_rows:
-                        df = DataFrame(result.fetchall(), columns=list(result.keys()))
-                        results.append(df.to_dict(orient="records"))
+            for query in queries:
+                result = self.connection.execute(text(query))
+                if result.returns_rows:
+                    df = DataFrame(result.fetchall(), columns=list(result.keys()))
+                    results.append(df.to_dict(orient="records"))
+                else:
+                    query_lower = query.strip().lower()
+                    if query_lower.startswith("insert"):
+                        inserted_pk = None
+                        try:
+                            if hasattr(result, "inserted_primary_key") and result.inserted_primary_key:
+                                inserted_pk = result.inserted_primary_key
+                        except Exception:
+                            pass
+                        lastrowid = getattr(result, "lastrowid", None)
+                        results.append(inserted_pk if inserted_pk else (lastrowid if lastrowid else result.rowcount))
+                    elif query_lower.startswith(("update", "delete")):
+                        results.append(result.rowcount)
                     else:
-                        query_lower = query.strip().lower()
-                        if query_lower.startswith("insert"):
-                            inserted_pk = None
-                            try:
-                                if hasattr(result, "inserted_primary_key") and result.inserted_primary_key:
-                                    inserted_pk = result.inserted_primary_key
-                            except Exception:
-                                pass
-                            lastrowid = getattr(result, "lastrowid", None)
-                            results.append(
-                                inserted_pk if inserted_pk else (lastrowid if lastrowid else result.rowcount)
-                            )
-                        elif query_lower.startswith(("update", "delete")):
-                            results.append(result.rowcount)
-                        else:
-                            results.append(None)
-                conn.commit()
+                        results.append(None)
+            self.connection.commit()
         except SQLAlchemyError as e:
+            self._safe_rollback()
             raise self._handle_exception(e, "\n".join(queries), "batch query") from e
         return results
 
@@ -454,9 +454,9 @@ class SQLAlchemyConnector(BaseSqlConnector):
             self._execute_query("SELECT 1")
             return True
         except Exception as e:
-            if isinstance(e, DatusException):
+            if isinstance(e, DatusDbException):
                 raise
-            raise DatusException(
+            raise DatusDbException(
                 ErrorCode.DB_CONNECTION_FAILED, message_args={"error_message": "Connection test failed"}
             ) from e
 
@@ -485,11 +485,10 @@ class SQLAlchemyConnector(BaseSqlConnector):
         try:
             return inspector.get_view_names(schema=sqlalchemy_schema)
         except Exception as e:
-            raise DatusException(
+            raise DatusDbException(
                 ErrorCode.DB_FAILED, message_args={"operation": "get_views", "error_message": str(e)}
             ) from e
 
-    @override
     def get_schemas(self, catalog_name: str = "", database_name: str = "", include_sys: bool = False) -> List[str]:
         """Get list of schemas."""
         schemas = self._inspector().get_schema_names()
@@ -584,7 +583,7 @@ class SQLAlchemyConnector(BaseSqlConnector):
                         }
                     )
             return samples
-        except DatusException:
+        except DatusDbException:
             raise
         except Exception as e:
             raise self._handle_exception(e) from e
@@ -607,20 +606,19 @@ class SQLAlchemyConnector(BaseSqlConnector):
         """Execute query and return CSV rows in batches."""
         self.connect()
         try:
-            with self.engine.connect() as conn:
-                result = conn.execute(text(sql).execution_options(stream_results=True, max_row_buffer=max_rows))
-                if result.returns_rows:
-                    if with_header:
-                        yield result.keys()
-                    while True:
-                        batch_rows = result.fetchmany(max_rows)
-                        if not batch_rows:
-                            break
-                        for row in batch_rows:
-                            yield row
-                else:
-                    if with_header:
-                        yield ()
-                    yield from []
+            result = self.connection.execute(text(sql).execution_options(stream_results=True, max_row_buffer=max_rows))
+            if result.returns_rows:
+                if with_header:
+                    yield result.keys()
+                while True:
+                    batch_rows = result.fetchmany(max_rows)
+                    if not batch_rows:
+                        break
+                    for row in batch_rows:
+                        yield row
+            else:
+                if with_header:
+                    yield ()
+                yield from []
         except Exception as e:
             raise self._handle_exception(e) from e

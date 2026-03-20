@@ -6,7 +6,8 @@ from unittest.mock import patch
 
 import pytest
 from datus_clickhouse import ClickHouseConfig, ClickHouseConnector
-from datus_db_core import DatusException
+from datus_db_core import DatusDbException
+from pandas import DataFrame
 
 
 @pytest.mark.acceptance
@@ -250,6 +251,20 @@ def test_identifier_without_database():
         assert identifier == "mytable"
 
 
+def test_show_create_reads_statement_column():
+    """Test _show_create returns ClickHouse DDL from single statement column."""
+    config = ClickHouseConfig(username="user")
+
+    with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
+        connector = ClickHouseConnector(config)
+        ddl_frame = DataFrame({"statement": ["CREATE TABLE mydb.mytable (`id` Int64) ENGINE = MergeTree()"]})
+
+        with patch.object(connector, "_execute_pandas", return_value=ddl_frame):
+            ddl = connector._show_create("`mydb`.`mytable`", "TABLE")
+
+        assert ddl.startswith("CREATE TABLE mydb.mytable")
+
+
 @pytest.mark.acceptance
 def test_get_metadata_config_valid_table_type():
     """Test _get_metadata_config with valid table type."""
@@ -277,7 +292,7 @@ def test_get_metadata_config_invalid_type():
     """Test _get_metadata_config with invalid table type."""
     from datus_clickhouse.connector import _get_metadata_config
 
-    with pytest.raises(DatusException, match="Invalid table type"):
+    with pytest.raises(DatusDbException, match="Invalid table type"):
         _get_metadata_config("invalid_type")
 
 

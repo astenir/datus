@@ -5,7 +5,7 @@
 """Unit tests for exceptions module."""
 
 import pytest
-from datus_db_core.exceptions import DatusException, ErrorCode
+from datus_db_core.exceptions import DatusDbException, ErrorCode
 
 
 class TestErrorCode:
@@ -31,19 +31,19 @@ class TestErrorCode:
         assert ErrorCode.DB_CONSTRAINT_VIOLATION.code == "500011"
 
 
-class TestDatusException:
+class TestDatusDbException:
     def test_basic_exception(self):
-        exc = DatusException(ErrorCode.COMMON_UNKNOWN)
+        exc = DatusDbException(ErrorCode.COMMON_UNKNOWN)
         assert "100000" in str(exc)
         assert "Unknown error" in str(exc)
 
     def test_exception_with_custom_message(self):
-        exc = DatusException(ErrorCode.COMMON_UNKNOWN, message="Something went wrong")
+        exc = DatusDbException(ErrorCode.COMMON_UNKNOWN, message="Something went wrong")
         assert "Something went wrong" in str(exc)
         assert "100000" in str(exc)
 
     def test_exception_with_message_args(self):
-        exc = DatusException(
+        exc = DatusDbException(
             ErrorCode.COMMON_FIELD_REQUIRED,
             message_args={"field_name": "username"},
         )
@@ -51,12 +51,12 @@ class TestDatusException:
         assert "100003" in str(exc)
 
     def test_exception_is_exception(self):
-        exc = DatusException(ErrorCode.COMMON_UNKNOWN)
+        exc = DatusDbException(ErrorCode.COMMON_UNKNOWN)
         assert isinstance(exc, Exception)
 
     def test_exception_can_be_raised_and_caught(self):
-        with pytest.raises(DatusException) as exc_info:
-            raise DatusException(
+        with pytest.raises(DatusDbException) as exc_info:
+            raise DatusDbException(
                 ErrorCode.DB_CONNECTION_FAILED,
                 message_args={"error_message": "timeout"},
             )
@@ -64,11 +64,11 @@ class TestDatusException:
         assert "timeout" in str(exc_info.value)
 
     def test_exception_code_attribute(self):
-        exc = DatusException(ErrorCode.DB_FAILED)
+        exc = DatusDbException(ErrorCode.DB_FAILED)
         assert exc.code == ErrorCode.DB_FAILED
 
     def test_db_error_message_formatting(self):
-        exc = DatusException(
+        exc = DatusDbException(
             ErrorCode.DB_EXECUTION_SYNTAX_ERROR,
             message_args={"error_message": "near 'SELCT': syntax error"},
         )

@@ -288,10 +288,7 @@ def test_sqlalchemy_schema_with_catalog_and_database():
     """Test _sqlalchemy_schema returns catalog.database format."""
     config = StarRocksConfig(username="test_user")
 
-    with (
-        patch("datus_mysql.MySQLConnector.__init__", return_value=None),
-        patch("datus_db_core.registry.ConnectorRegistry.support_catalog", return_value=True),
-    ):
+    with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
         connector.database_name = "my_db"
         connector.catalog_name = "my_catalog"
@@ -305,10 +302,7 @@ def test_sqlalchemy_schema_with_catalog_only():
     """Test _sqlalchemy_schema returns None when no database."""
     config = StarRocksConfig(username="test_user")
 
-    with (
-        patch("datus_mysql.MySQLConnector.__init__", return_value=None),
-        patch("datus_db_core.registry.ConnectorRegistry.support_catalog", return_value=True),
-    ):
+    with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
         connector.database_name = None
         connector.catalog_name = "my_catalog"
@@ -318,30 +312,25 @@ def test_sqlalchemy_schema_with_catalog_only():
         assert result is None
 
 
-def test_sqlalchemy_schema_without_catalog_support():
-    """Test _sqlalchemy_schema when catalog not supported."""
+def test_sqlalchemy_schema_uses_catalog_without_registry_state():
+    """Test _sqlalchemy_schema always includes catalog for direct connector usage."""
     config = StarRocksConfig(username="test_user")
 
-    with (
-        patch("datus_mysql.MySQLConnector.__init__", return_value=None),
-        patch("datus_db_core.registry.ConnectorRegistry.support_catalog", return_value=False),
-    ):
+    with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
+        connector.catalog_name = "my_catalog"
         connector.database_name = "my_db"
 
         result = connector._sqlalchemy_schema(database_name="test_db")
 
-        assert result == "test_db"
+        assert result == "my_catalog.test_db"
 
 
 def test_sqlalchemy_schema_uses_default_catalog():
     """Test _sqlalchemy_schema uses default catalog when not specified."""
     config = StarRocksConfig(username="test_user")
 
-    with (
-        patch("datus_mysql.MySQLConnector.__init__", return_value=None),
-        patch("datus_db_core.registry.ConnectorRegistry.support_catalog", return_value=True),
-    ):
+    with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
         connector.database_name = "my_db"
         connector.catalog_name = None

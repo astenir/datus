@@ -5,7 +5,7 @@
 import threading
 from typing import Any, Callable, Dict, Optional, Set, Type
 
-from datus_db_core.exceptions import DatusException, ErrorCode
+from datus_db_core.exceptions import DatusDbException, ErrorCode
 from datus_db_core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -66,7 +66,7 @@ class ConnectorRegistry:
     _uri_builders: Dict[str, Callable] = {}
     _context_resolvers: Dict[str, Callable] = {}
     _initialized: bool = False
-    _lock: threading.Lock = threading.Lock()
+    _lock: threading.RLock = threading.RLock()
 
     _DIALECT_ALIASES: Dict[str, str] = {
         "postgres": "postgresql",
@@ -91,22 +91,23 @@ class ConnectorRegistry:
         context_resolver: Optional[Callable] = None,
     ):
         key = cls._resolve_key(db_type)
-        cls._connectors[key] = connector_class
-        if factory:
-            cls._factories[key] = factory
-        if capabilities is not None:
-            cls._capabilities[key] = capabilities
-        if uri_builder:
-            cls._uri_builders[key] = uri_builder
-        if context_resolver:
-            cls._context_resolvers[key] = context_resolver
+        with cls._lock:
+            cls._connectors[key] = connector_class
+            if factory:
+                cls._factories[key] = factory
+            if capabilities is not None:
+                cls._capabilities[key] = capabilities
+            if uri_builder:
+                cls._uri_builders[key] = uri_builder
+            if context_resolver:
+                cls._context_resolvers[key] = context_resolver
 
-        cls._metadata[key] = AdapterMetadata(
-            db_type=key,
-            connector_class=connector_class,
-            config_class=config_class,
-            display_name=display_name,
-        )
+            cls._metadata[key] = AdapterMetadata(
+                db_type=key,
+                connector_class=connector_class,
+                config_class=config_class,
+                display_name=display_name,
+            )
         logger.debug(f"Registered connector: {db_type} -> {connector_class.__name__}")
 
     @classmethod
@@ -117,7 +118,7 @@ class ConnectorRegistry:
             cls._try_load_adapter(key)
 
         if key not in cls._connectors:
-            raise DatusException(
+            raise DatusDbException(
                 ErrorCode.DB_CONNECTION_FAILED,
                 message=f"Connector '{db_type}' not found. "
                 f"Available connectors: {list(cls._connectors.keys())}. "

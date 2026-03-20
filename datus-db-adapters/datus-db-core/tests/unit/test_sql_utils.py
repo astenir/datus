@@ -96,6 +96,42 @@ class TestFirstStatement:
         result = _first_statement("/* comment */ SELECT 1; SELECT 2")
         assert result == "SELECT 1"
 
+    def test_semicolon_in_backticks(self):
+        result = _first_statement("SELECT `col;name` FROM t")
+        assert result == "SELECT `col;name` FROM t"
+
+    def test_semicolon_in_brackets(self):
+        result = _first_statement("SELECT [col;name] FROM t")
+        assert result == "SELECT [col;name] FROM t"
+
+    def test_semicolon_in_double_quotes(self):
+        result = _first_statement('SELECT "col;name" FROM t')
+        assert result == 'SELECT "col;name" FROM t'
+
+    def test_semicolon_in_dollar_quoted_string(self):
+        result = _first_statement("SELECT $body$hello;world$body$ FROM t")
+        assert result == "SELECT $body$hello;world$body$ FROM t"
+
+    def test_semicolon_in_anonymous_dollar_quote(self):
+        result = _first_statement("SELECT $$hello;world$$ FROM t")
+        assert result == "SELECT $$hello;world$$ FROM t"
+
+    def test_escaped_single_quote_before_semicolon(self):
+        result = _first_statement("SELECT 'it''s;here' FROM t")
+        assert result == "SELECT 'it''s;here' FROM t"
+
+    def test_escaped_double_quote_before_semicolon(self):
+        result = _first_statement('SELECT "col""name;x" FROM t')
+        assert result == 'SELECT "col""name;x" FROM t'
+
+    def test_escaped_backtick_before_semicolon(self):
+        result = _first_statement("SELECT `col``name;x` FROM t")
+        assert result == "SELECT `col``name;x` FROM t"
+
+    def test_semicolon_after_closing_quote(self):
+        result = _first_statement("SELECT 'value'; SELECT 2")
+        assert result == "SELECT 'value'"
+
 
 class TestParseSqlType:
     def test_select(self):
@@ -177,10 +213,19 @@ class TestParseSqlType:
         assert parse_sql_type("REPLACE INTO t VALUES (1)", "mysql") == SQLType.INSERT
 
     def test_vacuum(self):
-        # VACUUM is parsed as Command by sqlglot, routed to CONTENT_SET
-        # It only falls back to DDL via keyword map if sqlglot parsing fails
-        result = parse_sql_type("VACUUM", "snowflake")
-        assert result in (SQLType.DDL, SQLType.CONTENT_SET)
+        assert parse_sql_type("VACUUM", "snowflake") == SQLType.DDL
+
+    def test_vacuum_postgres(self):
+        assert parse_sql_type("VACUUM", "postgres") == SQLType.DDL
+
+    def test_optimize(self):
+        assert parse_sql_type("OPTIMIZE TABLE t", "mysql") == SQLType.DDL
+
+    def test_copy(self):
+        assert parse_sql_type("COPY INTO t FROM @stage", "snowflake") == SQLType.DDL
+
+    def test_refresh(self):
+        assert parse_sql_type("REFRESH MATERIALIZED VIEW mv", "postgres") == SQLType.DDL
 
     def test_analyze(self):
         assert parse_sql_type("ANALYZE t", "postgres") == SQLType.DDL

@@ -5,7 +5,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from datus_db_core import DatusException, ErrorCode
+from datus_db_core import DatusDbException, ErrorCode
 from datus_redshift import RedshiftConfig, RedshiftConnector
 from datus_redshift.connector import _handle_redshift_exception, _validate_sql_identifier
 from redshift_connector.error import (
@@ -343,7 +343,7 @@ def test_validate_starts_with_digit():
 def test_handle_programming_error():
     """Test ProgrammingError maps to DB_EXECUTION_SYNTAX_ERROR."""
     ex = _handle_redshift_exception(ProgrammingError("syntax error"), "SELECT bad")
-    assert isinstance(ex, DatusException)
+    assert isinstance(ex, DatusDbException)
     assert ex.code == ErrorCode.DB_EXECUTION_SYNTAX_ERROR
 
 
