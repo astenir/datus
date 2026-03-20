@@ -11,7 +11,7 @@ __all__ = ["StarRocksConnector", "StarRocksConfig", "register"]
 
 def register():
     """Register StarRocks connector with Datus registry."""
-    from datus.tools.db_tools import connector_registry
+    from datus_db_core import connector_registry
 
     connector_registry.register(
         "starrocks", StarRocksConnector, config_class=StarRocksConfig, capabilities={"catalog", "database"}

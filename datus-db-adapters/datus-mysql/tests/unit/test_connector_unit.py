@@ -5,7 +5,7 @@
 from unittest.mock import patch
 
 import pytest
-from datus.utils.exceptions import DatusException
+from datus_db_core import DatusDbException
 from datus_mysql import MySQLConfig, MySQLConnector
 
 
@@ -319,7 +319,7 @@ def test_get_metadata_config_invalid_type():
     """Test _get_metadata_config with invalid table type."""
     from datus_mysql.connector import _get_metadata_config
 
-    with pytest.raises(DatusException, match="Invalid table type"):
+    with pytest.raises(DatusDbException, match="Invalid table type"):
         _get_metadata_config("invalid_type")
 
 

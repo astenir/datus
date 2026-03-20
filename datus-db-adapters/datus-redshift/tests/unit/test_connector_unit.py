@@ -5,7 +5,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from datus.utils.exceptions import DatusException, ErrorCode
+from datus_db_core import DatusDbException, ErrorCode
 from datus_redshift import RedshiftConfig, RedshiftConnector
 from datus_redshift.connector import _handle_redshift_exception, _validate_sql_identifier
 from redshift_connector.error import (
@@ -18,22 +18,17 @@ from redshift_connector.error import (
     ProgrammingError,
 )
 
-# Redshift connector calls super().__init__() which references DBType.REDSHIFT.
-# DBType may not have REDSHIFT defined yet, so we mock the entire __init__ chain:
-# 1. Patch DBType to have a REDSHIFT attribute (it's an Enum without this member)
-# 2. Patch BaseSqlConnector.__init__ to skip actual base initialization
-# 3. Patch redshift_connector.connect to avoid a real connection
-_MOCK_DBTYPE = "datus_redshift.connector.DBType"
+# Redshift connector calls super().__init__() which needs BaseSqlConnector.
+# We mock the init chain to avoid a real connection:
+# 1. Patch BaseSqlConnector.__init__ to skip actual base initialization
+# 2. Patch redshift_connector.connect to avoid a real connection
 _MOCK_BASE = "datus_redshift.connector.BaseSqlConnector.__init__"
 _MOCK_CONNECT = "datus_redshift.connector.redshift_connector.connect"
 
 
 def _make_patches():
     """Create patch context managers for connector initialization."""
-    mock_dbtype = MagicMock()
-    mock_dbtype.REDSHIFT = "redshift"
     return (
-        patch(_MOCK_DBTYPE, mock_dbtype),
         patch(_MOCK_BASE, return_value=None),
         patch(_MOCK_CONNECT),
     )
@@ -56,8 +51,8 @@ def connector(basic_config):
 
     Patches remain active for the duration of the test.
     """
-    p_dbtype, p_base, p_connect = _make_patches()
-    with p_dbtype, p_base, p_connect as mock_connect:
+    p_base, p_connect = _make_patches()
+    with p_base, p_connect as mock_connect:
         mock_connect.return_value = MagicMock()
         conn = RedshiftConnector(basic_config)
         yield conn
@@ -71,8 +66,8 @@ def connector(basic_config):
 @pytest.mark.acceptance
 def test_connector_initialization_with_config_object(basic_config):
     """Test connector initialization with RedshiftConfig object."""
-    p_dbtype, p_base, p_connect = _make_patches()
-    with p_dbtype, p_base, p_connect as mock_connect:
+    p_base, p_connect = _make_patches()
+    with p_base, p_connect as mock_connect:
         mock_connect.return_value = MagicMock()
         connector = RedshiftConnector(basic_config)
 
@@ -92,8 +87,8 @@ def test_connector_initialization_with_dict():
         "schema": "myschema",
     }
 
-    p_dbtype, p_base, p_connect = _make_patches()
-    with p_dbtype, p_base, p_connect as mock_connect:
+    p_base, p_connect = _make_patches()
+    with p_base, p_connect as mock_connect:
         mock_connect.return_value = MagicMock()
         connector = RedshiftConnector(config_dict)
 
@@ -112,8 +107,8 @@ def test_connector_default_database():
     """Test that database defaults to 'dev' when not specified."""
     config = RedshiftConfig(host="cluster.example.com", username="user", password="pass")
 
-    p_dbtype, p_base, p_connect = _make_patches()
-    with p_dbtype, p_base, p_connect as mock_connect:
+    p_base, p_connect = _make_patches()
+    with p_base, p_connect as mock_connect:
         mock_connect.return_value = MagicMock()
         connector = RedshiftConnector(config)
 
@@ -124,8 +119,8 @@ def test_connector_default_schema():
     """Test that schema defaults to 'public' when not specified."""
     config = RedshiftConfig(host="cluster.example.com", username="user", password="pass")
 
-    p_dbtype, p_base, p_connect = _make_patches()
-    with p_dbtype, p_base, p_connect as mock_connect:
+    p_base, p_connect = _make_patches()
+    with p_base, p_connect as mock_connect:
         mock_connect.return_value = MagicMock()
         connector = RedshiftConnector(config)
 
@@ -136,8 +131,8 @@ def test_connector_custom_schema():
     """Test that custom schema_name is stored correctly."""
     config = RedshiftConfig(host="cluster.example.com", username="user", password="pass", schema="analytics")
 
-    p_dbtype, p_base, p_connect = _make_patches()
-    with p_dbtype, p_base, p_connect as mock_connect:
+    p_base, p_connect = _make_patches()
+    with p_base, p_connect as mock_connect:
         mock_connect.return_value = MagicMock()
         connector = RedshiftConnector(config)
 
@@ -150,8 +145,8 @@ def test_connector_connect_params_basic():
         host="cluster.example.com", username="user", password="pass", port=5439, database="mydb", ssl=True
     )
 
-    p_dbtype, p_base, p_connect = _make_patches()
-    with p_dbtype, p_base, p_connect as mock_connect:
+    p_base, p_connect = _make_patches()
+    with p_base, p_connect as mock_connect:
         mock_connect.return_value = MagicMock()
         RedshiftConnector(config)
 
@@ -178,8 +173,8 @@ def test_connector_connect_params_iam():
         secret_access_key="SECRET",
     )
 
-    p_dbtype, p_base, p_connect = _make_patches()
-    with p_dbtype, p_base, p_connect as mock_connect:
+    p_base, p_connect = _make_patches()
+    with p_base, p_connect as mock_connect:
         mock_connect.return_value = MagicMock()
         RedshiftConnector(config)
 
@@ -195,8 +190,8 @@ def test_connector_connect_params_no_iam():
     """Test that IAM parameters are NOT passed when iam=False."""
     config = RedshiftConfig(host="cluster.example.com", username="user", password="pass")
 
-    p_dbtype, p_base, p_connect = _make_patches()
-    with p_dbtype, p_base, p_connect as mock_connect:
+    p_base, p_connect = _make_patches()
+    with p_base, p_connect as mock_connect:
         mock_connect.return_value = MagicMock()
         RedshiftConnector(config)
 
@@ -348,7 +343,7 @@ def test_validate_starts_with_digit():
 def test_handle_programming_error():
     """Test ProgrammingError maps to DB_EXECUTION_SYNTAX_ERROR."""
     ex = _handle_redshift_exception(ProgrammingError("syntax error"), "SELECT bad")
-    assert isinstance(ex, DatusException)
+    assert isinstance(ex, DatusDbException)
     assert ex.code == ErrorCode.DB_EXECUTION_SYNTAX_ERROR
 
 

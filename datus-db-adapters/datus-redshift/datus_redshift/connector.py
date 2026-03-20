@@ -15,14 +15,18 @@ import pyarrow as pa
 import redshift_connector
 
 # Import Datus base classes and types
-from datus.schemas.base import TABLE_TYPE
-from datus.schemas.node_models import ExecuteSQLResult
-from datus.tools.db_tools.base import BaseSqlConnector
-from datus.tools.db_tools.config import ConnectionConfig
-from datus.tools.db_tools.mixins import MaterializedViewSupportMixin, SchemaNamespaceMixin
-from datus.utils.exceptions import DatusException, ErrorCode
-from datus.utils.loggings import get_logger
-from datus.utils.sql_utils import parse_context_switch
+from datus_db_core import (
+    TABLE_TYPE,
+    BaseSqlConnector,
+    ConnectionConfig,
+    DatusDbException,
+    ErrorCode,
+    ExecuteSQLResult,
+    MaterializedViewSupportMixin,
+    SchemaNamespaceMixin,
+    get_logger,
+    parse_context_switch,
+)
 
 # Pandas is used for DataFrame operations
 from pandas import DataFrame
@@ -43,19 +47,19 @@ from .config import RedshiftConfig
 logger = get_logger(__name__)
 
 
-def _handle_redshift_exception(e: Exception, sql: str = "") -> DatusException:
+def _handle_redshift_exception(e: Exception, sql: str = "") -> DatusDbException:
     """
     Handle Redshift exceptions and map them to appropriate Datus ErrorCode.
 
     This function takes a Redshift-specific exception and converts it into
-    a standardized DatusException with appropriate error codes and messages.
+    a standardized DatusDbException with appropriate error codes and messages.
 
     Args:
         e: The exception raised by Redshift
         sql: The SQL query that caused the exception (for error messages)
 
     Returns:
-        DatusException with appropriate error code and message
+        DatusDbException with appropriate error code and message
     """
 
     # Check subclasses before parent classes to ensure correct error mapping.
@@ -64,27 +68,27 @@ def _handle_redshift_exception(e: Exception, sql: str = "") -> DatusException:
 
     # ProgrammingError = syntax errors, invalid SQL statements
     if isinstance(e, ProgrammingError):
-        return DatusException(ErrorCode.DB_EXECUTION_SYNTAX_ERROR, message_args={"sql": sql, "error_message": str(e)})
+        return DatusDbException(ErrorCode.DB_EXECUTION_SYNTAX_ERROR, message_args={"sql": sql, "error_message": str(e)})
 
     # IntegrityError = constraint violations (unique key, foreign key, etc.)
     elif isinstance(e, IntegrityError):
-        return DatusException(ErrorCode.DB_CONSTRAINT_VIOLATION, message_args={"sql": sql, "error_message": str(e)})
+        return DatusDbException(ErrorCode.DB_CONSTRAINT_VIOLATION, message_args={"sql": sql, "error_message": str(e)})
 
     # DataError = data-related errors (invalid data types, overflow, etc.)
     elif isinstance(e, DataError):
-        return DatusException(ErrorCode.DB_EXECUTION_ERROR, message_args={"sql": sql, "error_message": str(e)})
+        return DatusDbException(ErrorCode.DB_EXECUTION_ERROR, message_args={"sql": sql, "error_message": str(e)})
 
     # InterfaceError/InternalError = connection-level problems
     elif isinstance(e, (InterfaceError, InternalError)):
-        return DatusException(ErrorCode.DB_CONNECTION_FAILED, message_args={"error_message": str(e)})
+        return DatusDbException(ErrorCode.DB_CONNECTION_FAILED, message_args={"error_message": str(e)})
 
     # OperationalError/DatabaseError = runtime errors (connection issues, query execution problems)
     elif isinstance(e, (OperationalError, DatabaseError)):
-        return DatusException(ErrorCode.DB_EXECUTION_ERROR, message_args={"sql": sql, "error_message": str(e)})
+        return DatusDbException(ErrorCode.DB_EXECUTION_ERROR, message_args={"sql": sql, "error_message": str(e)})
 
     # Catch-all for any other exceptions
     else:
-        return DatusException(ErrorCode.DB_FAILED, message_args={"error_message": str(e)})
+        return DatusDbException(ErrorCode.DB_FAILED, message_args={"error_message": str(e)})
 
 
 def _validate_sql_identifier(identifier: str, identifier_type: str = "identifier") -> None:
@@ -330,7 +334,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             Tuple of (Arrow Table with results, row count)
 
         Raises:
-            DatusException: If query execution fails
+            DatusDbException: If query execution fails
         """
         try:
             with self.connection.cursor() as cursor:
@@ -385,7 +389,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
 
             # Convert Arrow to pandas DataFrame
             return arrow_table.to_pandas()
-        except DatusException:
+        except DatusDbException:
             # Already normalized by _do_execute_arrow, just bubble up
             raise
         except Exception as e:
@@ -638,7 +642,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                 error=None,
                 result_format="arrow",
             )
-        except DatusException as e:
+        except DatusDbException as e:
             return ExecuteSQLResult(success=False, sql_query=sql, error=str(e))
 
     def execute_pandas(self, sql: str) -> ExecuteSQLResult:
@@ -661,7 +665,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                 error=None,
                 result_format="pandas",
             )
-        except DatusException as e:
+        except DatusDbException as e:
             # Already normalized, just convert to result
             return ExecuteSQLResult(success=False, sql_query=sql, result_format="pandas", error=str(e))
 

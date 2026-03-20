@@ -5,8 +5,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from datus.tools.db_tools.mixins import CatalogSupportMixin, MaterializedViewSupportMixin
-from datus.utils.constants import DBType
+from datus_db_core import CatalogSupportMixin, MaterializedViewSupportMixin
 from datus_starrocks import StarRocksConfig, StarRocksConnector
 
 # ==================== Initialization Tests ====================
@@ -29,7 +28,7 @@ def test_connector_initialization_with_config_object():
 
         assert connector.starrocks_config == config
         assert connector.catalog_name == "test_catalog"
-        assert connector.dialect == DBType.STARROCKS
+        assert connector.dialect == "starrocks"
 
 
 @pytest.mark.acceptance
@@ -49,7 +48,7 @@ def test_connector_initialization_with_dict():
 
         assert isinstance(connector.starrocks_config, StarRocksConfig)
         assert connector.catalog_name == "custom_catalog"
-        assert connector.dialect == DBType.STARROCKS
+        assert connector.dialect == "starrocks"
 
 
 def test_connector_initialization_invalid_type():
@@ -293,7 +292,6 @@ def test_sqlalchemy_schema_with_catalog_and_database():
         connector = StarRocksConnector(config)
         connector.database_name = "my_db"
         connector.catalog_name = "my_catalog"
-        connector.support_catalog = MagicMock(return_value=True)
 
         result = connector._sqlalchemy_schema(catalog_name="test_catalog", database_name="test_db")
 
@@ -308,25 +306,24 @@ def test_sqlalchemy_schema_with_catalog_only():
         connector = StarRocksConnector(config)
         connector.database_name = None
         connector.catalog_name = "my_catalog"
-        connector.support_catalog = MagicMock(return_value=True)
 
         result = connector._sqlalchemy_schema(catalog_name="test_catalog")
 
         assert result is None
 
 
-def test_sqlalchemy_schema_without_catalog_support():
-    """Test _sqlalchemy_schema when catalog not supported."""
+def test_sqlalchemy_schema_uses_catalog_without_registry_state():
+    """Test _sqlalchemy_schema always includes catalog for direct connector usage."""
     config = StarRocksConfig(username="test_user")
 
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
+        connector.catalog_name = "my_catalog"
         connector.database_name = "my_db"
-        connector.support_catalog = MagicMock(return_value=False)
 
         result = connector._sqlalchemy_schema(database_name="test_db")
 
-        assert result == "test_db"
+        assert result == "my_catalog.test_db"
 
 
 def test_sqlalchemy_schema_uses_default_catalog():
@@ -337,7 +334,6 @@ def test_sqlalchemy_schema_uses_default_catalog():
         connector = StarRocksConnector(config)
         connector.database_name = "my_db"
         connector.catalog_name = None
-        connector.support_catalog = MagicMock(return_value=True)
 
         result = connector._sqlalchemy_schema(database_name="test_db")
 
@@ -455,12 +451,12 @@ def test_to_dict_includes_catalog():
         connector = StarRocksConnector(config)
         connector.host = "localhost"
         connector.port = 9030
-        connector.user = "test_user"
+        connector.username = "test_user"
         connector.database_name = "testdb"
 
         result = connector.to_dict()
 
-        assert result["db_type"] == DBType.STARROCKS
+        assert result["db_type"] == "starrocks"
         assert result["catalog"] == "my_catalog"
         assert result["host"] == "localhost"
         assert result["port"] == 9030
@@ -473,7 +469,7 @@ def test_get_type_returns_starrocks():
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
 
-        assert connector.get_type() == DBType.STARROCKS
+        assert connector.get_type() == "starrocks"
 
 
 def test_context_manager_support():

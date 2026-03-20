@@ -6,9 +6,6 @@ to Amazon Redshift databases and perform queries, metadata retrieval, and
 other database operations.
 """
 
-# Import the connector registry from Datus to register our connector
-from datus.tools.db_tools import connector_registry
-
 # Import our configuration and connector classes
 from .config import RedshiftConfig
 from .connector import RedshiftConnector
@@ -28,13 +25,8 @@ def register():
     registry under the name "redshift". This allows Datus to automatically discover
     and use this connector when configured to connect to Redshift databases.
     """
-    # Register our connector with the name "redshift"
-    # Now users can specify dialect="redshift" in their Datus configuration
+    from datus_db_core import connector_registry
+
     connector_registry.register(
         "redshift", RedshiftConnector, config_class=RedshiftConfig, capabilities={"database", "schema"}
     )
-
-
-# Auto-register when this module is imported
-# This means the connector is automatically available when you install this package
-register()

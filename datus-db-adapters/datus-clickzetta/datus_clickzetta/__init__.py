@@ -11,7 +11,7 @@ __all__ = ["ClickZettaConnector", "ClickZettaConfig", "register"]
 
 def register():
     """Register ClickZetta connector with Datus registry."""
-    from datus.tools.db_tools import connector_registry
+    from datus_db_core import connector_registry
 
     def clickzetta_factory(config):
         """Factory function to create ClickZetta connector from config dict."""

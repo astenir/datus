@@ -11,7 +11,7 @@ __all__ = ["ClickHouseConnector", "ClickHouseConfig", "register"]
 
 def register():
     """Register ClickHouse connector with Datus registry."""
-    from datus.tools.db_tools import connector_registry
+    from datus_db_core import connector_registry
 
     from .handlers import build_clickhouse_uri, resolve_clickhouse_context
 

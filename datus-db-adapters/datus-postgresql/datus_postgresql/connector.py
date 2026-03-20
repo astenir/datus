@@ -5,10 +5,7 @@
 from typing import Any, Dict, List, Optional, Set, Union, override
 from urllib.parse import quote_plus
 
-from datus.schemas.base import TABLE_TYPE
-from datus.tools.db_tools.base import list_to_in_str
-from datus.utils.exceptions import DatusException, ErrorCode
-from datus.utils.loggings import get_logger
+from datus_db_core import TABLE_TYPE, DatusDbException, ErrorCode, get_logger, list_to_in_str
 from datus_sqlalchemy import SQLAlchemyConnector
 from pydantic import BaseModel, Field
 
@@ -42,7 +39,7 @@ METADATA_DICT: Dict[TABLE_TYPE, TableMetadataNames] = {
 def _get_metadata_config(table_type: TABLE_TYPE) -> TableMetadataNames:
     """Get metadata configuration for given table type."""
     if table_type not in METADATA_DICT:
-        raise DatusException(ErrorCode.COMMON_FIELD_INVALID, f"Invalid table type '{table_type}'")
+        raise DatusDbException(ErrorCode.COMMON_FIELD_INVALID, f"Invalid table type '{table_type}'")
     return METADATA_DICT[table_type]
 
 

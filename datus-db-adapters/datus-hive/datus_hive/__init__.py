@@ -11,6 +11,6 @@ __all__ = ["HiveConnector", "HiveConfig", "register"]
 
 def register():
     """Register Hive connector with Datus registry."""
-    from datus.tools.db_tools import connector_registry
+    from datus_db_core import connector_registry
 
     connector_registry.register("hive", HiveConnector, config_class=HiveConfig, capabilities=set())

@@ -6,7 +6,7 @@ import os
 from typing import Generator
 
 import pytest
-from datus.tools.db_tools.mixins import MaterializedViewSupportMixin, SchemaNamespaceMixin
+from datus_db_core import MaterializedViewSupportMixin, SchemaNamespaceMixin
 from datus_snowflake import SnowflakeConfig, SnowflakeConnector
 
 # Skip all tests if Snowflake credentials are not provided

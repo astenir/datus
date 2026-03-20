@@ -222,8 +222,8 @@ class TestNewMethods:
         assert result.row_count == 0
         import pyarrow as pa
 
-        assert isinstance(result.data, pa.Table)
-        assert result.data.num_rows == 0
+        assert isinstance(result.sql_return, pa.Table)
+        assert result.sql_return.num_rows == 0
 
         connector.close()
 
@@ -302,13 +302,13 @@ class TestNewMethods:
         # Verify data is an Arrow table with correct structure
         import pyarrow as pa
 
-        assert isinstance(result.data, pa.Table)
-        assert result.data.num_rows == 3
-        assert result.data.num_columns == 3
+        assert isinstance(result.sql_return, pa.Table)
+        assert result.sql_return.num_rows == 3
+        assert result.sql_return.num_columns == 3
 
         # Verify column names are preserved
         expected_columns = ["int_col", "str_col", "float_col"]
-        assert result.data.schema.names == expected_columns
+        assert result.sql_return.schema.names == expected_columns
 
         connector.close()
 

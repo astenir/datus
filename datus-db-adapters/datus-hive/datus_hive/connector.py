@@ -5,8 +5,8 @@
 from typing import Any, Dict, List, Mapping, Optional, Set, Union, override
 from urllib.parse import quote_plus
 
-from datus.utils.exceptions import DatusException, ErrorCode
-from datus.utils.loggings import get_logger
+import pandas as pd
+from datus_db_core import DatusDbException, ErrorCode, get_logger
 from datus_sqlalchemy import SQLAlchemyConnector
 from sqlalchemy import create_engine
 
@@ -101,7 +101,7 @@ class HiveConnector(SQLAlchemyConnector):
 
         if not self.engine:
             self._force_reset()
-            raise DatusException(
+            raise DatusDbException(
                 ErrorCode.DB_CONNECTION_FAILED, message_args={"error_message": "Failed to establish connection"}
             )
 
@@ -180,9 +180,9 @@ class HiveConnector(SQLAlchemyConnector):
             if not name or name.startswith("#"):
                 break
             raw_type = result[type_col][i] if type_col else None
-            data_type = str(raw_type).strip() if raw_type is not None else ""
+            data_type = str(raw_type).strip() if pd.notna(raw_type) else ""
             raw_comment = result[comment_col][i] if comment_col else None
-            comment = str(raw_comment).strip() if raw_comment is not None else None
+            comment = str(raw_comment).strip() if pd.notna(raw_comment) else None
             rows.append(
                 {
                     "cid": i,

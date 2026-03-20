@@ -17,7 +17,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "datus-agent>0.2.1",
+    "datus-db-core>=0.1.0",
     "datus-sqlalchemy>=0.1.0",
     "pyhive>=0.7.0",
     "thrift>=0.16.0",
@@ -41,6 +41,7 @@ Issues = "https://github.com/Datus-ai/datus-db-adapters/issues"
 spark = "datus_spark:register"
 
 [tool.uv.sources]
+datus-db-core = { workspace = true }
 datus-sqlalchemy = { workspace = true }
 
 [build-system]

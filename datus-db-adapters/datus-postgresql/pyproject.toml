@@ -18,7 +18,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "datus-agent>0.2.1",
+    "datus-db-core>=0.1.0",
     "datus-sqlalchemy>=0.1.2",
     "psycopg2-binary>=2.9.11",
     "pydantic>=2.0.0",
@@ -33,6 +33,7 @@ Issues = "https://github.com/Datus-ai/datus-db-adapters/issues"
 postgresql = "datus_postgresql:register"
 
 [tool.uv.sources]
+datus-db-core = { workspace = true }
 datus-sqlalchemy = { workspace = true }
 
 [build-system]
