@@ -163,8 +163,10 @@ class DBFuncTool:
         self.schema_rag = SchemaWithValueRAG(agent_config, sub_agent_name) if agent_config else None
         self._field_order = self._determine_field_order()
         self._scoped_patterns = self._load_scoped_patterns(scoped_tables)
+
         self._semantic_storage = SemanticModelRAG(agent_config, sub_agent_name) if agent_config else None
         self.has_schema = self.schema_rag and self.schema_rag.schema_store.table_size() > 0
+
         self.has_semantic_models = self._semantic_storage and self._semantic_storage.get_size() > 0
 
     def _init_single_db_connector(self, connector: BaseSqlConnector):

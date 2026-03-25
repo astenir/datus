@@ -74,11 +74,42 @@ class SubjectTreeStore:
     """
 
     def __init__(self):
-        """Initialize SubjectTreeStore."""
+        """Initialize SubjectTreeStore.
+
+        Reads ``table_prefix`` and ``extra_fields`` from the storage registry
+        defaults (set via ``configure_storage_defaults()``).  This ensures that
+        SaaS deployments get prefixed table names (e.g. ``tb_subject_nodes``)
+        and multi-tenant columns (e.g. ``workspace_id``).
+        """
         from datus.storage.backend_holder import create_rdb_for_store
+        from datus.storage.registry import get_storage_defaults
+
+        defaults = get_storage_defaults()
+        table_prefix = defaults.get("table_prefix", "")
+
+        # Build table definition with optional prefix, extra columns, and scope indices
+        table_def = _SUBJECT_NODES_TABLE
+        scope_indices = defaults.get("scope_indices", [])
+        extra_pa_fields = defaults.get("extra_fields")
+
+        if table_prefix or extra_pa_fields or scope_indices:
+            import copy
+
+            table_def = copy.copy(table_def)
+            if table_prefix:
+                table_def.table_name = f"{table_prefix}{_SUBJECT_NODES_TABLE.table_name}"
+            if extra_pa_fields:
+                extra_cols = [ColumnDef(name=f.name, col_type="TEXT", default="") for f in extra_pa_fields]
+                table_def.columns = list(table_def.columns) + extra_cols
+            if scope_indices:
+                existing_idx_names = {idx.name for idx in table_def.indices}
+                for col in scope_indices:
+                    idx_name = f"idx_subject_{col}"
+                    if idx_name not in existing_idx_names:
+                        table_def.indices = list(table_def.indices) + [IndexDef(name=idx_name, columns=[col])]
 
         self._rdb = create_rdb_for_store("subject_tree")
-        self._table = self._rdb.ensure_table(_SUBJECT_NODES_TABLE)
+        self._table = self._rdb.ensure_table(table_def)
         self._migrate_null_parents()
         logger.info("SubjectTreeStore initialized")
 
@@ -627,6 +658,7 @@ class BaseSubjectEmbeddingStore(BaseEmbeddingStore):
         vector_source_name: str = "definition",
         vector_column_name: str = "vector",
         unique_columns: Optional[List[str]] = None,
+        **kwargs,
     ):
         super().__init__(
             table_name=table_name,
@@ -636,10 +668,13 @@ class BaseSubjectEmbeddingStore(BaseEmbeddingStore):
             vector_source_name=vector_source_name,
             vector_column_name=vector_column_name,
             unique_columns=unique_columns,
+            **kwargs,
         )
 
-        # Initialize SubjectTreeStore for managing subject hierarchy
-        self.subject_tree = SubjectTreeStore()
+        # Get singleton SubjectTreeStore from registry
+        from datus.storage.registry import get_subject_tree_store
+
+        self.subject_tree = get_subject_tree_store()
 
     def batch_store(
         self,

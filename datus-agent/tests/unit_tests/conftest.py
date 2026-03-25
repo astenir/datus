@@ -39,20 +39,15 @@ def reset_global_singletons():
     """
     yield
 
-    # Clean up db_manager_instance
-    import datus.tools.db_tools.db_manager as db_mgr_mod
+    # Reset db_manager factory (if set)
+    from datus.tools.db_tools.db_manager import set_db_manager_factory
 
-    if db_mgr_mod._INSTANCE is not None:
-        try:
-            db_mgr_mod._INSTANCE.close()
-        except Exception:
-            pass
-        db_mgr_mod._INSTANCE = None
+    set_db_manager_factory(None)
 
-    # Clean up StorageCache
-    from datus.storage.cache import clear_cache
+    # Clean up storage registry
+    from datus.storage.registry import clear_storage_registry
 
-    clear_cache()
+    clear_storage_registry()
 
     # Note: Do NOT reset path_manager here -- AgentConfig.__init__ calls
     # path_manager.update_home() which keeps it in sync.
@@ -63,7 +58,12 @@ def reset_global_singletons():
 # ---------------------------------------------------------------------------
 
 CALIFORNIA_SCHOOLS_DB = os.path.join(
-    os.path.dirname(__file__), "..", "..", "sample_data", "california_schools", "california_schools.sqlite"
+    os.path.dirname(__file__),
+    "..",
+    "..",
+    "sample_data",
+    "california_schools",
+    "california_schools.sqlite",
 )
 
 
@@ -116,6 +116,9 @@ def real_agent_config(tmp_path, reset_global_singletons):
                     }
                 ],
             },
+        },
+        "storage": {
+            "workspace_root": str(tmp_path / "workspace"),
         },
         "agentic_nodes": {
             "chat": {

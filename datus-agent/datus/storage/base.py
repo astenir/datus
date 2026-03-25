@@ -21,6 +21,22 @@ from datus.utils.loggings import get_logger
 logger = get_logger(__name__)
 
 
+class _SharedTableState:
+    """Mutable state shared between a singleton storage and its scoped views.
+
+    Using a dedicated object (instead of a plain bool) ensures that
+    ``copy.copy()`` preserves the reference — when the singleton sets
+    ``initialized = True`` or updates ``table``, all scoped views see
+    the change immediately.
+    """
+
+    __slots__ = ("initialized", "table")
+
+    def __init__(self):
+        self.initialized: bool = False
+        self.table: Optional[VectorTable] = None
+
+
 class StorageBase:
     """Base class for all storage components using a vector backend."""
 
@@ -87,38 +103,76 @@ class BaseEmbeddingStore(StorageBase):
         vector_column_name: str = "vector",
         unique_columns: Optional[List[str]] = None,
         db: Optional[VectorDatabase] = None,
+        table_prefix: str = "",
+        extra_fields: Optional[List[pa.Field]] = None,
+        default_values: Optional[Dict[str, Any]] = None,
+        scope_indices: Optional[List[str]] = None,
     ):
         super().__init__(db=db)
         self.model = embedding_model
         self.batch_size = embedding_model.batch_size
-        self.table_name = table_name
+        self.table_name = f"{table_prefix}{table_name}" if table_prefix else table_name
         self.vector_source_name = vector_source_name
         self.vector_column_name = vector_column_name
         self.on_duplicate_columns = on_duplicate_columns
+        # Append extra fields to schema if provided
+        if schema is not None and extra_fields:
+            schema = pa.schema(list(schema) + extra_fields)
         self._schema = schema
         self._unique_columns = unique_columns
+        self._default_values: Dict[str, Any] = default_values or {}
+        self._scope_indices: List[str] = scope_indices or []
         self._scope_filter: Optional[Node] = None
-        # Delay table initialization until first use
-        self.table: Optional[VectorTable] = None
-        self._table_initialized = False
+        # Delay table initialization until first use.
+        # _shared is a mutable object so that shallow copies (scoped views)
+        # share the same state — once the singleton initializes the table,
+        # all views see it immediately without re-entering the lock.
+        self._shared = _SharedTableState()
         self._table_lock = Lock()
         self._write_lock = Lock()
 
+    @property
+    def table(self) -> Optional[VectorTable]:
+        return self._shared.table
+
+    @table.setter
+    def table(self, value: Optional[VectorTable]):
+        self._shared.table = value
+
     def _ensure_table_ready(self):
         """Ensure table is ready for operations, with proper error handling."""
-        if self._table_initialized:
+        if self._shared.initialized:
             return
 
         with self._table_lock:
-            if self._table_initialized:
+            if self._shared.initialized:
                 return
 
             # First check if embedding model is available
             self._check_embedding_model_ready()
             # Initialize table with embedding function
             self._ensure_table(self._schema)
-            self._table_initialized = True
+            self._shared.initialized = True
+            # Auto-create scalar indices for scope fields (e.g. workspace_id)
+            for col in self._scope_indices:
+                self._create_scalar_index(col)
             logger.debug(f"Table {self.table_name} initialized successfully with embedding function")
+
+    def __copy__(self):
+        """Shallow copy that shares db/table/locks but allows independent _scope_filter."""
+        cls = self.__class__
+        new = cls.__new__(cls)
+        new.__dict__.update(self.__dict__)
+        return new
+
+    def _apply_default_values(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Fill in default values for rows that are missing them."""
+        if not self._default_values:
+            return data
+        for row in data:
+            for k, v in self._default_values.items():
+                row.setdefault(k, v)
+        return data
 
     def _apply_scope_filter(self, where: WhereExpr = None) -> WhereExpr:
         """Combine the provided where expression with the scope filter (if any)."""
@@ -170,8 +224,8 @@ class BaseEmbeddingStore(StorageBase):
         """Drop the table and reset state. Table will be recreated on next use."""
         with self._table_lock:
             self.db.drop_table(self.table_name, ignore_missing=True)
-            self.table = None
-            self._table_initialized = False
+            self._shared.table = None
+            self._shared.initialized = False
 
     def _ensure_table(self, schema: Optional[pa.Schema] = None):
         if self.db.table_exists(self.table_name):
@@ -210,6 +264,8 @@ class BaseEmbeddingStore(StorageBase):
                 Default: 'cosine'.
         """
         self._ensure_table_ready()
+        if not self._supports_runtime_indexing():
+            return
         try:
             row_count = self.table.count_rows()
             logger.debug(f"Creating vector index for {self.table_name} with {row_count} rows")
@@ -256,7 +312,10 @@ class BaseEmbeddingStore(StorageBase):
             logger.warning(f"Failed to create vector index for {self.table_name}: {str(e)}")
 
     def create_fts_index(self, field_names: Union[str, List[str]]):
+        """Create a full-text search index (LanceDB only)."""
         self._ensure_table_ready()
+        if not self._supports_runtime_indexing():
+            return
         try:
             self.table.create_fts_index(field_names)
         except Exception as e:
@@ -274,6 +333,7 @@ class BaseEmbeddingStore(StorageBase):
         """
         if not data:
             return
+        data = self._apply_default_values(data)
         # Ensure table is ready before storing data
         self._ensure_table_ready()
 
@@ -290,6 +350,9 @@ class BaseEmbeddingStore(StorageBase):
             raise DatusException(ErrorCode.STORAGE_SAVE_FAILED, message_args={"error_message": str(e)}) from e
 
     def store(self, data: List[Dict[str, Any]]):
+        if not data:
+            return
+        data = self._apply_default_values(data)
         # Ensure table is ready before storing data
         self._ensure_table_ready()
         try:
@@ -308,6 +371,7 @@ class BaseEmbeddingStore(StorageBase):
         """
         if not data:
             return
+        data = self._apply_default_values(data)
         self._ensure_table_ready()
 
         # Deduplicate input data by on_column, keeping the last occurrence
@@ -506,9 +570,20 @@ class BaseEmbeddingStore(StorageBase):
 
     # -- Convenience methods for subclasses --
 
+    def _supports_runtime_indexing(self) -> bool:
+        """Check if the backend supports runtime index creation.
+
+        LanceDB requires explicit index creation after data insertion.
+        Other backends (e.g. pgvector) handle indexing at DDL level
+        and should skip runtime index calls.
+        """
+        return hasattr(self.table, "create_scalar_index") and type(self.table).__name__.startswith("Lance")
+
     def _create_scalar_index(self, column: str) -> None:
-        """Create a scalar index on the given column."""
+        """Create a scalar index on the given column (LanceDB only)."""
         self._ensure_table_ready()
+        if not self._supports_runtime_indexing():
+            return
         try:
             self.table.create_scalar_index(column)
         except Exception as e:
