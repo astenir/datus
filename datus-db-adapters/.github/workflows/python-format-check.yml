@@ -30,35 +30,24 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install formatters and linters
-        run: |
-          pip install black==23.12.1
-          pip install flake8>=7.3.0
-          pip install isort>=6.0.1
+      - name: Install ruff
+        run: pip install "ruff==0.15.6"
 
-      - name: Check formatting with Black
+      - name: Check formatting with ruff
         run: |
           for dir in datus-*/; do
             if [ -d "$dir" ]; then
               echo "Checking $dir with Black..."
-              black --line-length=120 --check "$dir"
+              ruff format --check "$dir"
             fi
           done
 
-      - name: Lint with flake8
+      - name: Lint with ruff
         run: |
           for dir in datus-*/; do
             if [ -d "$dir" ]; then
               echo "Linting $dir with flake8..."
-              flake8 --max-line-length=120 --extend-ignore=E203,W503 "$dir"
+              ruff check "$dir"
             fi
           done
 
-      - name: Check imports with isort
-        run: |
-          for dir in datus-*/; do
-            if [ -d "$dir" ]; then
-              echo "Checking imports in $dir with isort..."
-              isort --check --diff --profile=black --line-length=120 "$dir"
-            fi
-          done
