@@ -122,6 +122,7 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             List of metadata dictionaries
         """
         self.connect()
+        database_name = database_name or self.database_name
         schema_name = schema_name or self.schema_name
 
         # Get metadata configuration
@@ -154,7 +155,7 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             query = f"""
                 SELECT table_schema, table_name
                 FROM information_schema.{metadata_config.info_table}
-                WHERE {where} {type_filter}
+                WHERE table_catalog = '{database_name}' AND {where} {type_filter}
             """
 
         query_result = self._execute_pandas(query)
@@ -168,7 +169,7 @@ class PostgreSQLConnector(SQLAlchemyConnector):
                 {
                     "identifier": self.identifier(schema_name=schema, table_name=tb_name),
                     "catalog_name": "",
-                    "database_name": self.database_name,
+                    "database_name": database_name,
                     "schema_name": schema,
                     "table_name": tb_name,
                     "table_type": table_type,
@@ -338,6 +339,7 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         if not table_name:
             return []
 
+        database_name = database_name or self.database_name
         schema_name = schema_name or self.schema_name
 
         # Use INFORMATION_SCHEMA to get schema with comments
@@ -364,7 +366,8 @@ class PostgreSQLConnector(SQLAlchemyConnector):
                 ON st.schemaname = c.table_schema AND st.relname = c.table_name
             LEFT JOIN pg_catalog.pg_description pgd
                 ON pgd.objoid = st.relid AND pgd.objsubid = c.ordinal_position
-            WHERE c.table_schema = '{schema_name}'
+            WHERE c.table_catalog = '{database_name}'
+              AND c.table_schema = '{schema_name}'
               AND c.table_name = '{table_name}'
             ORDER BY c.ordinal_position
         """
@@ -403,7 +406,8 @@ class PostgreSQLConnector(SQLAlchemyConnector):
     @override
     def get_schemas(self, catalog_name: str = "", database_name: str = "", include_sys: bool = False) -> List[str]:
         """Get list of schemas in the current database."""
-        sql = "SELECT schema_name FROM information_schema.schemata"
+        database_name = database_name or self.database_name
+        sql = f"SELECT schema_name FROM information_schema.schemata WHERE catalog_name = '{database_name}'"
         result = self._execute_pandas(sql)
         schemas = result["schema_name"].tolist()
 
@@ -502,7 +506,10 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
     ) -> str:
         """Generate a unique identifier for a table."""
+        database_name = database_name or self.database_name
         schema_name = schema_name or self.schema_name
+        if database_name and schema_name:
+            return f"{database_name}.{schema_name}.{table_name}"
         if schema_name:
             return f"{schema_name}.{table_name}"
         return table_name
@@ -512,7 +519,10 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
     ) -> str:
         """Build fully-qualified table name."""
+        database_name = database_name or self.database_name
         schema_name = schema_name or self.schema_name
+        if database_name and schema_name:
+            return f"{self._quote_identifier(database_name)}.{self._quote_identifier(schema_name)}.{self._quote_identifier(table_name)}"
         if schema_name:
             return f"{self._quote_identifier(schema_name)}.{self._quote_identifier(table_name)}"
         return self._quote_identifier(table_name)
