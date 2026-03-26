@@ -78,6 +78,7 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
             pool_pre_ping=True,
             connect_args={"verify": self._verify_ssl},
         )
+        self.connection = self.engine.connect()
         self._owns_engine = True
 
     # ==================== Context Manager Support ====================
@@ -163,7 +164,7 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
         schema = schema_name or database_name or self.schema_name
         try:
             result = self._execute_pandas(
-                f'SELECT table_name FROM "{catalog}".information_schema.views ' f"WHERE table_schema = '{schema}'"
+                f"SELECT table_name FROM \"{catalog}\".information_schema.views WHERE table_schema = '{schema}'"
             )
             if result.empty:
                 return []
