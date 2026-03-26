@@ -7,7 +7,9 @@ from typing import Any, Dict, Mapping, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
-def _extract_prefixed_config(carrier_map: Mapping[str, Any], prefix: str) -> Dict[str, Any]:
+def _extract_prefixed_config(
+    carrier_map: Mapping[str, Any], prefix: str
+) -> Dict[str, Any]:
     """Extract Hive configuration from a prefixed carrier map."""
     hive_config: Dict[str, Any] = {}
     prefix_len = len(prefix)
@@ -44,13 +46,26 @@ class HiveConfig(BaseModel):
     port: int = Field(default=10000, description="Hive server port")
     database: Optional[str] = Field(default=None, description="Default database name")
     username: str = Field(..., description="Hive username")
-    password: str = Field(default="", description="Hive password", json_schema_extra={"input_type": "password"})
-    auth: Optional[str] = Field(default=None, description="Authentication mechanism (NONE, LDAP, CUSTOM, KERBEROS)")
-    configuration: Dict[str, Any] = Field(default_factory=dict, description="Hive session configuration")
-    timeout_seconds: int = Field(default=30, description="Connection timeout in seconds")
+    password: str = Field(
+        default="",
+        description="Hive password",
+        json_schema_extra={"input_type": "password"},
+    )
+    auth: Optional[str] = Field(
+        default=None,
+        description="Authentication mechanism (NONE, LDAP, CUSTOM, KERBEROS)",
+    )
+    configuration: Dict[str, Any] = Field(
+        default_factory=dict, description="Hive session configuration"
+    )
+    timeout_seconds: int = Field(
+        default=30, description="Connection timeout in seconds"
+    )
 
     @classmethod
-    def from_config_map(cls, config_map: Mapping[str, Any], prefix: str) -> "HiveConfig":
+    def from_config_map(
+        cls, config_map: Mapping[str, Any], prefix: str
+    ) -> "HiveConfig":
         """Build HiveConfig from a prefixed carrier map."""
         extracted = _extract_prefixed_config(config_map, prefix)
         return cls(**extracted)

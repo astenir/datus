@@ -88,7 +88,13 @@ class DependencyResolver:
             print(f"[{i}/{len(build_order)}] Building {pkg}...")
 
             try:
-                subprocess.run(["uv", "build"], cwd=self.packages[pkg], check=True, capture_output=True, text=True)
+                subprocess.run(
+                    ["uv", "build"],
+                    cwd=self.packages[pkg],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
                 print("  ✓ Success")
 
             except subprocess.CalledProcessError as e:

@@ -40,7 +40,13 @@ def connector(config: MySQLConfig) -> Generator[MySQLConnector, None, None]:
 
 # ==================== TPC-H Test Data ====================
 
-TPCH_TABLES = ["tpch_region", "tpch_nation", "tpch_customer", "tpch_orders", "tpch_supplier"]
+TPCH_TABLES = [
+    "tpch_region",
+    "tpch_nation",
+    "tpch_customer",
+    "tpch_orders",
+    "tpch_supplier",
+]
 
 TPCH_DDL = [
     """

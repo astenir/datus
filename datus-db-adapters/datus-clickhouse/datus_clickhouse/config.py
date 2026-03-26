@@ -17,4 +17,6 @@ class ClickHouseConfig(BaseModel):
     username: str = Field(..., description="ClickHouse username")
     password: str = Field(default="", description="ClickHouse password")
     database: Optional[str] = Field(default=None, description="Default database name")
-    timeout_seconds: int = Field(default=30, description="Connection timeout in seconds")
+    timeout_seconds: int = Field(
+        default=30, description="Connection timeout in seconds"
+    )

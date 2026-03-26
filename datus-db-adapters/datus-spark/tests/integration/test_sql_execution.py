@@ -22,7 +22,9 @@ def test_execute_select_query(connector: SparkConnector):
 @pytest.mark.integration
 def test_execute_select_csv_format(connector: SparkConnector):
     """Test executing SELECT with CSV result format."""
-    result = connector.execute({"sql_query": "SELECT 1 as num, 'hello' as msg"}, result_format="csv")
+    result = connector.execute(
+        {"sql_query": "SELECT 1 as num, 'hello' as msg"}, result_format="csv"
+    )
     assert result.success
     assert "num" in result.sql_return
 

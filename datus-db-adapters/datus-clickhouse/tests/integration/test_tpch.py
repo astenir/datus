@@ -12,7 +12,13 @@ from datus_clickhouse import ClickHouseConnector
 def test_tpch_get_tables(tpch_setup: ClickHouseConnector):
     """Test that TPC-H tables exist in the database."""
     tables = tpch_setup.get_tables()
-    expected = {"tpch_region", "tpch_nation", "tpch_customer", "tpch_orders", "tpch_supplier"}
+    expected = {
+        "tpch_region",
+        "tpch_nation",
+        "tpch_customer",
+        "tpch_orders",
+        "tpch_supplier",
+    }
     table_set = set(tables)
     assert expected.issubset(table_set), f"Missing tables: {expected - table_set}"
 

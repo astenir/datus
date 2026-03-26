@@ -111,10 +111,14 @@ def test_get_schemas(connector: SnowflakeConnector, config: SnowflakeConfig):
         assert isinstance(schemas, list)
 
 
-def test_get_schemas_exclude_system(connector: SnowflakeConnector, config: SnowflakeConfig):
+def test_get_schemas_exclude_system(
+    connector: SnowflakeConnector, config: SnowflakeConfig
+):
     """Test that system schemas are excluded by default."""
     if config.database:
-        schemas = connector.get_schemas(database_name=config.database, include_sys=False)
+        schemas = connector.get_schemas(
+            database_name=config.database, include_sys=False
+        )
         for schema in schemas:
             assert schema.upper() != "INFORMATION_SCHEMA"
 
@@ -132,7 +136,9 @@ def test_get_tables(connector: SnowflakeConnector, config: SnowflakeConfig):
 def test_get_tables_with_ddl(connector: SnowflakeConnector, config: SnowflakeConfig):
     """Test getting tables with DDL."""
     if config.database and config.schema_name:
-        tables = connector.get_tables_with_ddl(database_name=config.database, schema_name=config.schema_name)
+        tables = connector.get_tables_with_ddl(
+            database_name=config.database, schema_name=config.schema_name
+        )
 
         if len(tables) > 0:
             table = tables[0]
@@ -157,7 +163,9 @@ def test_get_views(connector: SnowflakeConnector, config: SnowflakeConfig):
 def test_get_views_with_ddl(connector: SnowflakeConnector, config: SnowflakeConfig):
     """Test getting views with DDL."""
     if config.database and config.schema_name:
-        views = connector.get_views_with_ddl(database_name=config.database, schema_name=config.schema_name)
+        views = connector.get_views_with_ddl(
+            database_name=config.database, schema_name=config.schema_name
+        )
 
         if len(views) > 0:
             view = views[0]
@@ -176,10 +184,14 @@ def test_get_materialized_views(connector: SnowflakeConnector, config: Snowflake
         assert isinstance(mvs, list)
 
 
-def test_get_materialized_views_with_ddl(connector: SnowflakeConnector, config: SnowflakeConfig):
+def test_get_materialized_views_with_ddl(
+    connector: SnowflakeConnector, config: SnowflakeConfig
+):
     """Test getting materialized views with DDL."""
     if config.database and config.schema_name:
-        mvs = connector.get_materialized_views_with_ddl(database_name=config.database, schema_name=config.schema_name)
+        mvs = connector.get_materialized_views_with_ddl(
+            database_name=config.database, schema_name=config.schema_name
+        )
 
         if len(mvs) > 0:
             mv = mvs[0]
@@ -194,12 +206,16 @@ def test_get_materialized_views_with_ddl(connector: SnowflakeConnector, config: 
 def test_get_schema(connector: SnowflakeConnector, config: SnowflakeConfig):
     """Test getting table schema."""
     if config.database and config.schema_name:
-        tables = connector.get_tables(database_name=config.database, schema_name=config.schema_name)
+        tables = connector.get_tables(
+            database_name=config.database, schema_name=config.schema_name
+        )
 
         if len(tables) > 0:
             table_name = tables[0]
             schema = connector.get_schema(
-                database_name=config.database, schema_name=config.schema_name, table_name=table_name
+                database_name=config.database,
+                schema_name=config.schema_name,
+                table_name=table_name,
             )
 
             assert isinstance(schema, list)
@@ -217,7 +233,9 @@ def test_get_schema(connector: SnowflakeConnector, config: SnowflakeConfig):
 def test_get_sample_rows(connector: SnowflakeConnector, config: SnowflakeConfig):
     """Test getting sample rows."""
     if config.database and config.schema_name:
-        sample_rows = connector.get_sample_rows(database_name=config.database, schema_name=config.schema_name, top_n=3)
+        sample_rows = connector.get_sample_rows(
+            database_name=config.database, schema_name=config.schema_name, top_n=3
+        )
 
         if len(sample_rows) > 0:
             item = sample_rows[0]
@@ -272,7 +290,9 @@ def test_execute_show_databases(connector: SnowflakeConnector):
 def test_execute_show_schemas(connector: SnowflakeConnector, config: SnowflakeConfig):
     """Test executing SHOW SCHEMAS."""
     if config.database:
-        result = connector.execute_query(f'SHOW SCHEMAS IN DATABASE "{config.database}"', result_format="list")
+        result = connector.execute_query(
+            f'SHOW SCHEMAS IN DATABASE "{config.database}"', result_format="list"
+        )
         assert result.success
         assert isinstance(result.sql_return, list)
 
@@ -299,7 +319,9 @@ def test_execute_nonexistent_table(connector: SnowflakeConnector):
 
 def test_full_name_with_database_and_schema(connector: SnowflakeConnector):
     """Test full_name with database and schema."""
-    full_name = connector.full_name(database_name="mydb", schema_name="myschema", table_name="mytable")
+    full_name = connector.full_name(
+        database_name="mydb", schema_name="myschema", table_name="mytable"
+    )
     assert full_name == '"mydb"."myschema"."mytable"'
 
 

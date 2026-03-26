@@ -23,32 +23,58 @@ class ConcreteConnector(BaseSqlConnector):
         super().__init__(config, dialect)
 
     def execute_insert(self, sql: str) -> ExecuteSQLResult:
-        return ExecuteSQLResult(success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv")
+        return ExecuteSQLResult(
+            success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv"
+        )
 
     def execute_update(self, sql: str) -> ExecuteSQLResult:
-        return ExecuteSQLResult(success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv")
+        return ExecuteSQLResult(
+            success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv"
+        )
 
     def execute_delete(self, sql: str) -> ExecuteSQLResult:
-        return ExecuteSQLResult(success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv")
+        return ExecuteSQLResult(
+            success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv"
+        )
 
     def execute_query(
         self, sql: str, result_format: Literal["csv", "arrow", "pandas", "list"] = "csv"
     ) -> ExecuteSQLResult:
-        return ExecuteSQLResult(success=True, sql_query=sql, row_count=0, sql_return="", result_format=result_format)
+        return ExecuteSQLResult(
+            success=True,
+            sql_query=sql,
+            row_count=0,
+            sql_return="",
+            result_format=result_format,
+        )
 
     def execute_pandas(self, sql: str) -> ExecuteSQLResult:
-        return ExecuteSQLResult(success=True, sql_query=sql, row_count=0, sql_return="", result_format="pandas")
+        return ExecuteSQLResult(
+            success=True,
+            sql_query=sql,
+            row_count=0,
+            sql_return="",
+            result_format="pandas",
+        )
 
     def execute_ddl(self, sql: str) -> ExecuteSQLResult:
-        return ExecuteSQLResult(success=True, sql_query=sql, row_count=0, sql_return="", result_format="csv")
+        return ExecuteSQLResult(
+            success=True, sql_query=sql, row_count=0, sql_return="", result_format="csv"
+        )
 
     def execute_csv(self, sql: str) -> ExecuteSQLResult:
-        return ExecuteSQLResult(success=True, sql_query=sql, row_count=0, sql_return="", result_format="csv")
+        return ExecuteSQLResult(
+            success=True, sql_query=sql, row_count=0, sql_return="", result_format="csv"
+        )
 
-    def get_databases(self, catalog_name: str = "", include_sys: bool = False) -> List[str]:
+    def get_databases(
+        self, catalog_name: str = "", include_sys: bool = False
+    ) -> List[str]:
         return ["db1", "db2"]
 
-    def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
+    def get_tables(
+        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> List[str]:
         return ["table1", "table2"]
 
     def test_connection(self):
@@ -58,7 +84,13 @@ class ConcreteConnector(BaseSqlConnector):
         return [self.execute_query(q) for q in queries]
 
     def execute_content_set(self, sql_query: str) -> ExecuteSQLResult:
-        return ExecuteSQLResult(success=True, sql_query=sql_query, row_count=0, sql_return="", result_format="csv")
+        return ExecuteSQLResult(
+            success=True,
+            sql_query=sql_query,
+            row_count=0,
+            sql_return="",
+            result_format="csv",
+        )
 
 
 class TestBaseSqlConnectorInit:
@@ -162,35 +194,45 @@ class TestExecuteRouting:
 
     def test_insert_routes_to_execute_insert(self):
         connector = ConcreteConnector()
-        with patch.object(connector, "execute_insert", wraps=connector.execute_insert) as mock:
+        with patch.object(
+            connector, "execute_insert", wraps=connector.execute_insert
+        ) as mock:
             result = connector.execute({"sql_query": "INSERT INTO t VALUES (1)"})
             mock.assert_called_once()
         assert result.success is True
 
     def test_update_routes_to_execute_update(self):
         connector = ConcreteConnector()
-        with patch.object(connector, "execute_update", wraps=connector.execute_update) as mock:
+        with patch.object(
+            connector, "execute_update", wraps=connector.execute_update
+        ) as mock:
             result = connector.execute({"sql_query": "UPDATE t SET col=1"})
             mock.assert_called_once()
         assert result.success is True
 
     def test_delete_routes_to_execute_delete(self):
         connector = ConcreteConnector()
-        with patch.object(connector, "execute_delete", wraps=connector.execute_delete) as mock:
+        with patch.object(
+            connector, "execute_delete", wraps=connector.execute_delete
+        ) as mock:
             result = connector.execute({"sql_query": "DELETE FROM t WHERE id=1"})
             mock.assert_called_once()
         assert result.success is True
 
     def test_ddl_routes_to_execute_ddl(self):
         connector = ConcreteConnector()
-        with patch.object(connector, "execute_ddl", wraps=connector.execute_ddl) as mock:
+        with patch.object(
+            connector, "execute_ddl", wraps=connector.execute_ddl
+        ) as mock:
             result = connector.execute({"sql_query": "CREATE TABLE t (id INT)"})
             mock.assert_called_once()
         assert result.success is True
 
     def test_content_set_routes_to_execute_content_set(self):
         connector = ConcreteConnector()
-        with patch.object(connector, "execute_content_set", wraps=connector.execute_content_set) as mock:
+        with patch.object(
+            connector, "execute_content_set", wraps=connector.execute_content_set
+        ) as mock:
             result = connector.execute({"sql_query": "USE my_db"})
             mock.assert_called_once()
         assert result.success is True
@@ -202,7 +244,9 @@ class TestExecuteRouting:
 
     def test_explain_routes_to_execute_explain(self):
         connector = ConcreteConnector()
-        with patch.object(connector, "execute_explain", wraps=connector.execute_explain) as mock:
+        with patch.object(
+            connector, "execute_explain", wraps=connector.execute_explain
+        ) as mock:
             result = connector.execute({"sql_query": "EXPLAIN SELECT 1"})
             mock.assert_called_once()
         assert result.success is True
@@ -222,7 +266,11 @@ class TestExecuteRouting:
         connector = ConcreteConnector()
         with patch.object(connector, "execute_query") as mock:
             mock.return_value = ExecuteSQLResult(
-                success=True, sql_query="SELECT 1", row_count=0, sql_return="", result_format="arrow"
+                success=True,
+                sql_query="SELECT 1",
+                row_count=0,
+                sql_return="",
+                result_format="arrow",
             )
             connector.execute({"sql_query": "SELECT 1"}, result_format="arrow")
             mock.assert_called_once_with("SELECT 1", "arrow")
@@ -231,7 +279,9 @@ class TestExecuteRouting:
 class TestExecuteErrorHandling:
     def test_exception_returns_failure(self):
         connector = ConcreteConnector()
-        with patch.object(connector, "execute_query", side_effect=RuntimeError("DB down")):
+        with patch.object(
+            connector, "execute_query", side_effect=RuntimeError("DB down")
+        ):
             result = connector.execute({"sql_query": "SELECT 1"})
         assert result.success is False
         assert "DB down" in result.error
@@ -264,7 +314,11 @@ class TestExecuteErrorHandling:
         connector = ConcreteConnector()
         with patch.object(connector, "execute_query") as mock:
             mock.return_value = ExecuteSQLResult(
-                success=True, sql_query="SELECT 1", row_count=0, sql_return="", result_format="arrow"
+                success=True,
+                sql_query="SELECT 1",
+                row_count=0,
+                sql_return="",
+                result_format="arrow",
             )
             inp = ExecuteSQLInput(sql_query="SELECT 1", result_format="arrow")
             connector.execute(inp)
@@ -275,7 +329,9 @@ class TestSwitchContext:
     def test_switch_context_updates_names(self):
         connector = ConcreteConnector()
         with patch.object(connector, "connect"):
-            connector.switch_context(catalog_name="cat", database_name="db", schema_name="sch")
+            connector.switch_context(
+                catalog_name="cat", database_name="db", schema_name="sch"
+            )
         assert connector.catalog_name == "cat"
         assert connector.database_name == "db"
         assert connector.schema_name == "sch"
@@ -307,7 +363,9 @@ class TestExecuteExplain:
     def test_explain_delegates_to_execute_query(self):
         connector = ConcreteConnector()
         with patch.object(connector, "execute_query") as mock:
-            mock.return_value = ExecuteSQLResult(success=True, sql_query="EXPLAIN SELECT 1", row_count=0, sql_return="")
+            mock.return_value = ExecuteSQLResult(
+                success=True, sql_query="EXPLAIN SELECT 1", row_count=0, sql_return=""
+            )
             connector.execute_explain("EXPLAIN SELECT 1", "csv")
             mock.assert_called_once_with("EXPLAIN SELECT 1", "csv")
 

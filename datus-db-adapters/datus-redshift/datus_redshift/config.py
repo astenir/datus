@@ -46,11 +46,15 @@ class RedshiftConfig(BaseModel):
     # Default schema within the database (optional - if None, uses 'public' schema)
     # The alias="schema" allows you to pass "schema" instead of "schema_name" when creating the config
 
-    schema_name: Optional[str] = Field(default=None, alias="schema", description="Default schema name")
+    schema_name: Optional[str] = Field(
+        default=None, alias="schema", description="Default schema name"
+    )
 
     # Connection timeout in seconds (how long to wait before giving up on connection)
 
-    timeout_seconds: int = Field(default=30, description="Connection timeout in seconds")
+    timeout_seconds: int = Field(
+        default=30, description="Connection timeout in seconds"
+    )
 
     # SSL mode for secure connections (default is "verify-ca" for production security)
     # Options: "disable", "allow", "prefer", "require", "verify-ca", "verify-full"
@@ -63,7 +67,9 @@ class RedshiftConfig(BaseModel):
 
     # Cluster identifier (needed for IAM authentication)
 
-    cluster_identifier: Optional[str] = Field(default=None, description="Redshift cluster identifier for IAM auth")
+    cluster_identifier: Optional[str] = Field(
+        default=None, description="Redshift cluster identifier for IAM auth"
+    )
 
     # AWS region (needed for IAM authentication)
 
@@ -71,7 +77,9 @@ class RedshiftConfig(BaseModel):
 
     # AWS credentials (needed for IAM authentication)
 
-    access_key_id: Optional[str] = Field(default=None, description="AWS access key ID for IAM auth")
+    access_key_id: Optional[str] = Field(
+        default=None, description="AWS access key ID for IAM auth"
+    )
     secret_access_key: Optional[str] = Field(
         default=None,
         description="AWS secret access key for IAM auth",

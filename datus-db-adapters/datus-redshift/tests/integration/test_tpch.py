@@ -10,7 +10,8 @@ from datus_redshift import RedshiftConnector
 from .conftest import TPCH_SCHEMA
 
 pytestmark = pytest.mark.skipif(
-    not os.getenv("REDSHIFT_HOST"), reason="Redshift credentials not available in environment variables"
+    not os.getenv("REDSHIFT_HOST"),
+    reason="Redshift credentials not available in environment variables",
 )
 
 # Schema-qualified table names for Redshift (uses double-quoted identifiers)
@@ -23,7 +24,13 @@ S = TPCH_SCHEMA
 def test_tpch_get_tables(tpch_setup: RedshiftConnector):
     """Test that TPC-H tables exist in the database."""
     tables = tpch_setup.get_tables()
-    expected = {"tpch_region", "tpch_nation", "tpch_customer", "tpch_orders", "tpch_supplier"}
+    expected = {
+        "tpch_region",
+        "tpch_nation",
+        "tpch_customer",
+        "tpch_orders",
+        "tpch_supplier",
+    }
     table_set = set(tables)
     assert expected.issubset(table_set), f"Missing tables: {expected - table_set}"
 
@@ -149,7 +156,9 @@ def test_tpch_query_customer_orders(tpch_setup: RedshiftConnector):
 def test_tpch_query_csv_format(tpch_setup: RedshiftConnector):
     """Test CSV result format with TPC-H data."""
     result = tpch_setup.execute(
-        {"sql_query": f"SELECT regionkey, name FROM {S}.tpch_region ORDER BY regionkey"},
+        {
+            "sql_query": f"SELECT regionkey, name FROM {S}.tpch_region ORDER BY regionkey"
+        },
         result_format="csv",
     )
     assert result.success
@@ -161,7 +170,9 @@ def test_tpch_query_csv_format(tpch_setup: RedshiftConnector):
 def test_tpch_query_arrow_format(tpch_setup: RedshiftConnector):
     """Test Arrow result format with TPC-H data."""
     result = tpch_setup.execute(
-        {"sql_query": f"SELECT regionkey, name FROM {S}.tpch_region ORDER BY regionkey"},
+        {
+            "sql_query": f"SELECT regionkey, name FROM {S}.tpch_region ORDER BY regionkey"
+        },
         result_format="arrow",
     )
     assert result.success
@@ -172,7 +183,9 @@ def test_tpch_query_arrow_format(tpch_setup: RedshiftConnector):
 def test_tpch_query_pandas_format(tpch_setup: RedshiftConnector):
     """Test Pandas result format with TPC-H data."""
     result = tpch_setup.execute(
-        {"sql_query": f"SELECT regionkey, name FROM {S}.tpch_region ORDER BY regionkey"},
+        {
+            "sql_query": f"SELECT regionkey, name FROM {S}.tpch_region ORDER BY regionkey"
+        },
         result_format="pandas",
     )
     assert result.success

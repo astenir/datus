@@ -7,7 +7,11 @@
 from typing import Dict, List
 
 import pytest
-from datus_db_core.mixins import CatalogSupportMixin, MaterializedViewSupportMixin, SchemaNamespaceMixin
+from datus_db_core.mixins import (
+    CatalogSupportMixin,
+    MaterializedViewSupportMixin,
+    SchemaNamespaceMixin,
+)
 
 
 class TestCatalogSupportMixin:
@@ -40,7 +44,9 @@ class TestMaterializedViewSupportMixin:
 
     def test_concrete_implementation(self):
         class MyMV(MaterializedViewSupportMixin):
-            def get_materialized_views(self, catalog_name="", database_name="", schema_name="") -> List[str]:
+            def get_materialized_views(
+                self, catalog_name="", database_name="", schema_name=""
+            ) -> List[str]:
                 return ["mv1"]
 
             def get_materialized_views_with_ddl(
@@ -60,7 +66,9 @@ class TestSchemaNamespaceMixin:
 
     def test_concrete_implementation(self):
         class MySchema(SchemaNamespaceMixin):
-            def get_schemas(self, catalog_name="", database_name="", include_sys=False) -> List[str]:
+            def get_schemas(
+                self, catalog_name="", database_name="", include_sys=False
+            ) -> List[str]:
                 schemas = ["public", "app"]
                 if include_sys:
                     schemas.append("information_schema")

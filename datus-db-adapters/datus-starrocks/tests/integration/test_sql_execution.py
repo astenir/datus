@@ -23,15 +23,21 @@ def test_execute_select_query(connector: StarRocksConnector):
 @pytest.mark.integration
 def test_execute_explain_query(connector: StarRocksConnector, config: StarRocksConfig):
     """Test executing EXPLAIN query."""
-    tables = connector.get_tables(catalog_name=config.catalog, database_name=config.database)
+    tables = connector.get_tables(
+        catalog_name=config.catalog, database_name=config.database
+    )
 
     if len(tables) > 0:
         table_name = tables[0]
         full_name = connector.full_name(
-            catalog_name=config.catalog, database_name=config.database, table_name=table_name
+            catalog_name=config.catalog,
+            database_name=config.database,
+            table_name=table_name,
         )
 
-        result = connector.execute({"sql_query": f"EXPLAIN SELECT * FROM {full_name} LIMIT 1"})
+        result = connector.execute(
+            {"sql_query": f"EXPLAIN SELECT * FROM {full_name} LIMIT 1"}
+        )
         assert result.success
         assert not result.error
         assert result.sql_return
@@ -44,7 +50,9 @@ def test_execute_explain_query(connector: StarRocksConnector, config: StarRocksC
 
 @pytest.mark.integration
 @pytest.mark.acceptance
-def test_execute_ddl_create_drop(connector: StarRocksConnector, config: StarRocksConfig):
+def test_execute_ddl_create_drop(
+    connector: StarRocksConnector, config: StarRocksConfig
+):
     """Test DDL operations (CREATE/DROP table)."""
     suffix = uuid.uuid4().hex[:8]
     table_name = f"datus_test_{suffix}"
@@ -71,7 +79,9 @@ def test_execute_ddl_create_drop(connector: StarRocksConnector, config: StarRock
 
 
 @pytest.mark.integration
-def test_execute_ddl_create_materialized_view(connector: StarRocksConnector, config: StarRocksConfig):
+def test_execute_ddl_create_materialized_view(
+    connector: StarRocksConnector, config: StarRocksConfig
+):
     """Test creating materialized view (if supported)."""
     suffix = uuid.uuid4().hex[:8]
     table_name = f"datus_base_{suffix}"
@@ -149,15 +159,21 @@ def test_execute_insert(connector: StarRocksConnector, config: StarRocksConfig):
             pytest.skip(f"Unable to create test table: {create_result.error}")
 
         # Insert data
-        insert_result = connector.execute_insert(f"INSERT INTO {table_name} (id, name) VALUES (1, 'Alice'), (2, 'Bob')")
+        insert_result = connector.execute_insert(
+            f"INSERT INTO {table_name} (id, name) VALUES (1, 'Alice'), (2, 'Bob')"
+        )
         assert insert_result.success
 
         # Verify
         query_result = connector.execute(
-            {"sql_query": f"SELECT id, name FROM {table_name} ORDER BY id"}, result_format="list"
+            {"sql_query": f"SELECT id, name FROM {table_name} ORDER BY id"},
+            result_format="list",
         )
         assert query_result.success
-        assert query_result.sql_return == [{"id": 1, "name": "Alice"}, {"id": 2, "name": "Bob"}]
+        assert query_result.sql_return == [
+            {"id": 1, "name": "Alice"},
+            {"id": 2, "name": "Bob"},
+        ]
     finally:
         connector.execute_ddl(f"DROP TABLE IF EXISTS {table_name}")
 
@@ -188,19 +204,28 @@ def test_execute_update(connector: StarRocksConnector, config: StarRocksConfig):
             pytest.skip(f"Unable to create test table: {create_result.error}")
 
         # Insert initial data
-        connector.execute_insert(f"INSERT INTO {table_name} (id, name) VALUES (1, 'Alice'), (2, 'Bob')")
+        connector.execute_insert(
+            f"INSERT INTO {table_name} (id, name) VALUES (1, 'Alice'), (2, 'Bob')"
+        )
 
         # Update
         update_result = connector.execute(
-            {"sql_query": f"UPDATE {table_name} SET name = 'Alice Updated' WHERE id = 1"}, result_format="list"
+            {
+                "sql_query": f"UPDATE {table_name} SET name = 'Alice Updated' WHERE id = 1"
+            },
+            result_format="list",
         )
         assert update_result.success
 
         # Verify
         query_result = connector.execute(
-            {"sql_query": f"SELECT id, name FROM {table_name} ORDER BY id"}, result_format="list"
+            {"sql_query": f"SELECT id, name FROM {table_name} ORDER BY id"},
+            result_format="list",
         )
-        assert query_result.sql_return == [{"id": 1, "name": "Alice Updated"}, {"id": 2, "name": "Bob"}]
+        assert query_result.sql_return == [
+            {"id": 1, "name": "Alice Updated"},
+            {"id": 2, "name": "Bob"},
+        ]
     finally:
         connector.execute_ddl(f"DROP TABLE IF EXISTS {table_name}")
 
@@ -231,15 +256,21 @@ def test_execute_delete(connector: StarRocksConnector, config: StarRocksConfig):
             pytest.skip(f"Unable to create test table: {create_result.error}")
 
         # Insert initial data
-        connector.execute_insert(f"INSERT INTO {table_name} (id, name) VALUES (1, 'Alice'), (2, 'Bob')")
+        connector.execute_insert(
+            f"INSERT INTO {table_name} (id, name) VALUES (1, 'Alice'), (2, 'Bob')"
+        )
 
         # Delete
-        delete_result = connector.execute({"sql_query": f"DELETE FROM {table_name} WHERE id = 2"}, result_format="list")
+        delete_result = connector.execute(
+            {"sql_query": f"DELETE FROM {table_name} WHERE id = 2"},
+            result_format="list",
+        )
         assert delete_result.success
 
         # Verify
         query_result = connector.execute(
-            {"sql_query": f"SELECT id, name FROM {table_name} ORDER BY id"}, result_format="list"
+            {"sql_query": f"SELECT id, name FROM {table_name} ORDER BY id"},
+            result_format="list",
         )
         assert query_result.sql_return == [{"id": 1, "name": "Alice"}]
     finally:

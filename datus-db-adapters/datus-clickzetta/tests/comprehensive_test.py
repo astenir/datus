@@ -70,7 +70,9 @@ def main():
         # Test current timestamp query
         cursor.execute("SELECT current_timestamp();")
         time_results = cursor.fetchall()
-        print(f'   ✅ Time query successful: {time_results[0] if time_results else "No results"}')
+        print(
+            f"   ✅ Time query successful: {time_results[0] if time_results else 'No results'}"
+        )
 
         cursor.close()
     except Exception as e:
@@ -100,7 +102,7 @@ def main():
         print(f"   ✅ Table list retrieval successful: Found {table_count} tables")
 
         if table_count > 0:
-            print(f'   📝 Example table name: {tables[0][0] if tables else "None"}')
+            print(f"   📝 Example table name: {tables[0][0] if tables else 'None'}")
 
         cursor.close()
     except Exception as e:

@@ -28,5 +28,8 @@ def register():
     from datus_db_core import connector_registry
 
     connector_registry.register(
-        "redshift", RedshiftConnector, config_class=RedshiftConfig, capabilities={"database", "schema"}
+        "redshift",
+        RedshiftConnector,
+        config_class=RedshiftConfig,
+        capabilities={"database", "schema"},
     )

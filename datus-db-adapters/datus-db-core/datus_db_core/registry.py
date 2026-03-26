@@ -39,7 +39,9 @@ class AdapterMetadata:
             for field_name, field_info in self.config_class.model_fields.items():
                 field_data = {
                     "required": field_info.is_required(),
-                    "default": field_info.default if not field_info.is_required() else None,
+                    "default": field_info.default
+                    if not field_info.is_required()
+                    else None,
                     "description": field_info.description or "",
                     "type": (
                         field_info.annotation.__name__
@@ -47,7 +49,10 @@ class AdapterMetadata:
                         else str(field_info.annotation)
                     ),
                 }
-                if hasattr(field_info, "json_schema_extra") and field_info.json_schema_extra:
+                if (
+                    hasattr(field_info, "json_schema_extra")
+                    and field_info.json_schema_extra
+                ):
                     field_data.update(field_info.json_schema_extra)
                 fields_info[field_name] = field_data
             return fields_info

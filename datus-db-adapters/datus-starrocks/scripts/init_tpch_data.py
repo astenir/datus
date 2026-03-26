@@ -168,12 +168,20 @@ TPCH_DATA = [
     """,
 ]
 
-TPCH_TABLES = ["tpch_region", "tpch_nation", "tpch_customer", "tpch_orders", "tpch_supplier"]
+TPCH_TABLES = [
+    "tpch_region",
+    "tpch_nation",
+    "tpch_customer",
+    "tpch_orders",
+    "tpch_supplier",
+]
 ROW_COUNTS = [5, 25, 10, 15, 5]
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Initialize TPC-H sample data in StarRocks")
+    parser = argparse.ArgumentParser(
+        description="Initialize TPC-H sample data in StarRocks"
+    )
     parser.add_argument(
         "--host",
         default=os.getenv("STARROCKS_HOST", "localhost"),
@@ -271,7 +279,10 @@ def main():
     print("\nDone! TPC-H data is ready for use in Datus.")
     print("\nExample queries:")
     print("  SELECT * FROM `tpch_region`")
-    print("  SELECT n.name, r.name FROM `tpch_nation` n" " JOIN `tpch_region` r ON n.regionkey = r.regionkey")
+    print(
+        "  SELECT n.name, r.name FROM `tpch_nation` n"
+        " JOIN `tpch_region` r ON n.regionkey = r.regionkey"
+    )
 
 
 if __name__ == "__main__":

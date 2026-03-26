@@ -104,7 +104,12 @@ TPCH_DATA = {
     ],
     "tpch_nation": [
         (0, "ALGERIA", 0, " haggle. carefully final deposits detect slyly agai"),
-        (1, "ARGENTINA", 1, "al foxes promise slyly according to the regular accounts."),
+        (
+            1,
+            "ARGENTINA",
+            1,
+            "al foxes promise slyly according to the regular accounts.",
+        ),
         (2, "BRAZIL", 1, "y alongside of the pending deposits."),
         (3, "CANADA", 1, "eas hang ironic, silent packages."),
         (4, "EGYPT", 4, "y above the carefully unusual theodolites."),
@@ -118,7 +123,12 @@ TPCH_DATA = {
         (12, "JAPAN", 2, "ously. final, express gifts cajole a"),
         (13, "JORDAN", 4, "ic deposits are blithely about the carefully regular pa"),
         (14, "KENYA", 0, " pending excuses haggle furiously deposits."),
-        (15, "MOROCCO", 0, "rns. blithely bold courts among the closely regular packages"),
+        (
+            15,
+            "MOROCCO",
+            0,
+            "rns. blithely bold courts among the closely regular packages",
+        ),
         (16, "MOZAMBIQUE", 0, "s. ironic, unusual asymptotes wake blithely r"),
         (17, "PERU", 1, "platelets. blithely pending dependencies use fluffily"),
         (18, "CHINA", 2, "c dependencies. furiously express notornis sleep slyly"),
@@ -139,7 +149,15 @@ TPCH_DATA = {
             5755.94,
             "each slyly above the careful",
         ),
-        (2, "Supplier#000000002", "89eJ5ksX3ImxJQBvxObC,", 5, "15-679-861-2259", 4032.68, " slyly bold instructions."),
+        (
+            2,
+            "Supplier#000000002",
+            "89eJ5ksX3ImxJQBvxObC,",
+            5,
+            "15-679-861-2259",
+            4032.68,
+            " slyly bold instructions.",
+        ),
         (
             3,
             "Supplier#000000003",
@@ -158,7 +176,15 @@ TPCH_DATA = {
             4641.08,
             "riously even requests above the exp",
         ),
-        (5, "Supplier#000000005", "Gcdm2rJRzl5qlTVzc", 11, "21-151-690-3663", -531.44, ". slyly regular pinto beans t"),
+        (
+            5,
+            "Supplier#000000005",
+            "Gcdm2rJRzl5qlTVzc",
+            11,
+            "21-151-690-3663",
+            -531.44,
+            ". slyly regular pinto beans t",
+        ),
     ],
     "tpch_customer": [
         (
@@ -263,7 +289,17 @@ TPCH_DATA = {
         ),
     ],
     "tpch_orders": [
-        (1, 1, "O", 173665.47, "1996-01-02", "5-LOW", "Clerk#000000951", 0, "nstructions sleep furiously among"),
+        (
+            1,
+            1,
+            "O",
+            173665.47,
+            "1996-01-02",
+            "5-LOW",
+            "Clerk#000000951",
+            0,
+            "nstructions sleep furiously among",
+        ),
         (
             2,
             2,
@@ -275,9 +311,39 @@ TPCH_DATA = {
             0,
             " foxes. pending accounts at the pending",
         ),
-        (3, 3, "F", 193846.25, "1993-10-14", "5-LOW", "Clerk#000000955", 0, "sly final accounts boost."),
-        (4, 4, "O", 32151.78, "1995-10-11", "5-LOW", "Clerk#000000124", 0, "sits. slyly regular warthogs cajole."),
-        (5, 5, "F", 144659.20, "1994-07-30", "5-LOW", "Clerk#000000925", 0, "quickly. bold deposits sleep slyly."),
+        (
+            3,
+            3,
+            "F",
+            193846.25,
+            "1993-10-14",
+            "5-LOW",
+            "Clerk#000000955",
+            0,
+            "sly final accounts boost.",
+        ),
+        (
+            4,
+            4,
+            "O",
+            32151.78,
+            "1995-10-11",
+            "5-LOW",
+            "Clerk#000000124",
+            0,
+            "sits. slyly regular warthogs cajole.",
+        ),
+        (
+            5,
+            5,
+            "F",
+            144659.20,
+            "1994-07-30",
+            "5-LOW",
+            "Clerk#000000925",
+            0,
+            "quickly. bold deposits sleep slyly.",
+        ),
         (
             6,
             6,
@@ -289,9 +355,39 @@ TPCH_DATA = {
             0,
             "ggle. special, final requests are against the furiously",
         ),
-        (7, 7, "O", 252004.18, "1996-01-10", "2-HIGH", "Clerk#000000470", 0, "ly special requests"),
-        (32, 8, "O", 208660.75, "1995-07-16", "2-HIGH", "Clerk#000000616", 0, "ise blithely bold, regular requests."),
-        (33, 9, "F", 163243.98, "1993-10-27", "3-MEDIUM", "Clerk#000000409", 0, "uriously. furiously final request"),
+        (
+            7,
+            7,
+            "O",
+            252004.18,
+            "1996-01-10",
+            "2-HIGH",
+            "Clerk#000000470",
+            0,
+            "ly special requests",
+        ),
+        (
+            32,
+            8,
+            "O",
+            208660.75,
+            "1995-07-16",
+            "2-HIGH",
+            "Clerk#000000616",
+            0,
+            "ise blithely bold, regular requests.",
+        ),
+        (
+            33,
+            9,
+            "F",
+            163243.98,
+            "1993-10-27",
+            "3-MEDIUM",
+            "Clerk#000000409",
+            0,
+            "uriously. furiously final request",
+        ),
         (
             34,
             10,
@@ -314,10 +410,50 @@ TPCH_DATA = {
             0,
             "zzle. carefully enticing deposits nag furio",
         ),
-        (36, 2, "O", 38988.98, "1995-11-03", "1-URGENT", "Clerk#000000358", 0, " quick packages are blithely."),
-        (37, 3, "F", 131896.48, "1992-06-03", "3-MEDIUM", "Clerk#000000456", 0, "kly regular pinto beans."),
-        (38, 4, "O", 46366.56, "1996-08-21", "4-NOT SPECIFIED", "Clerk#000000604", 0, "haggle blithely."),
-        (39, 5, "O", 219707.84, "1996-09-20", "3-MEDIUM", "Clerk#000000659", 0, "ole express, ironic requests:"),
+        (
+            36,
+            2,
+            "O",
+            38988.98,
+            "1995-11-03",
+            "1-URGENT",
+            "Clerk#000000358",
+            0,
+            " quick packages are blithely.",
+        ),
+        (
+            37,
+            3,
+            "F",
+            131896.48,
+            "1992-06-03",
+            "3-MEDIUM",
+            "Clerk#000000456",
+            0,
+            "kly regular pinto beans.",
+        ),
+        (
+            38,
+            4,
+            "O",
+            46366.56,
+            "1996-08-21",
+            "4-NOT SPECIFIED",
+            "Clerk#000000604",
+            0,
+            "haggle blithely.",
+        ),
+        (
+            39,
+            5,
+            "O",
+            219707.84,
+            "1996-09-20",
+            "3-MEDIUM",
+            "Clerk#000000659",
+            0,
+            "ole express, ironic requests:",
+        ),
     ],
 }
 
@@ -334,16 +470,24 @@ def _escape_value(v) -> str:
 def main():
     parser = argparse.ArgumentParser(description="Initialize TPC-H data in PostgreSQL")
     parser.add_argument("--host", default=os.getenv("POSTGRESQL_HOST", "localhost"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("POSTGRESQL_PORT", "5432")))
+    parser.add_argument(
+        "--port", type=int, default=int(os.getenv("POSTGRESQL_PORT", "5432"))
+    )
     parser.add_argument("--username", default=os.getenv("POSTGRESQL_USER", "test_user"))
-    parser.add_argument("--password", default=os.getenv("POSTGRESQL_PASSWORD", "test_password"))
+    parser.add_argument(
+        "--password", default=os.getenv("POSTGRESQL_PASSWORD", "test_password")
+    )
     parser.add_argument("--database", default=os.getenv("POSTGRESQL_DATABASE", "test"))
     parser.add_argument("--schema", default=os.getenv("POSTGRESQL_SCHEMA", "public"))
-    parser.add_argument("--drop", action="store_true", help="Drop existing tables before creating")
+    parser.add_argument(
+        "--drop", action="store_true", help="Drop existing tables before creating"
+    )
     args = parser.parse_args()
 
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.schema):
-        print("ERROR: --schema must be a valid SQL identifier (letters, digits, underscores).")
+        print(
+            "ERROR: --schema must be a valid SQL identifier (letters, digits, underscores)."
+        )
         sys.exit(1)
 
     try:
@@ -376,7 +520,11 @@ def main():
         if args.drop:
             print("\nDropping existing TPC-H tables...")
             for table_name in reversed(list(TPCH_DDL.keys())):
-                conn.execute({"sql_query": f'DROP TABLE IF EXISTS "{schema}"."{table_name}" CASCADE'})
+                conn.execute(
+                    {
+                        "sql_query": f'DROP TABLE IF EXISTS "{schema}"."{table_name}" CASCADE'
+                    }
+                )
                 print(f"  Dropped {table_name}")
 
         # Create tables
@@ -391,7 +539,9 @@ def main():
             for row in rows:
                 values = ", ".join(_escape_value(v) for v in row)
                 conn.execute(
-                    {"sql_query": f'INSERT INTO "{schema}"."{table_name}" VALUES ({values}) ON CONFLICT DO NOTHING'}
+                    {
+                        "sql_query": f'INSERT INTO "{schema}"."{table_name}" VALUES ({values}) ON CONFLICT DO NOTHING'
+                    }
                 )
             print(f"  Inserted {len(rows)} rows into {table_name}")
 

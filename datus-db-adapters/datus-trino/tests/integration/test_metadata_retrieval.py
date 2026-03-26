@@ -75,14 +75,18 @@ def test_get_schemas_exclude_system(connector: TrinoConnector, config: TrinoConf
 @pytest.mark.acceptance
 def test_get_tables(connector: TrinoConnector, config: TrinoConfig):
     """Test getting table list."""
-    tables = connector.get_tables(catalog_name=config.catalog, schema_name=config.schema_name)
+    tables = connector.get_tables(
+        catalog_name=config.catalog, schema_name=config.schema_name
+    )
     assert isinstance(tables, list)
 
 
 @pytest.mark.integration
 def test_get_views(connector: TrinoConnector, config: TrinoConfig):
     """Test getting view list."""
-    views = connector.get_views(catalog_name=config.catalog, schema_name=config.schema_name)
+    views = connector.get_views(
+        catalog_name=config.catalog, schema_name=config.schema_name
+    )
     assert isinstance(views, list)
 
 

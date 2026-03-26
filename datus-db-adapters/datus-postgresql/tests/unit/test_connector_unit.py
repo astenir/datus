@@ -140,7 +140,10 @@ def test_connector_connection_string_no_database():
         connection_string = call_args[0][0]
 
         # Default database should be 'postgres'
-        assert "postgresql+psycopg2://user:pass@localhost:5432/postgres" in connection_string
+        assert (
+            "postgresql+psycopg2://user:pass@localhost:5432/postgres"
+            in connection_string
+        )
 
 
 def test_connector_connection_string_custom_sslmode():

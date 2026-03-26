@@ -154,19 +154,31 @@ TPCH_DATA = [
     """,
 ]
 
-TPCH_TABLES = ["tpch_region", "tpch_nation", "tpch_customer", "tpch_orders", "tpch_supplier"]
+TPCH_TABLES = [
+    "tpch_region",
+    "tpch_nation",
+    "tpch_customer",
+    "tpch_orders",
+    "tpch_supplier",
+]
 ROW_COUNTS = [5, 25, 10, 15, 5]
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Initialize TPC-H sample data in ClickZetta")
+    parser = argparse.ArgumentParser(
+        description="Initialize TPC-H sample data in ClickZetta"
+    )
     parser.add_argument("--service", default=os.getenv("CLICKZETTA_SERVICE", ""))
     parser.add_argument("--username", default=os.getenv("CLICKZETTA_USERNAME", ""))
     parser.add_argument("--instance", default=os.getenv("CLICKZETTA_INSTANCE", ""))
     parser.add_argument("--workspace", default=os.getenv("CLICKZETTA_WORKSPACE", ""))
     parser.add_argument("--schema", default=os.getenv("CLICKZETTA_SCHEMA", "PUBLIC"))
-    parser.add_argument("--vcluster", default=os.getenv("CLICKZETTA_VCLUSTER", "DEFAULT_AP"))
-    parser.add_argument("--drop", action="store_true", help="Drop existing TPC-H tables before creating")
+    parser.add_argument(
+        "--vcluster", default=os.getenv("CLICKZETTA_VCLUSTER", "DEFAULT_AP")
+    )
+    parser.add_argument(
+        "--drop", action="store_true", help="Drop existing TPC-H tables before creating"
+    )
     args = parser.parse_args()
 
     password = os.getenv("CLICKZETTA_PASSWORD", "")
@@ -228,7 +240,9 @@ def main():
         for i, data in enumerate(TPCH_DATA):
             insert_result = conn.execute_insert(data)
             if not insert_result.success:
-                print(f"  Failed inserting into {TPCH_TABLES[i]}: {insert_result.error}")
+                print(
+                    f"  Failed inserting into {TPCH_TABLES[i]}: {insert_result.error}"
+                )
                 sys.exit(2)
             print(f"  Inserted {ROW_COUNTS[i]} rows into {TPCH_TABLES[i]}")
 
@@ -244,7 +258,11 @@ def main():
                 print(f"  {table}: query failed [{result.error}]")
                 has_mismatch = True
                 continue
-            if result.sql_return and isinstance(result.sql_return[0], dict) and "cnt" in result.sql_return[0]:
+            if (
+                result.sql_return
+                and isinstance(result.sql_return[0], dict)
+                and "cnt" in result.sql_return[0]
+            ):
                 count = int(result.sql_return[0]["cnt"])
             else:
                 print(f"  {table}: unexpected query result")
@@ -265,7 +283,10 @@ def main():
     print("\nDone! TPC-H data is ready for use in Datus.")
     print("\nExample queries:")
     print("  SELECT * FROM `tpch_region`")
-    print("  SELECT n.name, r.name FROM `tpch_nation` n" " JOIN `tpch_region` r ON n.regionkey = r.regionkey")
+    print(
+        "  SELECT n.name, r.name FROM `tpch_nation` n"
+        " JOIN `tpch_region` r ON n.regionkey = r.regionkey"
+    )
 
 
 if __name__ == "__main__":

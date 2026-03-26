@@ -37,7 +37,7 @@ jobs:
         run: |
           for dir in datus-*/; do
             if [ -d "$dir" ]; then
-              echo "Checking $dir with Black..."
+              echo "Checking $dir with ruff format..."
               ruff format --check "$dir"
             fi
           done
@@ -46,7 +46,7 @@ jobs:
         run: |
           for dir in datus-*/; do
             if [ -d "$dir" ]; then
-              echo "Linting $dir with flake8..."
+              echo "Linting $dir with ruff..."
               ruff check "$dir"
             fi
           done

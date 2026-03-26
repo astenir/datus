@@ -5,7 +5,13 @@
 from typing import Any, Dict, List, Optional, Set, Union, override
 from urllib.parse import quote_plus
 
-from datus_db_core import TABLE_TYPE, DatusDbException, ErrorCode, get_logger, list_to_in_str
+from datus_db_core import (
+    TABLE_TYPE,
+    DatusDbException,
+    ErrorCode,
+    get_logger,
+    list_to_in_str,
+)
 from datus_sqlalchemy import SQLAlchemyConnector
 from pydantic import BaseModel, Field
 
@@ -17,8 +23,12 @@ logger = get_logger(__name__)
 class TableMetadataNames(BaseModel):
     """Metadata configuration for different PostgreSQL object types."""
 
-    info_table: str = Field(..., description="INFORMATION_SCHEMA table name or pg_catalog view")
-    table_types: Optional[List[str]] = Field(default=None, description="TABLE_TYPE values in INFORMATION_SCHEMA")
+    info_table: str = Field(
+        ..., description="INFORMATION_SCHEMA table name or pg_catalog view"
+    )
+    table_types: Optional[List[str]] = Field(
+        default=None, description="TABLE_TYPE values in INFORMATION_SCHEMA"
+    )
 
 
 # Metadata configuration for PostgreSQL objects
@@ -39,7 +49,9 @@ METADATA_DICT: Dict[TABLE_TYPE, TableMetadataNames] = {
 def _get_metadata_config(table_type: TABLE_TYPE) -> TableMetadataNames:
     """Get metadata configuration for given table type."""
     if table_type not in METADATA_DICT:
-        raise DatusDbException(ErrorCode.COMMON_FIELD_INVALID, f"Invalid table type '{table_type}'")
+        raise DatusDbException(
+            ErrorCode.COMMON_FIELD_INVALID, f"Invalid table type '{table_type}'"
+        )
     return METADATA_DICT[table_type]
 
 
@@ -57,7 +69,9 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         if isinstance(config, dict):
             config = PostgreSQLConfig(**config)
         elif not isinstance(config, PostgreSQLConfig):
-            raise TypeError(f"config must be PostgreSQLConfig or dict, got {type(config)}")
+            raise TypeError(
+                f"config must be PostgreSQLConfig or dict, got {type(config)}"
+            )
 
         self.config = config
         self.host = config.host
@@ -76,7 +90,11 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             f"{database}?sslmode={config.sslmode}"
         )
 
-        super().__init__(connection_string, dialect="postgresql", timeout_seconds=config.timeout_seconds)
+        super().__init__(
+            connection_string,
+            dialect="postgresql",
+            timeout_seconds=config.timeout_seconds,
+        )
         self.database_name = database
         self.schema_name = config.schema_name or "public"
 
@@ -90,7 +108,13 @@ class PostgreSQLConnector(SQLAlchemyConnector):
     @override
     def _sys_schemas(self) -> Set[str]:
         """System schemas to filter out."""
-        return {"pg_catalog", "information_schema", "pg_toast", "pg_temp_1", "pg_toast_temp_1"}
+        return {
+            "pg_catalog",
+            "information_schema",
+            "pg_toast",
+            "pg_temp_1",
+            "pg_toast_temp_1",
+        }
 
     # ==================== Utility Methods ====================
 
@@ -133,7 +157,9 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             if schema_name:
                 where = f"schemaname = '{schema_name}'"
             else:
-                where = f"{list_to_in_str('schemaname not in', list(self._sys_schemas()))}"
+                where = (
+                    f"{list_to_in_str('schemaname not in', list(self._sys_schemas()))}"
+                )
 
             query = f"""
                 SELECT schemaname as table_schema, matviewname as table_name
@@ -148,7 +174,9 @@ class PostgreSQLConnector(SQLAlchemyConnector):
                 where = f"{list_to_in_str('table_schema not in', list(self._sys_schemas()))}"
 
             if table_type == "table":
-                type_filter = list_to_in_str("and table_type in", metadata_config.table_types)
+                type_filter = list_to_in_str(
+                    "and table_type in", metadata_config.table_types
+                )
             else:
                 type_filter = ""
 
@@ -167,7 +195,9 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             tb_name = query_result["table_name"][i]
             result.append(
                 {
-                    "identifier": self.identifier(schema_name=schema, table_name=tb_name),
+                    "identifier": self.identifier(
+                        schema_name=schema, table_name=tb_name
+                    ),
                     "catalog_name": "",
                     "database_name": database_name,
                     "schema_name": schema,
@@ -177,7 +207,9 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             )
         return result
 
-    def _get_ddl(self, schema_name: str, table_name: str, object_type: str = "TABLE") -> str:
+    def _get_ddl(
+        self, schema_name: str, table_name: str, object_type: str = "TABLE"
+    ) -> str:
         """
         Get DDL for a table/view using pg_get_tabledef or reconstructing from metadata.
 
@@ -261,7 +293,9 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             List of metadata dictionaries with DDL
         """
         result = []
-        filter_tables = self._reset_filter_tables(tables, catalog_name, database_name, schema_name)
+        filter_tables = self._reset_filter_tables(
+            tables, catalog_name, database_name, schema_name
+        )
 
         object_type_map = {
             "table": "TABLE",
@@ -270,8 +304,12 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         }
         object_type = object_type_map.get(table_type, "TABLE")
 
-        for meta in self._get_metadata(table_type, catalog_name, database_name, schema_name):
-            full_name = self.full_name(schema_name=meta["schema_name"], table_name=meta["table_name"])
+        for meta in self._get_metadata(
+            table_type, catalog_name, database_name, schema_name
+        ):
+            full_name = self.full_name(
+                schema_name=meta["schema_name"], table_name=meta["table_name"]
+            )
 
             # Skip if not in filter list
             if filter_tables and full_name not in filter_tables:
@@ -279,7 +317,9 @@ class PostgreSQLConnector(SQLAlchemyConnector):
 
             # Get DDL
             try:
-                ddl = self._get_ddl(meta["schema_name"], meta["table_name"], object_type)
+                ddl = self._get_ddl(
+                    meta["schema_name"], meta["table_name"], object_type
+                )
             except Exception as e:
                 logger.warning(f"Could not get DDL for {full_name}: {e}")
                 ddl = f"-- DDL not available for {meta['table_name']}"
@@ -290,39 +330,70 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         return result
 
     @override
-    def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
+    def get_tables(
+        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> List[str]:
         """Get list of table names."""
-        return [meta["table_name"] for meta in self._get_metadata("table", catalog_name, database_name, schema_name)]
+        return [
+            meta["table_name"]
+            for meta in self._get_metadata(
+                "table", catalog_name, database_name, schema_name
+            )
+        ]
 
     @override
-    def get_views(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
+    def get_views(
+        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> List[str]:
         """Get list of view names."""
-        return [meta["table_name"] for meta in self._get_metadata("view", catalog_name, database_name, schema_name)]
+        return [
+            meta["table_name"]
+            for meta in self._get_metadata(
+                "view", catalog_name, database_name, schema_name
+            )
+        ]
 
     @override
     def get_materialized_views(
         self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
     ) -> List[str]:
         """Get list of materialized view names."""
-        return [meta["table_name"] for meta in self._get_metadata("mv", catalog_name, database_name, schema_name)]
+        return [
+            meta["table_name"]
+            for meta in self._get_metadata(
+                "mv", catalog_name, database_name, schema_name
+            )
+        ]
 
     @override
     def get_tables_with_ddl(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", tables: Optional[List[str]] = None
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        tables: Optional[List[str]] = None,
     ) -> List[Dict[str, str]]:
         """Get tables with DDL statements."""
-        return self._get_objects_with_ddl("table", tables, catalog_name, database_name, schema_name)
+        return self._get_objects_with_ddl(
+            "table", tables, catalog_name, database_name, schema_name
+        )
 
     @override
     def get_views_with_ddl(
         self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
     ) -> List[Dict[str, str]]:
         """Get views with DDL statements."""
-        return self._get_objects_with_ddl("view", None, catalog_name, database_name, schema_name)
+        return self._get_objects_with_ddl(
+            "view", None, catalog_name, database_name, schema_name
+        )
 
     @override
     def get_schema(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> List[Dict[str, Any]]:
         """
         Get table schema using INFORMATION_SCHEMA.
@@ -383,7 +454,9 @@ class PostgreSQLConnector(SQLAlchemyConnector):
                     "nullable": query_result["nullable"][i] == "YES",
                     "default_value": query_result["default_value"][i],
                     "pk": bool(query_result["is_pk"][i]),
-                    "comment": query_result["comment"][i] if query_result["comment"][i] else None,
+                    "comment": query_result["comment"][i]
+                    if query_result["comment"][i]
+                    else None,
                 }
             )
         return result
@@ -391,7 +464,9 @@ class PostgreSQLConnector(SQLAlchemyConnector):
     # ==================== Database/Schema Management ====================
 
     @override
-    def get_databases(self, catalog_name: str = "", include_sys: bool = False) -> List[str]:
+    def get_databases(
+        self, catalog_name: str = "", include_sys: bool = False
+    ) -> List[str]:
         """Get list of databases."""
         sql = "SELECT datname FROM pg_database WHERE datistemplate = false"
         result = self._execute_pandas(sql)
@@ -404,7 +479,9 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         return databases
 
     @override
-    def get_schemas(self, catalog_name: str = "", database_name: str = "", include_sys: bool = False) -> List[str]:
+    def get_schemas(
+        self, catalog_name: str = "", database_name: str = "", include_sys: bool = False
+    ) -> List[str]:
         """Get list of schemas in the current database."""
         database_name = database_name or self.database_name
         sql = f"SELECT schema_name FROM information_schema.schemata WHERE catalog_name = '{database_name}'"
@@ -425,7 +502,9 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         return schema_name or self.schema_name
 
     @override
-    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+    def do_switch_context(
+        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ):
         """Switch schema context by updating self.schema_name.
 
         Note: All queries use explicit schema qualification via full_name(),
@@ -464,13 +543,17 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         # If specific tables provided, query those
         if tables:
             for table_name in tables:
-                full_name = self.full_name(schema_name=schema_name, table_name=table_name)
+                full_name = self.full_name(
+                    schema_name=schema_name, table_name=table_name
+                )
                 sql = f"SELECT * FROM {full_name} LIMIT {top_n}"
                 df = self._execute_pandas(sql)
                 if not df.empty:
                     result.append(
                         {
-                            "identifier": self.identifier(schema_name=schema_name, table_name=table_name),
+                            "identifier": self.identifier(
+                                schema_name=schema_name, table_name=table_name
+                            ),
                             "catalog_name": "",
                             "database_name": self.database_name,
                             "schema_name": schema_name,
@@ -483,7 +566,9 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         # Otherwise get metadata and query all tables
         metadata = self._get_metadata(table_type, "", "", schema_name)
         for meta in metadata:
-            full_name = self.full_name(schema_name=meta["schema_name"], table_name=meta["table_name"])
+            full_name = self.full_name(
+                schema_name=meta["schema_name"], table_name=meta["table_name"]
+            )
             sql = f"SELECT * FROM {full_name} LIMIT {top_n}"
             df = self._execute_pandas(sql)
             if not df.empty:
@@ -503,7 +588,11 @@ class PostgreSQLConnector(SQLAlchemyConnector):
 
     @override
     def identifier(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> str:
         """Generate a unique identifier for a table."""
         database_name = database_name or self.database_name
@@ -516,7 +605,11 @@ class PostgreSQLConnector(SQLAlchemyConnector):
 
     @override
     def full_name(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> str:
         """Build fully-qualified table name."""
         database_name = database_name or self.database_name
@@ -529,7 +622,11 @@ class PostgreSQLConnector(SQLAlchemyConnector):
 
     @override
     def _reset_filter_tables(
-        self, tables: Optional[List[str]] = None, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+        self,
+        tables: Optional[List[str]] = None,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
     ) -> List[str]:
         """Reset filter tables with full names."""
         schema_name = schema_name or self.schema_name

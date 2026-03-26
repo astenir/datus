@@ -12,7 +12,13 @@ from datus_spark import SparkConnector
 def test_tpch_get_tables(tpch_setup: SparkConnector):
     """Test that TPC-H tables exist in the default database."""
     tables = tpch_setup.get_tables(database_name="default")
-    expected = {"tpch_region", "tpch_nation", "tpch_customer", "tpch_orders", "tpch_supplier"}
+    expected = {
+        "tpch_region",
+        "tpch_nation",
+        "tpch_customer",
+        "tpch_orders",
+        "tpch_supplier",
+    }
     table_set = set(tables)
     assert expected.issubset(table_set), f"Missing tables: {expected - table_set}"
 
@@ -138,7 +144,9 @@ def test_tpch_query_customer_orders(tpch_setup: SparkConnector):
 def test_tpch_query_csv_format(tpch_setup: SparkConnector):
     """Test CSV result format with TPC-H data."""
     result = tpch_setup.execute(
-        {"sql_query": "SELECT regionkey, name FROM `default`.`tpch_region` ORDER BY regionkey"},
+        {
+            "sql_query": "SELECT regionkey, name FROM `default`.`tpch_region` ORDER BY regionkey"
+        },
         result_format="csv",
     )
     assert result.success

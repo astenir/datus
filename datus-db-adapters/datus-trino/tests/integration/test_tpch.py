@@ -5,7 +5,16 @@
 import pytest
 from datus_trino import TrinoConnector
 
-TPCH_TABLES = {"customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier"}
+TPCH_TABLES = {
+    "customer",
+    "lineitem",
+    "nation",
+    "orders",
+    "part",
+    "partsupp",
+    "region",
+    "supplier",
+}
 
 # ==================== Metadata Tests ====================
 
@@ -29,7 +38,9 @@ def test_tpch_get_tables(tpch_connector: TrinoConnector):
 @pytest.mark.integration
 def test_tpch_get_columns(tpch_connector: TrinoConnector):
     """Test getting column schema for tpch.tiny.customer table."""
-    columns = tpch_connector.get_schema(catalog_name="tpch", schema_name="tiny", table_name="customer")
+    columns = tpch_connector.get_schema(
+        catalog_name="tpch", schema_name="tiny", table_name="customer"
+    )
     assert len(columns) > 0
     column_names = {col["name"] for col in columns}
     assert "custkey" in column_names or "c_custkey" in column_names

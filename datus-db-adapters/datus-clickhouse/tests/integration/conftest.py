@@ -39,7 +39,9 @@ def connector(config: ClickHouseConfig) -> Generator[ClickHouseConnector, None, 
             if not init_conn.test_connection():
                 pytest.skip("Database connection test failed")
             if config.database:
-                init_conn.execute_ddl(f"CREATE DATABASE IF NOT EXISTS `{config.database}`")
+                init_conn.execute_ddl(
+                    f"CREATE DATABASE IF NOT EXISTS `{config.database}`"
+                )
         finally:
             init_conn.close()
 
@@ -58,7 +60,13 @@ def connector(config: ClickHouseConfig) -> Generator[ClickHouseConnector, None, 
 
 # ==================== TPC-H Test Data ====================
 
-TPCH_TABLES = ["tpch_region", "tpch_nation", "tpch_customer", "tpch_orders", "tpch_supplier"]
+TPCH_TABLES = [
+    "tpch_region",
+    "tpch_nation",
+    "tpch_customer",
+    "tpch_orders",
+    "tpch_supplier",
+]
 
 TPCH_DDL = [
     """
@@ -214,7 +222,9 @@ def tpch_setup() -> Generator[ClickHouseConnector, None, None]:
             if not init_conn.test_connection():
                 pytest.skip("Database connection test failed")
             if config.database:
-                init_conn.execute_ddl(f"CREATE DATABASE IF NOT EXISTS `{config.database}`")
+                init_conn.execute_ddl(
+                    f"CREATE DATABASE IF NOT EXISTS `{config.database}`"
+                )
         finally:
             init_conn.close()
 

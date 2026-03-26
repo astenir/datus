@@ -15,7 +15,9 @@ class TestErrorCode:
 
     def test_all_error_codes_have_unique_codes(self):
         codes = [member.code for member in ErrorCode]
-        assert len(codes) == len(set(codes)), f"Duplicate error codes found: {[c for c in codes if codes.count(c) > 1]}"
+        assert len(codes) == len(set(codes)), (
+            f"Duplicate error codes found: {[c for c in codes if codes.count(c) > 1]}"
+        )
 
     def test_common_error_codes(self):
         assert ErrorCode.COMMON_FIELD_INVALID.code == "100001"

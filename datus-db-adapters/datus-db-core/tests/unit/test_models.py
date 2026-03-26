@@ -6,7 +6,12 @@
 
 import pandas as pd
 import pytest
-from datus_db_core.models import BaseInput, BaseResult, ExecuteSQLInput, ExecuteSQLResult
+from datus_db_core.models import (
+    BaseInput,
+    BaseResult,
+    ExecuteSQLInput,
+    ExecuteSQLResult,
+)
 from pydantic import ValidationError
 
 
@@ -83,7 +88,9 @@ class TestExecuteSQLInput:
 
 class TestExecuteSQLResult:
     def test_basic_creation(self):
-        result = ExecuteSQLResult(success=True, sql_query="SELECT 1", row_count=1, sql_return="1")
+        result = ExecuteSQLResult(
+            success=True, sql_query="SELECT 1", row_count=1, sql_return="1"
+        )
         assert result.success is True
         assert result.row_count == 1
         assert result.sql_return == "1"

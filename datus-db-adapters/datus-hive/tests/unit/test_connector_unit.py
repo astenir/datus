@@ -20,7 +20,10 @@ def connector():
             username="hue",
             password="pass",
             auth="CUSTOM",
-            configuration={"spark.app.name": "datacenter_carrier", "spark.sql.shuffle.partitions": 100},
+            configuration={
+                "spark.app.name": "datacenter_carrier",
+                "spark.sql.shuffle.partitions": 100,
+            },
         )
     )
 
@@ -174,7 +177,9 @@ def test_build_connect_args_minimal():
 
 def test_normalize_configuration_bool_values():
     """Test _normalize_configuration converts booleans to strings."""
-    result = HiveConnector._normalize_configuration({"flag_true": True, "flag_false": False})
+    result = HiveConnector._normalize_configuration(
+        {"flag_true": True, "flag_false": False}
+    )
 
     assert result == {"flag_true": "true", "flag_false": "false"}
 
@@ -280,7 +285,11 @@ def test_sys_databases():
 
 def test_get_databases_parses_results(monkeypatch, connector):
     monkeypatch.setattr(connector, "connect", lambda: None)
-    monkeypatch.setattr(connector, "_execute_pandas", lambda sql: pd.DataFrame({"database_name": ["default", "test"]}))
+    monkeypatch.setattr(
+        connector,
+        "_execute_pandas",
+        lambda sql: pd.DataFrame({"database_name": ["default", "test"]}),
+    )
 
     assert connector.get_databases() == ["default", "test"]
 
@@ -291,7 +300,9 @@ def test_get_databases_filters_system_dbs(monkeypatch, connector):
     monkeypatch.setattr(
         connector,
         "_execute_pandas",
-        lambda sql: pd.DataFrame({"database_name": ["default", "information_schema", "sys", "mydb"]}),
+        lambda sql: pd.DataFrame(
+            {"database_name": ["default", "information_schema", "sys", "mydb"]}
+        ),
     )
 
     result = connector.get_databases()
@@ -306,7 +317,9 @@ def test_get_databases_include_sys(monkeypatch, connector):
     monkeypatch.setattr(
         connector,
         "_execute_pandas",
-        lambda sql: pd.DataFrame({"database_name": ["default", "information_schema", "sys"]}),
+        lambda sql: pd.DataFrame(
+            {"database_name": ["default", "information_schema", "sys"]}
+        ),
     )
 
     result = connector.get_databases(include_sys=True)
@@ -330,7 +343,9 @@ def test_get_tables_parses_results(monkeypatch, connector):
     monkeypatch.setattr(
         connector,
         "_execute_pandas",
-        lambda sql: pd.DataFrame({"database": ["default"], "tableName": ["table_a"], "isTemporary": [False]}),
+        lambda sql: pd.DataFrame(
+            {"database": ["default"], "tableName": ["table_a"], "isTemporary": [False]}
+        ),
     )
 
     assert connector.get_tables(database_name="default") == ["table_a"]
@@ -341,7 +356,9 @@ def test_get_views_parses_results(monkeypatch, connector):
     monkeypatch.setattr(
         connector,
         "_execute_pandas",
-        lambda sql: pd.DataFrame({"database": ["default"], "viewName": ["view_a"], "isTemporary": [False]}),
+        lambda sql: pd.DataFrame(
+            {"database": ["default"], "viewName": ["view_a"], "isTemporary": [False]}
+        ),
     )
 
     assert connector.get_views(database_name="default") == ["view_a"]
@@ -351,7 +368,9 @@ def test_get_views_returns_empty_on_exception(monkeypatch, connector):
     """Test that get_views returns empty list when SHOW VIEWS fails."""
     monkeypatch.setattr(connector, "connect", lambda: None)
     monkeypatch.setattr(
-        connector, "_execute_pandas", lambda sql: (_ for _ in ()).throw(Exception("SHOW VIEWS not supported"))
+        connector,
+        "_execute_pandas",
+        lambda sql: (_ for _ in ()).throw(Exception("SHOW VIEWS not supported")),
     )
 
     result = connector.get_views(database_name="default")
@@ -413,7 +432,9 @@ def test_get_schema_returns_empty_for_no_table_name(connector):
 def test_get_tables_with_ddl(monkeypatch, connector):
     monkeypatch.setattr(connector, "connect", lambda: None)
     monkeypatch.setattr(connector, "get_tables", lambda **kwargs: ["table_a"])
-    monkeypatch.setattr(connector, "_show_create", lambda full_name: "CREATE TABLE table_a (id INT)")
+    monkeypatch.setattr(
+        connector, "_show_create", lambda full_name: "CREATE TABLE table_a (id INT)"
+    )
 
     ddl_list = connector.get_tables_with_ddl(database_name="default")
     assert ddl_list
@@ -435,7 +456,11 @@ def test_get_sample_rows_continues_on_error(monkeypatch, connector):
         return pd.DataFrame({"id": [1], "name": ["test"]})
 
     monkeypatch.setattr(connector, "connect", lambda: None)
-    monkeypatch.setattr(connector, "get_tables", lambda **kwargs: ["good_table", "bad_table", "another_good"])
+    monkeypatch.setattr(
+        connector,
+        "get_tables",
+        lambda **kwargs: ["good_table", "bad_table", "another_good"],
+    )
     monkeypatch.setattr(connector, "_execute_pandas", mock_execute_pandas)
 
     result = connector.get_sample_rows(database_name="default")

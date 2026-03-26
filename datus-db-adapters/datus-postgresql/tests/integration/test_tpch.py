@@ -131,7 +131,13 @@ class TestTpchMetadata:
         """get_tables() should return TPC-H tables."""
         tables = tpch_setup.get_tables(schema_name="public")
         tpch_tables = {t for t in tables if t.startswith("tpch_")}
-        expected = {"tpch_region", "tpch_nation", "tpch_supplier", "tpch_customer", "tpch_orders"}
+        expected = {
+            "tpch_region",
+            "tpch_nation",
+            "tpch_supplier",
+            "tpch_customer",
+            "tpch_orders",
+        }
         assert expected.issubset(tpch_tables)
 
     def test_get_schema_columns(self, tpch_setup):

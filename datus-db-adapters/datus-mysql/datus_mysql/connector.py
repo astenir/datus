@@ -5,7 +5,13 @@
 from typing import Any, Dict, List, Optional, Set, Union, override
 from urllib.parse import quote_plus
 
-from datus_db_core import TABLE_TYPE, DatusDbException, ErrorCode, get_logger, list_to_in_str
+from datus_db_core import (
+    TABLE_TYPE,
+    DatusDbException,
+    ErrorCode,
+    get_logger,
+    list_to_in_str,
+)
 from datus_sqlalchemy import SQLAlchemyConnector
 from pydantic import BaseModel, Field
 from sqlalchemy import text
@@ -21,13 +27,18 @@ class TableMetadataNames(BaseModel):
     show_table: str = Field(..., description="SHOW command keyword")
     show_create_table: str = Field(..., description="SHOW CREATE command keyword")
     info_table: str = Field(..., description="INFORMATION_SCHEMA table name")
-    table_types: Optional[List[str]] = Field(default=None, description="TABLE_TYPE values in INFORMATION_SCHEMA")
+    table_types: Optional[List[str]] = Field(
+        default=None, description="TABLE_TYPE values in INFORMATION_SCHEMA"
+    )
 
 
 # Metadata configuration for MySQL objects
 METADATA_DICT: Dict[TABLE_TYPE, TableMetadataNames] = {
     "table": TableMetadataNames(
-        show_table="TABLES", show_create_table="TABLE", info_table="TABLES", table_types=["TABLE", "BASE TABLE"]
+        show_table="TABLES",
+        show_create_table="TABLE",
+        info_table="TABLES",
+        table_types=["TABLE", "BASE TABLE"],
     ),
     "view": TableMetadataNames(
         show_table="VIEWS",
@@ -45,7 +56,9 @@ METADATA_DICT: Dict[TABLE_TYPE, TableMetadataNames] = {
 def _get_metadata_config(table_type: TABLE_TYPE) -> TableMetadataNames:
     """Get metadata configuration for given table type."""
     if table_type not in METADATA_DICT:
-        raise DatusDbException(ErrorCode.COMMON_FIELD_INVALID, f"Invalid table type '{table_type}'")
+        raise DatusDbException(
+            ErrorCode.COMMON_FIELD_INVALID, f"Invalid table type '{table_type}'"
+        )
     return METADATA_DICT[table_type]
 
 
@@ -130,7 +143,9 @@ class MySQLConnector(SQLAlchemyConnector):
         if database_name:
             where = f"TABLE_SCHEMA = '{database_name}'"
         else:
-            where = f"{list_to_in_str('TABLE_SCHEMA not in', list(self._sys_databases()))}"
+            where = (
+                f"{list_to_in_str('TABLE_SCHEMA not in', list(self._sys_databases()))}"
+            )
 
         # Get metadata configuration
         metadata_config = _get_metadata_config(table_type)
@@ -152,7 +167,9 @@ class MySQLConnector(SQLAlchemyConnector):
             tb_name = query_result["TABLE_NAME"][i]
             result.append(
                 {
-                    "identifier": self.identifier(database_name=db_name, table_name=tb_name),
+                    "identifier": self.identifier(
+                        database_name=db_name, table_name=tb_name
+                    ),
                     "catalog_name": "",
                     "schema_name": "",
                     "database_name": db_name,
@@ -203,7 +220,9 @@ class MySQLConnector(SQLAlchemyConnector):
         metadata_config = _get_metadata_config(table_type)
 
         for meta in self._get_metadata(table_type, catalog_name, database_name):
-            full_name = self.full_name(database_name=meta["database_name"], table_name=meta["table_name"])
+            full_name = self.full_name(
+                database_name=meta["database_name"], table_name=meta["table_name"]
+            )
 
             # Skip if not in filter list
             if filter_tables and full_name not in filter_tables:
@@ -222,13 +241,22 @@ class MySQLConnector(SQLAlchemyConnector):
         return result
 
     @override
-    def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
+    def get_tables(
+        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> List[str]:
         """Get list of table names."""
-        return [meta["table_name"] for meta in self._get_metadata("table", catalog_name, database_name)]
+        return [
+            meta["table_name"]
+            for meta in self._get_metadata("table", catalog_name, database_name)
+        ]
 
     @override
     def get_tables_with_ddl(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", tables: Optional[List[str]] = None
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        tables: Optional[List[str]] = None,
     ) -> List[Dict[str, str]]:
         """Get tables with DDL statements."""
         return self._get_objects_with_ddl("table", tables, catalog_name, database_name)
@@ -242,7 +270,11 @@ class MySQLConnector(SQLAlchemyConnector):
 
     @override
     def get_schema(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> List[Dict[str, Any]]:
         """
         Get table schema using INFORMATION_SCHEMA.
@@ -295,12 +327,16 @@ class MySQLConnector(SQLAlchemyConnector):
     # ==================== Database/Schema Management ====================
 
     @override
-    def get_databases(self, catalog_name: str = "", include_sys: bool = False) -> List[str]:
+    def get_databases(
+        self, catalog_name: str = "", include_sys: bool = False
+    ) -> List[str]:
         """Get list of databases (MySQL uses schemas as databases)."""
         return super().get_schemas(catalog_name=catalog_name, include_sys=include_sys)
 
     @override
-    def get_schemas(self, catalog_name: str = "", database_name: str = "", include_sys: bool = False) -> List[str]:
+    def get_schemas(
+        self, catalog_name: str = "", database_name: str = "", include_sys: bool = False
+    ) -> List[str]:
         """MySQL doesn't have separate schemas, return empty list."""
         return []
 
@@ -312,7 +348,9 @@ class MySQLConnector(SQLAlchemyConnector):
         return database_name or self.database_name
 
     @override
-    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+    def do_switch_context(
+        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ):
         """Switch database context using USE statement."""
         if database_name:
             with self.engine.connect() as conn:
@@ -350,7 +388,9 @@ class MySQLConnector(SQLAlchemyConnector):
         if tables:
             for table_name in tables:
                 full_name = self.full_name(
-                    catalog_name=catalog_name, database_name=database_name, table_name=table_name
+                    catalog_name=catalog_name,
+                    database_name=database_name,
+                    table_name=table_name,
                 )
                 sql = f"SELECT * FROM {full_name} LIMIT {top_n}"
                 df = self._execute_pandas(sql)
@@ -358,7 +398,9 @@ class MySQLConnector(SQLAlchemyConnector):
                     result.append(
                         {
                             "identifier": self.identifier(
-                                catalog_name=catalog_name, database_name=database_name, table_name=table_name
+                                catalog_name=catalog_name,
+                                database_name=database_name,
+                                table_name=table_name,
                             ),
                             "catalog_name": catalog_name,
                             "database_name": database_name,
@@ -372,7 +414,9 @@ class MySQLConnector(SQLAlchemyConnector):
         # Otherwise get metadata and query all tables
         metadata = self._get_metadata(table_type, "", database_name)
         for meta in metadata:
-            full_name = self.full_name(database_name=meta["database_name"], table_name=meta["table_name"])
+            full_name = self.full_name(
+                database_name=meta["database_name"], table_name=meta["table_name"]
+            )
             sql = f"SELECT * FROM {full_name} LIMIT {top_n}"
             df = self._execute_pandas(sql)
             if not df.empty:
@@ -392,7 +436,11 @@ class MySQLConnector(SQLAlchemyConnector):
 
     @override
     def full_name(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> str:
         """Build fully-qualified table name."""
         if database_name:
@@ -401,7 +449,11 @@ class MySQLConnector(SQLAlchemyConnector):
 
     @override
     def _reset_filter_tables(
-        self, tables: Optional[List[str]] = None, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+        self,
+        tables: Optional[List[str]] = None,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
     ) -> List[str]:
         """Reset filter tables with full names."""
         database_name = database_name or self.database_name

@@ -86,7 +86,9 @@ def test_get_tables_with_ddl(connector: ClickHouseConnector, config: ClickHouseC
     )
 
     try:
-        tables = connector.get_tables_with_ddl(database_name=config.database, tables=[table_name])
+        tables = connector.get_tables_with_ddl(
+            database_name=config.database, tables=[table_name]
+        )
 
         if len(tables) > 0:
             table = tables[0]
@@ -172,7 +174,9 @@ def test_get_schema(connector: ClickHouseConnector, config: ClickHouseConfig):
     )
 
     try:
-        schema = connector.get_schema(database_name=config.database, table_name=table_name)
+        schema = connector.get_schema(
+            database_name=config.database, table_name=table_name
+        )
 
         assert len(schema) == 6
 
@@ -220,7 +224,9 @@ def test_get_sample_rows(connector: ClickHouseConnector, config: ClickHouseConfi
     )
 
     try:
-        sample_rows = connector.get_sample_rows(database_name=config.database, tables=[table_name], top_n=2)
+        sample_rows = connector.get_sample_rows(
+            database_name=config.database, tables=[table_name], top_n=2
+        )
 
         assert len(sample_rows) == 1
         assert sample_rows[0]["table_name"] == table_name
@@ -263,7 +269,9 @@ def test_execute_ddl(connector: ClickHouseConnector, config: ClickHouseConfig):
         assert create_result.success
 
         # ALTER
-        alter_result = connector.execute_ddl(f"ALTER TABLE {table_name} ADD COLUMN age INT")
+        alter_result = connector.execute_ddl(
+            f"ALTER TABLE {table_name} ADD COLUMN age INT"
+        )
         assert alter_result.success
 
     finally:
@@ -288,7 +296,9 @@ def test_execute_insert(connector: ClickHouseConnector, config: ClickHouseConfig
     )
 
     try:
-        insert_result = connector.execute_insert(f"INSERT INTO {table_name} (id, name) VALUES (1, 'Alice'), (2, 'Bob')")
+        insert_result = connector.execute_insert(
+            f"INSERT INTO {table_name} (id, name) VALUES (1, 'Alice'), (2, 'Bob')"
+        )
         assert insert_result.success
 
         # Verify
@@ -324,7 +334,9 @@ def test_execute_update(connector: ClickHouseConnector, config: ClickHouseConfig
 
     try:
         # Insert initial data
-        connector.execute_insert(f"INSERT INTO {table_name} (id, name) VALUES (1, 'Alice'), (2, 'Bob')")
+        connector.execute_insert(
+            f"INSERT INTO {table_name} (id, name) VALUES (1, 'Alice'), (2, 'Bob')"
+        )
 
         # Update (ClickHouse uses ALTER TABLE ... UPDATE syntax)
         update_result = connector.execute_update(
@@ -361,7 +373,9 @@ def test_execute_delete(connector: ClickHouseConnector, config: ClickHouseConfig
 
     try:
         # Insert initial data
-        connector.execute_insert(f"INSERT INTO {table_name} (id, name) VALUES (1, 'Alice'), (2, 'Bob')")
+        connector.execute_insert(
+            f"INSERT INTO {table_name} (id, name) VALUES (1, 'Alice'), (2, 'Bob')"
+        )
 
         # Delete
         delete_result = connector.execute_delete(
@@ -370,7 +384,9 @@ def test_execute_delete(connector: ClickHouseConnector, config: ClickHouseConfig
         assert delete_result.success
 
         # Verify
-        query_result = connector.execute({"sql_query": f"SELECT id FROM {table_name}"}, result_format="list")
+        query_result = connector.execute(
+            {"sql_query": f"SELECT id FROM {table_name}"}, result_format="list"
+        )
         assert query_result.sql_return == [{"id": 1}]
     finally:
         connector.execute_ddl(f"DROP TABLE IF EXISTS {table_name}")
@@ -389,7 +405,9 @@ def test_exception_on_syntax_error(connector: ClickHouseConnector):
 @pytest.mark.integration
 def test_exception_on_nonexistent_table(connector: ClickHouseConnector):
     """Test exception on non-existent table."""
-    result = connector.execute({"sql_query": f"SELECT * FROM nonexistent_table_{uuid.uuid4().hex}"})
+    result = connector.execute(
+        {"sql_query": f"SELECT * FROM nonexistent_table_{uuid.uuid4().hex}"}
+    )
     assert "Unknown table expression" in result.error
 
 

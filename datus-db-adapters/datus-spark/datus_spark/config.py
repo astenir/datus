@@ -15,9 +15,15 @@ class SparkConfig(BaseModel):
     host: str = Field(default="127.0.0.1", description="Spark Thrift Server host")
     port: int = Field(default=10000, description="Spark Thrift Server port")
     username: str = Field(..., description="Spark username")
-    password: str = Field(default="", description="Spark password", json_schema_extra={"input_type": "password"})
+    password: str = Field(
+        default="",
+        description="Spark password",
+        json_schema_extra={"input_type": "password"},
+    )
     database: Optional[str] = Field(default=None, description="Default database name")
     auth_mechanism: Literal["NONE", "PLAIN", "KERBEROS"] = Field(
         default="NONE", description="Authentication mechanism (NONE, PLAIN, KERBEROS)"
     )
-    timeout_seconds: int = Field(default=30, description="Connection timeout in seconds")
+    timeout_seconds: int = Field(
+        default=30, description="Connection timeout in seconds"
+    )

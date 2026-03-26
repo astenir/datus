@@ -25,7 +25,9 @@ class TestUtilityFunctions:
         assert _safe_escape("test'quote") == "test''quote"
 
         # Test string with multiple quotes
-        assert _safe_escape("test'multiple'quotes'here") == "test''multiple''quotes''here"
+        assert (
+            _safe_escape("test'multiple'quotes'here") == "test''multiple''quotes''here"
+        )
 
         # Test None input
         assert _safe_escape(None) == ""
@@ -44,7 +46,9 @@ class TestUtilityFunctions:
         assert _safe_escape_identifier("test`backtick") == "test``backtick"
 
         # Test identifier with multiple backticks
-        assert _safe_escape_identifier("test`multi`backticks") == "test``multi``backticks"
+        assert (
+            _safe_escape_identifier("test`multi`backticks") == "test``multi``backticks"
+        )
 
         # Test None input
         assert _safe_escape_identifier(None) == ""
@@ -90,7 +94,9 @@ class TestUtilityFunctions:
         from datus_clickzetta.connector import ClickZettaConnector
 
         # Test volume: format
-        uri = ClickZettaConnector._normalize_volume_uri("volume:user://my_volume", "path/file.yaml")
+        uri = ClickZettaConnector._normalize_volume_uri(
+            "volume:user://my_volume", "path/file.yaml"
+        )
         assert uri == "volume:user://my_volume/path/file.yaml"
 
         # Test @ format (stage)
@@ -102,7 +108,9 @@ class TestUtilityFunctions:
         assert uri == "volume:user://my_volume"
 
         # Test with slash trimming
-        uri = ClickZettaConnector._normalize_volume_uri("volume:user://my_volume/", "/path/file.yaml")
+        uri = ClickZettaConnector._normalize_volume_uri(
+            "volume:user://my_volume/", "/path/file.yaml"
+        )
         assert uri == "volume:user://my_volume/path/file.yaml"
 
         # Test error cases
@@ -119,11 +127,17 @@ class TestUtilityFunctions:
 
         # Setup mock session
         mock_session = MagicMock()
-        mock_session_class.builder.configs.return_value.create.return_value = mock_session
+        mock_session_class.builder.configs.return_value.create.return_value = (
+            mock_session
+        )
 
         # Create connector instance
         connector = ClickZettaConnector(
-            service="service", username="user", password="pass", instance="instance", workspace="workspace"
+            service="service",
+            username="user",
+            password="pass",
+            instance="instance",
+            workspace="workspace",
         )
 
         # Test simple table definition
@@ -154,7 +168,10 @@ class TestUtilityFunctions:
         ]
 
         definition = connector._build_definition(
-            workspace="workspace", schema_name="schema", table_name="simple_table", columns=columns_no_comment
+            workspace="workspace",
+            schema_name="schema",
+            table_name="simple_table",
+            columns=columns_no_comment,
         )
 
         assert "CREATE TABLE" in definition
@@ -164,7 +181,11 @@ class TestUtilityFunctions:
 
         # Test view definition
         definition = connector._build_definition(
-            workspace="workspace", schema_name="schema", table_name="test_view", columns=columns, table_type="view"
+            workspace="workspace",
+            schema_name="schema",
+            table_name="test_view",
+            columns=columns,
+            table_type="view",
         )
 
         assert "CREATE VIEW" in definition
@@ -180,11 +201,15 @@ class TestVolumeOperations:
         from datus_clickzetta.connector import ClickZettaConnector
 
         # Test with trailing slashes
-        uri = ClickZettaConnector._normalize_volume_uri("volume:user://test/", "file.txt")
+        uri = ClickZettaConnector._normalize_volume_uri(
+            "volume:user://test/", "file.txt"
+        )
         assert uri == "volume:user://test/file.txt"
 
         # Test with leading slashes in path
-        uri = ClickZettaConnector._normalize_volume_uri("volume:user://test", "/file.txt")
+        uri = ClickZettaConnector._normalize_volume_uri(
+            "volume:user://test", "/file.txt"
+        )
         assert uri == "volume:user://test/file.txt"
 
         # Test stage with trailing slash
@@ -192,7 +217,9 @@ class TestVolumeOperations:
         assert uri == "@stage/file.txt"
 
         # Test nested paths
-        uri = ClickZettaConnector._normalize_volume_uri("volume:user://vol", "dir1/dir2/file.txt")
+        uri = ClickZettaConnector._normalize_volume_uri(
+            "volume:user://vol", "dir1/dir2/file.txt"
+        )
         assert uri == "volume:user://vol/dir1/dir2/file.txt"
 
 
@@ -206,14 +233,20 @@ class TestNewMethods:
 
         # Setup mock session
         mock_session = MagicMock()
-        mock_session_class.builder.configs.return_value.create.return_value = mock_session
+        mock_session_class.builder.configs.return_value.create.return_value = (
+            mock_session
+        )
 
         # Mock empty DataFrame
         empty_df = pd.DataFrame()
         mock_session.sql.return_value.to_pandas.return_value = empty_df
 
         connector = ClickZettaConnector(
-            service="service", username="user", password="pass", instance="instance", workspace="workspace"
+            service="service",
+            username="user",
+            password="pass",
+            instance="instance",
+            workspace="workspace",
         )
 
         result = connector.execute_arrow("SELECT * FROM empty_table")
@@ -234,14 +267,22 @@ class TestNewMethods:
 
         # Setup mock session
         mock_session = MagicMock()
-        mock_session_class.builder.configs.return_value.create.return_value = mock_session
+        mock_session_class.builder.configs.return_value.create.return_value = (
+            mock_session
+        )
 
         # Mock large DataFrame
-        large_df = pd.DataFrame({"id": range(100), "value": [f"value_{i}" for i in range(100)]})
+        large_df = pd.DataFrame(
+            {"id": range(100), "value": [f"value_{i}" for i in range(100)]}
+        )
         mock_session.sql.return_value.to_pandas.return_value = large_df
 
         connector = ClickZettaConnector(
-            service="service", username="user", password="pass", instance="instance", workspace="workspace"
+            service="service",
+            username="user",
+            password="pass",
+            instance="instance",
+            workspace="workspace",
         )
 
         # Test with max_rows limitation
@@ -260,14 +301,20 @@ class TestNewMethods:
 
         # Setup mock session
         mock_session = MagicMock()
-        mock_session_class.builder.configs.return_value.create.return_value = mock_session
+        mock_session_class.builder.configs.return_value.create.return_value = (
+            mock_session
+        )
 
         # Mock empty DataFrame
         empty_df = pd.DataFrame()
         mock_session.sql.return_value.to_pandas.return_value = empty_df
 
         connector = ClickZettaConnector(
-            service="service", username="user", password="pass", instance="instance", workspace="workspace"
+            service="service",
+            username="user",
+            password="pass",
+            instance="instance",
+            workspace="workspace",
         )
 
         result = connector.execute_query_to_dict("SELECT * FROM empty_table")
@@ -284,14 +331,26 @@ class TestNewMethods:
 
         # Setup mock session
         mock_session = MagicMock()
-        mock_session_class.builder.configs.return_value.create.return_value = mock_session
+        mock_session_class.builder.configs.return_value.create.return_value = (
+            mock_session
+        )
 
         # Mock query result
-        mock_df = pd.DataFrame({"int_col": [1, 2, 3], "str_col": ["a", "b", "c"], "float_col": [1.1, 2.2, 3.3]})
+        mock_df = pd.DataFrame(
+            {
+                "int_col": [1, 2, 3],
+                "str_col": ["a", "b", "c"],
+                "float_col": [1.1, 2.2, 3.3],
+            }
+        )
         mock_session.sql.return_value.to_pandas.return_value = mock_df
 
         connector = ClickZettaConnector(
-            service="service", username="user", password="pass", instance="instance", workspace="workspace"
+            service="service",
+            username="user",
+            password="pass",
+            instance="instance",
+            workspace="workspace",
         )
 
         result = connector.execute_arrow("SELECT * FROM test_table")

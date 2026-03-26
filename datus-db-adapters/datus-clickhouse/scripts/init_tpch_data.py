@@ -156,18 +156,38 @@ TPCH_DATA = [
     """,
 ]
 
-TPCH_TABLES = ["tpch_region", "tpch_nation", "tpch_customer", "tpch_orders", "tpch_supplier"]
+TPCH_TABLES = [
+    "tpch_region",
+    "tpch_nation",
+    "tpch_customer",
+    "tpch_orders",
+    "tpch_supplier",
+]
 ROW_COUNTS = [5, 25, 10, 15, 5]
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Initialize TPC-H sample data in ClickHouse")
-    parser.add_argument("--host", default="localhost", help="ClickHouse host (default: localhost)")
-    parser.add_argument("--port", type=int, default=8123, help="ClickHouse HTTP port (default: 8123)")
-    parser.add_argument("--username", default="default_user", help="Username (default: default_user)")
-    parser.add_argument("--password", default="default_test", help="Password (default: default_test)")
-    parser.add_argument("--database", default="default_test", help="Database (default: default_test)")
-    parser.add_argument("--drop", action="store_true", help="Drop existing TPC-H tables before creating")
+    parser = argparse.ArgumentParser(
+        description="Initialize TPC-H sample data in ClickHouse"
+    )
+    parser.add_argument(
+        "--host", default="localhost", help="ClickHouse host (default: localhost)"
+    )
+    parser.add_argument(
+        "--port", type=int, default=8123, help="ClickHouse HTTP port (default: 8123)"
+    )
+    parser.add_argument(
+        "--username", default="default_user", help="Username (default: default_user)"
+    )
+    parser.add_argument(
+        "--password", default="default_test", help="Password (default: default_test)"
+    )
+    parser.add_argument(
+        "--database", default="default_test", help="Database (default: default_test)"
+    )
+    parser.add_argument(
+        "--drop", action="store_true", help="Drop existing TPC-H tables before creating"
+    )
     args = parser.parse_args()
 
     # First ensure database exists
@@ -240,7 +260,10 @@ def main():
     print("\nDone! TPC-H data is ready for use in Datus.")
     print("\nExample queries:")
     print("  SELECT * FROM `tpch_region`")
-    print("  SELECT n.name, r.name FROM `tpch_nation` n" " JOIN `tpch_region` r ON n.regionkey = r.regionkey")
+    print(
+        "  SELECT n.name, r.name FROM `tpch_nation` n"
+        " JOIN `tpch_region` r ON n.regionkey = r.regionkey"
+    )
 
 
 if __name__ == "__main__":

@@ -112,7 +112,9 @@ def mock_datus_modules():
 
     # Mock sql_utils
     mock_sql_utils = MagicMock()
-    mock_sql_utils.metadata_identifier = MagicMock(return_value="workspace.schema.table")
+    mock_sql_utils.metadata_identifier = MagicMock(
+        return_value="workspace.schema.table"
+    )
     mock_sql_utils.parse_context_switch = MagicMock(return_value={})
     mock_sql_utils.parse_sql_type = MagicMock(return_value="SELECT")
 
@@ -173,7 +175,10 @@ def pytest_configure(config):
     """Configure pytest with custom markers."""
     config.addinivalue_line("markers", "unit: Mark test as a unit test")
     config.addinivalue_line("markers", "integration: Mark test as an integration test")
-    config.addinivalue_line("markers", "requires_clickzetta: Mark test as requiring actual ClickZetta credentials")
+    config.addinivalue_line(
+        "markers",
+        "requires_clickzetta: Mark test as requiring actual ClickZetta credentials",
+    )
     config.addinivalue_line("markers", "slow: Mark test as slow running")
 
 

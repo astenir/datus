@@ -21,7 +21,8 @@ from datus_redshift import RedshiftConnector
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
-        not os.getenv("REDSHIFT_HOST"), reason="Redshift credentials not available in environment variables"
+        not os.getenv("REDSHIFT_HOST"),
+        reason="Redshift credentials not available in environment variables",
     ),
 ]
 
@@ -117,7 +118,9 @@ class TestRedshiftMetadata:
 
     def test_full_name_generation(self, connector):
         """Test generating fully qualified table names."""
-        full_name = connector.full_name(database_name="mydb", schema_name="myschema", table_name="mytable")
+        full_name = connector.full_name(
+            database_name="mydb", schema_name="myschema", table_name="mytable"
+        )
         assert full_name == '"mydb"."myschema"."mytable"'
 
         full_name = connector.full_name(schema_name="myschema", table_name="mytable")
@@ -128,7 +131,9 @@ class TestRedshiftMetadata:
 
     def test_identifier_generation(self, connector):
         """Test generating table identifiers."""
-        identifier = connector.identifier(database_name="mydb", schema_name="myschema", table_name="mytable")
+        identifier = connector.identifier(
+            database_name="mydb", schema_name="myschema", table_name="mytable"
+        )
         assert "mydb" in identifier
         assert "myschema" in identifier
         assert "mytable" in identifier
