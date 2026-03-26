@@ -564,7 +564,7 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             return result
 
         # Otherwise get metadata and query all tables
-        metadata = self._get_metadata(table_type, "", "", schema_name)
+        metadata = self._get_metadata(table_type, "", database_name, schema_name)
         for meta in metadata:
             full_name = self.full_name(
                 schema_name=meta["schema_name"], table_name=meta["table_name"]
@@ -630,4 +630,4 @@ class PostgreSQLConnector(SQLAlchemyConnector):
     ) -> List[str]:
         """Reset filter tables with full names."""
         schema_name = schema_name or self.schema_name
-        return super()._reset_filter_tables(tables, "", "", schema_name)
+        return super()._reset_filter_tables(tables, "", database_name, schema_name)
