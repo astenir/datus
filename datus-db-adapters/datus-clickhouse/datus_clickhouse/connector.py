@@ -26,9 +26,7 @@ class TableMetadataNames(BaseModel):
     show_table: str = Field(..., description="SHOW command keyword")
     show_create_table: str = Field(..., description="SHOW CREATE command keyword")
     info_table: str = Field(..., description="INFORMATION_SCHEMA table name")
-    table_types: Optional[List[str]] = Field(
-        default=None, description="TABLE_TYPE values in INFORMATION_SCHEMA"
-    )
+    table_types: Optional[List[str]] = Field(default=None, description="TABLE_TYPE values in INFORMATION_SCHEMA")
 
 
 # Metadata configuration for ClickHouse objects
@@ -51,9 +49,7 @@ METADATA_DICT: Dict[TABLE_TYPE, TableMetadataNames] = {
 def _get_metadata_config(table_type: TABLE_TYPE) -> TableMetadataNames:
     """Get metadata configuration for given table type."""
     if table_type not in METADATA_DICT:
-        raise DatusDbException(
-            ErrorCode.COMMON_FIELD_INVALID, f"Invalid table type '{table_type}'"
-        )
+        raise DatusDbException(ErrorCode.COMMON_FIELD_INVALID, f"Invalid table type '{table_type}'")
     return METADATA_DICT[table_type]
 
 
@@ -71,9 +67,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
         if isinstance(config, dict):
             config = ClickHouseConfig(**config)
         elif not isinstance(config, ClickHouseConfig):
-            raise TypeError(
-                f"config must be ClickHouseConfig or dict, got {type(config)}"
-            )
+            raise TypeError(f"config must be ClickHouseConfig or dict, got {type(config)}")
 
         self.config = config
         self.host = config.host
@@ -85,10 +79,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
         encoded_password = quote_plus(config.password) if config.password else ""
 
         # Build connection string
-        connection_string = (
-            f"clickhouse://{self.username}:{encoded_password}@{self.host}:{self.port}/"
-            f"{database}"
-        )
+        connection_string = f"clickhouse://{self.username}:{encoded_password}@{self.host}:{self.port}/{database}"
 
         super().__init__(
             connection_string,
@@ -144,9 +135,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
             safe_db = database_name.replace("'", "''")
             where = f"TABLE_SCHEMA = '{safe_db}'"
         else:
-            where = (
-                f"{list_to_in_str('TABLE_SCHEMA not in', list(self._sys_databases()))}"
-            )
+            where = f"{list_to_in_str('TABLE_SCHEMA not in', list(self._sys_databases()))}"
 
         # Get metadata configuration
         metadata_config = _get_metadata_config(table_type)
@@ -154,9 +143,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
         # Build and execute query
         type_filter = ""
         if metadata_config.table_types:
-            type_filter = list_to_in_str(
-                "and table_type in ", metadata_config.table_types
-            )
+            type_filter = list_to_in_str("and table_type in ", metadata_config.table_types)
         query = (
             f"SELECT TABLE_SCHEMA, TABLE_NAME "
             f"FROM information_schema.{metadata_config.info_table} "
@@ -175,9 +162,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
             tb_name = query_result["TABLE_NAME"][i]
             result.append(
                 {
-                    "identifier": self.identifier(
-                        database_name=db_name, table_name=tb_name
-                    ),
+                    "identifier": self.identifier(database_name=db_name, table_name=tb_name),
                     "catalog_name": "",
                     "schema_name": "",
                     "database_name": db_name,
@@ -234,9 +219,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
         metadata_config = _get_metadata_config(table_type)
 
         for meta in self._get_metadata(table_type, catalog_name, database_name):
-            full_name = self.full_name(
-                database_name=meta["database_name"], table_name=meta["table_name"]
-            )
+            full_name = self.full_name(database_name=meta["database_name"], table_name=meta["table_name"])
 
             # Skip if not in filter list
             if filter_tables and full_name not in filter_tables:
@@ -255,14 +238,9 @@ class ClickHouseConnector(SQLAlchemyConnector):
         return result
 
     @override
-    def get_tables(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
-    ) -> List[str]:
+    def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """Get list of table names."""
-        return [
-            meta["table_name"]
-            for meta in self._get_metadata("table", catalog_name, database_name)
-        ]
+        return [meta["table_name"] for meta in self._get_metadata("table", catalog_name, database_name)]
 
     @override
     def get_tables_with_ddl(
@@ -306,9 +284,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
             return []
 
         database_name = database_name or self.database_name
-        full_table_name = self.full_name(
-            database_name=database_name, table_name=table_name
-        )
+        full_table_name = self.full_name(database_name=database_name, table_name=table_name)
 
         # Use DESCRIBE to get schema
         sql = f"DESCRIBE {full_table_name}"
@@ -321,9 +297,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
                     "cid": i,
                     "name": query_result["name"][i],
                     "type": query_result["type"][i],
-                    "nullable": (
-                        True if "Nullable" in query_result["type"][i] else False
-                    ),
+                    "nullable": (True if "Nullable" in query_result["type"][i] else False),
                     "default_value": query_result["default_expression"][i],
                     "pk": False,
                 }
@@ -333,16 +307,12 @@ class ClickHouseConnector(SQLAlchemyConnector):
     # ==================== Database/Schema Management ====================
 
     @override
-    def get_databases(
-        self, catalog_name: str = "", include_sys: bool = False
-    ) -> List[str]:
+    def get_databases(self, catalog_name: str = "", include_sys: bool = False) -> List[str]:
         """Get list of databases (ClickHouse uses schemas as databases)."""
         return super().get_schemas(catalog_name=catalog_name, include_sys=include_sys)
 
     @override
-    def get_schemas(
-        self, catalog_name: str = "", database_name: str = "", include_sys: bool = False
-    ) -> List[str]:
+    def get_schemas(self, catalog_name: str = "", database_name: str = "", include_sys: bool = False) -> List[str]:
         """ClickHouse has no schema layer; databases serve as schemas. Use get_databases() instead."""
         return []
 
@@ -354,9 +324,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
         return database_name or self.database_name
 
     @override
-    def do_switch_context(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
-    ):
+    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
         """Switch database context. Updates default database for subsequent full_name() calls."""
         if database_name:
             self.database_name = database_name
@@ -418,9 +386,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
         # Otherwise get metadata and query all tables
         metadata = self._get_metadata(table_type, "", database_name)
         for meta in metadata:
-            full_name = self.full_name(
-                database_name=meta["database_name"], table_name=meta["table_name"]
-            )
+            full_name = self.full_name(database_name=meta["database_name"], table_name=meta["table_name"])
             sql = f"SELECT * FROM {full_name} LIMIT {top_n}"
             df = self._execute_pandas(sql)
             if not df.empty:
@@ -475,8 +441,4 @@ class ClickHouseConnector(SQLAlchemyConnector):
         if not catalog_name and not database_name and not schema_name:
             return table_name
         else:
-            return (
-                f"{catalog_name}.{database_name}.{table_name}"
-                if catalog_name
-                else f"{database_name}.{table_name}"
-            )
+            return f"{catalog_name}.{database_name}.{table_name}" if catalog_name else f"{database_name}.{table_name}"
