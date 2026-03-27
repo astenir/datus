@@ -4,18 +4,6 @@
 
 from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple, override
 
-from datus_db_core import (
-    TABLE_TYPE,
-    BaseSqlConnector,
-    ConnectionConfig,
-    DatusDbException,
-    ErrorCode,
-    ExecuteSQLResult,
-    SQLType,
-    get_logger,
-    parse_context_switch,
-    parse_sql_type,
-)
 from pandas import DataFrame
 from pyarrow import Table
 from sqlalchemy import create_engine, inspect, text
@@ -32,6 +20,19 @@ from sqlalchemy.exc import (
     ProgrammingError,
     SQLAlchemyError,
     TimeoutError,
+)
+
+from datus_db_core import (
+    TABLE_TYPE,
+    BaseSqlConnector,
+    ConnectionConfig,
+    DatusDbException,
+    ErrorCode,
+    ExecuteSQLResult,
+    SQLType,
+    get_logger,
+    parse_context_switch,
+    parse_sql_type,
 )
 
 logger = get_logger(__name__)
@@ -105,7 +106,8 @@ class SQLAlchemyConnector(BaseSqlConnector):
         if not (self.engine and self.connection):
             self._force_reset()
             raise DatusDbException(
-                ErrorCode.DB_CONNECTION_FAILED, message_args={"error_message": "Failed to establish connection"}
+                ErrorCode.DB_CONNECTION_FAILED,
+                message_args={"error_message": "Failed to establish connection"},
             )
 
     @override
@@ -246,7 +248,11 @@ class SQLAlchemyConnector(BaseSqlConnector):
                 result = DataFrame(result)
 
             return ExecuteSQLResult(
-                success=True, sql_query=sql, sql_return=result, row_count=row_count, result_format=result_format
+                success=True,
+                sql_query=sql,
+                sql_return=result,
+                row_count=row_count,
+                result_format=result_format,
             )
         except Exception as e:
             ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
@@ -263,7 +269,8 @@ class SQLAlchemyConnector(BaseSqlConnector):
             SQLType.UNKNOWN,
         ):
             raise DatusDbException(
-                ErrorCode.DB_EXECUTION_ERROR, message="Only SELECT and metadata queries are supported"
+                ErrorCode.DB_EXECUTION_ERROR,
+                message="Only SELECT and metadata queries are supported",
             )
 
         self.connect()
@@ -297,7 +304,12 @@ class SQLAlchemyConnector(BaseSqlConnector):
             lastrowid = getattr(res, "lastrowid", None)
             return_value = inserted_pk if inserted_pk else (lastrowid if lastrowid else res.rowcount)
 
-            return ExecuteSQLResult(success=True, sql_query=sql, sql_return=str(return_value), row_count=res.rowcount)
+            return ExecuteSQLResult(
+                success=True,
+                sql_query=sql,
+                sql_return=str(return_value),
+                row_count=res.rowcount,
+            )
         except Exception as e:
             self._safe_rollback()
             ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
@@ -310,7 +322,12 @@ class SQLAlchemyConnector(BaseSqlConnector):
             self.connect()
             res = self.connection.execute(text(sql))
             self.connection.commit()
-            return ExecuteSQLResult(success=True, sql_query=sql, sql_return=str(res.rowcount), row_count=res.rowcount)
+            return ExecuteSQLResult(
+                success=True,
+                sql_query=sql,
+                sql_return=str(res.rowcount),
+                row_count=res.rowcount,
+            )
         except Exception as e:
             self._safe_rollback()
             ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
@@ -323,7 +340,12 @@ class SQLAlchemyConnector(BaseSqlConnector):
             self.connect()
             res = self.connection.execute(text(sql))
             self.connection.commit()
-            return ExecuteSQLResult(success=True, sql_query=sql, sql_return=str(res.rowcount), row_count=res.rowcount)
+            return ExecuteSQLResult(
+                success=True,
+                sql_query=sql,
+                sql_return=str(res.rowcount),
+                row_count=res.rowcount,
+            )
         except Exception as e:
             self._safe_rollback()
             ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
@@ -336,7 +358,12 @@ class SQLAlchemyConnector(BaseSqlConnector):
             self.connect()
             res = self.connection.execute(text(sql))
             self.connection.commit()
-            return ExecuteSQLResult(success=True, sql_query=sql, sql_return=str(res.rowcount), row_count=res.rowcount)
+            return ExecuteSQLResult(
+                success=True,
+                sql_query=sql,
+                sql_return=str(res.rowcount),
+                row_count=res.rowcount,
+            )
         except Exception as e:
             self._safe_rollback()
             ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
@@ -347,7 +374,11 @@ class SQLAlchemyConnector(BaseSqlConnector):
         try:
             df = self._execute_pandas(sql)
             return ExecuteSQLResult(
-                success=True, sql_query=sql, sql_return=df, row_count=len(df), result_format="pandas"
+                success=True,
+                sql_query=sql,
+                sql_return=df,
+                row_count=len(df),
+                result_format="pandas",
             )
         except Exception as e:
             ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
@@ -363,12 +394,21 @@ class SQLAlchemyConnector(BaseSqlConnector):
             self.connect()
             df = self._execute_pandas(sql)
             return ExecuteSQLResult(
-                success=True, sql_query=sql, sql_return=df.to_csv(index=False), row_count=len(df), result_format="csv"
+                success=True,
+                sql_query=sql,
+                sql_return=df.to_csv(index=False),
+                row_count=len(df),
+                result_format="csv",
             )
         except Exception as e:
             ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(
-                success=False, sql_query=sql, sql_return="", row_count=0, error=str(ex), result_format="csv"
+                success=False,
+                sql_query=sql,
+                sql_return="",
+                row_count=0,
+                error=str(ex),
+                result_format="csv",
             )
 
     def execute_arrow(self, sql: str) -> ExecuteSQLResult:
@@ -380,15 +420,28 @@ class SQLAlchemyConnector(BaseSqlConnector):
                 df = DataFrame(result.fetchall(), columns=result.keys())
                 table = Table.from_pandas(df)
                 return ExecuteSQLResult(
-                    success=True, sql_query=sql, sql_return=table, row_count=len(df), result_format="arrow"
+                    success=True,
+                    sql_query=sql,
+                    sql_return=table,
+                    row_count=len(df),
+                    result_format="arrow",
                 )
             return ExecuteSQLResult(
-                success=True, sql_query=sql, sql_return=result.rowcount, row_count=0, result_format="arrow"
+                success=True,
+                sql_query=sql,
+                sql_return=result.rowcount,
+                row_count=0,
+                result_format="arrow",
             )
         except Exception as e:
             ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(
-                success=False, error=str(ex), sql_query=sql, sql_return="", row_count=0, result_format="arrow"
+                success=False,
+                error=str(ex),
+                sql_query=sql,
+                sql_return="",
+                row_count=0,
+                result_format="arrow",
             )
 
     @override
@@ -457,7 +510,8 @@ class SQLAlchemyConnector(BaseSqlConnector):
             if isinstance(e, DatusDbException):
                 raise
             raise DatusDbException(
-                ErrorCode.DB_CONNECTION_FAILED, message_args={"error_message": "Connection test failed"}
+                ErrorCode.DB_CONNECTION_FAILED,
+                message_args={"error_message": "Connection test failed"},
             ) from e
 
     # ==================== Metadata Methods ====================
@@ -486,7 +540,8 @@ class SQLAlchemyConnector(BaseSqlConnector):
             return inspector.get_view_names(schema=sqlalchemy_schema)
         except Exception as e:
             raise DatusDbException(
-                ErrorCode.DB_FAILED, message_args={"operation": "get_views", "error_message": str(e)}
+                ErrorCode.DB_FAILED,
+                message_args={"operation": "get_views", "error_message": str(e)},
             ) from e
 
     def get_schemas(self, catalog_name: str = "", database_name: str = "", include_sys: bool = False) -> List[str]:
@@ -498,11 +553,17 @@ class SQLAlchemyConnector(BaseSqlConnector):
         return schemas
 
     def get_schema(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> List[Dict[str, Any]]:
         """Get table schema information."""
         sqlalchemy_schema = self._sqlalchemy_schema(
-            catalog_name or self.catalog_name, database_name or self.database_name, schema_name or self.schema_name
+            catalog_name or self.catalog_name,
+            database_name or self.database_name,
+            schema_name or self.schema_name,
         )
         inspector = self._inspector()
         try:
@@ -595,7 +656,11 @@ class SQLAlchemyConnector(BaseSqlConnector):
         return database_name or schema_name
 
     def full_name(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> str:
         """Build fully-qualified table name."""
         return self.identifier(catalog_name, database_name, schema_name, table_name)

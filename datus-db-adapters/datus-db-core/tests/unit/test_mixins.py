@@ -7,7 +7,12 @@
 from typing import Dict, List
 
 import pytest
-from datus_db_core.mixins import CatalogSupportMixin, MaterializedViewSupportMixin, SchemaNamespaceMixin
+
+from datus_db_core.mixins import (
+    CatalogSupportMixin,
+    MaterializedViewSupportMixin,
+    SchemaNamespaceMixin,
+)
 
 
 class TestCatalogSupportMixin:

@@ -40,7 +40,10 @@ def run_command(cmd, description=""):
 def main():
     parser = argparse.ArgumentParser(description="Run ClickZetta adapter tests")
     parser.add_argument(
-        "--mode", choices=["unit", "integration", "all", "quick", "coverage"], default="all", help="Test mode to run"
+        "--mode",
+        choices=["unit", "integration", "all", "quick", "coverage"],
+        default="all",
+        help="Test mode to run",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     parser.add_argument("--markers", "-m", help='Pytest markers to run (e.g., "not slow")')
@@ -57,7 +60,11 @@ def main():
 
     # Check if pytest is available
     try:
-        subprocess.run([sys.executable, "-m", "pytest", "--version"], capture_output=True, check=True)
+        subprocess.run(
+            [sys.executable, "-m", "pytest", "--version"],
+            capture_output=True,
+            check=True,
+        )
     except subprocess.CalledProcessError:
         print("❌ pytest not found. Trying to install...")
         try:
@@ -65,7 +72,15 @@ def main():
         except subprocess.CalledProcessError:
             try:
                 subprocess.run(
-                    [sys.executable, "-m", "pip", "install", "--break-system-packages", "pytest"], check=True
+                    [
+                        sys.executable,
+                        "-m",
+                        "pip",
+                        "install",
+                        "--break-system-packages",
+                        "pytest",
+                    ],
+                    check=True,
                 )
             except subprocess.CalledProcessError:
                 print("⚠️  Could not install pytest automatically.")
@@ -113,7 +128,11 @@ def main():
     elif args.mode == "coverage":
         # Install coverage if needed
         try:
-            subprocess.run([sys.executable, "-m", "coverage", "--version"], capture_output=True, check=True)
+            subprocess.run(
+                [sys.executable, "-m", "coverage", "--version"],
+                capture_output=True,
+                check=True,
+            )
         except subprocess.CalledProcessError:
             print("Installing coverage...")
             subprocess.run([sys.executable, "-m", "pip", "install", "coverage"], check=True)

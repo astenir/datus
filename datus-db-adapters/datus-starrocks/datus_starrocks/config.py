@@ -15,7 +15,11 @@ class StarRocksConfig(BaseModel):
     host: str = Field(default="127.0.0.1", description="StarRocks server host")
     port: int = Field(default=9030, description="StarRocks server port")
     username: str = Field(..., description="StarRocks username")
-    password: str = Field(default="", description="StarRocks password", json_schema_extra={"input_type": "password"})
+    password: str = Field(
+        default="",
+        description="StarRocks password",
+        json_schema_extra={"input_type": "password"},
+    )
     catalog: str = Field(default="default_catalog", description="Default catalog name")
     database: Optional[str] = Field(default=None, description="Default database name")
     charset: str = Field(default="utf8mb4", description="Character set to use")

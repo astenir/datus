@@ -161,24 +161,49 @@ TPCH_DATA = [
     """,
 ]
 
-TPCH_TABLES = ["tpch_region", "tpch_nation", "tpch_customer", "tpch_orders", "tpch_supplier"]
+TPCH_TABLES = [
+    "tpch_region",
+    "tpch_nation",
+    "tpch_customer",
+    "tpch_orders",
+    "tpch_supplier",
+]
 ROW_COUNTS = [5, 25, 10, 15, 5]
 
 
 def main():
     parser = argparse.ArgumentParser(description="Initialize TPC-H sample data in Amazon Redshift")
-    parser.add_argument("--host", default=os.getenv("REDSHIFT_HOST"), help="Redshift host (or set REDSHIFT_HOST)")
     parser.add_argument(
-        "--port", type=int, default=int(os.getenv("REDSHIFT_PORT", "5439")), help="Redshift port (default: 5439)"
+        "--host",
+        default=os.getenv("REDSHIFT_HOST"),
+        help="Redshift host (or set REDSHIFT_HOST)",
     )
     parser.add_argument(
-        "--username", default=os.getenv("REDSHIFT_USERNAME"), help="Username (or set REDSHIFT_USERNAME)"
+        "--port",
+        type=int,
+        default=int(os.getenv("REDSHIFT_PORT", "5439")),
+        help="Redshift port (default: 5439)",
     )
     parser.add_argument(
-        "--password", default=os.getenv("REDSHIFT_PASSWORD"), help="Password (or set REDSHIFT_PASSWORD)"
+        "--username",
+        default=os.getenv("REDSHIFT_USERNAME"),
+        help="Username (or set REDSHIFT_USERNAME)",
     )
-    parser.add_argument("--database", default=os.getenv("REDSHIFT_DATABASE", "dev"), help="Database (default: dev)")
-    parser.add_argument("--schema", default=os.getenv("REDSHIFT_SCHEMA", "public"), help="Schema (default: public)")
+    parser.add_argument(
+        "--password",
+        default=os.getenv("REDSHIFT_PASSWORD"),
+        help="Password (or set REDSHIFT_PASSWORD)",
+    )
+    parser.add_argument(
+        "--database",
+        default=os.getenv("REDSHIFT_DATABASE", "dev"),
+        help="Database (default: dev)",
+    )
+    parser.add_argument(
+        "--schema",
+        default=os.getenv("REDSHIFT_SCHEMA", "public"),
+        help="Schema (default: public)",
+    )
     parser.add_argument("--drop", action="store_true", help="Drop existing TPC-H tables before creating")
     args = parser.parse_args()
 
@@ -264,8 +289,7 @@ def main():
     print("\nExample queries:")
     print(f"  SELECT * FROM {schema}.tpch_region")
     print(
-        f"  SELECT n.name, r.name FROM {schema}.tpch_nation n"
-        f" JOIN {schema}.tpch_region r ON n.regionkey = r.regionkey"
+        f"  SELECT n.name, r.name FROM {schema}.tpch_nation n JOIN {schema}.tpch_region r ON n.regionkey = r.regionkey"
     )
 
 

@@ -229,7 +229,11 @@ class BaseSqlConnector(ABC):
 
     def switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
         self.connect()
-        self.do_switch_context(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name)
+        self.do_switch_context(
+            catalog_name=catalog_name,
+            database_name=database_name,
+            schema_name=schema_name,
+        )
         if catalog_name:
             self.catalog_name = catalog_name
         if database_name:
@@ -241,7 +245,11 @@ class BaseSqlConnector(ABC):
         return None
 
     def get_schema(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> List[Dict[str, str]]:
         raise NotImplementedError()
 
@@ -257,12 +265,20 @@ class BaseSqlConnector(ABC):
         raise NotImplementedError()
 
     def full_name(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> str:
         raise NotImplementedError()
 
     def identifier(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> str:
         return metadata_identifier(
             dialect=self.dialect,

@@ -6,10 +6,11 @@ import re
 from typing import Any, Dict, Optional
 
 import sqlglot
-from datus_db_core.constants import SQLType
-from datus_db_core.logging import get_logger
 from sqlglot import expressions
 from sqlglot.expressions import Table
+
+from datus_db_core.constants import SQLType
+from datus_db_core.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -319,7 +320,9 @@ _OPTIONAL_DDL_EXPRESSIONS: tuple[type[expressions.Expression], ...] = tuple(
 )
 
 
-def _normalize_expression(expr: Optional[expressions.Expression]) -> Optional[expressions.Expression]:
+def _normalize_expression(
+    expr: Optional[expressions.Expression],
+) -> Optional[expressions.Expression]:
     while expr is not None and isinstance(expr, (expressions.Alias, expressions.Subquery, expressions.Paren)):
         expr = expr.this
     return expr
@@ -394,7 +397,10 @@ def parse_sql_type(sql: str, dialect: str) -> SQLType:
         ),
     ):
         return SQLType.DDL
-    if isinstance(normalized_expression, (expressions.Describe, expressions.Show, expressions.Pragma)):
+    if isinstance(
+        normalized_expression,
+        (expressions.Describe, expressions.Show, expressions.Pragma),
+    ):
         return SQLType.METADATA_SHOW
     if isinstance(normalized_expression, expressions.Command):
         command_name = str(normalized_expression.args.get("this") or "").upper()
@@ -572,7 +578,9 @@ def parse_context_switch(sql: str, dialect: str) -> Optional[Dict[str, Any]]:
 
     if command == "SET":
         set_match = re.match(
-            r"^\s*SET\s+(?:SESSION\s+)?(CATALOG|DATABASE|SCHEMA)\s+(.*)$", statement, flags=re.IGNORECASE
+            r"^\s*SET\s+(?:SESSION\s+)?(CATALOG|DATABASE|SCHEMA)\s+(.*)$",
+            statement,
+            flags=re.IGNORECASE,
         )
         if not set_match:
             return None

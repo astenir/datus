@@ -5,6 +5,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from datus_db_core import CatalogSupportMixin
 from datus_trino import TrinoConfig, TrinoConnector
 
@@ -250,7 +251,11 @@ def test_full_name_with_special_characters():
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = TrinoConnector(config)
 
-        result = connector.full_name(catalog_name="test-catalog", schema_name="test_schema", table_name="test-table")
+        result = connector.full_name(
+            catalog_name="test-catalog",
+            schema_name="test_schema",
+            table_name="test-table",
+        )
 
         assert '"test-catalog"' in result
         assert '"test_schema"' in result

@@ -6,6 +6,7 @@ import os
 from typing import Generator
 
 import pytest
+
 from datus_spark import SparkConfig, SparkConnector
 
 
@@ -44,7 +45,13 @@ def connector(config: SparkConfig) -> Generator[SparkConnector, None, None]:
 
 # ==================== TPC-H Test Data ====================
 
-TPCH_TABLES = ["tpch_region", "tpch_nation", "tpch_customer", "tpch_orders", "tpch_supplier"]
+TPCH_TABLES = [
+    "tpch_region",
+    "tpch_nation",
+    "tpch_customer",
+    "tpch_orders",
+    "tpch_supplier",
+]
 
 TPCH_DDL = [
     """

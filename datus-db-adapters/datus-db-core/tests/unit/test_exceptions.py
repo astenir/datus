@@ -5,6 +5,7 @@
 """Unit tests for exceptions module."""
 
 import pytest
+
 from datus_db_core.exceptions import DatusDbException, ErrorCode
 
 

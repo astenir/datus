@@ -7,6 +7,7 @@ import os
 from typing import Generator
 
 import pytest
+
 from datus_starrocks import StarRocksConfig, StarRocksConnector
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,13 @@ def connector(config: StarRocksConfig) -> Generator[StarRocksConnector, None, No
 
 # ==================== TPC-H Test Data ====================
 
-TPCH_TABLES = ["tpch_region", "tpch_nation", "tpch_customer", "tpch_orders", "tpch_supplier"]
+TPCH_TABLES = [
+    "tpch_region",
+    "tpch_nation",
+    "tpch_customer",
+    "tpch_orders",
+    "tpch_supplier",
+]
 
 TPCH_DDL = [
     """

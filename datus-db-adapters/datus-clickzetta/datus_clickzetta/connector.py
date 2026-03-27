@@ -228,7 +228,12 @@ class ClickZettaConnector:
                 escaped_schema = _safe_escape_identifier(schema_name.upper())
                 self._wrap_exception(exc, f"USE SCHEMA `{escaped_schema}`", ErrorCode.DB_EXECUTION_ERROR)
 
-    def _wrap_exception(self, exc: Exception, sql: str = "", error_code: ErrorCode = ErrorCode.DB_EXECUTION_ERROR):
+    def _wrap_exception(
+        self,
+        exc: Exception,
+        sql: str = "",
+        error_code: ErrorCode = ErrorCode.DB_EXECUTION_ERROR,
+    ):
         if isinstance(exc, DatusDbException):
             raise exc
         raise DatusDbException(error_code, message_args={"error_message": str(exc), "sql": sql}) from exc
@@ -462,7 +467,8 @@ class ClickZettaConnector:
         except Exception as e:
             logger.error(f"Error executing query to DataFrame: {sql}, error: {str(e)}")
             raise DatusDbException(
-                code=ErrorCode.DB_EXECUTION_ERROR, message=f"Failed to execute query to DataFrame: {str(e)}"
+                code=ErrorCode.DB_EXECUTION_ERROR,
+                message=f"Failed to execute query to DataFrame: {str(e)}",
             ) from e
 
     def execute_query_to_dict(self, sql: str) -> List[Dict[str, Any]]:
@@ -476,7 +482,8 @@ class ClickZettaConnector:
         except Exception as e:
             logger.error(f"Error executing query to dict: {sql}, error: {str(e)}")
             raise DatusDbException(
-                code=ErrorCode.DB_EXECUTION_ERROR, message=f"Failed to execute query to dict: {str(e)}"
+                code=ErrorCode.DB_EXECUTION_ERROR,
+                message=f"Failed to execute query to dict: {str(e)}",
             ) from e
 
     def execute_ddl(self, sql: str) -> ExecuteSQLResult:
@@ -516,7 +523,8 @@ class ClickZettaConnector:
         except Exception as e:
             logger.error(f"Error executing Arrow query: {sql}, error: {str(e)}")
             raise DatusDbException(
-                code=ErrorCode.DB_EXECUTION_ERROR, message=f"Failed to execute Arrow query: {str(e)}"
+                code=ErrorCode.DB_EXECUTION_ERROR,
+                message=f"Failed to execute Arrow query: {str(e)}",
             ) from e
 
     def test_connection(self):
@@ -548,7 +556,11 @@ class ClickZettaConnector:
                     row_count = self._extract_row_count(command_df)
                     results.append(
                         ExecuteSQLResult(
-                            success=True, sql_return=None, sql_query=query, row_count=row_count, result_format="arrow"
+                            success=True,
+                            sql_return=None,
+                            sql_query=query,
+                            row_count=row_count,
+                            result_format="arrow",
                         )
                     )
             except Exception as e:
@@ -797,7 +809,11 @@ class ClickZettaConnector:
         return records
 
     def get_schema(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> List[Dict[str, Any]]:
         if not table_name:
             return []
@@ -871,7 +887,11 @@ class ClickZettaConnector:
         return samples
 
     def full_name(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> str:
         workspace = database_name or self.database_name
         schema = schema_name or self.schema_name
@@ -882,7 +902,11 @@ class ClickZettaConnector:
         return table_name
 
     def identifier(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> str:
         db = database_name or self.database_name
         schema = schema_name or self.schema_name
@@ -919,7 +943,8 @@ class ClickZettaConnector:
             sql_query = input_params.get("sql_query", "")
         else:
             raise DatusDbException(
-                ErrorCode.COMMON_INVALID_PARAMETER, message=f"Invalid input_params type: {type(input_params)}"
+                ErrorCode.COMMON_INVALID_PARAMETER,
+                message=f"Invalid input_params type: {type(input_params)}",
             )
 
         if not sql_query:

@@ -6,8 +6,14 @@
 
 import pandas as pd
 import pytest
-from datus_db_core.models import BaseInput, BaseResult, ExecuteSQLInput, ExecuteSQLResult
 from pydantic import ValidationError
+
+from datus_db_core.models import (
+    BaseInput,
+    BaseResult,
+    ExecuteSQLInput,
+    ExecuteSQLResult,
+)
 
 
 class TestBaseInput:

@@ -6,8 +6,9 @@ import os
 from typing import Generator
 
 import pytest
-from datus_redshift import RedshiftConfig, RedshiftConnector
 from redshift_connector.error import InterfaceError, OperationalError
+
+from datus_redshift import RedshiftConfig, RedshiftConnector
 
 
 @pytest.fixture
@@ -52,7 +53,13 @@ def connector(config: RedshiftConfig) -> Generator[RedshiftConnector, None, None
 
 TPCH_SCHEMA = os.getenv("REDSHIFT_TPCH_SCHEMA", "public")
 
-TPCH_TABLES = ["tpch_region", "tpch_nation", "tpch_customer", "tpch_orders", "tpch_supplier"]
+TPCH_TABLES = [
+    "tpch_region",
+    "tpch_nation",
+    "tpch_customer",
+    "tpch_orders",
+    "tpch_supplier",
+]
 
 TPCH_DDL = [
     """

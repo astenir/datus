@@ -8,6 +8,7 @@ from typing import Any, List, Literal
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from datus_db_core.base import BaseSqlConnector, list_to_in_str, to_sql_literal
 from datus_db_core.config import ConnectionConfig
 from datus_db_core.constants import SQLType
@@ -34,10 +35,22 @@ class ConcreteConnector(BaseSqlConnector):
     def execute_query(
         self, sql: str, result_format: Literal["csv", "arrow", "pandas", "list"] = "csv"
     ) -> ExecuteSQLResult:
-        return ExecuteSQLResult(success=True, sql_query=sql, row_count=0, sql_return="", result_format=result_format)
+        return ExecuteSQLResult(
+            success=True,
+            sql_query=sql,
+            row_count=0,
+            sql_return="",
+            result_format=result_format,
+        )
 
     def execute_pandas(self, sql: str) -> ExecuteSQLResult:
-        return ExecuteSQLResult(success=True, sql_query=sql, row_count=0, sql_return="", result_format="pandas")
+        return ExecuteSQLResult(
+            success=True,
+            sql_query=sql,
+            row_count=0,
+            sql_return="",
+            result_format="pandas",
+        )
 
     def execute_ddl(self, sql: str) -> ExecuteSQLResult:
         return ExecuteSQLResult(success=True, sql_query=sql, row_count=0, sql_return="", result_format="csv")
@@ -58,7 +71,13 @@ class ConcreteConnector(BaseSqlConnector):
         return [self.execute_query(q) for q in queries]
 
     def execute_content_set(self, sql_query: str) -> ExecuteSQLResult:
-        return ExecuteSQLResult(success=True, sql_query=sql_query, row_count=0, sql_return="", result_format="csv")
+        return ExecuteSQLResult(
+            success=True,
+            sql_query=sql_query,
+            row_count=0,
+            sql_return="",
+            result_format="csv",
+        )
 
 
 class TestBaseSqlConnectorInit:
@@ -222,7 +241,11 @@ class TestExecuteRouting:
         connector = ConcreteConnector()
         with patch.object(connector, "execute_query") as mock:
             mock.return_value = ExecuteSQLResult(
-                success=True, sql_query="SELECT 1", row_count=0, sql_return="", result_format="arrow"
+                success=True,
+                sql_query="SELECT 1",
+                row_count=0,
+                sql_return="",
+                result_format="arrow",
             )
             connector.execute({"sql_query": "SELECT 1"}, result_format="arrow")
             mock.assert_called_once_with("SELECT 1", "arrow")
@@ -264,7 +287,11 @@ class TestExecuteErrorHandling:
         connector = ConcreteConnector()
         with patch.object(connector, "execute_query") as mock:
             mock.return_value = ExecuteSQLResult(
-                success=True, sql_query="SELECT 1", row_count=0, sql_return="", result_format="arrow"
+                success=True,
+                sql_query="SELECT 1",
+                row_count=0,
+                sql_return="",
+                result_format="arrow",
             )
             inp = ExecuteSQLInput(sql_query="SELECT 1", result_format="arrow")
             connector.execute(inp)

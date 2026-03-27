@@ -6,6 +6,7 @@ import os
 import uuid
 
 import pytest
+
 from datus_postgresql import PostgreSQLConfig, PostgreSQLConnector
 
 # ==================== Connection Tests ====================
@@ -307,7 +308,8 @@ def test_execute_insert(connector: PostgreSQLConnector, config: PostgreSQLConfig
 
         # Verify
         query_result = connector.execute(
-            {"sql_query": f"SELECT id, name FROM {table_name} ORDER BY id"}, result_format="list"
+            {"sql_query": f"SELECT id, name FROM {table_name} ORDER BY id"},
+            result_format="list",
         )
         assert len(query_result.sql_return) == 2
         assert query_result.sql_return[0]["name"] == "Alice"
@@ -342,7 +344,8 @@ def test_execute_update(connector: PostgreSQLConnector, config: PostgreSQLConfig
 
         # Verify
         query_result = connector.execute(
-            {"sql_query": f"SELECT name FROM {table_name} WHERE id = 1"}, result_format="list"
+            {"sql_query": f"SELECT name FROM {table_name} WHERE id = 1"},
+            result_format="list",
         )
         assert query_result.sql_return == [{"name": "Alice Updated"}]
     finally:
@@ -404,8 +407,9 @@ def test_exception_on_nonexistent_table(connector: PostgreSQLConnector):
 @pytest.mark.integration
 def test_full_name_with_schema(connector: PostgreSQLConnector):
     """Test full_name with schema."""
+    db = connector.database_name
     full_name = connector.full_name(schema_name="myschema", table_name="mytable")
-    assert full_name == '"myschema"."mytable"'
+    assert full_name == f'"{db}"."myschema"."mytable"'
 
 
 @pytest.mark.integration
@@ -419,5 +423,6 @@ def test_full_name_with_default_schema(connector: PostgreSQLConnector):
 @pytest.mark.integration
 def test_identifier(connector: PostgreSQLConnector):
     """Test identifier generation."""
+    db = connector.database_name
     identifier = connector.identifier(schema_name="myschema", table_name="mytable")
-    assert identifier == "myschema.mytable"
+    assert identifier == f"{db}.myschema.mytable"

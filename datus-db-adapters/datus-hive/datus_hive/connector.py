@@ -6,9 +6,10 @@ from typing import Any, Dict, List, Mapping, Optional, Set, Union, override
 from urllib.parse import quote_plus
 
 import pandas as pd
+from sqlalchemy import create_engine
+
 from datus_db_core import DatusDbException, ErrorCode, get_logger
 from datus_sqlalchemy import SQLAlchemyConnector
-from sqlalchemy import create_engine
 
 from .config import HiveConfig
 
@@ -102,7 +103,8 @@ class HiveConnector(SQLAlchemyConnector):
         if not self.engine:
             self._force_reset()
             raise DatusDbException(
-                ErrorCode.DB_CONNECTION_FAILED, message_args={"error_message": "Failed to establish connection"}
+                ErrorCode.DB_CONNECTION_FAILED,
+                message_args={"error_message": "Failed to establish connection"},
             )
 
     @override
@@ -158,7 +160,11 @@ class HiveConnector(SQLAlchemyConnector):
 
     @override
     def get_schema(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> List[Dict[str, Any]]:
         """Get table schema information using DESCRIBE."""
         if not table_name:
@@ -198,7 +204,11 @@ class HiveConnector(SQLAlchemyConnector):
 
     @override
     def get_tables_with_ddl(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", tables: Optional[List[str]] = None
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        tables: Optional[List[str]] = None,
     ) -> List[Dict[str, str]]:
         """Get tables with DDL statements."""
         self.connect()
@@ -326,7 +336,11 @@ class HiveConnector(SQLAlchemyConnector):
 
     @override
     def full_name(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> str:
         """Build fully-qualified table name."""
         db = database_name or self.database_name

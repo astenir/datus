@@ -3,8 +3,9 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import pytest
-from datus_hive import HiveConfig
 from pydantic import ValidationError
+
+from datus_hive import HiveConfig
 
 
 def test_config_defaults_and_required_fields():

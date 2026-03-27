@@ -156,7 +156,13 @@ TPCH_DATA = [
     """,
 ]
 
-TPCH_TABLES = ["tpch_region", "tpch_nation", "tpch_customer", "tpch_orders", "tpch_supplier"]
+TPCH_TABLES = [
+    "tpch_region",
+    "tpch_nation",
+    "tpch_customer",
+    "tpch_orders",
+    "tpch_supplier",
+]
 ROW_COUNTS = [5, 25, 10, 15, 5]
 
 

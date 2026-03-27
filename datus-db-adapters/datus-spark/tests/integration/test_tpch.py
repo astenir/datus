@@ -3,6 +3,7 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import pytest
+
 from datus_spark import SparkConnector
 
 # ==================== Metadata Tests ====================
@@ -12,7 +13,13 @@ from datus_spark import SparkConnector
 def test_tpch_get_tables(tpch_setup: SparkConnector):
     """Test that TPC-H tables exist in the default database."""
     tables = tpch_setup.get_tables(database_name="default")
-    expected = {"tpch_region", "tpch_nation", "tpch_customer", "tpch_orders", "tpch_supplier"}
+    expected = {
+        "tpch_region",
+        "tpch_nation",
+        "tpch_customer",
+        "tpch_orders",
+        "tpch_supplier",
+    }
     table_set = set(tables)
     assert expected.issubset(table_set), f"Missing tables: {expected - table_set}"
 

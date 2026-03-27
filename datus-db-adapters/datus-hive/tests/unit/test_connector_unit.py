@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pandas as pd
 import pytest
+
 from datus_hive import HiveConfig
 from datus_hive.connector import HiveConnector
 
@@ -20,7 +21,10 @@ def connector():
             username="hue",
             password="pass",
             auth="CUSTOM",
-            configuration={"spark.app.name": "datacenter_carrier", "spark.sql.shuffle.partitions": 100},
+            configuration={
+                "spark.app.name": "datacenter_carrier",
+                "spark.sql.shuffle.partitions": 100,
+            },
         )
     )
 
@@ -280,7 +284,11 @@ def test_sys_databases():
 
 def test_get_databases_parses_results(monkeypatch, connector):
     monkeypatch.setattr(connector, "connect", lambda: None)
-    monkeypatch.setattr(connector, "_execute_pandas", lambda sql: pd.DataFrame({"database_name": ["default", "test"]}))
+    monkeypatch.setattr(
+        connector,
+        "_execute_pandas",
+        lambda sql: pd.DataFrame({"database_name": ["default", "test"]}),
+    )
 
     assert connector.get_databases() == ["default", "test"]
 
@@ -351,7 +359,9 @@ def test_get_views_returns_empty_on_exception(monkeypatch, connector):
     """Test that get_views returns empty list when SHOW VIEWS fails."""
     monkeypatch.setattr(connector, "connect", lambda: None)
     monkeypatch.setattr(
-        connector, "_execute_pandas", lambda sql: (_ for _ in ()).throw(Exception("SHOW VIEWS not supported"))
+        connector,
+        "_execute_pandas",
+        lambda sql: (_ for _ in ()).throw(Exception("SHOW VIEWS not supported")),
     )
 
     result = connector.get_views(database_name="default")
@@ -435,7 +445,11 @@ def test_get_sample_rows_continues_on_error(monkeypatch, connector):
         return pd.DataFrame({"id": [1], "name": ["test"]})
 
     monkeypatch.setattr(connector, "connect", lambda: None)
-    monkeypatch.setattr(connector, "get_tables", lambda **kwargs: ["good_table", "bad_table", "another_good"])
+    monkeypatch.setattr(
+        connector,
+        "get_tables",
+        lambda **kwargs: ["good_table", "bad_table", "another_good"],
+    )
     monkeypatch.setattr(connector, "_execute_pandas", mock_execute_pandas)
 
     result = connector.get_sample_rows(database_name="default")

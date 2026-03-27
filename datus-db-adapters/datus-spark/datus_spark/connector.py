@@ -56,7 +56,11 @@ class SparkConnector(SQLAlchemyConnector):
         if config.auth_mechanism and config.auth_mechanism != "NONE":
             connection_string += f"?auth={config.auth_mechanism}"
 
-        super().__init__(connection_string, dialect=SPARK_DIALECT, timeout_seconds=config.timeout_seconds)
+        super().__init__(
+            connection_string,
+            dialect=SPARK_DIALECT,
+            timeout_seconds=config.timeout_seconds,
+        )
 
         self.dialect = SPARK_DIALECT
         self.database_name = database
@@ -138,7 +142,11 @@ class SparkConnector(SQLAlchemyConnector):
 
     @override
     def get_schema(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> List[Dict[str, Any]]:
         """Get table schema information using DESCRIBE."""
         if not table_name:
@@ -198,7 +206,11 @@ class SparkConnector(SQLAlchemyConnector):
 
     @override
     def full_name(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> str:
         """
         Build fully-qualified table name.

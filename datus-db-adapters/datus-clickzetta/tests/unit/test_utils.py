@@ -123,7 +123,11 @@ class TestUtilityFunctions:
 
         # Create connector instance
         connector = ClickZettaConnector(
-            service="service", username="user", password="pass", instance="instance", workspace="workspace"
+            service="service",
+            username="user",
+            password="pass",
+            instance="instance",
+            workspace="workspace",
         )
 
         # Test simple table definition
@@ -154,7 +158,10 @@ class TestUtilityFunctions:
         ]
 
         definition = connector._build_definition(
-            workspace="workspace", schema_name="schema", table_name="simple_table", columns=columns_no_comment
+            workspace="workspace",
+            schema_name="schema",
+            table_name="simple_table",
+            columns=columns_no_comment,
         )
 
         assert "CREATE TABLE" in definition
@@ -164,7 +171,11 @@ class TestUtilityFunctions:
 
         # Test view definition
         definition = connector._build_definition(
-            workspace="workspace", schema_name="schema", table_name="test_view", columns=columns, table_type="view"
+            workspace="workspace",
+            schema_name="schema",
+            table_name="test_view",
+            columns=columns,
+            table_type="view",
         )
 
         assert "CREATE VIEW" in definition
@@ -213,7 +224,11 @@ class TestNewMethods:
         mock_session.sql.return_value.to_pandas.return_value = empty_df
 
         connector = ClickZettaConnector(
-            service="service", username="user", password="pass", instance="instance", workspace="workspace"
+            service="service",
+            username="user",
+            password="pass",
+            instance="instance",
+            workspace="workspace",
         )
 
         result = connector.execute_arrow("SELECT * FROM empty_table")
@@ -241,7 +256,11 @@ class TestNewMethods:
         mock_session.sql.return_value.to_pandas.return_value = large_df
 
         connector = ClickZettaConnector(
-            service="service", username="user", password="pass", instance="instance", workspace="workspace"
+            service="service",
+            username="user",
+            password="pass",
+            instance="instance",
+            workspace="workspace",
         )
 
         # Test with max_rows limitation
@@ -267,7 +286,11 @@ class TestNewMethods:
         mock_session.sql.return_value.to_pandas.return_value = empty_df
 
         connector = ClickZettaConnector(
-            service="service", username="user", password="pass", instance="instance", workspace="workspace"
+            service="service",
+            username="user",
+            password="pass",
+            instance="instance",
+            workspace="workspace",
         )
 
         result = connector.execute_query_to_dict("SELECT * FROM empty_table")
@@ -287,11 +310,21 @@ class TestNewMethods:
         mock_session_class.builder.configs.return_value.create.return_value = mock_session
 
         # Mock query result
-        mock_df = pd.DataFrame({"int_col": [1, 2, 3], "str_col": ["a", "b", "c"], "float_col": [1.1, 2.2, 3.3]})
+        mock_df = pd.DataFrame(
+            {
+                "int_col": [1, 2, 3],
+                "str_col": ["a", "b", "c"],
+                "float_col": [1.1, 2.2, 3.3],
+            }
+        )
         mock_session.sql.return_value.to_pandas.return_value = mock_df
 
         connector = ClickZettaConnector(
-            service="service", username="user", password="pass", instance="instance", workspace="workspace"
+            service="service",
+            username="user",
+            password="pass",
+            instance="instance",
+            workspace="workspace",
         )
 
         result = connector.execute_arrow("SELECT * FROM test_table")

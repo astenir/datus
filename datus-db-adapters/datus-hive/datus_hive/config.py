@@ -44,8 +44,15 @@ class HiveConfig(BaseModel):
     port: int = Field(default=10000, description="Hive server port")
     database: Optional[str] = Field(default=None, description="Default database name")
     username: str = Field(..., description="Hive username")
-    password: str = Field(default="", description="Hive password", json_schema_extra={"input_type": "password"})
-    auth: Optional[str] = Field(default=None, description="Authentication mechanism (NONE, LDAP, CUSTOM, KERBEROS)")
+    password: str = Field(
+        default="",
+        description="Hive password",
+        json_schema_extra={"input_type": "password"},
+    )
+    auth: Optional[str] = Field(
+        default=None,
+        description="Authentication mechanism (NONE, LDAP, CUSTOM, KERBEROS)",
+    )
     configuration: Dict[str, Any] = Field(default_factory=dict, description="Hive session configuration")
     timeout_seconds: int = Field(default=30, description="Connection timeout in seconds")
 

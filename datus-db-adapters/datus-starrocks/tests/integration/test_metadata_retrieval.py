@@ -3,6 +3,7 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import pytest
+
 from datus_starrocks import StarRocksConfig, StarRocksConnector
 
 # ==================== Table Metadata Tests ====================
@@ -135,7 +136,10 @@ def test_get_sample_rows_specific_tables(connector: StarRocksConnector, config: 
     if len(tables) > 0:
         table_name = tables[0]
         sample_rows = connector.get_sample_rows(
-            catalog_name=config.catalog, database_name=config.database, tables=[table_name], top_n=3
+            catalog_name=config.catalog,
+            database_name=config.database,
+            tables=[table_name],
+            top_n=3,
         )
 
         assert len(sample_rows) == 1

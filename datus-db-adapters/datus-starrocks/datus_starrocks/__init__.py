@@ -14,5 +14,8 @@ def register():
     from datus_db_core import connector_registry
 
     connector_registry.register(
-        "starrocks", StarRocksConnector, config_class=StarRocksConfig, capabilities={"catalog", "database"}
+        "starrocks",
+        StarRocksConnector,
+        config_class=StarRocksConfig,
+        capabilities={"catalog", "database"},
     )

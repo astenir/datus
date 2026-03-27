@@ -173,7 +173,10 @@ def pytest_configure(config):
     """Configure pytest with custom markers."""
     config.addinivalue_line("markers", "unit: Mark test as a unit test")
     config.addinivalue_line("markers", "integration: Mark test as an integration test")
-    config.addinivalue_line("markers", "requires_clickzetta: Mark test as requiring actual ClickZetta credentials")
+    config.addinivalue_line(
+        "markers",
+        "requires_clickzetta: Mark test as requiring actual ClickZetta credentials",
+    )
     config.addinivalue_line("markers", "slow: Mark test as slow running")
 
 

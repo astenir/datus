@@ -6,20 +6,6 @@ from typing import Any, Dict, List, Literal, Optional, Sequence, Set, Union, ove
 
 import pyarrow as pa
 import pyarrow.compute as pc
-from datus_db_core import (
-    TABLE_TYPE,
-    BaseSqlConnector,
-    ConnectionConfig,
-    DatusDbException,
-    ErrorCode,
-    ExecuteSQLResult,
-    MaterializedViewSupportMixin,
-    SchemaNamespaceMixin,
-    get_logger,
-    list_to_in_str,
-    parse_context_switch,
-    to_sql_literal,
-)
 from pandas import DataFrame
 from snowflake.connector import Connect, SnowflakeConnection
 from snowflake.connector.errors import (
@@ -36,6 +22,21 @@ from snowflake.connector.errors import (
     ServiceUnavailableError,
 )
 
+from datus_db_core import (
+    TABLE_TYPE,
+    BaseSqlConnector,
+    ConnectionConfig,
+    DatusDbException,
+    ErrorCode,
+    ExecuteSQLResult,
+    MaterializedViewSupportMixin,
+    SchemaNamespaceMixin,
+    get_logger,
+    list_to_in_str,
+    parse_context_switch,
+    to_sql_literal,
+)
+
 from .config import SnowflakeConfig
 
 logger = get_logger(__name__)
@@ -46,30 +47,42 @@ def _handle_snowflake_exception(e: Exception, sql: str = "") -> DatusDbException
 
     if isinstance(e, ProgrammingError):
         return DatusDbException(
-            ErrorCode.DB_EXECUTION_SYNTAX_ERROR, message_args={"sql": sql, "error_message": e.raw_msg}
+            ErrorCode.DB_EXECUTION_SYNTAX_ERROR,
+            message_args={"sql": sql, "error_message": e.raw_msg},
         )
 
     elif isinstance(e, (OperationalError, DatabaseError)):
-        return DatusDbException(ErrorCode.DB_EXECUTION_ERROR, message_args={"sql": sql, "error_message": e.raw_msg})
+        return DatusDbException(
+            ErrorCode.DB_EXECUTION_ERROR,
+            message_args={"sql": sql, "error_message": e.raw_msg},
+        )
 
     elif isinstance(e, IntegrityError):
         return DatusDbException(
-            ErrorCode.DB_CONSTRAINT_VIOLATION, message_args={"sql": sql, "error_message": e.raw_msg}
+            ErrorCode.DB_CONSTRAINT_VIOLATION,
+            message_args={"sql": sql, "error_message": e.raw_msg},
         )
 
     elif isinstance(e, (RequestTimeoutError, ServiceUnavailableError)):
-        return DatusDbException(ErrorCode.DB_EXECUTION_TIMEOUT, message_args={"sql": sql, "error_message": e.raw_msg})
+        return DatusDbException(
+            ErrorCode.DB_EXECUTION_TIMEOUT,
+            message_args={"sql": sql, "error_message": e.raw_msg},
+        )
 
     elif isinstance(e, (InterfaceError, InternalError)):
         return DatusDbException(ErrorCode.DB_CONNECTION_FAILED, message_args={"error_message": e.raw_msg})
 
     elif isinstance(e, ForbiddenError):
         return DatusDbException(
-            ErrorCode.DB_PERMISSION_DENIED, message_args={"operation": "query execution", "error_message": e.raw_msg}
+            ErrorCode.DB_PERMISSION_DENIED,
+            message_args={"operation": "query execution", "error_message": e.raw_msg},
         )
 
     elif isinstance(e, (DataError, NotSupportedError)):
-        return DatusDbException(ErrorCode.DB_EXECUTION_ERROR, message_args={"sql": sql, "error_message": e.raw_msg})
+        return DatusDbException(
+            ErrorCode.DB_EXECUTION_ERROR,
+            message_args={"sql": sql, "error_message": e.raw_msg},
+        )
 
     else:
         return DatusDbException(ErrorCode.DB_FAILED, message_args={"error_message": str(e)})
@@ -467,14 +480,20 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
     def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """Get list of table names."""
         tables = self._get_tables_per_db(
-            catalog_name=catalog_name, database_name=database_name, schema_name=schema_name, table_type="table"
+            catalog_name=catalog_name,
+            database_name=database_name,
+            schema_name=schema_name,
+            table_type="table",
         )
         return [item["table_name"] for item in tables]
 
     def get_views(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """Get list of view names."""
         views = self._get_tables_per_db(
-            catalog_name=catalog_name, database_name=database_name, schema_name=schema_name, table_type="view"
+            catalog_name=catalog_name,
+            database_name=database_name,
+            schema_name=schema_name,
+            table_type="view",
         )
         return [view["table_name"] for view in views]
 
@@ -483,7 +502,10 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
     ) -> List[str]:
         """Get list of materialized view names."""
         mvs = self._get_tables_per_db(
-            catalog_name=catalog_name, database_name=database_name, schema_name=schema_name, table_type="mv"
+            catalog_name=catalog_name,
+            database_name=database_name,
+            schema_name=schema_name,
+            table_type="mv",
         )
         return [mv["table_name"] for mv in mvs]
 
@@ -534,19 +556,28 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
         """Get tables from a single database."""
         if table_type in ("table", "full"):
             db_tables = self._do_get_metas(
-                database_name=database_name, schema_name=schema_name, tables=tables, meta_name="TABLES"
+                database_name=database_name,
+                schema_name=schema_name,
+                tables=tables,
+                meta_name="TABLES",
             )
             result.extend(self._metadata_to_dict(db_tables, "table", catalog_name))
 
         if table_type in ("view", "full"):
             db_views = self._do_get_metas(
-                database_name=database_name, schema_name=schema_name, tables=tables, meta_name="VIEWS"
+                database_name=database_name,
+                schema_name=schema_name,
+                tables=tables,
+                meta_name="VIEWS",
             )
             result.extend(self._metadata_to_dict(db_views, "view", catalog_name))
 
         if table_type in ("mv", "full"):
             db_mvs = self._do_get_metas(
-                database_name=database_name, schema_name=schema_name, tables=tables, meta_name="MATERIALIZED VIEWS"
+                database_name=database_name,
+                schema_name=schema_name,
+                tables=tables,
+                meta_name="MATERIALIZED VIEWS",
             )
             result.extend(self._metadata_to_dict(db_mvs, "mv", catalog_name))
 
@@ -572,7 +603,12 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
                 query_tables = query_tables.filter(pc.equal(query_tables["schema_name"], schema_name))
             else:
                 query_tables = query_tables.filter(
-                    pc.invert(pc.is_in(query_tables["schema_name"], pa.array(self._sys_schemas(), type=pa.string())))
+                    pc.invert(
+                        pc.is_in(
+                            query_tables["schema_name"],
+                            pa.array(self._sys_schemas(), type=pa.string()),
+                        )
+                    )
                 )
 
             if tables:
@@ -649,7 +685,10 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
         schema_name = schema_name or self.schema_name
 
         full_name = self.full_name(
-            catalog_name=catalog_name, database_name=database_name, schema_name=schema_name, table_name=table_name
+            catalog_name=catalog_name,
+            database_name=database_name,
+            schema_name=schema_name,
+            table_name=table_name,
         )
         table_type = table_type.upper()
 
@@ -753,9 +792,9 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
 
         for entry in table_entries:
             full_name = (
-                f'{to_sql_literal(entry["database_name"])}.'
-                f'{to_sql_literal(entry["schema_name"])}.'
-                f'{to_sql_literal(entry["table_name"])}'
+                f"{to_sql_literal(entry['database_name'])}."
+                f"{to_sql_literal(entry['schema_name'])}."
+                f"{to_sql_literal(entry['table_name'])}"
             ).strip()
             entry["definition"] = self._fetch_object_ddl("TABLE", full_name)
 
@@ -777,9 +816,9 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
 
         for entry in view_entries:
             full_name = (
-                f'{to_sql_literal(entry["database_name"])}.'
-                f'{to_sql_literal(entry["schema_name"])}.'
-                f'{to_sql_literal(entry["table_name"])}'
+                f"{to_sql_literal(entry['database_name'])}."
+                f"{to_sql_literal(entry['schema_name'])}."
+                f"{to_sql_literal(entry['table_name'])}"
             ).strip()
             entry["definition"] = self._fetch_object_ddl("VIEW", full_name)
 
@@ -801,9 +840,9 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
 
         for entry in mv_entries:
             full_name = (
-                f'{to_sql_literal(entry["database_name"])}.'
-                f'{to_sql_literal(entry["schema_name"])}.'
-                f'{to_sql_literal(entry["table_name"])}'
+                f"{to_sql_literal(entry['database_name'])}."
+                f"{to_sql_literal(entry['schema_name'])}."
+                f"{to_sql_literal(entry['table_name'])}"
             ).strip()
             entry["definition"] = self._fetch_object_ddl("MATERIALIZED VIEW", full_name)
 
@@ -861,7 +900,10 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
                     table_type=table_type,
                 ):
                     full_table_name = self.full_name(
-                        t["catalog_name"], t["database_name"], t["schema_name"], t["table_name"]
+                        t["catalog_name"],
+                        t["database_name"],
+                        t["schema_name"],
+                        t["table_name"],
                     )
                     sql = f"SELECT * FROM {full_table_name} LIMIT {top_n}"
                     res = cursor.execute(sql).fetch_pandas_all()
@@ -881,7 +923,11 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
 
     @override
     def full_name(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> str:
         """Build fully qualified table name."""
         if schema_name:

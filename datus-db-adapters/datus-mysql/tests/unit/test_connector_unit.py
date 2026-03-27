@@ -5,6 +5,7 @@
 from unittest.mock import patch
 
 import pytest
+
 from datus_db_core import DatusDbException
 from datus_mysql import MySQLConfig, MySQLConnector
 

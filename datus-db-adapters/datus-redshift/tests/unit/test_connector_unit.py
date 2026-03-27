@@ -5,9 +5,6 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from datus_db_core import DatusDbException, ErrorCode
-from datus_redshift import RedshiftConfig, RedshiftConnector
-from datus_redshift.connector import _handle_redshift_exception, _validate_sql_identifier
 from redshift_connector.error import (
     DatabaseError,
     DataError,
@@ -16,6 +13,13 @@ from redshift_connector.error import (
     InternalError,
     OperationalError,
     ProgrammingError,
+)
+
+from datus_db_core import DatusDbException, ErrorCode
+from datus_redshift import RedshiftConfig, RedshiftConnector
+from datus_redshift.connector import (
+    _handle_redshift_exception,
+    _validate_sql_identifier,
 )
 
 # Redshift connector calls super().__init__() which needs BaseSqlConnector.
@@ -42,7 +46,12 @@ def _make_patches():
 @pytest.fixture
 def basic_config():
     """Create a basic RedshiftConfig for testing."""
-    return RedshiftConfig(host="cluster.example.com", username="testuser", password="testpass", database="testdb")
+    return RedshiftConfig(
+        host="cluster.example.com",
+        username="testuser",
+        password="testpass",
+        database="testdb",
+    )
 
 
 @pytest.fixture
@@ -142,7 +151,12 @@ def test_connector_custom_schema():
 def test_connector_connect_params_basic():
     """Test that basic connection parameters are passed correctly."""
     config = RedshiftConfig(
-        host="cluster.example.com", username="user", password="pass", port=5439, database="mydb", ssl=True
+        host="cluster.example.com",
+        username="user",
+        password="pass",
+        port=5439,
+        database="mydb",
+        ssl=True,
     )
 
     p_base, p_connect = _make_patches()

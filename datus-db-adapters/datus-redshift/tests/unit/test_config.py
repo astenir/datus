@@ -3,15 +3,18 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import pytest
-from datus_redshift import RedshiftConfig
 from pydantic import ValidationError
+
+from datus_redshift import RedshiftConfig
 
 
 @pytest.mark.acceptance
 def test_config_with_all_required_fields():
     """Test config initialization with all required fields."""
     config = RedshiftConfig(
-        host="my-cluster.us-west-2.redshift.amazonaws.com", username="testuser", password="testpass"
+        host="my-cluster.us-west-2.redshift.amazonaws.com",
+        username="testuser",
+        password="testpass",
     )
 
     assert config.host == "my-cluster.us-west-2.redshift.amazonaws.com"
@@ -121,7 +124,12 @@ def test_config_invalid_port_type():
 def test_config_invalid_timeout_type():
     """Test that validation fails for invalid timeout type."""
     with pytest.raises(ValidationError) as exc_info:
-        RedshiftConfig(host="cluster.example.com", username="user", password="pass", timeout_seconds="invalid")
+        RedshiftConfig(
+            host="cluster.example.com",
+            username="user",
+            password="pass",
+            timeout_seconds="invalid",
+        )
 
     errors = exc_info.value.errors()
     assert any(error["loc"] == ("timeout_seconds",) for error in errors)
@@ -131,7 +139,12 @@ def test_config_invalid_timeout_type():
 def test_config_forbids_extra_fields():
     """Test that extra fields are not allowed."""
     with pytest.raises(ValidationError) as exc_info:
-        RedshiftConfig(host="cluster.example.com", username="user", password="pass", extra_field="not_allowed")
+        RedshiftConfig(
+            host="cluster.example.com",
+            username="user",
+            password="pass",
+            extra_field="not_allowed",
+        )
 
     errors = exc_info.value.errors()
     assert any(error["type"] == "extra_forbidden" for error in errors)
@@ -194,7 +207,12 @@ def test_config_special_characters_in_password():
 def test_config_special_characters_in_database():
     """Test config with special characters in database name."""
     special_db = "test-db_123"
-    config = RedshiftConfig(host="cluster.example.com", username="user", password="pass", database=special_db)
+    config = RedshiftConfig(
+        host="cluster.example.com",
+        username="user",
+        password="pass",
+        database=special_db,
+    )
 
     assert config.database == special_db
 

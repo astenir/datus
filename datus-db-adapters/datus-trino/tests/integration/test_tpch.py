@@ -3,9 +3,19 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import pytest
+
 from datus_trino import TrinoConnector
 
-TPCH_TABLES = {"customer", "lineitem", "nation", "orders", "part", "partsupp", "region", "supplier"}
+TPCH_TABLES = {
+    "customer",
+    "lineitem",
+    "nation",
+    "orders",
+    "part",
+    "partsupp",
+    "region",
+    "supplier",
+}
 
 # ==================== Metadata Tests ====================
 

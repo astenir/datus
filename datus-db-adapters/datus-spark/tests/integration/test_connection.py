@@ -5,6 +5,7 @@
 import os
 
 import pytest
+
 from datus_spark import SparkConfig, SparkConnector
 
 # ==================== Connection Tests ====================

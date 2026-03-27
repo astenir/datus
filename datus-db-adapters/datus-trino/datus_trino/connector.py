@@ -5,9 +5,10 @@
 from typing import Any, Dict, List, Optional, Set, Union, override
 from urllib.parse import quote_plus
 
+from sqlalchemy import create_engine
+
 from datus_db_core import CatalogSupportMixin, get_logger
 from datus_sqlalchemy import SQLAlchemyConnector
-from sqlalchemy import create_engine
 
 from .config import TrinoConfig
 
@@ -52,7 +53,11 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
             f"?http_scheme={config.http_scheme}"
         )
 
-        super().__init__(connection_string, dialect=TRINO_DIALECT, timeout_seconds=config.timeout_seconds)
+        super().__init__(
+            connection_string,
+            dialect=TRINO_DIALECT,
+            timeout_seconds=config.timeout_seconds,
+        )
 
         self._verify_ssl = config.verify
 
@@ -163,7 +168,7 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
         schema = schema_name or database_name or self.schema_name
         try:
             result = self._execute_pandas(
-                f'SELECT table_name FROM "{catalog}".information_schema.views ' f"WHERE table_schema = '{schema}'"
+                f"SELECT table_name FROM \"{catalog}\".information_schema.views WHERE table_schema = '{schema}'"
             )
             if result.empty:
                 return []
@@ -174,7 +179,11 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
 
     @override
     def get_schema(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> List[Dict[str, Any]]:
         """Get table schema information."""
         if not table_name:
@@ -218,7 +227,11 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
 
     @override
     def full_name(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> str:
         """
         Build fully-qualified table name.

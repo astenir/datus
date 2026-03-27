@@ -40,7 +40,11 @@ class TestConnectorInitialization:
         with patch("datus_clickzetta.connector.Session", None):
             with pytest.raises(Exception) as exc_info:
                 ClickZettaConnector(
-                    service="service", username="user", password="pass", instance="instance", workspace="workspace"
+                    service="service",
+                    username="user",
+                    password="pass",
+                    instance="instance",
+                    workspace="workspace",
                 )
             # Should raise DatusException for missing dependency
             assert "ClickZetta connector requires" in str(exc_info.value)
@@ -185,7 +189,12 @@ class TestMetadataOperations:
         mock_session_class.builder = mock_builder
 
         # Mock table query result with proper table_type column
-        mock_df = pd.DataFrame({"table_name": ["table1", "table2"], "table_type": ["MANAGED_TABLE", "BASE TABLE"]})
+        mock_df = pd.DataFrame(
+            {
+                "table_name": ["table1", "table2"],
+                "table_type": ["MANAGED_TABLE", "BASE TABLE"],
+            }
+        )
         mock_session.sql.return_value.to_pandas.return_value = mock_df
 
         connector = ClickZettaConnector(**clickzetta_test_config)
@@ -327,7 +336,10 @@ class TestNewMethods:
         connector = ClickZettaConnector(**clickzetta_test_config)
 
         # Use simple execute_arrow calls instead of execute_queries_arrow to avoid parse_sql_type issues
-        results = [connector.execute_arrow("SELECT * FROM table1"), connector.execute_arrow("SELECT * FROM table2")]
+        results = [
+            connector.execute_arrow("SELECT * FROM table1"),
+            connector.execute_arrow("SELECT * FROM table2"),
+        ]
 
         assert len(results) == 2
         assert all(result.success for result in results)

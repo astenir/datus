@@ -16,12 +16,14 @@ Set these environment variables to run the tests:
 import os
 
 import pytest
+
 from datus_redshift import RedshiftConnector
 
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
-        not os.getenv("REDSHIFT_HOST"), reason="Redshift credentials not available in environment variables"
+        not os.getenv("REDSHIFT_HOST"),
+        reason="Redshift credentials not available in environment variables",
     ),
 ]
 

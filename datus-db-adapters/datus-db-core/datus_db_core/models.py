@@ -67,7 +67,10 @@ class ExecuteSQLResult(BaseResult):
     sql_query: Optional[str] = Field("", description="The SQL query to execute")
     row_count: Optional[int] = Field(None, description="The number of rows returned")
     sql_return: Any = Field(default=None, description="The result of SQL execution (string or Arrow data)")
-    result_format: str = Field(default="", description="Format of the result: 'csv' or 'arrow' or 'pandas' or 'list'")
+    result_format: str = Field(
+        default="",
+        description="Format of the result: 'csv' or 'arrow' or 'pandas' or 'list'",
+    )
 
     def compact_result(self) -> str:
         sql_result = ""

@@ -151,7 +151,10 @@ class TestParseSqlType:
 
     def test_merge(self):
         assert (
-            parse_sql_type("MERGE INTO t USING s ON t.id=s.id WHEN MATCHED THEN UPDATE SET t.v=s.v", "snowflake")
+            parse_sql_type(
+                "MERGE INTO t USING s ON t.id=s.id WHEN MATCHED THEN UPDATE SET t.v=s.v",
+                "snowflake",
+            )
             == SQLType.MERGE
         )
 
@@ -359,7 +362,10 @@ class TestMetadataIdentifier:
         try:
             ConnectorRegistry._capabilities["testdialect"] = {"database", "schema"}
             result = metadata_identifier(
-                database_name="mydb", schema_name="mysch", table_name="mytable", dialect="testdialect"
+                database_name="mydb",
+                schema_name="mysch",
+                table_name="mytable",
+                dialect="testdialect",
             )
             assert result == "mydb.mysch.mytable"
         finally:

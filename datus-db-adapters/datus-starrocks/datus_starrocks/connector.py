@@ -4,7 +4,12 @@
 
 from typing import Any, Dict, List, Set, Union, override
 
-from datus_db_core import CatalogSupportMixin, MaterializedViewSupportMixin, get_logger, list_to_in_str
+from datus_db_core import (
+    CatalogSupportMixin,
+    MaterializedViewSupportMixin,
+    get_logger,
+    list_to_in_str,
+)
 from datus_mysql import MySQLConnector
 
 from .config import StarRocksConfig
@@ -142,7 +147,9 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
             item["catalog_name"] = current_catalog
             # Update identifier to include catalog
             item["identifier"] = self.identifier(
-                catalog_name=current_catalog, database_name=item["database_name"], table_name=item["table_name"]
+                catalog_name=current_catalog,
+                database_name=item["database_name"],
+                table_name=item["table_name"],
             )
             filtered_result.append(item)
 
@@ -158,7 +165,11 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
     def get_views(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """Get list of view names."""
         try:
-            result = self._get_metadata(table_type="view", catalog_name=catalog_name, database_name=database_name)
+            result = self._get_metadata(
+                table_type="view",
+                catalog_name=catalog_name,
+                database_name=database_name,
+            )
             return [view["table_name"] for view in result]
         except Exception as e:
             logger.warning(f"Failed to get views: {e}")
@@ -195,8 +206,7 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
 
         # Query materialized views from information_schema
         query_sql = (
-            "SELECT TABLE_SCHEMA, TABLE_NAME, MATERIALIZED_VIEW_DEFINITION "
-            "FROM information_schema.materialized_views"
+            "SELECT TABLE_SCHEMA, TABLE_NAME, MATERIALIZED_VIEW_DEFINITION FROM information_schema.materialized_views"
         )
 
         if database_name:
@@ -245,7 +255,11 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
 
     @override
     def full_name(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> str:
         """
         Build fully-qualified table name with catalog support.
@@ -290,7 +304,12 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
             error_str = str(e)
 
             # Check for known PyMySQL cleanup errors
-            pymysql_errors = ["struct.error", "struct.pack", "COMMAND.COM_QUIT", "required argument is not an integer"]
+            pymysql_errors = [
+                "struct.error",
+                "struct.pack",
+                "COMMAND.COM_QUIT",
+                "required argument is not an integer",
+            ]
 
             if any(err in error_str for err in pymysql_errors):
                 logger.debug(f"Ignoring PyMySQL cleanup error: {e}")

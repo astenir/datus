@@ -6,6 +6,7 @@ import os
 from typing import Generator
 
 import pytest
+
 from datus_db_core import MaterializedViewSupportMixin, SchemaNamespaceMixin
 from datus_snowflake import SnowflakeConfig, SnowflakeConnector
 
@@ -199,7 +200,9 @@ def test_get_schema(connector: SnowflakeConnector, config: SnowflakeConfig):
         if len(tables) > 0:
             table_name = tables[0]
             schema = connector.get_schema(
-                database_name=config.database, schema_name=config.schema_name, table_name=table_name
+                database_name=config.database,
+                schema_name=config.schema_name,
+                table_name=table_name,
             )
 
             assert isinstance(schema, list)

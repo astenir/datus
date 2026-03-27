@@ -14,6 +14,18 @@ import pyarrow as pa
 # Import Redshift connector library
 import redshift_connector
 
+# Pandas is used for DataFrame operations
+from pandas import DataFrame
+from redshift_connector.error import (
+    DatabaseError,
+    DataError,
+    IntegrityError,
+    InterfaceError,
+    InternalError,
+    OperationalError,
+    ProgrammingError,
+)
+
 # Import Datus base classes and types
 from datus_db_core import (
     TABLE_TYPE,
@@ -26,18 +38,6 @@ from datus_db_core import (
     SchemaNamespaceMixin,
     get_logger,
     parse_context_switch,
-)
-
-# Pandas is used for DataFrame operations
-from pandas import DataFrame
-from redshift_connector.error import (
-    DatabaseError,
-    DataError,
-    IntegrityError,
-    InterfaceError,
-    InternalError,
-    OperationalError,
-    ProgrammingError,
 )
 
 # Import our config class
@@ -68,15 +68,24 @@ def _handle_redshift_exception(e: Exception, sql: str = "") -> DatusDbException:
 
     # ProgrammingError = syntax errors, invalid SQL statements
     if isinstance(e, ProgrammingError):
-        return DatusDbException(ErrorCode.DB_EXECUTION_SYNTAX_ERROR, message_args={"sql": sql, "error_message": str(e)})
+        return DatusDbException(
+            ErrorCode.DB_EXECUTION_SYNTAX_ERROR,
+            message_args={"sql": sql, "error_message": str(e)},
+        )
 
     # IntegrityError = constraint violations (unique key, foreign key, etc.)
     elif isinstance(e, IntegrityError):
-        return DatusDbException(ErrorCode.DB_CONSTRAINT_VIOLATION, message_args={"sql": sql, "error_message": str(e)})
+        return DatusDbException(
+            ErrorCode.DB_CONSTRAINT_VIOLATION,
+            message_args={"sql": sql, "error_message": str(e)},
+        )
 
     # DataError = data-related errors (invalid data types, overflow, etc.)
     elif isinstance(e, DataError):
-        return DatusDbException(ErrorCode.DB_EXECUTION_ERROR, message_args={"sql": sql, "error_message": str(e)})
+        return DatusDbException(
+            ErrorCode.DB_EXECUTION_ERROR,
+            message_args={"sql": sql, "error_message": str(e)},
+        )
 
     # InterfaceError/InternalError = connection-level problems
     elif isinstance(e, (InterfaceError, InternalError)):
@@ -84,7 +93,10 @@ def _handle_redshift_exception(e: Exception, sql: str = "") -> DatusDbException:
 
     # OperationalError/DatabaseError = runtime errors (connection issues, query execution problems)
     elif isinstance(e, (OperationalError, DatabaseError)):
-        return DatusDbException(ErrorCode.DB_EXECUTION_ERROR, message_args={"sql": sql, "error_message": str(e)})
+        return DatusDbException(
+            ErrorCode.DB_EXECUTION_ERROR,
+            message_args={"sql": sql, "error_message": str(e)},
+        )
 
     # Catch-all for any other exceptions
     else:
@@ -114,8 +126,7 @@ def _validate_sql_identifier(identifier: str, identifier_type: str = "identifier
     # Check length (Redshift limit is 127 characters)
     if len(identifier) > 127:
         raise ValueError(
-            f"Invalid {identifier_type} name: '{identifier}'. "
-            f"Maximum length is 127 characters, got {len(identifier)}."
+            f"Invalid {identifier_type} name: '{identifier}'. Maximum length is 127 characters, got {len(identifier)}."
         )
 
     # Check for valid characters: letters, digits, underscore, dollar sign
@@ -792,7 +803,10 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             List of table names
         """
         tables = self._get_tables_per_schema(
-            catalog_name=catalog_name, database_name=database_name, schema_name=schema_name, table_type="table"
+            catalog_name=catalog_name,
+            database_name=database_name,
+            schema_name=schema_name,
+            table_type="table",
         )
         return [item["table_name"] for item in tables]
 
@@ -809,7 +823,10 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             List of view names
         """
         views = self._get_tables_per_schema(
-            catalog_name=catalog_name, database_name=database_name, schema_name=schema_name, table_type="view"
+            catalog_name=catalog_name,
+            database_name=database_name,
+            schema_name=schema_name,
+            table_type="view",
         )
         return [view["table_name"] for view in views]
 
@@ -828,7 +845,10 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             List of materialized view names
         """
         mvs = self._get_tables_per_schema(
-            catalog_name=catalog_name, database_name=database_name, schema_name=schema_name, table_type="mv"
+            catalog_name=catalog_name,
+            database_name=database_name,
+            schema_name=schema_name,
+            table_type="mv",
         )
         return [mv["table_name"] for mv in mvs]
 
@@ -1307,7 +1327,11 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
 
     @override
     def full_name(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> str:
         """
         Build fully qualified table name.

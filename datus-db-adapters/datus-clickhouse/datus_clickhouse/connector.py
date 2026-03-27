@@ -5,9 +5,16 @@
 from typing import Any, Dict, List, Optional, Set, Union, override
 from urllib.parse import quote_plus
 
-from datus_db_core import TABLE_TYPE, DatusDbException, ErrorCode, get_logger, list_to_in_str
-from datus_sqlalchemy import SQLAlchemyConnector
 from pydantic import BaseModel, Field
+
+from datus_db_core import (
+    TABLE_TYPE,
+    DatusDbException,
+    ErrorCode,
+    get_logger,
+    list_to_in_str,
+)
+from datus_sqlalchemy import SQLAlchemyConnector
 
 from .config import ClickHouseConfig
 
@@ -73,7 +80,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
         encoded_password = quote_plus(config.password) if config.password else ""
 
         # Build connection string
-        connection_string = f"clickhouse://{self.username}:{encoded_password}@{self.host}:{self.port}/" f"{database}"
+        connection_string = f"clickhouse://{self.username}:{encoded_password}@{self.host}:{self.port}/{database}"
 
         super().__init__(
             connection_string,

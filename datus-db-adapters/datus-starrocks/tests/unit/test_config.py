@@ -3,8 +3,9 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import pytest
-from datus_starrocks import StarRocksConfig
 from pydantic import ValidationError
+
+from datus_starrocks import StarRocksConfig
 
 # ==================== Basic Validation Tests ====================
 

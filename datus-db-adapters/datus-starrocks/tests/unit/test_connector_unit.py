@@ -5,6 +5,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from datus_db_core import CatalogSupportMixin, MaterializedViewSupportMixin
 from datus_starrocks import StarRocksConfig, StarRocksConnector
 
@@ -274,7 +275,11 @@ def test_full_name_with_special_characters():
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
 
-        result = connector.full_name(catalog_name="test-catalog", database_name="test_db", table_name="test-table")
+        result = connector.full_name(
+            catalog_name="test-catalog",
+            database_name="test_db",
+            table_name="test-table",
+        )
 
         assert "`test-catalog`" in result
         assert "`test_db`" in result
@@ -354,7 +359,10 @@ def test_close_ignores_struct_pack_error():
         connector.connection = MagicMock()
         connector.engine = None
 
-        with patch("datus_mysql.MySQLConnector.close", side_effect=Exception("struct.pack error")):
+        with patch(
+            "datus_mysql.MySQLConnector.close",
+            side_effect=Exception("struct.pack error"),
+        ):
             # Should not raise exception
             connector.close()
 
@@ -370,7 +378,10 @@ def test_close_ignores_com_quit_error():
         connector.connection = MagicMock()
         connector.engine = None
 
-        with patch("datus_mysql.MySQLConnector.close", side_effect=Exception("COMMAND.COM_QUIT failed")):
+        with patch(
+            "datus_mysql.MySQLConnector.close",
+            side_effect=Exception("COMMAND.COM_QUIT failed"),
+        ):
             # Should not raise exception
             connector.close()
 
@@ -386,7 +397,10 @@ def test_close_ignores_required_argument_error():
         connector.connection = MagicMock()
         connector.engine = None
 
-        with patch("datus_mysql.MySQLConnector.close", side_effect=Exception("required argument is not an integer")):
+        with patch(
+            "datus_mysql.MySQLConnector.close",
+            side_effect=Exception("required argument is not an integer"),
+        ):
             # Should not raise exception
             connector.close()
 
@@ -435,7 +449,10 @@ def test_close_reraises_unexpected_errors():
         connector.connection = None
         connector.engine = None
 
-        with patch("datus_mysql.MySQLConnector.close", side_effect=Exception("Unexpected error")):
+        with patch(
+            "datus_mysql.MySQLConnector.close",
+            side_effect=Exception("Unexpected error"),
+        ):
             with pytest.raises(Exception, match="Unexpected error"):
                 connector.close()
 

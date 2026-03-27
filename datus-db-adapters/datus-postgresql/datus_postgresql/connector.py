@@ -5,9 +5,18 @@
 from typing import Any, Dict, List, Optional, Set, Union, override
 from urllib.parse import quote_plus
 
-from datus_db_core import TABLE_TYPE, DatusDbException, ErrorCode, get_logger, list_to_in_str
-from datus_sqlalchemy import SQLAlchemyConnector
+from pandas import DataFrame
 from pydantic import BaseModel, Field
+from sqlalchemy import create_engine, text
+
+from datus_db_core import (
+    TABLE_TYPE,
+    DatusDbException,
+    ErrorCode,
+    get_logger,
+    list_to_in_str,
+)
+from datus_sqlalchemy import SQLAlchemyConnector
 
 from .config import PostgreSQLConfig
 
@@ -76,7 +85,11 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             f"{database}?sslmode={config.sslmode}"
         )
 
-        super().__init__(connection_string, dialect="postgresql", timeout_seconds=config.timeout_seconds)
+        super().__init__(
+            connection_string,
+            dialect="postgresql",
+            timeout_seconds=config.timeout_seconds,
+        )
         self.database_name = database
         self.schema_name = config.schema_name or "public"
 
@@ -90,7 +103,13 @@ class PostgreSQLConnector(SQLAlchemyConnector):
     @override
     def _sys_schemas(self) -> Set[str]:
         """System schemas to filter out."""
-        return {"pg_catalog", "information_schema", "pg_toast", "pg_temp_1", "pg_toast_temp_1"}
+        return {
+            "pg_catalog",
+            "information_schema",
+            "pg_toast",
+            "pg_temp_1",
+            "pg_toast_temp_1",
+        }
 
     # ==================== Utility Methods ====================
 
@@ -99,6 +118,33 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         """Safely wrap identifiers with double quotes for PostgreSQL."""
         escaped = identifier.replace('"', '""')
         return f'"{escaped}"'
+
+    def _build_connection_string(self, database_name: str) -> str:
+        """Build a PostgreSQL connection string for a given database."""
+        encoded_username = quote_plus(self.username) if self.username else ""
+        encoded_password = quote_plus(self.password) if self.password else ""
+        return (
+            f"postgresql+psycopg2://{encoded_username}:{encoded_password}"
+            f"@{self.host}:{self.port}/{database_name}?sslmode={self.config.sslmode}"
+        )
+
+    def _execute_on_database(self, sql: str, database_name: str) -> DataFrame:
+        """Execute a query on a specific database using a temporary connection.
+
+        Thread-safe: creates an isolated connection without mutating self.
+        """
+        if database_name == self.database_name:
+            return self._execute_pandas(sql)
+
+        conn_str = self._build_connection_string(database_name)
+        engine = create_engine(conn_str)
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(text(sql))
+                rows = [row._asdict() for row in result.fetchall()]
+                return DataFrame(rows)
+        finally:
+            engine.dispose()
 
     # ==================== Metadata Retrieval ====================
 
@@ -122,13 +168,15 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             List of metadata dictionaries
         """
         self.connect()
+        database_name = database_name or self.database_name
         schema_name = schema_name or self.schema_name
 
         # Get metadata configuration
         metadata_config = _get_metadata_config(table_type)
 
         if table_type == "mv":
-            # Materialized views use pg_matviews
+            # pg_matviews is scoped to the current database connection.
+            # Use a temporary connection if a different database is requested (thread-safe).
             if schema_name:
                 where = f"schemaname = '{schema_name}'"
             else:
@@ -139,8 +187,9 @@ class PostgreSQLConnector(SQLAlchemyConnector):
                 FROM pg_matviews
                 WHERE {where}
             """
+            query_result = self._execute_on_database(query, database_name)
         else:
-            # Tables and views use information_schema
+            # Tables and views use information_schema (supports table_catalog filter)
             if schema_name:
                 where = f"table_schema = '{schema_name}'"
             else:
@@ -154,10 +203,9 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             query = f"""
                 SELECT table_schema, table_name
                 FROM information_schema.{metadata_config.info_table}
-                WHERE {where} {type_filter}
+                WHERE table_catalog = '{database_name}' AND {where} {type_filter}
             """
-
-        query_result = self._execute_pandas(query)
+            query_result = self._execute_pandas(query)
 
         # Format results
         result = []
@@ -168,7 +216,7 @@ class PostgreSQLConnector(SQLAlchemyConnector):
                 {
                     "identifier": self.identifier(schema_name=schema, table_name=tb_name),
                     "catalog_name": "",
-                    "database_name": self.database_name,
+                    "database_name": database_name,
                     "schema_name": schema,
                     "table_name": tb_name,
                     "table_type": table_type,
@@ -307,7 +355,11 @@ class PostgreSQLConnector(SQLAlchemyConnector):
 
     @override
     def get_tables_with_ddl(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", tables: Optional[List[str]] = None
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        tables: Optional[List[str]] = None,
     ) -> List[Dict[str, str]]:
         """Get tables with DDL statements."""
         return self._get_objects_with_ddl("table", tables, catalog_name, database_name, schema_name)
@@ -321,7 +373,11 @@ class PostgreSQLConnector(SQLAlchemyConnector):
 
     @override
     def get_schema(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> List[Dict[str, Any]]:
         """
         Get table schema using INFORMATION_SCHEMA.
@@ -338,6 +394,7 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         if not table_name:
             return []
 
+        database_name = database_name or self.database_name
         schema_name = schema_name or self.schema_name
 
         # Use INFORMATION_SCHEMA to get schema with comments
@@ -364,7 +421,8 @@ class PostgreSQLConnector(SQLAlchemyConnector):
                 ON st.schemaname = c.table_schema AND st.relname = c.table_name
             LEFT JOIN pg_catalog.pg_description pgd
                 ON pgd.objoid = st.relid AND pgd.objsubid = c.ordinal_position
-            WHERE c.table_schema = '{schema_name}'
+            WHERE c.table_catalog = '{database_name}'
+              AND c.table_schema = '{schema_name}'
               AND c.table_name = '{table_name}'
             ORDER BY c.ordinal_position
         """
@@ -403,7 +461,8 @@ class PostgreSQLConnector(SQLAlchemyConnector):
     @override
     def get_schemas(self, catalog_name: str = "", database_name: str = "", include_sys: bool = False) -> List[str]:
         """Get list of schemas in the current database."""
-        sql = "SELECT schema_name FROM information_schema.schemata"
+        database_name = database_name or self.database_name
+        sql = f"SELECT schema_name FROM information_schema.schemata WHERE catalog_name = '{database_name}'"
         result = self._execute_pandas(sql)
         schemas = result["schema_name"].tolist()
 
@@ -422,11 +481,17 @@ class PostgreSQLConnector(SQLAlchemyConnector):
 
     @override
     def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        """Switch schema context by updating self.schema_name.
+        """Switch database/schema context.
 
-        Note: All queries use explicit schema qualification via full_name(),
-        so we only need to update self.schema_name here.
+        PostgreSQL requires reconnection to switch databases.
+        Schema switching only updates self.schema_name since all queries
+        use explicit schema qualification via full_name().
         """
+        if database_name and database_name != self.database_name:
+            self.connection_string = self._build_connection_string(database_name)
+            self.close()
+            self.connect()
+            self.database_name = database_name
         if schema_name:
             self.schema_name = schema_name
 
@@ -477,7 +542,7 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             return result
 
         # Otherwise get metadata and query all tables
-        metadata = self._get_metadata(table_type, "", "", schema_name)
+        metadata = self._get_metadata(table_type, "", database_name, schema_name)
         for meta in metadata:
             full_name = self.full_name(schema_name=meta["schema_name"], table_name=meta["table_name"])
             sql = f"SELECT * FROM {full_name} LIMIT {top_n}"
@@ -499,28 +564,46 @@ class PostgreSQLConnector(SQLAlchemyConnector):
 
     @override
     def identifier(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> str:
         """Generate a unique identifier for a table."""
+        database_name = database_name or self.database_name
         schema_name = schema_name or self.schema_name
+        if database_name and schema_name:
+            return f"{database_name}.{schema_name}.{table_name}"
         if schema_name:
             return f"{schema_name}.{table_name}"
         return table_name
 
     @override
     def full_name(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = "", table_name: str = ""
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        table_name: str = "",
     ) -> str:
         """Build fully-qualified table name."""
+        database_name = database_name or self.database_name
         schema_name = schema_name or self.schema_name
+        if database_name and schema_name:
+            return f"{self._quote_identifier(database_name)}.{self._quote_identifier(schema_name)}.{self._quote_identifier(table_name)}"
         if schema_name:
             return f"{self._quote_identifier(schema_name)}.{self._quote_identifier(table_name)}"
         return self._quote_identifier(table_name)
 
     @override
     def _reset_filter_tables(
-        self, tables: Optional[List[str]] = None, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+        self,
+        tables: Optional[List[str]] = None,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
     ) -> List[str]:
         """Reset filter tables with full names."""
         schema_name = schema_name or self.schema_name
-        return super()._reset_filter_tables(tables, "", "", schema_name)
+        return super()._reset_filter_tables(tables, "", database_name, schema_name)
