@@ -268,44 +268,12 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         """
         return {"pg_catalog", "information_schema", "pg_internal"}
 
-    def _get_connection_for_database(self, database_name: str):
-        """Get a connection to a specific database.
-
-        Returns self.connection if database_name matches the current database,
-        otherwise creates a new temporary connection (thread-safe).
-        The caller must close the returned connection if it is not self.connection.
-        """
-        if database_name == self.database_name:
-            return self.connection
-
-        config = self.redshift_config
-        connection_params = {
-            "host": config.host,
-            "port": config.port,
-            "user": config.username,
-            "password": config.password,
-            "database": database_name,
-            "timeout": config.timeout_seconds,
-            "ssl": config.ssl,
-        }
-        if config.iam:
-            connection_params.update(
-                {
-                    "iam": True,
-                    "cluster_identifier": config.cluster_identifier,
-                    "region": config.region,
-                    "access_key_id": config.access_key_id,
-                    "secret_access_key": config.secret_access_key,
-                }
-            )
-        return redshift_connector.connect(**connection_params)
-
     def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
         """
         Switch database or schema context.
 
-        Redshift requires a new connection to switch databases.
-        Schema switching uses SET search_path.
+        This changes the current working database/schema. Subsequent queries
+        without fully-qualified names will use this context.
 
         Args:
             catalog_name: Catalog name (not used in Redshift)
@@ -316,20 +284,27 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             ValueError: If schema_name or database_name contains invalid characters
         """
         try:
-            # Switch database by reconnecting
-            if database_name and database_name != self.database_name:
-                _validate_sql_identifier(database_name, "database")
-                self.connection.close()
-                self.connection = self._get_connection_for_database(database_name)
-                self.database_name = database_name
+            with self.connection.cursor() as cursor:
+                # If schema_name is provided, set the search_path
+                if schema_name:
+                    # Validate schema name to prevent SQL injection
+                    _validate_sql_identifier(schema_name, "schema")
 
-            # Switch schema via SET search_path
-            if schema_name:
-                _validate_sql_identifier(schema_name, "schema")
-                with self.connection.cursor() as cursor:
+                    # SET search_path changes which schema is used by default
                     sql = f'SET search_path TO "{schema_name}"'
                     cursor.execute(sql)
                     self.schema_name = schema_name
+
+                # Note: Redshift doesn't support switching databases within a connection
+                # You need to create a new connection to switch databases
+                if database_name and database_name != self.database_name:
+                    # Validate database name even though we're just warning
+                    _validate_sql_identifier(database_name, "database")
+
+                    logger.warning(
+                        f"Cannot switch database from {self.database_name} to {database_name} "
+                        f"in existing connection. Create a new connection to change databases."
+                    )
         except ValueError as e:
             # Re-raise validation errors as-is
             raise e
