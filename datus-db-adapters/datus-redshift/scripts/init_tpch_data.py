@@ -172,9 +172,7 @@ ROW_COUNTS = [5, 25, 10, 15, 5]
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Initialize TPC-H sample data in Amazon Redshift"
-    )
+    parser = argparse.ArgumentParser(description="Initialize TPC-H sample data in Amazon Redshift")
     parser.add_argument(
         "--host",
         default=os.getenv("REDSHIFT_HOST"),
@@ -206,9 +204,7 @@ def main():
         default=os.getenv("REDSHIFT_SCHEMA", "public"),
         help="Schema (default: public)",
     )
-    parser.add_argument(
-        "--drop", action="store_true", help="Drop existing TPC-H tables before creating"
-    )
+    parser.add_argument("--drop", action="store_true", help="Drop existing TPC-H tables before creating")
     args = parser.parse_args()
 
     if not args.host:
@@ -234,15 +230,11 @@ def main():
 
     schema = args.schema
 
-    print(
-        f"Connecting to Redshift at {args.host}:{args.port}/{args.database} (schema: {schema})..."
-    )
+    print(f"Connecting to Redshift at {args.host}:{args.port}/{args.database} (schema: {schema})...")
     conn = RedshiftConnector(config)
     try:
         if not conn.test_connection():
-            print(
-                "Failed to connect to Redshift. Check your credentials and cluster status."
-            )
+            print("Failed to connect to Redshift. Check your credentials and cluster status.")
             sys.exit(1)
 
         print("Connected successfully!")
@@ -297,8 +289,7 @@ def main():
     print("\nExample queries:")
     print(f"  SELECT * FROM {schema}.tpch_region")
     print(
-        f"  SELECT n.name, r.name FROM {schema}.tpch_nation n"
-        f" JOIN {schema}.tpch_region r ON n.regionkey = r.regionkey"
+        f"  SELECT n.name, r.name FROM {schema}.tpch_nation n JOIN {schema}.tpch_region r ON n.regionkey = r.regionkey"
     )
 
 

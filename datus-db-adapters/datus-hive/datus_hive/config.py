@@ -7,9 +7,7 @@ from typing import Any, Dict, Mapping, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
-def _extract_prefixed_config(
-    carrier_map: Mapping[str, Any], prefix: str
-) -> Dict[str, Any]:
+def _extract_prefixed_config(carrier_map: Mapping[str, Any], prefix: str) -> Dict[str, Any]:
     """Extract Hive configuration from a prefixed carrier map."""
     hive_config: Dict[str, Any] = {}
     prefix_len = len(prefix)
@@ -55,17 +53,11 @@ class HiveConfig(BaseModel):
         default=None,
         description="Authentication mechanism (NONE, LDAP, CUSTOM, KERBEROS)",
     )
-    configuration: Dict[str, Any] = Field(
-        default_factory=dict, description="Hive session configuration"
-    )
-    timeout_seconds: int = Field(
-        default=30, description="Connection timeout in seconds"
-    )
+    configuration: Dict[str, Any] = Field(default_factory=dict, description="Hive session configuration")
+    timeout_seconds: int = Field(default=30, description="Connection timeout in seconds")
 
     @classmethod
-    def from_config_map(
-        cls, config_map: Mapping[str, Any], prefix: str
-    ) -> "HiveConfig":
+    def from_config_map(cls, config_map: Mapping[str, Any], prefix: str) -> "HiveConfig":
         """Build HiveConfig from a prefixed carrier map."""
         extracted = _extract_prefixed_config(config_map, prefix)
         return cls(**extracted)

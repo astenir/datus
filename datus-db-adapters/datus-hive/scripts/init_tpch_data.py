@@ -168,20 +168,12 @@ ROW_COUNTS = [5, 25, 10, 15, 5]
 
 def main():
     parser = argparse.ArgumentParser(description="Initialize TPC-H sample data in Hive")
-    parser.add_argument(
-        "--host", default="localhost", help="Hive host (default: localhost)"
-    )
-    parser.add_argument(
-        "--port", type=int, default=10000, help="HiveServer2 port (default: 10000)"
-    )
+    parser.add_argument("--host", default="localhost", help="Hive host (default: localhost)")
+    parser.add_argument("--port", type=int, default=10000, help="HiveServer2 port (default: 10000)")
     parser.add_argument("--username", default="hive", help="Username (default: hive)")
     parser.add_argument("--password", default="", help="Password (default: empty)")
-    parser.add_argument(
-        "--database", default="default", help="Database (default: default)"
-    )
-    parser.add_argument(
-        "--drop", action="store_true", help="Drop existing TPC-H tables before creating"
-    )
+    parser.add_argument("--database", default="default", help="Database (default: default)")
+    parser.add_argument("--drop", action="store_true", help="Drop existing TPC-H tables before creating")
     args = parser.parse_args()
 
     print(f"Connecting to Hive at {args.host}:{args.port}...")
@@ -240,9 +232,7 @@ def main():
     print("\nDone! TPC-H data is ready for use in Datus.")
     print("\nExample queries:")
     print("  SELECT * FROM tpch_region")
-    print(
-        "  SELECT n.name, r.name FROM tpch_nation n JOIN tpch_region r ON n.regionkey = r.regionkey"
-    )
+    print("  SELECT n.name, r.name FROM tpch_nation n JOIN tpch_region r ON n.regionkey = r.regionkey")
 
 
 if __name__ == "__main__":

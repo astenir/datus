@@ -71,9 +71,7 @@ class TestRegister:
         assert ConnectorRegistry._factories["testdb"] is factory
 
     def test_register_with_capabilities(self):
-        ConnectorRegistry.register(
-            "testdb", DummyConnector, capabilities={"catalog", "database", "schema"}
-        )
+        ConnectorRegistry.register("testdb", DummyConnector, capabilities={"catalog", "database", "schema"})
         assert ConnectorRegistry.support_catalog("testdb")
         assert ConnectorRegistry.support_database("testdb")
         assert ConnectorRegistry.support_schema("testdb")
@@ -85,9 +83,7 @@ class TestRegister:
         assert meta.config_class is DummyConfig
 
     def test_register_with_display_name(self):
-        ConnectorRegistry.register(
-            "testdb", DummyConnector, display_name="Test Database"
-        )
+        ConnectorRegistry.register("testdb", DummyConnector, display_name="Test Database")
         meta = ConnectorRegistry.get_metadata("testdb")
         assert meta.display_name == "Test Database"
 
@@ -216,9 +212,7 @@ class TestCapabilities:
 
     def test_register_handlers_updates_capabilities(self):
         ConnectorRegistry.register("testdb", DummyConnector)
-        ConnectorRegistry.register_handlers(
-            "testdb", capabilities={"catalog", "schema"}
-        )
+        ConnectorRegistry.register_handlers("testdb", capabilities={"catalog", "schema"})
         assert ConnectorRegistry.support_catalog("testdb")
         assert ConnectorRegistry.support_schema("testdb")
 
@@ -276,15 +270,11 @@ class TestAdapterMetadata:
         assert meta.display_name == "Mysql"
 
     def test_custom_display_name(self):
-        meta = AdapterMetadata(
-            db_type="mysql", connector_class=DummyConnector, display_name="MySQL"
-        )
+        meta = AdapterMetadata(db_type="mysql", connector_class=DummyConnector, display_name="MySQL")
         assert meta.display_name == "MySQL"
 
     def test_get_config_fields_with_pydantic(self):
-        meta = AdapterMetadata(
-            db_type="test", connector_class=DummyConnector, config_class=DummyConfig
-        )
+        meta = AdapterMetadata(db_type="test", connector_class=DummyConnector, config_class=DummyConfig)
         fields = meta.get_config_fields()
         assert "host" in fields
         assert "timeout_seconds" in fields
@@ -297,7 +287,5 @@ class TestAdapterMetadata:
         class PlainConfig:
             pass
 
-        meta = AdapterMetadata(
-            db_type="test", connector_class=DummyConnector, config_class=PlainConfig
-        )
+        meta = AdapterMetadata(db_type="test", connector_class=DummyConnector, config_class=PlainConfig)
         assert meta.get_config_fields() == {}

@@ -21,13 +21,9 @@ class PostgreSQLConfig(BaseModel):
         json_schema_extra={"input_type": "password"},
     )
     database: Optional[str] = Field(default=None, description="Default database name")
-    schema_name: Optional[str] = Field(
-        default="public", alias="schema", description="Default schema name"
-    )
+    schema_name: Optional[str] = Field(default="public", alias="schema", description="Default schema name")
     sslmode: str = Field(
         default="prefer",
         description="SSL mode (disable, allow, prefer, require, verify-ca, verify-full)",
     )
-    timeout_seconds: int = Field(
-        default=30, description="Connection timeout in seconds"
-    )
+    timeout_seconds: int = Field(default=30, description="Connection timeout in seconds")

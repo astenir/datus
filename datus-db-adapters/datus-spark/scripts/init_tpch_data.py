@@ -150,9 +150,7 @@ TPCH_TABLES = [
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Initialize TPC-H sample data in Spark"
-    )
+    parser = argparse.ArgumentParser(description="Initialize TPC-H sample data in Spark")
     parser.add_argument(
         "--host",
         default="localhost",
@@ -165,12 +163,8 @@ def main():
         help="Spark Thrift Server port (default: 10000)",
     )
     parser.add_argument("--username", default="spark", help="Username (default: spark)")
-    parser.add_argument(
-        "--database", default="default", help="Database (default: default)"
-    )
-    parser.add_argument(
-        "--drop", action="store_true", help="Drop existing TPC-H tables before creating"
-    )
+    parser.add_argument("--database", default="default", help="Database (default: default)")
+    parser.add_argument("--drop", action="store_true", help="Drop existing TPC-H tables before creating")
     args = parser.parse_args()
 
     config = SparkConfig(

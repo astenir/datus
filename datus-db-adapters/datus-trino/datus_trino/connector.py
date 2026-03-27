@@ -44,11 +44,7 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
         # Build connection string: trino://user:pass@host:port/catalog/schema
         encoded_user = quote_plus(config.username)
         encoded_password = quote_plus(config.password) if config.password else ""
-        auth_part = (
-            f"{encoded_user}:{encoded_password}@"
-            if config.password
-            else f"{encoded_user}@"
-        )
+        auth_part = f"{encoded_user}:{encoded_password}@" if config.password else f"{encoded_user}@"
 
         connection_string = (
             f"trino://{auth_part}{config.host}:{config.port}"
@@ -137,16 +133,12 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
         return {"information_schema"}
 
     @override
-    def get_databases(
-        self, catalog_name: str = "", include_sys: bool = False
-    ) -> List[str]:
+    def get_databases(self, catalog_name: str = "", include_sys: bool = False) -> List[str]:
         """Get list of databases (schemas in Trino)."""
         return self.get_schemas(catalog_name=catalog_name, include_sys=include_sys)
 
     @override
-    def get_schemas(
-        self, catalog_name: str = "", database_name: str = "", include_sys: bool = False
-    ) -> List[str]:
+    def get_schemas(self, catalog_name: str = "", database_name: str = "", include_sys: bool = False) -> List[str]:
         """Get list of schemas from catalog."""
         catalog = catalog_name or self.catalog_name
         result = self._execute_pandas(f'SHOW SCHEMAS FROM "{catalog}"')
@@ -159,9 +151,7 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
         return schemas
 
     @override
-    def get_tables(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
-    ) -> List[str]:
+    def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """Get list of table names."""
         catalog = catalog_name or self.catalog_name
         schema = schema_name or database_name or self.schema_name
@@ -171,16 +161,13 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
         return result.iloc[:, 0].tolist()
 
     @override
-    def get_views(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
-    ) -> List[str]:
+    def get_views(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """Get list of view names."""
         catalog = catalog_name or self.catalog_name
         schema = schema_name or database_name or self.schema_name
         try:
             result = self._execute_pandas(
-                f'SELECT table_name FROM "{catalog}".information_schema.views '
-                f"WHERE table_schema = '{schema}'"
+                f"SELECT table_name FROM \"{catalog}\".information_schema.views WHERE table_schema = '{schema}'"
             )
             if result.empty:
                 return []
@@ -224,9 +211,7 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
                     "nullable": query_result["is_nullable"][i] == "YES",
                     "default_value": query_result["column_default"][i],
                     "pk": False,  # Trino doesn't have primary keys in INFORMATION_SCHEMA
-                    "comment": query_result["comment"][i]
-                    if "comment" in query_result.columns
-                    else None,
+                    "comment": query_result["comment"][i] if "comment" in query_result.columns else None,
                 }
             )
         return result
@@ -261,9 +246,7 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
                 f".{self._quote_identifier(table_name)}"
             )
         elif schema:
-            return (
-                f"{self._quote_identifier(schema)}.{self._quote_identifier(table_name)}"
-            )
+            return f"{self._quote_identifier(schema)}.{self._quote_identifier(table_name)}"
         return self._quote_identifier(table_name)
 
     @override
@@ -275,9 +258,7 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
         return schema if schema else None
 
     @override
-    def do_switch_context(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
-    ):
+    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
         """Switch catalog/schema context."""
         if catalog_name:
             self.catalog_name = catalog_name

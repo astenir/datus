@@ -17,9 +17,7 @@ from .config import StarRocksConfig
 logger = get_logger(__name__)
 
 
-class StarRocksConnector(
-    MySQLConnector, CatalogSupportMixin, MaterializedViewSupportMixin
-):
+class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSupportMixin):
     """
     StarRocks database connector.
 
@@ -38,9 +36,7 @@ class StarRocksConnector(
         if isinstance(config, dict):
             config = StarRocksConfig(**config)
         elif not isinstance(config, StarRocksConfig):
-            raise TypeError(
-                f"config must be StarRocksConfig or dict, got {type(config)}"
-            )
+            raise TypeError(f"config must be StarRocksConfig or dict, got {type(config)}")
 
         self.starrocks_config = config
 
@@ -107,9 +103,7 @@ class StarRocksConnector(
             return self.default_catalog()
         return catalog
 
-    def _before_metadata_query(
-        self, catalog_name: str = "", database_name: str = ""
-    ) -> None:
+    def _before_metadata_query(self, catalog_name: str = "", database_name: str = "") -> None:
         """Switch catalog before metadata queries if needed."""
         target_catalog = catalog_name or self.catalog_name or self.default_catalog()
         if target_catalog and target_catalog != self.catalog_name:
@@ -135,14 +129,10 @@ class StarRocksConnector(
             List of metadata dictionaries with catalog_name properly set
         """
         # Determine the target catalog
-        current_catalog = self.reset_catalog_to_default(
-            catalog_name or self.catalog_name
-        )
+        current_catalog = self.reset_catalog_to_default(catalog_name or self.catalog_name)
 
         # Switch to the correct catalog before querying
-        self._before_metadata_query(
-            catalog_name=current_catalog, database_name=database_name
-        )
+        self._before_metadata_query(catalog_name=current_catalog, database_name=database_name)
 
         # Get base metadata from parent
         result = super()._get_metadata(table_type, catalog_name, database_name)
@@ -151,11 +141,7 @@ class StarRocksConnector(
         filtered_result = []
         for item in result:
             # Filter by catalog if the item has catalog_name set
-            if (
-                "catalog_name" in item
-                and item["catalog_name"]
-                and item["catalog_name"] != current_catalog
-            ):
+            if "catalog_name" in item and item["catalog_name"] and item["catalog_name"] != current_catalog:
                 continue
 
             item["catalog_name"] = current_catalog
@@ -170,19 +156,13 @@ class StarRocksConnector(
         return filtered_result
 
     @override
-    def get_tables(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
-    ) -> List[str]:
+    def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """Get list of table names."""
-        result = self._get_metadata(
-            table_type="table", catalog_name=catalog_name, database_name=database_name
-        )
+        result = self._get_metadata(table_type="table", catalog_name=catalog_name, database_name=database_name)
         return [table["table_name"] for table in result]
 
     @override
-    def get_views(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
-    ) -> List[str]:
+    def get_views(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """Get list of view names."""
         try:
             result = self._get_metadata(
@@ -200,9 +180,7 @@ class StarRocksConnector(
     ) -> List[str]:
         """Get list of materialized view names."""
         try:
-            result = self._get_metadata(
-                table_type="mv", catalog_name=catalog_name, database_name=database_name
-            )
+            result = self._get_metadata(table_type="mv", catalog_name=catalog_name, database_name=database_name)
             return [mv["table_name"] for mv in result]
         except Exception as e:
             logger.warning(f"Failed to get materialized views: {e}")
@@ -222,27 +200,20 @@ class StarRocksConnector(
         Returns:
             List of materialized view metadata with DDL
         """
-        current_catalog = self.reset_catalog_to_default(
-            catalog_name or self.catalog_name
-        )
+        current_catalog = self.reset_catalog_to_default(catalog_name or self.catalog_name)
 
-        self._before_metadata_query(
-            catalog_name=current_catalog, database_name=database_name
-        )
+        self._before_metadata_query(catalog_name=current_catalog, database_name=database_name)
 
         # Query materialized views from information_schema
         query_sql = (
-            "SELECT TABLE_SCHEMA, TABLE_NAME, MATERIALIZED_VIEW_DEFINITION "
-            "FROM information_schema.materialized_views"
+            "SELECT TABLE_SCHEMA, TABLE_NAME, MATERIALIZED_VIEW_DEFINITION FROM information_schema.materialized_views"
         )
 
         if database_name:
             query_sql = f"{query_sql} WHERE TABLE_SCHEMA = '{database_name}'"
         else:
             ignore_dbs = list(self._sys_databases())
-            query_sql = (
-                f"{query_sql} {list_to_in_str('WHERE TABLE_SCHEMA NOT IN', ignore_dbs)}"
-            )
+            query_sql = f"{query_sql} {list_to_in_str('WHERE TABLE_SCHEMA NOT IN', ignore_dbs)}"
 
         result = self._execute_pandas(query_sql)
 
@@ -276,9 +247,7 @@ class StarRocksConnector(
         return mysql_sys | starrocks_sys
 
     @override
-    def get_databases(
-        self, catalog_name: str = "", include_sys: bool = False
-    ) -> List[str]:
+    def get_databases(self, catalog_name: str = "", include_sys: bool = False) -> List[str]:
         """Get list of databases in the catalog."""
         return super().get_databases(catalog_name, include_sys=include_sys)
 
@@ -310,9 +279,7 @@ class StarRocksConnector(
             return f"`{table_name}`"
 
     @override
-    def _sqlalchemy_schema(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
-    ) -> str:
+    def _sqlalchemy_schema(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> str:
         """Get schema name for SQLAlchemy Inspector with catalog support."""
         database_name = database_name or self.database_name
 

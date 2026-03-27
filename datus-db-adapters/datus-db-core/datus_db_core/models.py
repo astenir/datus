@@ -42,9 +42,7 @@ class BaseInput(BaseModel):
 class BaseResult(BaseModel):
     """Base class for node result data validation."""
 
-    success: bool = Field(
-        ..., description="Indicates whether the operation was successful"
-    )
+    success: bool = Field(..., description="Indicates whether the operation was successful")
     error: Optional[str] = Field(None, description="Error message if operation failed")
 
     def get(self, key: str, default: Any = None) -> Any:
@@ -58,9 +56,7 @@ class ExecuteSQLInput(BaseInput):
 
     database_name: str = Field(default="", description="The name of the database")
     sql_query: str = Field(..., description="The SQL query to execute")
-    result_format: str = Field(
-        default="csv", description="Format of the result: 'csv' or 'arrow' or 'list'"
-    )
+    result_format: str = Field(default="csv", description="Format of the result: 'csv' or 'arrow' or 'list'")
 
 
 class ExecuteSQLResult(BaseResult):
@@ -70,9 +66,7 @@ class ExecuteSQLResult(BaseResult):
 
     sql_query: Optional[str] = Field("", description="The SQL query to execute")
     row_count: Optional[int] = Field(None, description="The number of rows returned")
-    sql_return: Any = Field(
-        default=None, description="The result of SQL execution (string or Arrow data)"
-    )
+    sql_return: Any = Field(default=None, description="The result of SQL execution (string or Arrow data)")
     result_format: str = Field(
         default="",
         description="Format of the result: 'csv' or 'arrow' or 'pandas' or 'list'",

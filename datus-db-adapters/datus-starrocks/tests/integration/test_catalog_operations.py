@@ -55,9 +55,7 @@ def test_get_databases_from_default_catalog(connector: StarRocksConnector):
 
 
 @pytest.mark.integration
-def test_get_databases_from_custom_catalog(
-    connector: StarRocksConnector, config: StarRocksConfig
-):
+def test_get_databases_from_custom_catalog(connector: StarRocksConnector, config: StarRocksConfig):
     """Test getting databases from custom catalog if specified."""
     if config.catalog and config.catalog != "default_catalog":
         connector.switch_catalog(config.catalog)

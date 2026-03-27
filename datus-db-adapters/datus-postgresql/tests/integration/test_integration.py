@@ -112,9 +112,7 @@ def test_get_tables_with_ddl(connector: PostgreSQLConnector, config: PostgreSQLC
     )
 
     try:
-        tables = connector.get_tables_with_ddl(
-            schema_name=config.schema_name, tables=[table_name]
-        )
+        tables = connector.get_tables_with_ddl(schema_name=config.schema_name, tables=[table_name])
 
         if len(tables) > 0:
             table = tables[0]
@@ -193,9 +191,7 @@ def test_get_schema(connector: PostgreSQLConnector, config: PostgreSQLConfig):
     )
 
     try:
-        schema = connector.get_schema(
-            schema_name=config.schema_name, table_name=table_name
-        )
+        schema = connector.get_schema(schema_name=config.schema_name, table_name=table_name)
 
         assert len(schema) == 4
 
@@ -240,9 +236,7 @@ def test_get_sample_rows(connector: PostgreSQLConnector, config: PostgreSQLConfi
         """
         )
 
-        sample_rows = connector.get_sample_rows(
-            schema_name=config.schema_name, tables=[table_name], top_n=2
-        )
+        sample_rows = connector.get_sample_rows(schema_name=config.schema_name, tables=[table_name], top_n=2)
 
         assert len(sample_rows) == 1
         assert sample_rows[0]["table_name"] == table_name
@@ -284,9 +278,7 @@ def test_execute_ddl(connector: PostgreSQLConnector, config: PostgreSQLConfig):
         assert create_result.success
 
         # ALTER
-        alter_result = connector.execute_ddl(
-            f"ALTER TABLE {table_name} ADD COLUMN age INT"
-        )
+        alter_result = connector.execute_ddl(f"ALTER TABLE {table_name} ADD COLUMN age INT")
         assert alter_result.success
 
     finally:
@@ -309,9 +301,7 @@ def test_execute_insert(connector: PostgreSQLConnector, config: PostgreSQLConfig
     )
 
     try:
-        insert_result = connector.execute_insert(
-            f"INSERT INTO {table_name} (name) VALUES ('Alice'), ('Bob')"
-        )
+        insert_result = connector.execute_insert(f"INSERT INTO {table_name} (name) VALUES ('Alice'), ('Bob')")
         assert insert_result.success
         assert insert_result.row_count == 2
 
@@ -344,14 +334,10 @@ def test_execute_update(connector: PostgreSQLConnector, config: PostgreSQLConfig
 
     try:
         # Insert initial data
-        connector.execute_insert(
-            f"INSERT INTO {table_name} (name) VALUES ('Alice'), ('Bob')"
-        )
+        connector.execute_insert(f"INSERT INTO {table_name} (name) VALUES ('Alice'), ('Bob')")
 
         # Update
-        update_result = connector.execute_update(
-            f"UPDATE {table_name} SET name = 'Alice Updated' WHERE id = 1"
-        )
+        update_result = connector.execute_update(f"UPDATE {table_name} SET name = 'Alice Updated' WHERE id = 1")
         assert update_result.success
         assert update_result.row_count == 1
 
@@ -382,21 +368,15 @@ def test_execute_delete(connector: PostgreSQLConnector, config: PostgreSQLConfig
 
     try:
         # Insert initial data
-        connector.execute_insert(
-            f"INSERT INTO {table_name} (name) VALUES ('Alice'), ('Bob')"
-        )
+        connector.execute_insert(f"INSERT INTO {table_name} (name) VALUES ('Alice'), ('Bob')")
 
         # Delete
-        delete_result = connector.execute_delete(
-            f"DELETE FROM {table_name} WHERE id = 2"
-        )
+        delete_result = connector.execute_delete(f"DELETE FROM {table_name} WHERE id = 2")
         assert delete_result.success
         assert delete_result.row_count == 1
 
         # Verify
-        query_result = connector.execute(
-            {"sql_query": f"SELECT id FROM {table_name}"}, result_format="list"
-        )
+        query_result = connector.execute({"sql_query": f"SELECT id FROM {table_name}"}, result_format="list")
         assert len(query_result.sql_return) == 1
         assert query_result.sql_return[0]["id"] == 1
     finally:
@@ -416,9 +396,7 @@ def test_exception_on_syntax_error(connector: PostgreSQLConnector):
 @pytest.mark.integration
 def test_exception_on_nonexistent_table(connector: PostgreSQLConnector):
     """Test that non-existent table returns error result."""
-    result = connector.execute(
-        {"sql_query": f"SELECT * FROM nonexistent_table_{uuid.uuid4().hex}"}
-    )
+    result = connector.execute({"sql_query": f"SELECT * FROM nonexistent_table_{uuid.uuid4().hex}"})
     assert result.error is not None or not result.success
 
 

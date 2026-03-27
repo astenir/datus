@@ -24,9 +24,7 @@ def test_config_with_all_required_fields():
 @pytest.mark.acceptance
 def test_config_default_values():
     """Test that default values are set correctly."""
-    config = RedshiftConfig(
-        host="cluster.example.com", username="user", password="pass"
-    )
+    config = RedshiftConfig(host="cluster.example.com", username="user", password="pass")
 
     assert config.port == 5439
     assert config.database is None
@@ -116,9 +114,7 @@ def test_config_no_iam_no_password_raises():
 def test_config_invalid_port_type():
     """Test that validation fails for invalid port type."""
     with pytest.raises(ValidationError) as exc_info:
-        RedshiftConfig(
-            host="cluster.example.com", username="user", password="pass", port="invalid"
-        )
+        RedshiftConfig(host="cluster.example.com", username="user", password="pass", port="invalid")
 
     errors = exc_info.value.errors()
     assert any(error["loc"] == ("port",) for error in errors)
@@ -155,9 +151,7 @@ def test_config_forbids_extra_fields():
 
 def test_config_schema_alias():
     """Test that 'schema' alias maps to schema_name."""
-    config = RedshiftConfig(
-        host="cluster.example.com", username="user", password="pass", schema="my_schema"
-    )
+    config = RedshiftConfig(host="cluster.example.com", username="user", password="pass", schema="my_schema")
 
     assert config.schema_name == "my_schema"
 
@@ -204,9 +198,7 @@ def test_config_to_dict():
 def test_config_special_characters_in_password():
     """Test config with special characters in password."""
     special_password = "p@ss!w0rd#$%^&*()"
-    config = RedshiftConfig(
-        host="cluster.example.com", username="user", password=special_password
-    )
+    config = RedshiftConfig(host="cluster.example.com", username="user", password=special_password)
 
     assert config.password == special_password
 
@@ -227,44 +219,34 @@ def test_config_special_characters_in_database():
 def test_config_unicode_in_username():
     """Test config with unicode characters in username."""
     unicode_user = "用户名"
-    config = RedshiftConfig(
-        host="cluster.example.com", username=unicode_user, password="pass"
-    )
+    config = RedshiftConfig(host="cluster.example.com", username=unicode_user, password="pass")
 
     assert config.username == unicode_user
 
 
 def test_config_none_database():
     """Test config with None as database."""
-    config = RedshiftConfig(
-        host="cluster.example.com", username="user", password="pass", database=None
-    )
+    config = RedshiftConfig(host="cluster.example.com", username="user", password="pass", database=None)
 
     assert config.database is None
 
 
 def test_config_large_port_number():
     """Test config with large port number."""
-    config = RedshiftConfig(
-        host="cluster.example.com", username="user", password="pass", port=65535
-    )
+    config = RedshiftConfig(host="cluster.example.com", username="user", password="pass", port=65535)
 
     assert config.port == 65535
 
 
 def test_config_zero_timeout():
     """Test that zero timeout is allowed."""
-    config = RedshiftConfig(
-        host="cluster.example.com", username="user", password="pass", timeout_seconds=0
-    )
+    config = RedshiftConfig(host="cluster.example.com", username="user", password="pass", timeout_seconds=0)
 
     assert config.timeout_seconds == 0
 
 
 def test_config_ssl_disabled():
     """Test config with SSL disabled."""
-    config = RedshiftConfig(
-        host="cluster.example.com", username="user", password="pass", ssl=False
-    )
+    config = RedshiftConfig(host="cluster.example.com", username="user", password="pass", ssl=False)
 
     assert config.ssl is False

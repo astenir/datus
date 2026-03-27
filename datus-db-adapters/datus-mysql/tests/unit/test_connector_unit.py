@@ -271,14 +271,10 @@ def test_identifier_with_database():
     config = MySQLConfig(username="user")
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
-        with patch(
-            "datus_sqlalchemy.SQLAlchemyConnector.identifier"
-        ) as mock_identifier:
+        with patch("datus_sqlalchemy.SQLAlchemyConnector.identifier") as mock_identifier:
             mock_identifier.return_value = "mydb.mytable"
             connector = MySQLConnector(config)
-            identifier = connector.identifier(
-                database_name="mydb", table_name="mytable"
-            )
+            identifier = connector.identifier(database_name="mydb", table_name="mytable")
 
             assert identifier == "mydb.mytable"
 
@@ -288,9 +284,7 @@ def test_identifier_without_database():
     config = MySQLConfig(username="user")
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
-        with patch(
-            "datus_sqlalchemy.SQLAlchemyConnector.identifier"
-        ) as mock_identifier:
+        with patch("datus_sqlalchemy.SQLAlchemyConnector.identifier") as mock_identifier:
             mock_identifier.return_value = "mytable"
             connector = MySQLConnector(config)
             identifier = connector.identifier(table_name="mytable")

@@ -41,9 +41,7 @@ def connector(config: StarRocksConfig) -> Generator[StarRocksConnector, None, No
             try:
                 conn.close()
             except Exception:
-                logger.warning(
-                    "Failed to close connector during teardown", exc_info=True
-                )
+                logger.warning("Failed to close connector during teardown", exc_info=True)
 
 
 # ==================== TPC-H Test Data ====================
@@ -239,12 +237,8 @@ def tpch_setup() -> Generator[StarRocksConnector, None, None]:
                 for table in TPCH_TABLES:
                     conn.execute_ddl(f"DROP TABLE IF EXISTS `{table}`")
             except Exception:
-                logger.warning(
-                    "Failed to drop TPC-H tables during teardown", exc_info=True
-                )
+                logger.warning("Failed to drop TPC-H tables during teardown", exc_info=True)
             try:
                 conn.close()
             except Exception:
-                logger.warning(
-                    "Failed to close connection during teardown", exc_info=True
-                )
+                logger.warning("Failed to close connection during teardown", exc_info=True)

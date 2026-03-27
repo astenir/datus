@@ -39,13 +39,9 @@ class HiveConnector(SQLAlchemyConnector):
         database = config.database or "default"
 
         encoded_username = quote_plus(self.username) if self.username else ""
-        connection_string = (
-            f"hive://{encoded_username}@{self.host}:{self.port}/{database}"
-        )
+        connection_string = f"hive://{encoded_username}@{self.host}:{self.port}/{database}"
 
-        super().__init__(
-            connection_string, dialect="hive", timeout_seconds=config.timeout_seconds
-        )
+        super().__init__(connection_string, dialect="hive", timeout_seconds=config.timeout_seconds)
 
         self.config = config
         self.database_name = database
@@ -60,9 +56,7 @@ class HiveConnector(SQLAlchemyConnector):
         if config.password:
             connect_args["password"] = config.password
         if config.configuration:
-            connect_args["configuration"] = HiveConnector._normalize_configuration(
-                config.configuration
-            )
+            connect_args["configuration"] = HiveConnector._normalize_configuration(config.configuration)
         return connect_args
 
     @staticmethod
@@ -113,9 +107,7 @@ class HiveConnector(SQLAlchemyConnector):
             )
 
     @override
-    def get_databases(
-        self, catalog_name: str = "", include_sys: bool = False
-    ) -> List[str]:
+    def get_databases(self, catalog_name: str = "", include_sys: bool = False) -> List[str]:
         """Get list of databases in Hive."""
         self.connect()
         result = self._execute_pandas("SHOW DATABASES")
@@ -138,9 +130,7 @@ class HiveConnector(SQLAlchemyConnector):
         return {"information_schema", "sys"}
 
     @override
-    def get_tables(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
-    ) -> List[str]:
+    def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """Get list of tables."""
         self.connect()
         database_name = database_name or self.database_name
@@ -152,9 +142,7 @@ class HiveConnector(SQLAlchemyConnector):
         return self._extract_table_names(result)
 
     @override
-    def get_views(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
-    ) -> List[str]:
+    def get_views(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """Get list of views."""
         self.connect()
         database_name = database_name or self.database_name
@@ -193,11 +181,7 @@ class HiveConnector(SQLAlchemyConnector):
 
         rows: List[Dict[str, Any]] = []
         for i in range(len(result)):
-            name = (
-                str(result[col_name][i]).strip()
-                if result[col_name][i] is not None
-                else ""
-            )
+            name = str(result[col_name][i]).strip() if result[col_name][i] is not None else ""
             if not name or name.startswith("#"):
                 break
             raw_type = result[type_col][i] if type_col else None
@@ -228,22 +212,16 @@ class HiveConnector(SQLAlchemyConnector):
         """Get tables with DDL statements."""
         self.connect()
         database_name = database_name or self.database_name
-        filter_tables = self._reset_filter_tables(
-            tables, catalog_name, database_name, schema_name
-        )
+        filter_tables = self._reset_filter_tables(tables, catalog_name, database_name, schema_name)
         result: List[Dict[str, str]] = []
         for table_name in self.get_tables(database_name=database_name):
-            full_name = self.full_name(
-                database_name=database_name, table_name=table_name
-            )
+            full_name = self.full_name(database_name=database_name, table_name=table_name)
             if filter_tables and full_name not in filter_tables:
                 continue
             ddl = self._show_create(full_name)
             result.append(
                 {
-                    "identifier": self.identifier(
-                        database_name=database_name, table_name=table_name
-                    ),
+                    "identifier": self.identifier(database_name=database_name, table_name=table_name),
                     "catalog_name": "",
                     "schema_name": "",
                     "database_name": database_name,
@@ -263,15 +241,11 @@ class HiveConnector(SQLAlchemyConnector):
         database_name = database_name or self.database_name
         result: List[Dict[str, str]] = []
         for view_name in self.get_views(database_name=database_name):
-            full_name = self.full_name(
-                database_name=database_name, table_name=view_name
-            )
+            full_name = self.full_name(database_name=database_name, table_name=view_name)
             ddl = self._show_create(full_name)
             result.append(
                 {
-                    "identifier": self.identifier(
-                        database_name=database_name, table_name=view_name
-                    ),
+                    "identifier": self.identifier(database_name=database_name, table_name=view_name),
                     "catalog_name": "",
                     "schema_name": "",
                     "database_name": database_name,
@@ -299,17 +273,13 @@ class HiveConnector(SQLAlchemyConnector):
         tables_to_scan = tables or self.get_tables(database_name=database_name)
         for table_name in tables_to_scan:
             try:
-                full_name = self.full_name(
-                    database_name=database_name, table_name=table_name
-                )
+                full_name = self.full_name(database_name=database_name, table_name=table_name)
                 query = f"SELECT * FROM {full_name} LIMIT {int(top_n)}"
                 df = self._execute_pandas(query)
                 if not df.empty:
                     result.append(
                         {
-                            "identifier": self.identifier(
-                                database_name=database_name, table_name=table_name
-                            ),
+                            "identifier": self.identifier(database_name=database_name, table_name=table_name),
                             "catalog_name": "",
                             "database_name": database_name,
                             "schema_name": "",
@@ -345,21 +315,13 @@ class HiveConnector(SQLAlchemyConnector):
         for col in result.columns:
             values = result[col].tolist()
             if any(isinstance(value, str) for value in values):
-                names = [
-                    str(value)
-                    for value in values
-                    if isinstance(value, str) and value.strip()
-                ]
+                names = [str(value) for value in values if isinstance(value, str) and value.strip()]
                 if names:
                     return names
 
         for col in result.columns:
             values = result[col].tolist()
-            names = [
-                str(value)
-                for value in values
-                if value is not None and not isinstance(value, bool)
-            ]
+            names = [str(value) for value in values if value is not None and not isinstance(value, bool)]
             if names:
                 return names
 
@@ -385,17 +347,13 @@ class HiveConnector(SQLAlchemyConnector):
             return f"{self._quote_identifier(db)}.{self._quote_identifier(table_name)}"
         return self._quote_identifier(table_name)
 
-    def do_switch_context(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
-    ):
+    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
         """Switch database context using USE statement."""
         if database_name:
             self.execute_ddl(f"USE {self._quote_identifier(database_name)}")
             self.database_name = database_name
 
     @classmethod
-    def from_carrier_map(
-        cls, carrier_map: Mapping[str, Any], prefix: str
-    ) -> "HiveConnector":
+    def from_carrier_map(cls, carrier_map: Mapping[str, Any], prefix: str) -> "HiveConnector":
         """Create a HiveConnector from a prefixed carrier map."""
         return cls(HiveConfig.from_config_map(carrier_map, prefix))

@@ -156,9 +156,7 @@ def test_tpch_query_customer_orders(tpch_setup: RedshiftConnector):
 def test_tpch_query_csv_format(tpch_setup: RedshiftConnector):
     """Test CSV result format with TPC-H data."""
     result = tpch_setup.execute(
-        {
-            "sql_query": f"SELECT regionkey, name FROM {S}.tpch_region ORDER BY regionkey"
-        },
+        {"sql_query": f"SELECT regionkey, name FROM {S}.tpch_region ORDER BY regionkey"},
         result_format="csv",
     )
     assert result.success
@@ -170,9 +168,7 @@ def test_tpch_query_csv_format(tpch_setup: RedshiftConnector):
 def test_tpch_query_arrow_format(tpch_setup: RedshiftConnector):
     """Test Arrow result format with TPC-H data."""
     result = tpch_setup.execute(
-        {
-            "sql_query": f"SELECT regionkey, name FROM {S}.tpch_region ORDER BY regionkey"
-        },
+        {"sql_query": f"SELECT regionkey, name FROM {S}.tpch_region ORDER BY regionkey"},
         result_format="arrow",
     )
     assert result.success
@@ -183,9 +179,7 @@ def test_tpch_query_arrow_format(tpch_setup: RedshiftConnector):
 def test_tpch_query_pandas_format(tpch_setup: RedshiftConnector):
     """Test Pandas result format with TPC-H data."""
     result = tpch_setup.execute(
-        {
-            "sql_query": f"SELECT regionkey, name FROM {S}.tpch_region ORDER BY regionkey"
-        },
+        {"sql_query": f"SELECT regionkey, name FROM {S}.tpch_region ORDER BY regionkey"},
         result_format="pandas",
     )
     assert result.success

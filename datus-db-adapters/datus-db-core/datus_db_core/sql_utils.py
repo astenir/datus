@@ -50,9 +50,7 @@ def metadata_identifier(
     if dialect == _SQLITE:
         return f"{database_name}.{table_name}" if database_name else table_name
     if dialect == _DUCKDB:
-        return ".".join(
-            part for part in (database_name, schema_name, table_name) if part
-        )
+        return ".".join(part for part in (database_name, schema_name, table_name) if part)
 
     parts = []
     caps_known = connector_registry.has_capabilities(dialect)
@@ -317,18 +315,14 @@ _KEYWORD_SQL_TYPE_MAP: Dict[str, SQLType] = {
 }
 
 _OPTIONAL_DDL_EXPRESSIONS: tuple[type[expressions.Expression], ...] = tuple(
-    getattr(expressions, name)
-    for name in ("Copy", "Refresh")
-    if hasattr(expressions, name)
+    getattr(expressions, name) for name in ("Copy", "Refresh") if hasattr(expressions, name)
 )
 
 
 def _normalize_expression(
     expr: Optional[expressions.Expression],
 ) -> Optional[expressions.Expression]:
-    while expr is not None and isinstance(
-        expr, (expressions.Alias, expressions.Subquery, expressions.Paren)
-    ):
+    while expr is not None and isinstance(expr, (expressions.Alias, expressions.Subquery, expressions.Paren)):
         expr = expr.this
     return expr
 
@@ -341,9 +335,7 @@ def _fallback_sql_type(statement: str) -> SQLType | None:
     keyword = match.group(1) if match else ""
 
     if keyword == "WITH":
-        match_cte_target = re.search(
-            r"\)\s*(SELECT|INSERT|UPDATE|DELETE|MERGE)\b", upper_stmt
-        )
+        match_cte_target = re.search(r"\)\s*(SELECT|INSERT|UPDATE|DELETE|MERGE)\b", upper_stmt)
         if match_cte_target:
             keyword = match_cte_target.group(1)
         else:
@@ -369,9 +361,7 @@ def parse_sql_type(sql: str, dialect: str) -> SQLType:
             first_statement, dialect=dialect_name, error_level=sqlglot.ErrorLevel.IGNORE
         )
         if parsed_expression is None:
-            if dialect_name == "starrocks" and _metadata_pattern().match(
-                first_statement
-            ):
+            if dialect_name == "starrocks" and _metadata_pattern().match(first_statement):
                 return SQLType.METADATA_SHOW
             inferred = _fallback_sql_type(first_statement)
             return inferred if inferred else SQLType.UNKNOWN
@@ -434,9 +424,7 @@ def parse_sql_type(sql: str, dialect: str) -> SQLType:
         ),
     ):
         return SQLType.CONTENT_SET
-    if _OPTIONAL_DDL_EXPRESSIONS and isinstance(
-        normalized_expression, _OPTIONAL_DDL_EXPRESSIONS
-    ):
+    if _OPTIONAL_DDL_EXPRESSIONS and isinstance(normalized_expression, _OPTIONAL_DDL_EXPRESSIONS):
         return SQLType.DDL
 
     inferred = _fallback_sql_type(first_statement)
@@ -475,9 +463,7 @@ def _table_parts(table_expr: Optional[Table]) -> Dict[str, str]:
 
 
 def _parse_identifier_sequence(value: str, dialect: str) -> Dict[str, str]:
-    parsed = sqlglot.parse_one(
-        f"USE {value}", dialect=dialect, error_level=sqlglot.ErrorLevel.IGNORE
-    )
+    parsed = sqlglot.parse_one(f"USE {value}", dialect=dialect, error_level=sqlglot.ErrorLevel.IGNORE)
     table_expr = parsed.this if isinstance(parsed, expressions.Use) else None
     return _table_parts(table_expr)
 
@@ -508,9 +494,7 @@ def parse_context_switch(sql: str, dialect: str) -> Optional[Dict[str, Any]]:
     }
 
     if command == "USE":
-        expression = sqlglot.parse_one(
-            statement, dialect=normalized_dialect, error_level=sqlglot.ErrorLevel.IGNORE
-        )
+        expression = sqlglot.parse_one(statement, dialect=normalized_dialect, error_level=sqlglot.ErrorLevel.IGNORE)
         if not isinstance(expression, expressions.Use):
             return None
         parts = _table_parts(expression.this)

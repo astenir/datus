@@ -70,9 +70,7 @@ def main():
         # Test current timestamp query
         cursor.execute("SELECT current_timestamp();")
         time_results = cursor.fetchall()
-        print(
-            f"   ✅ Time query successful: {time_results[0] if time_results else 'No results'}"
-        )
+        print(f"   ✅ Time query successful: {time_results[0] if time_results else 'No results'}")
 
         cursor.close()
     except Exception as e:

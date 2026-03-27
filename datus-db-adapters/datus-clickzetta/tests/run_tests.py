@@ -46,9 +46,7 @@ def main():
         help="Test mode to run",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
-    parser.add_argument(
-        "--markers", "-m", help='Pytest markers to run (e.g., "not slow")'
-    )
+    parser.add_argument("--markers", "-m", help='Pytest markers to run (e.g., "not slow")')
     parser.add_argument("--pattern", "-k", help="Run tests matching pattern")
 
     args = parser.parse_args()
@@ -70,9 +68,7 @@ def main():
     except subprocess.CalledProcessError:
         print("❌ pytest not found. Trying to install...")
         try:
-            subprocess.run(
-                [sys.executable, "-m", "pip", "install", "pytest"], check=True
-            )
+            subprocess.run([sys.executable, "-m", "pip", "install", "pytest"], check=True)
         except subprocess.CalledProcessError:
             try:
                 subprocess.run(
@@ -139,9 +135,7 @@ def main():
             )
         except subprocess.CalledProcessError:
             print("Installing coverage...")
-            subprocess.run(
-                [sys.executable, "-m", "pip", "install", "coverage"], check=True
-            )
+            subprocess.run([sys.executable, "-m", "pip", "install", "coverage"], check=True)
 
         # Run tests with coverage
         cmd = [sys.executable, "-m", "coverage", "run", "-m", "pytest"] + base_cmd[3:]

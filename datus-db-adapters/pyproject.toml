@@ -61,4 +61,4 @@ ignore = [
 max-complexity = 10
 
 [tool.ruff.lint.isort]
-known-first-party = ["datus-"]
+known-first-party = ["datus-*"]

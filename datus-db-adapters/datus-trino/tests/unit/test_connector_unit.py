@@ -187,9 +187,7 @@ def test_full_name_with_catalog_schema_table():
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = TrinoConnector(config)
 
-        result = connector.full_name(
-            catalog_name="my_catalog", schema_name="my_schema", table_name="my_table"
-        )
+        result = connector.full_name(catalog_name="my_catalog", schema_name="my_schema", table_name="my_table")
 
         assert result == '"my_catalog"."my_schema"."my_table"'
 
@@ -201,9 +199,7 @@ def test_full_name_with_database_name():
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = TrinoConnector(config)
 
-        result = connector.full_name(
-            catalog_name="cat", database_name="db", table_name="tbl"
-        )
+        result = connector.full_name(catalog_name="cat", database_name="db", table_name="tbl")
 
         assert result == '"cat"."db"."tbl"'
 
@@ -242,9 +238,7 @@ def test_full_name_uses_double_quotes():
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = TrinoConnector(config)
 
-        result = connector.full_name(
-            catalog_name="catalog", schema_name="schema", table_name="table"
-        )
+        result = connector.full_name(catalog_name="catalog", schema_name="schema", table_name="table")
 
         assert result.count('"') == 6  # 3 pairs of double quotes
 

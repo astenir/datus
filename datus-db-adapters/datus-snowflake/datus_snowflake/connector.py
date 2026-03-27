@@ -69,9 +69,7 @@ def _handle_snowflake_exception(e: Exception, sql: str = "") -> DatusDbException
         )
 
     elif isinstance(e, (InterfaceError, InternalError)):
-        return DatusDbException(
-            ErrorCode.DB_CONNECTION_FAILED, message_args={"error_message": e.raw_msg}
-        )
+        return DatusDbException(ErrorCode.DB_CONNECTION_FAILED, message_args={"error_message": e.raw_msg})
 
     elif isinstance(e, ForbiddenError):
         return DatusDbException(
@@ -86,14 +84,10 @@ def _handle_snowflake_exception(e: Exception, sql: str = "") -> DatusDbException
         )
 
     else:
-        return DatusDbException(
-            ErrorCode.DB_FAILED, message_args={"error_message": str(e)}
-        )
+        return DatusDbException(ErrorCode.DB_FAILED, message_args={"error_message": str(e)})
 
 
-class SnowflakeConnector(
-    BaseSqlConnector, SchemaNamespaceMixin, MaterializedViewSupportMixin
-):
+class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedViewSupportMixin):
     """
     Connector for Snowflake databases using native Snowflake SDK.
 
@@ -117,9 +111,7 @@ class SnowflakeConnector(
         if isinstance(config, dict):
             config = SnowflakeConfig(**config)
         elif not isinstance(config, SnowflakeConfig):
-            raise TypeError(
-                f"config must be SnowflakeConfig or dict, got {type(config)}"
-            )
+            raise TypeError(f"config must be SnowflakeConfig or dict, got {type(config)}")
 
         self.snowflake_config = config
 
@@ -166,9 +158,7 @@ class SnowflakeConnector(
         """Return set of system schemas to filter out."""
         return {"INFORMATION_SCHEMA"}
 
-    def do_switch_context(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
-    ):
+    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
         """Switch database or schema context."""
         try:
             with self.connection.cursor() as cursor:
@@ -178,9 +168,7 @@ class SnowflakeConnector(
                     sql = f'USE DATABASE "{database_name}"'
                 else:
                     sql = (
-                        f'USE SCHEMA "{schema_name}"'
-                        if not database_name
-                        else f'USE "{database_name}"."{schema_name}"'
+                        f'USE SCHEMA "{schema_name}"' if not database_name else f'USE "{database_name}"."{schema_name}"'
                     )
                 cursor.execute(sql)
         except Exception as e:
@@ -190,9 +178,7 @@ class SnowflakeConnector(
         """Validate input parameters."""
         super().validate_input(input_params)
         if "params" in input_params:
-            if not isinstance(input_params["params"], Sequence) and not isinstance(
-                input_params["params"], dict
-            ):
+            if not isinstance(input_params["params"], Sequence) and not isinstance(input_params["params"], dict):
                 raise ValueError("params must be dict or Sequence")
 
     def _do_execute_arrow(
@@ -201,9 +187,7 @@ class SnowflakeConnector(
         """Execute SQL query and return results in Apache Arrow format."""
         try:
             with self.connection.cursor() as cursor:
-                cursor.execute(
-                    "ALTER SESSION SET PYTHON_CONNECTOR_QUERY_RESULT_FORMAT='ARROW'"
-                )
+                cursor.execute("ALTER SESSION SET PYTHON_CONNECTOR_QUERY_RESULT_FORMAT='ARROW'")
                 cursor.execute(sql_query, params)
                 return cursor.fetch_arrow_all(force_return_table=True), cursor.rowcount
         except Exception as e:
@@ -354,9 +338,7 @@ class SnowflakeConnector(
 
                 if result:
                     columns = list(zip(*[row[:7] for row in result]))
-                    arrow_result = pa.Table.from_arrays(
-                        [pa.array(col) for col in columns], names=col_names
-                    )
+                    arrow_result = pa.Table.from_arrays([pa.array(col) for col in columns], names=col_names)
                 else:
                     arrow_result = pa.Table.from_arrays([])
 
@@ -366,9 +348,7 @@ class SnowflakeConnector(
                     final_result = arrow_result.to_pylist()
                 else:
                     df = arrow_result.to_pandas()
-                    final_result = (
-                        df if result_format == "pandas" else df.to_csv(index=False)
-                    )
+                    final_result = df if result_format == "pandas" else df.to_csv(index=False)
 
                 return ExecuteSQLResult(
                     success=True,
@@ -378,9 +358,7 @@ class SnowflakeConnector(
                 )
         except Exception as e:
             ex = _handle_snowflake_exception(e, sql)
-            return ExecuteSQLResult(
-                success=False, sql_query=sql, result_format=result_format, error=str(ex)
-            )
+            return ExecuteSQLResult(success=False, sql_query=sql, result_format=result_format, error=str(ex))
 
     def execute_arrow(self, sql: str) -> ExecuteSQLResult:
         """Execute query and return Arrow table."""
@@ -418,9 +396,7 @@ class SnowflakeConnector(
             )
         except Exception as e:
             ex = _handle_snowflake_exception(e, sql)
-            return ExecuteSQLResult(
-                success=False, sql_query=sql, result_format="pandas", error=str(ex)
-            )
+            return ExecuteSQLResult(success=False, sql_query=sql, result_format="pandas", error=str(ex))
 
     def execute_csv(self, query: str) -> ExecuteSQLResult:
         """Execute query and return CSV string."""
@@ -439,9 +415,7 @@ class SnowflakeConnector(
         return [self.execute_arrow(sql) for sql in queries]
 
     @override
-    def get_databases(
-        self, catalog_name: str = "", include_sys: bool = False
-    ) -> List[str]:
+    def get_databases(self, catalog_name: str = "", include_sys: bool = False) -> List[str]:
         """Get list of databases."""
         res = self._execute_show(sql="SHOW DATABASES", result_format="arrow").sql_return
         databases = res["name"]
@@ -449,20 +423,14 @@ class SnowflakeConnector(
         if not include_sys:
             system_dbs = pa.array(self._sys_databases(), type=pa.string())
             databases = databases.filter(pc.invert(pc.is_in(databases, system_dbs)))
-            databases = [
-                db.as_py()
-                for db in databases
-                if db.as_py().upper() not in self._sys_databases()
-            ]
+            databases = [db.as_py() for db in databases if db.as_py().upper() not in self._sys_databases()]
         else:
             databases = databases.to_pylist()
 
         return databases
 
     @override
-    def get_schemas(
-        self, catalog_name: str = "", database_name: str = "", include_sys: bool = False
-    ) -> List[str]:
+    def get_schemas(self, catalog_name: str = "", database_name: str = "", include_sys: bool = False) -> List[str]:
         """Get list of schemas using SHOW SCHEMAS command."""
         database_name = database_name or self.database_name
 
@@ -484,15 +452,11 @@ class SnowflakeConnector(
 
                 return schemas
         except Exception as e:
-            logger.warning(
-                f"Failed to get schemas using SHOW SCHEMAS, falling back to INFORMATION_SCHEMA: {e}"
-            )
+            logger.warning(f"Failed to get schemas using SHOW SCHEMAS, falling back to INFORMATION_SCHEMA: {e}")
 
             # Fallback to INFORMATION_SCHEMA
             select_table_name = (
-                "INFORMATION_SCHEMA.SCHEMATA"
-                if not database_name
-                else f'"{database_name}".INFORMATION_SCHEMA.SCHEMATA'
+                "INFORMATION_SCHEMA.SCHEMATA" if not database_name else f'"{database_name}".INFORMATION_SCHEMA.SCHEMATA'
             )
 
             sql = f"SELECT SCHEMA_NAME FROM {select_table_name}"
@@ -512,9 +476,7 @@ class SnowflakeConnector(
                 raise _handle_snowflake_exception(e, sql) from e
 
     @override
-    def get_tables(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
-    ) -> List[str]:
+    def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """Get list of table names."""
         tables = self._get_tables_per_db(
             catalog_name=catalog_name,
@@ -524,9 +486,7 @@ class SnowflakeConnector(
         )
         return [item["table_name"] for item in tables]
 
-    def get_views(
-        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
-    ) -> List[str]:
+    def get_views(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """Get list of view names."""
         views = self._get_tables_per_db(
             catalog_name=catalog_name,
@@ -639,9 +599,7 @@ class SnowflakeConnector(
             query_tables = pa.Table.from_pylist(query_tables)
 
             if schema_name:
-                query_tables = query_tables.filter(
-                    pc.equal(query_tables["schema_name"], schema_name)
-                )
+                query_tables = query_tables.filter(pc.equal(query_tables["schema_name"], schema_name))
             else:
                 query_tables = query_tables.filter(
                     pc.invert(
@@ -653,15 +611,11 @@ class SnowflakeConnector(
                 )
 
             if tables:
-                query_tables = query_tables.filter(
-                    pc.is_in(query_tables["name"], pa.array(tables, type=pa.string()))
-                )
+                query_tables = query_tables.filter(pc.is_in(query_tables["name"], pa.array(tables, type=pa.string())))
 
             return query_tables
         except Exception as e:
-            logger.warning(
-                f"Failed to get meta using {sql}, falling back to INFORMATION_SCHEMA: {e}"
-            )
+            logger.warning(f"Failed to get meta using {sql}, falling back to INFORMATION_SCHEMA: {e}")
 
             # Fallback to INFORMATION_SCHEMA
             select_table_name = f'"{database_name}".INFORMATION_SCHEMA.TABLES'
@@ -756,10 +710,7 @@ class SnowflakeConnector(
             raise _handle_snowflake_exception(e, describe_sql) from e
 
         def _row_map(row: Sequence[Any]) -> Dict[str, Any]:
-            return {
-                column_names[idx]: row[idx]
-                for idx in range(min(len(column_names), len(row)))
-            }
+            return {column_names[idx]: row[idx] for idx in range(min(len(column_names), len(row)))}
 
         schemas: List[Dict[str, Any]] = []
         columns_list: List[Dict[str, Any]] = []
@@ -776,9 +727,7 @@ class SnowflakeConnector(
                 continue
 
             data_type = row_info.get("type", "")
-            nullable_flag = str(
-                row_info.get("null?") or row_info.get("null? ") or ""
-            ).upper()
+            nullable_flag = str(row_info.get("null?") or row_info.get("null? ") or "").upper()
             default_value = row_info.get("default")
             comment = row_info.get("comment")
             pk_flag = str(row_info.get("primary key") or "").upper()
