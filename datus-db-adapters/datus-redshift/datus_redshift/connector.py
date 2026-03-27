@@ -272,8 +272,8 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         """
         Switch database or schema context.
 
-        This changes the current working database/schema. Subsequent queries
-        without fully-qualified names will use this context.
+        Redshift requires a new connection to switch databases.
+        Schema switching uses SET search_path.
 
         Args:
             catalog_name: Catalog name (not used in Redshift)
@@ -284,27 +284,41 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             ValueError: If schema_name or database_name contains invalid characters
         """
         try:
-            with self.connection.cursor() as cursor:
-                # If schema_name is provided, set the search_path
-                if schema_name:
-                    # Validate schema name to prevent SQL injection
-                    _validate_sql_identifier(schema_name, "schema")
+            # Switch database by reconnecting
+            if database_name and database_name != self.database_name:
+                _validate_sql_identifier(database_name, "database")
 
-                    # SET search_path changes which schema is used by default
+                config = self.redshift_config
+                connection_params = {
+                    "host": config.host,
+                    "port": config.port,
+                    "user": config.username,
+                    "password": config.password,
+                    "database": database_name,
+                    "timeout": config.timeout_seconds,
+                    "ssl": config.ssl,
+                }
+                if config.iam:
+                    connection_params.update(
+                        {
+                            "iam": True,
+                            "cluster_identifier": config.cluster_identifier,
+                            "region": config.region,
+                            "access_key_id": config.access_key_id,
+                            "secret_access_key": config.secret_access_key,
+                        }
+                    )
+                self.connection.close()
+                self.connection = redshift_connector.connect(**connection_params)
+                self.database_name = database_name
+
+            # Switch schema via SET search_path
+            if schema_name:
+                _validate_sql_identifier(schema_name, "schema")
+                with self.connection.cursor() as cursor:
                     sql = f'SET search_path TO "{schema_name}"'
                     cursor.execute(sql)
                     self.schema_name = schema_name
-
-                # Note: Redshift doesn't support switching databases within a connection
-                # You need to create a new connection to switch databases
-                if database_name and database_name != self.database_name:
-                    # Validate database name even though we're just warning
-                    _validate_sql_identifier(database_name, "database")
-
-                    logger.warning(
-                        f"Cannot switch database from {self.database_name} to {database_name} "
-                        f"in existing connection. Create a new connection to change databases."
-                    )
         except ValueError as e:
             # Re-raise validation errors as-is
             raise e
@@ -972,9 +986,14 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                 logger.warning(f"Failed to get views: {e}")
 
         # Get materialized views if requested
-        # Note: information_schema does not include materialized views,
-        # so we use pg_class which is scoped to the current database connection
+        # pg_class is scoped to the current database connection.
+        # If a different database is requested, switch context first.
         if table_type in ("mv", "full"):
+            need_switch = database_name != self.database_name
+            original_db = self.database_name if need_switch else None
+            if need_switch:
+                self.switch_context(database_name=database_name)
+
             if tables:
                 for table in tables:
                     _validate_sql_identifier(table, "materialized view")
@@ -1010,6 +1029,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                         )
             except Exception as e:
                 logger.warning(f"Failed to get materialized views: {e}")
+            finally:
+                if need_switch:
+                    self.switch_context(database_name=original_db)
 
         return result
 

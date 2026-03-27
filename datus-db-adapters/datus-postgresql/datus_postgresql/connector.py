@@ -146,19 +146,29 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         metadata_config = _get_metadata_config(table_type)
 
         if table_type == "mv":
-            # Materialized views use pg_matviews
-            if schema_name:
-                where = f"schemaname = '{schema_name}'"
-            else:
-                where = f"{list_to_in_str('schemaname not in', list(self._sys_schemas()))}"
+            # pg_matviews is scoped to the current database connection.
+            # If a different database is requested, switch context first.
+            need_switch = database_name != self.database_name
+            original_db = self.database_name if need_switch else None
+            if need_switch:
+                self.switch_context(database_name=database_name)
+            try:
+                if schema_name:
+                    where = f"schemaname = '{schema_name}'"
+                else:
+                    where = f"{list_to_in_str('schemaname not in', list(self._sys_schemas()))}"
 
-            query = f"""
-                SELECT schemaname as table_schema, matviewname as table_name
-                FROM pg_matviews
-                WHERE {where}
-            """
+                query = f"""
+                    SELECT schemaname as table_schema, matviewname as table_name
+                    FROM pg_matviews
+                    WHERE {where}
+                """
+                query_result = self._execute_pandas(query)
+            finally:
+                if need_switch:
+                    self.switch_context(database_name=original_db)
         else:
-            # Tables and views use information_schema
+            # Tables and views use information_schema (supports table_catalog filter)
             if schema_name:
                 where = f"table_schema = '{schema_name}'"
             else:
@@ -174,8 +184,7 @@ class PostgreSQLConnector(SQLAlchemyConnector):
                 FROM information_schema.{metadata_config.info_table}
                 WHERE table_catalog = '{database_name}' AND {where} {type_filter}
             """
-
-        query_result = self._execute_pandas(query)
+            query_result = self._execute_pandas(query)
 
         # Format results
         result = []
@@ -451,11 +460,22 @@ class PostgreSQLConnector(SQLAlchemyConnector):
 
     @override
     def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        """Switch schema context by updating self.schema_name.
+        """Switch database/schema context.
 
-        Note: All queries use explicit schema qualification via full_name(),
-        so we only need to update self.schema_name here.
+        PostgreSQL requires a new connection to switch databases.
+        Schema switching only updates self.schema_name since all queries
+        use explicit schema qualification via full_name().
         """
+        if database_name and database_name != self.database_name:
+            encoded_username = quote_plus(self.username) if self.username else ""
+            encoded_password = quote_plus(self.password) if self.password else ""
+            self.connection_string = (
+                f"postgresql+psycopg2://{encoded_username}:{encoded_password}"
+                f"@{self.host}:{self.port}/{database_name}?sslmode={self.config.sslmode}"
+            )
+            self.close()
+            self.connect()
+            self.database_name = database_name
         if schema_name:
             self.schema_name = schema_name
 
