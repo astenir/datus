@@ -5,7 +5,9 @@
 from typing import Any, Dict, List, Optional, Set, Union, override
 from urllib.parse import quote_plus
 
+from pandas import DataFrame
 from pydantic import BaseModel, Field
+from sqlalchemy import create_engine, text
 
 from datus_db_core import (
     TABLE_TYPE,
@@ -117,6 +119,33 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         escaped = identifier.replace('"', '""')
         return f'"{escaped}"'
 
+    def _build_connection_string(self, database_name: str) -> str:
+        """Build a PostgreSQL connection string for a given database."""
+        encoded_username = quote_plus(self.username) if self.username else ""
+        encoded_password = quote_plus(self.password) if self.password else ""
+        return (
+            f"postgresql+psycopg2://{encoded_username}:{encoded_password}"
+            f"@{self.host}:{self.port}/{database_name}?sslmode={self.config.sslmode}"
+        )
+
+    def _execute_on_database(self, sql: str, database_name: str) -> DataFrame:
+        """Execute a query on a specific database using a temporary connection.
+
+        Thread-safe: creates an isolated connection without mutating self.
+        """
+        if database_name == self.database_name:
+            return self._execute_pandas(sql)
+
+        conn_str = self._build_connection_string(database_name)
+        engine = create_engine(conn_str)
+        try:
+            with engine.connect() as conn:
+                result = conn.execute(text(sql))
+                rows = [row._asdict() for row in result.fetchall()]
+                return DataFrame(rows)
+        finally:
+            engine.dispose()
+
     # ==================== Metadata Retrieval ====================
 
     def _get_metadata(
@@ -147,26 +176,18 @@ class PostgreSQLConnector(SQLAlchemyConnector):
 
         if table_type == "mv":
             # pg_matviews is scoped to the current database connection.
-            # If a different database is requested, switch context first.
-            need_switch = database_name != self.database_name
-            original_db = self.database_name if need_switch else None
-            if need_switch:
-                self.switch_context(database_name=database_name)
-            try:
-                if schema_name:
-                    where = f"schemaname = '{schema_name}'"
-                else:
-                    where = f"{list_to_in_str('schemaname not in', list(self._sys_schemas()))}"
+            # Use a temporary connection if a different database is requested (thread-safe).
+            if schema_name:
+                where = f"schemaname = '{schema_name}'"
+            else:
+                where = f"{list_to_in_str('schemaname not in', list(self._sys_schemas()))}"
 
-                query = f"""
-                    SELECT schemaname as table_schema, matviewname as table_name
-                    FROM pg_matviews
-                    WHERE {where}
-                """
-                query_result = self._execute_pandas(query)
-            finally:
-                if need_switch:
-                    self.switch_context(database_name=original_db)
+            query = f"""
+                SELECT schemaname as table_schema, matviewname as table_name
+                FROM pg_matviews
+                WHERE {where}
+            """
+            query_result = self._execute_on_database(query, database_name)
         else:
             # Tables and views use information_schema (supports table_catalog filter)
             if schema_name:
@@ -462,17 +483,12 @@ class PostgreSQLConnector(SQLAlchemyConnector):
     def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
         """Switch database/schema context.
 
-        PostgreSQL requires a new connection to switch databases.
+        PostgreSQL requires reconnection to switch databases.
         Schema switching only updates self.schema_name since all queries
         use explicit schema qualification via full_name().
         """
         if database_name and database_name != self.database_name:
-            encoded_username = quote_plus(self.username) if self.username else ""
-            encoded_password = quote_plus(self.password) if self.password else ""
-            self.connection_string = (
-                f"postgresql+psycopg2://{encoded_username}:{encoded_password}"
-                f"@{self.host}:{self.port}/{database_name}?sslmode={self.config.sslmode}"
-            )
+            self.connection_string = self._build_connection_string(database_name)
             self.close()
             self.connect()
             self.database_name = database_name

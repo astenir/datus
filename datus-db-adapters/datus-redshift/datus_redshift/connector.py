@@ -268,6 +268,38 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         """
         return {"pg_catalog", "information_schema", "pg_internal"}
 
+    def _get_connection_for_database(self, database_name: str):
+        """Get a connection to a specific database.
+
+        Returns self.connection if database_name matches the current database,
+        otherwise creates a new temporary connection (thread-safe).
+        The caller must close the returned connection if it is not self.connection.
+        """
+        if database_name == self.database_name:
+            return self.connection
+
+        config = self.redshift_config
+        connection_params = {
+            "host": config.host,
+            "port": config.port,
+            "user": config.username,
+            "password": config.password,
+            "database": database_name,
+            "timeout": config.timeout_seconds,
+            "ssl": config.ssl,
+        }
+        if config.iam:
+            connection_params.update(
+                {
+                    "iam": True,
+                    "cluster_identifier": config.cluster_identifier,
+                    "region": config.region,
+                    "access_key_id": config.access_key_id,
+                    "secret_access_key": config.secret_access_key,
+                }
+            )
+        return redshift_connector.connect(**connection_params)
+
     def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
         """
         Switch database or schema context.
@@ -287,29 +319,8 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             # Switch database by reconnecting
             if database_name and database_name != self.database_name:
                 _validate_sql_identifier(database_name, "database")
-
-                config = self.redshift_config
-                connection_params = {
-                    "host": config.host,
-                    "port": config.port,
-                    "user": config.username,
-                    "password": config.password,
-                    "database": database_name,
-                    "timeout": config.timeout_seconds,
-                    "ssl": config.ssl,
-                }
-                if config.iam:
-                    connection_params.update(
-                        {
-                            "iam": True,
-                            "cluster_identifier": config.cluster_identifier,
-                            "region": config.region,
-                            "access_key_id": config.access_key_id,
-                            "secret_access_key": config.secret_access_key,
-                        }
-                    )
                 self.connection.close()
-                self.connection = redshift_connector.connect(**connection_params)
+                self.connection = self._get_connection_for_database(database_name)
                 self.database_name = database_name
 
             # Switch schema via SET search_path
@@ -987,13 +998,8 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
 
         # Get materialized views if requested
         # pg_class is scoped to the current database connection.
-        # If a different database is requested, switch context first.
+        # Use a temporary connection if a different database is requested (thread-safe).
         if table_type in ("mv", "full"):
-            need_switch = database_name != self.database_name
-            original_db = self.database_name if need_switch else None
-            if need_switch:
-                self.switch_context(database_name=database_name)
-
             if tables:
                 for table in tables:
                     _validate_sql_identifier(table, "materialized view")
@@ -1010,28 +1016,30 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                 sql += f" AND c.relname IN ({tables_str})"
 
             try:
-                with self.connection.cursor() as cursor:
-                    cursor.execute(sql)
-                    for row in cursor.fetchall():
-                        result.append(
-                            {
-                                "catalog_name": "",
-                                "database_name": database_name,
-                                "schema_name": row[0],
-                                "table_name": row[1],
-                                "table_type": "mv",
-                                "identifier": self.identifier(
-                                    database_name=database_name,
-                                    schema_name=row[0],
-                                    table_name=row[1],
-                                ),
-                            }
-                        )
+                conn = self._get_connection_for_database(database_name)
+                try:
+                    with conn.cursor() as cursor:
+                        cursor.execute(sql)
+                        for row in cursor.fetchall():
+                            result.append(
+                                {
+                                    "catalog_name": "",
+                                    "database_name": database_name,
+                                    "schema_name": row[0],
+                                    "table_name": row[1],
+                                    "table_type": "mv",
+                                    "identifier": self.identifier(
+                                        database_name=database_name,
+                                        schema_name=row[0],
+                                        table_name=row[1],
+                                    ),
+                                }
+                            )
+                finally:
+                    if conn is not self.connection:
+                        conn.close()
             except Exception as e:
                 logger.warning(f"Failed to get materialized views: {e}")
-            finally:
-                if need_switch:
-                    self.switch_context(database_name=original_db)
 
         return result
 
