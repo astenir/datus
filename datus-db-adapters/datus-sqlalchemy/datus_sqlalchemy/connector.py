@@ -4,18 +4,6 @@
 
 from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple, override
 
-from datus_db_core import (
-    TABLE_TYPE,
-    BaseSqlConnector,
-    ConnectionConfig,
-    DatusDbException,
-    ErrorCode,
-    ExecuteSQLResult,
-    SQLType,
-    get_logger,
-    parse_context_switch,
-    parse_sql_type,
-)
 from pandas import DataFrame
 from pyarrow import Table
 from sqlalchemy import create_engine, inspect, text
@@ -32,6 +20,19 @@ from sqlalchemy.exc import (
     ProgrammingError,
     SQLAlchemyError,
     TimeoutError,
+)
+
+from datus_db_core import (
+    TABLE_TYPE,
+    BaseSqlConnector,
+    ConnectionConfig,
+    DatusDbException,
+    ErrorCode,
+    ExecuteSQLResult,
+    SQLType,
+    get_logger,
+    parse_context_switch,
+    parse_sql_type,
 )
 
 logger = get_logger(__name__)

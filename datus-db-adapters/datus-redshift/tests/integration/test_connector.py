@@ -16,6 +16,7 @@ Set these environment variables to run the tests:
 import os
 
 import pytest
+
 from datus_redshift import RedshiftConnector
 
 pytestmark = [

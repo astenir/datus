@@ -5,6 +5,7 @@
 import uuid
 
 import pytest
+
 from datus_spark import SparkConfig, SparkConnector
 
 # ==================== Query Execution Tests ====================

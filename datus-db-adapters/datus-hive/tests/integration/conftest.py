@@ -7,6 +7,7 @@ import os
 from typing import Generator
 
 import pytest
+
 from datus_hive import HiveConfig, HiveConnector
 
 

@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pandas as pd
 import pytest
+
 from datus_hive import HiveConfig
 from datus_hive.connector import HiveConnector
 

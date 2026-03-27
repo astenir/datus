@@ -5,9 +5,10 @@
 from unittest.mock import patch
 
 import pytest
+from pandas import DataFrame
+
 from datus_clickhouse import ClickHouseConfig, ClickHouseConnector
 from datus_db_core import DatusDbException
-from pandas import DataFrame
 
 
 @pytest.mark.acceptance

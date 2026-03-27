@@ -5,8 +5,9 @@
 """Unit tests for config module."""
 
 import pytest
-from datus_db_core.config import ConnectionConfig
 from pydantic import ValidationError
+
+from datus_db_core.config import ConnectionConfig
 
 
 class TestConnectionConfig:

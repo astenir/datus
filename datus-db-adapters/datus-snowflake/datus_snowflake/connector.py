@@ -6,20 +6,6 @@ from typing import Any, Dict, List, Literal, Optional, Sequence, Set, Union, ove
 
 import pyarrow as pa
 import pyarrow.compute as pc
-from datus_db_core import (
-    TABLE_TYPE,
-    BaseSqlConnector,
-    ConnectionConfig,
-    DatusDbException,
-    ErrorCode,
-    ExecuteSQLResult,
-    MaterializedViewSupportMixin,
-    SchemaNamespaceMixin,
-    get_logger,
-    list_to_in_str,
-    parse_context_switch,
-    to_sql_literal,
-)
 from pandas import DataFrame
 from snowflake.connector import Connect, SnowflakeConnection
 from snowflake.connector.errors import (
@@ -34,6 +20,21 @@ from snowflake.connector.errors import (
     ProgrammingError,
     RequestTimeoutError,
     ServiceUnavailableError,
+)
+
+from datus_db_core import (
+    TABLE_TYPE,
+    BaseSqlConnector,
+    ConnectionConfig,
+    DatusDbException,
+    ErrorCode,
+    ExecuteSQLResult,
+    MaterializedViewSupportMixin,
+    SchemaNamespaceMixin,
+    get_logger,
+    list_to_in_str,
+    parse_context_switch,
+    to_sql_literal,
 )
 
 from .config import SnowflakeConfig

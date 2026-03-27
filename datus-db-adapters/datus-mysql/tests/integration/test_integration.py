@@ -6,6 +6,7 @@ import os
 import uuid
 
 import pytest
+
 from datus_mysql import MySQLConfig, MySQLConnector
 
 # ==================== Connection Tests ====================

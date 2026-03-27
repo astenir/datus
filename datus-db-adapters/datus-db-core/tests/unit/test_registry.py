@@ -7,6 +7,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from datus_db_core.config import ConnectionConfig
 from datus_db_core.exceptions import DatusDbException
 from datus_db_core.registry import AdapterMetadata, ConnectorRegistry

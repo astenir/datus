@@ -3,6 +3,7 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import pytest
+
 from datus_starrocks import StarRocksConfig, StarRocksConnector
 
 # ==================== Catalog Tests (CatalogSupportMixin) ====================

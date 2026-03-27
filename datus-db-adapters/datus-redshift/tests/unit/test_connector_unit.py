@@ -5,12 +5,6 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from datus_db_core import DatusDbException, ErrorCode
-from datus_redshift import RedshiftConfig, RedshiftConnector
-from datus_redshift.connector import (
-    _handle_redshift_exception,
-    _validate_sql_identifier,
-)
 from redshift_connector.error import (
     DatabaseError,
     DataError,
@@ -19,6 +13,13 @@ from redshift_connector.error import (
     InternalError,
     OperationalError,
     ProgrammingError,
+)
+
+from datus_db_core import DatusDbException, ErrorCode
+from datus_redshift import RedshiftConfig, RedshiftConnector
+from datus_redshift.connector import (
+    _handle_redshift_exception,
+    _validate_sql_identifier,
 )
 
 # Redshift connector calls super().__init__() which needs BaseSqlConnector.

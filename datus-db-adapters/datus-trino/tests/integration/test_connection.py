@@ -5,6 +5,7 @@
 import os
 
 import pytest
+
 from datus_trino import TrinoConfig, TrinoConnector
 
 # ==================== Connection Tests ====================

@@ -6,10 +6,11 @@ import re
 from typing import Any, Dict, Optional
 
 import sqlglot
-from datus_db_core.constants import SQLType
-from datus_db_core.logging import get_logger
 from sqlglot import expressions
 from sqlglot.expressions import Table
+
+from datus_db_core.constants import SQLType
+from datus_db_core.logging import get_logger
 
 logger = get_logger(__name__)
 

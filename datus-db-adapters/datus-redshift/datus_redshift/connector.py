@@ -14,6 +14,18 @@ import pyarrow as pa
 # Import Redshift connector library
 import redshift_connector
 
+# Pandas is used for DataFrame operations
+from pandas import DataFrame
+from redshift_connector.error import (
+    DatabaseError,
+    DataError,
+    IntegrityError,
+    InterfaceError,
+    InternalError,
+    OperationalError,
+    ProgrammingError,
+)
+
 # Import Datus base classes and types
 from datus_db_core import (
     TABLE_TYPE,
@@ -26,18 +38,6 @@ from datus_db_core import (
     SchemaNamespaceMixin,
     get_logger,
     parse_context_switch,
-)
-
-# Pandas is used for DataFrame operations
-from pandas import DataFrame
-from redshift_connector.error import (
-    DatabaseError,
-    DataError,
-    IntegrityError,
-    InterfaceError,
-    InternalError,
-    OperationalError,
-    ProgrammingError,
 )
 
 # Import our config class

@@ -61,4 +61,4 @@ ignore = [
 max-complexity = 10
 
 [tool.ruff.lint.isort]
-known-first-party = ["datus-*"]
+known-first-party = ["datus_db_core", "datus_sqlalchemy", "datus_mysql", "datus_postgresql", "datus_redshift", "datus_snowflake", "datus_clickhouse", "datus_clickzetta", "datus_starrocks", "datus_trino", "datus_spark", "datus_hive"]

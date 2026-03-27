@@ -3,8 +3,9 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import pytest
-from datus_spark import SparkConfig
 from pydantic import ValidationError
+
+from datus_spark import SparkConfig
 
 # ==================== Basic Validation Tests ====================
 

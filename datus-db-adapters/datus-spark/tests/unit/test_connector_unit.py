@@ -5,6 +5,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from datus_spark import SparkConfig, SparkConnector
 
 # ==================== Initialization Tests ====================

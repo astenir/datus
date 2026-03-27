@@ -6,6 +6,7 @@ import os
 from typing import Generator
 
 import pytest
+
 from datus_db_core import MaterializedViewSupportMixin, SchemaNamespaceMixin
 from datus_snowflake import SnowflakeConfig, SnowflakeConnector
 

@@ -5,6 +5,7 @@
 import os
 
 import pytest
+
 from datus_redshift import RedshiftConnector
 
 from .conftest import TPCH_SCHEMA

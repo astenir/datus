@@ -6,6 +6,7 @@ import os
 from typing import Generator
 
 import pytest
+
 from datus_spark import SparkConfig, SparkConnector
 
 

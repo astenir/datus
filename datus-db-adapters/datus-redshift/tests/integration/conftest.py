@@ -6,8 +6,9 @@ import os
 from typing import Generator
 
 import pytest
-from datus_redshift import RedshiftConfig, RedshiftConnector
 from redshift_connector.error import InterfaceError, OperationalError
+
+from datus_redshift import RedshiftConfig, RedshiftConnector
 
 
 @pytest.fixture

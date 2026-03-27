@@ -5,6 +5,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from datus_db_core import CatalogSupportMixin, MaterializedViewSupportMixin
 from datus_starrocks import StarRocksConfig, StarRocksConnector
 

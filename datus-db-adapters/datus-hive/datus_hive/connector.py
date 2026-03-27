@@ -6,9 +6,10 @@ from typing import Any, Dict, List, Mapping, Optional, Set, Union, override
 from urllib.parse import quote_plus
 
 import pandas as pd
+from sqlalchemy import create_engine
+
 from datus_db_core import DatusDbException, ErrorCode, get_logger
 from datus_sqlalchemy import SQLAlchemyConnector
-from sqlalchemy import create_engine
 
 from .config import HiveConfig
 

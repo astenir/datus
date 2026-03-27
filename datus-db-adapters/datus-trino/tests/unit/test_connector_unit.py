@@ -5,6 +5,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from datus_db_core import CatalogSupportMixin
 from datus_trino import TrinoConfig, TrinoConnector
 

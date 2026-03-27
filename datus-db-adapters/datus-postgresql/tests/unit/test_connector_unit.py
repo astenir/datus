@@ -5,6 +5,7 @@
 from unittest.mock import patch
 
 import pytest
+
 from datus_db_core import DatusDbException
 from datus_postgresql import PostgreSQLConfig, PostgreSQLConnector
 
@@ -223,10 +224,11 @@ def test_full_name_with_schema():
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = PostgreSQLConnector(config)
+        connector.database_name = "postgres"
         connector.schema_name = "public"
         full_name = connector.full_name(schema_name="myschema", table_name="mytable")
 
-        assert full_name == '"myschema"."mytable"'
+        assert full_name == '"postgres"."myschema"."mytable"'
 
 
 def test_full_name_with_default_schema():
@@ -235,10 +237,11 @@ def test_full_name_with_default_schema():
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = PostgreSQLConnector(config)
+        connector.database_name = "postgres"
         connector.schema_name = "public"
         full_name = connector.full_name(table_name="mytable")
 
-        assert full_name == '"public"."mytable"'
+        assert full_name == '"postgres"."public"."mytable"'
 
 
 def test_full_name_with_special_characters():
@@ -247,10 +250,11 @@ def test_full_name_with_special_characters():
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = PostgreSQLConnector(config)
+        connector.database_name = "postgres"
         connector.schema_name = "public"
         full_name = connector.full_name(schema_name='my"schema', table_name='my"table')
 
-        assert full_name == '"my""schema"."my""table"'
+        assert full_name == '"postgres"."my""schema"."my""table"'
 
 
 def test_identifier_with_schema():
@@ -259,10 +263,11 @@ def test_identifier_with_schema():
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = PostgreSQLConnector(config)
+        connector.database_name = "postgres"
         connector.schema_name = "public"
         identifier = connector.identifier(schema_name="myschema", table_name="mytable")
 
-        assert identifier == "myschema.mytable"
+        assert identifier == "postgres.myschema.mytable"
 
 
 def test_identifier_with_default_schema():
@@ -271,10 +276,11 @@ def test_identifier_with_default_schema():
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = PostgreSQLConnector(config)
+        connector.database_name = "postgres"
         connector.schema_name = "public"
         identifier = connector.identifier(table_name="mytable")
 
-        assert identifier == "public.mytable"
+        assert identifier == "postgres.public.mytable"
 
 
 @pytest.mark.acceptance
