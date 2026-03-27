@@ -790,13 +790,12 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         Returns:
             List of schema names
         """
-        database_name = database_name or self.database_name
-
-        # Query information_schema for database_name filtering via catalog_name
-        sql = f"""
-            SELECT schema_name
-            FROM information_schema.schemata
-            WHERE catalog_name = '{database_name}'
+        # Query system catalog to get schema list
+        sql = """
+            SELECT nspname
+            FROM pg_namespace
+            WHERE nspname NOT LIKE 'pg_temp_%'
+            AND nspname NOT LIKE 'pg_toast%'
         """
 
         try:
@@ -899,42 +898,38 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         Returns:
             List of metadata dictionaries
         """
-        database_name = database_name or self.database_name
         schema_name = schema_name or self.schema_name
         result = []
 
-        # Build the WHERE clause for schema filtering (information_schema)
+        # Build the WHERE clause for schema filtering
         if schema_name:
+            # Validate schema name to prevent SQL injection
             _validate_sql_identifier(schema_name, "schema")
-            is_schema_filter = f"table_schema = '{schema_name}'"
+            schema_filter = f"n.nspname = '{schema_name}'"
         else:
+            # Exclude system schemas
             sys_schemas_str = ", ".join([f"'{s}'" for s in self._sys_schemas()])
-            is_schema_filter = f"table_schema NOT IN ({sys_schemas_str})"
+            schema_filter = f"n.nspname NOT IN ({sys_schemas_str})"
 
-        # Build the WHERE clause for schema filtering (pg_catalog)
-        if schema_name:
-            pg_schema_filter = f"n.nspname = '{schema_name}'"
-        else:
-            sys_schemas_str = ", ".join([f"'{s}'" for s in self._sys_schemas()])
-            pg_schema_filter = f"n.nspname NOT IN ({sys_schemas_str})"
-
-        # Get tables if requested (use information_schema for database_name filtering)
+        # Get tables if requested
         if table_type in ("table", "full"):
+            # Validate all table names if provided to prevent SQL injection
             if tables:
                 for table in tables:
                     _validate_sql_identifier(table, "table")
 
+            # Query pg_class for tables (relkind = 'r')
             sql = f"""
-                SELECT table_schema as schema_name, table_name
-                FROM information_schema.tables
-                WHERE table_catalog = '{database_name}'
-                AND table_type = 'BASE TABLE'
-                AND {is_schema_filter}
+                SELECT n.nspname as schema_name, c.relname as table_name
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE c.relkind = 'r' AND {schema_filter}
             """
 
+            # Add table name filter if specific tables requested
             if tables:
                 tables_str = ", ".join([f"'{t}'" for t in tables])
-                sql += f" AND table_name IN ({tables_str})"
+                sql += f" AND c.relname IN ({tables_str})"
 
             try:
                 with self.connection.cursor() as cursor:
@@ -943,12 +938,12 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                         result.append(
                             {
                                 "catalog_name": "",
-                                "database_name": database_name,
+                                "database_name": self.database_name,
                                 "schema_name": row[0],
                                 "table_name": row[1],
                                 "table_type": "table",
                                 "identifier": self.identifier(
-                                    database_name=database_name,
+                                    database_name=self.database_name,
                                     schema_name=row[0],
                                     table_name=row[1],
                                 ),
@@ -957,23 +952,24 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             except Exception as e:
                 logger.warning(f"Failed to get tables: {e}")
 
-        # Get views if requested (use information_schema for database_name filtering)
+        # Get views if requested
         if table_type in ("view", "full"):
+            # Validate all view names if provided to prevent SQL injection
             if tables:
                 for table in tables:
                     _validate_sql_identifier(table, "view")
 
+            # Query pg_class for views (relkind = 'v')
             sql = f"""
-                SELECT table_schema as schema_name, table_name
-                FROM information_schema.tables
-                WHERE table_catalog = '{database_name}'
-                AND table_type = 'VIEW'
-                AND {is_schema_filter}
+                SELECT n.nspname as schema_name, c.relname as table_name
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE c.relkind = 'v' AND {schema_filter}
             """
 
             if tables:
                 tables_str = ", ".join([f"'{t}'" for t in tables])
-                sql += f" AND table_name IN ({tables_str})"
+                sql += f" AND c.relname IN ({tables_str})"
 
             try:
                 with self.connection.cursor() as cursor:
@@ -982,12 +978,12 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                         result.append(
                             {
                                 "catalog_name": "",
-                                "database_name": database_name,
+                                "database_name": self.database_name,
                                 "schema_name": row[0],
                                 "table_name": row[1],
                                 "table_type": "view",
                                 "identifier": self.identifier(
-                                    database_name=database_name,
+                                    database_name=self.database_name,
                                     schema_name=row[0],
                                     table_name=row[1],
                                 ),
@@ -997,18 +993,18 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                 logger.warning(f"Failed to get views: {e}")
 
         # Get materialized views if requested
-        # pg_class is scoped to the current database connection.
-        # Use a temporary connection if a different database is requested (thread-safe).
         if table_type in ("mv", "full"):
+            # Validate all materialized view names if provided to prevent SQL injection
             if tables:
                 for table in tables:
                     _validate_sql_identifier(table, "materialized view")
 
+            # Query pg_class for materialized views (relkind = 'm')
             sql = f"""
                 SELECT n.nspname as schema_name, c.relname as table_name
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
-                WHERE c.relkind = 'm' AND {pg_schema_filter}
+                WHERE c.relkind = 'm' AND {schema_filter}
             """
 
             if tables:
@@ -1016,28 +1012,23 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                 sql += f" AND c.relname IN ({tables_str})"
 
             try:
-                conn = self._get_connection_for_database(database_name)
-                try:
-                    with conn.cursor() as cursor:
-                        cursor.execute(sql)
-                        for row in cursor.fetchall():
-                            result.append(
-                                {
-                                    "catalog_name": "",
-                                    "database_name": database_name,
-                                    "schema_name": row[0],
-                                    "table_name": row[1],
-                                    "table_type": "mv",
-                                    "identifier": self.identifier(
-                                        database_name=database_name,
-                                        schema_name=row[0],
-                                        table_name=row[1],
-                                    ),
-                                }
-                            )
-                finally:
-                    if conn is not self.connection:
-                        conn.close()
+                with self.connection.cursor() as cursor:
+                    cursor.execute(sql)
+                    for row in cursor.fetchall():
+                        result.append(
+                            {
+                                "catalog_name": "",
+                                "database_name": self.database_name,
+                                "schema_name": row[0],
+                                "table_name": row[1],
+                                "table_type": "mv",
+                                "identifier": self.identifier(
+                                    database_name=self.database_name,
+                                    schema_name=row[0],
+                                    table_name=row[1],
+                                ),
+                            }
+                        )
             except Exception as e:
                 logger.warning(f"Failed to get materialized views: {e}")
 
@@ -1067,7 +1058,6 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         if not table_name:
             return []
 
-        database_name = database_name or self.database_name
         schema_name = schema_name or self.schema_name
 
         # Validate identifiers to prevent SQL injection
@@ -1088,8 +1078,7 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             LEFT JOIN pg_catalog.pg_namespace n ON n.oid = cl.relnamespace AND n.nspname = c.table_schema
             LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid = cl.oid AND a.attname = c.column_name
             LEFT JOIN pg_catalog.pg_description d ON d.objoid = cl.oid AND d.objsubid = a.attnum
-            WHERE c.table_catalog = '{database_name}'
-            AND c.table_schema = '{schema_name}'
+            WHERE c.table_schema = '{schema_name}'
             AND c.table_name = '{table_name}'
             ORDER BY c.ordinal_position
         """
