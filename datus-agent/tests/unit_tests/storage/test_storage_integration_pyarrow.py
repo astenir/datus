@@ -86,6 +86,8 @@ class TestMetricRAGPyArrow:
         # Mock cache for MetricRAG
         rag = MetricRAG.__new__(MetricRAG)
         rag.storage = metric_storage
+        rag.datasource_id = "test_datasource"
+        rag._sub_agent_filter = None
 
         result = rag.search_all_metrics()
 
@@ -136,6 +138,8 @@ class TestMetricRAGPyArrow:
 
         rag = MetricRAG.__new__(MetricRAG)
         rag.storage = metric_storage
+        rag.datasource_id = ""
+        rag._sub_agent_filter = None
 
         # Test the get_metrics_detail method functionality
         result = rag.get_metrics_detail(subject_path=["Sales", "Revenue", "Monthly"], name="monthly_revenue")

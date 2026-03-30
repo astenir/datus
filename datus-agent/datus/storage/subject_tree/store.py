@@ -34,12 +34,14 @@ _SUBJECT_NODES_TABLE = TableDefinition(
         ColumnDef(name="description", col_type="TEXT", default=""),
         ColumnDef(name="created_at", col_type="TEXT", nullable=False),
         ColumnDef(name="updated_at", col_type="TEXT", nullable=False),
+        ColumnDef(name="datasource_id", col_type="TEXT", default=""),
     ],
     indices=[
         IndexDef(name="idx_subject_parent_id", columns=["parent_id"]),
-        IndexDef(name="idx_subject_parent_name", columns=["parent_id", "name"], unique=True),
+        IndexDef(name="idx_subject_parent_name_ds", columns=["parent_id", "name", "datasource_id"], unique=True),
+        IndexDef(name="idx_subject_datasource_id", columns=["datasource_id"]),
     ],
-    constraints=["UNIQUE(parent_id, name)"],
+    constraints=["UNIQUE(parent_id, name, datasource_id)"],
 )
 
 
@@ -53,6 +55,7 @@ class SubjectNodeRecord:
     description: str = ""
     created_at: str = ""
     updated_at: str = ""
+    datasource_id: str = ""
 
 
 def _node_to_dict(record: SubjectNodeRecord) -> Dict[str, Any]:
@@ -64,6 +67,7 @@ def _node_to_dict(record: SubjectNodeRecord) -> Dict[str, Any]:
         "description": record.description,
         "created_at": record.created_at,
         "updated_at": record.updated_at,
+        "datasource_id": record.datasource_id,
     }
 
 
@@ -73,44 +77,48 @@ class SubjectTreeStore:
     Implements adjacency list model for tree structure.
     """
 
-    def __init__(self):
+    def __init__(self, namespace: str = ""):
         """Initialize SubjectTreeStore.
 
-        Reads ``table_prefix`` and ``extra_fields`` from the storage registry
-        defaults (set via ``configure_storage_defaults()``).  This ensures that
-        SaaS deployments get prefixed table names (e.g. ``tb_subject_nodes``)
-        and multi-tenant columns (e.g. ``workspace_id``).
+        Args:
+            namespace: Namespace for RDB path isolation.  In PHYSICAL mode
+                each namespace gets its own SQLite file; in LOGICAL mode
+                all share one file.
+
+        Reads ``table_prefix``, ``extra_fields``, and ``scope_indices`` from
+        the storage registry defaults (set via ``configure_storage_defaults()``).
         """
         from datus.storage.backend_holder import create_rdb_for_store
         from datus.storage.registry import get_storage_defaults
 
         defaults = get_storage_defaults()
         table_prefix = defaults.get("table_prefix", "")
-
-        # Build table definition with optional prefix, extra columns, and scope indices
-        table_def = _SUBJECT_NODES_TABLE
         scope_indices = defaults.get("scope_indices", [])
         extra_pa_fields = defaults.get("extra_fields")
 
-        if table_prefix or extra_pa_fields or scope_indices:
-            import copy
+        # Build table definition with optional prefix, extra columns, and scope indices
+        table_def = TableDefinition(
+            table_name=f"{table_prefix}{_SUBJECT_NODES_TABLE.table_name}"
+            if table_prefix
+            else _SUBJECT_NODES_TABLE.table_name,
+            columns=list(_SUBJECT_NODES_TABLE.columns),
+            indices=list(_SUBJECT_NODES_TABLE.indices),
+            constraints=list(_SUBJECT_NODES_TABLE.constraints),
+        )
+        if extra_pa_fields:
+            extra_cols = [ColumnDef(name=f.name, col_type="TEXT", default="") for f in extra_pa_fields]
+            table_def.columns = table_def.columns + extra_cols
+        if scope_indices:
+            existing_idx_names = {idx.name for idx in table_def.indices}
+            for col in scope_indices:
+                idx_name = f"idx_subject_{col}"
+                if idx_name not in existing_idx_names:
+                    table_def.indices = table_def.indices + [IndexDef(name=idx_name, columns=[col])]
 
-            table_def = copy.copy(table_def)
-            if table_prefix:
-                table_def.table_name = f"{table_prefix}{_SUBJECT_NODES_TABLE.table_name}"
-            if extra_pa_fields:
-                extra_cols = [ColumnDef(name=f.name, col_type="TEXT", default="") for f in extra_pa_fields]
-                table_def.columns = list(table_def.columns) + extra_cols
-            if scope_indices:
-                existing_idx_names = {idx.name for idx in table_def.indices}
-                for col in scope_indices:
-                    idx_name = f"idx_subject_{col}"
-                    if idx_name not in existing_idx_names:
-                        table_def.indices = list(table_def.indices) + [IndexDef(name=idx_name, columns=[col])]
-
-        self._rdb = create_rdb_for_store("subject_tree")
+        self._rdb = create_rdb_for_store("subject_tree", namespace=namespace)
         self._table = self._rdb.ensure_table(table_def)
         self._migrate_null_parents()
+
         logger.info("SubjectTreeStore initialized")
 
     def _migrate_null_parents(self):
@@ -155,7 +163,11 @@ class SubjectTreeStore:
 
         try:
             record = SubjectNodeRecord(
-                parent_id=db_parent_id, name=name, description=description, created_at=now, updated_at=now
+                parent_id=db_parent_id,
+                name=name,
+                description=description,
+                created_at=now,
+                updated_at=now,
             )
             node_id = self._table.insert(record)
 
@@ -292,9 +304,10 @@ class SubjectTreeStore:
     def get_children(self, parent_id: Optional[int]) -> List[Dict[str, Any]]:
         """Get direct children of a node."""
         db_parent_id = ROOT_PARENT_ID if parent_id is None else parent_id
+        where = {"parent_id": db_parent_id}
         rows = self._table.query(
             SubjectNodeRecord,
-            where={"parent_id": db_parent_id},
+            where=where,
             order_by=["name"],
         )
         return [_node_to_dict(row) for row in rows]
@@ -528,9 +541,10 @@ class SubjectTreeStore:
     def _find_child_by_name(self, parent_id: Optional[int], name: str) -> Optional[Dict[str, Any]]:
         """Find a child node by name under a specific parent."""
         db_parent_id = ROOT_PARENT_ID if parent_id is None else parent_id
+        where = {"parent_id": db_parent_id, "name": name}
         rows = self._table.query(
             SubjectNodeRecord,
-            where={"parent_id": db_parent_id, "name": name},
+            where=where,
         )
         if rows:
             return _node_to_dict(rows[0])
@@ -671,10 +685,11 @@ class BaseSubjectEmbeddingStore(BaseEmbeddingStore):
             **kwargs,
         )
 
-        # Get singleton SubjectTreeStore from registry
+        # Get per-namespace SubjectTreeStore from registry
+        from datus.storage.backend_holder import get_current_namespace
         from datus.storage.registry import get_subject_tree_store
 
-        self.subject_tree = get_subject_tree_store()
+        self.subject_tree = get_subject_tree_store(namespace=get_current_namespace())
 
     def batch_store(
         self,
@@ -1044,7 +1059,9 @@ class BaseSubjectEmbeddingStore(BaseEmbeddingStore):
 
         return True
 
-    def update_entry(self, subject_path: List[str], name: str, update_values: Dict[str, Any]) -> bool:
+    def update_entry(
+        self, subject_path: List[str], name: str, update_values: Dict[str, Any], extra_conditions: Optional[List] = None
+    ) -> bool:
         """Update fields for a storage entry, excluding subject_node_id and name.
 
         This method allows updating any fields of an entry except subject_node_id and name.
@@ -1110,7 +1127,10 @@ class BaseSubjectEmbeddingStore(BaseEmbeddingStore):
         self._ensure_table_ready()
         from datus_storage_base.conditions import and_, eq
 
-        where_condition = and_(eq(SUBJECT_ID_COLUMN_NAME, subject_node_id), eq(NAME_COLUMN_NAME, name.strip()))
+        conditions = [eq(SUBJECT_ID_COLUMN_NAME, subject_node_id), eq(NAME_COLUMN_NAME, name.strip())]
+        if extra_conditions:
+            conditions.extend(extra_conditions)
+        where_condition = and_(*conditions)
 
         # Check if entry exists
         count = self._count_rows(where_condition)
@@ -1180,7 +1200,7 @@ class BaseSubjectEmbeddingStore(BaseEmbeddingStore):
             logger.error(f"Failed to fetch entries by node_id={node_id}: {e}")
             return []
 
-    def delete_entry(self, subject_path: List[str], name: str) -> bool:
+    def delete_entry(self, subject_path: List[str], name: str, extra_conditions: Optional[List] = None) -> bool:
         """Delete entry by subject_path and name from vector store.
 
         This is a generic method for deleting entries from storage using
@@ -1190,25 +1210,13 @@ class BaseSubjectEmbeddingStore(BaseEmbeddingStore):
         Args:
             subject_path: Subject hierarchy path (e.g., ['Finance', 'Revenue'])
             name: Name of the entry to delete
+            extra_conditions: Additional filter conditions
 
         Returns:
             True if deleted successfully, False if entry not found
 
         Raises:
             ValueError: If subject_path is empty or name is empty
-
-        Examples:
-            # Delete a specific metric
-            deleted = store.delete_entry(
-                subject_path=['Finance', 'Revenue'],
-                name='total_revenue'
-            )
-
-            # Delete a reference SQL
-            deleted = store.delete_entry(
-                subject_path=['Analytics', 'Reports'],
-                name='daily_sales_query'
-            )
         """
         if not subject_path:
             raise ValueError("subject_path cannot be empty")
@@ -1230,7 +1238,10 @@ class BaseSubjectEmbeddingStore(BaseEmbeddingStore):
         self._ensure_table_ready()
         from datus_storage_base.conditions import and_, eq
 
-        where_condition = and_(eq(SUBJECT_ID_COLUMN_NAME, subject_node_id), eq(NAME_COLUMN_NAME, name))
+        conditions = [eq(SUBJECT_ID_COLUMN_NAME, subject_node_id), eq(NAME_COLUMN_NAME, name)]
+        if extra_conditions:
+            conditions.extend(extra_conditions)
+        where_condition = and_(*conditions)
 
         # Check if entry exists
         count = self._count_rows(where_condition)

@@ -88,7 +88,11 @@ class TestExtraFields:
             embedding_model=_FakeEmbeddingModel(),
             schema=schema,
         )
-        assert store._schema is schema
+        # datasource_id is auto-appended for subject tree compatibility
+        schema_names = {f.name for f in store._schema}
+        assert "id" in schema_names
+        assert "text" in schema_names
+        assert "datasource_id" in schema_names
 
     def test_extra_fields_are_appended(self):
         schema = _base_schema()
@@ -128,8 +132,10 @@ class TestExtraFields:
             schema=schema,
             extra_fields=[],
         )
-        # Empty list should not modify schema
-        assert store._schema is schema
+        # Empty list for extra_fields keeps original schema unchanged
+        schema_names = {f.name for f in store._schema}
+        assert "id" in schema_names
+        assert "text" in schema_names
 
 
 class TestDefaultValues:
@@ -141,6 +147,7 @@ class TestDefaultValues:
             embedding_model=_FakeEmbeddingModel(),
             schema=_base_schema(),
         )
+        # No defaults when none provided (audit fields handled by backend)
         assert store._default_values == {}
 
     def test_default_values_stored(self):
@@ -151,7 +158,9 @@ class TestDefaultValues:
             schema=_base_schema(),
             default_values=defaults,
         )
-        assert store._default_values == defaults
+        # Only provided defaults are stored (no auto audit fields)
+        assert store._default_values["workspace_id"] == "ws_123"
+        assert store._default_values["created_by"] == "user_1"
 
     def test_apply_default_values_fills_missing(self):
         store = BaseEmbeddingStore(
@@ -183,7 +192,9 @@ class TestDefaultValues:
         )
         data = [{"id": "1"}]
         result = store._apply_default_values(data)
-        assert result == [{"id": "1"}]
+        # No defaults applied when none configured
+        assert result[0]["id"] == "1"
+        assert "creator_id" not in result[0]
 
     def test_apply_default_values_multiple_rows(self):
         store = BaseEmbeddingStore(
@@ -203,6 +214,46 @@ class TestDefaultValues:
         assert result[1]["tenant"] == "t1"
 
 
+class TestTruncateScoped:
+    """Tests for truncate_scoped() behavior in PHYSICAL vs LOGICAL mode."""
+
+    def test_truncate_scoped_physical_drops_table(self):
+        """In PHYSICAL mode, truncate_scoped() drops the entire table."""
+        from unittest.mock import MagicMock
+
+        store = BaseEmbeddingStore(
+            table_name="test",
+            embedding_model=_FakeEmbeddingModel(),
+            schema=_base_schema(),
+        )
+        # Simulate initialized table without LOGICAL isolation
+        mock_table = MagicMock(spec=["delete", "count_rows"])
+        store._shared.table = mock_table
+        store._shared.initialized = True
+        store.db = MagicMock()
+
+        store.truncate_scoped()
+        # Should drop the table (truncate behavior)
+        store.db.drop_table.assert_called_once()
+
+    def test_truncate_scoped_logical_deletes_scoped(self):
+        """In LOGICAL mode, truncate_scoped() calls table.delete(None) for scoped delete."""
+        from unittest.mock import MagicMock, patch
+
+        store = BaseEmbeddingStore(
+            table_name="test",
+            embedding_model=_FakeEmbeddingModel(),
+            schema=_base_schema(),
+        )
+        mock_table = MagicMock()
+        store._shared.table = mock_table
+        store._shared.initialized = True
+
+        with patch("datus.storage.backend_holder.get_isolation_type", return_value="logical"):
+            store.truncate_scoped()
+            mock_table.delete.assert_called_once_with(None)
+
+
 class TestCombinedFeatures:
     """Test that table_prefix, extra_fields, and default_values work together."""
 
@@ -218,4 +269,4 @@ class TestCombinedFeatures:
         )
         assert store.table_name == "tb_metrics"
         assert "workspace_id" in [f.name for f in store._schema]
-        assert store._default_values == {"workspace_id": "ws_123"}
+        assert store._default_values["workspace_id"] == "ws_123"

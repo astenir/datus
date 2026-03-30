@@ -81,6 +81,7 @@ def _get_rdb_backend() -> BaseRdbBackend:
                 cfg = _ensure_config()
                 rdb_config = dict(cfg.rdb.params)
                 rdb_config["data_dir"] = _data_dir
+                rdb_config["isolation"] = _parse_isolation_type(cfg)
                 _rdb_backend = RdbRegistry.create_backend(cfg.rdb.type, rdb_config)
                 _rdb_initialized = True
                 logger.debug(f"RDB backend initialized: {cfg.rdb.type}")
@@ -101,6 +102,7 @@ def get_vector_backend():
                 logger.debug(f"Initializing vector backend: type={cfg.vector.type}")
                 vector_config = dict(cfg.vector.params)
                 vector_config["data_dir"] = _data_dir
+                vector_config["isolation"] = _parse_isolation_type(cfg)
                 _vector_backend = VectorRegistry.create_backend(cfg.vector.type, vector_config)
                 _vector_initialized = True
                 logger.debug(f"Vector backend initialized: {cfg.vector.type}")
@@ -108,27 +110,52 @@ def get_vector_backend():
     return _vector_backend
 
 
-def create_rdb_for_store(store_db_name: str) -> RdbDatabase:
+def get_current_namespace() -> str:
+    """Return the current global namespace."""
+    return _namespace
+
+
+def get_isolation_type() -> str:
+    """Return the current isolation type as a string ('physical' or 'logical')."""
+    cfg = _ensure_config()
+    return _parse_isolation_type(cfg)
+
+
+def _parse_isolation_type(cfg) -> str:
+    isolation = getattr(cfg, "isolation", "physical")
+    if hasattr(isolation, "value"):
+        return isolation.value
+    return str(isolation)
+
+
+def create_rdb_for_store(store_db_name: str, namespace: str = "") -> RdbDatabase:
     """Create an RDB database handle for a specific store.
 
-    The storage path is resolved from the global ``_data_dir`` and ``_namespace``.
     The backend singleton is reused; ``connect()`` produces a per-store database.
+
+    Args:
+        store_db_name: Logical store name (e.g. ``"subject_tree"``).
+        namespace: Namespace for path isolation.  Defaults to global ``_namespace``.
     """
     backend = _get_rdb_backend()
-    return backend.connect(_namespace, store_db_name)
+    ns = namespace or _namespace
+    return backend.connect(ns, store_db_name)
 
 
 def create_vector_connection(namespace: str = "") -> VectorDatabase:
     """Create a vector db connection.
 
-    Args:
-        namespace: Logical namespace for data isolation.  When empty
-            (the default), the global namespace set by ``init_backends``
-            is used.  Pass an explicit namespace to create an isolated
-            connection (e.g. for per-platform document stores).
+    Main storage uses the unified ``datus_db`` directory (default).
+    Pass an explicit *namespace* to create an isolated database for
+    special stores (e.g. ``docstore__snowflake`` for document stores).
+
+    When no *namespace* is given, the global ``_namespace`` is used so that:
+    - PHYSICAL mode: connects to ``datus_db_{namespace}`` directory
+    - LOGICAL mode: connects to shared ``datus_db`` with datasource_id filtering
     """
     backend = get_vector_backend()
-    return backend.connect(namespace=namespace or _namespace)
+    ns = namespace if namespace else _namespace
+    return backend.connect(namespace=ns)
 
 
 def reset_backends() -> None:

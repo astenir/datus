@@ -49,7 +49,7 @@ def test_configuration_load(namespace: str, agent_config: AgentConfig):
     )
 
     assert agent_config.schema_linking_rate == "slow"
-    # rag_storage_path() returns absolute path, check it ends with expected relative path
+    # rag_storage_path() returns absolute path; PHYSICAL mode uses datus_db_{namespace}
     assert agent_config.rag_storage_path().endswith(f"data/datus_db_{namespace}")
 
     with pytest.raises(DatusException, match="Missing required field: namespace"):

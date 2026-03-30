@@ -855,3 +855,20 @@ class TestSubjectTreeStore:
         assert updated_node["description"] == "Revenue management"  # Description preserved
         assert updated_node["created_at"] == original_created  # Created time preserved
         assert updated_node["updated_at"] > original_updated  # Updated time changed
+
+
+# ========== Datasource Fields Tests ==========
+
+
+class TestSubjectTreeDatasourceFields:
+    """Tests for datasource_id column on SubjectTreeStore."""
+
+    def test_datasource_id_column_exists(self):
+        """datasource_id field is present on created nodes."""
+        store = SubjectTreeStore()
+        node = store.create_node(None, "Finance")
+        assert "datasource_id" in node
+
+
+# Datasource isolation is now handled at the RDB layer (SqliteRdbDatabase).
+# See tests/unit_tests/storage/rdb/ for isolation tests.

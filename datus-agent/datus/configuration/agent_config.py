@@ -323,11 +323,6 @@ class AgentConfig:
         else:
             self._init_dirs()
 
-        # Per-request context for storage (SaaS only).
-        # ALL fields are auto-filled on writes (insert/upsert).
-        # Only fields listed in configure_storage_defaults(scope_fields=[...]) are used as read filters.
-        # Example: {"workspace_id": "ws_abc", "creator_id": "user_123", "updator_id": "user_123"}
-        self.request_context: Dict[str, Any] = kwargs.get("request_context", {})
         self.workspace_root = None
         storage_config = kwargs.get("storage", {})
         # use default embedding model if not provided
@@ -780,12 +775,14 @@ class AgentConfig:
         return self.models[name]
 
     def rag_storage_path(self) -> str:
-        if not self._current_namespace:
-            raise DatusException(
-                code=ErrorCode.COMMON_FIELD_REQUIRED,
-                message="Namespace is required, please run with --namespace <namespace>",
-            )
-        return rag_storage_path(self._current_namespace, self.rag_base_path)
+        isolation = "physical"
+        if hasattr(self, "_backend_config") and self._backend_config:
+            iso = getattr(self._backend_config, "isolation", None)
+            if hasattr(iso, "value"):
+                isolation = iso.value
+            elif iso:
+                isolation = str(iso)
+        return rag_storage_path(self.rag_base_path, self.current_namespace, isolation=isolation)
 
     def document_storage_path(self, platform: str) -> str:
         """Per-platform document storage path (namespace-independent).
@@ -799,6 +796,7 @@ class AgentConfig:
         return os.path.join(self.rag_base_path, "document")
 
     def sub_agent_storage_path(self, sub_agent_name: str):
+        """Deprecated: sub-agents now use the shared global storage with datasource_id field isolation."""
         return os.path.join(self.rag_base_path, "sub_agents", sub_agent_name)
 
     def _is_file_based_vector_backend(self) -> bool:
@@ -868,8 +866,11 @@ class AgentConfig:
             )
 
 
-def rag_storage_path(namespace: str, rag_base_path: str = "data") -> str:
-    return os.path.join(rag_base_path, f"datus_db_{namespace}")
+def rag_storage_path(rag_base_path: str = "data", namespace: str = "", isolation: str = "physical") -> str:
+    if isolation == "logical":
+        return os.path.join(rag_base_path, "datus_db")
+    db_name = f"datus_db_{namespace}" if namespace else "datus_db"
+    return os.path.join(rag_base_path, db_name)
 
 
 def resolve_env(value: str) -> str:

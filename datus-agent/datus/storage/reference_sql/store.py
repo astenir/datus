@@ -121,6 +121,7 @@ class ReferenceSqlStorage(BaseSubjectEmbeddingStore):
         subject_path: Optional[List[str]] = None,
         top_n: Optional[int] = 5,
         selected_fields: Optional[List[str]] = None,
+        extra_conditions: Optional[List] = None,
     ) -> List[Dict[str, Any]]:
         """Search reference SQL by query text with optional subject path filtering.
 
@@ -128,6 +129,8 @@ class ReferenceSqlStorage(BaseSubjectEmbeddingStore):
             query_text: Query text to search for (optional, if None returns all matching subject entries)
             subject_path: Optional subject hierarchy path (e.g., ['Finance', 'Revenue'])
             top_n: Number of results to return
+            extra_conditions: Additional filter conditions (e.g., datasource_id filter)
+            datasource_id: Datasource identifier for tenant isolation
 
         Returns:
             List of matching reference SQL entries with subject_path enriched
@@ -137,24 +140,34 @@ class ReferenceSqlStorage(BaseSubjectEmbeddingStore):
             subject_path=subject_path,
             top_n=top_n,
             selected_fields=selected_fields,
+            additional_conditions=extra_conditions,
         )
 
     def search_all_reference_sql(
         self,
         subject_path: Optional[List[str]] = None,
         select_fields: Optional[List[str]] = None,
+        extra_conditions: Optional[List] = None,
     ) -> List[Dict[str, Any]]:
         """Search all reference SQL entries with optional subject path filtering.
 
         Args:
             subject_path: Optional subject hierarchy path (e.g., ['Finance', 'Revenue'])
+            extra_conditions: Additional filter conditions (e.g., datasource_id filter)
+            datasource_id: Datasource identifier for tenant isolation
 
         Returns:
             List of matching reference SQL entries
         """
-        return self.search_with_subject_filter(subject_path=subject_path, selected_fields=select_fields)
+        return self.search_with_subject_filter(
+            subject_path=subject_path,
+            selected_fields=select_fields,
+            additional_conditions=extra_conditions,
+        )
 
-    def delete_reference_sql(self, subject_path: List[str], name: str) -> bool:
+    def delete_reference_sql(
+        self, subject_path: List[str], name: str, extra_conditions: Optional[List] = None, datasource_id: str = ""
+    ) -> bool:
         """Delete reference SQL by subject_path and name.
 
         Only deletes from vector store, does not modify any files.
@@ -162,6 +175,7 @@ class ReferenceSqlStorage(BaseSubjectEmbeddingStore):
         Args:
             subject_path: Subject hierarchy path (e.g., ['Analytics', 'Reports'])
             name: Name of the reference SQL to delete
+            extra_conditions: Additional filter conditions (e.g., datasource_id filter)
 
         Returns:
             True if deleted successfully, False if entry not found
@@ -172,20 +186,40 @@ class ReferenceSqlStorage(BaseSubjectEmbeddingStore):
                 name='daily_sales_query'
             )
         """
-        return self.delete_entry(subject_path, name)
+        return self.delete_entry(subject_path, name, extra_conditions=extra_conditions)
 
 
 class ReferenceSqlRAG:
-    def __init__(self, agent_config: AgentConfig, sub_agent_name: Optional[str] = None):
-        from datus.storage.registry import get_rag_storage
+    """RAG interface for reference SQL operations.
 
-        self.reference_sql_storage = get_rag_storage(
-            ReferenceSqlStorage, "reference_sql", agent_config, sub_agent_name, "sqls"
+    Handles datasource_id filtering on reads and field injection on writes.
+    """
+
+    def __init__(
+        self,
+        agent_config: AgentConfig,
+        sub_agent_name: Optional[str] = None,
+        datasource_id: Optional[str] = None,
+    ):
+        from datus.storage.rag_scope import _build_sub_agent_filter
+        from datus.storage.registry import get_storage
+
+        self.datasource_id = datasource_id or agent_config.current_namespace or ""
+        self.reference_sql_storage = get_storage(ReferenceSqlStorage, "reference_sql", namespace=self.datasource_id)
+        self._sub_agent_filter = _build_sub_agent_filter(
+            agent_config, sub_agent_name, self.reference_sql_storage, "sqls"
         )
 
+    def _sub_agent_conditions(self) -> List:
+        """Build sub-agent filter conditions (datasource_id handled by backend)."""
+        conditions = []
+        if self._sub_agent_filter:
+            conditions.append(self._sub_agent_filter)
+        return conditions
+
     def truncate(self) -> None:
-        """Drop the reference_sql table and reset state."""
-        self.reference_sql_storage.truncate()
+        """Delete all reference SQL data for this datasource."""
+        self.reference_sql_storage.truncate_scoped()
 
     def store_batch(self, reference_sql_items: List[Dict[str, Any]]):
         """Store batch of reference SQL items."""
@@ -202,23 +236,24 @@ class ReferenceSqlRAG:
         subject_path: Optional[List[str]] = None,
         select_fields: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """Search all reference SQL items.
-
-        Args:
-            subject_path: Optional subject hierarchy path (e.g., ['Finance', 'Revenue'])
-
-        Returns:
-            List of matching reference SQL entries
-        """
-        return self.reference_sql_storage.search_all_reference_sql(subject_path, select_fields=select_fields)
+        return self.reference_sql_storage.search_all_reference_sql(
+            subject_path,
+            select_fields=select_fields,
+            extra_conditions=self._sub_agent_conditions(),
+        )
 
     def after_init(self):
         """Initialize indices after data loading."""
         self.reference_sql_storage.create_indices()
 
     def get_reference_sql_size(self):
-        """Get total number of reference SQL entries."""
-        return self.reference_sql_storage.table_size()
+        from datus_storage_base.conditions import and_
+
+        conditions = self._sub_agent_conditions()
+        if not conditions:
+            return self.reference_sql_storage._count_rows()
+        where = conditions[0] if len(conditions) == 1 else and_(*conditions)
+        return self.reference_sql_storage._count_rows(where=where)
 
     def search_reference_sql(
         self,
@@ -227,19 +262,12 @@ class ReferenceSqlRAG:
         top_n: int = 5,
         selected_fields: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """Search reference SQL by summary using vector search.
-
-        Args:
-            query_text: Query text to search for
-            subject_path: Optional subject hierarchy path (e.g., ['Finance', 'Revenue'])
-            top_n: Number of results to return
-            selected_fields: Optional list of fields to return
-
-        Returns:
-            List of matching reference SQL entries with selected fields
-        """
         return self.reference_sql_storage.search_reference_sql(
-            query_text=query_text, subject_path=subject_path, top_n=top_n, selected_fields=selected_fields
+            query_text=query_text,
+            subject_path=subject_path,
+            top_n=top_n,
+            selected_fields=selected_fields,
+            extra_conditions=self._sub_agent_conditions(),
         )
 
     def get_reference_sql_detail(
@@ -248,29 +276,16 @@ class ReferenceSqlRAG:
         name: str,
         selected_fields: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """Get reference SQL detail by subject path and name.
-
-        Args:
-            subject_path: Subject hierarchy path (e.g., ['Finance', 'Revenue', 'Q1'])
-            name: Reference SQL name
-            selected_fields: Optional list of fields to return
-
-        Returns:
-            List containing the matching reference SQL entry details
-        """
         full_path = list(subject_path) + [name]
-        return self.reference_sql_storage.search_all_reference_sql(full_path, select_fields=selected_fields)
+        return self.reference_sql_storage.search_all_reference_sql(
+            full_path,
+            select_fields=selected_fields,
+            extra_conditions=self._sub_agent_conditions(),
+        )
 
     def delete_reference_sql(self, subject_path: List[str], name: str) -> bool:
-        """Delete reference SQL by subject_path and name.
-
-        Only deletes from vector store, does not modify any files.
-
-        Args:
-            subject_path: Subject hierarchy path (e.g., ['Analytics', 'Reports'])
-            name: Name of the reference SQL to delete
-
-        Returns:
-            True if deleted successfully, False if entry not found
-        """
-        return self.reference_sql_storage.delete_reference_sql(subject_path, name)
+        return self.reference_sql_storage.delete_reference_sql(
+            subject_path,
+            name,
+            extra_conditions=self._sub_agent_conditions(),
+        )

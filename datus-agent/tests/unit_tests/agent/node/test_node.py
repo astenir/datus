@@ -625,6 +625,7 @@ class TestNode:
     def test_search_metrics_node(self, search_metrics_input, agent_config: AgentConfig):
         """Test schema linking node"""
         # Take first test case from the list
+        _current_namespace = agent_config.current_namespace
         try:
             for case in search_metrics_input:
                 input_data = SearchMetricsInput(**case["input"])

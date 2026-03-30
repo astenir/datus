@@ -12,9 +12,7 @@ from typing import Any, Dict, List, Optional
 from datus_storage_base.conditions import And, eq
 
 from datus.configuration.agent_config import AgentConfig
-from datus.schemas.agent_models import SubAgentConfig
-from datus.storage.rag_scope import build_rag_scope
-from datus.storage.registry import create_scoped_view, get_storage
+from datus.storage.registry import get_storage
 from datus.storage.semantic_model.store import SemanticModelStorage
 from datus.utils.loggings import get_logger
 
@@ -26,31 +24,15 @@ class CatalogUpdater:
     Used to update all catalog data, including vector databases specific to Sub-Agents.
     """
 
-    def __init__(self, agent_config: AgentConfig):
+    def __init__(self, agent_config: AgentConfig, datasource_id: Optional[str] = None):
         self._agent_config = agent_config
-        self.semantic_model_storage = get_storage(
-            SemanticModelStorage, "semantic_model", agent_config.current_namespace
-        )
-
-    def _sub_agent_storage(self, sub_agent_config: SubAgentConfig) -> SemanticModelStorage | None:
-        name = sub_agent_config.system_prompt
-        storage = get_storage(SemanticModelStorage, "semantic_model", self._agent_config.current_namespace)
-        scope = build_rag_scope(self._agent_config, name, storage, "tables")
-        return create_scoped_view(storage, scope)
+        self.datasource_id = datasource_id or agent_config.current_namespace or ""
+        self.semantic_model_storage = get_storage(SemanticModelStorage, "semantic_model", namespace=self.datasource_id)
 
     def _get_all_storages(self) -> List[SemanticModelStorage]:
-        """Get main storage and all sub-agent storages."""
-        storages = [self.semantic_model_storage]
-        for _, value in self._agent_config.agentic_nodes.items():
-            sub_agent_config = SubAgentConfig.model_validate(value)
-            if (
-                sub_agent_config.is_in_namespace(self._agent_config.current_namespace)
-                and sub_agent_config.has_scoped_context()
-            ):
-                sub_storage = self._sub_agent_storage(sub_agent_config)
-                if sub_storage:
-                    storages.append(sub_storage)
-        return storages
+        """Get all storages for updates. All sub-agents share the same singleton storage,
+        so returning it once is sufficient to avoid duplicate updates."""
+        return [self.semantic_model_storage]
 
     def _parse_json_field(self, value: Any) -> Optional[List[Dict[str, Any]]]:
         """Parse JSON string or return list directly."""
