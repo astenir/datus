@@ -21,6 +21,7 @@ from rich.markup import escape
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
+from datus.cli._cli_utils import select_choice
 from datus.cli.init_util import detect_db_connectivity
 from datus.configuration.agent_config import AgentConfig
 from datus.utils.loggings import configure_logging, get_logger, print_rich_exception
@@ -46,25 +47,21 @@ class InteractiveInit:
         self.template_dir = path_manager.template_dir
         self.sample_dir = path_manager.sample_dir
         self.benchmark_dir = path_manager.benchmark_dir
-        # Whether the model can initialize the indicator
-        try:
-            text = read_data_file_text(resource_path="conf/agent.yml.qs", encoding="utf-8")
-            self.config = yaml.safe_load(text)
-        except Exception as e:
-            logger.error(f"Loading sample configuration failed: {e}")
-            self.console.print("[yellow]Unable to load sample configuration file, using default configuration[/]")
-            self.config = {
-                "agent": {
-                    "target": "",
-                    "models": {},
-                    "namespace": {},
-                    "storage": {"embedding_device_type": "cpu"},  # base_path removed - now fixed at {home}/data
-                    "nodes": {
-                        "schema_linking": {"matching_rate": "fast"},
-                        "date_parser": {"language": "en"},
-                    },
-                }
+        self.config = {
+            "agent": {
+                "target": "",
+                "models": {},
+                "namespace": {},
+                "storage": {
+                    "workspace_root": "~/.datus/workspace",
+                    "embedding_device_type": "cpu",
+                },
+                "nodes": {
+                    "schema_linking": {"matching_rate": "fast"},
+                    "date_parser": {"language": "en"},
+                },
             }
+        }
 
     def _init_dirs(self):
         from datus.utils.path_manager import get_path_manager
@@ -160,57 +157,41 @@ class InteractiveInit:
             for handler, original_handler_level in original_handler_levels.items():
                 handler.setLevel(original_handler_level)
 
+    def _load_provider_catalog(self) -> dict:
+        """Load LLM provider catalog from conf/providers.yml."""
+        try:
+            text = read_data_file_text(resource_path="conf/providers.yml", encoding="utf-8")
+            return yaml.safe_load(text)
+        except Exception as e:
+            logger.error(f"Failed to load providers.yml: {e}")
+            return {"providers": {}, "model_overrides": {}}
+
     def _configure_llm(self) -> bool:
         """Step 1: Configure LLM provider and test connectivity."""
         self.console.print("[bold yellow][1/5] Configure LLM[/bold yellow]")
 
-        # Provider selection
-        providers = {
-            "openai": {
-                "type": "openai",
-                "base_url": "https://api.openai.com/v1",
-                "model": "gpt-4.1",
-                "options": ["gpt-5.2", "gpt-4.1", "gpt-4.1-mini", "o3", "o3-pro", "o4-mini"],
-            },
-            "deepseek": {
-                "type": "deepseek",
-                "base_url": "https://api.deepseek.com",
-                "model": "deepseek-chat",
-                "options": ["deepseek-chat", "deepseek-reasoner"],
-            },
-            "claude": {
-                "type": "claude",
-                "base_url": "https://api.anthropic.com",
-                "model": "claude-sonnet-4-5",
-                "options": [
-                    "claude-haiku-4-5",
-                    "claude-sonnet-4-5",
-                    "claude-opus-4-5",
-                    "claude-sonnet-4",
-                    "claude-opus-4",
-                ],
-            },
-            "kimi": {
-                "type": "kimi",
-                "base_url": "https://api.moonshot.cn/v1",
-                "model": "kimi-k2.5",
-                "options": ["kimi-k2.5", "kimi-k2-turbo-preview", "kimi-k2-0905-Preview", "kimi-k2-thinking"],
-            },
-            "qwen": {
-                "type": "openai",
-                "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-                "model": "qwen3-max",
-                "options": ["qwen3-max", "qwen3-coder-plus", "qwen-plus", "qwen-flash"],
-            },
-            "gemini": {
-                "type": "gemini",
-                "base_url": "https://generativelanguage.googleapis.com/v1beta",
-                "model": "gemini-2.5-flash",
-                "options": ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-3-pro-preview"],
-            },
-        }
+        catalog = self._load_provider_catalog()
+        providers = catalog.get("providers", {})
+        model_param_overrides = catalog.get("model_overrides", {})
 
-        provider = Prompt.ask("- Which LLM provider?", choices=list(providers.keys()), default="openai")
+        if not providers:
+            self.console.print("❌ No providers found in conf/providers.yml")
+            return False
+
+        self.console.print("- Which LLM provider?")
+        provider = select_choice(
+            self.console,
+            {k: k for k in providers.keys()},
+            default="openai",
+        )
+
+        # OAuth flow for Codex provider
+        if providers[provider].get("auth_type") == "oauth":
+            return self._configure_codex_oauth(provider, providers[provider])
+
+        # Subscription flow for Claude subscription
+        if providers[provider].get("auth_type") == "subscription":
+            return self._configure_claude_subscription(provider, providers[provider])
 
         # API key input
         api_key = getpass("- Enter your API key: ")
@@ -218,26 +199,28 @@ class InteractiveInit:
             self.console.print("❌ API key cannot be empty")
             return False
 
+        provider_info = providers[provider]
+
         # Base URL (with default)
-        base_url = Prompt.ask("- Enter your base URL", default=providers[provider]["base_url"])
+        base_url = Prompt.ask("- Enter your base URL", default=provider_info["base_url"])
 
-        # Model name (with default and options hint)
-        if "options" in providers[provider]:
-            options_hint = ", ".join(providers[provider]["options"])
-            self.console.print(f"  [dim]reference options: {options_hint}[/dim]")
-        model_name = Prompt.ask("- Enter your model name", default=providers[provider]["model"]).strip()
-
-        # Model-specific parameter overrides (some models enforce fixed values)
-        model_param_overrides = {
-            "kimi-k2.5": {"temperature": 1.0, "top_p": 0.95},
-            "qwen3-coder-plus": {"temperature": 1.0, "top_p": 0.95},
-        }
+        # Model name selection (arrow-key with free-text custom input)
+        models = provider_info.get("models", [])
+        if models:
+            self.console.print("- Select your model:")
+            model_name = select_choice(
+                self.console,
+                {str(m): str(m) for m in models},
+                default=provider_info.get("default_model", str(models[0])),
+                allow_free_text=True,
+            )
+        else:
+            model_name = Prompt.ask("- Enter your model name", default=provider_info.get("default_model", "")).strip()
 
         # Store configuration
         self.config["agent"]["target"] = provider
         model_config_entry = {
-            "type": providers[provider]["type"],
-            "vendor": provider,
+            "type": provider_info["type"],
             "base_url": base_url,
             "api_key": api_key,
             "model": model_name,
@@ -277,7 +260,12 @@ class InteractiveInit:
         # Database type selection
         db_types = sorted(available_adapters.keys())
         default_type = "duckdb" if "duckdb" in db_types else db_types[0]
-        db_type = Prompt.ask("- Database type", choices=db_types, default=default_type)
+        self.console.print("- Database type:")
+        db_type = select_choice(
+            self.console,
+            {t: t for t in db_types},
+            default=default_type,
+        )
 
         # Get adapter metadata
         adapter_metadata = available_adapters[db_type]
@@ -417,6 +405,7 @@ class InteractiveInit:
             self.console.print(f" ✅ Configuration saved to {config_path}")
             return True
         except Exception as e:
+            logger.error(f"Failed to save configuration: {e}")
             self.console.print(f" ❌ Failed to save configuration: {e}")
             return False
 
@@ -440,14 +429,155 @@ class InteractiveInit:
         self.console.print(f"\nYou are ready to run `datus-cli --namespace {self.namespace_name}` 🚀")
         self.console.print("\nCheck the document at https://docs.datus.ai/ for more details.")
 
+    def _configure_claude_subscription(self, provider: str, provider_config: dict) -> bool:
+        """Configure Claude with subscription plan (Pro/Max).
+
+        Uses Claude Code setup-token (sk-ant-oat01-*) for supported Claude models
+        via Anthropic's beta Messages endpoint.
+        """
+        # Model selection
+        models = provider_config.get("models", [])
+        if models:
+            self.console.print("- Select your model:")
+            model_name = select_choice(
+                self.console,
+                {m: m for m in models},
+                default=provider_config.get("default_model", models[0]),
+                allow_free_text=True,
+            )
+        else:
+            model_name = Prompt.ask("- Enter your model name", default=provider_config.get("default_model", "")).strip()
+
+        api_key_value, auth_type = self._get_subscription_token()
+        if api_key_value is None:
+            return False
+
+        # Store configuration
+        self.config["agent"]["target"] = provider
+        self.config["agent"]["models"][provider] = {
+            "type": provider_config["type"],
+            "vendor": provider,
+            "base_url": provider_config["base_url"],
+            "api_key": api_key_value,
+            "model": model_name,
+            "auth_type": auth_type,
+        }
+
+        # Test LLM connectivity
+        self.console.print("→ Testing LLM connectivity...")
+        success, error_msg = self._test_llm_connectivity()
+        if success:
+            self.console.print(" ✅ Claude subscription model test successful\n")
+            return True
+        else:
+            self.console.print(f"❌ LLM connectivity test failed: {error_msg}")
+            if "401" in error_msg or "300011" in error_msg or "300035" in error_msg:
+                self.console.print(
+                    "   Token may be expired. Run 'claude setup-token' to refresh, then retry 'datus init'.\n"
+                )
+            else:
+                self.console.print("")
+            return False
+
+    def _get_subscription_token(self) -> tuple[str | None, str]:
+        """Try to auto-detect Claude subscription token, fall back to manual input.
+
+        Returns:
+            (token, auth_type) on success, (None, "") on failure.
+        """
+        self.console.print("  [dim]Detecting Claude subscription token...[/dim]")
+        try:
+            from datus.auth.claude_credential import get_claude_subscription_token
+
+            token, source = get_claude_subscription_token()
+            self.console.print(f"  ✅ Subscription token detected (from {source})")
+            return token, "subscription"
+        except Exception:
+            self.console.print("  [yellow]⚠️  Could not auto-detect subscription token[/yellow]")
+            self.console.print("  [dim]Run 'claude setup-token' to get your subscription token[/dim]")
+            token = getpass("- Paste your subscription token (sk-ant-oat01-...): ")
+            if not token.strip():
+                self.console.print("❌ Token cannot be empty")
+                return None, ""
+            return token, "subscription"
+
+    def _configure_codex_oauth(self, provider: str, provider_config: dict) -> bool:
+        """Configure Codex provider with OAuth authentication."""
+        # Model selection
+        models = provider_config.get("models", [])
+        if models:
+            self.console.print("- Select your model:")
+            model_name = select_choice(
+                self.console,
+                {m: m for m in models},
+                default=provider_config.get("default_model", models[0]),
+                allow_free_text=True,
+            )
+        else:
+            model_name = Prompt.ask("- Enter your model name", default=provider_config.get("default_model", "")).strip()
+
+        # Run OAuth login via browser
+        self.console.print("→ Opening browser for OAuth authentication...")
+        try:
+            from datus.auth.oauth_manager import OAuthManager
+
+            oauth_mgr = OAuthManager()
+            oauth_mgr.login_browser()
+        except Exception as e:
+            logger.error(f"OAuth authentication failed: {e}")
+            self.console.print(f"❌ OAuth authentication failed: {e}")
+            return False
+
+        # Store configuration
+        self.config["agent"]["target"] = provider
+        self.config["agent"]["models"][provider] = {
+            "type": provider_config["type"],
+            "vendor": provider,
+            "base_url": provider_config["base_url"],
+            "api_key": "",
+            "model": model_name,
+            "auth_type": "oauth",
+        }
+
+        # Verify connectivity
+        self.console.print("→ Verifying Codex API connectivity...")
+        connectivity_ok = True
+        try:
+            from datus.configuration.agent_config import ModelConfig
+            from datus.models.codex_model import CodexModel
+
+            test_config = ModelConfig(
+                type="codex",
+                base_url=provider_config["base_url"],
+                api_key="",
+                model=model_name,
+                auth_type="oauth",
+            )
+            test_model = CodexModel(model_config=test_config)
+            resp = test_model.generate("Say hi", instructions="You are a helpful assistant.")
+            if not resp or not resp.strip():
+                self.console.print("⚠️  OAuth login succeeded but model returned empty response")
+                connectivity_ok = False
+        except Exception as e:
+            logger.warning(f"Codex connectivity test failed: {e}")
+            self.console.print(f"⚠️  OAuth login succeeded but connectivity test failed: {e}")
+            connectivity_ok = False
+
+        if not connectivity_ok:
+            from rich.prompt import Confirm
+
+            if not Confirm.ask("Continue without verifying connectivity?", default=False):
+                return False
+
+        self.console.print(" ✅ OAuth authentication successful\n")
+        return True
+
     def _test_llm_connectivity(self) -> tuple[bool, str]:
         """Test LLM model connectivity."""
         try:
-            # Test LLM connectivity by creating the specific model directly
             provider = self.config["agent"]["target"]
             model_config_data = self.config["agent"]["models"][provider]
 
-            # Create model config object
             from datus.configuration.agent_config import ModelConfig
 
             model_config = ModelConfig(
@@ -457,34 +587,24 @@ class InteractiveInit:
                 model=model_config_data["model"],
                 temperature=model_config_data.get("temperature"),
                 top_p=model_config_data.get("top_p"),
+                auth_type=model_config_data.get("auth_type", "api_key"),
+                default_headers=model_config_data.get("default_headers"),
             )
 
-            # Import and create the specific model class
-            model_type = model_config_data["type"]
+            # Reuse the centralized MODEL_TYPE_MAP from LLMBaseModel
+            from datus.models.base import LLMBaseModel
 
-            # Map model types to class names
-            type_map = {
-                "deepseek": "DeepSeekModel",
-                "openai": "OpenAIModel",
-                "claude": "ClaudeModel",
-                "qwen": "QwenModel",
-                "gemini": "GeminiModel",
-                "kimi": "KimiModel",
-            }
-
-            if model_type not in type_map:
+            model_type = model_config.type
+            class_name = LLMBaseModel.MODEL_TYPE_MAP.get(model_type)
+            if not class_name:
                 error_msg = f"Unsupported model type: {model_type}"
                 logger.error(error_msg)
                 return False, error_msg
 
-            class_name = type_map[model_type]
             module = __import__(f"datus.models.{model_type}_model", fromlist=[class_name])
             model_class = getattr(module, class_name)
-
-            # Create model instance
             llm_model = model_class(model_config=model_config)
 
-            # Simple test - try to generate a response
             response = llm_model.generate("Hi")
             if response is not None and len(response.strip()) > 0:
                 return True, ""

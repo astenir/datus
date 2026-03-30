@@ -430,9 +430,11 @@ class TestConfigureLLM:
         with tempfile.TemporaryDirectory() as tmpdir:
             init = InteractiveInit(user_home=tmpdir)
 
-            with patch("datus.cli.interactive_init.Prompt.ask", return_value="openai"):
-                with patch("datus.cli.interactive_init.getpass", return_value=""):
-                    result = init._configure_llm()
+            with (
+                patch("datus.cli.interactive_init.select_choice", return_value="openai"),
+                patch("datus.cli.interactive_init.getpass", return_value=""),
+            ):
+                result = init._configure_llm()
 
             assert result is False
 
@@ -447,10 +449,8 @@ class TestConfigureLLM:
             mock_module.KimiModel.return_value = mock_model_instance
 
             with (
-                patch(
-                    "datus.cli.interactive_init.Prompt.ask",
-                    side_effect=["kimi", "https://api.moonshot.cn/v1", "kimi-k2.5"],
-                ),
+                patch("datus.cli.interactive_init.select_choice", side_effect=["kimi", "kimi-k2.5"]),
+                patch("datus.cli.interactive_init.Prompt.ask", return_value="https://api.moonshot.cn/v1"),
                 patch("datus.cli.interactive_init.getpass", return_value="test-key"),
                 patch.dict("sys.modules", {"datus.models.kimi_model": mock_module}),
             ):
@@ -501,10 +501,8 @@ class TestConfigureLLM:
             mock_module.OpenAIModel.return_value = mock_model_instance
 
             with (
-                patch(
-                    "datus.cli.interactive_init.Prompt.ask",
-                    side_effect=["openai", "https://api.openai.com/v1", "gpt-4.1"],
-                ),
+                patch("datus.cli.interactive_init.select_choice", side_effect=["openai", "gpt-4.1"]),
+                patch("datus.cli.interactive_init.Prompt.ask", return_value="https://api.openai.com/v1"),
                 patch("datus.cli.interactive_init.getpass", return_value="test-key"),
                 patch.dict("sys.modules", {"datus.models.openai_model": mock_module}),
             ):
@@ -526,9 +524,10 @@ class TestConfigureLLM:
             mock_module.OpenAIModel.return_value = mock_model_instance
 
             with (
+                patch("datus.cli.interactive_init.select_choice", side_effect=["qwen", "qwen3-coder-plus"]),
                 patch(
                     "datus.cli.interactive_init.Prompt.ask",
-                    side_effect=["qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1", "qwen3-coder-plus"],
+                    return_value="https://dashscope.aliyuncs.com/compatible-mode/v1",
                 ),
                 patch("datus.cli.interactive_init.getpass", return_value="test-key"),
                 patch.dict("sys.modules", {"datus.models.openai_model": mock_module}),
@@ -607,3 +606,123 @@ class TestOverwriteSqlAndLogResult:
 
         # Exception should be caught and reported via print_rich_exception
         mock_print_exc.assert_called_once()
+
+
+class TestConfigureCodexOAuth:
+    """Tests for the Codex OAuth configuration flow."""
+
+    def test_codex_oauth_success(self):
+        """Test successful Codex OAuth configuration."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            init = InteractiveInit(user_home=tmpdir)
+
+            provider_config = {
+                "type": "codex",
+                "base_url": "https://chatgpt.com/backend-api/codex",
+                "default_model": "gpt-5.3-codex",
+                "models": ["gpt-5.3-codex", "gpt-5.1-codex-mini", "o3-codex"],
+                "auth_type": "oauth",
+            }
+
+            with (
+                patch("datus.cli.interactive_init.select_choice", return_value="gpt-5.3-codex"),
+                patch("datus.auth.oauth_manager.OAuthManager") as mock_oauth_cls,
+                patch.object(init, "console"),
+            ):
+                mock_oauth = MagicMock()
+                mock_oauth_cls.return_value = mock_oauth
+
+                # Mock the connectivity test
+                with patch("datus.models.codex_model.CodexModel") as mock_model_cls:
+                    mock_model = MagicMock()
+                    mock_model.generate.return_value = "Hi there!"
+                    mock_model_cls.return_value = mock_model
+
+                    result = init._configure_codex_oauth("codex", provider_config)
+
+            assert result is True
+            assert init.config["agent"]["target"] == "codex"
+            assert init.config["agent"]["models"]["codex"]["type"] == "codex"
+            assert init.config["agent"]["models"]["codex"]["auth_type"] == "oauth"
+            assert init.config["agent"]["models"]["codex"]["api_key"] == ""
+            mock_oauth.login_browser.assert_called_once()
+
+    def test_codex_oauth_login_failure(self):
+        """Test Codex OAuth when login fails."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            init = InteractiveInit(user_home=tmpdir)
+
+            provider_config = {
+                "type": "codex",
+                "base_url": "https://chatgpt.com/backend-api/codex",
+                "default_model": "gpt-5.3-codex",
+                "auth_type": "oauth",
+            }
+
+            with (
+                patch("datus.cli.interactive_init.Prompt.ask", side_effect=["gpt-5.3-codex"]),
+                patch("datus.auth.oauth_manager.OAuthManager") as mock_oauth_cls,
+                patch.object(init, "console"),
+            ):
+                mock_oauth = MagicMock()
+                mock_oauth.login_browser.side_effect = Exception("Login failed")
+                mock_oauth_cls.return_value = mock_oauth
+
+                result = init._configure_codex_oauth("codex", provider_config)
+
+            assert result is False
+
+
+class TestConfigureClaudeSubscription:
+    """Tests for the Claude subscription configuration flow."""
+
+    def test_claude_subscription_success_keeps_token_in_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            init = InteractiveInit(user_home=tmpdir)
+
+            provider_config = {
+                "type": "claude",
+                "base_url": "https://api.anthropic.com",
+                "default_model": "claude-sonnet-4-6",
+                "models": ["claude-sonnet-4-6"],
+                "auth_type": "subscription",
+            }
+
+            with (
+                patch("datus.cli.interactive_init.select_choice", return_value="claude-sonnet-4-6"),
+                patch.object(init, "_get_subscription_token", return_value=("sk-ant-oat01-test-token", "subscription")),
+                patch.object(init, "_test_llm_connectivity", return_value=(True, "")),
+                patch.object(init, "console"),
+            ):
+                result = init._configure_claude_subscription("claude_subscription", provider_config)
+
+            assert result is True
+            assert init.config["agent"]["target"] == "claude_subscription"
+            model_cfg = init.config["agent"]["models"]["claude_subscription"]
+            assert model_cfg["type"] == "claude"
+            assert model_cfg["auth_type"] == "subscription"
+            assert model_cfg["api_key"] == "sk-ant-oat01-test-token"
+
+    def test_claude_subscription_failure_preserves_token_for_retry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            init = InteractiveInit(user_home=tmpdir)
+
+            provider_config = {
+                "type": "claude",
+                "base_url": "https://api.anthropic.com",
+                "default_model": "claude-sonnet-4-6",
+                "models": ["claude-sonnet-4-6"],
+                "auth_type": "subscription",
+            }
+
+            with (
+                patch("datus.cli.interactive_init.select_choice", return_value="claude-sonnet-4-6"),
+                patch.object(init, "_get_subscription_token", return_value=("sk-ant-oat01-test-token", "subscription")),
+                patch.object(init, "_test_llm_connectivity", return_value=(False, "401 unauthorized")),
+                patch.object(init, "console"),
+            ):
+                result = init._configure_claude_subscription("claude_subscription", provider_config)
+
+            assert result is False
+            model_cfg = init.config["agent"]["models"]["claude_subscription"]
+            assert model_cfg["api_key"] == "sk-ant-oat01-test-token"

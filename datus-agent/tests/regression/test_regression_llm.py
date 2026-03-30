@@ -28,6 +28,7 @@ from tests.conftest import load_acceptance_config
 
 logger = get_logger(__name__)
 set_tracing_disabled(True)
+load_dotenv()
 
 
 # ============================================================
@@ -58,6 +59,16 @@ PROVIDER_MODELS = {
         "type": "kimi",
         "env_var": "KIMI_API_KEY",
         "models": ["kimi-k2.5", "kimi-k2-turbo-preview"],
+    },
+    "R06-openrouter": {
+        "type": "openrouter",
+        "env_var": "OPENROUTER_API_KEY",
+        "models": ["anthropic/claude-sonnet-4", "openai/gpt-4.1-mini"],
+    },
+    "R07-codex": {
+        "type": "codex",
+        "env_var": "CODEX_OAUTH_TOKEN",  # CI gate only; CodexModel uses OAuthManager token storage
+        "models": ["o3-codex"],
     },
 }
 

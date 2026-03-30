@@ -56,6 +56,29 @@ class ErrorCode(Enum):
         "300023",
         "Model returned response in illegal format. Response: '{response_preview}' (length: {response_length})",
     )
+
+    # OAuth authentication errors
+    OAUTH_NOT_AUTHENTICATED = ("300030", "Not authenticated. Please run OAuth login first.")
+    OAUTH_AUTH_FAILED = ("300031", "OAuth authorization failed: {error_detail}")
+    OAUTH_NO_REFRESH_TOKEN = ("300032", "No refresh token available. Please re-authenticate.")
+    OAUTH_TIMEOUT = ("300033", "OAuth authentication timed out")
+
+    # Claude subscription token errors
+    CLAUDE_SUBSCRIPTION_TOKEN_NOT_FOUND = (
+        "300034",
+        "Claude subscription token not found. Run 'claude setup-token' or set CLAUDE_CODE_OAUTH_TOKEN.",
+    )
+    CLAUDE_SUBSCRIPTION_TOKEN_EXPIRED = (
+        "300035",
+        "Claude subscription token has expired. Run 'claude setup-token' to get a fresh token.",
+    )
+    CLAUDE_SUBSCRIPTION_AUTH_FAILED = (
+        "300036",
+        "Claude subscription token rejected (HTTP 401) but token is not expired. "
+        "Possible causes: token revoked, Claude Max subscription inactive, or token corrupted. "
+        "Run 'claude setup-token' to get a fresh token.",
+    )
+
     # Tool errors
     TOOL_EXECUTION_FAILED = ("400001", "Tool execution failed")
     TOOL_INVALID_INPUT = ("400002", "Invalid tool input")
