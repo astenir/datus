@@ -21,7 +21,9 @@ def test_execute_content_set_and_query_share_persistent_connection():
 
     engine = MagicMock()
     engine.connect.return_value = persistent_conn
-    persistent_conn.execute.side_effect = [MagicMock(), query_result]
+    # 1st connect: fresh, no health check → execute_content_set: USE + commit
+    # 2nd connect: _check_connection (SELECT 1) → _execute_query: SELECT
+    persistent_conn.execute.side_effect = [MagicMock(), MagicMock(), query_result]
 
     with patch("datus_sqlalchemy.connector.create_engine", return_value=engine):
         set_result = connector.execute_content_set("USE analytics")
@@ -30,4 +32,4 @@ def test_execute_content_set_and_query_share_persistent_connection():
     assert set_result.success is True
     assert query_rows == [{"id": 1}]
     assert engine.connect.call_count == 1
-    assert persistent_conn.execute.call_count == 2
+    assert persistent_conn.execute.call_count == 3

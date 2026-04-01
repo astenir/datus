@@ -74,11 +74,26 @@ class SQLAlchemyConnector(BaseSqlConnector):
 
     # ==================== Connection Management ====================
 
+    def _check_connection(self) -> bool:
+        """Check if the persistent connection is still alive."""
+        try:
+            self.connection.execute(text("SELECT 1"))
+            return True
+        except Exception:
+            return False
+
     @override
     def connect(self):
-        """Establish connection to the database."""
+        """Establish connection to the database, reconnecting if stale."""
         if self.engine and self.connection and self._owns_engine:
-            return
+            if self._check_connection():
+                return
+            # Connection is stale, rebuild it
+            logger.warning("Stale connection detected, reconnecting...")
+            needs_context_replay = True
+            self._force_reset()
+        else:
+            needs_context_replay = False
 
         try:
             self._safe_close()
@@ -102,6 +117,14 @@ class SQLAlchemyConnector(BaseSqlConnector):
         except Exception as e:
             self._force_reset()
             raise self._handle_exception(e, "", "connection") from e
+
+        # Replay switched context after stale reconnect
+        if needs_context_replay:
+            self.do_switch_context(
+                catalog_name=self.catalog_name,
+                database_name=self.database_name,
+                schema_name=self.schema_name,
+            )
 
         if not (self.engine and self.connection):
             self._force_reset()

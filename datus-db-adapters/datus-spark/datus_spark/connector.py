@@ -187,14 +187,12 @@ class SparkConnector(SQLAlchemyConnector):
 
     @override
     def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        """Switch database context using USE statement."""
+        """Switch database context using USE statement on the persistent connection."""
         if database_name:
             from sqlalchemy import text
 
-            with self.engine.connect() as conn:
-                conn.execute(text(f"USE {self._quote_identifier(database_name)}"))
-                conn.commit()
-            self.database_name = database_name
+            self.connection.execute(text(f"USE {self._quote_identifier(database_name)}"))
+            self.connection.commit()
 
     # ==================== Utility Methods ====================
 

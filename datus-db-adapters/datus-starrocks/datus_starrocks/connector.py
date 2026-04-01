@@ -11,6 +11,7 @@ from datus_db_core import (
     list_to_in_str,
 )
 from datus_mysql import MySQLConnector
+from sqlalchemy import text
 
 from .config import StarRocksConfig
 
@@ -60,6 +61,17 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         # Override dialect to StarRocks
         self.dialect = "starrocks"
 
+    # ==================== Connection Management ====================
+
+    @override
+    def connect(self):
+        """Establish connection and switch to configured catalog if non-default."""
+        super().connect()
+        if self.catalog_name and self.catalog_name != self.default_catalog():
+            self.connection.execute(text(f"SET CATALOG {self._quote_identifier(self.catalog_name)}"))
+            self.connection.commit()
+            logger.debug(f"Switched to catalog: {self.catalog_name}")
+
     # ==================== Context Manager Support ====================
 
     def __enter__(self):
@@ -102,6 +114,17 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         if not catalog or catalog == "def":
             return self.default_catalog()
         return catalog
+
+    @override
+    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        """Switch catalog and/or database context on the persistent connection."""
+        if catalog_name:
+            self.connection.execute(text(f"SET CATALOG {self._quote_identifier(catalog_name)}"))
+            self.connection.commit()
+            logger.debug(f"Switched catalog to: {catalog_name}")
+        if database_name:
+            self.connection.execute(text(f"USE {self._quote_identifier(database_name)}"))
+            self.connection.commit()
 
     def _before_metadata_query(self, catalog_name: str = "", database_name: str = "") -> None:
         """Switch catalog before metadata queries if needed."""
@@ -248,8 +271,20 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
 
     @override
     def get_databases(self, catalog_name: str = "", include_sys: bool = False) -> List[str]:
-        """Get list of databases in the catalog."""
-        return super().get_databases(catalog_name, include_sys=include_sys)
+        """Get list of databases in the catalog via SHOW DATABASES.
+
+        Cannot use SQLAlchemy Inspector here because it creates its own
+        connection from the engine pool without catalog context.
+        """
+        self._before_metadata_query(catalog_name=catalog_name)
+        result = self._execute_pandas("SHOW DATABASES")
+        if result.empty:
+            return []
+        databases = result.iloc[:, 0].tolist()
+        if not include_sys:
+            sys_dbs = self._sys_databases()
+            databases = [db for db in databases if db not in sys_dbs]
+        return databases
 
     # ==================== Full Name Construction ====================
 
