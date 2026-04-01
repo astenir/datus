@@ -791,12 +791,12 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
             return []
 
         for entry in table_entries:
-            full_name = (
-                f"{to_sql_literal(entry['database_name'], True)}."
-                f"{to_sql_literal(entry['schema_name'], True)}."
-                f"{to_sql_literal(entry['table_name'], True)}"
-            ).strip()
-            entry["definition"] = self._fetch_object_ddl("TABLE", full_name)
+            ddl_name = self.full_name(
+                database_name=entry["database_name"],
+                schema_name=entry["schema_name"],
+                table_name=entry["table_name"],
+            )
+            entry["definition"] = self._fetch_object_ddl("TABLE", ddl_name)
 
         return table_entries
 
@@ -815,12 +815,12 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
             return []
 
         for entry in view_entries:
-            full_name = (
-                f"{to_sql_literal(entry['database_name'], True)}."
-                f"{to_sql_literal(entry['schema_name'], True)}."
-                f"{to_sql_literal(entry['table_name'], True)}"
-            ).strip()
-            entry["definition"] = self._fetch_object_ddl("VIEW", full_name)
+            ddl_name = self.full_name(
+                database_name=entry["database_name"],
+                schema_name=entry["schema_name"],
+                table_name=entry["table_name"],
+            )
+            entry["definition"] = self._fetch_object_ddl("VIEW", ddl_name)
 
         return view_entries
 
@@ -839,12 +839,12 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
             return []
 
         for entry in mv_entries:
-            full_name = (
-                f"{to_sql_literal(entry['database_name'], True)}."
-                f"{to_sql_literal(entry['schema_name'], True)}."
-                f"{to_sql_literal(entry['table_name'], True)}"
-            ).strip()
-            entry["definition"] = self._fetch_object_ddl("MATERIALIZED VIEW", full_name)
+            ddl_name = self.full_name(
+                database_name=entry["database_name"],
+                schema_name=entry["schema_name"],
+                table_name=entry["table_name"],
+            )
+            entry["definition"] = self._fetch_object_ddl("MATERIALIZED VIEW", ddl_name)
 
         return mv_entries
 
