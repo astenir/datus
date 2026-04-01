@@ -13,6 +13,4 @@ def register():
     """Register Spark connector with Datus registry."""
     from datus_db_core import connector_registry
 
-    connector_registry.register(
-        "spark", SparkConnector, config_class=SparkConfig, capabilities={"database"}
-    )
+    connector_registry.register("spark", SparkConnector, config_class=SparkConfig, capabilities={"database"})

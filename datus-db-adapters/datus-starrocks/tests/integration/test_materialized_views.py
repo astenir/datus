@@ -35,9 +35,7 @@ def test_get_materialized_views_with_ddl(connector: StarRocksConnector):
 
 
 @pytest.mark.integration
-def test_materialized_view_identifier_includes_catalog(
-    connector: StarRocksConnector, config: StarRocksConfig
-):
+def test_materialized_view_identifier_includes_catalog(connector: StarRocksConnector, config: StarRocksConfig):
     """Test materialized view identifier includes catalog."""
     mvs = connector.get_materialized_views_with_ddl(catalog_name=config.catalog)
 
@@ -52,22 +50,16 @@ def test_materialized_view_identifier_includes_catalog(
 
 
 @pytest.mark.integration
-def test_get_materialized_views_from_specific_catalog(
-    connector: StarRocksConnector, config: StarRocksConfig
-):
+def test_get_materialized_views_from_specific_catalog(connector: StarRocksConnector, config: StarRocksConfig):
     """Test getting materialized views from specific catalog."""
     # Switch to the target catalog
     connector.switch_catalog(config.catalog)
 
-    mvs = connector.get_materialized_views(
-        catalog_name=config.catalog, database_name=config.database
-    )
+    mvs = connector.get_materialized_views(catalog_name=config.catalog, database_name=config.database)
     assert isinstance(mvs, list)
 
     # Verify all MVs belong to the specified catalog
-    mvs_with_ddl = connector.get_materialized_views_with_ddl(
-        catalog_name=config.catalog, database_name=config.database
-    )
+    mvs_with_ddl = connector.get_materialized_views_with_ddl(catalog_name=config.catalog, database_name=config.database)
     for mv in mvs_with_ddl:
         assert mv["catalog_name"] == config.catalog
         if config.database:

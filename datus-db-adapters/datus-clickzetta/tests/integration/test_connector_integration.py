@@ -101,9 +101,7 @@ class TestConnectorOperations:
 
         # Setup mock session
         mock_session = MagicMock()
-        mock_session_class.builder.configs.return_value.create.return_value = (
-            mock_session
-        )
+        mock_session_class.builder.configs.return_value.create.return_value = mock_session
 
         # Mock query result
         mock_df = pd.DataFrame({"col1": [1, 2, 3], "col2": ["a", "b", "c"]})
@@ -126,9 +124,7 @@ class TestConnectorOperations:
 
         # Setup mock session
         mock_session = MagicMock()
-        mock_session_class.builder.configs.return_value.create.return_value = (
-            mock_session
-        )
+        mock_session_class.builder.configs.return_value.create.return_value = mock_session
 
         connector = ClickZettaConnector(**clickzetta_test_config)
 
@@ -158,9 +154,7 @@ class TestConnectorOperations:
 
         # Setup mock session
         mock_session = MagicMock()
-        mock_session_class.builder.configs.return_value.create.return_value = (
-            mock_session
-        )
+        mock_session_class.builder.configs.return_value.create.return_value = mock_session
 
         connector = ClickZettaConnector(**clickzetta_test_config)
 
@@ -204,9 +198,7 @@ class TestMetadataOperations:
         mock_session.sql.return_value.to_pandas.return_value = mock_df
 
         connector = ClickZettaConnector(**clickzetta_test_config)
-        tables = connector.get_tables(
-            database_name="test_workspace", schema_name="test_schema"
-        )
+        tables = connector.get_tables(database_name="test_workspace", schema_name="test_schema")
 
         assert isinstance(tables, list)
         assert len(tables) == 2
@@ -228,15 +220,11 @@ class TestMetadataOperations:
         mock_session_class.builder = mock_builder
 
         # Mock view query result with proper table_name and table_type columns
-        mock_df = pd.DataFrame(
-            {"table_name": ["view1", "view2"], "table_type": ["VIEW", "DYNAMIC_TABLE"]}
-        )
+        mock_df = pd.DataFrame({"table_name": ["view1", "view2"], "table_type": ["VIEW", "DYNAMIC_TABLE"]})
         mock_session.sql.return_value.to_pandas.return_value = mock_df
 
         connector = ClickZettaConnector(**clickzetta_test_config)
-        views = connector.get_views(
-            database_name="test_workspace", schema_name="test_schema"
-        )
+        views = connector.get_views(database_name="test_workspace", schema_name="test_schema")
 
         assert isinstance(views, list)
         assert len(views) == 2
@@ -263,17 +251,13 @@ class TestVolumeOperations:
         mock_session_class.builder = mock_builder
 
         # Mock file listing result
-        mock_df = pd.DataFrame(
-            {"name": ["file1.csv", "file2.json"], "size": [1024, 2048]}
-        )
+        mock_df = pd.DataFrame({"name": ["file1.csv", "file2.json"], "size": [1024, 2048]})
         mock_session.sql.return_value.to_pandas.return_value = mock_df
 
         connector = ClickZettaConnector(**clickzetta_test_config)
 
         # Test volume listing using the correct method name
-        files = connector.list_volume_files(
-            "volume:user://test_volume", directory="data/"
-        )
+        files = connector.list_volume_files("volume:user://test_volume", directory="data/")
 
         assert isinstance(files, list)
         mock_session.sql.assert_called()
@@ -292,9 +276,7 @@ class TestNewMethods:
 
         # Setup mock session
         mock_session = MagicMock()
-        mock_session_class.builder.configs.return_value.create.return_value = (
-            mock_session
-        )
+        mock_session_class.builder.configs.return_value.create.return_value = mock_session
 
         # Mock query result
         mock_df = pd.DataFrame({"col1": [1, 2, 3], "col2": ["a", "b", "c"]})
@@ -321,9 +303,7 @@ class TestNewMethods:
 
         # Setup mock session
         mock_session = MagicMock()
-        mock_session_class.builder.configs.return_value.create.return_value = (
-            mock_session
-        )
+        mock_session_class.builder.configs.return_value.create.return_value = mock_session
 
         # Mock query results - both queries will go through execute_arrow -> _run_query
         mock_df1 = pd.DataFrame({"col1": [1, 2], "col2": ["a", "b"]})
@@ -375,14 +355,10 @@ class TestNewMethods:
 
         # Setup mock session
         mock_session = MagicMock()
-        mock_session_class.builder.configs.return_value.create.return_value = (
-            mock_session
-        )
+        mock_session_class.builder.configs.return_value.create.return_value = mock_session
 
         # Mock query result
-        mock_df = pd.DataFrame(
-            {"col1": [1, 2, 3, 4, 5], "col2": ["a", "b", "c", "d", "e"]}
-        )
+        mock_df = pd.DataFrame({"col1": [1, 2, 3, 4, 5], "col2": ["a", "b", "c", "d", "e"]})
         mock_session.sql.return_value.to_pandas.return_value = mock_df
 
         connector = ClickZettaConnector(**clickzetta_test_config)
@@ -393,9 +369,7 @@ class TestNewMethods:
         assert len(df) == 5
 
         # Test with max_rows
-        df_limited = connector.execute_query_to_df(
-            "SELECT * FROM test_table", max_rows=3
-        )
+        df_limited = connector.execute_query_to_df("SELECT * FROM test_table", max_rows=3)
         assert len(df_limited) == 3
 
         connector.close()
@@ -407,9 +381,7 @@ class TestNewMethods:
 
         # Setup mock session
         mock_session = MagicMock()
-        mock_session_class.builder.configs.return_value.create.return_value = (
-            mock_session
-        )
+        mock_session_class.builder.configs.return_value.create.return_value = mock_session
 
         # Mock query result
         mock_df = pd.DataFrame({"col1": [1, 2, 3], "col2": ["a", "b", "c"]})

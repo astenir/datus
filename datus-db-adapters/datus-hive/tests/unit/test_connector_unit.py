@@ -178,9 +178,7 @@ def test_build_connect_args_minimal():
 
 def test_normalize_configuration_bool_values():
     """Test _normalize_configuration converts booleans to strings."""
-    result = HiveConnector._normalize_configuration(
-        {"flag_true": True, "flag_false": False}
-    )
+    result = HiveConnector._normalize_configuration({"flag_true": True, "flag_false": False})
 
     assert result == {"flag_true": "true", "flag_false": "false"}
 
@@ -301,9 +299,7 @@ def test_get_databases_filters_system_dbs(monkeypatch, connector):
     monkeypatch.setattr(
         connector,
         "_execute_pandas",
-        lambda sql: pd.DataFrame(
-            {"database_name": ["default", "information_schema", "sys", "mydb"]}
-        ),
+        lambda sql: pd.DataFrame({"database_name": ["default", "information_schema", "sys", "mydb"]}),
     )
 
     result = connector.get_databases()
@@ -318,9 +314,7 @@ def test_get_databases_include_sys(monkeypatch, connector):
     monkeypatch.setattr(
         connector,
         "_execute_pandas",
-        lambda sql: pd.DataFrame(
-            {"database_name": ["default", "information_schema", "sys"]}
-        ),
+        lambda sql: pd.DataFrame({"database_name": ["default", "information_schema", "sys"]}),
     )
 
     result = connector.get_databases(include_sys=True)
@@ -344,9 +338,7 @@ def test_get_tables_parses_results(monkeypatch, connector):
     monkeypatch.setattr(
         connector,
         "_execute_pandas",
-        lambda sql: pd.DataFrame(
-            {"database": ["default"], "tableName": ["table_a"], "isTemporary": [False]}
-        ),
+        lambda sql: pd.DataFrame({"database": ["default"], "tableName": ["table_a"], "isTemporary": [False]}),
     )
 
     assert connector.get_tables(database_name="default") == ["table_a"]
@@ -357,9 +349,7 @@ def test_get_views_parses_results(monkeypatch, connector):
     monkeypatch.setattr(
         connector,
         "_execute_pandas",
-        lambda sql: pd.DataFrame(
-            {"database": ["default"], "viewName": ["view_a"], "isTemporary": [False]}
-        ),
+        lambda sql: pd.DataFrame({"database": ["default"], "viewName": ["view_a"], "isTemporary": [False]}),
     )
 
     assert connector.get_views(database_name="default") == ["view_a"]
@@ -433,9 +423,7 @@ def test_get_schema_returns_empty_for_no_table_name(connector):
 def test_get_tables_with_ddl(monkeypatch, connector):
     monkeypatch.setattr(connector, "connect", lambda: None)
     monkeypatch.setattr(connector, "get_tables", lambda **kwargs: ["table_a"])
-    monkeypatch.setattr(
-        connector, "_show_create", lambda full_name: "CREATE TABLE table_a (id INT)"
-    )
+    monkeypatch.setattr(connector, "_show_create", lambda full_name: "CREATE TABLE table_a (id INT)")
 
     ddl_list = connector.get_tables_with_ddl(database_name="default")
     assert ddl_list

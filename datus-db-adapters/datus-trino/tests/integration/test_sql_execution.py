@@ -23,9 +23,7 @@ def test_execute_select_query(connector: TrinoConnector):
 def test_execute_select_with_multiple_rows(connector: TrinoConnector):
     """Test executing SELECT with multiple rows."""
     result = connector.execute(
-        {
-            "sql_query": "SELECT * FROM (VALUES (1, 'a'), (2, 'b'), (3, 'c')) AS t(id, name)"
-        },
+        {"sql_query": "SELECT * FROM (VALUES (1, 'a'), (2, 'b'), (3, 'c')) AS t(id, name)"},
         result_format="list",
     )
     assert result.success
@@ -35,9 +33,7 @@ def test_execute_select_with_multiple_rows(connector: TrinoConnector):
 @pytest.mark.integration
 def test_execute_select_csv_format(connector: TrinoConnector):
     """Test executing SELECT with CSV result format."""
-    result = connector.execute(
-        {"sql_query": "SELECT 1 as num, 'hello' as msg"}, result_format="csv"
-    )
+    result = connector.execute({"sql_query": "SELECT 1 as num, 'hello' as msg"}, result_format="csv")
     assert result.success
     assert "num" in result.sql_return
     assert "hello" in result.sql_return

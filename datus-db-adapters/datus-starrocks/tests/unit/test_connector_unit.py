@@ -197,9 +197,7 @@ def test_full_name_with_catalog_and_database():
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
 
-        result = connector.full_name(
-            catalog_name="my_catalog", database_name="my_db", table_name="my_table"
-        )
+        result = connector.full_name(catalog_name="my_catalog", database_name="my_db", table_name="my_table")
 
         assert result == "`my_catalog`.`my_db`.`my_table`"
 
@@ -248,9 +246,7 @@ def test_full_name_resets_empty_catalog_to_default():
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
 
-        result = connector.full_name(
-            catalog_name="", database_name="db", table_name="table"
-        )
+        result = connector.full_name(catalog_name="", database_name="db", table_name="table")
 
         # Empty catalog is reset to default_catalog
         assert result == "`default_catalog`.`db`.`table`"
@@ -264,9 +260,7 @@ def test_full_name_quotes_identifiers():
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
 
-        result = connector.full_name(
-            catalog_name="catalog", database_name="database", table_name="table"
-        )
+        result = connector.full_name(catalog_name="catalog", database_name="database", table_name="table")
 
         assert result.count("`") == 6  # 3 pairs of backticks
 
@@ -301,9 +295,7 @@ def test_sqlalchemy_schema_with_catalog_and_database():
         connector.database_name = "my_db"
         connector.catalog_name = "my_catalog"
 
-        result = connector._sqlalchemy_schema(
-            catalog_name="test_catalog", database_name="test_db"
-        )
+        result = connector._sqlalchemy_schema(catalog_name="test_catalog", database_name="test_db")
 
         assert result == "test_catalog.test_db"
 
@@ -421,9 +413,7 @@ def test_close_clears_connection_on_pymysql_error():
         connector.connection = MagicMock()
         connector.engine = None
 
-        with patch(
-            "datus_mysql.MySQLConnector.close", side_effect=Exception("struct.error")
-        ):
+        with patch("datus_mysql.MySQLConnector.close", side_effect=Exception("struct.error")):
             connector.close()
 
             assert connector.connection is None
@@ -439,9 +429,7 @@ def test_close_disposes_engine_on_error():
         mock_engine = MagicMock()
         connector.engine = mock_engine
 
-        with patch(
-            "datus_mysql.MySQLConnector.close", side_effect=Exception("struct.pack")
-        ):
+        with patch("datus_mysql.MySQLConnector.close", side_effect=Exception("struct.pack")):
             connector.close()
 
             # Engine should be disposed and set to None

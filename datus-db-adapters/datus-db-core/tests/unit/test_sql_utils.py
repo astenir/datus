@@ -162,10 +162,7 @@ class TestParseSqlType:
         assert parse_sql_type("CREATE TABLE t (id INT)", "mysql") == SQLType.DDL
 
     def test_alter_table(self):
-        assert (
-            parse_sql_type("ALTER TABLE t ADD COLUMN name VARCHAR(50)", "mysql")
-            == SQLType.DDL
-        )
+        assert parse_sql_type("ALTER TABLE t ADD COLUMN name VARCHAR(50)", "mysql") == SQLType.DDL
 
     def test_drop_table(self):
         assert parse_sql_type("DROP TABLE t", "mysql") == SQLType.DDL
@@ -186,16 +183,10 @@ class TestParseSqlType:
         assert parse_sql_type("USE my_db", "mysql") == SQLType.CONTENT_SET
 
     def test_set(self):
-        assert (
-            parse_sql_type("SET search_path TO my_schema", "postgres")
-            == SQLType.CONTENT_SET
-        )
+        assert parse_sql_type("SET search_path TO my_schema", "postgres") == SQLType.CONTENT_SET
 
     def test_with_cte_select(self):
-        assert (
-            parse_sql_type("WITH cte AS (SELECT 1) SELECT * FROM cte", "snowflake")
-            == SQLType.SELECT
-        )
+        assert parse_sql_type("WITH cte AS (SELECT 1) SELECT * FROM cte", "snowflake") == SQLType.SELECT
 
     def test_empty_string(self):
         assert parse_sql_type("", "mysql") == SQLType.UNKNOWN
@@ -353,9 +344,7 @@ class TestParseContextSwitch:
 
 class TestMetadataIdentifier:
     def test_sqlite_with_database(self):
-        result = metadata_identifier(
-            database_name="main", table_name="users", dialect="sqlite"
-        )
+        result = metadata_identifier(database_name="main", table_name="users", dialect="sqlite")
         assert result == "main.users"
 
     def test_sqlite_without_database(self):
@@ -363,9 +352,7 @@ class TestMetadataIdentifier:
         assert result == "users"
 
     def test_duckdb(self):
-        result = metadata_identifier(
-            database_name="db", schema_name="public", table_name="t", dialect="duckdb"
-        )
+        result = metadata_identifier(database_name="db", schema_name="public", table_name="t", dialect="duckdb")
         assert result == "db.public.t"
 
     def test_with_registry_capabilities(self):

@@ -42,7 +42,5 @@ class SchemaNamespaceMixin(ABC):
     """Mixin for databases that support schema-level namespace."""
 
     @abstractmethod
-    def get_schemas(
-        self, catalog_name: str = "", database_name: str = "", include_sys: bool = False
-    ) -> List[str]:
+    def get_schemas(self, catalog_name: str = "", database_name: str = "", include_sys: bool = False) -> List[str]:
         raise NotImplementedError

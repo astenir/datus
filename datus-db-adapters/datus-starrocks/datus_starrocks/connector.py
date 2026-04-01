@@ -74,9 +74,7 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         already_connected = self.engine and self.connection and self._owns_engine
         super().connect()
         if not already_connected and self.catalog_name and self.catalog_name != self.default_catalog():
-            self.connection.execute(
-                text(f"SET CATALOG {self._quote_identifier(self.catalog_name)}")
-            )
+            self.connection.execute(text(f"SET CATALOG {self._quote_identifier(self.catalog_name)}"))
             self.connection.commit()
             logger.debug(f"Switched to catalog on first connect: {self.catalog_name}")
 
@@ -128,15 +126,11 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
     def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
         """Switch catalog and/or database context on the persistent connection."""
         if catalog_name:
-            self.connection.execute(
-                text(f"SET CATALOG {self._quote_identifier(catalog_name)}")
-            )
+            self.connection.execute(text(f"SET CATALOG {self._quote_identifier(catalog_name)}"))
             self.connection.commit()
             logger.debug(f"Switched catalog to: {catalog_name}")
         if database_name:
-            self.connection.execute(
-                text(f"USE {self._quote_identifier(database_name)}")
-            )
+            self.connection.execute(text(f"USE {self._quote_identifier(database_name)}"))
             self.connection.commit()
 
     # ==================== Metadata Retrieval (Stateless, Catalog-Qualified) ====================

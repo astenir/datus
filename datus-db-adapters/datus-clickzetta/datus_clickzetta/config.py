@@ -21,17 +21,11 @@ class ClickZettaConfig(BaseModel):
     )
     instance: str = Field(..., description="ClickZetta instance identifier")
     workspace: str = Field(..., description="ClickZetta workspace name")
-    schema_name: str = Field(
-        default="PUBLIC", description="Default schema name", alias="schema"
-    )
+    schema_name: str = Field(default="PUBLIC", description="Default schema name", alias="schema")
     vcluster: str = Field(default="DEFAULT_AP", description="Virtual cluster name")
     secure: Optional[bool] = Field(default=None, description="Enable secure connection")
-    hints: Optional[Dict[str, Any]] = Field(
-        default=None, description="Additional connection hints"
-    )
-    extra: Optional[Dict[str, Any]] = Field(
-        default=None, description="Extra connection parameters"
-    )
+    hints: Optional[Dict[str, Any]] = Field(default=None, description="Additional connection hints")
+    extra: Optional[Dict[str, Any]] = Field(default=None, description="Extra connection parameters")
 
     @field_validator("service", "username", "password", "instance", "workspace")
     @classmethod

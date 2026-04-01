@@ -37,13 +37,9 @@ def test_get_tables_with_ddl(connector: StarRocksConnector, config: StarRocksCon
 
 
 @pytest.mark.integration
-def test_get_tables_with_catalog_filter(
-    connector: StarRocksConnector, config: StarRocksConfig
-):
+def test_get_tables_with_catalog_filter(connector: StarRocksConnector, config: StarRocksConfig):
     """Test getting tables with catalog filter."""
-    tables = connector.get_tables(
-        catalog_name=config.catalog, database_name=config.database
-    )
+    tables = connector.get_tables(catalog_name=config.catalog, database_name=config.database)
     assert isinstance(tables, list)
 
     # If database exists, should have some tables
@@ -53,13 +49,9 @@ def test_get_tables_with_catalog_filter(
 
 
 @pytest.mark.integration
-def test_get_tables_metadata_includes_catalog(
-    connector: StarRocksConnector, config: StarRocksConfig
-):
+def test_get_tables_metadata_includes_catalog(connector: StarRocksConnector, config: StarRocksConfig):
     """Test that table metadata includes catalog_name."""
-    tables = connector.get_tables_with_ddl(
-        catalog_name=config.catalog, database_name=config.database
-    )
+    tables = connector.get_tables_with_ddl(catalog_name=config.catalog, database_name=config.database)
 
     for table in tables:
         assert "catalog_name" in table
@@ -93,13 +85,9 @@ def test_get_views_with_ddl(connector: StarRocksConnector, config: StarRocksConf
 
 
 @pytest.mark.integration
-def test_get_views_identifier_format(
-    connector: StarRocksConnector, config: StarRocksConfig
-):
+def test_get_views_identifier_format(connector: StarRocksConnector, config: StarRocksConfig):
     """Test view identifier includes catalog."""
-    views = connector.get_views_with_ddl(
-        catalog_name=config.catalog, database_name=config.database
-    )
+    views = connector.get_views_with_ddl(catalog_name=config.catalog, database_name=config.database)
 
     if len(views) > 0:
         view = views[0]
@@ -123,13 +111,9 @@ def test_get_sample_rows_default(connector: StarRocksConnector):
 
 
 @pytest.mark.integration
-def test_get_sample_rows_with_catalog(
-    connector: StarRocksConnector, config: StarRocksConfig
-):
+def test_get_sample_rows_with_catalog(connector: StarRocksConnector, config: StarRocksConfig):
     """Test getting sample rows for specific catalog and database."""
-    sample_rows = connector.get_sample_rows(
-        catalog_name=config.catalog, database_name=config.database
-    )
+    sample_rows = connector.get_sample_rows(catalog_name=config.catalog, database_name=config.database)
 
     if len(sample_rows) > 0:
         item = sample_rows[0]
@@ -144,14 +128,10 @@ def test_get_sample_rows_with_catalog(
 
 
 @pytest.mark.integration
-def test_get_sample_rows_specific_tables(
-    connector: StarRocksConnector, config: StarRocksConfig
-):
+def test_get_sample_rows_specific_tables(connector: StarRocksConnector, config: StarRocksConfig):
     """Test getting sample rows for specific tables."""
     # First get available tables
-    tables = connector.get_tables(
-        catalog_name=config.catalog, database_name=config.database
-    )
+    tables = connector.get_tables(catalog_name=config.catalog, database_name=config.database)
 
     if len(tables) > 0:
         table_name = tables[0]

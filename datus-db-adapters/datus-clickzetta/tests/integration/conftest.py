@@ -179,17 +179,13 @@ def tpch_setup() -> Generator:
         for i, ddl in enumerate(TPCH_DDL):
             ddl_result = conn.execute_ddl(ddl)
             if not ddl_result.success:
-                raise RuntimeError(
-                    f"Failed creating table {TPCH_TABLES[i]}: {ddl_result.error}"
-                )
+                raise RuntimeError(f"Failed creating table {TPCH_TABLES[i]}: {ddl_result.error}")
 
         # Insert data
         for i, data in enumerate(TPCH_DATA):
             insert_result = conn.execute_insert(data)
             if not insert_result.success:
-                raise RuntimeError(
-                    f"Failed inserting into {TPCH_TABLES[i]}: {insert_result.error}"
-                )
+                raise RuntimeError(f"Failed inserting into {TPCH_TABLES[i]}: {insert_result.error}")
 
     except Exception as e:
         pytest.fail(f"TPC-H setup failed: {e}")

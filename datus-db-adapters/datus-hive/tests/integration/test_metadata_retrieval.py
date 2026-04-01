@@ -45,9 +45,7 @@ def test_get_tables_with_ddl(connector: HiveConnector, config: HiveConfig):
     )
 
     try:
-        tables = connector.get_tables_with_ddl(
-            database_name=database, tables=[table_name]
-        )
+        tables = connector.get_tables_with_ddl(database_name=database, tables=[table_name])
         if tables:
             table = tables[0]
             assert table["table_name"] == table_name
@@ -143,15 +141,11 @@ def test_get_sample_rows(connector: HiveConnector, config: HiveConfig):
 
     try:
         try:
-            connector.execute_insert(
-                f"INSERT INTO {table_name} VALUES (1, 'alpha'), (2, 'beta')"
-            )
+            connector.execute_insert(f"INSERT INTO {table_name} VALUES (1, 'alpha'), (2, 'beta')")
         except Exception as exc:
             pytest.skip(f"Insert not supported in this environment: {exc}")
 
-        samples = connector.get_sample_rows(
-            tables=[table_name], top_n=2, database_name=database
-        )
+        samples = connector.get_sample_rows(tables=[table_name], top_n=2, database_name=database)
         assert samples
         assert samples[0]["table_name"] == table_name
     finally:

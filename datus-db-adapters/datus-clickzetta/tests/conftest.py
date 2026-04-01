@@ -112,9 +112,7 @@ def mock_datus_modules():
 
     # Mock sql_utils
     mock_sql_utils = MagicMock()
-    mock_sql_utils.metadata_identifier = MagicMock(
-        return_value="workspace.schema.table"
-    )
+    mock_sql_utils.metadata_identifier = MagicMock(return_value="workspace.schema.table")
     mock_sql_utils.parse_context_switch = MagicMock(return_value={})
     mock_sql_utils.parse_sql_type = MagicMock(return_value="SELECT")
 
