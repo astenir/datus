@@ -13,7 +13,7 @@ from datus_db_core import (
 from datus_mysql import MySQLConnector
 from sqlalchemy import text
 
-from .config import StarRocksConfig
+from datus_starrocks.config import StarRocksConfig
 
 logger = get_logger(__name__)
 
