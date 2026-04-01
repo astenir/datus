@@ -4,6 +4,8 @@
 
 from typing import Any, Dict, List, Set, Union, override
 
+from sqlalchemy import text
+
 from datus_db_core import (
     CatalogSupportMixin,
     MaterializedViewSupportMixin,
@@ -11,9 +13,8 @@ from datus_db_core import (
     list_to_in_str,
 )
 from datus_mysql import MySQLConnector
-from sqlalchemy import text
 
-from datus_starrocks.config import StarRocksConfig
+from .config import StarRocksConfig
 
 logger = get_logger(__name__)
 
