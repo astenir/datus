@@ -23,7 +23,9 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
     StarRocks database connector.
 
     StarRocks uses MySQL protocol but adds multi-catalog support and materialized views.
-    This connector implements CatalogSupportMixin and MaterializedViewSupportMixin.
+    Metadata queries use catalog-qualified information_schema (e.g.
+    `catalog.information_schema.TABLES`) so they are stateless and thread-safe,
+    without requiring SET CATALOG context switching.
     """
 
     def __init__(self, config: Union[StarRocksConfig, dict]):
@@ -65,12 +67,18 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
 
     @override
     def connect(self):
-        """Establish connection and switch to configured catalog if non-default."""
+        """Establish connection and switch to configured catalog on first connect.
+
+        Reconnect context replay is handled by the base class via do_switch_context().
+        """
+        already_connected = self.engine and self.connection and self._owns_engine
         super().connect()
-        if self.catalog_name and self.catalog_name != self.default_catalog():
-            self.connection.execute(text(f"SET CATALOG {self._quote_identifier(self.catalog_name)}"))
+        if not already_connected and self.catalog_name and self.catalog_name != self.default_catalog():
+            self.connection.execute(
+                text(f"SET CATALOG {self._quote_identifier(self.catalog_name)}")
+            )
             self.connection.commit()
-            logger.debug(f"Switched to catalog: {self.catalog_name}")
+            logger.debug(f"Switched to catalog on first connect: {self.catalog_name}")
 
     # ==================== Context Manager Support ====================
 
@@ -109,8 +117,9 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         self.switch_context(catalog_name=catalog_name)
         self.catalog_name = catalog_name
 
-    def reset_catalog_to_default(self, catalog: str) -> str:
-        """Reset the catalog to the default catalog if it is not set or is 'def'."""
+    def _resolve_catalog(self, catalog_name: str = "") -> str:
+        """Resolve the effective catalog name, falling back to configured or default."""
+        catalog = catalog_name or self.catalog_name
         if not catalog or catalog == "def":
             return self.default_catalog()
         return catalog
@@ -119,20 +128,18 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
     def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
         """Switch catalog and/or database context on the persistent connection."""
         if catalog_name:
-            self.connection.execute(text(f"SET CATALOG {self._quote_identifier(catalog_name)}"))
+            self.connection.execute(
+                text(f"SET CATALOG {self._quote_identifier(catalog_name)}")
+            )
             self.connection.commit()
             logger.debug(f"Switched catalog to: {catalog_name}")
         if database_name:
-            self.connection.execute(text(f"USE {self._quote_identifier(database_name)}"))
+            self.connection.execute(
+                text(f"USE {self._quote_identifier(database_name)}")
+            )
             self.connection.commit()
 
-    def _before_metadata_query(self, catalog_name: str = "", database_name: str = "") -> None:
-        """Switch catalog before metadata queries if needed."""
-        target_catalog = catalog_name or self.catalog_name or self.default_catalog()
-        if target_catalog and target_catalog != self.catalog_name:
-            self.switch_context(catalog_name=target_catalog)
-
-    # ==================== Metadata Retrieval ====================
+    # ==================== Metadata Retrieval (Stateless, Catalog-Qualified) ====================
 
     def _get_metadata(
         self,
@@ -141,42 +148,53 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         database_name: str = "",
     ) -> List[Dict[str, str]]:
         """
-        Get metadata for tables/views with catalog support.
+        Get metadata for tables/views using catalog-qualified information_schema.
 
-        Args:
-            table_type: Type of object (table, view, mv)
-            catalog_name: Catalog name
-            database_name: Database name to query
-
-        Returns:
-            List of metadata dictionaries with catalog_name properly set
+        Uses `catalog.information_schema.TABLES` syntax so no SET CATALOG is needed.
+        This makes metadata queries stateless and thread-safe.
         """
-        # Determine the target catalog
-        current_catalog = self.reset_catalog_to_default(catalog_name or self.catalog_name)
+        self.connect()
+        current_catalog = self._resolve_catalog(catalog_name)
+        database_name = database_name or self.database_name
 
-        # Switch to the correct catalog before querying
-        self._before_metadata_query(catalog_name=current_catalog, database_name=database_name)
+        from datus_mysql.connector import _get_metadata_config
 
-        # Get base metadata from parent
-        result = super()._get_metadata(table_type, catalog_name, database_name)
+        metadata_config = _get_metadata_config(table_type)
 
-        # Set the correct catalog_name and filter results by catalog as safety check
-        filtered_result = []
-        for item in result:
-            # Filter by catalog if the item has catalog_name set
-            if "catalog_name" in item and item["catalog_name"] and item["catalog_name"] != current_catalog:
-                continue
+        # Build WHERE clause
+        if database_name:
+            where = f"TABLE_SCHEMA = '{database_name}'"
+        else:
+            where = list_to_in_str("TABLE_SCHEMA NOT IN", list(self._sys_databases()))
 
-            item["catalog_name"] = current_catalog
-            # Update identifier to include catalog
-            item["identifier"] = self.identifier(
-                catalog_name=current_catalog,
-                database_name=item["database_name"],
-                table_name=item["table_name"],
+        type_filter = list_to_in_str("AND TABLE_TYPE IN", metadata_config.table_types)
+
+        # Use catalog-qualified information_schema — no SET CATALOG needed
+        query = (
+            f"SELECT TABLE_SCHEMA, TABLE_NAME "
+            f"FROM `{current_catalog}`.information_schema.{metadata_config.info_table} "
+            f"WHERE {where} {type_filter}"
+        )
+
+        query_result = self._execute_pandas(query)
+
+        result = []
+        for i in range(len(query_result)):
+            db_name = query_result["TABLE_SCHEMA"][i]
+            tb_name = query_result["TABLE_NAME"][i]
+            result.append(
+                {
+                    "identifier": self.identifier(
+                        catalog_name=current_catalog, database_name=db_name, table_name=tb_name
+                    ),
+                    "catalog_name": current_catalog,
+                    "schema_name": "",
+                    "database_name": db_name,
+                    "table_name": tb_name,
+                    "table_type": table_type,
+                }
             )
-            filtered_result.append(item)
-
-        return filtered_result
+        return result
 
     @override
     def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
@@ -188,11 +206,7 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
     def get_views(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """Get list of view names."""
         try:
-            result = self._get_metadata(
-                table_type="view",
-                catalog_name=catalog_name,
-                database_name=database_name,
-            )
+            result = self._get_metadata(table_type="view", catalog_name=catalog_name, database_name=database_name)
             return [view["table_name"] for view in result]
         except Exception as e:
             logger.warning(f"Failed to get views: {e}")
@@ -215,21 +229,15 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         """
         Get materialized views with DDL definitions.
 
-        Args:
-            catalog_name: Catalog name
-            database_name: Database name
-            schema_name: Schema name (unused in StarRocks)
-
-        Returns:
-            List of materialized view metadata with DDL
+        Uses catalog-qualified information_schema query.
         """
-        current_catalog = self.reset_catalog_to_default(catalog_name or self.catalog_name)
+        current_catalog = self._resolve_catalog(catalog_name)
+        database_name = database_name or self.database_name
 
-        self._before_metadata_query(catalog_name=current_catalog, database_name=database_name)
-
-        # Query materialized views from information_schema
+        # Use catalog-qualified information_schema
         query_sql = (
-            "SELECT TABLE_SCHEMA, TABLE_NAME, MATERIALIZED_VIEW_DEFINITION FROM information_schema.materialized_views"
+            f"SELECT TABLE_SCHEMA, TABLE_NAME, MATERIALIZED_VIEW_DEFINITION "
+            f"FROM `{current_catalog}`.information_schema.materialized_views"
         )
 
         if database_name:
@@ -271,13 +279,9 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
 
     @override
     def get_databases(self, catalog_name: str = "", include_sys: bool = False) -> List[str]:
-        """Get list of databases in the catalog via SHOW DATABASES.
-
-        Cannot use SQLAlchemy Inspector here because it creates its own
-        connection from the engine pool without catalog context.
-        """
-        self._before_metadata_query(catalog_name=catalog_name)
-        result = self._execute_pandas("SHOW DATABASES")
+        """Get list of databases using catalog-qualified SHOW DATABASES."""
+        current_catalog = self._resolve_catalog(catalog_name)
+        result = self._execute_pandas(f"SHOW DATABASES FROM `{current_catalog}`")
         if result.empty:
             return []
         databases = result.iloc[:, 0].tolist()
@@ -301,7 +305,7 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
 
         StarRocks format: `catalog`.`database`.`table`
         """
-        catalog_name = self.reset_catalog_to_default(catalog_name)
+        catalog_name = self._resolve_catalog(catalog_name)
 
         if catalog_name:
             if database_name:

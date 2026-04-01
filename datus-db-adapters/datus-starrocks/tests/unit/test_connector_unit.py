@@ -103,36 +103,37 @@ def test_default_catalog_returns_default_catalog():
         assert connector.default_catalog() == "default_catalog"
 
 
-def test_reset_catalog_to_default_with_empty():
-    """Test reset_catalog_to_default with empty string."""
+def test_resolve_catalog_with_empty():
+    """Test _resolve_catalog with empty string falls back to default."""
     config = StarRocksConfig(username="test_user")
 
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
+        connector.catalog_name = ""
 
-        result = connector.reset_catalog_to_default("")
+        result = connector._resolve_catalog("")
         assert result == "default_catalog"
 
 
-def test_reset_catalog_to_default_with_def():
-    """Test reset_catalog_to_default with 'def' string."""
+def test_resolve_catalog_with_def():
+    """Test _resolve_catalog with 'def' string returns default."""
     config = StarRocksConfig(username="test_user")
 
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
 
-        result = connector.reset_catalog_to_default("def")
+        result = connector._resolve_catalog("def")
         assert result == "default_catalog"
 
 
-def test_reset_catalog_to_default_preserves_custom():
-    """Test reset_catalog_to_default preserves custom catalog."""
+def test_resolve_catalog_preserves_custom():
+    """Test _resolve_catalog preserves custom catalog."""
     config = StarRocksConfig(username="test_user")
 
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
 
-        result = connector.reset_catalog_to_default("my_catalog")
+        result = connector._resolve_catalog("my_catalog")
         assert result == "my_catalog"
 
 
@@ -163,30 +164,26 @@ def test_switch_catalog_calls_switch_context():
         connector.switch_context.assert_called_once_with(catalog_name="target_catalog")
 
 
-def test_before_metadata_query_switches_catalog():
-    """Test that _before_metadata_query switches to target catalog."""
-    config = StarRocksConfig(username="test_user", catalog="original_catalog")
+def test_resolve_catalog_falls_back_to_connector_catalog():
+    """Test _resolve_catalog uses connector's catalog_name when no arg given."""
+    config = StarRocksConfig(username="test_user", catalog="configured_catalog")
 
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
-        connector.switch_context = MagicMock()
 
-        connector._before_metadata_query(catalog_name="target_catalog")
-
-        connector.switch_context.assert_called_once_with(catalog_name="target_catalog")
+        result = connector._resolve_catalog("")
+        assert result == "configured_catalog"
 
 
-def test_before_metadata_query_no_switch_if_same():
-    """Test that _before_metadata_query doesn't switch if catalog is same."""
-    config = StarRocksConfig(username="test_user", catalog="same_catalog")
+def test_resolve_catalog_arg_takes_precedence():
+    """Test _resolve_catalog uses explicit arg over connector catalog."""
+    config = StarRocksConfig(username="test_user", catalog="configured_catalog")
 
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
-        connector.switch_context = MagicMock()
 
-        connector._before_metadata_query(catalog_name="same_catalog")
-
-        connector.switch_context.assert_not_called()
+        result = connector._resolve_catalog("explicit_catalog")
+        assert result == "explicit_catalog"
 
 
 # ==================== full_name() Method Tests ====================
@@ -200,7 +197,9 @@ def test_full_name_with_catalog_and_database():
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
 
-        result = connector.full_name(catalog_name="my_catalog", database_name="my_db", table_name="my_table")
+        result = connector.full_name(
+            catalog_name="my_catalog", database_name="my_db", table_name="my_table"
+        )
 
         assert result == "`my_catalog`.`my_db`.`my_table`"
 
@@ -249,7 +248,9 @@ def test_full_name_resets_empty_catalog_to_default():
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
 
-        result = connector.full_name(catalog_name="", database_name="db", table_name="table")
+        result = connector.full_name(
+            catalog_name="", database_name="db", table_name="table"
+        )
 
         # Empty catalog is reset to default_catalog
         assert result == "`default_catalog`.`db`.`table`"
@@ -263,7 +264,9 @@ def test_full_name_quotes_identifiers():
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
 
-        result = connector.full_name(catalog_name="catalog", database_name="database", table_name="table")
+        result = connector.full_name(
+            catalog_name="catalog", database_name="database", table_name="table"
+        )
 
         assert result.count("`") == 6  # 3 pairs of backticks
 
@@ -298,7 +301,9 @@ def test_sqlalchemy_schema_with_catalog_and_database():
         connector.database_name = "my_db"
         connector.catalog_name = "my_catalog"
 
-        result = connector._sqlalchemy_schema(catalog_name="test_catalog", database_name="test_db")
+        result = connector._sqlalchemy_schema(
+            catalog_name="test_catalog", database_name="test_db"
+        )
 
         assert result == "test_catalog.test_db"
 
@@ -416,7 +421,9 @@ def test_close_clears_connection_on_pymysql_error():
         connector.connection = MagicMock()
         connector.engine = None
 
-        with patch("datus_mysql.MySQLConnector.close", side_effect=Exception("struct.error")):
+        with patch(
+            "datus_mysql.MySQLConnector.close", side_effect=Exception("struct.error")
+        ):
             connector.close()
 
             assert connector.connection is None
@@ -432,7 +439,9 @@ def test_close_disposes_engine_on_error():
         mock_engine = MagicMock()
         connector.engine = mock_engine
 
-        with patch("datus_mysql.MySQLConnector.close", side_effect=Exception("struct.pack")):
+        with patch(
+            "datus_mysql.MySQLConnector.close", side_effect=Exception("struct.pack")
+        ):
             connector.close()
 
             # Engine should be disposed and set to None
