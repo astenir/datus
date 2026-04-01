@@ -22,6 +22,10 @@ class TrinoConfig(BaseModel):
     )
     catalog: str = Field(default="hive", description="Default catalog name")
     schema_name: str = Field(default="default", description="Default schema name")
-    http_scheme: Literal["http", "https"] = Field(default="http", description="HTTP scheme (http or https)")
+    http_scheme: Literal["http", "https"] = Field(
+        default="http", description="HTTP scheme (http or https)"
+    )
     verify: bool = Field(default=True, description="Verify SSL certificates")
-    timeout_seconds: int = Field(default=30, gt=0, description="Connection timeout in seconds")
+    timeout_seconds: int = Field(
+        default=30, gt=0, description="Connection timeout in seconds"
+    )

@@ -21,6 +21,10 @@ class SnowflakeConfig(BaseModel):
     )
     warehouse: str = Field(..., description="Snowflake warehouse name")
     database: Optional[str] = Field(default=None, description="Default database name")
-    schema_name: Optional[str] = Field(default=None, alias="schema", description="Default schema name")
+    schema_name: Optional[str] = Field(
+        default=None, alias="schema", description="Default schema name"
+    )
     role: Optional[str] = Field(default=None, description="Snowflake role to use")
-    timeout_seconds: int = Field(default=30, description="Connection timeout in seconds")
+    timeout_seconds: int = Field(
+        default=30, description="Connection timeout in seconds"
+    )

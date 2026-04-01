@@ -470,16 +470,24 @@ def _escape_value(v) -> str:
 def main():
     parser = argparse.ArgumentParser(description="Initialize TPC-H data in PostgreSQL")
     parser.add_argument("--host", default=os.getenv("POSTGRESQL_HOST", "localhost"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("POSTGRESQL_PORT", "5432")))
+    parser.add_argument(
+        "--port", type=int, default=int(os.getenv("POSTGRESQL_PORT", "5432"))
+    )
     parser.add_argument("--username", default=os.getenv("POSTGRESQL_USER", "test_user"))
-    parser.add_argument("--password", default=os.getenv("POSTGRESQL_PASSWORD", "test_password"))
+    parser.add_argument(
+        "--password", default=os.getenv("POSTGRESQL_PASSWORD", "test_password")
+    )
     parser.add_argument("--database", default=os.getenv("POSTGRESQL_DATABASE", "test"))
     parser.add_argument("--schema", default=os.getenv("POSTGRESQL_SCHEMA", "public"))
-    parser.add_argument("--drop", action="store_true", help="Drop existing tables before creating")
+    parser.add_argument(
+        "--drop", action="store_true", help="Drop existing tables before creating"
+    )
     args = parser.parse_args()
 
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.schema):
-        print("ERROR: --schema must be a valid SQL identifier (letters, digits, underscores).")
+        print(
+            "ERROR: --schema must be a valid SQL identifier (letters, digits, underscores)."
+        )
         sys.exit(1)
 
     try:
@@ -512,7 +520,11 @@ def main():
         if args.drop:
             print("\nDropping existing TPC-H tables...")
             for table_name in reversed(list(TPCH_DDL.keys())):
-                conn.execute({"sql_query": f'DROP TABLE IF EXISTS "{schema}"."{table_name}" CASCADE'})
+                conn.execute(
+                    {
+                        "sql_query": f'DROP TABLE IF EXISTS "{schema}"."{table_name}" CASCADE'
+                    }
+                )
                 print(f"  Dropped {table_name}")
 
         # Create tables
@@ -527,7 +539,9 @@ def main():
             for row in rows:
                 values = ", ".join(_escape_value(v) for v in row)
                 conn.execute(
-                    {"sql_query": f'INSERT INTO "{schema}"."{table_name}" VALUES ({values}) ON CONFLICT DO NOTHING'}
+                    {
+                        "sql_query": f'INSERT INTO "{schema}"."{table_name}" VALUES ({values}) ON CONFLICT DO NOTHING'
+                    }
                 )
             print(f"  Inserted {len(rows)} rows into {table_name}")
 

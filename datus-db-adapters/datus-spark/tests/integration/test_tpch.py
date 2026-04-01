@@ -145,7 +145,9 @@ def test_tpch_query_customer_orders(tpch_setup: SparkConnector):
 def test_tpch_query_csv_format(tpch_setup: SparkConnector):
     """Test CSV result format with TPC-H data."""
     result = tpch_setup.execute(
-        {"sql_query": "SELECT regionkey, name FROM `default`.`tpch_region` ORDER BY regionkey"},
+        {
+            "sql_query": "SELECT regionkey, name FROM `default`.`tpch_region` ORDER BY regionkey"
+        },
         result_format="csv",
     )
     assert result.success

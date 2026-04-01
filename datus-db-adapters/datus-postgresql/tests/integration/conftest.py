@@ -512,14 +512,20 @@ def tpch_setup():
     try:
         # Create tables
         for table_name, ddl in TPCH_DDL.items():
-            conn.execute({"sql_query": f'DROP TABLE IF EXISTS "{schema}"."{table_name}" CASCADE'})
+            conn.execute(
+                {"sql_query": f'DROP TABLE IF EXISTS "{schema}"."{table_name}" CASCADE'}
+            )
             conn.execute({"sql_query": ddl.format(schema=schema)})
 
         # Insert data
         for table_name, rows in TPCH_DATA.items():
             for row in rows:
                 values = ", ".join(_escape_value(v) for v in row)
-                conn.execute({"sql_query": f'INSERT INTO "{schema}"."{table_name}" VALUES ({values})'})
+                conn.execute(
+                    {
+                        "sql_query": f'INSERT INTO "{schema}"."{table_name}" VALUES ({values})'
+                    }
+                )
 
         yield conn
 
@@ -527,7 +533,11 @@ def tpch_setup():
         # Cleanup: drop tables in reverse order (foreign key safety)
         for table_name in reversed(list(TPCH_DDL.keys())):
             try:
-                conn.execute({"sql_query": f'DROP TABLE IF EXISTS "{schema}"."{table_name}" CASCADE'})
+                conn.execute(
+                    {
+                        "sql_query": f'DROP TABLE IF EXISTS "{schema}"."{table_name}" CASCADE'
+                    }
+                )
             except Exception:
                 pass
         try:

@@ -92,7 +92,9 @@ class SparkConnector(SQLAlchemyConnector):
     # ==================== Metadata Retrieval ====================
 
     @override
-    def get_databases(self, catalog_name: str = "", include_sys: bool = False) -> List[str]:
+    def get_databases(
+        self, catalog_name: str = "", include_sys: bool = False
+    ) -> List[str]:
         """Get list of databases."""
         result = self._execute_pandas("SHOW DATABASES")
         if result.empty:
@@ -104,12 +106,16 @@ class SparkConnector(SQLAlchemyConnector):
         return databases
 
     @override
-    def get_schemas(self, catalog_name: str = "", database_name: str = "", include_sys: bool = False) -> List[str]:
+    def get_schemas(
+        self, catalog_name: str = "", database_name: str = "", include_sys: bool = False
+    ) -> List[str]:
         """Spark doesn't have separate schemas, return empty list."""
         return []
 
     @override
-    def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
+    def get_tables(
+        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> List[str]:
         """Get list of table names."""
         db = database_name or self.database_name
         result = self._execute_pandas(f"SHOW TABLES IN {self._quote_identifier(db)}")
@@ -124,7 +130,9 @@ class SparkConnector(SQLAlchemyConnector):
         return result[name_col].tolist()
 
     @override
-    def get_views(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
+    def get_views(
+        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> List[str]:
         """Get list of view names."""
         db = database_name or self.database_name
         try:
@@ -161,17 +169,25 @@ class SparkConnector(SQLAlchemyConnector):
         for i in range(len(query_result)):
             col_name = query_result.iloc[i, 0]
             # Skip partition/metadata separator lines
-            if col_name is None or str(col_name).startswith("#") or str(col_name).strip() == "":
+            if (
+                col_name is None
+                or str(col_name).startswith("#")
+                or str(col_name).strip() == ""
+            ):
                 continue
             result.append(
                 {
                     "cid": len(result),
                     "name": col_name,
-                    "type": str(query_result.iloc[i, 1]) if len(query_result.columns) > 1 else "",
+                    "type": str(query_result.iloc[i, 1])
+                    if len(query_result.columns) > 1
+                    else "",
                     "nullable": True,  # Spark doesn't expose nullable in DESCRIBE
                     "default_value": None,
                     "pk": False,
-                    "comment": str(query_result.iloc[i, 2]) if len(query_result.columns) > 2 else None,
+                    "comment": str(query_result.iloc[i, 2])
+                    if len(query_result.columns) > 2
+                    else None,
                 }
             )
         return result
@@ -186,12 +202,16 @@ class SparkConnector(SQLAlchemyConnector):
         return database_name or self.database_name
 
     @override
-    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+    def do_switch_context(
+        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ):
         """Switch database context using USE statement on the persistent connection."""
         if database_name:
             from sqlalchemy import text
 
-            self.connection.execute(text(f"USE {self._quote_identifier(database_name)}"))
+            self.connection.execute(
+                text(f"USE {self._quote_identifier(database_name)}")
+            )
             self.connection.commit()
 
     # ==================== Utility Methods ====================

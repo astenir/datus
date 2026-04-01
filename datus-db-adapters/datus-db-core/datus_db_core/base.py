@@ -158,14 +158,20 @@ class BaseSqlConnector(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    def get_databases(self, catalog_name: str = "", include_sys: bool = False) -> List[str]:
+    def get_databases(
+        self, catalog_name: str = "", include_sys: bool = False
+    ) -> List[str]:
         raise NotImplementedError()
 
     @abstractmethod
-    def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
+    def get_tables(
+        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> List[str]:
         raise NotImplementedError()
 
-    def get_views(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
+    def get_views(
+        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> List[str]:
         return []
 
     def _sys_databases(self) -> Set[str]:
@@ -227,7 +233,9 @@ class BaseSqlConnector(ABC):
     ) -> List[Dict[str, str]]:
         raise NotImplementedError()
 
-    def switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+    def switch_context(
+        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ):
         self.connect()
         self.do_switch_context(
             catalog_name=catalog_name,
@@ -241,7 +249,9 @@ class BaseSqlConnector(ABC):
         if schema_name:
             self.schema_name = schema_name
 
-    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+    def do_switch_context(
+        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ):
         return None
 
     def get_schema(

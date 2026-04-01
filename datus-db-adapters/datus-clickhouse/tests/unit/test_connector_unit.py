@@ -231,10 +231,14 @@ def test_identifier_with_database():
     config = ClickHouseConfig(username="user")
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
-        with patch("datus_sqlalchemy.SQLAlchemyConnector.identifier") as mock_identifier:
+        with patch(
+            "datus_sqlalchemy.SQLAlchemyConnector.identifier"
+        ) as mock_identifier:
             mock_identifier.return_value = "mydb.mytable"
             connector = ClickHouseConnector(config)
-            identifier = connector.identifier(database_name="mydb", table_name="mytable")
+            identifier = connector.identifier(
+                database_name="mydb", table_name="mytable"
+            )
 
             assert identifier == "mydb.mytable"
 
@@ -244,7 +248,9 @@ def test_identifier_without_database():
     config = ClickHouseConfig(username="user")
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
-        with patch("datus_sqlalchemy.SQLAlchemyConnector.identifier") as mock_identifier:
+        with patch(
+            "datus_sqlalchemy.SQLAlchemyConnector.identifier"
+        ) as mock_identifier:
             mock_identifier.return_value = "mytable"
             connector = ClickHouseConnector(config)
             identifier = connector.identifier(table_name="mytable")
@@ -258,7 +264,13 @@ def test_show_create_reads_statement_column():
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = ClickHouseConnector(config)
-        ddl_frame = DataFrame({"statement": ["CREATE TABLE mydb.mytable (`id` Int64) ENGINE = MergeTree()"]})
+        ddl_frame = DataFrame(
+            {
+                "statement": [
+                    "CREATE TABLE mydb.mytable (`id` Int64) ENGINE = MergeTree()"
+                ]
+            }
+        )
 
         with patch.object(connector, "_execute_pandas", return_value=ddl_frame):
             ddl = connector._show_create("`mydb`.`mytable`", "TABLE")

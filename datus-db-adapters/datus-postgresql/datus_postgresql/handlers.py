@@ -69,7 +69,9 @@ def resolve_postgresql_context(db_config, uri: str) -> Tuple[str, str, str, str]
     url = make_url(uri)
     query_params: Dict[str, str] = {k: _clean_str(v) for k, v in url.query.items()}
     database = _clean_str(url.database) or _clean_str(db_config.database) or "postgres"
-    config_schema = _clean_str(getattr(db_config, "schema_name", None) or getattr(db_config, "schema", None))
+    config_schema = _clean_str(
+        getattr(db_config, "schema_name", None) or getattr(db_config, "schema", None)
+    )
     schema = (
         query_params.get("currentSchema")
         or query_params.get("schema")

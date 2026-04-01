@@ -24,4 +24,6 @@ class SparkConfig(BaseModel):
     auth_mechanism: Literal["NONE", "PLAIN", "KERBEROS"] = Field(
         default="NONE", description="Authentication mechanism (NONE, PLAIN, KERBEROS)"
     )
-    timeout_seconds: int = Field(default=30, description="Connection timeout in seconds")
+    timeout_seconds: int = Field(
+        default=30, description="Connection timeout in seconds"
+    )

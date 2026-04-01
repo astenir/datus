@@ -89,7 +89,9 @@ def _handle_redshift_exception(e: Exception, sql: str = "") -> DatusDbException:
 
     # InterfaceError/InternalError = connection-level problems
     elif isinstance(e, (InterfaceError, InternalError)):
-        return DatusDbException(ErrorCode.DB_CONNECTION_FAILED, message_args={"error_message": str(e)})
+        return DatusDbException(
+            ErrorCode.DB_CONNECTION_FAILED, message_args={"error_message": str(e)}
+        )
 
     # OperationalError/DatabaseError = runtime errors (connection issues, query execution problems)
     elif isinstance(e, (OperationalError, DatabaseError)):
@@ -100,10 +102,14 @@ def _handle_redshift_exception(e: Exception, sql: str = "") -> DatusDbException:
 
     # Catch-all for any other exceptions
     else:
-        return DatusDbException(ErrorCode.DB_FAILED, message_args={"error_message": str(e)})
+        return DatusDbException(
+            ErrorCode.DB_FAILED, message_args={"error_message": str(e)}
+        )
 
 
-def _validate_sql_identifier(identifier: str, identifier_type: str = "identifier") -> None:
+def _validate_sql_identifier(
+    identifier: str, identifier_type: str = "identifier"
+) -> None:
     """
     Validate SQL identifier to prevent SQL injection.
 
@@ -139,7 +145,9 @@ def _validate_sql_identifier(identifier: str, identifier_type: str = "identifier
         )
 
 
-class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedViewSupportMixin):
+class RedshiftConnector(
+    BaseSqlConnector, SchemaNamespaceMixin, MaterializedViewSupportMixin
+):
     """
     Connector for Amazon Redshift databases using native Redshift SDK.
 
@@ -170,7 +178,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         if isinstance(config, dict):
             config = RedshiftConfig(**config)
         elif not isinstance(config, RedshiftConfig):
-            raise TypeError(f"config must be RedshiftConfig or dict, got {type(config)}")
+            raise TypeError(
+                f"config must be RedshiftConfig or dict, got {type(config)}"
+            )
 
         # Store the configuration for later use
         self.redshift_config = config
@@ -187,7 +197,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             "port": config.port,
             "user": config.username,
             "password": config.password,
-            "database": config.database if config.database else "dev",  # 'dev' is default Redshift database
+            "database": config.database
+            if config.database
+            else "dev",  # 'dev' is default Redshift database
             "timeout": config.timeout_seconds,
             "ssl": config.ssl,
         }
@@ -268,7 +280,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         """
         return {"pg_catalog", "information_schema", "pg_internal"}
 
-    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+    def do_switch_context(
+        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ):
         """
         Switch database or schema context.
 
@@ -326,7 +340,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
 
         # Additional validation: if params are provided, they must be a sequence or dict
         if "params" in input_params:
-            if not isinstance(input_params["params"], Sequence) and not isinstance(input_params["params"], dict):
+            if not isinstance(input_params["params"], Sequence) and not isinstance(
+                input_params["params"], dict
+            ):
                 raise ValueError("params must be dict or Sequence")
 
     def _do_execute_arrow(
@@ -359,12 +375,18 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                 results = cursor.fetchall()
 
                 # Get column names from cursor description
-                column_names = [desc[0] for desc in cursor.description] if cursor.description else []
+                column_names = (
+                    [desc[0] for desc in cursor.description]
+                    if cursor.description
+                    else []
+                )
 
                 # Convert results to Arrow table
                 if results and column_names:
                     # Transpose rows to columns for Arrow
-                    columns = list(zip(*results)) if results else [[] for _ in column_names]
+                    columns = (
+                        list(zip(*results)) if results else [[] for _ in column_names]
+                    )
 
                     # Create Arrow arrays for each column
                     arrow_arrays = [pa.array(col) for col in columns]
@@ -623,7 +645,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                 result.result_format = result_format
             return result
 
-    def execute_arrow(self, sql: str, params: Optional[Sequence[Any] | dict[Any, Any]] = None) -> ExecuteSQLResult:
+    def execute_arrow(
+        self, sql: str, params: Optional[Sequence[Any] | dict[Any, Any]] = None
+    ) -> ExecuteSQLResult:
         """
         Execute query and return results as Arrow table.
 
@@ -678,7 +702,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             )
         except DatusDbException as e:
             # Already normalized, just convert to result
-            return ExecuteSQLResult(success=False, sql_query=sql, result_format="pandas", error=str(e))
+            return ExecuteSQLResult(
+                success=False, sql_query=sql, result_format="pandas", error=str(e)
+            )
 
     def execute_csv(self, query: str) -> ExecuteSQLResult:
         """
@@ -722,7 +748,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         return [self.execute_arrow(sql) for sql in queries]
 
     @override
-    def get_databases(self, catalog_name: str = "", include_sys: bool = False) -> List[str]:
+    def get_databases(
+        self, catalog_name: str = "", include_sys: bool = False
+    ) -> List[str]:
         """
         Get list of databases in the Redshift cluster.
 
@@ -753,7 +781,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             raise _handle_redshift_exception(e, sql)
 
     @override
-    def get_schemas(self, catalog_name: str = "", database_name: str = "", include_sys: bool = False) -> List[str]:
+    def get_schemas(
+        self, catalog_name: str = "", database_name: str = "", include_sys: bool = False
+    ) -> List[str]:
         """
         Get list of schemas in the current database.
 
@@ -790,7 +820,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             raise _handle_redshift_exception(e, sql)
 
     @override
-    def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
+    def get_tables(
+        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> List[str]:
         """
         Get list of table names.
 
@@ -810,7 +842,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         )
         return [item["table_name"] for item in tables]
 
-    def get_views(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
+    def get_views(
+        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> List[str]:
         """
         Get list of view names.
 
@@ -1099,7 +1133,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         except Exception as e:
             raise _handle_redshift_exception(e, sql)
 
-    def _fetch_object_ddl(self, object_type: str, schema_name: str, table_name: str) -> str:
+    def _fetch_object_ddl(
+        self, object_type: str, schema_name: str, table_name: str
+    ) -> str:
         """
         Retrieve DDL for a database object using pg_get_viewdef or similar.
 
@@ -1124,14 +1160,20 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                     row = cursor.fetchone()
                     if row:
                         view_def = row[0]
-                        mat_view = "MATERIALIZED " if "MATERIALIZED" in object_type.upper() else ""
+                        mat_view = (
+                            "MATERIALIZED "
+                            if "MATERIALIZED" in object_type.upper()
+                            else ""
+                        )
                         return f"CREATE {mat_view}VIEW {schema_name}.{table_name} AS\n{view_def}"
             else:
                 # For tables, we'd need to reconstruct DDL from system catalogs
                 # This is complex, so we'll return a placeholder
                 return f"-- DDL extraction for tables not fully implemented\n-- Table: {schema_name}.{table_name}"
         except Exception as e:
-            logger.warning(f"Failed to get DDL for {object_type} {schema_name}.{table_name}: {e}")
+            logger.warning(
+                f"Failed to get DDL for {object_type} {schema_name}.{table_name}: {e}"
+            )
             return f"-- DDL not available for {object_type.lower()} {schema_name}.{table_name}: {e}"
 
     @override
@@ -1167,7 +1209,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
 
         # Add DDL to each entry
         for entry in table_entries:
-            entry["definition"] = self._fetch_object_ddl("TABLE", entry["schema_name"], entry["table_name"])
+            entry["definition"] = self._fetch_object_ddl(
+                "TABLE", entry["schema_name"], entry["table_name"]
+            )
 
         return table_entries
 
@@ -1197,7 +1241,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
 
         # Add DDL to each entry
         for entry in view_entries:
-            entry["definition"] = self._fetch_object_ddl("VIEW", entry["schema_name"], entry["table_name"])
+            entry["definition"] = self._fetch_object_ddl(
+                "VIEW", entry["schema_name"], entry["table_name"]
+            )
 
         return view_entries
 
@@ -1227,7 +1273,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
 
         # Add DDL to each entry
         for entry in mv_entries:
-            entry["definition"] = self._fetch_object_ddl("MATERIALIZED VIEW", entry["schema_name"], entry["table_name"])
+            entry["definition"] = self._fetch_object_ddl(
+                "MATERIALIZED VIEW", entry["schema_name"], entry["table_name"]
+            )
 
         return mv_entries
 
@@ -1289,7 +1337,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                                 }
                             )
                     except Exception as e:
-                        logger.warning(f"Failed to get sample rows for {full_name}: {e}")
+                        logger.warning(
+                            f"Failed to get sample rows for {full_name}: {e}"
+                        )
             else:
                 # Sample all tables of the specified type
                 for t in self._get_tables_per_schema(
@@ -1321,7 +1371,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
                                 }
                             )
                     except Exception as e:
-                        logger.warning(f"Failed to get sample rows for {full_table_name}: {e}")
+                        logger.warning(
+                            f"Failed to get sample rows for {full_table_name}: {e}"
+                        )
 
         return result
 

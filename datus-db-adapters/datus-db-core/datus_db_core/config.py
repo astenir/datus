@@ -10,4 +10,6 @@ class ConnectionConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    timeout_seconds: int = Field(default=30, description="Connection timeout in seconds")
+    timeout_seconds: int = Field(
+        default=30, description="Connection timeout in seconds"
+    )
