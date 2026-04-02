@@ -47,12 +47,18 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         # Pass MySQL config to parent connector
         from datus_mysql import MySQLConfig
 
+        # When using a non-default catalog, don't put database in the connection
+        # string — it would fail because the database doesn't exist under
+        # default_catalog.  We switch catalog and USE database in connect().
+        needs_catalog_switch = config.catalog and config.catalog != "default_catalog"
+        mysql_database = "" if needs_catalog_switch else (config.database or "")
+
         mysql_config = MySQLConfig(
             host=config.host,
             port=config.port,
             username=config.username,
             password=config.password,
-            database=config.database or "",
+            database=mysql_database,
             charset=config.charset,
             autocommit=config.autocommit,
             timeout_seconds=config.timeout_seconds,
@@ -60,6 +66,7 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         super().__init__(mysql_config)
 
         self.catalog_name = config.catalog
+        self._deferred_database = config.database if needs_catalog_switch else ""
 
         # Override dialect to StarRocks
         self.dialect = "starrocks"
@@ -78,6 +85,13 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
             self.connection.execute(text(f"SET CATALOG {self._quote_identifier(self.catalog_name)}"))
             self.connection.commit()
             logger.debug(f"Switched to catalog on first connect: {self.catalog_name}")
+
+            # Now that the catalog is set, switch to the deferred database
+            if self._deferred_database:
+                self.connection.execute(text(f"USE {self._quote_identifier(self._deferred_database)}"))
+                self.connection.commit()
+                self.database_name = self._deferred_database
+                logger.debug(f"Switched to deferred database: {self._deferred_database}")
 
     # ==================== Context Manager Support ====================
 
