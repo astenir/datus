@@ -76,7 +76,7 @@ When working on multiple adapters that each need independent branches and PRs:
 | Trino | double quotes `"` | `"catalog"."schema"."table"` |
 | PostgreSQL | double quotes `"` | `"schema"."table"` |
 | Redshift | double quotes `"` | `"schema"."table"` |
-| ClickHouse | double quotes `"` | `"database"."table"` |
+| ClickHouse | backticks `` ` `` | `` `database`.`table` `` |
 | Spark | backticks `` ` `` | `` `database`.`table` `` |
 | Hive | backticks `` ` `` | `` `database`.`table` `` |
 | ClickZetta | double quotes `"` | `"schema"."table"` |

@@ -76,7 +76,7 @@ class HiveConnector(SQLAlchemyConnector):
     @override
     def connect(self):
         """Initialize the SQLAlchemy engine with PyHive connect_args."""
-        if self.engine and self._owns_engine:
+        if self.engine and self.connection and self._owns_engine:
             return
 
         try:
@@ -93,14 +93,14 @@ class HiveConnector(SQLAlchemyConnector):
                 pool_pre_ping=True,
                 connect_args=connect_args,
             )
-
+            self.connection = self.engine.connect()
             self._owns_engine = True
 
         except Exception as e:
             self._force_reset()
             raise self._handle_exception(e, "", "connection") from e
 
-        if not self.engine:
+        if not (self.engine and self.connection):
             self._force_reset()
             raise DatusDbException(
                 ErrorCode.DB_CONNECTION_FAILED,

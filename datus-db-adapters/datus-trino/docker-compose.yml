@@ -3,7 +3,7 @@ services:
     image: trinodb/trino:479
     container_name: datus-trino-test
     ports:
-      - "8080:8080"  # HTTP port
+      - "${TRINO_HOST_PORT:-8080}:8080"  # HTTP port
     healthcheck:
       test: ["CMD-SHELL", "trino --execute 'SELECT 1' || exit 1"]
       interval: 10s

@@ -4,7 +4,7 @@
 
 import pytest
 
-from datus_starrocks import StarRocksConfig, StarRocksConnector
+from datus_starrocks import StarRocksConnector
 
 # ==================== Catalog Tests (CatalogSupportMixin) ====================
 
@@ -27,21 +27,15 @@ def test_default_catalog(connector: StarRocksConnector):
 
 @pytest.mark.integration
 @pytest.mark.acceptance
-def test_switch_catalog(connector: StarRocksConnector):
+def test_switch_catalog(connector: StarRocksConnector, hive_catalog_setup: str):
     """Test switching catalogs."""
     original_catalog = connector.catalog_name
-    catalogs = connector.get_catalogs()
-
-    if len(catalogs) > 1:
-        target_catalog = [c for c in catalogs if c != original_catalog][0]
-        connector.switch_catalog(target_catalog)
-        assert connector.catalog_name == target_catalog
-
-        # Switch back
+    try:
+        connector.switch_catalog(hive_catalog_setup)
+        assert connector.catalog_name == hive_catalog_setup
+    finally:
         connector.switch_catalog(original_catalog)
-        assert connector.catalog_name == original_catalog
-    else:
-        pytest.skip("Only one catalog available, cannot test switching")
+    assert connector.catalog_name == original_catalog
 
 
 @pytest.mark.integration
@@ -56,14 +50,15 @@ def test_get_databases_from_default_catalog(connector: StarRocksConnector):
 
 
 @pytest.mark.integration
-def test_get_databases_from_custom_catalog(connector: StarRocksConnector, config: StarRocksConfig):
-    """Test getting databases from custom catalog if specified."""
-    if config.catalog and config.catalog != "default_catalog":
-        connector.switch_catalog(config.catalog)
-        databases = connector.get_databases(catalog_name=config.catalog)
+def test_get_databases_from_custom_catalog(connector: StarRocksConnector, hive_catalog_setup: str):
+    """Test getting databases from Hive catalog."""
+    original_catalog = connector.catalog_name
+    try:
+        connector.switch_catalog(hive_catalog_setup)
+        databases = connector.get_databases(catalog_name=hive_catalog_setup)
         assert isinstance(databases, list)
-    else:
-        pytest.skip("No custom catalog configured")
+    finally:
+        connector.switch_catalog(original_catalog)
 
 
 @pytest.mark.integration
@@ -78,42 +73,34 @@ def test_get_databases_exclude_system(connector: StarRocksConnector):
 
 
 @pytest.mark.integration
-def test_catalog_context_persists(connector: StarRocksConnector):
+def test_catalog_context_persists(connector: StarRocksConnector, hive_catalog_setup: str):
     """Test that catalog context persists across operations."""
     original_catalog = connector.catalog_name
-    catalogs = connector.get_catalogs()
-
-    if len(catalogs) > 1:
-        target_catalog = [c for c in catalogs if c != original_catalog][0]
-        connector.switch_catalog(target_catalog)
+    try:
+        connector.switch_catalog(hive_catalog_setup)
 
         # Catalog should persist
-        assert connector.catalog_name == target_catalog
+        assert connector.catalog_name == hive_catalog_setup
 
         # Get databases (should use the switched catalog)
         databases = connector.get_databases()
         assert isinstance(databases, list)
 
         # Catalog should still be the same
-        assert connector.catalog_name == target_catalog
-
-        # Switch back
+        assert connector.catalog_name == hive_catalog_setup
+    finally:
         connector.switch_catalog(original_catalog)
-    else:
-        pytest.skip("Only one catalog available")
 
 
 @pytest.mark.integration
-def test_switch_back_to_original_catalog(connector: StarRocksConnector):
+def test_switch_back_to_original_catalog(connector: StarRocksConnector, hive_catalog_setup: str):
     """Test switching back to original catalog."""
     original_catalog = connector.catalog_name
-    catalogs = connector.get_catalogs()
 
-    if len(catalogs) > 1:
-        # Switch to different catalog
-        target_catalog = [c for c in catalogs if c != original_catalog][0]
-        connector.switch_catalog(target_catalog)
-        assert connector.catalog_name == target_catalog
+    try:
+        # Switch to Hive catalog
+        connector.switch_catalog(hive_catalog_setup)
+        assert connector.catalog_name == hive_catalog_setup
 
         # Switch back to original
         connector.switch_catalog(original_catalog)
@@ -122,5 +109,5 @@ def test_switch_back_to_original_catalog(connector: StarRocksConnector):
         # Verify we can still access databases
         databases = connector.get_databases()
         assert isinstance(databases, list)
-    else:
-        pytest.skip("Only one catalog available")
+    finally:
+        connector.switch_catalog(original_catalog)
