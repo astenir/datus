@@ -13,6 +13,55 @@ from datus_starrocks.tpch_data import TPCH_DATA, TPCH_DDL, TPCH_TABLES
 
 logger = logging.getLogger(__name__)
 
+HIVE_CATALOG_NAME = "hive_test_catalog"
+
+
+@pytest.fixture(scope="session")
+def hive_catalog_setup() -> Generator[str, None, None]:
+    """Session-scoped fixture: create a Hive external catalog in StarRocks for catalog tests."""
+    metastore_uri = os.getenv("HIVE_METASTORE_URI", "thrift://host.docker.internal:9083")
+    sr_config = StarRocksConfig(
+        host=os.getenv("STARROCKS_HOST", "localhost"),
+        port=int(os.getenv("STARROCKS_PORT", "9030")),
+        username=os.getenv("STARROCKS_USER", "root"),
+        password=os.getenv("STARROCKS_PASSWORD", ""),
+        catalog=os.getenv("STARROCKS_CATALOG", "default_catalog"),
+        database="information_schema",
+    )
+
+    conn = None
+    try:
+        conn = StarRocksConnector(sr_config)
+        if not conn.test_connection():
+            pytest.skip("StarRocks not available for Hive catalog setup")
+    except Exception as e:
+        pytest.skip(f"StarRocks not available: {e}")
+
+    try:
+        conn.execute_ddl(f"DROP CATALOG IF EXISTS `{HIVE_CATALOG_NAME}`")
+        conn.execute_ddl(
+            f"""
+            CREATE EXTERNAL CATALOG `{HIVE_CATALOG_NAME}`
+            PROPERTIES (
+                "type" = "hive",
+                "hive.metastore.uris" = "{metastore_uri}"
+            )
+            """
+        )
+        yield HIVE_CATALOG_NAME
+    except Exception as e:
+        pytest.skip(f"Failed to create Hive catalog: {e}")
+    finally:
+        if conn is not None:
+            try:
+                conn.execute_ddl(f"DROP CATALOG IF EXISTS `{HIVE_CATALOG_NAME}`")
+            except Exception:
+                logger.warning("Failed to drop Hive catalog during teardown", exc_info=True)
+            try:
+                conn.close()
+            except Exception:
+                pass
+
 
 @pytest.fixture
 def config() -> StarRocksConfig:
@@ -32,9 +81,25 @@ def connector(config: StarRocksConfig) -> Generator[StarRocksConnector, None, No
     """Create and cleanup StarRocks connector for integration tests."""
     conn = None
     try:
+        # Ensure test database exists (connect without database first)
+        init_config = StarRocksConfig(
+            host=config.host,
+            port=config.port,
+            username=config.username,
+            password=config.password,
+            catalog=config.catalog,
+            database="information_schema",
+        )
+        init_conn = StarRocksConnector(init_config)
+        try:
+            if not init_conn.test_connection():
+                pytest.skip("Database connection test failed")
+            if config.database:
+                init_conn.execute_ddl(f"CREATE DATABASE IF NOT EXISTS `{config.database}`")
+        finally:
+            init_conn.close()
+
         conn = StarRocksConnector(config)
-        if not conn.test_connection():
-            pytest.skip("Database connection test failed")
         yield conn
     except Exception as e:
         pytest.skip(f"Database not available: {e}")
@@ -62,9 +127,25 @@ def tpch_setup() -> Generator[StarRocksConnector, None, None]:
     # Only skip on connection failures; DDL/DML errors should propagate and fail
     # the suite so they are not silently hidden.
     try:
+        # Ensure test database exists
+        init_config = StarRocksConfig(
+            host=tpch_config.host,
+            port=tpch_config.port,
+            username=tpch_config.username,
+            password=tpch_config.password,
+            catalog=tpch_config.catalog,
+            database="information_schema",
+        )
+        init_conn = StarRocksConnector(init_config)
+        try:
+            if not init_conn.test_connection():
+                pytest.skip("Database connection test failed")
+            if tpch_config.database:
+                init_conn.execute_ddl(f"CREATE DATABASE IF NOT EXISTS `{tpch_config.database}`")
+        finally:
+            init_conn.close()
+
         conn = StarRocksConnector(tpch_config)
-        if not conn.test_connection():
-            pytest.skip("Database connection test failed")
     except Exception as e:
         pytest.skip(f"Database not available: {e}")
 

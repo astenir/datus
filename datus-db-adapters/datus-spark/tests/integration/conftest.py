@@ -61,6 +61,10 @@ def tpch_setup():
         if not conn.test_connection():
             pytest.skip("Database connection test failed for TPC-H setup")
 
+        # Drop tables first for deterministic setup
+        for table in TPCH_TABLES:
+            conn.execute_ddl(f"DROP TABLE IF EXISTS `default`.`{table}`")
+
         # Create tables and insert data
         for ddl in TPCH_DDL:
             conn.execute_ddl(ddl)

@@ -71,8 +71,10 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
     @override
     def connect(self):
         """Initialize connection pool with SSL verification setting."""
-        if self.engine and self._owns_engine:
+        if self.engine and self.connection and self._owns_engine:
             return
+
+        self._safe_close()
 
         self.engine = create_engine(
             self.connection_string,

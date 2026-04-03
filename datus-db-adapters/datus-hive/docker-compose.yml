@@ -1,12 +1,33 @@
 services:
+  hive-metastore:
+    image: apache/hive:4.0.1
+    container_name: datus-hive-metastore
+    environment:
+      SERVICE_NAME: metastore
+    ports:
+      - "9083:9083"
+    volumes:
+      - hive_warehouse:/opt/hive/data/warehouse
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '(echo > /dev/tcp/localhost/9083) 2>/dev/null || exit 1'"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
   hive-server:
     image: apache/hive:4.0.1
     container_name: datus-hive-server
     environment:
       SERVICE_NAME: hiveserver2
+      SERVICE_OPTS: "-Dhive.metastore.uris=thrift://hive-metastore:9083"
+      IS_RESUME: "true"
     ports:
       - "10000:10000"
       - "10002:10002"
+    depends_on:
+      hive-metastore:
+        condition: service_healthy
     volumes:
       - hive_warehouse:/opt/hive/data/warehouse
     healthcheck:
