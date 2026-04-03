@@ -33,6 +33,7 @@ print(result.sql_return)
 cd datus-greenplum && python -m pytest tests/unit/ -v
 
 # Integration tests (requires running Greenplum)
+cd datus-greenplum
 docker-compose up -d
-cd datus-greenplum && python -m pytest tests/integration/ -v
+python -m pytest tests/integration/ -v
 ```

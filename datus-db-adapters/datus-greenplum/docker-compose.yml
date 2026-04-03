@@ -1,6 +1,6 @@
 # Greenplum test environment
 # Usage: docker-compose up -d
-# Connect: psql -h localhost -p 5432 -U gpadmin -d test
+# Connect: psql -h localhost -p 15432 -U gpadmin -d postgres
 
 services:
   greenplum:

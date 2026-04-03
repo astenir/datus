@@ -8,3 +8,6 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "integration: marks tests as integration tests (deselect with '-m \"not integration\"')"
     )
+    config.addinivalue_line(
+        "markers", "acceptance: marks tests as acceptance tests for CI/CD (core functionality validation)"
+    )
