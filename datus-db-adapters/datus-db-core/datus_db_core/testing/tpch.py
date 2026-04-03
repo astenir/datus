@@ -116,6 +116,11 @@ def build_tpch_inserts(quote_fn=None):
     if quote_fn is None:
         quote_fn = lambda t: t  # noqa: E731
 
+    if len(TPCH_TABLES) != len(_TPCH_VALUES):
+        raise ValueError(
+            f"TPCH_TABLES ({len(TPCH_TABLES)}) and _TPCH_VALUES ({len(_TPCH_VALUES)}) must have the same length"
+        )
+
     return [
         f"""
     INSERT INTO {quote_fn(table)} VALUES{values}"""

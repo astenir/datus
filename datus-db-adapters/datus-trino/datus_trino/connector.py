@@ -74,19 +74,23 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
         if self.engine and self.connection and self._owns_engine:
             return
 
-        self._safe_close()
+        try:
+            self._safe_close()
 
-        self.engine = create_engine(
-            self.connection_string,
-            pool_size=10,
-            max_overflow=20,
-            pool_timeout=self.timeout_seconds,
-            pool_recycle=3600,
-            pool_pre_ping=True,
-            connect_args={"verify": self._verify_ssl},
-        )
-        self.connection = self.engine.connect()
-        self._owns_engine = True
+            self.engine = create_engine(
+                self.connection_string,
+                pool_size=10,
+                max_overflow=20,
+                pool_timeout=self.timeout_seconds,
+                pool_recycle=3600,
+                pool_pre_ping=True,
+                connect_args={"verify": self._verify_ssl},
+            )
+            self.connection = self.engine.connect()
+            self._owns_engine = True
+        except Exception as e:
+            self._force_reset()
+            raise self._handle_exception(e, "", "connection") from e
 
     # ==================== Context Manager Support ====================
 

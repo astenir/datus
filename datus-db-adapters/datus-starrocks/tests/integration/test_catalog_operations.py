@@ -30,11 +30,11 @@ def test_default_catalog(connector: StarRocksConnector):
 def test_switch_catalog(connector: StarRocksConnector, hive_catalog_setup: str):
     """Test switching catalogs."""
     original_catalog = connector.catalog_name
-    connector.switch_catalog(hive_catalog_setup)
-    assert connector.catalog_name == hive_catalog_setup
-
-    # Switch back
-    connector.switch_catalog(original_catalog)
+    try:
+        connector.switch_catalog(hive_catalog_setup)
+        assert connector.catalog_name == hive_catalog_setup
+    finally:
+        connector.switch_catalog(original_catalog)
     assert connector.catalog_name == original_catalog
 
 
@@ -52,11 +52,13 @@ def test_get_databases_from_default_catalog(connector: StarRocksConnector):
 @pytest.mark.integration
 def test_get_databases_from_custom_catalog(connector: StarRocksConnector, hive_catalog_setup: str):
     """Test getting databases from Hive catalog."""
-    connector.switch_catalog(hive_catalog_setup)
-    databases = connector.get_databases(catalog_name=hive_catalog_setup)
-    assert isinstance(databases, list)
-    # Switch back
-    connector.switch_catalog(connector.default_catalog())
+    original_catalog = connector.catalog_name
+    try:
+        connector.switch_catalog(hive_catalog_setup)
+        databases = connector.get_databases(catalog_name=hive_catalog_setup)
+        assert isinstance(databases, list)
+    finally:
+        connector.switch_catalog(original_catalog)
 
 
 @pytest.mark.integration
@@ -74,20 +76,20 @@ def test_get_databases_exclude_system(connector: StarRocksConnector):
 def test_catalog_context_persists(connector: StarRocksConnector, hive_catalog_setup: str):
     """Test that catalog context persists across operations."""
     original_catalog = connector.catalog_name
-    connector.switch_catalog(hive_catalog_setup)
+    try:
+        connector.switch_catalog(hive_catalog_setup)
 
-    # Catalog should persist
-    assert connector.catalog_name == hive_catalog_setup
+        # Catalog should persist
+        assert connector.catalog_name == hive_catalog_setup
 
-    # Get databases (should use the switched catalog)
-    databases = connector.get_databases()
-    assert isinstance(databases, list)
+        # Get databases (should use the switched catalog)
+        databases = connector.get_databases()
+        assert isinstance(databases, list)
 
-    # Catalog should still be the same
-    assert connector.catalog_name == hive_catalog_setup
-
-    # Switch back
-    connector.switch_catalog(original_catalog)
+        # Catalog should still be the same
+        assert connector.catalog_name == hive_catalog_setup
+    finally:
+        connector.switch_catalog(original_catalog)
 
 
 @pytest.mark.integration
@@ -95,14 +97,17 @@ def test_switch_back_to_original_catalog(connector: StarRocksConnector, hive_cat
     """Test switching back to original catalog."""
     original_catalog = connector.catalog_name
 
-    # Switch to Hive catalog
-    connector.switch_catalog(hive_catalog_setup)
-    assert connector.catalog_name == hive_catalog_setup
+    try:
+        # Switch to Hive catalog
+        connector.switch_catalog(hive_catalog_setup)
+        assert connector.catalog_name == hive_catalog_setup
 
-    # Switch back to original
-    connector.switch_catalog(original_catalog)
-    assert connector.catalog_name == original_catalog
+        # Switch back to original
+        connector.switch_catalog(original_catalog)
+        assert connector.catalog_name == original_catalog
 
-    # Verify we can still access databases
-    databases = connector.get_databases()
-    assert isinstance(databases, list)
+        # Verify we can still access databases
+        databases = connector.get_databases()
+        assert isinstance(databases, list)
+    finally:
+        connector.switch_catalog(original_catalog)
