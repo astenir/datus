@@ -724,6 +724,14 @@ class TestSyncToStorage:
             result = await hooks._sync_to_storage("/tmp/file.yaml", "ext_knowledge")
         assert "Successfully synced" in result
 
+    async def test_reference_template_type_calls_sync(self, hooks):
+        mock_result = {"success": True, "message": "Template synced"}
+        with patch(
+            "datus.cli.generation_hooks.GenerationHooks._sync_reference_template_to_db", return_value=mock_result
+        ):
+            result = await hooks._sync_to_storage("/tmp/file.yaml", "reference_template")
+        assert "Successfully synced" in result
+
     async def test_exception_returns_error_string(self, hooks):
         with patch(
             "datus.cli.generation_hooks.GenerationHooks._sync_semantic_to_db",
@@ -731,6 +739,84 @@ class TestSyncToStorage:
         ):
             result = await hooks._sync_to_storage("/tmp/file.yaml", "semantic")
         assert "error" in result.lower() or "Sync error" in result
+
+
+# ---------------------------------------------------------------------------
+# Tests: _sync_reference_template_to_db
+# ---------------------------------------------------------------------------
+
+
+class TestSyncReferenceTemplateToDb:
+    def test_valid_template_yaml(self, tmp_path):
+        import yaml
+
+        from datus.cli.generation_hooks import GenerationHooks
+
+        yaml_file = tmp_path / "tpl.yaml"
+        yaml_file.write_text(
+            yaml.dump(
+                {
+                    "sql": "SELECT * FROM t WHERE x = '{{val}}'",
+                    "name": "test_template",
+                    "summary": "Test template",
+                    "search_text": "test template val",
+                    "subject_tree": "Sales/Revenue",
+                    "tags": "test",
+                }
+            )
+        )
+
+        mock_config = MagicMock()
+        mock_config.current_namespace = "test_ns"
+
+        with (
+            patch("datus.storage.reference_template.store.ReferenceTemplateRAG") as mock_rag_cls,
+            patch("datus.storage.reference_template.init_utils.exists_reference_templates", return_value=set()),
+        ):
+            mock_rag = mock_rag_cls.return_value
+            mock_rag.upsert_batch = MagicMock()
+
+            result = GenerationHooks._sync_reference_template_to_db(str(yaml_file), mock_config)
+
+        assert result["success"] is True
+        assert "Synced" in result["message"]
+
+    def test_missing_sql_field(self, tmp_path):
+        import yaml
+
+        from datus.cli.generation_hooks import GenerationHooks
+
+        yaml_file = tmp_path / "bad.yaml"
+        yaml_file.write_text(yaml.dump({"name": "no_sql"}))
+
+        result = GenerationHooks._sync_reference_template_to_db(str(yaml_file), MagicMock())
+        assert result["success"] is False
+        assert "No reference_template data" in result["error"]
+
+    def test_duplicate_skipped(self, tmp_path):
+        import yaml
+
+        from datus.cli.generation_hooks import GenerationHooks
+
+        yaml_file = tmp_path / "dup.yaml"
+        yaml_file.write_text(yaml.dump({"sql": "SELECT 1", "name": "dup", "summary": "x", "search_text": "x"}))
+
+        mock_config = MagicMock()
+        with (
+            patch("datus.storage.reference_template.store.ReferenceTemplateRAG"),
+            patch(
+                "datus.storage.reference_template.init_utils.exists_reference_templates",
+                return_value={"existing_id"},
+            ),
+            patch(
+                "datus.storage.reference_template.init_utils.gen_reference_template_id",
+                return_value="existing_id",
+            ),
+        ):
+            result = GenerationHooks._sync_reference_template_to_db(str(yaml_file), mock_config)
+
+        assert result["success"] is True
+        assert "already exists" in result["message"]
 
 
 # ---------------------------------------------------------------------------

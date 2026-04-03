@@ -76,6 +76,7 @@ class Agent:
         self.metadata_store = None
         self.metrics_store = None
         self._ref_sql_file_sql_counter: Dict[str, int] = {}
+        self._ref_tpl_file_counter: Dict[str, int] = {}
         self._metrics_row_stage_seen: Dict[str, Set[str]] = {}
         self._print_lock = threading.Lock()
         self._check_storage_modules()
@@ -248,6 +249,49 @@ class Agent:
             number = self._next_reference_sql_number(filepath)
             sql_line = self._format_reference_sql_line(str(payload.get("sql") or ""), number)
             print(f"{prefix}#{number}. {sql_line}", flush=True)
+            return
+
+        if stage == BatchStage.ITEM_PROCESSING:
+            payload = event.payload or {}
+            self._print_stream_lines(payload.get("output", {}).get("raw_output"), prefix=prefix)
+            return
+
+        if stage == BatchStage.ITEM_FAILED:
+            error = event.error
+            if error:
+                self._print_stream_lines(error, prefix=prefix)
+            return
+
+    def _reset_reference_template_stream_state(self) -> None:
+        self._ref_tpl_file_counter = {}
+
+    def _next_reference_template_number(self, filepath: str) -> int:
+        with self._print_lock:
+            count = self._ref_tpl_file_counter.get(filepath, 0) + 1
+            self._ref_tpl_file_counter[filepath] = count
+            return count
+
+    def _emit_reference_template_event(self, event: BatchEvent) -> None:
+        stage = event.stage
+        filepath = event.group_id or "unknown_file"
+        short_name = self._get_file_short_name(filepath)
+        prefix = f"[{short_name}] "
+
+        if stage == BatchStage.GROUP_STARTED:
+            logger.info(f"reference_template file start: {filepath}")
+            print(f"{prefix}start processing {filepath}", flush=True)
+            return
+
+        if stage == BatchStage.GROUP_COMPLETED:
+            logger.info(f"reference_template file complete: {filepath}")
+            print(f"{prefix}completed", flush=True)
+            return
+
+        if stage == BatchStage.ITEM_STARTED:
+            payload = event.payload or {}
+            number = self._next_reference_template_number(filepath)
+            template_preview = " ".join(str(payload.get("template") or "").split())[:80]
+            print(f"{prefix}#{number}. {template_preview or f'template_{number}'}", flush=True)
             return
 
         if stage == BatchStage.ITEM_PROCESSING:
@@ -570,6 +614,30 @@ class Agent:
                     pool_size=pool_size,
                     subject_tree=subject_tree,
                     emit=self._emit_reference_sql_event,
+                )
+                return result
+            elif component == "reference_template":
+                if kb_update_strategy == "overwrite":
+                    self.global_config.save_storage_config("reference_template")
+                else:
+                    self.global_config.check_init_storage_config("reference_template")
+
+                from datus.storage.reference_template import ReferenceTemplateRAG
+                from datus.storage.reference_template.reference_template_init import init_reference_template
+
+                self.reference_template_store = ReferenceTemplateRAG(self.global_config)
+                if kb_update_strategy == "overwrite":
+                    self.reference_template_store.truncate()
+                self._reset_reference_template_stream_state()
+                result = init_reference_template(
+                    self.reference_template_store,
+                    self.global_config,
+                    self.args.template_dir,
+                    validate_only=self.args.validate_only or False,
+                    build_mode=kb_update_strategy,
+                    pool_size=pool_size,
+                    subject_tree=subject_tree,
+                    emit=self._emit_reference_template_event,
                 )
                 return result
             results[component] = True
