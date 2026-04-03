@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
+
 from datus_greenplum import GreenplumConfig, GreenplumConnector
 from datus_greenplum.connector import _escape_literal
 
