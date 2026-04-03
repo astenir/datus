@@ -2,156 +2,168 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-"""TPC-H integration tests for Greenplum adapter.
-
-These tests require a running Greenplum instance with valid credentials.
-The tpch_setup fixture (session-scoped) creates and populates TPC-H tables
-before the first test and drops them after the last test.
-
-Run with:
-    pytest tests/integration/test_tpch.py -v
-"""
-
 import pytest
 
-pytestmark = pytest.mark.integration
+from datus_greenplum import GreenplumConnector
+
+# ==================== Metadata Tests ====================
 
 
-class TestTpchDataValidation:
-    """Validate that TPC-H sample data was loaded correctly."""
-
-    def test_region_count(self, tpch_setup):
-        """Verify tpch_region has 5 rows."""
-        result = tpch_setup.execute(
-            {"sql_query": 'SELECT COUNT(*) AS cnt FROM "public"."tpch_region"'},
-            result_format="list",
-        )
-        assert result.sql_return[0]["cnt"] == 5
-
-    def test_nation_count(self, tpch_setup):
-        """Verify tpch_nation has 25 rows."""
-        result = tpch_setup.execute(
-            {"sql_query": 'SELECT COUNT(*) AS cnt FROM "public"."tpch_nation"'},
-            result_format="list",
-        )
-        assert result.sql_return[0]["cnt"] == 25
-
-    def test_customer_count(self, tpch_setup):
-        """Verify tpch_customer has 5 rows."""
-        result = tpch_setup.execute(
-            {"sql_query": 'SELECT COUNT(*) AS cnt FROM "public"."tpch_customer"'},
-            result_format="list",
-        )
-        assert result.sql_return[0]["cnt"] == 5
-
-    def test_orders_count(self, tpch_setup):
-        """Verify tpch_orders has 5 rows."""
-        result = tpch_setup.execute(
-            {"sql_query": 'SELECT COUNT(*) AS cnt FROM "public"."tpch_orders"'},
-            result_format="list",
-        )
-        assert result.sql_return[0]["cnt"] == 5
-
-    def test_supplier_count(self, tpch_setup):
-        """Verify tpch_supplier has 5 rows."""
-        result = tpch_setup.execute(
-            {"sql_query": 'SELECT COUNT(*) AS cnt FROM "public"."tpch_supplier"'},
-            result_format="list",
-        )
-        assert result.sql_return[0]["cnt"] == 5
+@pytest.mark.integration
+def test_tpch_get_tables(tpch_setup: GreenplumConnector):
+    """Test that TPC-H tables exist in the database."""
+    tables = tpch_setup.get_tables(schema_name="public")
+    expected = {
+        "tpch_region",
+        "tpch_nation",
+        "tpch_customer",
+        "tpch_orders",
+        "tpch_supplier",
+    }
+    table_set = set(tables)
+    assert expected.issubset(table_set), f"Missing tables: {expected - table_set}"
 
 
-class TestTpchQueries:
-    """Run TPC-H-style analytical queries."""
-
-    def test_region_nation_join(self, tpch_setup):
-        """Join region and nation tables."""
-        result = tpch_setup.execute(
-            {
-                "sql_query": """
-                    SELECT r."r_name" AS region, COUNT(*) AS nation_count
-                    FROM "public"."tpch_region" r
-                    JOIN "public"."tpch_nation" n ON r."r_regionkey" = n."n_regionkey"
-                    GROUP BY r."r_name"
-                    ORDER BY nation_count DESC
-                """
-            },
-            result_format="list",
-        )
-        assert len(result.sql_return) == 5
-        total = sum(row["nation_count"] for row in result.sql_return)
-        assert total == 25
-
-    def test_customer_order_summary(self, tpch_setup):
-        """Aggregate orders by customer."""
-        result = tpch_setup.execute(
-            {
-                "sql_query": """
-                    SELECT c."c_name",
-                           COUNT(o."o_orderkey") AS order_count,
-                           SUM(o."o_totalprice") AS total_spent
-                    FROM "public"."tpch_customer" c
-                    JOIN "public"."tpch_orders" o ON c."c_custkey" = o."o_custkey"
-                    GROUP BY c."c_name"
-                    ORDER BY total_spent DESC
-                """
-            },
-            result_format="list",
-        )
-        assert len(result.sql_return) > 0
-        for row in result.sql_return:
-            assert row["order_count"] > 0
-            assert float(row["total_spent"]) > 0
-
-    def test_supplier_nation_region(self, tpch_setup):
-        """Three-table join: supplier -> nation -> region."""
-        result = tpch_setup.execute(
-            {
-                "sql_query": """
-                    SELECT s."s_name", n."n_name" AS nation, r."r_name" AS region
-                    FROM "public"."tpch_supplier" s
-                    JOIN "public"."tpch_nation" n ON s."s_nationkey" = n."n_nationkey"
-                    JOIN "public"."tpch_region" r ON n."n_regionkey" = r."r_regionkey"
-                    ORDER BY s."s_suppkey"
-                """
-            },
-            result_format="list",
-        )
-        assert len(result.sql_return) == 5
-        for row in result.sql_return:
-            assert row["s_name"] is not None
-            assert row["nation"] is not None
-            assert row["region"] is not None
+@pytest.mark.integration
+def test_tpch_get_columns(tpch_setup: GreenplumConnector):
+    """Test getting column schema for tpch_customer table."""
+    columns = tpch_setup.get_schema(schema_name="public", table_name="tpch_customer")
+    assert len(columns) > 0
+    column_names = {col["name"] for col in columns}
+    assert "custkey" in column_names
+    assert "name" in column_names
+    assert "nationkey" in column_names
+    for col in columns:
+        assert "name" in col
+        assert "type" in col
 
 
-class TestTpchMetadata:
-    """Validate metadata retrieval for TPC-H tables."""
+@pytest.mark.integration
+def test_tpch_get_columns_nation(tpch_setup: GreenplumConnector):
+    """Test getting column schema for tpch_nation table."""
+    columns = tpch_setup.get_schema(schema_name="public", table_name="tpch_nation")
+    column_names = {col["name"] for col in columns}
+    assert "nationkey" in column_names
+    assert "name" in column_names
+    assert "regionkey" in column_names
 
-    def test_get_tables_includes_tpch(self, tpch_setup):
-        """get_tables() should return TPC-H tables."""
-        tables = tpch_setup.get_tables(schema_name="public")
-        tpch_tables = {t for t in tables if t.startswith("tpch_")}
-        expected = {"tpch_region", "tpch_nation", "tpch_supplier", "tpch_customer", "tpch_orders"}
-        assert expected.issubset(tpch_tables)
 
-    def test_get_schema_columns(self, tpch_setup):
-        """get_schema() should return correct columns for tpch_region."""
-        cols = tpch_setup.get_schema(schema_name="public", table_name="tpch_region")
-        col_names = [c["name"] for c in cols]
-        assert "r_regionkey" in col_names
-        assert "r_name" in col_names
-        assert "r_comment" in col_names
+# ==================== Data Query Tests ====================
 
-    def test_get_tables_with_ddl(self, tpch_setup):
-        """get_tables_with_ddl() should include DDL with distribution policy for TPC-H tables."""
-        tables_ddl = tpch_setup.get_tables_with_ddl(schema_name="public")
-        tpch_ddl = [t for t in tables_ddl if t["table_name"].startswith("tpch_")]
-        assert len(tpch_ddl) >= 5
-        for item in tpch_ddl:
-            assert "definition" in item
-            assert "CREATE TABLE" in item["definition"]
-            # Greenplum DDL should include distribution policy
-            ddl = item["definition"]
-            assert "DISTRIBUTED BY" in ddl or "DISTRIBUTED RANDOMLY" in ddl, (
-                f"DDL for {item['table_name']} missing distribution policy: {ddl}"
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+def test_tpch_query_region(tpch_setup: GreenplumConnector):
+    """Test querying tpch_region - should have 5 regions."""
+    result = tpch_setup.execute(
+        {"sql_query": 'SELECT * FROM "tpch_region"'},
+        result_format="list",
+    )
+    assert result.success
+    assert len(result.sql_return) == 5
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
+def test_tpch_query_nation(tpch_setup: GreenplumConnector):
+    """Test querying tpch_nation - should have 25 nations."""
+    result = tpch_setup.execute(
+        {"sql_query": 'SELECT * FROM "tpch_nation"'},
+        result_format="list",
+    )
+    assert result.success
+    assert len(result.sql_return) == 25
+
+
+@pytest.mark.integration
+def test_tpch_query_join(tpch_setup: GreenplumConnector):
+    """Test JOIN query: nation JOIN region."""
+    result = tpch_setup.execute(
+        {
+            "sql_query": (
+                'SELECT n."name" AS nation_name, r."name" AS region_name '
+                'FROM "tpch_nation" n '
+                'JOIN "tpch_region" r ON n."regionkey" = r."regionkey" '
+                'ORDER BY n."nationkey"'
             )
+        },
+        result_format="list",
+    )
+    assert result.success
+    assert len(result.sql_return) == 25
+    # ALGERIA is in AFRICA
+    first_row = result.sql_return[0]
+    assert first_row["nation_name"] == "ALGERIA"
+    assert first_row["region_name"] == "AFRICA"
+
+
+@pytest.mark.integration
+def test_tpch_query_aggregation(tpch_setup: GreenplumConnector):
+    """Test aggregation: count nations per region."""
+    result = tpch_setup.execute(
+        {
+            "sql_query": (
+                'SELECT r."name" AS region_name, COUNT(n."nationkey") AS nation_count '
+                'FROM "tpch_region" r '
+                'JOIN "tpch_nation" n ON r."regionkey" = n."regionkey" '
+                'GROUP BY r."name" '
+                'ORDER BY r."name"'
+            )
+        },
+        result_format="list",
+    )
+    assert result.success
+    assert len(result.sql_return) == 5  # 5 regions
+    total_nations = sum(row["nation_count"] for row in result.sql_return)
+    assert total_nations == 25  # 25 nations total
+
+
+@pytest.mark.integration
+def test_tpch_query_customer_orders(tpch_setup: GreenplumConnector):
+    """Test JOIN query: customer JOIN orders."""
+    result = tpch_setup.execute(
+        {
+            "sql_query": (
+                'SELECT c."name", COUNT(o."orderkey") AS order_count, '
+                'SUM(o."totalprice") AS total_spent '
+                'FROM "tpch_customer" c '
+                'JOIN "tpch_orders" o ON c."custkey" = o."custkey" '
+                'GROUP BY c."name" '
+                "ORDER BY order_count DESC "
+                "LIMIT 5"
+            )
+        },
+        result_format="list",
+    )
+    assert result.success
+    assert len(result.sql_return) > 0
+    assert "order_count" in result.sql_return[0]
+    assert "total_spent" in result.sql_return[0]
+
+
+@pytest.mark.integration
+def test_tpch_query_csv_format(tpch_setup: GreenplumConnector):
+    """Test CSV result format with TPC-H data."""
+    result = tpch_setup.execute(
+        {"sql_query": 'SELECT "regionkey", "name" FROM "tpch_region" ORDER BY "regionkey"'},
+        result_format="csv",
+    )
+    assert result.success
+    assert "AFRICA" in result.sql_return
+    assert "ASIA" in result.sql_return
+
+
+@pytest.mark.integration
+def test_tpch_get_tables_with_ddl(tpch_setup: GreenplumConnector):
+    """get_tables_with_ddl() should include DDL with distribution policy for TPC-H tables."""
+    tables_ddl = tpch_setup.get_tables_with_ddl(schema_name="public")
+    tpch_ddl = [t for t in tables_ddl if t["table_name"].startswith("tpch_")]
+    assert len(tpch_ddl) >= 5
+    for item in tpch_ddl:
+        assert "definition" in item
+        assert "CREATE TABLE" in item["definition"]
+        # Greenplum DDL should include distribution policy
+        ddl = item["definition"]
+        assert "DISTRIBUTED BY" in ddl or "DISTRIBUTED RANDOMLY" in ddl, (
+            f"DDL for {item['table_name']} missing distribution policy: {ddl}"
+        )
