@@ -83,6 +83,7 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
             pool_pre_ping=True,
             connect_args={"verify": self._verify_ssl},
         )
+        self.connection = self.engine.connect()
         self._owns_engine = True
 
     # ==================== Context Manager Support ====================
