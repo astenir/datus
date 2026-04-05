@@ -8,7 +8,7 @@ from urllib.parse import quote_plus
 import pandas as pd
 from sqlalchemy import create_engine
 
-from datus_db_core import DatusDbException, ErrorCode, get_logger
+from datus_db_core import ErrorCode, get_logger
 from datus_sqlalchemy import SQLAlchemyConnector
 
 from .config import HiveConfig
