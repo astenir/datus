@@ -3,7 +3,7 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import threading
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import MagicMock, patch
 
 from datus_sqlalchemy import SQLAlchemyConnector
 

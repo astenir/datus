@@ -5,7 +5,6 @@
 from typing import Any, Dict, List, Optional, Set, Union, override
 from urllib.parse import quote_plus
 
-from pandas import DataFrame
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, text
 
