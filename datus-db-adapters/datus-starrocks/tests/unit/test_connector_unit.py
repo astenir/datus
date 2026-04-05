@@ -139,12 +139,11 @@ def test_resolve_catalog_preserves_custom():
 
 @pytest.mark.acceptance
 def test_switch_catalog_updates_catalog_name():
-    """Test that switch_catalog updates catalog_name attribute."""
+    """Test that switch_catalog updates catalog_name via switch_context."""
     config = StarRocksConfig(username="test_user")
 
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
-        connector.switch_context = MagicMock()
 
         connector.switch_catalog("new_catalog")
 
@@ -443,7 +442,6 @@ def test_close_ignores_struct_pack_error():
 
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
-        connector.connection = MagicMock()
         connector.engine = None
 
         with patch(
@@ -452,8 +450,7 @@ def test_close_ignores_struct_pack_error():
         ):
             # Should not raise exception
             connector.close()
-
-            assert connector.connection is None
+            assert connector.engine is None
 
 
 def test_close_ignores_com_quit_error():
@@ -462,7 +459,6 @@ def test_close_ignores_com_quit_error():
 
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
-        connector.connection = MagicMock()
         connector.engine = None
 
         with patch(
@@ -471,8 +467,7 @@ def test_close_ignores_com_quit_error():
         ):
             # Should not raise exception
             connector.close()
-
-            assert connector.connection is None
+            assert connector.engine is None
 
 
 def test_close_ignores_required_argument_error():
@@ -481,7 +476,6 @@ def test_close_ignores_required_argument_error():
 
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
-        connector.connection = MagicMock()
         connector.engine = None
 
         with patch(
@@ -490,23 +484,20 @@ def test_close_ignores_required_argument_error():
         ):
             # Should not raise exception
             connector.close()
+            assert connector.engine is None
 
-            assert connector.connection is None
 
-
-def test_close_clears_connection_on_pymysql_error():
-    """Test close clears connection variables on PyMySQL error."""
+def test_close_clears_engine_on_pymysql_error():
+    """Test close clears engine on PyMySQL error."""
     config = StarRocksConfig(username="test_user")
 
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
-        connector.connection = MagicMock()
         connector.engine = None
 
         with patch("datus_mysql.MySQLConnector.close", side_effect=Exception("struct.error")):
             connector.close()
-
-            assert connector.connection is None
+            assert connector.engine is None
 
 
 def test_close_disposes_engine_on_error():
@@ -515,7 +506,6 @@ def test_close_disposes_engine_on_error():
 
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
-        connector.connection = None
         mock_engine = MagicMock()
         connector.engine = mock_engine
 
@@ -533,7 +523,6 @@ def test_close_reraises_unexpected_errors():
 
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
-        connector.connection = None
         connector.engine = None
 
         with patch(

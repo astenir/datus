@@ -387,41 +387,39 @@ def test_sys_schemas():
 # ==================== do_switch_context Tests ====================
 
 
-def test_do_switch_context_catalog():
-    """Test do_switch_context updates catalog."""
+def test_switch_context_catalog():
+    """Test switch_context updates catalog."""
     config = TrinoConfig(username="test_user")
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = TrinoConnector(config)
 
-        connector.do_switch_context(catalog_name="new_catalog")
+        connector.switch_context(catalog_name="new_catalog")
 
         assert connector.catalog_name == "new_catalog"
 
 
-def test_do_switch_context_schema():
-    """Test do_switch_context updates schema."""
+def test_switch_context_schema():
+    """Test switch_context updates schema."""
     config = TrinoConfig(username="test_user")
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = TrinoConnector(config)
 
-        connector.do_switch_context(schema_name="new_schema")
+        connector.switch_context(schema_name="new_schema")
 
         assert connector.schema_name == "new_schema"
-        assert connector.database_name == "new_schema"
 
 
-def test_do_switch_context_database():
-    """Test do_switch_context with database_name updates schema."""
+def test_switch_context_database():
+    """Test switch_context with database_name updates database."""
     config = TrinoConfig(username="test_user")
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = TrinoConnector(config)
 
-        connector.do_switch_context(database_name="new_db")
+        connector.switch_context(database_name="new_db")
 
-        assert connector.schema_name == "new_db"
         assert connector.database_name == "new_db"
 
 

@@ -87,7 +87,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
             dialect="clickhouse",
             timeout_seconds=config.timeout_seconds,
         )
-        self.database_name = database
+        self._default_database = database
 
     # ==================== System Resources ====================
 
@@ -325,10 +325,13 @@ class ClickHouseConnector(SQLAlchemyConnector):
         return database_name or self.database_name
 
     @override
-    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        """Switch database context. Updates default database for subsequent full_name() calls."""
+    def do_switch_context(self, conn, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        """Apply database context to a connection using USE statement."""
         if database_name:
-            self.database_name = database_name
+            from sqlalchemy import text
+
+            conn.execute(text(f"USE {self._quote_identifier(database_name)}"))
+            conn.commit()
 
     # ==================== Sample Data ====================
 

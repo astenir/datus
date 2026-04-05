@@ -92,7 +92,7 @@ class MySQLConnector(SQLAlchemyConnector):
         )
 
         super().__init__(connection_string, dialect="mysql")
-        self.database_name = database
+        self._default_database = database
 
     # ==================== System Resources ====================
 
@@ -330,12 +330,11 @@ class MySQLConnector(SQLAlchemyConnector):
         return database_name or self.database_name
 
     @override
-    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        """Switch database context using USE statement on the persistent connection."""
-
+    def do_switch_context(self, conn, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        """Apply database context to a connection using USE statement."""
         if database_name:
-            self.connection.execute(text(f"USE {self.quote_identifier(database_name)}"))
-            self.connection.commit()
+            conn.execute(text(f"USE {self.quote_identifier(database_name)}"))
+            conn.commit()
 
     # ==================== Sample Data ====================
 

@@ -45,7 +45,7 @@ class HiveConnector(SQLAlchemyConnector):
         super().__init__(connection_string, dialect="hive", timeout_seconds=config.timeout_seconds)
 
         self.config = config
-        self.database_name = database
+        self._default_database = database
         self._connect_args = self._build_connect_args(config)
 
     @staticmethod
@@ -74,38 +74,30 @@ class HiveConnector(SQLAlchemyConnector):
         return normalized
 
     @override
-    def connect(self):
-        """Initialize the SQLAlchemy engine with PyHive connect_args."""
-        if self.engine and self.connection and self._owns_engine:
-            return
-
-        try:
-            self._safe_close()
-
-            connect_args = dict(self._connect_args)
-
-            self.engine = create_engine(
-                self.connection_string,
-                pool_size=10,
-                max_overflow=20,
-                pool_timeout=self.timeout_seconds,
-                pool_recycle=3600,
-                pool_pre_ping=True,
-                connect_args=connect_args,
-            )
-            self.connection = self.engine.connect()
-            self._owns_engine = True
-
-        except Exception as e:
-            self._force_reset()
-            raise self._handle_exception(e, "", "connection") from e
-
-        if not (self.engine and self.connection):
-            self._force_reset()
-            raise DatusDbException(
-                ErrorCode.DB_CONNECTION_FAILED,
-                message_args={"error_message": "Failed to establish connection"},
-            )
+    def _ensure_engine(self):
+        """Create the SQLAlchemy engine with PyHive connect_args. Thread-safe."""
+        if self.engine and self._owns_engine:
+            return self.engine
+        with self._engine_lock:
+            if self.engine and self._owns_engine:
+                return self.engine
+            try:
+                connect_args = dict(self._connect_args)
+                self.engine = create_engine(
+                    self.connection_string,
+                    pool_size=10,
+                    max_overflow=20,
+                    pool_timeout=self.timeout_seconds,
+                    pool_recycle=3600,
+                    pool_pre_ping=True,
+                    connect_args=connect_args,
+                )
+                self._owns_engine = True
+                return self.engine
+            except Exception as e:
+                self.engine = None
+                self._owns_engine = False
+                raise self._handle_exception(e, "", "connection") from e
 
     @override
     def get_databases(self, catalog_name: str = "", include_sys: bool = False) -> List[str]:
@@ -348,11 +340,13 @@ class HiveConnector(SQLAlchemyConnector):
             return f"{self.quote_identifier(db)}.{self.quote_identifier(table_name)}"
         return self.quote_identifier(table_name)
 
-    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        """Switch database context using USE statement."""
+    def do_switch_context(self, conn, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        """Apply database context to a connection using USE statement."""
         if database_name:
-            self.execute_ddl(f"USE {self.quote_identifier(database_name)}")
-            self.database_name = database_name
+            from sqlalchemy import text
+
+            conn.execute(text(f"USE {self.quote_identifier(database_name)}"))
+            conn.commit()
 
     @classmethod
     def from_carrier_map(cls, carrier_map: Mapping[str, Any], prefix: str) -> "HiveConnector":

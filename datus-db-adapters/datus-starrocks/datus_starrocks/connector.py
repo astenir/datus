@@ -64,34 +64,12 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
             timeout_seconds=config.timeout_seconds,
         )
         super().__init__(mysql_config)
-
-        self.catalog_name = config.catalog
         self._deferred_database = config.database if needs_catalog_switch else ""
-        self.database_name = config.database or ""
+        self._default_catalog = config.catalog
+        self._default_database = config.database or ""
+
         # Override dialect to StarRocks
         self.dialect = "starrocks"
-
-    # ==================== Connection Management ====================
-
-    @override
-    def connect(self):
-        """Establish connection and switch to configured catalog on first connect.
-
-        Reconnect context replay is handled by the base class via do_switch_context().
-        """
-        already_connected = self.engine and self.connection and self._owns_engine
-        super().connect()
-        if not already_connected and self.catalog_name and self.catalog_name != self.default_catalog():
-            self.connection.execute(text(f"SET CATALOG {self.quote_identifier(self.catalog_name)}"))
-            self.connection.commit()
-            logger.debug(f"Switched to catalog on first connect: {self.catalog_name}")
-
-            # Now that the catalog is set, switch to the deferred database
-            if self._deferred_database:
-                self.connection.execute(text(f"USE {self.quote_identifier(self._deferred_database)}"))
-                self.connection.commit()
-                self.database_name = self._deferred_database
-                logger.debug(f"Switched to deferred database: {self._deferred_database}")
 
     # ==================== Context Manager Support ====================
 
@@ -128,7 +106,6 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
             catalog_name: Name of the catalog to switch to
         """
         self.switch_context(catalog_name=catalog_name)
-        self.catalog_name = catalog_name
 
     def _resolve_catalog(self, catalog_name: str = "") -> str:
         """Resolve the effective catalog name, falling back to configured or default."""
@@ -138,15 +115,16 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         return catalog
 
     @override
-    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        """Switch catalog and/or database context on the persistent connection."""
+    def do_switch_context(self, conn, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        """Apply catalog and/or database context to a connection."""
         if catalog_name:
-            self.connection.execute(text(f"SET CATALOG {self.quote_identifier(catalog_name)}"))
-            self.connection.commit()
+            conn.execute(text(f"SET CATALOG {self.quote_identifier(catalog_name)}"))
+            conn.commit()
             logger.debug(f"Switched catalog to: {catalog_name}")
         if database_name:
-            self.connection.execute(text(f"USE {self.quote_identifier(database_name)}"))
-            self.connection.commit()
+            conn.execute(text(f"USE {self.quote_identifier(database_name)}"))
+            conn.commit()
+            logger.debug(f"Switched database to: {database_name}")
 
     # ==================== Metadata Retrieval (Stateless, Catalog-Qualified) ====================
 
@@ -342,7 +320,7 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
     @override
     def close(self):
         """
-        Close connection with special handling for PyMySQL cleanup errors.
+        Close engine with special handling for PyMySQL cleanup errors.
 
         StarRocks may trigger PyMySQL struct.pack errors during cleanup,
         which we safely ignore.
@@ -362,10 +340,6 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
 
             if any(err in error_str for err in pymysql_errors):
                 logger.debug(f"Ignoring PyMySQL cleanup error: {e}")
-
-                # Force cleanup of connection variables
-                if hasattr(self, "connection"):
-                    self.connection = None
                 if hasattr(self, "engine"):
                     try:
                         if self.engine:
@@ -374,8 +348,8 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
                         pass
                     finally:
                         self.engine = None
+                self._owns_engine = False
             else:
-                # Re-raise unexpected errors
                 logger.error(f"Unexpected close error: {e}")
                 raise
 

@@ -90,8 +90,9 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             dialect="postgresql",
             timeout_seconds=config.timeout_seconds,
         )
-        self.database_name = database
-        self.schema_name = config.schema_name or "public"
+        self._default_database = database
+        self._default_schema = config.schema_name or "public"
+        self._engines = {}  # database_name -> engine (for cross-database access)
 
     # ==================== System Resources ====================
 
@@ -123,24 +124,6 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             f"postgresql+psycopg2://{encoded_username}:{encoded_password}"
             f"@{self.host}:{self.port}/{database_name}?sslmode={self.config.sslmode}"
         )
-
-    def _execute_on_database(self, sql: str, database_name: str) -> DataFrame:
-        """Execute a query on a specific database using a temporary connection.
-
-        Thread-safe: creates an isolated connection without mutating self.
-        """
-        if database_name == self.database_name:
-            return self._execute_pandas(sql)
-
-        conn_str = self._build_connection_string(database_name)
-        engine = create_engine(conn_str)
-        try:
-            with engine.connect() as conn:
-                result = conn.execute(text(sql))
-                rows = [row._asdict() for row in result.fetchall()]
-                return DataFrame(rows)
-        finally:
-            engine.dispose()
 
     # ==================== Metadata Retrieval ====================
 
@@ -183,7 +166,14 @@ class PostgreSQLConnector(SQLAlchemyConnector):
                 FROM pg_matviews
                 WHERE {where}
             """
-            query_result = self._execute_on_database(query, database_name)
+            # pg_matviews is scoped to the connected database.
+            # Temporarily set thread-local database so _conn() picks the right engine.
+            saved_db = self.database_name
+            try:
+                self.database_name = database_name
+                query_result = self._execute_pandas(query)
+            finally:
+                self.database_name = saved_db
         else:
             # Tables and views use information_schema (supports table_catalog filter)
             if schema_name:
@@ -475,21 +465,79 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         """Get schema name for SQLAlchemy Inspector."""
         return schema_name or self.schema_name
 
-    @override
-    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        """Switch database/schema context.
+    def _get_engine(self, database_name: str = ""):
+        """Get or create engine for the given database. Thread-safe.
 
-        PostgreSQL requires reconnection to switch databases.
-        Schema switching only updates self.schema_name since all queries
-        use explicit schema qualification via full_name().
+        PostgreSQL requires different connection strings per database,
+        so each database gets its own engine with connection pool.
         """
-        if database_name and database_name != self.database_name:
-            self.connection_string = self._build_connection_string(database_name)
-            self.close()
-            self.connect()
-            self.database_name = database_name
+        db = database_name or self.database_name
+        if db not in self._engines:
+            with self._engine_lock:
+                if db not in self._engines:
+                    conn_str = self._build_connection_string(db)
+                    self._engines[db] = create_engine(
+                        conn_str,
+                        pool_size=5,
+                        max_overflow=10,
+                        pool_timeout=self.timeout_seconds,
+                        pool_recycle=3600,
+                        pool_pre_ping=True,
+                    )
+        return self._engines[db]
+
+    @override
+    def _conn(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        """Checkout connection from the correct per-database engine. Thread-safe.
+
+        Overrides base _conn() to avoid writing to shared self.engine.
+        Each thread gets a connection from the engine matching its database_name.
+        """
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _pg_conn():
+            effective_database = database_name or self.database_name
+            effective_schema = schema_name or self.schema_name
+            effective_catalog = catalog_name or self.catalog_name
+            engine = self._get_engine(effective_database)
+            conn = engine.connect()
+            try:
+                self.do_switch_context(conn, effective_catalog, effective_database, effective_schema)
+                yield conn
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise
+            finally:
+                conn.close()
+
+        return _pg_conn()
+
+    @override
+    def close(self):
+        """Dispose all engines."""
+        for engine in self._engines.values():
+            try:
+                engine.dispose()
+            except Exception as e:
+                logger.warning(f"Error disposing engine: {e}")
+        self._engines.clear()
+        self.engine = None
+        self._owns_engine = False
+
+    @override
+    def do_switch_context(self, conn, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        """Apply schema context to a connection.
+
+        Database switching is handled by _conn() which picks the right engine
+        based on the effective database_name.
+        """
         if schema_name:
-            self.schema_name = schema_name
+            conn.execute(text(f"SET search_path TO {self._quote_identifier(schema_name)}"))
+            conn.commit()
 
     # ==================== Sample Data ====================
 

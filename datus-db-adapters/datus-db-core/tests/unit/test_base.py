@@ -85,7 +85,6 @@ class TestBaseSqlConnectorInit:
         connector = ConcreteConnector()
         assert connector.dialect == "snowflake"
         assert connector.timeout_seconds == 30
-        assert connector.connection is None
         assert connector.catalog_name == ""
         assert connector.database_name == ""
         assert connector.schema_name == ""
@@ -98,18 +97,9 @@ class TestBaseSqlConnectorInit:
 
 
 class TestClose:
-    def test_close_with_connection(self):
-        connector = ConcreteConnector()
-        mock_conn = MagicMock()
-        connector.connection = mock_conn
-        connector.close()
-        mock_conn.close.assert_called_once()
-        assert connector.connection is None
-
-    def test_close_without_connection(self):
+    def test_close_no_error(self):
         connector = ConcreteConnector()
         connector.close()  # Should not raise
-        assert connector.connection is None
 
 
 class TestContextManager:
@@ -126,12 +116,11 @@ class TestContextManager:
             connector.__exit__(None, None, None)
             mock_close.assert_called_once()
 
-    def test_exit_with_exception_calls_rollback(self):
+    def test_exit_with_exception_calls_close(self):
         connector = ConcreteConnector()
-        mock_conn = MagicMock()
-        connector.connection = mock_conn
-        connector.__exit__(ValueError, ValueError("test"), None)
-        mock_conn.rollback.assert_called_once()
+        with patch.object(connector, "close") as mock_close:
+            connector.__exit__(ValueError, ValueError("test"), None)
+            mock_close.assert_called_once()
 
     def test_exit_returns_false(self):
         connector = ConcreteConnector()
@@ -307,11 +296,11 @@ class TestSwitchContext:
         assert connector.database_name == "db"
         assert connector.schema_name == "sch"
 
-    def test_switch_context_calls_connect(self):
+    def test_switch_context_does_not_call_connect(self):
         connector = ConcreteConnector()
         with patch.object(connector, "connect") as mock:
             connector.switch_context(database_name="db")
-            mock.assert_called_once()
+            mock.assert_not_called()
 
     def test_switch_context_partial_update(self):
         connector = ConcreteConnector()
@@ -339,24 +328,50 @@ class TestExecuteExplain:
             mock.assert_called_once_with("EXPLAIN SELECT 1", "csv")
 
 
-class TestSafeRollback:
-    def test_rollback_called(self):
-        connector = ConcreteConnector()
-        mock_conn = MagicMock()
-        connector.connection = mock_conn
-        connector._safe_rollback()
-        mock_conn.rollback.assert_called_once()
+class TestThreadLocalContext:
+    def test_thread_local_isolation(self):
+        """Two threads switching context see their own values."""
+        import threading
 
-    def test_rollback_no_connection(self):
         connector = ConcreteConnector()
-        connector._safe_rollback()  # Should not raise
+        results = {}
 
-    def test_rollback_exception_suppressed(self):
+        def worker(thread_id, db_name):
+            connector.switch_context(database_name=db_name)
+            import time
+
+            time.sleep(0.05)
+            results[thread_id] = connector.database_name
+
+        t1 = threading.Thread(target=worker, args=(1, "db1"))
+        t2 = threading.Thread(target=worker, args=(2, "db2"))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert results[1] == "db1"
+        assert results[2] == "db2"
+
+    def test_default_context_for_new_threads(self):
+        """New threads get the default context, not another thread's context."""
+        import threading
+
         connector = ConcreteConnector()
-        mock_conn = MagicMock()
-        mock_conn.rollback.side_effect = RuntimeError("rollback failed")
-        connector.connection = mock_conn
-        connector._safe_rollback()  # Should not raise
+        connector._default_database = "default_db"
+        connector.switch_context(database_name="main_thread_db")
+
+        results = {}
+
+        def worker():
+            results["db"] = connector.database_name
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+
+        assert results["db"] == "default_db"
+        assert connector.database_name == "main_thread_db"
 
 
 class TestListToInStr:
