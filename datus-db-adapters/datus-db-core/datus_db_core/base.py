@@ -116,7 +116,11 @@ class BaseSqlConnector(ABC):
         if result_format is None:
             result_format = getattr(input_params, "result_format", "csv") or "csv"
         # Only pass context kwargs when explicitly set (backward compatible)
-        ctx = {k: v for k, v in [("catalog_name", catalog_name), ("database_name", database_name), ("schema_name", schema_name)] if v}
+        ctx = {
+            k: v
+            for k, v in [("catalog_name", catalog_name), ("database_name", database_name), ("schema_name", schema_name)]
+            if v
+        }
         try:
             sql_type = parse_sql_type(sql_query, self.dialect)
             if sql_type == SQLType.INSERT:

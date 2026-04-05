@@ -248,7 +248,9 @@ class SQLAlchemyConnector(BaseSqlConnector):
     ) -> ExecuteSQLResult:
         """Execute SELECT query."""
         try:
-            result = self._execute_query(sql, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name)
+            result = self._execute_query(
+                sql, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name
+            )
             row_count = len(result)
 
             # Format result based on requested format
@@ -271,7 +273,9 @@ class SQLAlchemyConnector(BaseSqlConnector):
             ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql)
 
-    def _execute_query(self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[Dict[str, Any]]:
+    def _execute_query(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> List[Dict[str, Any]]:
         """Internal query execution returning list of dicts."""
         if parse_sql_type(sql, self.dialect) in (
             SQLType.INSERT,
@@ -297,7 +301,9 @@ class SQLAlchemyConnector(BaseSqlConnector):
             raise self._handle_exception(e, sql, "query") from e
 
     @override
-    def execute_insert(self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> ExecuteSQLResult:
+    def execute_insert(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """Execute INSERT statement."""
         try:
             with self._conn(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name) as conn:
@@ -326,7 +332,9 @@ class SQLAlchemyConnector(BaseSqlConnector):
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql, sql_return="", row_count=0)
 
     @override
-    def execute_update(self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> ExecuteSQLResult:
+    def execute_update(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """Execute UPDATE statement."""
         try:
             with self._conn(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name) as conn:
@@ -343,7 +351,9 @@ class SQLAlchemyConnector(BaseSqlConnector):
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql, sql_return="", row_count=0)
 
     @override
-    def execute_delete(self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> ExecuteSQLResult:
+    def execute_delete(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """Execute DELETE statement."""
         try:
             with self._conn(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name) as conn:
@@ -360,7 +370,9 @@ class SQLAlchemyConnector(BaseSqlConnector):
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql, sql_return="", row_count=0)
 
     @override
-    def execute_ddl(self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> ExecuteSQLResult:
+    def execute_ddl(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """Execute DDL statement (CREATE, ALTER, DROP, etc.)."""
         try:
             with self._conn(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name) as conn:
@@ -376,10 +388,14 @@ class SQLAlchemyConnector(BaseSqlConnector):
             ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, sql_query=sql, error=str(ex))
 
-    def execute_pandas(self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> ExecuteSQLResult:
+    def execute_pandas(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """Execute query and return pandas DataFrame."""
         try:
-            df = self._execute_pandas(sql, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name)
+            df = self._execute_pandas(
+                sql, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name
+            )
             return ExecuteSQLResult(
                 success=True,
                 sql_query=sql,
@@ -391,14 +407,22 @@ class SQLAlchemyConnector(BaseSqlConnector):
             ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql)
 
-    def _execute_pandas(self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> DataFrame:
+    def _execute_pandas(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> DataFrame:
         """Internal pandas execution."""
-        return DataFrame(self._execute_query(sql, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name))
+        return DataFrame(
+            self._execute_query(sql, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name)
+        )
 
-    def execute_csv(self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> ExecuteSQLResult:
+    def execute_csv(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """Execute query and return CSV format."""
         try:
-            df = self._execute_pandas(sql, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name)
+            df = self._execute_pandas(
+                sql, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name
+            )
             return ExecuteSQLResult(
                 success=True,
                 sql_query=sql,
@@ -417,7 +441,9 @@ class SQLAlchemyConnector(BaseSqlConnector):
                 result_format="csv",
             )
 
-    def execute_arrow(self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> ExecuteSQLResult:
+    def execute_arrow(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """Execute query and return Arrow table."""
         try:
             with self._conn(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name) as conn:
@@ -474,7 +500,9 @@ class SQLAlchemyConnector(BaseSqlConnector):
             ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql)
 
-    def execute_queries(self, queries: List[str], catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[Any]:
+    def execute_queries(
+        self, queries: List[str], catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> List[Any]:
         """Execute multiple queries on a single connection (batch atomicity)."""
         results = []
         try:
@@ -672,8 +700,13 @@ class SQLAlchemyConnector(BaseSqlConnector):
     # ==================== Streaming Methods ====================
 
     def execute_csv_iterator(
-        self, sql: str, max_rows: int = 100, with_header: bool = True,
-        catalog_name: str = "", database_name: str = "", schema_name: str = "",
+        self,
+        sql: str,
+        max_rows: int = 100,
+        with_header: bool = True,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
     ) -> Iterator[Tuple]:
         """Execute query and return CSV rows in batches.
 
@@ -685,9 +718,7 @@ class SQLAlchemyConnector(BaseSqlConnector):
         """
         try:
             with self._conn(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name) as conn:
-                result = conn.execute(
-                    text(sql).execution_options(stream_results=True, max_row_buffer=max_rows)
-                )
+                result = conn.execute(text(sql).execution_options(stream_results=True, max_row_buffer=max_rows))
                 if result.returns_rows:
                     if with_header:
                         yield result.keys()
