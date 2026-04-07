@@ -80,6 +80,41 @@ class ConcreteConnector(BaseSqlConnector):
         )
 
 
+class ContextAwareConnector(ConcreteConnector):
+    """Connector whose execute methods accept context kwargs."""
+
+    def __init__(self, config=None, dialect="snowflake"):
+        super().__init__(config, dialect)
+        self.last_context = {}
+
+    def execute_insert(self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        self.last_context = {"catalog_name": catalog_name, "database_name": database_name, "schema_name": schema_name}
+        return ExecuteSQLResult(success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv")
+
+    def execute_update(self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        self.last_context = {"catalog_name": catalog_name, "database_name": database_name, "schema_name": schema_name}
+        return ExecuteSQLResult(success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv")
+
+    def execute_delete(self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        self.last_context = {"catalog_name": catalog_name, "database_name": database_name, "schema_name": schema_name}
+        return ExecuteSQLResult(success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv")
+
+    def execute_query(
+        self,
+        sql: str,
+        result_format: Literal["csv", "arrow", "pandas", "list"] = "csv",
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+    ):
+        self.last_context = {"catalog_name": catalog_name, "database_name": database_name, "schema_name": schema_name}
+        return ExecuteSQLResult(success=True, sql_query=sql, row_count=0, sql_return="", result_format=result_format)
+
+    def execute_ddl(self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        self.last_context = {"catalog_name": catalog_name, "database_name": database_name, "schema_name": schema_name}
+        return ExecuteSQLResult(success=True, sql_query=sql, row_count=0, sql_return="", result_format="csv")
+
+
 class TestBaseSqlConnectorInit:
     def test_init_defaults(self):
         connector = ConcreteConnector()
@@ -287,27 +322,97 @@ class TestExecuteErrorHandling:
             mock.assert_called_once_with("SELECT 1", "arrow")
 
 
+class TestExecuteContextPassThrough:
+    """Test that execute() forwards catalog/database/schema to sub-methods via _call_with_ctx."""
+
+    def test_select_receives_context(self):
+        connector = ContextAwareConnector()
+        connector.execute({"sql_query": "SELECT 1"}, catalog_name="cat", database_name="db", schema_name="sch")
+        assert connector.last_context == {"catalog_name": "cat", "database_name": "db", "schema_name": "sch"}
+
+    def test_insert_receives_context(self):
+        connector = ContextAwareConnector()
+        connector.execute({"sql_query": "INSERT INTO t VALUES (1)"}, database_name="db")
+        assert connector.last_context["database_name"] == "db"
+
+    def test_update_receives_context(self):
+        connector = ContextAwareConnector()
+        connector.execute({"sql_query": "UPDATE t SET col=1"}, catalog_name="cat")
+        assert connector.last_context["catalog_name"] == "cat"
+
+    def test_delete_receives_context(self):
+        connector = ContextAwareConnector()
+        connector.execute({"sql_query": "DELETE FROM t WHERE id=1"}, schema_name="sch")
+        assert connector.last_context["schema_name"] == "sch"
+
+    def test_ddl_receives_context(self):
+        connector = ContextAwareConnector()
+        connector.execute({"sql_query": "CREATE TABLE t (id INT)"}, database_name="db", schema_name="sch")
+        assert connector.last_context["database_name"] == "db"
+        assert connector.last_context["schema_name"] == "sch"
+
+    def test_empty_context_not_forwarded(self):
+        """When no context is passed, sub-methods get no context kwargs."""
+        connector = ContextAwareConnector()
+        connector.execute({"sql_query": "SELECT 1"})
+        # _call_with_ctx with empty ctx calls method without context kwargs,
+        # so the method's defaults ("") are used
+        assert connector.last_context == {"catalog_name": "", "database_name": "", "schema_name": ""}
+
+    def test_partial_context_only_forwards_non_empty(self):
+        """Only non-empty context values are forwarded."""
+        connector = ContextAwareConnector()
+        connector.execute({"sql_query": "SELECT 1"}, database_name="db")
+        assert connector.last_context["database_name"] == "db"
+        assert connector.last_context["catalog_name"] == ""
+        assert connector.last_context["schema_name"] == ""
+
+
+class TestCallWithCtx:
+    """Test _call_with_ctx: context forwarding and TypeError fallback."""
+
+    def test_forwards_context_when_method_accepts_it(self):
+        connector = ContextAwareConnector()
+        ctx = {"catalog_name": "cat", "database_name": "db"}
+        result = BaseSqlConnector._call_with_ctx(connector.execute_insert, "INSERT INTO t VALUES (1)", ctx)
+        assert result.success is True
+        assert connector.last_context["catalog_name"] == "cat"
+        assert connector.last_context["database_name"] == "db"
+
+    def test_falls_back_when_method_rejects_context(self):
+        """ConcreteConnector methods don't accept context kwargs — fallback works."""
+        connector = ConcreteConnector()
+        ctx = {"catalog_name": "cat"}
+        result = BaseSqlConnector._call_with_ctx(connector.execute_insert, "INSERT INTO t VALUES (1)", ctx)
+        assert result.success is True
+
+    def test_empty_ctx_skips_forwarding(self):
+        connector = ConcreteConnector()
+        result = BaseSqlConnector._call_with_ctx(connector.execute_insert, "INSERT INTO t VALUES (1)", {})
+        assert result.success is True
+
+    def test_passes_extra_args(self):
+        connector = ContextAwareConnector()
+        ctx = {"database_name": "db"}
+        result = BaseSqlConnector._call_with_ctx(connector.execute_query, "SELECT 1", ctx, "arrow")
+        assert result.success is True
+        assert result.result_format == "arrow"
+        assert connector.last_context["database_name"] == "db"
+
+
 class TestSwitchContext:
     def test_switch_context_updates_names(self):
         connector = ConcreteConnector()
-        with patch.object(connector, "connect"):
-            connector.switch_context(catalog_name="cat", database_name="db", schema_name="sch")
+        connector.switch_context(catalog_name="cat", database_name="db", schema_name="sch")
         assert connector.catalog_name == "cat"
         assert connector.database_name == "db"
         assert connector.schema_name == "sch"
-
-    def test_switch_context_does_not_call_connect(self):
-        connector = ConcreteConnector()
-        with patch.object(connector, "connect") as mock:
-            connector.switch_context(database_name="db")
-            mock.assert_not_called()
 
     def test_switch_context_partial_update(self):
         connector = ConcreteConnector()
         connector.catalog_name = "old_cat"
         connector.database_name = "old_db"
-        with patch.object(connector, "connect"):
-            connector.switch_context(schema_name="new_sch")
+        connector.switch_context(schema_name="new_sch")
         assert connector.catalog_name == "old_cat"
         assert connector.database_name == "old_db"
         assert connector.schema_name == "new_sch"
@@ -372,6 +477,28 @@ class TestThreadLocalContext:
 
         assert results["db"] == "default_db"
         assert connector.database_name == "main_thread_db"
+
+
+    def test_concurrent_execute_with_different_contexts(self):
+        """Two threads calling execute() with different context params don't interfere."""
+        import threading
+
+        connector = ContextAwareConnector()
+        results = {}
+
+        def worker(thread_id, db_name):
+            connector.execute({"sql_query": "SELECT 1"}, database_name=db_name)
+            results[thread_id] = connector.last_context.copy()
+
+        t1 = threading.Thread(target=worker, args=(1, "db1"))
+        t2 = threading.Thread(target=worker, args=(2, "db2"))
+        t1.start()
+        t1.join()
+        t2.start()
+        t2.join()
+
+        assert results[1]["database_name"] == "db1"
+        assert results[2]["database_name"] == "db2"
 
 
 class TestListToInStr:

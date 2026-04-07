@@ -346,72 +346,67 @@ def test_sqlalchemy_schema_uses_default_catalog():
 
 
 @pytest.mark.acceptance
-def test_do_switch_context_catalog_uses_persistent_connection():
-    """do_switch_context must execute SET CATALOG on self.connection."""
+def test_do_switch_context_catalog():
+    """do_switch_context executes SET CATALOG on the given connection."""
     config = StarRocksConfig(username="test_user")
 
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
-        connector.connection = MagicMock()
-        connector.engine = MagicMock()
+        mock_conn = MagicMock()
 
-        connector.do_switch_context(catalog_name="new_catalog")
+        connector.do_switch_context(mock_conn, catalog_name="new_catalog")
 
-        connector.connection.execute.assert_called_once()
-        connector.connection.commit.assert_called_once()
-        connector.engine.connect.assert_not_called()
+        mock_conn.execute.assert_called_once()
+        mock_conn.commit.assert_called_once()
 
-        # Verify SET CATALOG was issued
-        sql_arg = str(connector.connection.execute.call_args[0][0].text)
+        sql_arg = str(mock_conn.execute.call_args[0][0].text)
         assert "SET CATALOG" in sql_arg
         assert "new_catalog" in sql_arg
 
 
-def test_do_switch_context_database_uses_persistent_connection():
-    """do_switch_context must execute USE on self.connection."""
+def test_do_switch_context_database():
+    """do_switch_context executes USE on the given connection."""
     config = StarRocksConfig(username="test_user")
 
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
-        connector.connection = MagicMock()
-        connector.engine = MagicMock()
+        mock_conn = MagicMock()
 
-        connector.do_switch_context(database_name="new_db")
+        connector.do_switch_context(mock_conn, database_name="new_db")
 
-        connector.connection.execute.assert_called_once()
-        connector.connection.commit.assert_called_once()
-        connector.engine.connect.assert_not_called()
+        mock_conn.execute.assert_called_once()
+        mock_conn.commit.assert_called_once()
 
-        sql_arg = str(connector.connection.execute.call_args[0][0].text)
+        sql_arg = str(mock_conn.execute.call_args[0][0].text)
         assert "USE" in sql_arg
         assert "new_db" in sql_arg
 
 
 def test_do_switch_context_catalog_and_database():
-    """do_switch_context handles both catalog and database."""
+    """do_switch_context handles both catalog and database on the given connection."""
     config = StarRocksConfig(username="test_user")
 
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
-        connector.connection = MagicMock()
-        connector.engine = MagicMock()
+        mock_conn = MagicMock()
 
-        connector.do_switch_context(catalog_name="cat", database_name="db")
+        connector.do_switch_context(mock_conn, catalog_name="cat", database_name="db")
 
         # Two execute calls: SET CATALOG + USE
-        assert connector.connection.execute.call_count == 2
-        assert connector.connection.commit.call_count == 2
-        connector.engine.connect.assert_not_called()
+        assert mock_conn.execute.call_count == 2
+        assert mock_conn.commit.call_count == 2
 
 
 def test_set_catalog():
-    """connector.execute('set catalog ...') updates StarRocksConnector.catalog_name without calling engine.connect."""
+    """connector.execute('set catalog ...') updates catalog_name via execute_content_set."""
     config = StarRocksConfig(username="test_user")
 
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
         connector = StarRocksConnector(config)
-        connector.connection = MagicMock()
-        connector.engine = MagicMock()
+        mock_conn = MagicMock()
+        engine = MagicMock()
+        engine.connect.return_value = mock_conn
+        connector.engine = engine
         connector._owns_engine = True
         assert connector.catalog_name == "default_catalog"
 
@@ -420,7 +415,6 @@ def test_set_catalog():
 
         connector.execute(input_params={"sql_query": "set catalog default_catalog"})
         assert connector.catalog_name == "default_catalog"
-        connector.engine.connect.assert_not_called()
 
 
 def test_init_normalizes_def_catalog():

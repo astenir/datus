@@ -48,8 +48,10 @@ def test_conn_applies_context_per_checkout():
         with connector._conn():
             pass
 
-    # Verify USE was executed on the checked-out connection
+    # Verify USE analytics was executed on the checked-out connection
     mock_conn.execute.assert_called()
+    sql_arg = str(mock_conn.execute.call_args_list[0][0][0].text)
+    assert "analytics" in sql_arg
     mock_conn.commit.assert_called()
 
 
@@ -108,3 +110,167 @@ def test_thread_local_context_isolation_with_conn():
 
     assert results[1] == "db1"
     assert results[2] == "db2"
+
+
+# ==================== _conn() Context Override Tests ====================
+
+
+def test_conn_explicit_params_override_thread_local():
+    """Explicit _conn(database_name=...) overrides thread-local default."""
+    connector = DummySQLAlchemyConnector("sqlite://", dialect="sqlite")
+    connector.switch_context(database_name="thread_default")
+
+    mock_conn = MagicMock()
+    engine = MagicMock()
+    engine.connect.return_value = mock_conn
+
+    with patch("datus_sqlalchemy.connector.create_engine", return_value=engine):
+        connector._ensure_engine()
+        with connector._conn(database_name="override_db"):
+            pass
+
+    sql_arg = str(mock_conn.execute.call_args_list[0][0][0].text)
+    assert "override_db" in sql_arg
+    assert "thread_default" not in sql_arg
+
+
+def test_conn_falls_back_to_thread_local_when_no_override():
+    """_conn() without explicit params uses thread-local context."""
+    connector = DummySQLAlchemyConnector("sqlite://", dialect="sqlite")
+    connector.switch_context(database_name="my_default")
+
+    mock_conn = MagicMock()
+    engine = MagicMock()
+    engine.connect.return_value = mock_conn
+
+    with patch("datus_sqlalchemy.connector.create_engine", return_value=engine):
+        connector._ensure_engine()
+        with connector._conn():
+            pass
+
+    sql_arg = str(mock_conn.execute.call_args_list[0][0][0].text)
+    assert "my_default" in sql_arg
+
+
+# ==================== Execute Methods with Context Params ====================
+
+
+def test_execute_query_with_context_params():
+    """execute_query passes context to _conn()."""
+    connector = DummySQLAlchemyConnector("sqlite://", dialect="sqlite")
+
+    mock_conn = MagicMock()
+    query_result = MagicMock()
+    query_result.fetchall.return_value = [MagicMock(_asdict=lambda: {"id": 1})]
+    mock_conn.execute.return_value = query_result
+
+    engine = MagicMock()
+    engine.connect.return_value = mock_conn
+
+    with patch("datus_sqlalchemy.connector.create_engine", return_value=engine):
+        result = connector.execute_query("SELECT 1", database_name="target_db")
+
+    assert result.success is True
+    # do_switch_context should have been called with target_db
+    sql_arg = str(mock_conn.execute.call_args_list[0][0][0].text)
+    assert "target_db" in sql_arg
+
+
+def test_execute_insert_with_context_params():
+    """execute_insert passes context to _conn()."""
+    connector = DummySQLAlchemyConnector("sqlite://", dialect="sqlite")
+
+    mock_conn = MagicMock()
+    mock_result = MagicMock()
+    mock_result.rowcount = 1
+    mock_result.inserted_primary_key = None
+    mock_conn.execute.return_value = mock_result
+
+    engine = MagicMock()
+    engine.connect.return_value = mock_conn
+
+    with patch("datus_sqlalchemy.connector.create_engine", return_value=engine):
+        result = connector.execute_insert("INSERT INTO t VALUES (1)", database_name="target_db")
+
+    assert result.success is True
+    sql_arg = str(mock_conn.execute.call_args_list[0][0][0].text)
+    assert "target_db" in sql_arg
+
+
+def test_execute_ddl_with_context_params():
+    """execute_ddl passes context to _conn()."""
+    connector = DummySQLAlchemyConnector("sqlite://", dialect="sqlite")
+
+    mock_conn = MagicMock()
+    mock_result = MagicMock()
+    mock_result.rowcount = 0
+    mock_conn.execute.return_value = mock_result
+
+    engine = MagicMock()
+    engine.connect.return_value = mock_conn
+
+    with patch("datus_sqlalchemy.connector.create_engine", return_value=engine):
+        result = connector.execute_ddl("CREATE TABLE t (id INT)", catalog_name="cat", database_name="db")
+
+    assert result.success is True
+
+
+# ==================== _conn() Rollback on Exception ====================
+
+
+def test_conn_rollback_on_exception():
+    """_conn() calls conn.rollback() when an exception occurs."""
+    connector = DummySQLAlchemyConnector("sqlite://", dialect="sqlite")
+
+    mock_conn = MagicMock()
+    engine = MagicMock()
+    engine.connect.return_value = mock_conn
+
+    # Make do_switch_context raise to trigger the exception path
+    with patch("datus_sqlalchemy.connector.create_engine", return_value=engine):
+        connector._ensure_engine()
+        with patch.object(connector, "do_switch_context", side_effect=RuntimeError("boom")):
+            try:
+                with connector._conn():
+                    pass
+            except RuntimeError:
+                pass
+
+    mock_conn.rollback.assert_called_once()
+    mock_conn.close.assert_called_once()
+
+
+# ==================== _ensure_engine Thread Safety ====================
+
+
+def test_ensure_engine_concurrent_access():
+    """Multiple threads calling _ensure_engine create only one engine."""
+    connector = DummySQLAlchemyConnector("sqlite://", dialect="sqlite")
+    call_count = 0
+
+    def counting_create_engine(*args, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        import time
+
+        time.sleep(0.02)  # Simulate slow engine creation
+        return MagicMock()
+
+    results = {}
+
+    def worker(thread_id):
+        engine = connector._ensure_engine()
+        results[thread_id] = engine
+
+    with patch("datus_sqlalchemy.connector.create_engine", side_effect=counting_create_engine):
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    # Double-check locking should ensure create_engine is called exactly once
+    assert call_count == 1
+    # All threads should get the same engine instance
+    engines = list(results.values())
+    assert all(e is engines[0] for e in engines)
