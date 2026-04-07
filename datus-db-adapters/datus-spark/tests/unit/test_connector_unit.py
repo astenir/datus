@@ -308,6 +308,39 @@ def test_context_manager_support():
 # ==================== Quote Identifier Tests ====================
 
 
+def test_do_switch_context_uses_persistent_connection():
+    """do_switch_context must execute USE on self.connection, not a temp connection."""
+    config = SparkConfig(username="test_user", database="db")
+
+    with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
+        connector = SparkConnector(config)
+        connector.connection = MagicMock()
+        connector.engine = MagicMock()
+
+        connector.do_switch_context(database_name="new_db")
+
+        connector.connection.execute.assert_called_once()
+        connector.connection.commit.assert_called_once()
+        # Must NOT create a temp connection via engine.connect()
+        connector.engine.connect.assert_not_called()
+
+
+def test_do_switch_context_noop_without_database():
+    """do_switch_context should do nothing when database_name is empty."""
+    config = SparkConfig(username="test_user", database="db")
+
+    with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
+        connector = SparkConnector(config)
+        connector.connection = MagicMock()
+
+        connector.do_switch_context()
+
+        connector.connection.execute.assert_not_called()
+
+
+# ==================== Quote Identifier Tests ====================
+
+
 def test_quote_identifier():
     """Test _quote_identifier uses backticks."""
     assert SparkConnector._quote_identifier("table") == "`table`"

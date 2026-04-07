@@ -50,7 +50,7 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         # When using a non-default catalog, don't put database in the connection
         # string — it would fail because the database doesn't exist under
         # default_catalog.  We switch catalog and USE database in connect().
-        needs_catalog_switch = config.catalog and config.catalog != "default_catalog"
+        needs_catalog_switch = config.catalog and config.catalog not in ("default_catalog", "def")
         mysql_database = "" if needs_catalog_switch else (config.database or "")
 
         mysql_config = MySQLConfig(
@@ -181,7 +181,7 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         # Use catalog-qualified information_schema — no SET CATALOG needed
         query = (
             f"SELECT TABLE_SCHEMA, TABLE_NAME "
-            f"FROM `{current_catalog}`.information_schema.{metadata_config.info_table} "
+            f"FROM {self._quote_identifier(current_catalog)}.information_schema.{metadata_config.info_table} "
             f"WHERE {where} {type_filter}"
         )
 
@@ -240,13 +240,14 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
 
         Uses catalog-qualified information_schema query.
         """
+        self.connect()
         current_catalog = self._resolve_catalog(catalog_name)
         database_name = database_name or self.database_name
 
         # Use catalog-qualified information_schema
         query_sql = (
             f"SELECT TABLE_SCHEMA, TABLE_NAME, MATERIALIZED_VIEW_DEFINITION "
-            f"FROM `{current_catalog}`.information_schema.materialized_views"
+            f"FROM {self._quote_identifier(current_catalog)}.information_schema.materialized_views"
         )
 
         if database_name:
@@ -290,7 +291,7 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
     def get_databases(self, catalog_name: str = "", include_sys: bool = False) -> List[str]:
         """Get list of databases using catalog-qualified SHOW DATABASES."""
         current_catalog = self._resolve_catalog(catalog_name)
-        result = self._execute_pandas(f"SHOW DATABASES FROM `{current_catalog}`")
+        result = self._execute_pandas(f"SHOW DATABASES FROM {self._quote_identifier(current_catalog)}")
         if result.empty:
             return []
         databases = result.iloc[:, 0].tolist()

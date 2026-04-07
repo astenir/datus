@@ -347,6 +347,77 @@ def test_sqlalchemy_schema_uses_default_catalog():
 
 
 @pytest.mark.acceptance
+def test_do_switch_context_catalog_uses_persistent_connection():
+    """do_switch_context must execute SET CATALOG on self.connection."""
+    config = StarRocksConfig(username="test_user")
+
+    with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
+        connector = StarRocksConnector(config)
+        connector.connection = MagicMock()
+        connector.engine = MagicMock()
+
+        connector.do_switch_context(catalog_name="new_catalog")
+
+        connector.connection.execute.assert_called_once()
+        connector.connection.commit.assert_called_once()
+        connector.engine.connect.assert_not_called()
+
+        # Verify SET CATALOG was issued
+        sql_arg = str(connector.connection.execute.call_args[0][0].text)
+        assert "SET CATALOG" in sql_arg
+        assert "new_catalog" in sql_arg
+
+
+def test_do_switch_context_database_uses_persistent_connection():
+    """do_switch_context must execute USE on self.connection."""
+    config = StarRocksConfig(username="test_user")
+
+    with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
+        connector = StarRocksConnector(config)
+        connector.connection = MagicMock()
+        connector.engine = MagicMock()
+
+        connector.do_switch_context(database_name="new_db")
+
+        connector.connection.execute.assert_called_once()
+        connector.connection.commit.assert_called_once()
+        connector.engine.connect.assert_not_called()
+
+        sql_arg = str(connector.connection.execute.call_args[0][0].text)
+        assert "USE" in sql_arg
+        assert "new_db" in sql_arg
+
+
+def test_do_switch_context_catalog_and_database():
+    """do_switch_context handles both catalog and database."""
+    config = StarRocksConfig(username="test_user")
+
+    with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
+        connector = StarRocksConnector(config)
+        connector.connection = MagicMock()
+        connector.engine = MagicMock()
+
+        connector.do_switch_context(catalog_name="cat", database_name="db")
+
+        # Two execute calls: SET CATALOG + USE
+        assert connector.connection.execute.call_count == 2
+        assert connector.connection.commit.call_count == 2
+        connector.engine.connect.assert_not_called()
+
+
+def test_init_normalizes_def_catalog():
+    """config.catalog='def' should be treated as default (no catalog switch needed)."""
+    config = StarRocksConfig(username="test_user", catalog="def", database="mydb")
+
+    with patch("datus_mysql.MySQLConnector.__init__") as mock_init:
+        connector = StarRocksConnector(config)
+
+        # 'def' is default, so database should be in the MySQL connection string
+        mysql_config = mock_init.call_args[0][0]
+        assert mysql_config.database == "mydb"
+        assert connector._deferred_database == ""
+
+
 def test_close_ignores_struct_pack_error():
     """Test close ignores struct.pack error."""
     config = StarRocksConfig(username="test_user")
