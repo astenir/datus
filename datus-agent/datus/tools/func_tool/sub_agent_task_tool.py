@@ -50,6 +50,7 @@ NODE_CLASS_MAP = {
     "semantic": NodeType.TYPE_SEMANTIC,
     "sql_summary": NodeType.TYPE_SQL_SUMMARY,
     "explore": NodeType.TYPE_EXPLORE,
+    "gen_table": NodeType.TYPE_GEN_TABLE,
 }
 
 # Descriptions for built-in system subagents (used in task tool description for LLM)
@@ -92,9 +93,15 @@ BUILTIN_SUBAGENT_DESCRIPTIONS = {
         "Returns JSON with {response, semantic_models (list of file paths), tokens_used}."
     ),
     "gen_metrics": (
-        "Extract core business metrics from SQL queries and generate MetricFlow metric definitions. "
-        "Use when asked to create metrics, KPIs, or business measures from SQL. "
-        "Prompt MUST contain one or more complete SQL queries for analysis. "
+        "Define and generate MetricFlow metric definitions. "
+        "Three input modes: "
+        "(1) SQL-based: provide SQL queries for metric extraction. "
+        "(2) Natural language: describe the business metric or calculation rules, "
+        "the agent will guide through interactive Q&A to define the metric. "
+        "(3) Batch: provide multiple SQL queries for core metric extraction. "
+        "For batch input, if the user provides a CSV file path, YOU (the parent agent) must read the file content first "
+        "and include the full content in the prompt — the metrics agent cannot access files outside its workspace. "
+        "The metrics agent will deduplicate aggregation patterns and propose only core base metrics. "
         "Returns JSON with {response, tokens_used}."
     ),
     "gen_sql_summary": (
@@ -111,6 +118,14 @@ BUILTIN_SUBAGENT_DESCRIPTIONS = {
         "The agent will parse both from the prompt, autonomously explore the database, write SQL, "
         "verify against the gold SQL reference, and extract knowledge. "
         "Returns JSON with {response, ext_knowledge_file, tokens_used}."
+    ),
+    "gen_table": (
+        "Create database tables with two input modes: "
+        "(1) SQL-based: provide a JOIN/SELECT SQL → CTAS to create a wide table for query acceleration. "
+        "(2) Natural language: describe the table structure (columns, types, purpose) → generate CREATE TABLE DDL. "
+        "Both modes: the agent analyzes the input, proposes a table schema, asks for confirmation, "
+        "and executes the DDL. For semantic model generation on the new table, "
+        "use gen_semantic_model separately. Returns JSON with {response, tokens_used}."
     ),
 }
 
@@ -291,6 +306,13 @@ class SubAgentTaskTool:
                 tools=None,
                 node_name="gen_report",
             )
+        elif subagent_type == "gen_table":
+            from datus.agent.node.gen_table_agentic_node import GenTableAgenticNode
+
+            return GenTableAgenticNode(
+                agent_config=self.agent_config,
+                execution_mode="interactive",
+            )
         else:
             raise ValueError(f"Unknown builtin subagent type: {subagent_type}")
 
@@ -324,6 +346,7 @@ class SubAgentTaskTool:
             "gen_metrics": (NodeType.TYPE_SEMANTIC, "gen_metrics"),
             "gen_sql_summary": (NodeType.TYPE_SQL_SUMMARY, "gen_sql_summary"),
             "gen_ext_knowledge": (NodeType.TYPE_EXT_KNOWLEDGE, "gen_ext_knowledge"),
+            "gen_table": (NodeType.TYPE_GEN_TABLE, "gen_table"),
         }
         if subagent_type in builtin_type_map:
             return builtin_type_map[subagent_type]
@@ -351,6 +374,12 @@ class SubAgentTaskTool:
         correctly resolves the pending futures.
         """
         node.interaction_broker = broker
+
+        # Update broker reference on ask_user_tool that was already initialised
+        # with the node's original (now stale) broker.
+        ask_user_tool = getattr(node, "ask_user_tool", None)
+        if ask_user_tool is not None and hasattr(ask_user_tool, "_broker"):
+            ask_user_tool._broker = broker
 
         # Update broker references on hooks that were already initialised
         # with the node's original (now stale) broker.
@@ -518,7 +547,16 @@ class SubAgentTaskTool:
         from datus.agent.node.gen_ext_knowledge_agentic_node import GenExtKnowledgeAgenticNode
         from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
         from datus.agent.node.gen_semantic_model_agentic_node import GenSemanticModelAgenticNode
+        from datus.agent.node.gen_table_agentic_node import GenTableAgenticNode
         from datus.agent.node.sql_summary_agentic_node import SqlSummaryAgenticNode
+
+        if isinstance(node, GenTableAgenticNode):
+            from datus.schemas.semantic_agentic_node_models import SemanticNodeInput
+
+            return SemanticNodeInput(
+                user_message=prompt,
+                database=self.agent_config.current_database,
+            )
 
         if isinstance(node, (GenSemanticModelAgenticNode, GenMetricsAgenticNode)):
             from datus.schemas.semantic_agentic_node_models import SemanticNodeInput
