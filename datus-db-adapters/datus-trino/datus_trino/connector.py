@@ -170,8 +170,9 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
         catalog = catalog_name or self.catalog_name
         schema = schema_name or database_name or self.schema_name
         try:
+            safe_schema = schema.replace("'", "''")
             result = self._execute_pandas(
-                f"SELECT table_name FROM \"{catalog}\".information_schema.views WHERE table_schema = '{schema}'"
+                f"SELECT table_name FROM \"{catalog}\".information_schema.views WHERE table_schema = '{safe_schema}'"
             )
             if result.empty:
                 return []
@@ -195,12 +196,15 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
         catalog = catalog_name or self.catalog_name
         schema = schema_name or database_name or self.schema_name
 
+        safe_catalog = catalog.replace("'", "''")
+        safe_schema = schema.replace("'", "''")
+        safe_table = table_name.replace("'", "''")
         sql = (
             f"SELECT column_name, data_type, is_nullable, column_default, comment "
             f'FROM "{catalog}".information_schema.columns '
-            f"WHERE table_catalog = '{catalog}' "
-            f"AND table_schema = '{schema}' "
-            f"AND table_name = '{table_name}' "
+            f"WHERE table_catalog = '{safe_catalog}' "
+            f"AND table_schema = '{safe_schema}' "
+            f"AND table_name = '{safe_table}' "
             f"ORDER BY ordinal_position"
         )
         query_result = self._execute_pandas(sql)

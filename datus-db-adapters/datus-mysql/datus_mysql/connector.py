@@ -138,7 +138,8 @@ class MySQLConnector(SQLAlchemyConnector):
 
         # Build WHERE clause
         if database_name:
-            where = f"TABLE_SCHEMA = '{database_name}'"
+            safe_db = database_name.replace("'", "''")
+            where = f"TABLE_SCHEMA = '{safe_db}'"
         else:
             where = f"{list_to_in_str('TABLE_SCHEMA not in', list(self._sys_databases()))}"
 
@@ -289,8 +290,8 @@ class MySQLConnector(SQLAlchemyConnector):
                 COLUMN_DEFAULT as `Default`,
                 COLUMN_COMMENT as Comment
             FROM INFORMATION_SCHEMA.COLUMNS
-            WHERE TABLE_SCHEMA = '{database_name}'
-              AND TABLE_NAME = '{table_name}'
+            WHERE TABLE_SCHEMA = '{database_name.replace("'", "''")}'
+              AND TABLE_NAME = '{table_name.replace("'", "''")}'
             ORDER BY ORDINAL_POSITION
         """
         query_result = self._execute_pandas(sql)

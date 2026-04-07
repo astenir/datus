@@ -155,8 +155,9 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         if table_type == "mv":
             # pg_matviews is scoped to the current database connection.
             # Use a temporary connection if a different database is requested (thread-safe).
+            safe_schema = schema_name.replace("'", "''") if schema_name else ""
             if schema_name:
-                where = f"schemaname = '{schema_name}'"
+                where = f"schemaname = '{safe_schema}'"
             else:
                 where = f"{list_to_in_str('schemaname not in', list(self._sys_schemas()))}"
 
@@ -165,18 +166,13 @@ class PostgreSQLConnector(SQLAlchemyConnector):
                 FROM pg_matviews
                 WHERE {where}
             """
-            # pg_matviews is scoped to the connected database.
-            # Temporarily set thread-local database so _conn() picks the right engine.
-            saved_db = self.database_name
-            try:
-                self.database_name = database_name
-                query_result = self._execute_pandas(query)
-            finally:
-                self.database_name = saved_db
+            query_result = self._execute_pandas(query, database_name=database_name)
         else:
             # Tables and views use information_schema (supports table_catalog filter)
+            safe_schema = schema_name.replace("'", "''") if schema_name else ""
+            safe_db = database_name.replace("'", "''") if database_name else ""
             if schema_name:
-                where = f"table_schema = '{schema_name}'"
+                where = f"table_schema = '{safe_schema}'"
             else:
                 where = f"{list_to_in_str('table_schema not in', list(self._sys_schemas()))}"
 
@@ -188,9 +184,9 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             query = f"""
                 SELECT table_schema, table_name
                 FROM information_schema.{metadata_config.info_table}
-                WHERE table_catalog = '{database_name}' AND {where} {type_filter}
+                WHERE table_catalog = '{safe_db}' AND {where} {type_filter}
             """
-            query_result = self._execute_pandas(query)
+            query_result = self._execute_pandas(query, database_name=database_name)
 
         # Format results
         result = []
@@ -223,10 +219,13 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         """
         full_name = self.full_name(schema_name=schema_name, table_name=table_name)
 
+        safe_schema = schema_name.replace("'", "''") if schema_name else ""
+        safe_table = table_name.replace("'", "''") if table_name else ""
+
         if object_type == "VIEW":
             # Get view definition
             sql = f"""
-                SELECT pg_get_viewdef('{schema_name}.{table_name}'::regclass, true) as definition
+                SELECT pg_get_viewdef('{safe_schema}.{safe_table}'::regclass, true) as definition
             """
             result = self._execute_pandas(sql)
             if not result.empty and result["definition"][0]:
@@ -238,7 +237,7 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             sql = f"""
                 SELECT definition
                 FROM pg_matviews
-                WHERE schemaname = '{schema_name}' AND matviewname = '{table_name}'
+                WHERE schemaname = '{safe_schema}' AND matviewname = '{safe_table}'
             """
             result = self._execute_pandas(sql)
             if not result.empty and result["definition"][0]:
@@ -382,6 +381,10 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         database_name = database_name or self.database_name
         schema_name = schema_name or self.schema_name
 
+        safe_db = database_name.replace("'", "''") if database_name else ""
+        safe_schema = schema_name.replace("'", "''") if schema_name else ""
+        safe_table = table_name.replace("'", "''") if table_name else ""
+
         # Use INFORMATION_SCHEMA to get schema with comments
         sql = f"""
             SELECT
@@ -399,16 +402,16 @@ class PostgreSQLConnector(SQLAlchemyConnector):
                     ON tc.constraint_name = kcu.constraint_name
                     AND tc.table_schema = kcu.table_schema
                 WHERE tc.constraint_type = 'PRIMARY KEY'
-                    AND tc.table_schema = '{schema_name}'
-                    AND tc.table_name = '{table_name}'
+                    AND tc.table_schema = '{safe_schema}'
+                    AND tc.table_name = '{safe_table}'
             ) pk ON c.column_name = pk.column_name
             LEFT JOIN pg_catalog.pg_statio_all_tables st
                 ON st.schemaname = c.table_schema AND st.relname = c.table_name
             LEFT JOIN pg_catalog.pg_description pgd
                 ON pgd.objoid = st.relid AND pgd.objsubid = c.ordinal_position
-            WHERE c.table_catalog = '{database_name}'
-              AND c.table_schema = '{schema_name}'
-              AND c.table_name = '{table_name}'
+            WHERE c.table_catalog = '{safe_db}'
+              AND c.table_schema = '{safe_schema}'
+              AND c.table_name = '{safe_table}'
             ORDER BY c.ordinal_position
         """
         query_result = self._execute_pandas(sql)
@@ -447,7 +450,8 @@ class PostgreSQLConnector(SQLAlchemyConnector):
     def get_schemas(self, catalog_name: str = "", database_name: str = "", include_sys: bool = False) -> List[str]:
         """Get list of schemas in the current database."""
         database_name = database_name or self.database_name
-        sql = f"SELECT schema_name FROM information_schema.schemata WHERE catalog_name = '{database_name}'"
+        safe_db = database_name.replace("'", "''") if database_name else ""
+        sql = f"SELECT schema_name FROM information_schema.schemata WHERE catalog_name = '{safe_db}'"
         result = self._execute_pandas(sql)
         schemas = result["schema_name"].tolist()
 
@@ -517,15 +521,15 @@ class PostgreSQLConnector(SQLAlchemyConnector):
 
     @override
     def close(self):
-        """Dispose all engines."""
+        """Dispose all engines (per-database pool + parent engine)."""
         for engine in self._engines.values():
             try:
                 engine.dispose()
             except Exception as e:
                 logger.warning(f"Error disposing engine: {e}")
         self._engines.clear()
-        self.engine = None
-        self._owns_engine = False
+        # Dispose parent engine that may have been created via connect()/_ensure_engine()
+        super().close()
 
     @override
     def do_switch_context(self, conn, catalog_name: str = "", database_name: str = "", schema_name: str = ""):

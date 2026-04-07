@@ -102,10 +102,14 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
     def switch_catalog(self, catalog_name: str) -> None:
         """Switch to a different catalog.
 
+        Clears database_name because the old database may not exist
+        in the new catalog.
+
         Args:
             catalog_name: Name of the catalog to switch to
         """
         self.switch_context(catalog_name=catalog_name)
+        self.database_name = ""
 
     def _resolve_catalog(self, catalog_name: str = "") -> str:
         """Resolve the effective catalog name, falling back to configured or default."""
@@ -150,7 +154,8 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
 
         # Build WHERE clause
         if database_name:
-            where = f"TABLE_SCHEMA = '{database_name}'"
+            safe_db = database_name.replace("'", "''")
+            where = f"TABLE_SCHEMA = '{safe_db}'"
         else:
             where = list_to_in_str("TABLE_SCHEMA NOT IN", list(self._sys_databases()))
 
@@ -229,7 +234,8 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         )
 
         if database_name:
-            query_sql = f"{query_sql} WHERE TABLE_SCHEMA = '{database_name}'"
+            safe_db = database_name.replace("'", "''")
+            query_sql = f"{query_sql} WHERE TABLE_SCHEMA = '{safe_db}'"
         else:
             ignore_dbs = list(self._sys_databases())
             query_sql = f"{query_sql} {list_to_in_str('WHERE TABLE_SCHEMA NOT IN', ignore_dbs)}"

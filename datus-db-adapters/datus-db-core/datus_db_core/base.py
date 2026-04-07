@@ -287,8 +287,9 @@ class BaseSqlConnector(ABC):
         if ctx:
             try:
                 return method(sql, *args, **extra_kwargs, **ctx)
-            except TypeError:
-                pass
+            except TypeError as e:
+                if "unexpected keyword argument" not in str(e):
+                    raise
         return method(sql, *args, **extra_kwargs)
 
     def switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
@@ -297,14 +298,17 @@ class BaseSqlConnector(ABC):
         For SQLAlchemy connectors: context is applied per-operation via _conn().
         For native connectors (Redshift/Snowflake): also calls _apply_live_context()
         to execute USE/SET on the persistent connection.
+
+        State is updated only after _apply_live_context succeeds, so a failed
+        live switch does not leave thread-local context out of sync.
         """
+        self._apply_live_context(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name)
         if catalog_name:
             self.catalog_name = catalog_name
         if database_name:
             self.database_name = database_name
         if schema_name:
             self.schema_name = schema_name
-        self._apply_live_context(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name)
 
     def _apply_live_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
         """Apply context to a persistent connection (for native connectors).
