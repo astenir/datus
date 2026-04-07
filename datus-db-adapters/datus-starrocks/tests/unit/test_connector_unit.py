@@ -404,6 +404,7 @@ def test_do_switch_context_catalog_and_database():
         assert connector.connection.commit.call_count == 2
         connector.engine.connect.assert_not_called()
 
+
 def test_set_catalog():
     """do_switch_context handles both catalog and database."""
     config = StarRocksConfig(username="test_user")
@@ -421,6 +422,7 @@ def test_set_catalog():
         connector.execute(input_params={"sql_query": "set catalog default_catalog"})
         assert connector.catalog_name == "default_catalog"
         connector.engine.connect.assert_not_called()
+
 
 def test_init_normalizes_def_catalog():
     """config.catalog='def' should be treated as default (no catalog switch needed)."""
