@@ -405,6 +405,25 @@ def test_do_switch_context_catalog_and_database():
         connector.engine.connect.assert_not_called()
 
 
+def test_set_catalog():
+    """connector.execute('set catalog ...') updates StarRocksConnector.catalog_name without calling engine.connect."""
+    config = StarRocksConfig(username="test_user")
+
+    with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
+        connector = StarRocksConnector(config)
+        connector.connection = MagicMock()
+        connector.engine = MagicMock()
+        connector._owns_engine = True
+        assert connector.catalog_name == "default_catalog"
+
+        connector.execute(input_params={"sql_query": "set catalog cat"})
+        assert connector.catalog_name == "cat"
+
+        connector.execute(input_params={"sql_query": "set catalog default_catalog"})
+        assert connector.catalog_name == "default_catalog"
+        connector.engine.connect.assert_not_called()
+
+
 def test_init_normalizes_def_catalog():
     """config.catalog='def' should be treated as default (no catalog switch needed)."""
     config = StarRocksConfig(username="test_user", catalog="def", database="mydb")

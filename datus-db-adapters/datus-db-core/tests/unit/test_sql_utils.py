@@ -184,6 +184,7 @@ class TestParseSqlType:
 
     def test_set(self):
         assert parse_sql_type("SET search_path TO my_schema", "postgres") == SQLType.CONTENT_SET
+        assert parse_sql_type("SET catalog my_cat", "starrocks") == SQLType.CONTENT_SET
 
     def test_with_cte_select(self):
         assert parse_sql_type("WITH cte AS (SELECT 1) SELECT * FROM cte", "snowflake") == SQLType.SELECT
