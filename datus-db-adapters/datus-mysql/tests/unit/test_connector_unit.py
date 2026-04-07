@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -355,6 +355,36 @@ def test_connector_database_name_attribute():
         connector = MySQLConnector(config)
 
         assert connector.database_name == "testdb"
+
+
+def test_do_switch_context_uses_persistent_connection():
+    """do_switch_context must execute USE on self.connection, not a temp connection."""
+    config = MySQLConfig(username="user", database="db")
+
+    with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
+        connector = MySQLConnector(config)
+        connector.connection = MagicMock()
+        connector.engine = MagicMock()
+
+        connector.do_switch_context(database_name="new_db")
+
+        connector.connection.execute.assert_called_once()
+        connector.connection.commit.assert_called_once()
+        # Must NOT create a temp connection via engine.connect()
+        connector.engine.connect.assert_not_called()
+
+
+def test_do_switch_context_noop_without_database():
+    """do_switch_context should do nothing when database_name is empty."""
+    config = MySQLConfig(username="user", database="db")
+
+    with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
+        connector = MySQLConnector(config)
+        connector.connection = MagicMock()
+
+        connector.do_switch_context()
+
+        connector.connection.execute.assert_not_called()
 
 
 def test_connector_database_name_empty_when_none():
