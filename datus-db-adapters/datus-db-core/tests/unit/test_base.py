@@ -478,7 +478,6 @@ class TestThreadLocalContext:
         assert results["db"] == "default_db"
         assert connector.database_name == "main_thread_db"
 
-
     def test_concurrent_execute_with_different_contexts(self):
         """Two threads calling execute() with different context params don't interfere."""
         import threading
