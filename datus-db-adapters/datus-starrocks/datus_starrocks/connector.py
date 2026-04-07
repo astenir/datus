@@ -67,7 +67,7 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
 
         self.catalog_name = config.catalog
         self._deferred_database = config.database if needs_catalog_switch else ""
-
+        self.database_name = config.database or ""
         # Override dialect to StarRocks
         self.dialect = "starrocks"
 
