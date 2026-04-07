@@ -406,7 +406,7 @@ def test_do_switch_context_catalog_and_database():
 
 
 def test_set_catalog():
-    """do_switch_context handles both catalog and database."""
+    """connector.execute('set catalog ...') updates StarRocksConnector.catalog_name without calling engine.connect."""
     config = StarRocksConfig(username="test_user")
 
     with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
