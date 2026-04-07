@@ -52,7 +52,6 @@ class TestNode:
             agent_config=agent_config,
         )
         node.run()
-        print(f"result {node.result}")
         assert node.result is not None, "Expected node.result to be populated, but got None"
 
     def test_empty_vector_and_scalar_query(self, agent_config: AgentConfig):
@@ -79,8 +78,7 @@ class TestNode:
             agent_config=agent_config,
         )
         node.execute()
-        print(f"result {node.result}")
-        assert node.result is not None, node.result is None
+        assert node.result is not None, "Expected node.result to be populated, but got None"
 
 
 class TestRag:
@@ -109,8 +107,8 @@ class TestRag:
         ]
         try:
             rag.storage.batch_store_metrics(test_metrics)
-        except Exception as e:
-            logger.warning(f"Failed to populate metrics: {e}")
+        except (ImportError, AttributeError) as e:
+            pytest.skip(f"Storage API unavailable: {e}")
         return rag
 
     @pytest.fixture
@@ -130,18 +128,18 @@ class TestRag:
         ]
         try:
             rag.storage.batch_store(test_models)
-        except Exception as e:
-            logger.warning(f"Failed to populate semantic models: {e}")
+        except (ImportError, AttributeError) as e:
+            pytest.skip(f"Storage API unavailable: {e}")
         return rag
 
     def test_pure_scalar_query(self, metrics_rag: MetricRAG, semantic_rag: SemanticModelRAG):
         semantic_rag.storage._ensure_table_ready()
         result = semantic_rag.storage.table.search_all()
-        assert len(result) >= 0  # Changed to >= 0 to allow empty tables
+        assert hasattr(result, "__len__"), f"Expected sized collection from search_all, got {type(result)}"
 
         metrics_rag.storage._ensure_table_ready()
         result = metrics_rag.storage.table.search_all()
-        assert len(result) >= 0  # Changed to >= 0 to allow empty tables
+        assert hasattr(result, "__len__"), f"Expected sized collection from search_all, got {type(result)}"
 
 
 def test_json():
@@ -150,5 +148,6 @@ def test_json():
         description="A test metric for JSON serialization",
     )
     json_str = json.dumps(metric.__dict__)
-    print(f"json:{json_str}")
-    assert json.loads(json_str) == metric.__dict__
+    parsed = json.loads(json_str)
+    assert parsed == metric.__dict__
+    assert parsed["name"] == "metric_name"
