@@ -289,7 +289,7 @@ class BaseSqlConnector(ABC):
                 return method(sql, *args, **extra_kwargs, **ctx)
             except TypeError as e:
                 if "unexpected keyword argument" not in str(e):
-                    raise
+                    raise TypeError(f"{method.__qualname__} does not support per-call context overrides: {sorted(ctx)}")
         return method(sql, *args, **extra_kwargs)
 
     def switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):

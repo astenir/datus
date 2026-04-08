@@ -65,7 +65,7 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         )
         super().__init__(mysql_config)
         self._deferred_database = config.database if needs_catalog_switch else ""
-        self._default_catalog = config.catalog
+        self._default_catalog = (self.default_catalog() if config.catalog in ("", None, "def") else config.catalog)
         self._default_database = config.database or ""
 
         # Override dialect to StarRocks

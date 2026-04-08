@@ -2,6 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Set, Union, override
 from urllib.parse import quote_plus
 
@@ -91,7 +92,8 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         )
         self._default_database = database
         self._default_schema = config.schema_name or "public"
-        self._engines = {}  # database_name -> engine (for cross-database access)
+        self._engines: OrderedDict = OrderedDict()  # LRU cache: database_name -> engine
+        self._max_engines = 8
 
     # ==================== System Resources ====================
 
@@ -473,21 +475,30 @@ class PostgreSQLConnector(SQLAlchemyConnector):
 
         PostgreSQL requires different connection strings per database,
         so each database gets its own engine with connection pool.
+        Uses LRU eviction (max 8 engines) to avoid holding too many connections.
         """
         db = database_name or self.database_name
-        if db not in self._engines:
-            with self._engine_lock:
-                if db not in self._engines:
-                    conn_str = self._build_connection_string(db)
-                    self._engines[db] = create_engine(
-                        conn_str,
-                        pool_size=5,
-                        max_overflow=10,
-                        pool_timeout=self.timeout_seconds,
-                        pool_recycle=3600,
-                        pool_pre_ping=True,
-                    )
-        return self._engines[db]
+        with self._engine_lock:
+            if db in self._engines:
+                self._engines.move_to_end(db)
+                return self._engines[db]
+            conn_str = self._build_connection_string(db)
+            engine = create_engine(
+                conn_str,
+                pool_size=5,
+                max_overflow=10,
+                pool_timeout=self.timeout_seconds,
+                pool_recycle=3600,
+                pool_pre_ping=True,
+            )
+            self._engines[db] = engine
+            while len(self._engines) > self._max_engines:
+                _, evicted = self._engines.popitem(last=False)
+                try:
+                    evicted.dispose()
+                except Exception as e:
+                    logger.warning(f"Error disposing evicted engine: {e}")
+            return engine
 
     @override
     def _conn(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
