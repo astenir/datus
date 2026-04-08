@@ -94,18 +94,31 @@ class ConcreteConnector(BaseSqlConnector):
 
 
 class ContextAwareConnector(ConcreteConnector):
-    """Connector whose execute methods accept context kwargs and record what was passed."""
+    """Connector whose execute methods accept context kwargs and record what was passed.
+
+    last_context/last_context_keys are per-thread so concurrent tests can
+    inspect each thread's result without races.
+    """
 
     _CTX_KEYS = {"catalog_name", "database_name", "schema_name"}
 
     def __init__(self, config=None, dialect="snowflake"):
+        import threading
+
         super().__init__(config, dialect)
-        self.last_context = {}
-        self.last_context_keys: set = set()
+        self._local = threading.local()
+
+    @property
+    def last_context(self):
+        return getattr(self._local, "last_context", {})
+
+    @property
+    def last_context_keys(self):
+        return getattr(self._local, "last_context_keys", set())
 
     def _record(self, **kwargs):
-        self.last_context_keys = set(kwargs.keys()) & self._CTX_KEYS
-        self.last_context = {k: kwargs.get(k, "") for k in self._CTX_KEYS}
+        self._local.last_context_keys = set(kwargs.keys()) & self._CTX_KEYS
+        self._local.last_context = {k: kwargs.get(k, "") for k in self._CTX_KEYS}
 
     def execute_insert(self, sql: str, **kwargs):
         self._record(**kwargs)
@@ -502,14 +515,16 @@ class TestThreadLocalContext:
         assert connector.database_name == "main_thread_db"
 
     def test_concurrent_execute_with_different_contexts(self):
-        """Two threads calling execute() with different context params don't interfere."""
+        """Two threads calling execute() with different contexts don't interfere."""
         import threading
+        import time
 
         connector = ContextAwareConnector()
         results = {}
 
         def worker(thread_id, db_name):
             connector.execute({"sql_query": "SELECT 1"}, database_name=db_name)
+            time.sleep(0.05)
             results[thread_id] = connector.last_context.copy()
 
         t1 = threading.Thread(target=worker, args=(1, "db1"))
