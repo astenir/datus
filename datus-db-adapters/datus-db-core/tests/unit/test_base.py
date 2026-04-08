@@ -399,6 +399,16 @@ class TestCallWithCtx:
         assert result.result_format == "arrow"
         assert connector.last_context["database_name"] == "db"
 
+    def test_internal_type_error_propagates(self):
+        """A TypeError raised inside the method body must not be swallowed."""
+
+        def buggy_insert(sql, catalog_name="", database_name="", schema_name=""):
+            raise TypeError("unsupported operand type(s) for +: 'int' and 'str'")
+
+        ctx = {"catalog_name": "cat"}
+        with pytest.raises(TypeError, match="unsupported operand"):
+            BaseSqlConnector._call_with_ctx(buggy_insert, "INSERT INTO t VALUES (1)", ctx)
+
 
 class TestSwitchContext:
     def test_switch_context_updates_names(self):
@@ -492,8 +502,8 @@ class TestThreadLocalContext:
         t1 = threading.Thread(target=worker, args=(1, "db1"))
         t2 = threading.Thread(target=worker, args=(2, "db2"))
         t1.start()
-        t1.join()
         t2.start()
+        t1.join()
         t2.join()
 
         assert results[1]["database_name"] == "db1"
