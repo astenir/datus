@@ -1,6 +1,6 @@
 [project]
 name = "datus-starrocks"
-version = "0.1.4"
+version = "0.1.5"
 description = "StarRocks database adapter for Datus"
 readme = "README.md"
 requires-python = ">=3.12"
