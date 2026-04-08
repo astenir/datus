@@ -4,6 +4,7 @@
 
 import argparse
 import csv
+import os
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -15,15 +16,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from datus.agent.agent import Agent
-from datus.configuration.agent_config_loader import load_agent_config
+from datus.api.auth import load_auth_provider
+from datus.api.deps import init_deps
+from datus.api.services.datus_service_cache import DatusServiceCache
+from datus.configuration.agent_config_loader import load_agent_config, parse_config_path
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.node_models import SqlTask
 from datus.storage.task import TaskStore
 from datus.utils.loggings import get_logger
 
 from ..utils.json_utils import to_str
-from .auth import auth_service, get_current_client
-from .models import (
+from .legacy_auth import auth_service, get_current_client
+from .legacy_models import (
     FeedbackRequest,
     FeedbackResponse,
     HealthResponse,
@@ -422,6 +426,14 @@ async def lifespan(app: FastAPI):
 
     # Startup
     await service.initialize()
+
+    # Initialize plugin-based auth and service cache for new API routes
+    namespace = getattr(args, "namespace", None) or os.getenv("DATUS_NAMESPACE", "default")
+    api_config = getattr(service.agent_config, "api_config", {}) if service.agent_config else {}
+    auth_provider = load_auth_provider(api_config, namespace=namespace)
+    service_cache = DatusServiceCache(max_size=128)
+    init_deps(auth_provider, service_cache, namespace=namespace)
+
     logger.info("Datus API Service started")
     yield
     # Shutdown
@@ -439,13 +451,38 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
     app.state.agent_args = agent_args
 
     # Add CORS middleware
+    cors_origins_env = os.getenv("DATUS_CORS_ORIGINS", "*")
+    cors_origins = [o.strip() for o in cors_origins_env.split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
+        allow_origins=cors_origins,
+        allow_credentials=cors_origins != ["*"],
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Register new API v1 routes from plugin system (with lazy imports)
+    _route_modules = [
+        ("datus.api.routes.chat_routes", "chat"),
+        ("datus.api.routes.cli_routes", "cli"),
+        ("datus.api.routes.database_routes", "database"),
+        ("datus.api.routes.table_routes", "table"),
+        ("datus.api.routes.explorer_routes", "explorer"),
+        ("datus.api.routes.config_routes", "config"),
+        ("datus.api.routes.mcp_routes", "mcp"),
+        ("datus.api.routes.kb_routes", "kb"),
+        ("datus.api.routes.agent_routes", "agent"),
+    ]
+    import importlib
+
+    for module_path, name in _route_modules:
+        try:
+            mod = importlib.import_module(module_path)
+            app.include_router(mod.router)
+        except ImportError:
+            logger.info(f"{name} routes not available (module not found)")
+        except Exception:
+            logger.exception(f"Failed to load {name} routes from {module_path}")
 
     # Route handlers with decorators
     @app.get("/", tags=["root"])
@@ -521,3 +558,25 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
             raise HTTPException(status_code=500, detail=str(e))
 
     return app
+
+
+# Global app instance for uvicorn to load
+# Configuration via environment variables: DATUS_CONFIG, DATUS_NAMESPACE, DATUS_OUTPUT_DIR, DATUS_LOG_LEVEL
+_config_file = os.getenv("DATUS_CONFIG", "")  # Empty string uses default resolution
+try:
+    _config_path = str(parse_config_path(_config_file))
+except Exception as e:
+    logger.warning(f"Failed to locate config file: {e}, using current directory default")
+    _config_path = "conf/agent.yml"
+
+_namespace = os.getenv("DATUS_NAMESPACE", "default")
+_output_dir = os.getenv("DATUS_OUTPUT_DIR", "./output")
+_log_level = os.getenv("DATUS_LOG_LEVEL", "INFO")
+
+_default_args = argparse.Namespace(
+    config=_config_path,
+    namespace=_namespace,
+    output_dir=_output_dir,
+    log_level=_log_level,
+)
+app = create_app(_default_args)
