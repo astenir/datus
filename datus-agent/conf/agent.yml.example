@@ -333,6 +333,23 @@ agent:
       password: admin
       extra: # Special configurations for different platforms
         provider: db
+  # Scheduler configuration for submitting and managing SQL/SparkSQL jobs
+  # Requires datus-scheduler-core and a platform adapter (e.g. datus-scheduler-airflow)
+  scheduler:
+    name: airflow_local
+    type: airflow
+    api_base_url: http://localhost:8080/api/v1
+    username: ${AIRFLOW_USERNAME}
+    password: ${AIRFLOW_PASSWORD}
+    dags_folder: /path/to/airflow/dags
+    dag_discovery_timeout: 60
+    dag_discovery_poll_interval: 5
+    # Available Airflow Connection IDs for scheduled jobs.
+    # Create these connections in Airflow (Admin > Connections) first,
+    # then list them here so the agent knows which conn_id to use.
+    connections:
+      starrocks_default: "StarRocks production database"
+      # pg_analytics: "PostgreSQL analytics warehouse"
   # Platform documentation (namespace-independent, stored at {home}/data/document/{platform}/)
   # Each key under 'document' is either a reserved global setting (e.g. tavily_api_key)
   #

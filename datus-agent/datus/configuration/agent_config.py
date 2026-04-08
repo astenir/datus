@@ -278,6 +278,7 @@ class AgentConfig:
         self.agentic_nodes = kwargs.get("agentic_nodes", {})
         self.dashboard_config: Dict[str, DashboardConfig] = {}
         self.init_dashboard(kwargs.get("dashboard", {}))
+        self.scheduler_config: Dict[str, Any] = kwargs.get("scheduler", {})
 
         for name, raw_config in self.agentic_nodes.items():
             if not _SAFE_NAME_RE.match(name):
