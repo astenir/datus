@@ -23,17 +23,28 @@ class ConcreteConnector(BaseSqlConnector):
             config = ConnectionConfig()
         super().__init__(config, dialect)
 
-    def execute_insert(self, sql: str) -> ExecuteSQLResult:
+    def execute_insert(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         return ExecuteSQLResult(success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv")
 
-    def execute_update(self, sql: str) -> ExecuteSQLResult:
+    def execute_update(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         return ExecuteSQLResult(success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv")
 
-    def execute_delete(self, sql: str) -> ExecuteSQLResult:
+    def execute_delete(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         return ExecuteSQLResult(success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv")
 
     def execute_query(
-        self, sql: str, result_format: Literal["csv", "arrow", "pandas", "list"] = "csv"
+        self,
+        sql: str,
+        result_format: Literal["csv", "arrow", "pandas", "list"] = "csv",
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
     ) -> ExecuteSQLResult:
         return ExecuteSQLResult(
             success=True,
@@ -52,7 +63,9 @@ class ConcreteConnector(BaseSqlConnector):
             result_format="pandas",
         )
 
-    def execute_ddl(self, sql: str) -> ExecuteSQLResult:
+    def execute_ddl(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         return ExecuteSQLResult(success=True, sql_query=sql, row_count=0, sql_return="", result_format="csv")
 
     def execute_csv(self, sql: str) -> ExecuteSQLResult:
@@ -81,37 +94,37 @@ class ConcreteConnector(BaseSqlConnector):
 
 
 class ContextAwareConnector(ConcreteConnector):
-    """Connector whose execute methods accept context kwargs."""
+    """Connector whose execute methods accept context kwargs and record what was passed."""
+
+    _CTX_KEYS = {"catalog_name", "database_name", "schema_name"}
 
     def __init__(self, config=None, dialect="snowflake"):
         super().__init__(config, dialect)
         self.last_context = {}
+        self.last_context_keys: set = set()
 
-    def execute_insert(self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        self.last_context = {"catalog_name": catalog_name, "database_name": database_name, "schema_name": schema_name}
+    def _record(self, **kwargs):
+        self.last_context_keys = set(kwargs.keys()) & self._CTX_KEYS
+        self.last_context = {k: kwargs.get(k, "") for k in self._CTX_KEYS}
+
+    def execute_insert(self, sql: str, **kwargs):
+        self._record(**kwargs)
         return ExecuteSQLResult(success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv")
 
-    def execute_update(self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        self.last_context = {"catalog_name": catalog_name, "database_name": database_name, "schema_name": schema_name}
+    def execute_update(self, sql: str, **kwargs):
+        self._record(**kwargs)
         return ExecuteSQLResult(success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv")
 
-    def execute_delete(self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        self.last_context = {"catalog_name": catalog_name, "database_name": database_name, "schema_name": schema_name}
+    def execute_delete(self, sql: str, **kwargs):
+        self._record(**kwargs)
         return ExecuteSQLResult(success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv")
 
-    def execute_query(
-        self,
-        sql: str,
-        result_format: Literal["csv", "arrow", "pandas", "list"] = "csv",
-        catalog_name: str = "",
-        database_name: str = "",
-        schema_name: str = "",
-    ):
-        self.last_context = {"catalog_name": catalog_name, "database_name": database_name, "schema_name": schema_name}
+    def execute_query(self, sql: str, result_format: Literal["csv", "arrow", "pandas", "list"] = "csv", **kwargs):
+        self._record(**kwargs)
         return ExecuteSQLResult(success=True, sql_query=sql, row_count=0, sql_return="", result_format=result_format)
 
-    def execute_ddl(self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        self.last_context = {"catalog_name": catalog_name, "database_name": database_name, "schema_name": schema_name}
+    def execute_ddl(self, sql: str, **kwargs):
+        self._record(**kwargs)
         return ExecuteSQLResult(success=True, sql_query=sql, row_count=0, sql_return="", result_format="csv")
 
 
@@ -352,20 +365,17 @@ class TestExecuteContextPassThrough:
         assert connector.last_context["schema_name"] == "sch"
 
     def test_empty_context_not_forwarded(self):
-        """When no context is passed, sub-methods get no context kwargs."""
+        """When no context is passed, no context kwargs reach the sub-method."""
         connector = ContextAwareConnector()
         connector.execute({"sql_query": "SELECT 1"})
-        # _call_with_ctx with empty ctx calls method without context kwargs,
-        # so the method's defaults ("") are used
-        assert connector.last_context == {"catalog_name": "", "database_name": "", "schema_name": ""}
+        assert connector.last_context_keys == set()
 
     def test_partial_context_only_forwards_non_empty(self):
-        """Only non-empty context values are forwarded."""
+        """Only non-empty context values are forwarded as kwargs."""
         connector = ContextAwareConnector()
         connector.execute({"sql_query": "SELECT 1"}, database_name="db")
+        assert connector.last_context_keys == {"database_name"}
         assert connector.last_context["database_name"] == "db"
-        assert connector.last_context["catalog_name"] == ""
-        assert connector.last_context["schema_name"] == ""
 
 
 class TestCallWithCtx:
@@ -379,12 +389,15 @@ class TestCallWithCtx:
         assert connector.last_context["catalog_name"] == "cat"
         assert connector.last_context["database_name"] == "db"
 
-    def test_falls_back_when_method_rejects_context(self):
-        """ConcreteConnector methods don't accept context kwargs — fallback works."""
-        connector = ConcreteConnector()
+    def test_raises_when_method_rejects_context(self):
+        """Methods without context kwargs trigger a clear TypeError."""
+
+        def no_ctx_method(sql: str) -> ExecuteSQLResult:
+            return ExecuteSQLResult(success=True, sql_query=sql, row_count=0, sql_return="", result_format="csv")
+
         ctx = {"catalog_name": "cat"}
-        result = BaseSqlConnector._call_with_ctx(connector.execute_insert, "INSERT INTO t VALUES (1)", ctx)
-        assert result.success is True
+        with pytest.raises(TypeError, match="does not accept per-call context overrides"):
+            BaseSqlConnector._call_with_ctx(no_ctx_method, "INSERT INTO t VALUES (1)", ctx)
 
     def test_empty_ctx_skips_forwarding(self):
         connector = ConcreteConnector()

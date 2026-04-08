@@ -401,7 +401,11 @@ class ClickZettaConnector:
     # ------------------------------------------------------------------ #
     # BaseSqlConnector abstract methods
     # ------------------------------------------------------------------ #
-    def execute_insert(self, sql: str) -> ExecuteSQLResult:
+    def execute_insert(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
+        if catalog_name or database_name or schema_name:
+            self.do_switch_context(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name)
         try:
             df = self._run_command(sql)
             row_count = self._extract_row_count(df)
@@ -414,15 +418,26 @@ class ClickZettaConnector:
         except DatusDbException as exc:
             return ExecuteSQLResult(success=False, error=str(exc), sql_query=sql, sql_return="", row_count=0)
 
-    def execute_update(self, sql: str) -> ExecuteSQLResult:
-        return self.execute_insert(sql)
+    def execute_update(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
+        return self.execute_insert(sql, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name)
 
-    def execute_delete(self, sql: str) -> ExecuteSQLResult:
-        return self.execute_insert(sql)
+    def execute_delete(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
+        return self.execute_insert(sql, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name)
 
     def execute_query(
-        self, sql: str, result_format: Literal["csv", "arrow", "pandas", "list"] = "csv"
+        self,
+        sql: str,
+        result_format: Literal["csv", "arrow", "pandas", "list"] = "csv",
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
     ) -> ExecuteSQLResult:
+        if catalog_name or database_name or schema_name:
+            self.do_switch_context(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name)
         try:
             df = self._run_query(sql)
             row_count = len(df)
@@ -486,7 +501,11 @@ class ClickZettaConnector:
                 message=f"Failed to execute query to dict: {str(e)}",
             ) from e
 
-    def execute_ddl(self, sql: str) -> ExecuteSQLResult:
+    def execute_ddl(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
+        if catalog_name or database_name or schema_name:
+            self.do_switch_context(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name)
         try:
             self._run_command(sql)
             return ExecuteSQLResult(success=True, sql_query=sql, sql_return="Successful", row_count=0)

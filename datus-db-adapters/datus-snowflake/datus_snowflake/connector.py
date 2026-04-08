@@ -220,13 +220,21 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
         return result
 
     @override
-    def execute_ddl(self, sql: str) -> ExecuteSQLResult:
+    def execute_ddl(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """Execute DDL statement."""
-        return self._execute_update_or_delete(sql)
+        return self._execute_update_or_delete(
+            sql, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name
+        )
 
     @override
-    def execute_insert(self, sql: str) -> ExecuteSQLResult:
+    def execute_insert(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """Execute INSERT statement."""
+        if catalog_name or database_name or schema_name:
+            self.do_switch_context(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name)
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute(sql)
@@ -249,17 +257,29 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
             )
 
     @override
-    def execute_update(self, sql: str) -> ExecuteSQLResult:
+    def execute_update(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """Execute UPDATE statement."""
-        return self._execute_update_or_delete(sql)
+        return self._execute_update_or_delete(
+            sql, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name
+        )
 
     @override
-    def execute_delete(self, sql: str) -> ExecuteSQLResult:
+    def execute_delete(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """Execute DELETE statement."""
-        return self._execute_update_or_delete(sql)
+        return self._execute_update_or_delete(
+            sql, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name
+        )
 
-    def _execute_update_or_delete(self, sql: str) -> ExecuteSQLResult:
+    def _execute_update_or_delete(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """Execute UPDATE or DELETE statement."""
+        if catalog_name or database_name or schema_name:
+            self.do_switch_context(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name)
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute(sql)
@@ -306,9 +326,16 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
 
     @override
     def execute_query(
-        self, sql: str, result_format: Literal["csv", "arrow", "pandas", "list"] = "csv"
+        self,
+        sql: str,
+        result_format: Literal["csv", "arrow", "pandas", "list"] = "csv",
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
     ) -> ExecuteSQLResult:
         """Execute query and return results in specified format."""
+        if catalog_name or database_name or schema_name:
+            self.do_switch_context(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name)
         if sql.lower().startswith("show"):
             return self._execute_show(sql, result_format)
 

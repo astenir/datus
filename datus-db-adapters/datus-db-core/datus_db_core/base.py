@@ -162,15 +162,21 @@ class BaseSqlConnector(ABC):
             )
 
     @abstractmethod
-    def execute_insert(self, sql: str) -> ExecuteSQLResult:
+    def execute_insert(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         raise NotImplementedError()
 
     @abstractmethod
-    def execute_update(self, sql: str) -> ExecuteSQLResult:
+    def execute_update(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         raise NotImplementedError()
 
     @abstractmethod
-    def execute_delete(self, sql: str) -> ExecuteSQLResult:
+    def execute_delete(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         raise NotImplementedError()
 
     def validate_input(self, input_params: Any):
@@ -190,7 +196,12 @@ class BaseSqlConnector(ABC):
 
     @abstractmethod
     def execute_query(
-        self, sql: str, result_format: Literal["csv", "arrow", "pandas", "list"] = "csv"
+        self,
+        sql: str,
+        result_format: Literal["csv", "arrow", "pandas", "list"] = "csv",
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
     ) -> ExecuteSQLResult:
         raise NotImplementedError()
 
@@ -204,7 +215,9 @@ class BaseSqlConnector(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    def execute_ddl(self, sql: str) -> ExecuteSQLResult:
+    def execute_ddl(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         raise NotImplementedError()
 
     @abstractmethod
@@ -283,13 +296,16 @@ class BaseSqlConnector(ABC):
 
     @staticmethod
     def _call_with_ctx(method, sql, ctx, *args, **extra_kwargs):
-        """Call an execute method with context kwargs, falling back if unsupported."""
+        """Call an execute method with context kwargs, raising if unsupported."""
         if ctx:
             try:
                 return method(sql, *args, **extra_kwargs, **ctx)
             except TypeError as e:
-                if "unexpected keyword argument" not in str(e):
-                    raise TypeError(f"{method.__qualname__} does not support per-call context overrides: {sorted(ctx)}")
+                if "unexpected keyword argument" in str(e):
+                    raise TypeError(
+                        f"{method.__qualname__} does not accept per-call context overrides: {sorted(ctx)}"
+                    ) from e
+                raise
         return method(sql, *args, **extra_kwargs)
 
     def switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
