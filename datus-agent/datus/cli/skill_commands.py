@@ -138,6 +138,7 @@ class SkillCommands:
         table.add_column("Name", style="cyan")
         table.add_column("Version")
         table.add_column("Source")
+        table.add_column("Path", max_width=50)
         table.add_column("Tags")
         table.add_column("Description", max_width=40)
 
@@ -145,10 +146,12 @@ class SkillCommands:
             source = skill.source or "local"
             tags = ", ".join(skill.tags) if skill.tags else ""
             desc = skill.description or ""
+            location = str(skill.location) if skill.location else "-"
             table.add_row(
                 skill.name,
                 skill.version or "-",
                 source,
+                location,
                 tags,
                 (desc[:37] + "...") if len(desc) > 40 else desc,
             )
@@ -316,15 +319,23 @@ class SkillCommands:
             self.console.print(f"[yellow]Skill '{name}' not found locally.[/]")
             return
 
+        # Confirm deletion (skip prompt in non-interactive contexts)
+        import sys
+
+        skill_path = skill.location
+        if skill_path and skill_path.exists() and sys.stdin.isatty():
+            confirm = input(f"Delete skill files at {skill_path}? [y/N] ").strip().lower()
+            if confirm != "y":
+                self.console.print("[yellow]Cancelled.[/]")
+                return
+
         # Remove from registry
         removed = manager.registry.remove_skill(name)
         if removed:
-            # Optionally delete files if marketplace-installed
-            if skill.source == "marketplace":
-                skill_path = skill.location
-                if skill_path.exists():
-                    shutil.rmtree(str(skill_path), ignore_errors=True)
-                    self.console.print(f"[dim]Deleted files at {skill_path}[/]")
+            # Delete skill files from disk
+            if skill_path and skill_path.exists():
+                shutil.rmtree(str(skill_path), ignore_errors=True)
+                self.console.print(f"[dim]Deleted files at {skill_path}[/]")
             self.console.print(f"[bold green]Removed skill '{name}'[/]")
         else:
             self.console.print(f"[bold red]Failed to remove skill '{name}'[/]")
