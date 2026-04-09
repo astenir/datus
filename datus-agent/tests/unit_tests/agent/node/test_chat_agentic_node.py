@@ -1156,3 +1156,40 @@ class TestChatSystemPromptCurrentDate:
         ):
             prompt = node._get_system_prompt()
         assert "2025-06-15" in prompt
+
+
+class TestChatAgenticNodeExecutionMode:
+    """Verify the `execution_mode` constructor parameter controls ask_user_tool setup."""
+
+    def _build(self, real_agent_config, execution_mode):
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+
+        return ChatAgenticNode(
+            node_id="test_execution_mode",
+            description="Test execution_mode flag",
+            node_type=NodeType.TYPE_CHAT,
+            agent_config=real_agent_config,
+            execution_mode=execution_mode,
+        )
+
+    def test_execution_mode_default_is_interactive(self, real_agent_config, mock_llm_create):
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+
+        node = ChatAgenticNode(
+            node_id="test_default_execution_mode",
+            description="Default",
+            node_type=NodeType.TYPE_CHAT,
+            agent_config=real_agent_config,
+        )
+        assert node.execution_mode == "interactive"
+        assert node.ask_user_tool is not None
+
+    def test_workflow_mode_disables_ask_user_tool(self, real_agent_config, mock_llm_create):
+        node = self._build(real_agent_config, execution_mode="workflow")
+        assert node.execution_mode == "workflow"
+        assert node.ask_user_tool is None
+
+    def test_interactive_mode_keeps_ask_user_tool(self, real_agent_config, mock_llm_create):
+        node = self._build(real_agent_config, execution_mode="interactive")
+        assert node.execution_mode == "interactive"
+        assert node.ask_user_tool is not None

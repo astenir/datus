@@ -11,7 +11,7 @@ import asyncio
 import copy
 import uuid
 from datetime import datetime
-from typing import AsyncGenerator, Dict, List, Optional
+from typing import AsyncGenerator, Dict, List, Literal, Optional
 
 from datus.agent.node.agentic_node import AgenticNode
 from datus.agent.node.chat_agentic_node import ChatAgenticNode
@@ -90,9 +90,11 @@ class ChatTaskManager:
     Owned by DatusService — one instance per cached project.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, default_source: Optional[str] = None, default_interactive: bool = True) -> None:
         self._tasks: Dict[str, ChatTask] = {}
         self._completed_tasks: Dict[str, ChatTask] = {}
+        self._default_source = default_source
+        self._default_interactive = default_interactive
 
     # ------------------------------------------------------------------
     # Public API
@@ -268,8 +270,16 @@ class ChatTaskManager:
             #    Runs in thread pool because setup_tools() triggers synchronous
             #    operations (psycopg ConnectionPool creation, PG DDL for table
             #    creation via get_storage()) that would freeze the event loop.
+            interactive_enabled = request.interactive if request.interactive is not None else self._default_interactive
+
             def _init_node():
-                n = self._create_node(agent_config, subagent_id=sub_agent_id, session_id=session_id, user_id=user_id)
+                n = self._create_node(
+                    agent_config,
+                    subagent_id=sub_agent_id,
+                    session_id=session_id,
+                    user_id=user_id,
+                    interactive=interactive_enabled,
+                )
                 n.session_id = session_id
                 return n
 
@@ -310,12 +320,13 @@ class ChatTaskManager:
             node.input = node_input
 
             # 5. Replace filesystem tools with proxy if applicable
-            if request.source:
-                if request.source == "vscode":
-                    proxy_patterns = ["filesystem_tools.*"]
-                else:
-                    proxy_patterns = ["write_file", "edit_file", "move_file", "create_directory"]
-                apply_proxy_tools(node, proxy_patterns)
+            effective_source = request.source or self._default_source
+            if effective_source == "vscode":
+                apply_proxy_tools(node, ["filesystem_tools.*"])
+            elif effective_source == "web":
+                apply_proxy_tools(node, ["write_file", "edit_file", "move_file", "create_directory"])
+            elif effective_source:
+                logger.warning("Unsupported source '%s'; skipping proxy shortcut", effective_source)
 
             # 6. Execute streaming
             action_history = ActionHistoryManager()
@@ -408,12 +419,14 @@ class ChatTaskManager:
         subagent_id: Optional[str],
         session_id: str,
         user_id: Optional[str] = None,
+        interactive: bool = True,
     ) -> AgenticNode:
         """Create a fresh AgenticNode based on subagent_id (builtin name or custom DB ID).
 
         ``user_id`` is propagated as the node ``scope`` so that session files
         are isolated per user under ``{session_dir}/{user_id}/``.
         """
+        execution_mode: Literal["interactive", "workflow"] = "interactive" if interactive else "workflow"
         if subagent_id:
             if subagent_id == "gen_semantic_model":
                 from datus.agent.node.gen_semantic_model_agentic_node import (
@@ -422,7 +435,7 @@ class ChatTaskManager:
 
                 return GenSemanticModelAgenticNode(
                     agent_config=agent_config,
-                    execution_mode="interactive",
+                    execution_mode=execution_mode,
                     scope=user_id,
                 )
             elif subagent_id == "gen_metrics":
@@ -430,7 +443,7 @@ class ChatTaskManager:
 
                 return GenMetricsAgenticNode(
                     agent_config=agent_config,
-                    execution_mode="interactive",
+                    execution_mode=execution_mode,
                     scope=user_id,
                 )
             elif subagent_id == "gen_sql_summary":
@@ -439,7 +452,7 @@ class ChatTaskManager:
                 return SqlSummaryAgenticNode(
                     node_name=subagent_id,
                     agent_config=agent_config,
-                    execution_mode="interactive",
+                    execution_mode=execution_mode,
                     scope=user_id,
                 )
             elif subagent_id == "gen_ext_knowledge":
@@ -450,7 +463,7 @@ class ChatTaskManager:
                 return GenExtKnowledgeAgenticNode(
                     node_name=subagent_id,
                     agent_config=agent_config,
-                    execution_mode="interactive",
+                    execution_mode=execution_mode,
                     scope=user_id,
                 )
             else:
@@ -473,6 +486,7 @@ class ChatTaskManager:
                     tools=None,
                     node_name=node_name,
                     scope=user_id,
+                    execution_mode=execution_mode,
                 )
         else:
             return ChatAgenticNode(
@@ -483,6 +497,7 @@ class ChatTaskManager:
                 agent_config=agent_config,
                 tools=None,
                 scope=user_id,
+                execution_mode=execution_mode,
             )
 
     # ------------------------------------------------------------------
