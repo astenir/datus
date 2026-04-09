@@ -202,6 +202,37 @@ class TestChatAgenticNodeToolSetup:
         tool_names = [t.name for t in node.ask_user_tool.available_tools()]
         assert "ask_user" in tool_names
 
+    def test_workflow_mode_excludes_ask_user_tool(self, real_agent_config, mock_llm_create):
+        """In workflow mode, ask_user tool is not registered to avoid blocking pipelines."""
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+
+        node = ChatAgenticNode(
+            node_id="test_workflow",
+            description="Test workflow mode",
+            node_type=NodeType.TYPE_CHAT,
+            agent_config=real_agent_config,
+            execution_mode="workflow",
+        )
+
+        assert node.execution_mode == "workflow"
+        assert node.ask_user_tool is None
+        tool_names = [t.name for t in node.tools]
+        assert "ask_user" not in tool_names
+
+    def test_interactive_mode_is_default(self, real_agent_config, mock_llm_create):
+        """Default execution_mode is 'interactive' with ask_user tool registered."""
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+
+        node = ChatAgenticNode(
+            node_id="test_interactive_default",
+            description="Test interactive default",
+            node_type=NodeType.TYPE_CHAT,
+            agent_config=real_agent_config,
+        )
+
+        assert node.execution_mode == "interactive"
+        assert node.ask_user_tool is not None
+
 
 # ===========================================================================
 # ChatAgenticNode execute_stream Tests
@@ -976,6 +1007,215 @@ class TestChatAgenticNodeExecuteStreamWithTools:
         assert stats.get("total_actions", 0) > 0
         assert stats.get("tool_calls_count", 0) >= 1
         assert "list_tables" in stats.get("tools_used", [])
+
+    @pytest.mark.asyncio
+    async def test_execute_stream_dict_response_value_does_not_crash(self, real_agent_config, mock_llm_create):
+        """execute_stream converts dict response values to string, preventing Pydantic ValidationError.
+
+        Regression test: when a tool result dict (e.g. from execute_sql) is stored under the
+        "response" key in an action output, the or-chain extraction must not pass the raw dict
+        to ChatNodeResult(response=...) which expects a str.
+        """
+        from unittest.mock import patch
+
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+        from datus.schemas.action_history import ActionHistory
+
+        node = ChatAgenticNode(
+            node_id="test_dict_response",
+            description="Test dict response handling",
+            node_type=NodeType.TYPE_CHAT,
+            agent_config=real_agent_config,
+        )
+        node.input = ChatNodeInput(user_message="Show me data", database="california_schools")
+
+        # Simulate the problematic scenario: the last successful action's output
+        # has "response" as a dict (e.g. DB tool result) and no string "content".
+        async def mock_execute(prompt, execution_mode, original_input, action_history_manager, session):
+            action = ActionHistory(
+                action_id="msg_dict",
+                role=ActionRole.ASSISTANT,
+                messages="Query result",
+                action_type="message",
+                input={},
+                output={
+                    "content": "",
+                    "response": {"success": 1, "error": None, "expression_type": "rows"},
+                },
+                status=ActionStatus.SUCCESS,
+            )
+            action_history_manager.add_action(action)
+            yield action
+
+        with patch.object(node, "_execute_with_recursive_replan", mock_execute):
+            ahm = ActionHistoryManager()
+            actions = []
+            async for action in node.execute_stream(ahm):
+                actions.append(action)
+
+        final_action = actions[-1]
+        assert final_action.status == ActionStatus.SUCCESS
+        assert final_action.action_type == "chat_response"
+        # Key assertion: response must be a string, not a dict
+        assert isinstance(final_action.output["response"], str)
+
+    @pytest.mark.asyncio
+    async def test_execute_stream_extracts_string_content_from_action(self, real_agent_config, mock_llm_create):
+        """execute_stream correctly extracts string content from action output's content key.
+
+        Covers the isinstance(candidate, str) branch in the stream loop extraction.
+        """
+        from unittest.mock import patch
+
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+        from datus.schemas.action_history import ActionHistory
+
+        node = ChatAgenticNode(
+            node_id="test_str_content",
+            description="Test string content extraction",
+            node_type=NodeType.TYPE_CHAT,
+            agent_config=real_agent_config,
+        )
+        node.input = ChatNodeInput(user_message="Hello", database="california_schools")
+
+        async def mock_execute(prompt, execution_mode, original_input, action_history_manager, session):
+            action = ActionHistory(
+                action_id="msg_str",
+                role=ActionRole.ASSISTANT,
+                messages="Text response",
+                action_type="message",
+                input={},
+                output={"content": "Here are your results in markdown."},
+                status=ActionStatus.SUCCESS,
+            )
+            action_history_manager.add_action(action)
+            yield action
+
+        with patch.object(node, "_execute_with_recursive_replan", mock_execute):
+            ahm = ActionHistoryManager()
+            actions = []
+            async for action in node.execute_stream(ahm):
+                actions.append(action)
+
+        final_action = actions[-1]
+        assert final_action.status == ActionStatus.SUCCESS
+        assert final_action.output["response"] == "Here are your results in markdown."
+
+    @pytest.mark.asyncio
+    async def test_execute_stream_fallback_dict_in_text_key(self, real_agent_config, mock_llm_create):
+        """Fallback extraction stringifies non-string candidate from last_successful_output.
+
+        When the stream loop finds no content but last_successful_output has a dict
+        in the "text" key (only checked in fallback, not in stream loop), the fallback
+        must convert it to string rather than skipping it.
+        """
+        from unittest.mock import patch
+
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+        from datus.schemas.action_history import ActionHistory
+
+        node = ChatAgenticNode(
+            node_id="test_fallback_dict_text",
+            description="Test fallback dict text",
+            node_type=NodeType.TYPE_CHAT,
+            agent_config=real_agent_config,
+        )
+        node.input = ChatNodeInput(user_message="Query", database="california_schools")
+
+        async def mock_execute(prompt, execution_mode, original_input, action_history_manager, session):
+            # Action with "text" as dict — stream loop doesn't check "text",
+            # so response_content stays empty. Fallback checks "text" and finds the dict.
+            action = ActionHistory(
+                action_id="tool_result",
+                role=ActionRole.ASSISTANT,
+                messages="Result",
+                action_type="tool_output",
+                input={},
+                output={
+                    "content": "",
+                    "response": "",
+                    "text": {"rows": [1, 2, 3], "total": 3},
+                    "raw_output": "",
+                },
+                status=ActionStatus.SUCCESS,
+            )
+            action_history_manager.add_action(action)
+            yield action
+
+        with patch.object(node, "_execute_with_recursive_replan", mock_execute):
+            ahm = ActionHistoryManager()
+            actions = []
+            async for action in node.execute_stream(ahm):
+                actions.append(action)
+
+        final_action = actions[-1]
+        assert final_action.status == ActionStatus.SUCCESS
+        response = final_action.output["response"]
+        assert isinstance(response, str)
+        assert "rows" in response
+
+    @pytest.mark.asyncio
+    async def test_execute_stream_summary_report_dict_does_not_crash(self, real_agent_config, mock_llm_create):
+        """execute_stream handles dict values in summary_report action outputs.
+
+        Regression test: when a summary_report action has "markdown" or "content"
+        as a dict, the fallback extraction must convert it to string.
+        The summary_report is added to action_history_manager without being yielded
+        through the stream so that earlier extraction points don't intercept it.
+        """
+        from unittest.mock import patch
+
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+        from datus.schemas.action_history import ActionHistory
+
+        node = ChatAgenticNode(
+            node_id="test_summary_dict",
+            description="Test summary report dict handling",
+            node_type=NodeType.TYPE_CHAT,
+            agent_config=real_agent_config,
+        )
+        node.input = ChatNodeInput(user_message="Summarize", database="california_schools")
+
+        async def mock_execute(prompt, execution_mode, original_input, action_history_manager, session):
+            # Add summary_report directly to action_history_manager (simulates sub-component adding it).
+            # Do NOT yield it, so last_successful_output stays None and the summary_report
+            # fallback loop is actually reached.
+            summary_action = ActionHistory(
+                action_id="summary_1",
+                role=ActionRole.ASSISTANT,
+                messages="Summary report",
+                action_type="summary_report",
+                input={},
+                output={
+                    "markdown": {"title": "Report", "sections": ["a", "b"]},
+                    "content": "",
+                },
+                status=ActionStatus.SUCCESS,
+            )
+            action_history_manager.add_action(summary_action)
+
+            # Yield a non-dict output action so the stream has at least one item
+            empty_action = ActionHistory(
+                action_id="empty_1",
+                role=ActionRole.ASSISTANT,
+                messages="Processing",
+                action_type="thinking",
+                input={},
+                output="",
+                status=ActionStatus.SUCCESS,
+            )
+            yield empty_action
+
+        with patch.object(node, "_execute_with_recursive_replan", mock_execute):
+            ahm = ActionHistoryManager()
+            actions = []
+            async for action in node.execute_stream(ahm):
+                actions.append(action)
+
+        final_action = actions[-1]
+        assert final_action.status == ActionStatus.SUCCESS
+        assert isinstance(final_action.output["response"], str)
+        assert len(final_action.output["response"]) > 0
 
 
 # ===========================================================================

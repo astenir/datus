@@ -75,7 +75,10 @@ class ChatAgenticNode(AgenticNode):
             input_data: Chat input data
             agent_config: Agent configuration
             tools: List of tools (will be populated in setup_tools)
+            execution_mode: Execution mode - "interactive" (default) or "workflow"
         """
+        self.execution_mode = execution_mode
+
         # Node name for config lookup and template resolution
         self.configured_node_name = "chat"
 
@@ -150,6 +153,7 @@ class ChatAgenticNode(AgenticNode):
         self._setup_filesystem_tools()
         self._setup_skill_tools()
         self._setup_sub_agent_task_tool()
+        # Setup ask_user tool for clarification questions (interactive mode only)
         if self.execution_mode == "interactive":
             self._setup_ask_user_tool()
         self._setup_scheduler_tools()
@@ -750,35 +754,43 @@ class ChatAgenticNode(AgenticNode):
                         if stream_action.action_type == "message" and "raw_output" in stream_action.output:
                             raw_output_value = stream_action.output.get("raw_output", "")
 
-                        response_content = (
+                        # Extract string content only; dict values from tool results must not leak through
+                        candidate = (
                             stream_action.output.get("content", "")
                             or stream_action.output.get("response", "")
                             or raw_output_value
-                            or response_content
                         )
+                        if isinstance(candidate, str) and candidate:
+                            response_content = candidate
+                        elif candidate and not isinstance(candidate, str):
+                            response_content = str(candidate)
 
             # Fallback: extract from last successful output
             if not response_content and last_successful_output:
                 logger.debug(f"Trying to extract response from last_successful_output: {last_successful_output}")
-                response_content = (
+                candidate = (
                     last_successful_output.get("content", "")
                     or last_successful_output.get("text", "")
                     or last_successful_output.get("response", "")
                     or last_successful_output.get("raw_output", "")
-                    or str(last_successful_output)
                 )
+                if isinstance(candidate, str) and candidate:
+                    response_content = candidate
+                elif candidate and not isinstance(candidate, str):
+                    response_content = str(candidate)
 
             # Check summary_report actions for content if still empty
             if not response_content:
                 for stream_action in reversed(action_history_manager.get_actions()):
                     if stream_action.action_type == "summary_report" and stream_action.output:
                         if isinstance(stream_action.output, dict):
-                            response_content = (
+                            candidate = (
                                 stream_action.output.get("markdown", "")
                                 or stream_action.output.get("content", "")
                                 or stream_action.output.get("response", "")
                             )
-                            if response_content:
+                            if candidate:
+                                response_content = str(candidate) if not isinstance(candidate, str) else candidate
                                 break
 
             logger.debug(f"Final response_content: '{response_content}' (length: {len(response_content)})")
