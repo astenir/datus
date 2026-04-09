@@ -222,6 +222,9 @@ class PlatformDocSearchTool:
 
             # Get tavily_api_key from config (priority) or fall back to env var
             tavily_key = getattr(self.agent_config, "tavily_api_key", None)
+            if not tavily_key:
+                logger.warning("TAVILY_API_KEY env var not set")
+                return FuncToolResult(success=1, result=[])
 
             result = search_by_tavily(
                 keywords=keywords,
