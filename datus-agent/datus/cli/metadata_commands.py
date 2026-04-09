@@ -83,6 +83,10 @@ class MetadataCommands:
                         )
 
             self.cli.last_result = result
+            if not result:
+                self.cli.console.print("[yellow]Empty set.[/]")
+                return
+
             # Display results
             table = Table(title="Databases", show_header=True, header_style="bold green")
             if show_uri:

@@ -79,6 +79,17 @@ class TestCmdListDatabases:
         meta.cmd_list_databases()
         cli.console.print.assert_called()
 
+    def test_empty_result_prints_empty_set(self):
+        """Non-SQLite single DB with get_databases returning empty triggers 'Empty set' message."""
+        cli = _make_cli(db_type="snowflake")
+        db_cfg = _make_db_config(db_type="snowflake", logic_name="mydb")
+        cli.agent_config.namespaces = {"test_ns": {"mydb": db_cfg}}
+        cli.db_connector.get_databases.return_value = []
+        meta = MetadataCommands(cli)
+        meta.cmd_list_databases()
+        calls = [str(c) for c in cli.console.print.call_args_list]
+        assert any("Empty set" in c for c in calls)
+
     def test_exception_prints_error(self, meta):
         meta.cli.agent_config.current_namespace = None
         meta.cli.agent_config.namespaces = {}
@@ -209,6 +220,9 @@ class TestCmdSchemas:
             meta = MetadataCommands(cli)
             meta.cmd_schemas("")
         cli.console.print.assert_called()
+        cli.db_connector.get_schemas.assert_called_once_with(
+            catalog_name=cli.cli_context.current_catalog, database_name=cli.cli_context.current_db_name
+        )
 
 
 # ---------------------------------------------------------------------------
