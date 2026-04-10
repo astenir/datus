@@ -6,7 +6,7 @@
 Integration tests for web chatbot components.
 
 Tests ChatExecutor and ConfigManager with real DatusCLI + real LLM,
-validating the web chatbot's core logic without Streamlit UI.
+validating the web chatbot's core logic.
 """
 
 from unittest.mock import patch
@@ -61,7 +61,6 @@ class TestConfigManagerIntegration:
         cli = cm.setup_config(config_path=TESTS_CONF, namespace="ssb_sqlite")
 
         assert cli is not None, "setup_config should return a DatusCLI instance"
-        assert cli.streamlit_mode is True, "streamlit_mode should be True"
         assert cm.cli is cli
 
         models = cm.get_available_models()

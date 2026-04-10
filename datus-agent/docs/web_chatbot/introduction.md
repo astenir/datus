@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Datus Web Chatbot provides a user-friendly web interface for interacting with the Datus AI assistant. Built on Streamlit, it offers an intuitive chat experience for natural language to SQL conversion without requiring command-line knowledge.
+The Datus Web Chatbot provides a user-friendly web interface for interacting with the Datus AI assistant. It serves a React-based frontend (`@datus/web-chatbot`) backed by the Datus Agent FastAPI server, offering an intuitive chat experience for natural language to SQL conversion without requiring command-line knowledge.
 
 ## Quick Start
 

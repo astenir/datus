@@ -76,7 +76,6 @@ class DatusCLI:
         self.console = Console(log_path=False)
         self.console_column_width = 16
         self.selected_catalog_path = ""
-        self.streamlit_mode = False
         self.selected_catalog_data = {}
 
         setup_exception_handler(
@@ -354,7 +353,7 @@ class DatusCLI:
                 if user_input_raw is None:
                     continue
                 if user_input_raw == "_open_chat_sql_details":
-                    if not self.streamlit_mode and self.chat_commands and self.chat_commands.last_actions:
+                    if self.chat_commands and self.chat_commands.last_actions:
                         self.chat_commands.display_inline_trace_details(self.chat_commands.last_actions)
                     continue
                 self._prefill_input = None
@@ -398,10 +397,6 @@ class DatusCLI:
     def _async_init_agent(self):
         """Initialize the agent asynchronously in a background thread."""
         if self.agent_initializing or self.agent_ready:
-            return
-
-        # Skip background initialization in Streamlit mode to avoid vector DB conflicts
-        if hasattr(self, "streamlit_mode") and self.streamlit_mode:
             return
 
         self.agent_initializing = True

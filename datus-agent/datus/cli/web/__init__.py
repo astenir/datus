@@ -3,20 +3,14 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 """
-Web interface components for Datus Agent.
+Web interface for Datus Agent.
 
-This package contains modular components for the Streamlit web interface.
+Serves a React-based chatbot frontend backed by FastAPI.
 """
 
-from datus.cli.web.chat_executor import ChatExecutor
-from datus.cli.web.chatbot import StreamlitChatbot, run_web_interface
-from datus.cli.web.config_manager import ConfigManager
-from datus.cli.web.ui_components import UIComponents
+from datus.cli.web.chatbot import create_web_app, run_web_interface
 
 __all__ = [
-    "ChatExecutor",
-    "ConfigManager",
-    "StreamlitChatbot",
-    "UIComponents",
+    "create_web_app",
     "run_web_interface",
 ]

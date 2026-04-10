@@ -47,7 +47,6 @@ def _make_cli(agent_config, available_subagents=None):
     cli.agent_ready = False
     cli.agent_initializing = False
     cli.plan_mode_active = False
-    cli.streamlit_mode = False
     cli.at_completer = MagicMock()
     cli.db_connector = MagicMock()
     cli.db_manager = MagicMock()

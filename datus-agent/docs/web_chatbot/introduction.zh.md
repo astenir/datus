@@ -2,7 +2,7 @@
 
 ## 概览
 
-Datus Web chatbot 提供一个易用的网页界面，用于与 Datus AI 助手交互。它基于 Streamlit 构建，面向自然语言转 SQL 的场景，用户无需掌握命令行即可完成对话式分析。
+Datus Web chatbot 提供一个易用的网页界面，用于与 Datus AI 助手交互。它通过 FastAPI 服务端托管 React 前端组件（`@datus/web-chatbot`），面向自然语言转 SQL 的场景，用户无需掌握命令行即可完成对话式分析。
 
 ## 快速开始
 

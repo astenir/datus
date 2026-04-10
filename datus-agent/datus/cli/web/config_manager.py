@@ -49,9 +49,6 @@ def get_available_namespaces(config_path: str = "") -> List[str]:
 
 def create_cli_args(config_path: str = "", namespace: str = None, catalog: str = "", database: str = "") -> Namespace:
     """Create CLI arguments for DatusCLI initialization"""
-    # Import here to avoid circular dependency with streamlit session_state
-    import streamlit as st
-
     args = Namespace()
     args.config = parse_config_path(config_path)
     args.namespace = namespace  # Add namespace parameter
@@ -61,8 +58,7 @@ def create_cli_args(config_path: str = "", namespace: str = None, catalog: str =
     args.database = database
     args.catalog = catalog
     args.schema = ""
-    # Add missing attributes that DatusCLI expects
-    args.debug = bool(st.session_state.get("startup_debug", False)) if hasattr(st, "session_state") else False
+    args.debug = False
     args.no_color = False
 
     # Read storage path from config file
@@ -134,9 +130,6 @@ class ConfigManager:
 
         # Initialize real DatusCLI
         cli = DatusCLI(args)
-
-        # Set Streamlit mode flag to skip interactive prompts
-        cli.streamlit_mode = True
 
         # Update internal reference
         self.cli = cli

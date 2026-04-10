@@ -78,7 +78,7 @@ class ArgumentParser:
         mode_group.add_argument(
             "--web",
             action="store_true",
-            help="Launch web-based Streamlit chatbot interface",
+            help="Launch web-based chatbot interface",
         )
         mode_group.add_argument(
             "-p",
@@ -134,6 +134,14 @@ class ArgumentParser:
             help="Session scope for directory isolation (sessions stored under {session_dir}/{scope}/)",
         )
 
+        self.parser.add_argument(
+            "--chatbot-dist",
+            dest="chatbot_dist",
+            type=str,
+            default=None,
+            help="Path to @datus/web-chatbot dist directory (for --web mode)",
+        )
+
     def parse_args(self):
         return self.parser.parse_args()
 
@@ -168,7 +176,7 @@ class Application:
             cli.run()
 
     def _run_web_interface(self, args):
-        """Launch Streamlit web interface"""
+        """Launch web chatbot interface"""
         from datus.cli.web import run_web_interface
 
         run_web_interface(args)

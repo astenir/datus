@@ -192,26 +192,39 @@ class TestSearchDocument:
 
 
 class TestWebSearchDocument:
-    def test_success(self, doc_search_tool):
+    @pytest.fixture
+    def tavily_tool(self):
+        """Tool with tavily_api_key set so web_search_document reaches the Tavily call."""
+        config = Mock()
+        config.tavily_api_key = "test-tavily-key"
+        return PlatformDocSearchTool(agent_config=config)
+
+    def test_no_tavily_key_returns_empty(self, doc_search_tool):
+        """When tavily_api_key is None, should return early with empty result."""
+        result = doc_search_tool.web_search_document(keywords=["test"])
+        assert result.success == 1
+        assert result.result == []
+
+    def test_success(self, tavily_tool):
         mock_result = Mock()
         mock_result.success = True
         mock_result.docs = ["doc1 content", "doc2 content"]
         mock_result.doc_count = 2
 
         with patch(_TAVILY_PATH, return_value=mock_result):
-            result = doc_search_tool.web_search_document(keywords=["snowflake COPY INTO"], max_results=5)
+            result = tavily_tool.web_search_document(keywords=["snowflake COPY INTO"], max_results=5)
 
         assert result.success == 1
         assert result.result["doc_count"] == 2
 
-    def test_success_with_include_domains(self, doc_search_tool):
+    def test_success_with_include_domains(self, tavily_tool):
         mock_result = Mock()
         mock_result.success = True
         mock_result.docs = ["content"]
         mock_result.doc_count = 1
 
         with patch(_TAVILY_PATH, return_value=mock_result) as mock_fn:
-            result = doc_search_tool.web_search_document(
+            result = tavily_tool.web_search_document(
                 keywords=["query"],
                 max_results=3,
                 include_domains=["docs.snowflake.com"],
@@ -225,7 +238,7 @@ class TestWebSearchDocument:
             include_answer="basic",
             include_raw_content="markdown",
             include_domains=["docs.snowflake.com"],
-            api_key=None,
+            api_key="test-tavily-key",
         )
 
     def test_uses_tavily_key_from_config(self, mock_agent_config):
@@ -243,20 +256,20 @@ class TestWebSearchDocument:
         call_kwargs = mock_fn.call_args.kwargs
         assert call_kwargs["api_key"] == "my-tavily-key"
 
-    def test_search_fails(self, doc_search_tool):
+    def test_search_fails(self, tavily_tool):
         mock_result = Mock()
         mock_result.success = False
         mock_result.error = "Tavily API error"
 
         with patch(_TAVILY_PATH, return_value=mock_result):
-            result = doc_search_tool.web_search_document(keywords=["test"])
+            result = tavily_tool.web_search_document(keywords=["test"])
 
         assert result.success == 0
         assert result.error == "Tavily API error"
 
-    def test_exception_returns_failure(self, doc_search_tool):
+    def test_exception_returns_failure(self, tavily_tool):
         with patch(_TAVILY_PATH, side_effect=Exception("network error")):
-            result = doc_search_tool.web_search_document(keywords=["test"])
+            result = tavily_tool.web_search_document(keywords=["test"])
 
         assert result.success == 0
         assert "network error" in result.error
