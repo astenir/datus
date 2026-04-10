@@ -422,6 +422,7 @@ class ClaudeModel(OpenAICompatibleModel):
                 cumulative_output_tokens = 0
                 cache_creation_tokens = 0
                 cache_read_tokens = 0
+                last_call_input_tokens = 0
 
                 # Execute conversation loop
                 turn = -1
@@ -448,6 +449,7 @@ class ClaudeModel(OpenAICompatibleModel):
                         cumulative_output_tokens += getattr(response.usage, "output_tokens", 0)
                         cache_creation_tokens += getattr(response.usage, "cache_creation_input_tokens", 0)
                         cache_read_tokens += getattr(response.usage, "cache_read_input_tokens", 0)
+                        last_call_input_tokens = getattr(response.usage, "input_tokens", 0)
 
                     message = response.content
 
@@ -621,6 +623,7 @@ class ClaudeModel(OpenAICompatibleModel):
                         if self.context_length() and total_tokens > 0
                         else 0
                     ),
+                    "last_call_input_tokens": last_call_input_tokens,
                 }
                 logger.debug(f"Native API cumulative token usage: {usage_info}")
 
