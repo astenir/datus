@@ -16,7 +16,7 @@ from datus.api.models.cli_models import (
     SSEMessageData,
     SSEMessagePayload,
 )
-from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+from datus.schemas.action_history import SUBAGENT_COMPLETE_ACTION_TYPE, ActionHistory, ActionRole, ActionStatus
 from datus.utils.json_utils import llm_result2json
 from datus.utils.loggings import get_logger
 
@@ -70,7 +70,8 @@ def _build_tool_result_content(action: ActionHistory) -> List[IMessageContent]:
     if start_time and end_time:
         duration = (end_time - start_time).total_seconds()
 
-    short_desc = output.get("summary", "") if isinstance(output, dict) else ""
+    output_dict = output if isinstance(output, dict) else None
+    short_desc = output_dict.get("summary", "") if output_dict else ""
     function_name, _ = _extract_function(action)
 
     payload_data = {
@@ -78,7 +79,7 @@ def _build_tool_result_content(action: ActionHistory) -> List[IMessageContent]:
         "toolName": function_name,
         "duration": duration,
         "shortDesc": short_desc,
-        "result": output.get("raw_output", output),
+        "result": output_dict.get("raw_output", output) if output_dict else output,
     }
     return [IMessageContent(type="call-tool-result", payload=payload_data)]
 
@@ -182,6 +183,18 @@ def _build_interaction_content(action: ActionHistory) -> List[IMessageContent]:
     return [IMessageContent(type="user-interaction", payload=payload_data)]
 
 
+def _build_subagent_complete_content(action: ActionHistory) -> List[IMessageContent]:
+    """Build content for sub-agent completion summary event."""
+    output = action.output if isinstance(action.output, dict) else {}
+    duration = (action.end_time - action.start_time).total_seconds() if action.start_time and action.end_time else 0.0
+    payload_data = {
+        "subagentType": output.get("subagent_type", "unknown"),
+        "toolCount": output.get("tool_count", 0),
+        "duration": duration,
+    }
+    return [IMessageContent(type="subagent-complete", payload=payload_data)]
+
+
 def _build_interaction_result_content(action: ActionHistory) -> Optional[List[IMessageContent]]:
     """Build content for interaction result event (SUCCESS status)."""
     output = action.output if isinstance(action.output, dict) else {}
@@ -225,6 +238,8 @@ def action_to_sse_event(
 
         if status == ActionStatus.FAILED:
             contents = _build_error_content(action)
+        elif action.action_type == SUBAGENT_COMPLETE_ACTION_TYPE:
+            contents = _build_subagent_complete_content(action)
         elif role == ActionRole.TOOL and status == ActionStatus.PROCESSING:
             contents = _build_tool_call_content(action)
         elif role == ActionRole.TOOL:
@@ -256,6 +271,8 @@ def action_to_sse_event(
                 message_id=message_id,
                 role=sse_role,
                 content=contents,
+                depth=action.depth,
+                parent_action_id=action.parent_action_id,
             ),
         )
 

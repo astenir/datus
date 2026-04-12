@@ -15,7 +15,7 @@ from datus.api.services.action_sse_converter import (
     _extract_function,
     action_to_sse_event,
 )
-from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+from datus.schemas.action_history import SUBAGENT_COMPLETE_ACTION_TYPE, ActionHistory, ActionRole, ActionStatus
 
 
 def _make_action(**overrides) -> ActionHistory:
@@ -404,6 +404,21 @@ class TestActionToSSEEvent:
         assert event is not None
         assert event.data.payload.content[0].type == "call-tool-result"
 
+    def test_tool_success_non_dict_output(self):
+        """TOOL + SUCCESS with non-dict output does not crash."""
+        action = _make_action(
+            role=ActionRole.TOOL,
+            status=ActionStatus.SUCCESS,
+            input={"function_name": "run_sql"},
+            output="plain string result",
+        )
+        event = action_to_sse_event(action, event_id=30, message_id="msg-30")
+        assert event is not None
+        content = event.data.payload.content[0]
+        assert content.type == "call-tool-result"
+        assert content.payload["result"] == "plain string result"
+        assert content.payload["shortDesc"] == ""
+
     def test_user_role_excluded_by_default(self):
         """USER role returns None when include_user_message=False."""
         action = _make_action(role=ActionRole.USER, input={"user_message": "Hello"})
@@ -489,3 +504,102 @@ class TestActionToSSEEvent:
         )
         event = action_to_sse_event(action, event_id=10, message_id="msg-10")
         assert event is not None
+
+    def test_depth_and_parent_action_id_forwarded(self):
+        """depth=1 and parent_action_id are forwarded to SSEMessagePayload."""
+        action = _make_action(
+            role=ActionRole.TOOL,
+            status=ActionStatus.PROCESSING,
+            input={"function_name": "run_sql", "arguments": {}},
+            depth=1,
+            parent_action_id="parent-001",
+        )
+        event = action_to_sse_event(action, event_id=11, message_id="msg-11")
+        assert event is not None
+        assert event.data.payload.depth == 1
+        assert event.data.payload.parent_action_id == "parent-001"
+
+    def test_default_depth_is_zero(self):
+        """Normal action has depth=0 and parent_action_id=None by default."""
+        action = _make_action(
+            role=ActionRole.TOOL,
+            status=ActionStatus.PROCESSING,
+            input={"function_name": "list_tables", "arguments": {}},
+        )
+        event = action_to_sse_event(action, event_id=12, message_id="msg-12")
+        assert event is not None
+        assert event.data.payload.depth == 0
+        assert event.data.payload.parent_action_id is None
+
+    def test_subagent_complete_produces_event(self):
+        """subagent_complete action produces type='subagent-complete' content."""
+        action = _make_action(
+            role=ActionRole.SYSTEM,
+            status=ActionStatus.SUCCESS,
+            action_type=SUBAGENT_COMPLETE_ACTION_TYPE,
+            output={"subagent_type": "sql_gen", "tool_count": 3},
+        )
+        event = action_to_sse_event(action, event_id=13, message_id="msg-13")
+        assert event is not None
+        assert len(event.data.payload.content) == 1
+        content = event.data.payload.content[0]
+        assert content.type == "subagent-complete"
+        assert content.payload["subagentType"] == "sql_gen"
+        assert content.payload["toolCount"] == 3
+        assert content.payload["duration"] == 5.0  # end - start = 5s from defaults
+
+    def test_subagent_complete_with_depth(self):
+        """subagent_complete event carries depth=1 and parent_action_id."""
+        action = _make_action(
+            role=ActionRole.SYSTEM,
+            status=ActionStatus.SUCCESS,
+            action_type=SUBAGENT_COMPLETE_ACTION_TYPE,
+            output={"subagent_type": "data_viz", "tool_count": 1},
+            depth=1,
+            parent_action_id="parent-002",
+        )
+        event = action_to_sse_event(action, event_id=14, message_id="msg-14")
+        assert event is not None
+        assert event.data.payload.depth == 1
+        assert event.data.payload.parent_action_id == "parent-002"
+
+    def test_subagent_complete_non_dict_output(self):
+        """subagent_complete with non-dict output uses safe defaults."""
+        action = _make_action(
+            role=ActionRole.SYSTEM,
+            status=ActionStatus.SUCCESS,
+            action_type=SUBAGENT_COMPLETE_ACTION_TYPE,
+            output="not a dict",
+        )
+        event = action_to_sse_event(action, event_id=15, message_id="msg-15")
+        assert event is not None
+        content = event.data.payload.content[0]
+        assert content.payload["subagentType"] == "unknown"
+        assert content.payload["toolCount"] == 0
+
+    def test_subagent_complete_missing_times_gives_zero_duration(self):
+        """subagent_complete with missing end_time gives duration=0."""
+        action = _make_action(
+            role=ActionRole.SYSTEM,
+            status=ActionStatus.SUCCESS,
+            action_type=SUBAGENT_COMPLETE_ACTION_TYPE,
+            output={"subagent_type": "explore", "tool_count": 2},
+            end_time=None,
+        )
+        event = action_to_sse_event(action, event_id=16, message_id="msg-16")
+        assert event is not None
+        assert event.data.payload.content[0].payload["duration"] == 0.0
+
+    def test_subagent_complete_failed_produces_error_event(self):
+        """subagent_complete with FAILED status produces error content, not subagent-complete."""
+        action = _make_action(
+            role=ActionRole.SYSTEM,
+            status=ActionStatus.FAILED,
+            action_type=SUBAGENT_COMPLETE_ACTION_TYPE,
+            output={"error": "sub-agent timed out"},
+        )
+        event = action_to_sse_event(action, event_id=17, message_id="msg-17")
+        assert event is not None
+        content = event.data.payload.content[0]
+        assert content.type == "error"
+        assert "timed out" in content.payload["content"]
