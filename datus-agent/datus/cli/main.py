@@ -59,12 +59,12 @@ class ArgumentParser:
         # storage_path parameter deprecated - data path is now fixed at {agent.home}/data
 
         self.parser.add_argument(
+            "--database",
             "--namespace",
             type=str,
-            help="Namespace of databases or benchmark",
+            help="Database name to connect (use --database, --namespace is deprecated)",
+            default="",
         )
-
-        self.parser.add_argument("--database", type=str, help="Default database to connect", default="")
 
         # LLM trace settings
         self.parser.add_argument(
@@ -155,9 +155,11 @@ class Application:
 
         configure_logging(args.debug, console_output=False)
 
-        if not args.namespace:
-            self.arg_parser.parser.print_help()
-            return
+        if not args.database:
+            # Try to auto-select: default database or single database
+            args.database = self._resolve_default_database(args)
+            if not args.database:
+                return
 
         if args.resume and args.print_mode is None:
             self.arg_parser.parser.error("--resume requires --print mode")
@@ -174,6 +176,40 @@ class Application:
         else:
             cli = DatusCLI(args)
             cli.run()
+
+    def _resolve_default_database(self, args) -> str:
+        """Auto-select database when --database is not specified."""
+        from rich.console import Console
+        from rich.table import Table
+
+        from datus.configuration.agent_config_loader import load_agent_config
+
+        console = Console()
+        try:
+            config = load_agent_config(config=args.config or "", action="service", reload=True)
+        except Exception:
+            self.arg_parser.parser.print_help()
+            return ""
+
+        databases = config.service.databases
+        if not databases:
+            console.print("[yellow]No databases configured. Run 'datus configure' first.[/yellow]")
+            return ""
+
+        default_db = config.service.default_database
+        if default_db:
+            console.print(f"[dim]Using default database: {default_db}[/dim]")
+            return default_db
+
+        # Multiple databases, no default — show list and ask user to specify
+        console.print("[yellow]Multiple databases configured. Please specify --database <name>[/yellow]\n")
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Name", style="cyan")
+        table.add_column("Type")
+        for name, cfg in databases.items():
+            table.add_row(name, cfg.type)
+        console.print(table)
+        return ""
 
     def _run_web_interface(self, args):
         """Launch web chatbot interface"""

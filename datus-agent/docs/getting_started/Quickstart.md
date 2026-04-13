@@ -52,40 +52,54 @@ Datus requires a Python 3.12 environment. Choose your preferred method:
     pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ datus-agent
     ```
 
-### Initialize Configuration
+### Configure LLM & Database
 
-Run the initialization command:
+Run the configuration command to set up your LLM provider and database connections:
 
 ```bash
-datus-agent init
+datus-agent configure
 ```
 
-The setup will guide you through:
+This interactive tool lets you:
 
-**1. LLM Configuration** - Configure your preferred LLM provider (OpenAI, DeepSeek, Claude, Kimi, Qwen)
+**1. Add a Model** — Select your LLM provider (OpenAI, DeepSeek, Claude, Kimi, Qwen, etc.) and enter your API key. Environment variables like `${DEEPSEEK_API_KEY}` are auto-detected.
 
-**2. Namespace Setup** - Connect to your database. For a quick start, use the demo database:
+**2. Add a Database** — Connect to your database. For a quick start, use the demo DuckDB:
 
 !!! tip "Demo Database"
     Datus provides a pre-configured demo DuckDB database for testing.
 
     **Connection string:** `~/.datus/sample/duckdb-demo.duckdb`
 
-**3. Workspace Configuration** - Set up your SQL files directory (default: `~/.datus/workspace`)
+Database adapter plugins (Snowflake, MySQL, PostgreSQL, StarRocks) are auto-installed when selected.
 
-**4. Knowledge Base (Optional)** - Initialize vector DB for metadata and reference SQL
+Configuration is saved to `~/.datus/conf/agent.yml`. Run `datus-agent configure` again anytime to add more models or databases.
 
-After setup completes, you're ready to launch Datus!
+### Initialize Project (Optional)
+
+In your project directory, run:
+
+```bash
+datus-agent init
+```
+
+This generates an `AGENTS.md` file describing your project's architecture, directory structure, services, and data assets. The LLM analyzes your directory and README to produce the content.
+
+You can also use `--database` to include database schema information:
+
+```bash
+datus-agent init --database demo
+```
 
 ## Step 2: Launch Datus CLI
 
-Start the Datus CLI with your configured namespace:
+Start the Datus CLI with your configured database:
 
-!!! tip "Configuration"
-    You can connect to different databases by adding namespaces in `agent.yml`. See our [Configuration guide](../configuration/introduction.md) for details.
+!!! tip "Multiple Databases"
+    You can add more databases anytime with `datus-agent configure`. Use `datus-agent service list` to see all configured databases.
 
 ```bash title="Terminal"
-datus-cli --namespace duckdb-demo
+datus-cli --database duckdb-demo
 ```
 ```{ .yaml .no-copy }
 Initializing AI capabilities in background...
@@ -93,7 +107,7 @@ Initializing AI capabilities in background...
 Datus - AI-powered SQL command-line interface
 Type '.help' for a list of commands or '.exit' to quit.
 
-Namespace duckdb-demo selected
+Database duckdb-demo selected
 Connected to duckdb-demo using database duckdb-demo
 Context: Current: database: duckdb-demo
 Type SQL statements or use ! @ . commands to interact.

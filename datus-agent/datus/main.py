@@ -21,7 +21,6 @@ if __package__ is None:
 
 from datus import __version__
 from datus.agent.agent import Agent
-from datus.cli.interactive_init import InteractiveInit
 from datus.configuration.agent_config_loader import load_agent_config
 from datus.schemas.node_models import SqlTask
 from datus.utils.exceptions import setup_exception_handler
@@ -54,18 +53,38 @@ def create_parser() -> argparse.ArgumentParser:
     # Create subparsers for different commands, inheriting global options
     subparsers = parser.add_subparsers(dest="action", help="Action to perform")
 
-    # init command
+    # configure command — LLM + database + workspace setup
     subparsers.add_parser(
-        "init",
-        help="Interactive setup wizard for basic configuration",
+        "configure",
+        help="Configure LLM, database connections, and workspace settings",
         parents=[global_parser],
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    # namespace command
+    # init command — project workspace initialization (AGENTS.md)
+    init_parser = subparsers.add_parser(
+        "init",
+        help="Initialize project workspace (generate AGENTS.md)",
+        parents=[global_parser],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    init_parser.add_argument(
+        "--database", "--namespace", type=str, default="", help="Database to probe for schema info in AGENTS.md"
+    )
+
+    # service command (was: namespace)
+    service_parser = subparsers.add_parser(
+        "service",
+        help="Manage services (databases, BI tools, schedulers)",
+        parents=[global_parser],
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    service_parser.add_argument("command", help="Service management command", choices=["list", "add", "delete"])
+
+    # Keep 'namespace' as hidden alias for backward compatibility
     namespace_parser = subparsers.add_parser(
         "namespace",
-        help="Manage namespaces",
+        help=argparse.SUPPRESS,
         parents=[global_parser],
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -87,7 +106,7 @@ def create_parser() -> argparse.ArgumentParser:
         parents=[global_parser],
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    check_db_parser.add_argument("--namespace", type=str, required=True, help="Database namespace to check")
+    check_db_parser.add_argument("--database", "--namespace", type=str, required=True, help="Database name to check")
 
     # bootstrap-kb command
     bootstrap_parser = subparsers.add_parser(
@@ -123,7 +142,7 @@ def create_parser() -> argparse.ArgumentParser:
     bootstrap_parser.add_argument(
         "--benchmark", type=str, choices=["spider2", "bird_dev", "bird_critic"], help="Benchmark dataset to use"
     )
-    bootstrap_parser.add_argument("--namespace", type=str, required=True, help="Database namespace")
+    bootstrap_parser.add_argument("--database", "--namespace", type=str, required=True, help="Database name")
     bootstrap_parser.add_argument(
         "--schema_linking_type",
         type=str,
@@ -299,7 +318,7 @@ def create_parser() -> argparse.ArgumentParser:
     benchmark_parser.add_argument(
         "--benchmark_task_ids", type=str, nargs="+", help="Specific benchmark task IDs to run"
     )
-    benchmark_parser.add_argument("--namespace", type=str, required=True, help="Database namespace")
+    benchmark_parser.add_argument("--database", "--namespace", type=str, required=True, help="Database name")
     benchmark_parser.add_argument("--task_db_name", type=str, help="Database name for the task")
     benchmark_parser.add_argument("--task_schema", type=str, help="Schema name for the task")
     benchmark_parser.add_argument("--subject_path", type=str, help="Subject path for the task")
@@ -365,7 +384,7 @@ def create_parser() -> argparse.ArgumentParser:
         parents=[global_parser],
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    run_parser.add_argument("--namespace", type=str, required=True, help="Database namespace")
+    run_parser.add_argument("--database", "--namespace", type=str, required=True, help="Database name")
     run_parser.add_argument("--task", type=str, required=True, help="Natural language task description")
     run_parser.add_argument(
         "--task_id",
@@ -404,7 +423,7 @@ def create_parser() -> argparse.ArgumentParser:
         parents=[global_parser],
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    evaluation_parser.add_argument("--namespace", type=str, required=True, help="Database namespace")
+    evaluation_parser.add_argument("--database", "--namespace", type=str, required=True, help="Database name")
     evaluation_parser.add_argument(
         "--benchmark",
         type=str,
@@ -430,7 +449,7 @@ def create_parser() -> argparse.ArgumentParser:
         parents=[global_parser],
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    bi_subparser.add_argument("--namespace", type=str, required=True, help="Database namespace")
+    bi_subparser.add_argument("--database", "--namespace", type=str, required=True, help="Database name")
 
     multi_benchmark_parser = subparsers.add_parser(
         "multi-round-benchmark", parents=[global_parser], help="Multi-round benchmarking"
@@ -512,16 +531,30 @@ def main():
         parser.print_help()
         return 1
 
-    # Handle init command separately as it doesn't require existing configuration
+    # configure command — set up LLM + database (replaces old init config part)
+    if args.action == "configure":
+        configure_logging(args.debug, console_output=False)
+        from datus.cli.interactive_configure import InteractiveConfigure
+
+        return InteractiveConfigure().run()
+
+    # init command — generate AGENTS.md workspace (requires configured LLM)
     if args.action == "init":
         configure_logging(args.debug, console_output=False)
-        init = InteractiveInit()
-        return init.run()
+        from datus.cli.init_workspace import InitWorkspace
+
+        return InitWorkspace(args).run()
 
     if args.action == "tutorial":
         configure_logging(args.debug, console_output=False)
         tutorial = BenchmarkTutorial(args.config)
         return tutorial.run()
+
+    if args.action == "service":
+        configure_logging(args.debug, console_output=False)
+        from datus.cli.service_manager import ServiceManager
+
+        return ServiceManager(args.config or "").run(args.command)
 
     if args.action == "namespace":
         configure_logging(args.debug, console_output=False)

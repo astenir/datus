@@ -182,7 +182,7 @@ class AgenticNode(Node):
                 version=version,
                 # Add common template variables
                 agent_config=self.agent_config,
-                namespace=getattr(self.agent_config, "current_namespace", None) if self.agent_config else None,
+                namespace=getattr(self.agent_config, "current_database", None) if self.agent_config else None,
                 workspace_root=root_path,  # DEPRECATED: Use semantic_model_dir or sql_summary_dir instead
                 # Add conversation summary if available
                 conversation_summary=conversation_summary,
@@ -217,6 +217,11 @@ class AgenticNode(Node):
         Returns:
             Prompt with skills XML and memory context appended
         """
+        # Inject AGENTS.md project context if present in cwd
+        agents_md = self._load_agents_md()
+        if agents_md:
+            base_prompt = base_prompt + "\n\n" + agents_md
+
         # Ensure skill tools are in self.tools (lazy injection after subclass setup_tools()).
         self._ensure_skill_tools_in_tools()
 
@@ -258,6 +263,33 @@ class AgenticNode(Node):
         except Exception as e:
             logger.warning(f"Failed to inject memory context for node '{node_name}': {e}")
         return base_prompt
+
+    def _load_agents_md(self) -> str:
+        """Load AGENTS.md from current working directory as project context.
+
+        Returns first 200 lines wrapped in <project_context> tags.
+        Returns empty string if file doesn't exist — all features work without it.
+        """
+        import os
+
+        agents_md_path = os.path.join(os.getcwd(), "AGENTS.md")
+        if not os.path.exists(agents_md_path):
+            return ""
+
+        try:
+            with open(agents_md_path, encoding="utf-8") as f:
+                lines = f.readlines()
+            if not lines:
+                return ""
+            # Keep first 200 lines to stay within reasonable context budget
+            max_lines = 200
+            content = "".join(lines[:max_lines])
+            if len(lines) > max_lines:
+                content += f"\n... ({len(lines) - max_lines} more lines, see AGENTS.md for full content)"
+            return f"<project_context>\n{content}\n</project_context>"
+        except Exception as e:
+            logger.debug(f"Failed to load AGENTS.md: {e}")
+            return ""
 
     def _generate_session_id(self) -> str:
         """Generate a unique session ID."""
@@ -1045,7 +1077,7 @@ class AgenticNode(Node):
 
     def _resolve_workspace_root(self) -> str:
         """
-        Resolve workspace_root with priority: node-specific > global storage > legacy > default.
+        Resolve workspace_root with priority: node-specific > global storage > legacy > cwd.
         Expands ~ to user home directory if present.
 
         Returns:
@@ -1055,7 +1087,7 @@ class AgenticNode(Node):
 
         workspace_root = None
 
-        # Priority: node-specific workspace_root > global storage.workspace_root > legacy > default "."
+        # Priority 1: node-specific workspace_root (explicit per-node config)
         node_workspace_root = self.node_config.get("workspace_root")
         if node_workspace_root:
             workspace_root = node_workspace_root
@@ -1070,16 +1102,15 @@ class AgenticNode(Node):
                 workspace_root = global_workspace_root
                 logger.debug(f"Using global workspace_root: {workspace_root}")
         elif self.agent_config and hasattr(self.agent_config, "workspace_root"):
-            # Fallback to old workspace_root location
             legacy_workspace_root = self.agent_config.workspace_root
             if legacy_workspace_root is not None:
                 workspace_root = legacy_workspace_root
                 logger.debug(f"Using legacy workspace_root: {workspace_root}")
 
-        # Default to current directory if not configured
+        # Default to current working directory (project directory)
         if workspace_root is None:
-            workspace_root = "."
-            logger.debug("Using default workspace_root: .")
+            workspace_root = os.getcwd()
+            logger.debug(f"Using current directory as workspace_root: {workspace_root}")
 
         # Expand ~ to user home directory
         expanded_path = os.path.expanduser(workspace_root)

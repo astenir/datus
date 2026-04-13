@@ -42,7 +42,7 @@ class TestCreateParser:
             ]
         )
         assert args.action == "run"
-        assert args.namespace == "myns"
+        assert args.database == "myns"
         assert args.task == "count rows"
         assert args.task_db_name == "mydb"
 
@@ -81,7 +81,7 @@ class TestCreateParser:
             ]
         )
         assert args.action == "check-db"
-        assert args.namespace == "testns"
+        assert args.database == "testns"
 
     def test_probe_llm_action_parsed(self):
         parser = create_parser()
@@ -221,16 +221,28 @@ class TestMainNoAction:
 
 
 class TestMainInitAction:
-    def test_init_action_runs_interactive_init(self):
+    def test_init_action_runs_init_workspace(self):
         mock_init = MagicMock()
         mock_init.run.return_value = 0
         with (
             patch("datus.main.configure_logging"),
-            patch("datus.main.InteractiveInit", return_value=mock_init),
+            patch("datus.cli.init_workspace.InitWorkspace", return_value=mock_init),
             patch.object(sys, "argv", ["datus", "init"]),
         ):
             result = main()
         mock_init.run.assert_called_once()
+        assert result == 0
+
+    def test_configure_action_runs_interactive_configure(self):
+        mock_configure = MagicMock()
+        mock_configure.run.return_value = 0
+        with (
+            patch("datus.main.configure_logging"),
+            patch("datus.cli.interactive_configure.InteractiveConfigure", return_value=mock_configure),
+            patch.object(sys, "argv", ["datus", "configure"]),
+        ):
+            result = main()
+        mock_configure.run.assert_called_once()
         assert result == 0
 
 

@@ -28,7 +28,7 @@ class DummyAgentConfig:
 
     def __init__(self):
         self.db_type = "sqlite"
-        self.current_namespace = "test_namespace"
+        self.current_database = "test_namespace"
         self._db_config = SimpleNamespace(catalog="catalog", database="database", schema="schema")
 
     def current_db_config(self):
@@ -181,7 +181,8 @@ class TestBenchmarkTutorialEnsureConfig:
         mock_agent_config = MagicMock()
         mock_agent_config.home = str(tmp_path)
         mock_agent_config.benchmark_configs = {}
-        mock_agent_config.namespaces = {}
+        mock_agent_config.service = MagicMock()
+        mock_agent_config.service.databases = {}
         mock_agent_config.path_manager = MagicMock()
         mock_agent_config.path_manager.benchmark_dir = tmp_path / "benchmark"
 
@@ -202,9 +203,9 @@ class TestBenchmarkTutorialEnsureConfig:
 
         assert result is True
         assert mock_config_manager.update_item.call_count == 2
-        # First call for namespace config
+        # First call for service config (databases)
         first_call = mock_config_manager.update_item.call_args_list[0]
-        assert first_call[0][0] == "namespace"
+        assert first_call[0][0] == "service"
         # Second call for benchmark config
         second_call = mock_config_manager.update_item.call_args_list[1]
         assert second_call[0][0] == "benchmark"
@@ -406,7 +407,7 @@ class TestBenchmarkTutorialInitMetrics:
         config_file.write_text("agent: {}")
 
         mock_agent_config = MagicMock()
-        mock_agent_config.current_namespace = "california_schools"
+        mock_agent_config.current_database = "california_schools"
         mock_agent_config.rag_storage_path.return_value = str(tmp_path / "storage")
 
         monkeypatch.setattr(tutorial_module, "load_agent_config", lambda reload, config: mock_agent_config)
@@ -442,7 +443,7 @@ class TestBenchmarkTutorialInitMetrics:
         config_file.write_text("agent: {}")
 
         mock_agent_config = MagicMock()
-        mock_agent_config.current_namespace = "california_schools"
+        mock_agent_config.current_database = "california_schools"
         mock_agent_config.rag_storage_path.return_value = str(tmp_path / "storage")
 
         monkeypatch.setattr(tutorial_module, "load_agent_config", lambda reload, config: mock_agent_config)
@@ -499,7 +500,7 @@ class TestBenchmarkTutorialInitMetrics:
         config_file.write_text("agent: {}")
 
         mock_agent_config = MagicMock()
-        mock_agent_config.current_namespace = "california_schools"
+        mock_agent_config.current_database = "california_schools"
 
         monkeypatch.setattr(tutorial_module, "load_agent_config", lambda reload, config: mock_agent_config)
 
