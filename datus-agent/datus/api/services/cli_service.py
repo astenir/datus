@@ -7,9 +7,7 @@ import threading
 import time
 import uuid
 from datetime import datetime
-from typing import Any, Dict, Optional
-
-from pydantic import ValidationError
+from typing import Dict, Optional
 
 from datus.api.models.base_models import Result
 from datus.api.models.cli_models import (
@@ -18,25 +16,11 @@ from datus.api.models.cli_models import (
     ExecuteContextInput,
     ExecuteSQLData,
     ExecuteSQLInput,
-    ExecuteToolData,
-    HistoricalQuery,
     InternalCommandData,
     InternalCommandInput,
     InternalCommandResultData,
-    Metric,
-    SampleData,
-    SavedFile,
-    SaveToolInput,
-    SaveToolResult,
-    SchemaLinkingResult,
-    SchemaLinkingToolInput,
-    SearchHistoryResult,
-    SearchHistoryToolInput,
-    SearchMetricsResult,
-    SearchMetricsToolInput,
     StopExecuteSQLData,
     TableInfo,
-    TableMetadata,
 )
 from datus.api.models.config_models import ErrorCode
 from datus.api.services.chat_service import ChatService
@@ -48,8 +32,6 @@ from datus.schemas.action_history import (
     ActionStatus,
 )
 from datus.tools.db_tools.db_manager import DBManager
-from datus.tools.func_tool.context_search import ContextSearchTools
-from datus.tools.output_tools.output import OutputTool
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
@@ -90,20 +72,9 @@ class CLIService:
         if self.agent_config:
             self._initialize_connection()
 
-        # Initialize agent (lazy loading)
-        self.agent = None
-        self.agent_ready = False
-
         # Track running SQL execution tasks: {task_id: asyncio.Task}
         self._sql_tasks: Dict[str, asyncio.Task] = {}
         self._sql_tasks_lock = threading.Lock()
-
-        # Initialize context search tools and output tool
-        self.context_search_tools = None
-        self.output_tool = None
-        if self.agent_config:
-            self.context_search_tools = ContextSearchTools(self.agent_config)
-            self.output_tool = OutputTool(agent_config=self.agent_config)
 
     def _initialize_connection(self):
         """Initialize the current database connection."""
@@ -122,34 +93,6 @@ class CLIService:
                     )
             except Exception as e:
                 logger.warning(f"Failed to initialize database connection: {e}")
-
-    def _ensure_agent(self):
-        """Ensure agent is initialized."""
-        if not self.agent and not self.agent_ready:
-            try:
-                from argparse import Namespace
-
-                from datus.agent.agent import Agent
-
-                agent_args = Namespace(
-                    temperature=0.7,
-                    top_p=0.9,
-                    max_tokens=8000,
-                    plan="reflection",
-                    max_steps=20,
-                    debug=False,
-                    load_cp=False,
-                    components=["metrics", "metadata", "table_lineage", "document"],
-                )
-
-                if self.agent_config:
-                    self.agent = Agent(agent_args, self.agent_config)
-                    self.agent_ready = True
-                    return True
-            except Exception as e:
-                logger.error(f"Failed to initialize agent: {e}")
-                return False
-        return self.agent_ready
 
     def _cleanup_sql_task(self, task_id: str) -> None:
         """Remove a completed SQL task from the tracking dict."""
@@ -352,333 +295,6 @@ class CLIService:
             success=True,
             data=StopExecuteSQLData(execute_task_id=task_id, stopped=True),
         )
-
-    def execute_tool(self, tool_name: str, request: Any) -> Result[ExecuteToolData]:
-        """Execute Tool Commands API as defined in the design."""
-        try:
-            if hasattr(request, "model_dump"):
-                payload = request.model_dump(exclude_unset=True)
-            elif isinstance(request, dict):
-                payload = dict(request)
-            else:
-                return Result(
-                    success=False,
-                    errorCode=ErrorCode.INVALID_PARAMETERS,
-                    errorMessage="Tool request must be a mapping or Pydantic model",
-                )
-
-            tool_key = tool_name.strip().lower()
-            handlers: Dict[str, Any] = {
-                "sl": (SchemaLinkingToolInput, self._execute_schema_linking_tool, True),
-                "schema_linking": (
-                    SchemaLinkingToolInput,
-                    self._execute_schema_linking_tool,
-                    True,
-                ),
-                "sm": (SearchMetricsToolInput, self._execute_search_metrics_tool, True),
-                "search_metrics": (
-                    SearchMetricsToolInput,
-                    self._execute_search_metrics_tool,
-                    True,
-                ),
-                "sh": (SearchHistoryToolInput, self._execute_search_history_tool, True),
-                "search_history": (
-                    SearchHistoryToolInput,
-                    self._execute_search_history_tool,
-                    True,
-                ),
-                "save": (SaveToolInput, self._execute_save_tool, False),
-            }
-
-            handler = handlers.get(tool_key)
-            if not handler:
-                return Result(
-                    success=False,
-                    errorCode=ErrorCode.TOOL_EXECUTION_ERROR,
-                    errorMessage=(
-                        "Tool not supported. Supported tools: "
-                        "sl/schema_linking, sm/search_metrics, "
-                        "sh/search_history, save"
-                    ),
-                )
-
-            model_cls, executor, requires_agent = handler
-
-            if requires_agent and not self._ensure_agent():
-                return Result(
-                    success=False,
-                    errorCode=ErrorCode.TOOL_EXECUTION_ERROR,
-                    errorMessage="Agent not available",
-                )
-
-            payload = {key: value for key, value in payload.items() if key not in {"tool_name", "stream_output"}}
-            args = payload.pop("args", None)
-            if args and "query_text" not in payload:
-                payload["query_text"] = args
-
-            try:
-                tool_input = model_cls.model_validate(payload)
-            except ValidationError as e:
-                error_details = "; ".join(err.get("msg", "Invalid value") for err in e.errors())
-                logger.error(f"Invalid input for tool {tool_key}: {e}")
-                return Result(
-                    success=False,
-                    errorCode=ErrorCode.INVALID_PARAMETERS,
-                    errorMessage=f"Invalid input parameters: {error_details}",
-                )
-
-            start_time = time.time()
-            result = executor(tool_input)
-            exec_time = time.time() - start_time
-
-            data = ExecuteToolData(
-                tool_name=tool_key,
-                query_text=getattr(tool_input, "query_text", None),
-                result=result,
-                execution_time=exec_time,
-                executed_at=datetime.now().isoformat() + "Z",
-            )
-
-            return Result(success=True, data=data)
-
-        except Exception as e:
-            logger.error(f"Failed to execute tool {tool_name}: {e}")
-            return Result(
-                success=False,
-                errorCode=ErrorCode.TOOL_EXECUTION_ERROR,
-                errorMessage=str(e),
-            )
-
-    def _execute_schema_linking_tool(self, request: SchemaLinkingToolInput) -> SchemaLinkingResult:
-        """Execute schema linking tool with structured parameters."""
-        try:
-            if not self.context_search_tools:
-                raise Exception("Context search tools not available")
-
-            result = self.context_search_tools.search_table_metadata(
-                query_text=request.query_text,
-                catalog_name=request.catalog_name or "",
-                database_name=request.database_name or "",
-                schema_name=request.schema_name or "",
-                top_n=request.top_n,
-                simple_sample_data=False,
-            )
-
-            if not result.success:
-                raise Exception(result.error or "Schema linking search failed")
-
-            metadata = []
-            sample_data = []
-
-            # Convert result to our model format
-            if result.result and "metadata" in result.result:
-                for item in result.result["metadata"]:
-                    metadata.append(
-                        TableMetadata(
-                            table_name=item.get("table_name", ""),
-                            catalog_name=item.get("catalog_name", ""),
-                            database_name=item.get("database_name", ""),
-                            schema_name=item.get("schema_name", ""),
-                            definition=item.get("definition", ""),
-                            score=1.0 - item.get("_distance", 0.0),  # Convert distance to score
-                        )
-                    )
-
-            if result.result and "sample_data" in result.result:
-                for item in result.result["sample_data"]:
-                    sample_data.append(
-                        SampleData(
-                            table_name=item.get("table_name", ""),
-                            sample_rows=item.get("sample_rows", ""),
-                        )
-                    )
-
-            return SchemaLinkingResult(
-                metadata=metadata,
-                sample_data=sample_data,
-                total_metadata=len(metadata),
-                total_sample_data=len(sample_data),
-            )
-        except Exception as e:
-            logger.error(f"Schema linking tool error: {e}")
-            return SchemaLinkingResult(metadata=[], sample_data=[], total_metadata=0, total_sample_data=0)
-
-    def _execute_search_metrics_tool(self, request: SearchMetricsToolInput) -> SearchMetricsResult:
-        """Execute search metrics tool with structured parameters."""
-        try:
-            if not self.context_search_tools:
-                raise Exception("Context search tools not available")
-
-            result = self.context_search_tools.search_metrics(
-                query_text=request.query_text,
-                domain=request.domain or "",
-                layer1=request.layer1 or "",
-                layer2=request.layer2 or "",
-                catalog_name=request.catalog_name or "",
-                database_name=request.database_name or "",
-                schema_name=request.schema_name or "",
-                top_n=request.top_n,
-            )
-
-            if not result.success:
-                raise Exception(result.error or "Metrics search failed")
-
-            metrics = []
-
-            # Convert result to our model format
-            if result.result:
-                for item in result.result:
-                    metrics.append(
-                        Metric(
-                            name=item.get("name", ""),
-                            description=item.get("description", ""),
-                            constraint=item.get("constraint", ""),
-                            domain=item.get("domain", ""),
-                            layer1=item.get("layer1", ""),
-                            layer2=item.get("layer2", ""),
-                            score=1.0 - item.get("_distance", 0.0),  # Convert distance to score
-                        )
-                    )
-
-            return SearchMetricsResult(metrics=metrics, total_count=len(metrics))
-        except Exception as e:
-            logger.error(f"Search metrics tool error: {e}")
-            return SearchMetricsResult(metrics=[], total_count=0)
-
-    def _execute_search_history_tool(self, request: SearchHistoryToolInput) -> SearchHistoryResult:
-        """Execute search history tool with structured parameters."""
-        try:
-            if not self.context_search_tools:
-                raise Exception("Context search tools not available")
-
-            # Call real implementation
-            result = self.context_search_tools.search_historical_sql(
-                query_text=request.query_text,
-                domain=request.domain or "",
-                layer1=request.layer1 or "",
-                layer2=request.layer2 or "",
-                top_n=request.top_n,
-            )
-
-            if not result.success:
-                raise Exception(result.error or "Historical SQL search failed")
-
-            history = []
-
-            # Convert result to our model format
-            if result.result:
-                for item in result.result:
-                    history.append(
-                        HistoricalQuery(
-                            sql_query=item.get("sql", ""),
-                            description=item.get("comment", ""),
-                            domain=item.get("domain", ""),
-                            layer1=item.get("layer1", ""),
-                            layer2=item.get("layer2", ""),
-                            timestamp=item.get("timestamp", ""),
-                            score=1.0 - item.get("_distance", 0.0),  # Convert distance to score
-                        )
-                    )
-
-            return SearchHistoryResult(history=history, total_count=len(history))
-        except Exception as e:
-            logger.error(f"Search history tool error: {e}")
-            return SearchHistoryResult(history=[], total_count=0)
-
-    def _execute_save_tool(self, request: SaveToolInput) -> SaveToolResult:
-        """Execute save tool with structured parameters."""
-        try:
-            import os
-            import zipfile
-            from datetime import datetime
-
-            from datus.schemas.node_models import OutputInput
-
-            # Get last SQL context
-            last_sql = self.cli_context.get_last_sql_context()
-            if not last_sql:
-                logger.error("No previous SQL result to save")
-                return SaveToolResult(files_saved=[], total_files=0, total_size="0B")
-
-            # Create target directory
-            target_dir = request.target_dir or os.path.expanduser("~/.datus/output")
-            os.makedirs(target_dir, exist_ok=True)
-
-            file_name = request.file_name or datetime.now().strftime("%Y%m%d%H%M%S")
-
-            # Initialize output tool if not exists
-            if not self.output_tool:
-                self.output_tool = OutputTool(agent_config=self.agent_config)
-
-            # Execute output tool to save results
-            output_input = OutputInput(
-                task="",
-                database_name=self.cli_context.current_db_name or "",
-                task_id=file_name,
-                gen_sql=last_sql.sql_query,
-                sql_result=last_sql.sql_return or "",
-                row_count=last_sql.row_count or 0,
-                file_type=request.file_type,
-                check_result=False,
-                error=last_sql.sql_error,
-                finished=not last_sql.sql_error,
-                output_dir=target_dir,
-            )
-
-            result = self.output_tool.execute(output_input, self.current_db_connector)
-
-            # Parse saved files from result.output
-            files_saved = []
-            total_size = 0
-            file_paths = []
-
-            # OutputTool returns paths in result.output
-            output_paths = result.output.split("\n") if result.output else []
-            for path in output_paths:
-                path = path.strip()
-                if path and os.path.exists(path):
-                    file_type = path.split(".")[-1] if "." in path else "unknown"
-                    file_size = os.path.getsize(path)
-                    files_saved.append(
-                        SavedFile(
-                            file_type=file_type,
-                            file_path=path,
-                            file_size=f"{file_size}B",
-                        )
-                    )
-                    total_size += file_size
-                    file_paths.append(path)
-
-            # Create zip archive
-            zip_path = None
-            download_url = None
-            if file_paths:
-                zip_filename = f"{file_name}.zip"
-                zip_path = os.path.join(target_dir, zip_filename)
-
-                with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-                    for file_path in file_paths:
-                        # Add file to zip with just the basename (no directory structure)
-                        zipf.write(file_path, os.path.basename(file_path))
-
-                # Calculate zip size
-                zip_size = os.path.getsize(zip_path)
-                logger.info(f"Created zip archive: {zip_path} ({zip_size} bytes)")
-
-                # Generate download URL (relative path from output directory)
-                # Frontend should map this to actual download endpoint
-                download_url = f"/api/download/{zip_filename}"
-
-            return SaveToolResult(
-                files_saved=files_saved,
-                total_files=len(files_saved),
-                total_size=f"{total_size}B",
-                zip_path=zip_path,
-                download_url=download_url,
-            )
-        except Exception as e:
-            logger.error(f"Save tool error: {e}")
-            return SaveToolResult(files_saved=[], total_files=0, total_size="0B")
 
     def execute_context(self, context_type: str, request: ExecuteContextInput) -> Result[ExecuteContextData]:
         """

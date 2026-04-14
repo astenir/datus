@@ -54,162 +54,6 @@ class StopExecuteSQLData(BaseModel):
     stopped: bool = Field(..., description="Whether the execution was successfully stopped")
 
 
-# Tool Commands models
-class SchemaLinkingToolInput(BaseModel):
-    """Input model for schema linking tool (sl)."""
-
-    query_text: str = Field(..., description="Text to search for in table metadata")
-    catalog_name: Optional[str] = Field(None, description="Catalog name")
-    database_name: Optional[str] = Field(None, description="Database name")
-    schema_name: Optional[str] = Field(None, description="Schema name")
-    top_n: int = Field(5, description="Number of top results to return")
-
-
-class SearchMetricsToolInput(BaseModel):
-    """Input model for search metrics tool (sm)."""
-
-    query_text: str = Field(..., description="Text to search for in metrics")
-    domain: Optional[str] = Field(None, description="Metrics domain")
-    layer1: Optional[str] = Field(None, description="First layer classification")
-    layer2: Optional[str] = Field(None, description="Second layer classification")
-    catalog_name: Optional[str] = Field(None, description="Catalog name")
-    database_name: Optional[str] = Field(None, description="Database name")
-    schema_name: Optional[str] = Field(None, description="Schema name")
-    top_n: int = Field(5, description="Number of top results to return")
-
-
-class SearchHistoryToolInput(BaseModel):
-    """Input model for search history tool (sh)."""
-
-    query_text: str = Field(..., description="Text to search for in SQL history")
-    domain: Optional[str] = Field(None, description="Query domain")
-    layer1: Optional[str] = Field(None, description="First layer classification")
-    layer2: Optional[str] = Field(None, description="Second layer classification")
-    top_n: int = Field(5, description="Number of top results to return")
-
-
-class SaveToolInput(BaseModel):
-    """Input model for save tool."""
-
-    file_type: str = Field("all", description="File type to save (json/csv/sql/all)")
-    target_dir: Optional[str] = Field(None, description="Target directory")
-    file_name: Optional[str] = Field(None, description="File name")
-
-
-class ExecuteToolInput(BaseModel):
-    """Generic input model for tool execution - used for backward compatibility."""
-
-    model_config = ConfigDict(
-        json_schema_extra={
-            "example": {
-                "tool_name": "sl",
-                "args": "users table analysis",
-                "stream_output": False,
-            }
-        }
-    )
-
-    tool_name: str = Field(..., description="Name of the tool to execute")
-    args: str = Field("", description="Arguments for the tool")
-    stream_output: bool = Field(False, description="Whether to stream output")
-
-
-# Tool-specific result models
-class TableMetadata(BaseModel):
-    """Table metadata information."""
-
-    table_name: str = Field(..., description="Table name")
-    catalog_name: Optional[str] = Field(None, description="Catalog name")
-    database_name: Optional[str] = Field(None, description="Database name")
-    schema_name: Optional[str] = Field(None, description="Schema name")
-    definition: Optional[str] = Field(None, description="Table definition (DDL)")
-    score: Optional[float] = Field(None, description="Relevance score")
-
-
-class SampleData(BaseModel):
-    """Sample data information."""
-
-    table_name: str = Field(..., description="Table name")
-    sample_rows: str = Field(..., description="Sample rows as formatted text")
-
-
-class SchemaLinkingResult(BaseModel):
-    """Schema linking tool result."""
-
-    metadata: List[TableMetadata] = Field(default_factory=list, description="Table metadata")
-    sample_data: List[SampleData] = Field(default_factory=list, description="Sample data")
-    total_metadata: int = Field(0, description="Total metadata count")
-    total_sample_data: int = Field(0, description="Total sample data count")
-
-
-class Metric(BaseModel):
-    """Metric information."""
-
-    name: str = Field(..., description="Metric name")
-    description: str = Field(..., description="Metric description")
-    constraint: Optional[str] = Field(None, description="Metric constraint/formula")
-    domain: Optional[str] = Field(None, description="Metric domain")
-    layer1: Optional[str] = Field(None, description="First layer")
-    layer2: Optional[str] = Field(None, description="Second layer")
-    score: Optional[float] = Field(None, description="Relevance score")
-
-
-class SearchMetricsResult(BaseModel):
-    """Search metrics tool result."""
-
-    metrics: List[Metric] = Field(default_factory=list, description="Found metrics")
-    total_count: int = Field(0, description="Total metrics count")
-
-
-class HistoricalQuery(BaseModel):
-    """Historical query information."""
-
-    sql_query: str = Field(..., description="SQL query")
-    description: Optional[str] = Field(None, description="Query description")
-    domain: Optional[str] = Field(None, description="Query domain")
-    layer1: Optional[str] = Field(None, description="First layer")
-    layer2: Optional[str] = Field(None, description="Second layer")
-    timestamp: Optional[str] = Field(None, description="Query timestamp")
-    score: Optional[float] = Field(None, description="Relevance score")
-
-
-class SearchHistoryResult(BaseModel):
-    """Search history tool result."""
-
-    history: List[HistoricalQuery] = Field(default_factory=list, description="Historical queries")
-    total_count: int = Field(0, description="Total queries count")
-
-
-class SavedFile(BaseModel):
-    """Saved file information."""
-
-    file_type: str = Field(..., description="File type")
-    file_path: str = Field(..., description="File path")
-    file_size: str = Field(..., description="File size")
-
-
-class SaveToolResult(BaseModel):
-    """Save tool result."""
-
-    files_saved: List[SavedFile] = Field(default_factory=list, description="Saved files")
-    total_files: int = Field(0, description="Total files saved")
-    total_size: str = Field("0B", description="Total size")
-    zip_path: Optional[str] = Field(None, description="Path to zip archive")
-    download_url: Optional[str] = Field(None, description="Download URL for zip archive")
-
-
-class ExecuteToolData(BaseModel):
-    """Data for tool execution result."""
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    tool_name: str = Field(..., description="Tool name")
-    query_text: Optional[str] = Field(None, description="Query text used")
-    result: Any = Field(..., description="Tool execution result")
-    execution_time: float = Field(..., description="Execution time in seconds")
-    executed_at: str = Field(..., description="Execution timestamp")
-
-
 # Context Commands models
 class ExecuteContextInput(BaseModel):
     """Input model for context commands."""
@@ -258,30 +102,6 @@ class ExecuteContextData(BaseModel):
     result: ContextResultData = Field(..., description="Context result")
 
 
-# Chat Commands models - Enhanced for ChatAgenticNode integration
-class TableSchema(BaseModel):
-    """Table schema reference for chat context."""
-
-    table_name: str = Field(..., description="Table name")
-    catalog_name: Optional[str] = Field(None, description="Catalog name")
-    database_name: Optional[str] = Field(None, description="Database name")
-    schema_name: Optional[str] = Field(None, description="Schema name")
-    definition: Optional[str] = Field(None, description="Table definition/DDL")
-    score: Optional[float] = Field(None, description="Relevance score")
-
-
-class HistoricalSql(BaseModel):
-    """Historical SQL reference for chat context."""
-
-    sql_query: str = Field(..., description="SQL query")
-    description: Optional[str] = Field(None, description="Query description")
-    domain: Optional[str] = Field(None, description="Query domain")
-    layer1: Optional[str] = Field(None, description="Layer 1 classification")
-    layer2: Optional[str] = Field(None, description="Layer 2 classification")
-    timestamp: Optional[str] = Field(None, description="When query was executed")
-    score: Optional[float] = Field(None, description="Relevance score")
-
-
 class ChatInput(BaseModel):
     """Enhanced input model for chat commands with ChatAgenticNode support."""
 
@@ -328,13 +148,6 @@ class ChatInput(BaseModel):
     sql_paths: Optional[List[str]] = Field(default=None, description="SQL path identifiers for @Sql references")
     knowledge_paths: Optional[List[str]] = Field(
         default=None, description="Knowledge path identifiers for @Knowledge references"
-    )
-
-    # Legacy fields (direct objects, deprecated in favor of paths)
-    schemas: Optional[List[TableSchema]] = Field(default=None, description="Table schemas to reference (legacy)")
-    metrics: Optional[List[Metric]] = Field(default=None, description="Metrics to reference (legacy)")
-    historical_sql: Optional[List[HistoricalSql]] = Field(
-        default=None, description="Historical SQL to reference (legacy)"
     )
 
     # Response control
@@ -496,78 +309,6 @@ class InternalCommandData(BaseModel):
     result: InternalCommandResultData = Field(..., description="Command result")
 
 
-# Tool Types Enum
-class ToolType(str, Enum):
-    """Supported tool types."""
-
-    DARUN = "darun"
-    DASTART = "dastart"
-    CLEAN = "clean"
-    REASON = "reason"
-    REASON_STREAM = "reason_stream"
-    GEN_METRICS = "gen_metrics"
-    GEN_METRICS_STREAM = "gen_metrics_stream"
-    GEN_SCHEMAS_DESCRIPTIONS = "gen_schemas_descriptions"
-    GEN_QUERY = "gen_query"
-    SHOW_RESULT_RAW = "show_result_raw"
-    SHOW_RESULT_TABLE = "show_result_table"
-    COMPARE = "compare"
-    SUMMARY = "summary"
-    EXPORT = "export"
-    CALL_TOOL = "call_tool"
-    RUN = "run"
-    SL = "sl"
-    GEN = "gen"
-    FIX = "fix"
-    SAVE = "save"
-    BASH = "bash"
-
-
-# Context Types Enum
-class ContextType(str, Enum):
-    """Supported context types."""
-
-    CATALOGS = "catalogs"
-    CONTEXT = "context"
-    CONTEXT_SCREEN = "context_screen"
-    TABLES = "tables"
-    CATALOG = "catalog"
-    SUBJECT = "subject"
-    SQL = "sql"
-
-
-# Internal Command Types Enum
-class InternalCommandType(str, Enum):
-    """Supported internal command types."""
-
-    HELP = "help"
-    EXIT = "exit"
-    QUIT = "quit"
-    CLEAR = "clear"
-    SHOW = "show"
-    DATABASES = "databases"
-    DATABASE = "database"
-    SESSIONS = "sessions"
-    SESSION = "session"
-    NEW = "new"
-    EXPORT = "export"
-    SAVE = "save"
-    LOAD = "load"
-    HISTORY = "history"
-    CONFIG = "config"
-    LOGS = "logs"
-    MCP = "mcp"
-    DEBUG = "debug"
-    CHAT_INFO = "chat_info"
-    COMPACT = "compact"
-    TABLES = "tables"
-    SCHEMAS = "schemas"
-    SCHEMA = "schema"
-    TABLE_SCHEMA = "table_schema"
-    INDEXES = "indexes"
-    NAMESPACE = "namespace"
-
-
 # SSE (Server-Sent Events) Models for Streaming Chat
 
 
@@ -633,14 +374,6 @@ class ICreateMessagePayload(BaseModel):
 
     message_id: int = Field(..., description="Message ID")
     role: str = Field(..., description="Message role (user, assistant)")
-
-
-class IAppendMessagePayload(BaseModel):
-    """Payload for appending content to a message."""
-
-    message_id: int = Field(..., description="Message ID")
-    type: str = Field(..., description="Content type (markdown, code, etc.)")
-    content: Dict[str, Any] = Field(..., description="Message content payload")
 
 
 class IUpdateMessagePayload(BaseModel):
@@ -722,13 +455,6 @@ class SSEEvent(BaseModel):
     )
     data: SSEEventData = Field(..., description="Event payload")
     timestamp: str = Field(default_factory=lambda: datetime.now().isoformat() + "Z")
-
-
-class SSEPayload(BaseModel):
-    """Standard payload structure for SSE events (deprecated, use SSEMessageData instead)."""
-
-    type: str = Field(..., description="Data type (createMessage, appendMessage, updateMessage)")
-    payload: Dict[str, Any] = Field(..., description="Type-specific payload")
 
 
 class ChatHistoryData(BaseModel):
