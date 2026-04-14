@@ -2,9 +2,10 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+import inspect
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from agents import Tool
 from pydantic import BaseModel, Field
@@ -52,13 +53,59 @@ class FilesystemConfig:
         self.max_file_size = max_file_size
 
 
+PathNormalizer = Callable[[str, Optional[str]], str]
+
+
 class FilesystemFuncTool(BaseTool):
     """Function tool wrapper for filesystem operations"""
 
-    def __init__(self, root_path: str = None, **kwargs):
+    def __init__(
+        self,
+        root_path: str = None,
+        *,
+        path_normalizer: Optional[PathNormalizer] = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.root_path = root_path or os.getenv("FILESYSTEM_MCP_PATH", os.path.expanduser("~"))
         self.config = FilesystemConfig(root_path=root_path)
+        self._path_normalizer = path_normalizer
+        # Detect strict_kind support via signature inspection up front so a
+        # TypeError raised *inside* the normalizer can't be mistaken for a
+        # legacy 2-arg signature and silently drop the strict flag.
+        self._normalizer_accepts_strict_kind = False
+        if path_normalizer is not None:
+            try:
+                params = inspect.signature(path_normalizer).parameters
+                self._normalizer_accepts_strict_kind = "strict_kind" in params or any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()
+                )
+            except (TypeError, ValueError):
+                pass
+
+    def _normalize(self, path: str, file_type: Optional[str] = None, *, strict: bool = False) -> str:
+        """
+        Apply the configured path normalizer (if any) before sandbox resolution.
+
+        With ``strict=False`` (default, read-side), normalizer errors are logged
+        and the original path is returned so the downstream sandbox check can
+        fail naturally. With ``strict=True`` (write-side), the exception is
+        re-raised so callers don't silently land a mutation at a mis-normalized
+        location. ``strict=True`` is also forwarded to the normalizer as the
+        ``strict_kind`` kwarg so KB normalizers can enforce cross-kind write
+        restrictions on mutating ops while keeping reads lax.
+        """
+        if self._path_normalizer is None or not path:
+            return path
+        try:
+            if self._normalizer_accepts_strict_kind:
+                return self._path_normalizer(path, file_type, strict_kind=strict)
+            return self._path_normalizer(path, file_type)
+        except Exception as e:
+            logger.warning(f"path_normalizer raised on path={path!r} file_type={file_type!r}: {e}")
+            if strict:
+                raise
+            return path
 
     def available_tools(self) -> List[Tool]:
         """Get all available filesystem tools"""
@@ -82,13 +129,20 @@ class FilesystemFuncTool(BaseTool):
         return bound_tools
 
     def _get_safe_path(self, path: str) -> Optional[Path]:
-        """Get a safe path within the root directory"""
+        """Get a safe path within the root directory.
+
+        Uses ``Path.relative_to`` instead of string ``startswith`` so that
+        sibling directories whose names share the root's prefix (e.g. a
+        ``knowledge_base_home_backup`` sitting next to ``knowledge_base_home``)
+        can't be mistaken for an in-sandbox path via ``../`` traversal.
+        """
         try:
             root = Path(self.config.root_path).resolve()
             target = (root / path).resolve()
-            if not str(target).startswith(str(root)):
+            try:
+                target.relative_to(root)
+            except ValueError:
                 return None
-
             return target
         except Exception:
             return None
@@ -113,6 +167,7 @@ class FilesystemFuncTool(BaseTool):
                   - 'result' (Optional[str]): File contents on success.
         """
         try:
+            path = self._normalize(path)
             target_path = self._get_safe_path(path)
 
             if not target_path or not target_path.exists():
@@ -155,27 +210,28 @@ class FilesystemFuncTool(BaseTool):
         try:
             results = {}
 
-            for path in paths:
+            for raw_path in paths:
+                path = self._normalize(raw_path)
                 target_path = self._get_safe_path(path)
                 if not target_path or not target_path.exists():
-                    results[path] = f"File not found: {path}"
+                    results[raw_path] = f"File not found: {raw_path}"
                     continue
 
                 if not target_path.is_file():
-                    results[path] = f"Path is not a file: {path}"
+                    results[raw_path] = f"Path is not a file: {raw_path}"
                     continue
 
                 if not self._is_allowed_file(target_path):
-                    results[path] = f"File type not allowed: {path}"
+                    results[raw_path] = f"File type not allowed: {raw_path}"
                     continue
 
                 try:
                     content = target_path.read_text(encoding="utf-8")
-                    results[path] = content
+                    results[raw_path] = content
                 except UnicodeDecodeError:
-                    results[path] = f"Cannot read binary file: {path}"
+                    results[raw_path] = f"Cannot read binary file: {raw_path}"
                 except PermissionError:
-                    results[path] = f"Permission denied: {path}"
+                    results[raw_path] = f"Permission denied: {raw_path}"
 
             return FuncToolResult(result=results)
 
@@ -200,6 +256,10 @@ class FilesystemFuncTool(BaseTool):
                   - 'result' (Optional[str]): Success message on success.
         """
         try:
+            try:
+                path = self._normalize(path, file_type, strict=True)
+            except Exception as e:
+                return FuncToolResult(success=0, error=f"Path normalization failed: {e}")
             target_path = self._get_safe_path(path)
 
             if not target_path:
@@ -211,7 +271,7 @@ class FilesystemFuncTool(BaseTool):
             try:
                 target_path.parent.mkdir(parents=True, exist_ok=True)
                 target_path.write_text(content, encoding="utf-8")
-                return FuncToolResult(result=f"File written successfully: {str(target_path)}")
+                return FuncToolResult(result=f"File written successfully: {str(path)}")
             except PermissionError:
                 return FuncToolResult(success=0, error=f"Permission denied: {path}")
 
@@ -243,6 +303,10 @@ class FilesystemFuncTool(BaseTool):
                 except json.JSONDecodeError as e:
                     return FuncToolResult(success=0, error=f"Invalid JSON in edits parameter: {str(e)}")
 
+            try:
+                path = self._normalize(path, strict=True)
+            except Exception as e:
+                return FuncToolResult(success=0, error=f"Path normalization failed: {e}")
             target_path = self._get_safe_path(path)
 
             if not target_path or not target_path.exists():
@@ -283,9 +347,7 @@ class FilesystemFuncTool(BaseTool):
                     return FuncToolResult(success=0, error="No edits were applied")
 
                 target_path.write_text(content, encoding="utf-8")
-                return FuncToolResult(
-                    result=f"File edited successfully: {str(target_path)} ({edits_applied} edit(s) applied)"
-                )
+                return FuncToolResult(result=f"File edited successfully: {str(path)} ({edits_applied} edit(s) applied)")
             except UnicodeDecodeError:
                 return FuncToolResult(success=0, error=f"Cannot edit binary file: {path}")
             except PermissionError:
@@ -561,7 +623,11 @@ class FilesystemFuncTool(BaseTool):
             dict: A dictionary with the execution result, containing these keys:
                   - 'success' (int): 1 for success, 0 for failure.
                   - 'error' (Optional[str]): Error message on failure.
-                  - 'result' (Optional[List[str]]): List of matching absolute file paths on success.
+                  - 'result' (Optional[List[str]]): List of matches whose paths are
+                    relative to ``root_path`` (so callers can feed them back to
+                    ``read_file`` / ``write_file`` without leaking absolute paths).
+                    Falls back to the absolute form only if a match somehow lands
+                    outside ``root_path``.
         """
         try:
             target_path = self._get_safe_path(path)
@@ -633,14 +699,20 @@ class FilesystemFuncTool(BaseTool):
                                     continue
 
                                 relative_path = str(item.relative_to(target_path_resolved))
+                                # Report paths relative to root_path so the LLM can feed them
+                                # back to read_file/write_file without leaking absolute paths.
+                                try:
+                                    reported_path = str(item_resolved.relative_to(root_path_resolved))
+                                except ValueError:
+                                    reported_path = str(item_resolved)
                                 try:
                                     if glob.globmatch(relative_path, pattern, flags=glob.DOTGLOB | glob.GLOBSTAR):
-                                        matches.append(str(item_resolved))
+                                        matches.append(reported_path)
                                         if len(matches) >= effective_max:
                                             return
                                 except Exception:
                                     if item.name == pattern:
-                                        matches.append(str(item_resolved))
+                                        matches.append(reported_path)
                                         if len(matches) >= effective_max:
                                             return
 

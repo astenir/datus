@@ -14,7 +14,7 @@ from typing import AsyncGenerator, Literal, Optional
 
 from datus.agent.node.agentic_node import AgenticNode
 from datus.cli.execution_state import ExecutionInterrupted
-from datus.cli.generation_hooks import GenerationHooks
+from datus.cli.generation_hooks import GenerationHooks, make_kb_path_normalizer
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.sql_summary_agentic_node_models import SqlSummaryNodeInput, SqlSummaryNodeResult
@@ -74,6 +74,7 @@ class SqlSummaryAgenticNode(AgenticNode):
                 self.max_turns = agentic_node_config.get("max_turns", 30)
 
         self.sql_summary_dir = str(agent_config.path_manager.sql_summary_path(agent_config.current_database))
+        self.knowledge_base_dir = str(agent_config.path_manager.knowledge_base_home)
 
         from datus.configuration.node_type import NodeType
 
@@ -153,7 +154,10 @@ class SqlSummaryAgenticNode(AgenticNode):
         try:
             from datus.tools.func_tool import trans_to_function_tool
 
-            self.filesystem_func_tool = FilesystemFuncTool(root_path=self.sql_summary_dir)
+            self.filesystem_func_tool = FilesystemFuncTool(
+                root_path=self.knowledge_base_dir,
+                path_normalizer=make_kb_path_normalizer(self.agent_config, default_kind="sql_summary"),
+            )
 
             self.tools.append(trans_to_function_tool(self.filesystem_func_tool.read_file))
             self.tools.append(trans_to_function_tool(self.filesystem_func_tool.read_multiple_files))
@@ -245,6 +249,9 @@ class SqlSummaryAgenticNode(AgenticNode):
 
         context["native_tools"] = ", ".join([tool.name for tool in self.tools]) if self.tools else "None"
         context["sql_summary_dir"] = self.sql_summary_dir
+        context["knowledge_base_dir"] = self.knowledge_base_dir
+        context["kind_subdir"] = "sql_summaries"
+        context["current_database"] = self.agent_config.current_database
         context["has_ask_user_tool"] = self.ask_user_tool is not None
 
         # Handle subject_tree context based on whether predefined or query from storage
@@ -611,13 +618,22 @@ class SqlSummaryAgenticNode(AgenticNode):
         Save generated SQL summary to database (synchronous).
 
         Args:
-            sql_summary_file: Name of the SQL summary file (e.g., "query_001.yaml")
+            sql_summary_file: Path of the SQL summary file as reported by the LLM.
+                Absolute, KB-root-relative (e.g. ``sql_summaries/<db>/q_001.yaml``)
+                and bare-filename forms are all accepted — the same normalizer
+                used on the write side resolves them to the actual on-disk path.
         """
         try:
             import os
 
-            # Construct full path
-            full_path = os.path.join(self.sql_summary_dir, sql_summary_file)
+            from datus.cli.generation_hooks import resolve_kb_sandbox_path
+
+            full_path = resolve_kb_sandbox_path(
+                sql_summary_file, "sql_summary", self.agent_config, self.knowledge_base_dir
+            )
+            if not full_path:
+                logger.warning(f"SQL summary file rejected by sandbox check: {sql_summary_file!r}")
+                return
 
             if not os.path.exists(full_path):
                 logger.warning(f"SQL summary file not found: {full_path}")

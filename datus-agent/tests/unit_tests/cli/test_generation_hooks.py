@@ -23,7 +23,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from datus.cli.execution_state import InteractionCancelled
-from datus.cli.generation_hooks import GenerationCancelledException, GenerationHooks
+from datus.cli.generation_hooks import (
+    GenerationCancelledException,
+    GenerationHooks,
+    make_kb_path_normalizer,
+    normalize_kb_relative_path,
+    resolve_kb_sandbox_path,
+)
+from datus.tools.func_tool.filesystem_tools import FilesystemFuncTool
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -38,13 +45,20 @@ def broker():
 
 
 @pytest.fixture
-def agent_config():
+def agent_config(tmp_path):
+    kb_home = tmp_path / "kb"
+    (kb_home / "semantic_models" / "test_ns").mkdir(parents=True, exist_ok=True)
+    (kb_home / "sql_summaries" / "test_ns").mkdir(parents=True, exist_ok=True)
+    (kb_home / "ext_knowledge" / "test_ns").mkdir(parents=True, exist_ok=True)
     cfg = MagicMock()
-    cfg.home = "/tmp/datus_test"
+    cfg.home = str(tmp_path)
     cfg.current_database = "test_ns"
+    cfg.current_namespace = "test_ns"
     cfg.db_type = "sqlite"
     cfg.path_manager = MagicMock()
-    cfg.path_manager.semantic_model_path.return_value = Path("/tmp/datus_test/semantic_models/test_ns")
+    cfg.path_manager.semantic_model_path.return_value = kb_home / "semantic_models" / "test_ns"
+    # Real value so _resolve_path's realpath/commonpath containment check works.
+    cfg.path_manager.knowledge_base_home = kb_home
     return cfg
 
 
@@ -149,22 +163,34 @@ class TestStubHooks:
 
 
 class TestExtractFilepaths:
-    def test_from_dict_with_files(self, hooks):
-        result = {"result": {"semantic_model_files": ["/a/b.yaml", "/c/d.yaml"]}}
+    def test_from_dict_with_files(self, hooks, agent_config):
+        # Absolute paths inside the configured knowledge_base_home pass the
+        # containment check and are returned normpath'd.
+        sem_dir = Path(str(agent_config.path_manager.knowledge_base_home)) / "semantic_models" / "test_ns"
+        paths_in = [str(sem_dir / "a.yaml"), str(sem_dir / "b.yaml")]
+        result = {"result": {"semantic_model_files": paths_in}}
         paths = hooks._extract_filepaths_from_result(result)
-        assert paths == ["/a/b.yaml", "/c/d.yaml"]
+        assert paths == paths_in
+
+    def test_from_dict_drops_paths_outside_kb_home(self, hooks):
+        """Absolute paths outside knowledge_base_home must be filtered out."""
+        result = {"result": {"semantic_model_files": ["/etc/passwd", "/a/b.yaml"]}}
+        paths = hooks._extract_filepaths_from_result(result)
+        assert paths == []
 
     def test_from_dict_no_files(self, hooks):
         result = {"result": {}}
         paths = hooks._extract_filepaths_from_result(result)
         assert paths == []
 
-    def test_from_object_with_result(self, hooks):
+    def test_from_object_with_result(self, hooks, agent_config):
+        sem_dir = Path(str(agent_config.path_manager.knowledge_base_home)) / "semantic_models" / "test_ns"
+        inside = str(sem_dir / "x.yaml")
         r = MagicMock()
-        r.result = {"semantic_model_files": ["/x/y.yaml"]}
+        r.result = {"semantic_model_files": [inside]}
         r.success = True
         paths = hooks._extract_filepaths_from_result(r)
-        assert paths == ["/x/y.yaml"]
+        assert paths == [inside]
 
     def test_from_none_returns_empty(self, hooks):
         paths = hooks._extract_filepaths_from_result(None)
@@ -177,91 +203,128 @@ class TestExtractFilepaths:
 
 
 class TestResolvePath:
-    def _make_hooks(self, broker, sem="/ws/sm", sql="/ws/sql", ext="/ws/ext", namespace="ns_a"):
+    """
+    Tests for ``GenerationHooks._resolve_path``.
+
+    The resolver joins relative paths against ``knowledge_base_home`` after
+    routing them through ``normalize_kb_relative_path`` — so a naked filename
+    written by the LLM (e.g. ``orders.yml``) lands at
+    ``{kb_home}/{type_subdir}/{namespace}/orders.yml``, matching where the
+    FilesystemFuncTool actually wrote the file.
+    """
+
+    def _make_hooks(self, broker, kb="/ws", namespace="ns_a"):
         cfg = MagicMock()
         cfg.current_namespace = namespace
         cfg.path_manager = MagicMock()
-        cfg.path_manager.semantic_model_path = MagicMock(return_value=Path(sem))
-        cfg.path_manager.sql_summary_path = MagicMock(return_value=Path(sql))
-        cfg.path_manager.ext_knowledge_path = MagicMock(return_value=Path(ext))
+        cfg.path_manager.knowledge_base_home = Path(kb)
         return GenerationHooks(broker=broker, agent_config=cfg), cfg
 
-    def test_absolute_path_unchanged(self, broker):
+    def test_absolute_path_outside_kb_rejected(self, broker):
+        """Absolute paths that escape knowledge_base_home must be returned as an
+        empty string so downstream ``os.path.exists`` / ``open`` never sees
+        them — fail closed, no arbitrary file disclosure."""
         h, _ = self._make_hooks(broker)
-        assert h._resolve_path("/abs/path/to/file.yml", "semantic") == "/abs/path/to/file.yml"
+        assert h._resolve_path("/etc/passwd", "semantic") == ""
+        assert h._resolve_path("/abs/path/to/file.yml", "semantic") == ""
+
+    def test_absolute_path_inside_kb_home_is_normpathed(self, broker, tmp_path):
+        """Absolute paths that resolve inside knowledge_base_home are accepted."""
+        kb = tmp_path / "kb"
+        (kb / "semantic_models" / "ns_a").mkdir(parents=True)
+        inside = kb / "semantic_models" / "ns_a" / "orders.yml"
+        inside.write_text("x")
+        h, _ = self._make_hooks(broker, kb=str(kb))
+        resolved = h._resolve_path(str(inside), "semantic")
+        assert os.path.realpath(resolved) == os.path.realpath(str(inside))
 
     def test_relative_joined_for_semantic(self, broker):
         h, _ = self._make_hooks(broker)
-        assert h._resolve_path("orders.yml", "semantic") == "/ws/sm/orders.yml"
+        assert h._resolve_path("orders.yml", "semantic") == "/ws/semantic_models/ns_a/orders.yml"
 
     def test_relative_joined_for_sql_summary(self, broker):
         h, _ = self._make_hooks(broker)
-        assert h._resolve_path("q_001.yaml", "sql_summary") == "/ws/sql/q_001.yaml"
+        assert h._resolve_path("q_001.yaml", "sql_summary") == "/ws/sql_summaries/ns_a/q_001.yaml"
 
     def test_relative_joined_for_ext_knowledge(self, broker):
         h, _ = self._make_hooks(broker)
-        assert h._resolve_path("gmv.yaml", "ext_knowledge") == "/ws/ext/gmv.yaml"
+        assert h._resolve_path("gmv.yaml", "ext_knowledge") == "/ws/ext_knowledge/ns_a/gmv.yaml"
 
     def test_nested_relative_joined(self, broker):
         h, _ = self._make_hooks(broker)
-        assert h._resolve_path("metrics/orders_metrics.yml", "semantic") == "/ws/sm/metrics/orders_metrics.yml"
+        assert (
+            h._resolve_path("metrics/orders_metrics.yml", "semantic")
+            == "/ws/semantic_models/ns_a/metrics/orders_metrics.yml"
+        )
+
+    def test_already_prefixed_path_passes_through(self, broker):
+        """LLM that includes the {subdir}/{namespace}/ prefix must not be double-prefixed."""
+        h, _ = self._make_hooks(broker)
+        assert h._resolve_path("semantic_models/ns_a/orders.yml", "semantic") == "/ws/semantic_models/ns_a/orders.yml"
+
+    def test_other_namespace_subdir_passes_through(self, broker):
+        """Explicit cross-namespace authoring is preserved."""
+        h, _ = self._make_hooks(broker)
+        assert (
+            h._resolve_path("semantic_models/other_db/orders.yml", "semantic")
+            == "/ws/semantic_models/other_db/orders.yml"
+        )
 
     def test_empty_path_returns_unchanged(self, broker):
         h, _ = self._make_hooks(broker)
         assert h._resolve_path("", "semantic") == ""
 
-    def test_unknown_kind_leaves_relative_unchanged(self, broker):
+    def test_unknown_kind_resolves_against_kb_home_root(self, broker):
+        """Unknown kind: normalizer adds no prefix, but path still rooted at kb_home."""
         h, _ = self._make_hooks(broker)
-        assert h._resolve_path("orders.yml", "unknown") == "orders.yml"
+        assert h._resolve_path("orders.yml", "unknown") == "/ws/orders.yml"
 
     def test_no_agent_config_leaves_relative_unchanged(self, broker):
         h = GenerationHooks(broker=broker, agent_config=None)
         assert h._resolve_path("orders.yml", "semantic") == "orders.yml"
 
     def test_rejects_traversal_escape(self, broker):
-        """Relative paths that escape the workspace root must be rejected."""
+        """`../../etc/passwd` resolves outside knowledge_base_home and must be rejected."""
         h, _ = self._make_hooks(broker)
-        assert h._resolve_path("../../etc/passwd", "semantic") == "../../etc/passwd"
+        assert h._resolve_path("../../etc/passwd", "semantic") == ""
 
-    def test_rejects_traversal_escape_that_normalizes_outside(self, broker):
-        """`a/../../b` normalizes outside the workspace and must be rejected."""
+    def test_allows_traversal_that_stays_inside_kb_home(self, broker):
+        """A path whose normpath stays under knowledge_base_home is allowed."""
         h, _ = self._make_hooks(broker)
-        assert h._resolve_path("a/../../b.yml", "semantic") == "a/../../b.yml"
+        # `metrics/../orders.yml` → prepend → `semantic_models/ns_a/metrics/../orders.yml`
+        # → normpath under /ws → `/ws/semantic_models/ns_a/orders.yml`
+        assert h._resolve_path("metrics/../orders.yml", "semantic") == "/ws/semantic_models/ns_a/orders.yml"
 
-    def test_allows_traversal_that_stays_inside(self, broker):
-        """`metrics/../orders.yml` normalizes inside the workspace and is allowed."""
-        h, _ = self._make_hooks(broker)
-        assert h._resolve_path("metrics/../orders.yml", "semantic") == "/ws/sm/orders.yml"
-
-    def test_rejects_symlink_that_escapes_workspace(self, broker, tmp_path):
-        """A symlink inside the workspace whose target is outside must be rejected."""
-        workspace = tmp_path / "workspace"
-        workspace.mkdir()
+    def test_rejects_symlink_that_escapes_kb_home(self, broker, tmp_path):
+        """A symlink inside the KB whose target is outside must be rejected."""
+        kb_home = tmp_path / "kb"
+        sub = kb_home / "semantic_models" / "ns_a"
+        sub.mkdir(parents=True)
         outside = tmp_path / "outside"
         outside.mkdir()
         (outside / "secret.yml").write_text("x")
-        (workspace / "leak.yml").symlink_to(outside / "secret.yml")
+        (sub / "leak.yml").symlink_to(outside / "secret.yml")
 
-        h, _ = self._make_hooks(broker, sem=str(workspace))
-        # Textually the path looks inside the workspace, but realpath dereferences
-        # the symlink to /…/outside/secret.yml which escapes the workspace root.
-        assert h._resolve_path("leak.yml", "semantic") == "leak.yml"
+        h, _ = self._make_hooks(broker, kb=str(kb_home))
+        # Textually the path looks inside kb_home, but realpath dereferences the
+        # symlink to /…/outside/secret.yml which escapes the workspace root.
+        assert h._resolve_path("leak.yml", "semantic") == ""
 
     def test_uses_current_namespace_at_call_time(self, broker):
         """Sub-agent switches change current_namespace; resolution must follow."""
         h, cfg = self._make_hooks(broker, namespace="ns_a")
-        h._resolve_path("orders.yml", "semantic")
-        cfg.path_manager.semantic_model_path.assert_called_with("ns_a")
+        assert h._resolve_path("orders.yml", "semantic") == "/ws/semantic_models/ns_a/orders.yml"
 
         cfg.current_namespace = "ns_b"
-        h._resolve_path("orders.yml", "semantic")
-        cfg.path_manager.semantic_model_path.assert_called_with("ns_b")
+        assert h._resolve_path("orders.yml", "semantic") == "/ws/semantic_models/ns_b/orders.yml"
 
     def test_extract_filepaths_resolves_relative_entries(self, broker):
         h, _ = self._make_hooks(broker)
+        # The relative entry resolves inside kb_home; the escaping absolute entry
+        # is dropped so downstream processing never sees it.
         result = {"result": {"semantic_model_files": ["orders.yml", "/abs/customers.yml"]}}
         paths = h._extract_filepaths_from_result(result)
-        assert paths == ["/ws/sm/orders.yml", "/abs/customers.yml"]
+        assert paths == ["/ws/semantic_models/ns_a/orders.yml"]
 
 
 # ---------------------------------------------------------------------------
@@ -345,9 +408,10 @@ class TestHandleEndSemanticModelGeneration:
         await hooks._handle_end_semantic_model_generation(result)
         hooks._process_single_file.assert_not_called()
 
-    async def test_with_file_paths_processes_each(self, hooks):
+    async def test_with_file_paths_processes_each(self, hooks, agent_config):
         hooks._process_single_file = AsyncMock()
-        result = {"result": {"semantic_model_files": ["/a.yaml", "/b.yaml"]}}
+        sem_dir = Path(str(agent_config.path_manager.knowledge_base_home)) / "semantic_models" / "test_ns"
+        result = {"result": {"semantic_model_files": [str(sem_dir / "a.yaml"), str(sem_dir / "b.yaml")]}}
         await hooks._handle_end_semantic_model_generation(result)
         assert hooks._process_single_file.await_count == 2
 
@@ -468,12 +532,13 @@ class TestHandleSqlSummaryResultExtended:
             os.unlink(path)
         hooks._get_sync_confirmation.assert_not_called()
 
-    async def test_happy_path_calls_confirmation(self, hooks):
+    async def test_happy_path_calls_confirmation(self, hooks, agent_config):
         """File exists with content -> confirmation called."""
         hooks._get_sync_confirmation = AsyncMock()
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            f.write("name: test_sql\nsql: SELECT 1\n")
-            path = f.name
+        sql_dir = Path(str(agent_config.path_manager.knowledge_base_home)) / "sql_summaries" / "test_ns"
+        path_obj = sql_dir / "q_happy.yaml"
+        path_obj.write_text("name: test_sql\nsql: SELECT 1\n")
+        path = str(path_obj)
         try:
             result = {"result": f"File written successfully: {path}"}
             await hooks._handle_sql_summary_result(result)
@@ -482,12 +547,13 @@ class TestHandleSqlSummaryResultExtended:
         hooks._get_sync_confirmation.assert_awaited_once()
         assert path in hooks.processed_files
 
-    async def test_reference_sql_file_written_pattern(self, hooks):
+    async def test_reference_sql_file_written_pattern(self, hooks, agent_config):
         """'Reference SQL file written successfully:' pattern is also matched."""
         hooks._get_sync_confirmation = AsyncMock()
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            f.write("name: test_sql\nsql: SELECT 1\n")
-            path = f.name
+        sql_dir = Path(str(agent_config.path_manager.knowledge_base_home)) / "sql_summaries" / "test_ns"
+        path_obj = sql_dir / "q_ref.yaml"
+        path_obj.write_text("name: test_sql\nsql: SELECT 1\n")
+        path = str(path_obj)
         try:
             result = {"result": f"Reference SQL file written successfully: {path}"}
             await hooks._handle_sql_summary_result(result)
@@ -515,11 +581,12 @@ class TestHandleExtKnowledgeResult:
         await hooks._handle_ext_knowledge_result(result)
         hooks._get_sync_confirmation.assert_not_called()
 
-    async def test_happy_path_calls_confirmation(self, hooks):
+    async def test_happy_path_calls_confirmation(self, hooks, agent_config):
         hooks._get_sync_confirmation = AsyncMock()
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            f.write("key: value\n")
-            path = f.name
+        ext_dir = Path(str(agent_config.path_manager.knowledge_base_home)) / "ext_knowledge" / "test_ns"
+        path_obj = ext_dir / "ext_happy.yaml"
+        path_obj.write_text("key: value\n")
+        path = str(path_obj)
         try:
             result = {"result": f"File written successfully: {path}"}
             await hooks._handle_ext_knowledge_result(result)
@@ -528,11 +595,12 @@ class TestHandleExtKnowledgeResult:
         hooks._get_sync_confirmation.assert_awaited_once()
         assert path in hooks.processed_files
 
-    async def test_ext_knowledge_file_written_pattern(self, hooks):
+    async def test_ext_knowledge_file_written_pattern(self, hooks, agent_config):
         hooks._get_sync_confirmation = AsyncMock()
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            f.write("key: value\n")
-            path = f.name
+        ext_dir = Path(str(agent_config.path_manager.knowledge_base_home)) / "ext_knowledge" / "test_ns"
+        path_obj = ext_dir / "ext_pattern.yaml"
+        path_obj.write_text("key: value\n")
+        path = str(path_obj)
         try:
             result = {"result": f"External knowledge file written successfully: {path}"}
             await hooks._handle_ext_knowledge_result(result)
@@ -565,11 +633,12 @@ class TestHandleExtKnowledgeResult:
             os.unlink(path)
         hooks._get_sync_confirmation.assert_not_called()
 
-    async def test_result_object_with_match(self, hooks):
+    async def test_result_object_with_match(self, hooks, agent_config):
         hooks._get_sync_confirmation = AsyncMock()
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            f.write("key: value\n")
-            path = f.name
+        ext_dir = Path(str(agent_config.path_manager.knowledge_base_home)) / "ext_knowledge" / "test_ns"
+        path_obj = ext_dir / "ext_match.yaml"
+        path_obj.write_text("key: value\n")
+        path = str(path_obj)
         try:
             result = MagicMock()
             result.result = f"File written successfully: {path}"
@@ -1141,6 +1210,60 @@ class TestSyncSemanticToDbBooleanCoercion:
 
 
 # ---------------------------------------------------------------------------
+# Tests: _sync_semantic_to_db actionable error for empty metric-only sync
+# ---------------------------------------------------------------------------
+
+
+class TestSyncSemanticToDbMetricOnlyDiagnostic:
+    """Metric-only syncs (e.g. end_metric_generation) emit a tailored error
+    message when the file has no `metric:` blocks, so the LLM can self-correct
+    instead of getting a generic "No valid objects found to sync"."""
+
+    def test_metric_only_sync_with_no_metric_blocks_returns_actionable_error(self, agent_config, tmp_path):
+        empty_metric = tmp_path / "frpm_metrics.yml"
+        empty_metric.write_text(
+            "# Generated metric documentation\n\n## Summary\n\n- avg_percent_eligible_free_ages_5_17\n"
+        )
+
+        with (
+            patch("datus.cli.generation_hooks.SemanticModelRAG"),
+            patch("datus.cli.generation_hooks.MetricRAG"),
+        ):
+            result = GenerationHooks._sync_semantic_to_db(
+                file_path=str(empty_metric),
+                agent_config=agent_config,
+                include_semantic_objects=False,
+                include_metrics=True,
+            )
+
+        assert result["success"] is False
+        assert "no `metric:` YAML blocks" in result["error"]
+        assert "create_metric: true" in result["error"]
+        assert str(empty_metric) in result["error"]
+
+    def test_combined_sync_keeps_generic_error_when_both_missing(self, agent_config, tmp_path):
+        """A combined sync (semantic + metrics) with neither still uses the
+        original generic message; the new diagnostic only fires for the
+        metrics-only branch."""
+        empty = tmp_path / "empty.yml"
+        empty.write_text("# nothing useful\n")
+
+        with (
+            patch("datus.cli.generation_hooks.SemanticModelRAG"),
+            patch("datus.cli.generation_hooks.MetricRAG"),
+        ):
+            result = GenerationHooks._sync_semantic_to_db(
+                file_path=str(empty),
+                agent_config=agent_config,
+                include_semantic_objects=True,
+                include_metrics=True,
+            )
+
+        assert result["success"] is False
+        assert result["error"] == "No data_source or metrics found in YAML file"
+
+
+# ---------------------------------------------------------------------------
 # Tests: _get_base_dir edge cases (resolver missing / exception)
 # ---------------------------------------------------------------------------
 
@@ -1165,15 +1288,17 @@ class TestGetBaseDirEdgeCases:
 
 
 class TestResolvePathCommonpathValueError:
-    def test_returns_original_when_commonpath_raises_value_error(self, broker):
-        """When os.path.commonpath raises ValueError (e.g. mixed drives), original path is returned."""
+    def test_returns_empty_when_commonpath_raises_value_error(self, broker):
+        """When os.path.commonpath raises ValueError (e.g. mixed drives), we
+        can't verify containment, so the resolver must fail closed by
+        returning an empty string (not the original path)."""
         cfg = MagicMock()
         cfg.current_namespace = "ns"
         cfg.path_manager = MagicMock()
-        cfg.path_manager.semantic_model_path = MagicMock(return_value=Path("/ws/sm"))
+        cfg.path_manager.knowledge_base_home = Path("/ws")
         h = GenerationHooks(broker=broker, agent_config=cfg)
         with patch("datus.cli.generation_hooks.os.path.commonpath", side_effect=ValueError("mixed drives")):
-            assert h._resolve_path("orders.yml", "semantic") == "orders.yml"
+            assert h._resolve_path("orders.yml", "semantic") == ""
 
 
 # ---------------------------------------------------------------------------
@@ -1225,3 +1350,257 @@ class TestHandleEndMetricGeneration:
     async def test_unexpected_exception_absorbed(self, hooks):
         hooks._extract_metric_generation_result = MagicMock(side_effect=RuntimeError("boom"))
         await hooks._handle_end_metric_generation({"result": {}})  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Tests: normalize_kb_relative_path (pure function)
+# ---------------------------------------------------------------------------
+
+
+class TestNormalizeKbRelativePath:
+    def test_prepends_when_prefix_missing(self):
+        assert (
+            normalize_kb_relative_path("orders.yaml", "semantic", "school_db")
+            == "semantic_models/school_db/orders.yaml"
+        )
+
+    def test_prepends_for_sql_summary(self):
+        assert (
+            normalize_kb_relative_path("q_001.yaml", "sql_summary", "school_db") == "sql_summaries/school_db/q_001.yaml"
+        )
+
+    def test_prepends_for_ext_knowledge(self):
+        assert (
+            normalize_kb_relative_path("notes.yaml", "ext_knowledge", "school_db")
+            == "ext_knowledge/school_db/notes.yaml"
+        )
+
+    def test_metric_kind_co_locates_with_semantic_models(self):
+        """metrics live under semantic_models/{db}/metrics/ — same root as semantic."""
+        assert (
+            normalize_kb_relative_path("metrics/orders_metrics.yaml", "metric", "school_db")
+            == "semantic_models/school_db/metrics/orders_metrics.yaml"
+        )
+
+    def test_idempotent_when_prefix_already_correct(self):
+        already = "semantic_models/school_db/orders.yaml"
+        assert normalize_kb_relative_path(already, "semantic", "school_db") == already
+
+    def test_passes_through_paths_in_other_namespaces(self):
+        path = "semantic_models/other_db/orders.yaml"
+        assert normalize_kb_relative_path(path, "semantic", "school_db") == path
+
+    def test_passes_through_paths_in_other_kinds(self):
+        path = "sql_summaries/school_db/q_001.yaml"
+        assert normalize_kb_relative_path(path, "semantic", "school_db") == path
+
+    def test_absolute_paths_unchanged(self):
+        assert normalize_kb_relative_path("/abs/path/orders.yaml", "semantic", "school_db") == "/abs/path/orders.yaml"
+
+    def test_empty_path_unchanged(self):
+        assert normalize_kb_relative_path("", "semantic", "school_db") == ""
+
+    def test_dot_path_unchanged(self):
+        assert normalize_kb_relative_path(".", "semantic", "school_db") == "."
+
+    def test_parent_traversal_unchanged(self):
+        assert normalize_kb_relative_path("../../etc/passwd", "semantic", "school_db") == "../../etc/passwd"
+
+    def test_unknown_kind_unchanged(self):
+        assert normalize_kb_relative_path("orders.yaml", "unknown", "school_db") == "orders.yaml"
+
+    def test_missing_namespace_unchanged(self):
+        assert normalize_kb_relative_path("orders.yaml", "semantic", None) == "orders.yaml"
+
+
+# ---------------------------------------------------------------------------
+# Tests: make_kb_path_normalizer factory
+# ---------------------------------------------------------------------------
+
+
+class _StubCfg:
+    """Minimal agent_config stand-in for normalizer factory tests."""
+
+    def __init__(self, ns: str):
+        self.current_namespace = ns
+
+
+class TestMakeKbPathNormalizer:
+    def test_uses_default_kind_when_file_type_missing(self):
+        normalizer = make_kb_path_normalizer(_StubCfg("db"), default_kind="semantic")
+        assert normalizer("orders.yaml", None) == "semantic_models/db/orders.yaml"
+
+    def test_file_type_overrides_default_kind(self):
+        normalizer = make_kb_path_normalizer(_StubCfg("db"), default_kind="semantic")
+        assert normalizer("q_001.yaml", "sql_summary") == "sql_summaries/db/q_001.yaml"
+
+    def test_file_type_aliases_recognized(self):
+        normalizer = make_kb_path_normalizer(_StubCfg("db"), default_kind=None)
+        assert normalizer("orders.yaml", "semantic_model") == "semantic_models/db/orders.yaml"
+        assert normalizer("metrics/x.yaml", "metric") == "semantic_models/db/metrics/x.yaml"
+        assert normalizer("notes.yaml", "ext_knowledge") == "ext_knowledge/db/notes.yaml"
+
+    def test_namespace_resolved_at_call_time(self):
+        """Sub-agent switches mid-session must be honored — closure rebinds each call."""
+        cfg = _StubCfg("ns_x")
+        normalizer = make_kb_path_normalizer(cfg, default_kind="semantic")
+        assert normalizer("orders.yaml", None) == "semantic_models/ns_x/orders.yaml"
+        cfg.current_namespace = "ns_y"
+        assert normalizer("orders.yaml", None) == "semantic_models/ns_y/orders.yaml"
+
+    def test_strict_kind_rejects_cross_kind_write(self):
+        """Mutating ops (strict_kind=True) must reject writes to peer kinds' subdirs."""
+        normalizer = make_kb_path_normalizer(_StubCfg("db"), default_kind="semantic")
+        # Read-lax: cross-kind reads still allowed.
+        assert normalizer("sql_summaries/db/q.yaml", None) == "sql_summaries/db/q.yaml"
+        # Write-strict: the same cross-kind path is refused.
+        with pytest.raises(ValueError, match="Write to 'sql_summaries/' is not allowed"):
+            normalizer("sql_summaries/db/q.yaml", None, strict_kind=True)
+
+    def test_strict_kind_ignores_file_type_override(self):
+        """In strict mode, file_type cannot be used to switch kinds."""
+        normalizer = make_kb_path_normalizer(_StubCfg("db"), default_kind="semantic")
+        # Without strict: file_type override is honored.
+        assert normalizer("q.yaml", "sql_summary") == "sql_summaries/db/q.yaml"
+        # With strict: override is ignored; default_kind wins.
+        assert normalizer("q.yaml", "sql_summary", strict_kind=True) == "semantic_models/db/q.yaml"
+
+    def test_strict_kind_rejects_cross_namespace_prefixed_write(self):
+        """Even within the same kind, an explicit prefix pointing at another
+        namespace must be rejected by a mutating op — otherwise a node whose
+        ``current_namespace`` is ``db`` could overwrite ``other_db``'s KB by
+        emitting ``semantic_models/other_db/orders.yml`` verbatim.
+
+        Rationale: with ``FilesystemFuncTool``'s ``root_path`` widened to
+        ``knowledge_base_home`` (so reads can browse peer namespaces), the
+        strict normalizer is the last line of defence for write/edit ops.
+        """
+        normalizer = make_kb_path_normalizer(_StubCfg("db"), default_kind="semantic")
+        # Read-lax: explicit cross-namespace prefix is honored so the LLM can
+        # browse peer namespaces.
+        assert normalizer("semantic_models/other_db/orders.yml", None) == "semantic_models/other_db/orders.yml"
+        # Write-strict: the same path must be refused.
+        with pytest.raises(ValueError, match="other_db"):
+            normalizer("semantic_models/other_db/orders.yml", None, strict_kind=True)
+
+    def test_strict_kind_allows_correct_namespace_prefix(self):
+        """Own-namespace prefix is still accepted in strict mode."""
+        normalizer = make_kb_path_normalizer(_StubCfg("db"), default_kind="semantic")
+        assert normalizer("semantic_models/db/orders.yml", None, strict_kind=True) == "semantic_models/db/orders.yml"
+
+
+# ---------------------------------------------------------------------------
+# Tests: hook + tool agreement — _resolve_path finds files written via the
+# same normalizer regardless of whether the LLM emitted a naked filename.
+# ---------------------------------------------------------------------------
+
+
+class TestHookAndToolPathAgreement:
+    def test_resolve_path_finds_naked_file_after_normalized_write(self, tmp_path, real_agent_config):
+        """FilesystemFuncTool writes orders.yml → hook resolves 'orders.yml' to the same on-disk path."""
+        kb_root = Path(str(real_agent_config.path_manager.knowledge_base_home))
+
+        tool = FilesystemFuncTool(
+            root_path=str(kb_root),
+            path_normalizer=make_kb_path_normalizer(real_agent_config, default_kind="semantic"),
+        )
+        write_result = tool.write_file("orders.yml", "id: orders\n", file_type="semantic_model")
+        assert write_result.success == 1
+
+        hooks = GenerationHooks(broker=None, agent_config=real_agent_config)
+        resolved = hooks._resolve_path("orders.yml", "semantic")
+
+        on_disk = kb_root / "semantic_models" / real_agent_config.current_namespace / "orders.yml"
+        assert os.path.realpath(resolved) == os.path.realpath(str(on_disk))
+        assert Path(resolved).is_file()
+
+    def test_extract_filepaths_resolves_relative_entries_against_kb_home(self, real_agent_config):
+        """end_semantic_model_generation payloads with bare filenames resolve correctly."""
+        kb_root = Path(str(real_agent_config.path_manager.knowledge_base_home))
+        target = kb_root / "semantic_models" / real_agent_config.current_namespace / "orders.yml"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("data\n")
+
+        hooks = GenerationHooks(broker=None, agent_config=real_agent_config)
+        paths = hooks._extract_filepaths_from_result({"result": {"semantic_model_files": ["orders.yml"]}})
+        assert len(paths) == 1
+        assert os.path.realpath(paths[0]) == os.path.realpath(str(target))
+
+
+# ---------------------------------------------------------------------------
+# Tests: resolve_kb_sandbox_path — used by workflow-mode _save_to_db() helpers
+# ---------------------------------------------------------------------------
+
+
+class _SandboxCfg:
+    """Minimal agent_config stand-in for resolve_kb_sandbox_path tests."""
+
+    def __init__(self, ns: str):
+        self.current_namespace = ns
+
+
+class TestResolveKbSandboxPath:
+    def test_empty_path_returns_none(self, tmp_path):
+        assert resolve_kb_sandbox_path("", "sql_summary", _SandboxCfg("db"), str(tmp_path)) is None
+
+    def test_bare_filename_is_prefixed_under_sandbox(self, tmp_path):
+        kb = tmp_path
+        resolved = resolve_kb_sandbox_path("q_001.yaml", "sql_summary", _SandboxCfg("db"), str(kb))
+        assert resolved == os.path.normpath(str(kb / "sql_summaries" / "db" / "q_001.yaml"))
+
+    def test_fully_prefixed_relative_path_passes_through(self, tmp_path):
+        kb = tmp_path
+        resolved = resolve_kb_sandbox_path("sql_summaries/db/q.yaml", "sql_summary", _SandboxCfg("db"), str(kb))
+        assert resolved == os.path.normpath(str(kb / "sql_summaries" / "db" / "q.yaml"))
+
+    def test_absolute_path_inside_sandbox_accepted(self, tmp_path):
+        kb = tmp_path
+        (kb / "sql_summaries" / "db").mkdir(parents=True)
+        inside = kb / "sql_summaries" / "db" / "q.yaml"
+        inside.write_text("x")
+        resolved = resolve_kb_sandbox_path(str(inside), "sql_summary", _SandboxCfg("db"), str(kb))
+        assert os.path.realpath(resolved) == os.path.realpath(str(inside))
+
+    def test_absolute_path_outside_sandbox_rejected(self, tmp_path):
+        """A fabricated absolute path outside the sandbox must be refused so
+        _save_to_db never syncs an arbitrary on-disk file."""
+        assert resolve_kb_sandbox_path("/etc/passwd", "sql_summary", _SandboxCfg("db"), str(tmp_path)) is None
+
+    def test_cross_kind_prefix_rejected(self, tmp_path):
+        """Workflow returning ``ext_knowledge/db/foo.yaml`` from a
+        sql_summary node must be refused — the prompt-compliant output here
+        is restricted to ``sql_summaries/``."""
+        assert (
+            resolve_kb_sandbox_path("ext_knowledge/db/foo.yaml", "sql_summary", _SandboxCfg("db"), str(tmp_path))
+            is None
+        )
+
+    def test_cross_namespace_prefix_rejected(self, tmp_path):
+        """sql_summaries/other_db/q.yaml is inside the kind but outside the
+        current namespace's sandbox → rejected (no cross-namespace writes)."""
+        assert (
+            resolve_kb_sandbox_path("sql_summaries/other_db/q.yaml", "sql_summary", _SandboxCfg("db"), str(tmp_path))
+            is None
+        )
+
+    def test_traversal_escape_rejected(self, tmp_path):
+        """``../../etc/passwd`` resolves outside the sandbox → rejected."""
+        assert resolve_kb_sandbox_path("../../etc/passwd", "sql_summary", _SandboxCfg("db"), str(tmp_path)) is None
+
+    def test_unknown_kind_no_containment_check(self, tmp_path):
+        """For an unknown kind we cannot compute a sandbox — fall back to
+        just normalizing against knowledge_base_dir."""
+        resolved = resolve_kb_sandbox_path("foo.yaml", "unknown", _SandboxCfg("db"), str(tmp_path))
+        assert resolved == os.path.normpath(str(tmp_path / "foo.yaml"))
+
+    def test_missing_namespace_no_containment_check(self, tmp_path):
+        """Without a namespace we cannot compute the {kind}/{ns}/ sandbox so
+        containment is skipped, matching normalize_kb_relative_path semantics."""
+        resolved = resolve_kb_sandbox_path("foo.yaml", "sql_summary", _SandboxCfg(None), str(tmp_path))
+        assert resolved == os.path.normpath(str(tmp_path / "foo.yaml"))
+
+    def test_commonpath_value_error_fails_closed(self, tmp_path):
+        """Simulate os.path.commonpath raising (e.g. mixed drives on
+        Windows) — the resolver must fail closed with None."""
+        with patch("datus.cli.generation_hooks.os.path.commonpath", side_effect=ValueError("mixed drives")):
+            assert resolve_kb_sandbox_path("q.yaml", "sql_summary", _SandboxCfg("db"), str(tmp_path)) is None

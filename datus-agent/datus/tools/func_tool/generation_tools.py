@@ -222,18 +222,39 @@ class GenerationTools:
                 f"metric_sqls={metric_sqls}"
             )
 
-            # Resolve absolute paths — use agent_config so knowledge_home override is respected
-            base_dir = str(
-                get_path_manager(agent_config=self.agent_config).semantic_model_path(
-                    self.agent_config.current_namespace
+            # Resolve absolute paths against knowledge_base_home, applying the same
+            # silent prefix normalization as FilesystemFuncTool so the LLM-reported
+            # path matches where the file was actually written.
+            from datus.cli.generation_hooks import normalize_kb_relative_path
+
+            kb_home = str(get_path_manager(agent_config=self.agent_config).knowledge_base_home)
+            namespace = self.agent_config.current_namespace
+
+            def _resolve(path: str, kind: str) -> str:
+                if not path or os.path.isabs(path):
+                    return path
+                return os.path.normpath(os.path.join(kb_home, normalize_kb_relative_path(path, kind, namespace)))
+
+            abs_metric = _resolve(metric_file, "metric")
+            abs_semantic = _resolve(semantic_model_file, "semantic")
+
+            # Pre-flight: refuse to sync a metric file that has no `metric:`
+            # YAML blocks. The LLM occasionally fills the file with markdown
+            # documentation and relies on `create_metric: true` measures
+            # (which never reach the KB vector DB). Catching it here gives a
+            # crisp, actionable error the LLM can act on without a roundtrip
+            # through the deeper sync path.
+            preflight_error = self._validate_metric_file_has_blocks(abs_metric)
+            if preflight_error:
+                return FuncToolResult(
+                    success=0,
+                    error=preflight_error,
+                    result={
+                        "metric_file": metric_file,
+                        "semantic_model_file": semantic_model_file,
+                        "metric_sqls": metric_sqls,
+                    },
                 )
-            )
-            abs_metric = os.path.join(base_dir, metric_file) if not os.path.isabs(metric_file) else metric_file
-            abs_semantic = (
-                os.path.join(base_dir, semantic_model_file)
-                if semantic_model_file and not os.path.isabs(semantic_model_file)
-                else semantic_model_file
-            )
 
             # Auto-sync to Knowledge Base
             sync_result = self._sync_metric_to_db(abs_metric, abs_semantic, metric_sqls)
@@ -263,6 +284,38 @@ class GenerationTools:
         except Exception as e:
             logger.error(f"Error completing metric generation: {e}")
             return FuncToolResult(success=0, error=f"Failed to complete generation: {str(e)}")
+
+    @staticmethod
+    def _validate_metric_file_has_blocks(metric_file: str) -> Optional[str]:
+        """Return an actionable error string when ``metric_file`` lacks any
+        ``metric:`` YAML document; return ``None`` when at least one is found.
+
+        The check is intentionally lenient: a file is considered valid as long
+        as it parses as YAML and at least one document carries a top-level
+        ``metric:`` key. We don't validate the metric body here — the
+        downstream sync path does that.
+        """
+        if not metric_file or not os.path.exists(metric_file):
+            return f"Metric file not found: {metric_file!r}"
+        try:
+            with open(metric_file, "r", encoding="utf-8") as f:
+                docs = list(yaml.safe_load_all(f))
+        except yaml.YAMLError as e:
+            return (
+                f"Metric file {metric_file!r} is not valid YAML ({e}). "
+                "Rewrite the file with explicit `metric:` YAML blocks "
+                "(separated by `---`)."
+            )
+        for doc in docs:
+            if isinstance(doc, dict) and "metric" in doc:
+                return None
+        return (
+            f"Metric file {metric_file!r} contains no `metric:` YAML blocks. "
+            "Documentation/markdown is not a metric definition. Rewrite the file "
+            "with explicit `metric:` entries (separated by `---`); do not rely on "
+            "`create_metric: true` on semantic-model measures — those only emit "
+            "metrics at MetricFlow runtime and are NOT synced to the Knowledge Base."
+        )
 
     def _sync_metric_to_db(
         self,
