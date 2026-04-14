@@ -4,8 +4,9 @@ from datetime import datetime
 
 import pytest
 
-from datus.api.models.kb_models import BootstrapKbEvent, BootstrapKbInput
+from datus.api.models.kb_models import BootstrapDocInput, BootstrapKbEvent, BootstrapKbInput
 from datus.api.services.kb_service import KbService
+from datus.configuration.agent_config import DocumentConfig
 from datus.schemas.batch_events import BatchEvent, BatchStage
 
 
@@ -433,3 +434,238 @@ class TestKbServiceRunComponent:
         result = svc._run_component(request, "metadata", queue, loop, cancel_event, str(real_agent_config.home))
         assert result["status"] == "success"
         loop.close()
+
+
+class TestKbServiceMergeDocOverrides:
+    """Tests for _merge_doc_overrides — DocumentConfig overlay logic."""
+
+    def test_no_overrides(self):
+        """When all request fields are None, base config is returned unchanged."""
+        base = DocumentConfig(type="github", source="owner/repo", version="1.0")
+        request = BootstrapDocInput(platform="test")
+
+        merged = KbService._merge_doc_overrides(base, request)
+        assert merged.type == "github"
+        assert merged.source == "owner/repo"
+        assert merged.version == "1.0"
+
+    def test_source_override(self):
+        """Non-None request field overrides the base config."""
+        base = DocumentConfig(type="github", source="old/repo")
+        request = BootstrapDocInput(platform="test", source="new/repo")
+
+        merged = KbService._merge_doc_overrides(base, request)
+        assert merged.source == "new/repo"
+        assert merged.type == "github"  # unchanged
+
+    def test_source_type_maps_to_type(self):
+        """source_type in request maps to 'type' field in DocumentConfig."""
+        base = DocumentConfig(type="github")
+        request = BootstrapDocInput(platform="test", source_type="local")
+
+        merged = KbService._merge_doc_overrides(base, request)
+        assert merged.type == "local"
+
+    def test_all_overrides(self):
+        """All overridable fields are applied."""
+        base = DocumentConfig()
+        request = BootstrapDocInput(
+            platform="test",
+            source_type="website",
+            source="https://docs.example.com",
+            version="2.0",
+            github_ref="v2",
+            paths=["api"],
+            chunk_size=2048,
+            max_depth=5,
+            include_patterns=["*.md"],
+            exclude_patterns=["changelog*"],
+        )
+
+        merged = KbService._merge_doc_overrides(base, request)
+        assert merged.type == "website"
+        assert merged.source == "https://docs.example.com"
+        assert merged.version == "2.0"
+        assert merged.github_ref == "v2"
+        assert merged.paths == ["api"]
+        assert merged.chunk_size == 2048
+        assert merged.max_depth == 5
+        assert merged.include_patterns == ["*.md"]
+        assert merged.exclude_patterns == ["changelog*"]
+
+    def test_immutable_base(self):
+        """Original base config is not mutated."""
+        base = DocumentConfig(type="github", source="owner/repo")
+        request = BootstrapDocInput(platform="test", source="other/repo")
+
+        KbService._merge_doc_overrides(base, request)
+        assert base.source == "owner/repo"  # unchanged
+
+
+@pytest.mark.asyncio
+class TestKbServiceBootstrapDocStream:
+    """Tests for bootstrap_doc_stream — platform doc SSE streaming."""
+
+    async def test_check_mode_yields_events(self, real_agent_config):
+        """bootstrap_doc_stream with check mode yields completion events."""
+        import asyncio
+
+        # Add a document config for the test platform
+        real_agent_config.document_configs["test_platform"] = DocumentConfig(type="local", source="/nonexistent")
+
+        svc = KbService(agent_config=real_agent_config)
+        cancel_event = asyncio.Event()
+        request = BootstrapDocInput(platform="test_platform", build_mode="check")
+
+        events = []
+        async for event in svc.bootstrap_doc_stream(request, "doc-stream", cancel_event):
+            events.append(event)
+
+        # Should have at least one event (completed or failed)
+        assert len(events) >= 1
+        # Last event should be for platform_doc component
+        assert events[-1].component == "platform_doc"
+
+    async def test_cancelled_stream(self, real_agent_config):
+        """bootstrap_doc_stream stops when cancel_event is pre-set."""
+        import asyncio
+
+        real_agent_config.document_configs["cancel_test"] = DocumentConfig(type="local", source="/nonexistent")
+
+        svc = KbService(agent_config=real_agent_config)
+        cancel_event = asyncio.Event()
+        cancel_event.set()  # Pre-cancel
+
+        request = BootstrapDocInput(platform="cancel_test", build_mode="overwrite")
+
+        events = []
+        async for event in svc.bootstrap_doc_stream(request, "cancel-doc", cancel_event):
+            events.append(event)
+
+        assert len(events) >= 1
+
+    async def test_missing_platform_no_source(self, real_agent_config):
+        """bootstrap_doc_stream with unknown platform and no source still runs (returns error)."""
+        import asyncio
+
+        svc = KbService(agent_config=real_agent_config)
+        cancel_event = asyncio.Event()
+        request = BootstrapDocInput(platform="nonexistent_platform", build_mode="check")
+
+        events = []
+        async for event in svc.bootstrap_doc_stream(request, "missing-stream", cancel_event):
+            events.append(event)
+
+        # Should produce events (may fail due to no source, but shouldn't crash)
+        assert len(events) >= 1
+
+    async def test_init_platform_docs_failure_yields_task_failed(self, real_agent_config):
+        """bootstrap_doc_stream yields TASK_FAILED when init_platform_docs returns success=False."""
+        import asyncio
+        from unittest.mock import patch
+
+        from datus.storage.document.doc_init import InitResult
+
+        real_agent_config.document_configs["fail_platform"] = DocumentConfig(type="local", source="/nonexistent")
+        svc = KbService(agent_config=real_agent_config)
+        cancel_event = asyncio.Event()
+        request = BootstrapDocInput(platform="fail_platform", build_mode="check")
+
+        failed_result = InitResult(
+            platform="fail_platform",
+            version="unknown",
+            source="/nonexistent",
+            total_docs=0,
+            total_chunks=0,
+            success=False,
+            errors=["Source not found", "Index missing"],
+            duration_seconds=0.1,
+        )
+
+        with patch("datus.api.services.kb_service.KbService._run_doc_init", return_value=failed_result):
+            events = []
+            async for event in svc.bootstrap_doc_stream(request, "fail-stream", cancel_event):
+                events.append(event)
+
+        assert len(events) >= 1
+        last = events[-1]
+        assert last.component == "platform_doc"
+        from datus.schemas.batch_events import BatchStage
+
+        assert last.stage == BatchStage.TASK_FAILED.value
+        assert "Source not found" in (last.error or "")
+
+    async def test_run_doc_init_exception_yields_task_failed(self, real_agent_config):
+        """bootstrap_doc_stream yields TASK_FAILED when _run_doc_init raises an exception."""
+        import asyncio
+        from unittest.mock import patch
+
+        real_agent_config.document_configs["exc_platform"] = DocumentConfig(type="local", source="/nonexistent")
+        svc = KbService(agent_config=real_agent_config)
+        cancel_event = asyncio.Event()
+        request = BootstrapDocInput(platform="exc_platform", build_mode="overwrite")
+
+        def _raise(*args, **kwargs):
+            raise RuntimeError("unexpected doc init failure")
+
+        with patch.object(svc, "_run_doc_init", side_effect=_raise):
+            events = []
+            async for event in svc.bootstrap_doc_stream(request, "exc-stream", cancel_event):
+                events.append(event)
+
+        assert len(events) >= 1
+        last = events[-1]
+        assert last.component == "platform_doc"
+        from datus.schemas.batch_events import BatchStage
+
+        assert last.stage == BatchStage.TASK_FAILED.value
+        assert "unexpected doc init failure" in (last.error or "")
+
+
+@pytest.mark.asyncio
+class TestKbServiceRunDocInitCancelBridge:
+    """Tests for _run_doc_init cancel bridge behavior."""
+
+    async def test_cancel_bridge_propagates_to_init_platform_docs(self, real_agent_config):
+        """_run_doc_init bridges cancel_event.is_set() as cancel_check callable."""
+        import asyncio
+        from unittest.mock import patch
+
+        real_agent_config.document_configs["cancel_bridge"] = DocumentConfig(type="local", source="/nonexistent")
+        svc = KbService(agent_config=real_agent_config)
+        cancel_event = asyncio.Event()
+        cancel_event.set()  # Pre-cancel so cancel_check() returns True immediately
+
+        request = BootstrapDocInput(platform="cancel_bridge", build_mode="overwrite")
+
+        captured_cancel_check = []
+
+        def _capture_cancel(platform, cfg, build_mode, pool_size, emit, cancel_check):
+            captured_cancel_check.append(cancel_check)
+            # Return a minimal result so the function doesn't blow up
+            from datus.storage.document.doc_init import InitResult
+
+            return InitResult(
+                platform=platform,
+                version="unknown",
+                source="",
+                total_docs=0,
+                total_chunks=0,
+                success=True,
+                errors=[],
+                duration_seconds=0.0,
+            )
+
+        with patch("datus.storage.document.doc_init.init_platform_docs", side_effect=_capture_cancel):
+            async for _ in svc.bootstrap_doc_stream(request, "bridge-stream", cancel_event):
+                pass
+
+        # Verify the cancel_check callable correctly reflects cancel_event state
+        assert len(captured_cancel_check) == 1
+        cancel_fn = captured_cancel_check[0]
+        assert callable(cancel_fn)
+        assert cancel_fn() is True  # cancel_event is set → True
+
+        # Verify that when cancel_event is cleared, cancel_check returns False
+        cancel_event.clear()
+        assert cancel_fn() is False

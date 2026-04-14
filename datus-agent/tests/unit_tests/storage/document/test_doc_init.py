@@ -442,3 +442,446 @@ class TestInitPlatformDocsDbPathDeprecation:
 
             deprecation_warnings = [x for x in w if issubclass(x.category, DeprecationWarning)]
             assert len(deprecation_warnings) == 0
+
+
+# ---------------------------------------------------------------------------
+# init_platform_docs — emit callback + cancel_check
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.ci
+class TestInitPlatformDocsEmit:
+    """Tests for emit callback and cancel_check in init_platform_docs."""
+
+    def _mock_cfg(self, source="/some/path", source_type="local", version="v1"):
+        cfg = MagicMock()
+        cfg.source = source
+        cfg.type = source_type
+        cfg.version = version
+        cfg.paths = []
+        cfg.chunk_size = 512
+        cfg.include_patterns = []
+        cfg.exclude_patterns = []
+        return cfg
+
+    @patch("datus.storage.document.doc_init.document_store")
+    def test_emit_none_backward_compatible(self, mock_store_fn):
+        """init_platform_docs with emit=None works identically to before."""
+        mock_store = MagicMock()
+        mock_store.get_stats.return_value = {"versions": [], "total_chunks": 0, "doc_count": 0}
+        mock_store_fn.return_value = mock_store
+
+        result = init_platform_docs(
+            platform="test_compat",
+            cfg=self._mock_cfg(),
+            build_mode="check",
+            emit=None,
+        )
+        assert result.success is True
+
+    @patch("datus.storage.document.doc_init.document_store")
+    def test_emit_receives_task_started(self, mock_store_fn):
+        """emit callback receives task_started event."""
+        mock_store = MagicMock()
+        mock_store.get_stats.return_value = {"versions": ["v1"], "total_chunks": 5, "doc_count": 2}
+        mock_store_fn.return_value = mock_store
+
+        events = []
+        result = init_platform_docs(
+            platform="test_emit",
+            cfg=self._mock_cfg(),
+            build_mode="check",
+            emit=lambda e: events.append(e),
+        )
+        assert result.success is True
+        # Should have received at least a task_started event
+        stages = [e.stage for e in events]
+        assert "task_started" in stages
+
+    @patch("datus.storage.document.doc_init.document_store")
+    def test_cancel_check_before_processing(self, mock_store_fn):
+        """cancel_check returning True causes early return."""
+        mock_store = MagicMock()
+        mock_store_fn.return_value = mock_store
+
+        events = []
+        result = init_platform_docs(
+            platform="test_cancel",
+            cfg=self._mock_cfg(),
+            build_mode="overwrite",
+            emit=lambda e: events.append(e),
+            cancel_check=lambda: True,
+        )
+        assert "Cancelled" in result.errors
+
+    @patch("datus.storage.document.doc_init.document_store")
+    def test_cancel_check_false_continues(self, mock_store_fn):
+        """cancel_check returning False allows normal processing."""
+        mock_store = MagicMock()
+        mock_store.get_stats.return_value = {"versions": [], "total_chunks": 0, "doc_count": 0}
+        mock_store_fn.return_value = mock_store
+
+        result = init_platform_docs(
+            platform="test_no_cancel",
+            cfg=self._mock_cfg(),
+            build_mode="check",
+            cancel_check=lambda: False,
+        )
+        assert result.success is True
+
+    @patch("datus.storage.document.doc_init.document_store")
+    def test_emit_task_failed_on_store_error(self, mock_store_fn):
+        """emit receives task_failed when document_store raises."""
+        from datus.utils.exceptions import DatusException, ErrorCode
+
+        mock_store_fn.side_effect = DatusException(ErrorCode.COMMON_VALIDATION_FAILED)
+
+        events = []
+        result = init_platform_docs(
+            platform="test_store_err",
+            cfg=self._mock_cfg(),
+            build_mode="check",
+            emit=lambda e: events.append(e),
+        )
+        assert result.success is True  # _make_empty_result sets success=True
+        stages = [e.stage for e in events]
+        assert "task_failed" in stages
+
+    @patch("datus.storage.document.doc_init.document_store")
+    def test_check_mode_emits_no_task_failed(self, mock_store_fn):
+        """Check mode emits task_started and does not emit task_failed."""
+        mock_store = MagicMock()
+        mock_store.get_stats.return_value = {"versions": ["v1", "v2"], "total_chunks": 30, "doc_count": 6}
+        mock_store.get_stats_by_version.return_value = {"doc_count": 3, "total_chunks": 15}
+        mock_store_fn.return_value = mock_store
+
+        events = []
+        result = init_platform_docs(
+            platform="test_check_completed",
+            cfg=self._mock_cfg(),
+            build_mode="check",
+            emit=lambda e: events.append(e),
+        )
+
+        assert result.success is True
+        # check mode returns early — emit only gets task_started (no task_completed from the helper)
+        # The important assertion is that no task_failed was emitted
+        stages = [e.stage for e in events]
+        assert "task_failed" not in stages
+        assert "task_started" in stages
+
+    @patch("datus.storage.document.doc_init.document_store")
+    def test_emit_task_failed_on_processing_exception(self, mock_store_fn):
+        """emit receives task_failed with exception_type when processing raises."""
+        mock_store = MagicMock()
+        mock_store_fn.return_value = mock_store
+
+        # Use overwrite + local source so we enter the processing branch
+        cfg = self._mock_cfg(source="/some/path", source_type="local")
+
+        # Patch LocalFetcher to raise during fetch
+        from unittest.mock import patch as inner_patch
+
+        with inner_patch("datus.storage.document.doc_init.LocalFetcher") as mock_fetcher_cls:
+            mock_fetcher = MagicMock()
+            mock_fetcher.fetch.side_effect = ValueError("disk read error")
+            mock_fetcher_cls.return_value = mock_fetcher
+
+            events = []
+            result = init_platform_docs(
+                platform="test_proc_exc",
+                cfg=cfg,
+                build_mode="overwrite",
+                emit=lambda e: events.append(e),
+            )
+
+        assert result.success is False
+        stages = [e.stage for e in events]
+        assert "task_failed" in stages
+        # Verify the exception type and error message were captured in the event
+        failed_events = [e for e in events if e.stage == "task_failed"]
+        assert len(failed_events) >= 1
+        assert failed_events[0].exception_type == "ValueError"
+        assert "disk read error" in (failed_events[0].error or "")
+
+    @patch("datus.storage.document.doc_init.document_store")
+    def test_cancel_check_true_in_overwrite_emits_task_failed(self, mock_store_fn):
+        """cancel_check=lambda: True during overwrite emits task_failed before processing."""
+        mock_store = MagicMock()
+        mock_store_fn.return_value = mock_store
+
+        events = []
+        result = init_platform_docs(
+            platform="test_cancel_emit",
+            cfg=self._mock_cfg(),
+            build_mode="overwrite",
+            emit=lambda e: events.append(e),
+            cancel_check=lambda: True,
+        )
+
+        # Result should contain "Cancelled" in errors
+        assert "Cancelled" in result.errors
+
+        # emit must have received a task_failed event
+        stages = [e.stage for e in events]
+        assert "task_failed" in stages
+
+        # Verify the task_failed event has the cancellation error
+        failed_events = [e for e in events if e.stage == "task_failed"]
+        assert any("Cancelled" in (e.error or "") for e in failed_events)
+
+
+# ---------------------------------------------------------------------------
+# init_platform_docs — overwrite processing branches
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.ci
+class TestInitPlatformDocsOverwrite:
+    """Tests for overwrite-mode processing branches in init_platform_docs."""
+
+    def _mock_cfg(self, source="/some/path", source_type="local", version="v1"):
+        cfg = MagicMock()
+        cfg.source = source
+        cfg.type = source_type
+        cfg.version = version
+        cfg.paths = []
+        cfg.chunk_size = 512
+        cfg.include_patterns = []
+        cfg.exclude_patterns = []
+        return cfg
+
+    @patch("datus.storage.document.doc_init.StreamingDocProcessor")
+    @patch("datus.storage.document.doc_init.LocalFetcher")
+    @patch("datus.storage.document.doc_init.document_store")
+    def test_overwrite_local_source_processes_documents(self, mock_store_fn, mock_fetcher_cls, mock_processor_cls):
+        """Overwrite with local source fetches docs, processes them, and returns success."""
+        from datus.storage.document.streaming_processor import ProcessingStats
+
+        mock_store = MagicMock()
+        mock_store.delete_docs.return_value = 0
+        mock_store_fn.return_value = mock_store
+
+        mock_fetcher = MagicMock()
+        mock_doc = MagicMock()
+        mock_doc.version = "v1"
+        mock_fetcher.fetch.return_value = [mock_doc] * 5
+        mock_fetcher_cls.return_value = mock_fetcher
+
+        mock_processor = MagicMock()
+        mock_stats = ProcessingStats()
+        mock_stats.increment(docs=5, chunks=20)
+        mock_processor.process_local.return_value = mock_stats
+        mock_processor_cls.return_value = mock_processor
+
+        events = []
+        result = init_platform_docs(
+            platform="test_local",
+            cfg=self._mock_cfg(source="/some/path", source_type="local", version="v1"),
+            build_mode="overwrite",
+            emit=lambda e: events.append(e),
+        )
+
+        mock_fetcher_cls.assert_called_once()
+        mock_fetcher.fetch.assert_called_once()
+        mock_processor.process_local.assert_called_once()
+        mock_store.delete_docs.assert_called_once_with(version="v1")
+
+        assert result.success is True
+        assert result.total_docs == 5
+        assert result.total_chunks == 20
+
+        stages = [e.stage for e in events]
+        assert "task_started" in stages
+        assert "task_validated" in stages
+        assert "task_completed" in stages
+
+    @patch("datus.storage.document.doc_init.LocalFetcher")
+    @patch("datus.storage.document.doc_init.document_store")
+    def test_overwrite_local_no_documents_returns_empty(self, mock_store_fn, mock_fetcher_cls):
+        """Overwrite with local source returning no docs gives total_docs=0 and error."""
+        mock_store = MagicMock()
+        mock_store_fn.return_value = mock_store
+
+        mock_fetcher = MagicMock()
+        mock_fetcher.fetch.return_value = []
+        mock_fetcher_cls.return_value = mock_fetcher
+
+        result = init_platform_docs(
+            platform="test_local_empty",
+            cfg=self._mock_cfg(source="/empty/path", source_type="local", version="v1"),
+            build_mode="overwrite",
+        )
+
+        assert result.total_docs == 0
+        assert any("No documents found" in err for err in result.errors)
+
+    @patch("datus.storage.document.doc_init.StreamingDocProcessor")
+    @patch("datus.storage.document.doc_init.GitHubFetcher")
+    @patch("datus.storage.document.doc_init.document_store")
+    def test_overwrite_github_source_processes_files(self, mock_store_fn, mock_fetcher_cls, mock_processor_cls):
+        """Overwrite with github source calls collect_metadata and process_github."""
+        from datus.storage.document.streaming_processor import ProcessingStats
+
+        mock_store = MagicMock()
+        mock_store.delete_docs.return_value = 0
+        mock_store_fn.return_value = mock_store
+
+        mock_fetcher = MagicMock()
+        mock_metadata = MagicMock()
+        mock_metadata.file_paths = ["docs/intro.md", "docs/setup.md", "docs/ref.md"]
+        mock_metadata.version = "v2"
+        mock_fetcher.collect_metadata.return_value = mock_metadata
+        mock_fetcher_cls.return_value = mock_fetcher
+
+        mock_processor = MagicMock()
+        mock_stats = ProcessingStats()
+        mock_stats.increment(docs=3, chunks=12)
+        mock_processor.process_github.return_value = mock_stats
+        mock_processor_cls.return_value = mock_processor
+
+        result = init_platform_docs(
+            platform="test_github",
+            cfg=self._mock_cfg(source="owner/repo", source_type="github", version="v2"),
+            build_mode="overwrite",
+        )
+
+        mock_fetcher.collect_metadata.assert_called_once()
+        mock_processor.process_github.assert_called_once()
+        assert result.total_docs == 3
+        assert result.total_chunks == 12
+
+    @patch("datus.storage.document.doc_init.StreamingDocProcessor")
+    @patch("datus.storage.document.doc_init.WebFetcher")
+    @patch("datus.storage.document.doc_init.document_store")
+    def test_overwrite_website_source_processes_urls(self, mock_store_fn, mock_fetcher_cls, mock_processor_cls):
+        """Overwrite with website source calls process_website."""
+        from datus.storage.document.streaming_processor import ProcessingStats
+
+        mock_store = MagicMock()
+        mock_store.delete_docs.return_value = 0
+        mock_store_fn.return_value = mock_store
+
+        mock_fetcher = MagicMock()
+        mock_fetcher._detect_version_from_url.return_value = "v3"
+        mock_fetcher_cls.return_value = mock_fetcher
+
+        mock_processor = MagicMock()
+        mock_stats = ProcessingStats()
+        mock_stats.increment(docs=10, chunks=40)
+        mock_processor.process_website.return_value = mock_stats
+        mock_processor_cls.return_value = mock_processor
+
+        result = init_platform_docs(
+            platform="test_website",
+            cfg=self._mock_cfg(source="https://docs.example.com", source_type="website", version=""),
+            build_mode="overwrite",
+        )
+
+        mock_processor.process_website.assert_called_once()
+        assert result.total_docs == 10
+        assert result.total_chunks == 40
+
+    @patch("datus.storage.document.doc_init.StreamingDocProcessor")
+    @patch("datus.storage.document.doc_init.LocalFetcher")
+    @patch("datus.storage.document.doc_init.document_store")
+    def test_index_creation_after_processing(self, mock_store_fn, mock_fetcher_cls, mock_processor_cls):
+        """After processing with chunks > 0, create_indices is called on the store."""
+        from datus.storage.document.streaming_processor import ProcessingStats
+
+        mock_store = MagicMock()
+        mock_store.delete_docs.return_value = 0
+        mock_store_fn.return_value = mock_store
+
+        mock_fetcher = MagicMock()
+        mock_doc = MagicMock()
+        mock_doc.version = "v1"
+        mock_fetcher.fetch.return_value = [mock_doc]
+        mock_fetcher_cls.return_value = mock_fetcher
+
+        mock_processor = MagicMock()
+        mock_stats = ProcessingStats()
+        mock_stats.increment(docs=1, chunks=5)
+        mock_processor.process_local.return_value = mock_stats
+        mock_processor_cls.return_value = mock_processor
+
+        init_platform_docs(
+            platform="test_index",
+            cfg=self._mock_cfg(),
+            build_mode="overwrite",
+        )
+
+        mock_store.create_indices.assert_called_once()
+
+    @patch("datus.storage.document.doc_init.StreamingDocProcessor")
+    @patch("datus.storage.document.doc_init.LocalFetcher")
+    @patch("datus.storage.document.doc_init.document_store")
+    def test_index_creation_error_logged(self, mock_store_fn, mock_fetcher_cls, mock_processor_cls):
+        """When create_indices raises, error is captured in stats but result is still success."""
+        from datus.storage.document.streaming_processor import ProcessingStats
+
+        mock_store = MagicMock()
+        mock_store.delete_docs.return_value = 0
+        mock_store.create_indices.side_effect = RuntimeError("index build failed")
+        mock_store_fn.return_value = mock_store
+
+        mock_fetcher = MagicMock()
+        mock_doc = MagicMock()
+        mock_doc.version = "v1"
+        mock_fetcher.fetch.return_value = [mock_doc]
+        mock_fetcher_cls.return_value = mock_fetcher
+
+        mock_processor = MagicMock()
+        mock_stats = ProcessingStats()
+        mock_stats.increment(docs=1, chunks=5)
+        mock_processor.process_local.return_value = mock_stats
+        mock_processor_cls.return_value = mock_processor
+
+        result = init_platform_docs(
+            platform="test_index_err",
+            cfg=self._mock_cfg(),
+            build_mode="overwrite",
+        )
+
+        mock_store.create_indices.assert_called_once()
+        assert any("Index error" in err for err in result.errors)
+        # total_chunks > 0 so success is True despite index error
+        assert result.success is True
+
+    @patch("datus.storage.document.doc_init.StreamingDocProcessor")
+    @patch("datus.storage.document.doc_init.LocalFetcher")
+    @patch("datus.storage.document.doc_init.document_store")
+    def test_cancel_check_between_phases(self, mock_store_fn, mock_fetcher_cls, mock_processor_cls):
+        """cancel_check True after validation (second call) triggers early return with Cancelled."""
+        mock_store = MagicMock()
+        mock_store_fn.return_value = mock_store
+
+        mock_fetcher = MagicMock()
+        mock_doc = MagicMock()
+        mock_doc.version = "v1"
+        mock_fetcher.fetch.return_value = [mock_doc] * 3
+        mock_fetcher_cls.return_value = mock_fetcher
+
+        # cancel_check: first call (before any processing) returns False,
+        # second call (after task_validated, before delete+process) returns True
+        call_count = {"n": 0}
+
+        def cancel_check():
+            call_count["n"] += 1
+            return call_count["n"] >= 2
+
+        events = []
+        result = init_platform_docs(
+            platform="test_cancel_between",
+            cfg=self._mock_cfg(source="/some/path", source_type="local", version="v1"),
+            build_mode="overwrite",
+            emit=lambda e: events.append(e),
+            cancel_check=cancel_check,
+        )
+
+        assert "Cancelled" in result.errors
+        # Cancellation must skip both deletion and processing
+        mock_store.delete_docs.assert_not_called()
+        mock_processor_cls.return_value.process_local.assert_not_called()
+        stages = [e.stage for e in events]
+        assert "task_failed" in stages
