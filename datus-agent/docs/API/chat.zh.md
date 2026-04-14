@@ -1,7 +1,7 @@
 # Chat 接口
 
 Chat 相关接口驱动 Agent 的对话循环。流式接口以 Server-Sent Events 返回,其余接口使用标准
-[`Result[T]` 封装](introduction.zh.md#响应封装)。
+[`Result[T]` 封装](introduction.zh.md#response-envelope)。
 
 所有接口均支持 `X-Datus-User-Id` 请求头以实现按用户的会话隔离。
 
@@ -25,7 +25,7 @@ Chat 相关接口驱动 Agent 的对话循环。流式接口以 Server-Sent Even
 | `prompt_language`| string   | `en`(默认)或 `zh` |
 | `stream_response`| bool?   | 是否逐 token 流式下发 thinking 内容;`null` 时使用服务端 `--stream` 启动参数(默认 `false`) |
 
-**响应**:`text/event-stream`,格式见下文 [流式格式](#流式格式)。
+**响应**:`text/event-stream`,格式见下文 [流式格式](#streaming-format)。
 
 ### `POST /api/v1/chat/resume`
 
@@ -87,7 +87,7 @@ total_turns, token_count, last_sql_queries, is_active }`。
 
 ---
 
-## 流式格式
+## 流式格式 {#streaming-format}
 
 流式响应使用 Server-Sent Events。每个事件由三行加一个空行组成:
 
