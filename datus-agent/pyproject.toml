@@ -72,20 +72,18 @@ dependencies = [
     "markdown-it-py>=3.0.0",
     "tabulate>=0.9.0",
     "datus-semantic-metricflow>=0.1.6",
+    # BI platform adapters (core models & interfaces)
+    "datus-bi-core>=0.1.0",
 ]
-#[tool.uv.sources]
-
-# for debug
-
-#datus-postgresql = { path = "../datus-storage-adapters/datus-storage-postgresql", editable = true }
 
 [project.optional-dependencies]
 # Database connectors have been moved to separate adapter packages
 # See https://github.com/Datus-ai/Datus-adapters for available adapters
 scheduler = ["datus-scheduler-airflow>=0.1.0"]
-
-[tool.uv.sources]
-# datus-scheduler-airflow = { path = "../datus-scheduler-adapters/datus-scheduler-airflow", editable = true }
+bi = [
+    "datus-bi-superset>=0.1.0",
+    "datus-bi-grafana>=0.1.0",
+]
 
 [project.urls]
 Homepage = "https://datus.ai/"
@@ -220,3 +218,12 @@ exclude_lines = [
 ]
 show_missing = true
 precision = 2
+
+# Dev-only: local editable sources for BI adapters.
+# Requires cloning https://github.com/Datus-ai/datus-bi-adapters next to this repo.
+# CI and end users install from PyPI via: pip install datus-agent[bi]
+[tool.uv.sources]
+# datus-scheduler-airflow = { path = "../datus-scheduler-adapters/datus-scheduler-airflow", editable = true }
+datus-bi-core = { path = "../datus-bi-adapters/datus-bi-core", editable = true }
+datus-bi-superset = { path = "../datus-bi-adapters/datus-bi-superset", editable = true }
+datus-bi-grafana = { path = "../datus-bi-adapters/datus-bi-grafana", editable = true }

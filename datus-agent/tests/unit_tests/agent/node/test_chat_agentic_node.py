@@ -605,9 +605,9 @@ class TestChatAgenticNodeExecutionConfig:
 
         config = node._get_execution_config("normal", node.input)
 
-        # If permission_hooks was set up, hooks should be non-None
-        if node.permission_hooks:
-            assert config["hooks"] is not None
+        # Permission hooks should always be set up for chat node
+        assert node.permission_hooks is not None
+        assert config["hooks"] is not None
 
 
 # ===========================================================================
@@ -1456,3 +1456,168 @@ class TestChatAgenticNodeExecutionMode:
         node = self._build(real_agent_config, execution_mode="interactive")
         assert node.execution_mode == "interactive"
         assert node.ask_user_tool is not None
+
+
+# ===========================================================================
+# BI Tools Setup Tests
+# ===========================================================================
+
+
+def _mock_bi_core(mock_adapter_cls):
+    """Build a mock datus_bi_core module for testing without the real package."""
+    from unittest.mock import MagicMock
+
+    mock_module = MagicMock()
+    mock_module.adapter_registry.get.return_value = mock_adapter_cls
+    mock_module.AuthParam = MagicMock()
+    return mock_module
+
+
+class TestChatAgenticNodeBITools:
+    """Verify _setup_bi_tools correctly initializes BI tools from config."""
+
+    def _make_bi_agent_config(self, real_agent_config):
+        """Add bi_platform and dashboard config to an existing AgentConfig."""
+        from datus.configuration.agent_config import DashboardConfig
+
+        # Add bi_platform to chat node config
+        real_agent_config.agentic_nodes["chat"]["bi_platform"] = "superset"
+
+        # Add dashboard config
+        real_agent_config.dashboard_config = {
+            "superset": DashboardConfig(
+                platform="superset",
+                api_url="http://localhost:8088",
+                username="admin",
+                password="admin",
+                dataset_db={"uri": "postgresql+psycopg2://user:pass@localhost/db", "schema": "public"},
+            ),
+        }
+        return real_agent_config
+
+    def test_bi_tools_loaded_when_configured(self, real_agent_config, mock_llm_create):
+        """BI tools should be loaded when bi_platform and dashboard config are set."""
+        import sys
+        from unittest.mock import MagicMock, patch
+
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+        from datus.configuration.node_type import NodeType
+
+        cfg = self._make_bi_agent_config(real_agent_config)
+
+        mock_adapter_cls = MagicMock(return_value=MagicMock())
+        bi_core_mock = _mock_bi_core(mock_adapter_cls)
+
+        with (
+            patch("datus.agent.node.chat_agentic_node.BIFuncTool") as mock_bi_tool_cls,
+            patch.dict(sys.modules, {"datus_bi_core": bi_core_mock}),
+        ):
+            mock_bi_instance = MagicMock()
+            mock_bi_instance.available_tools.return_value = []
+            mock_bi_tool_cls.return_value = mock_bi_instance
+
+            node = ChatAgenticNode(
+                node_id="test_bi",
+                description="Test BI tools",
+                node_type=NodeType.TYPE_CHAT,
+                agent_config=cfg,
+            )
+
+        assert node.bi_func_tool is not None
+        mock_bi_tool_cls.assert_called_once()
+        call_kwargs = mock_bi_tool_cls.call_args
+        assert call_kwargs[1]["dataset_db_uri"] == "postgresql+psycopg2://user:pass@localhost/db"
+        assert call_kwargs[1]["dataset_db_schema"] == "public"
+        assert call_kwargs[1]["datasource_name"] == ""
+
+    def test_bi_tools_passes_datasource_name(self, real_agent_config, mock_llm_create):
+        """datasource_name from dataset_db config is passed to BIFuncTool."""
+        import sys
+        from unittest.mock import MagicMock, patch
+
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+        from datus.configuration.node_type import NodeType
+
+        cfg = self._make_bi_agent_config(real_agent_config)
+        cfg.dashboard_config["superset"].dataset_db["datasource_name"] = "My-PostgreSQL"
+
+        mock_adapter_cls = MagicMock(return_value=MagicMock())
+        bi_core_mock = _mock_bi_core(mock_adapter_cls)
+
+        with (
+            patch("datus.agent.node.chat_agentic_node.BIFuncTool") as mock_bi_tool_cls,
+            patch.dict(sys.modules, {"datus_bi_core": bi_core_mock}),
+        ):
+            mock_bi_instance = MagicMock()
+            mock_bi_instance.available_tools.return_value = []
+            mock_bi_tool_cls.return_value = mock_bi_instance
+
+            ChatAgenticNode(
+                node_id="test_ds_name",
+                description="Test datasource name",
+                node_type=NodeType.TYPE_CHAT,
+                agent_config=cfg,
+            )
+
+        call_kwargs = mock_bi_tool_cls.call_args
+        assert call_kwargs[1]["datasource_name"] == "My-PostgreSQL"
+
+    def test_bi_tools_not_loaded_without_bi_platform(self, real_agent_config, mock_llm_create):
+        """BI tools should NOT be loaded when bi_platform is not configured."""
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+        from datus.configuration.node_type import NodeType
+
+        node = ChatAgenticNode(
+            node_id="test_no_bi",
+            description="Test no BI tools",
+            node_type=NodeType.TYPE_CHAT,
+            agent_config=real_agent_config,
+        )
+
+        assert node.bi_func_tool is None
+
+    def test_bi_tools_read_connector_rebound_on_db_switch(self, real_agent_config, mock_llm_create):
+        """_read_connector should be rebound when database connection changes."""
+        import sys
+        from unittest.mock import MagicMock, patch
+
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+        from datus.configuration.node_type import NodeType
+
+        cfg = self._make_bi_agent_config(real_agent_config)
+
+        mock_adapter_cls = MagicMock(return_value=MagicMock())
+        bi_core_mock = _mock_bi_core(mock_adapter_cls)
+
+        with (
+            patch("datus.agent.node.chat_agentic_node.BIFuncTool") as mock_bi_tool_cls,
+            patch.dict(sys.modules, {"datus_bi_core": bi_core_mock}),
+        ):
+            mock_bi_instance = MagicMock()
+            mock_bi_instance.available_tools.return_value = []
+            mock_bi_tool_cls.return_value = mock_bi_instance
+
+            node = ChatAgenticNode(
+                node_id="test_rebind",
+                description="Test connector rebind",
+                node_type=NodeType.TYPE_CHAT,
+                agent_config=cfg,
+            )
+
+        # Simulate DB switch
+        new_connector = MagicMock()
+        new_db_func_tool = MagicMock()
+        new_db_func_tool.connector = new_connector
+        node.db_func_tool = new_db_func_tool
+        node.bi_func_tool = MagicMock()
+
+        with patch("datus.agent.node.chat_agentic_node.db_manager_instance") as mock_db_mgr:
+            mock_conn = MagicMock()
+            mock_db_mgr.return_value.get_conn.return_value = mock_conn
+            with patch("datus.agent.node.chat_agentic_node.DBFuncTool") as mock_db_tool_cls:
+                new_tool = MagicMock()
+                new_tool.connector = new_connector
+                mock_db_tool_cls.return_value = new_tool
+                node._update_database_connection("other_db")
+
+        assert node.bi_func_tool._read_connector == new_connector
