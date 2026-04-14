@@ -34,18 +34,94 @@ class GenerationCancelledException(Exception):
 class GenerationHooks(AgentHooks):
     """Hooks for handling generation tool results and user interaction."""
 
+    # Mapping: generation kind → path_manager method name.
+    # Looked up lazily per call so sub-agent namespace switches are honored.
+    _BASE_DIR_RESOLVERS = {
+        "semantic": "semantic_model_path",
+        "sql_summary": "sql_summary_path",
+        "ext_knowledge": "ext_knowledge_path",
+    }
+
     def __init__(self, broker: InteractionBroker, agent_config: AgentConfig = None):
         """
         Initialize generation hooks.
 
         Args:
             broker: InteractionBroker for async user interactions
-            agent_config: Agent configuration for storage access
+            agent_config: Agent configuration for storage access. Base directories
+                for relative path resolution are looked up on this config at call
+                time so sub-agent namespace switches take effect without rebuilding
+                the hook.
         """
         self.broker = broker
         self.agent_config = agent_config
         self.processed_files = set()  # Track files that have been processed to avoid duplicates
         logger.debug(f"GenerationHooks initialized with config: {agent_config is not None}")
+
+    def _get_base_dir(self, kind: str) -> Optional[str]:
+        """
+        Look up the workspace directory for a generation kind from the current
+        ``agent_config``. Returns None when the config is missing or the path
+        manager cannot resolve the requested kind — callers must treat None as
+        "leave relative paths unchanged".
+        """
+        if not self.agent_config:
+            return None
+        resolver_name = self._BASE_DIR_RESOLVERS.get(kind)
+        if not resolver_name:
+            return None
+        try:
+            path_manager = getattr(self.agent_config, "path_manager", None)
+            resolver = getattr(path_manager, resolver_name, None)
+            if resolver is None:
+                return None
+            namespace = getattr(self.agent_config, "current_namespace", None)
+            return str(resolver(namespace))
+        except Exception as e:
+            logger.warning(f"Failed to resolve base_dir for kind={kind}: {e}")
+            return None
+
+    def _resolve_path(self, path: str, kind: str) -> str:
+        """
+        Resolve a file path reported by a generation tool against the current
+        sub-agent's workspace directory.
+
+        Absolute paths are returned unchanged. Relative paths are joined with
+        the base directory for ``kind`` (resolved from the live ``agent_config``);
+        if the base directory cannot be determined, the path is returned as-is
+        so downstream existence checks can surface the real failure.
+
+        Path traversal (``"../etc/passwd"``) is rejected: if the joined path
+        escapes the workspace root, the original ``path`` is returned so the
+        downstream existence check fails naturally instead of operating on a
+        file outside the workspace.
+        """
+        if not path:
+            return path
+        if os.path.isabs(path):
+            return path
+        base_dir = self._get_base_dir(kind)
+        if not base_dir:
+            return path
+
+        candidate = os.path.normpath(os.path.join(base_dir, path))
+        try:
+            # Use realpath (not abspath) so symlinked paths pointing outside the
+            # workspace are still detected as escapes.
+            base_abs = os.path.realpath(base_dir)
+            candidate_abs = os.path.realpath(candidate)
+            if os.path.commonpath([base_abs, candidate_abs]) != base_abs:
+                logger.warning(
+                    f"Rejected path {path!r} for kind={kind}: resolved {candidate_abs!r} "
+                    f"escapes workspace {base_abs!r}."
+                )
+                return path
+        except ValueError:
+            # commonpath raises when inputs mix drives or relative/absolute — treat as escape.
+            logger.warning(f"Rejected path {path!r} for kind={kind}: cannot verify containment in {base_dir!r}.")
+            return path
+
+        return candidate
 
     async def on_start(self, context, agent) -> None:
         pass
@@ -119,13 +195,11 @@ class GenerationHooks(AgentHooks):
                 logger.warning(f"Could not extract metric_file from end_metric_generation result: {result}")
                 return
 
-            # Convert relative paths to absolute paths
-            if self.agent_config:
-                base_dir = str(self.agent_config.path_manager.semantic_model_path(self.agent_config.current_database))
-                if metric_file and not os.path.isabs(metric_file):
-                    metric_file = os.path.join(base_dir, metric_file)
-                if semantic_model_file and not os.path.isabs(semantic_model_file):
-                    semantic_model_file = os.path.join(base_dir, semantic_model_file)
+            # Resolve relative paths against the current sub-agent's semantic-model
+            # workspace using the shared resolver. This applies the same containment
+            # check (path traversal rejection) as the other generation kinds.
+            metric_file = self._resolve_path(metric_file, "semantic")
+            semantic_model_file = self._resolve_path(semantic_model_file, "semantic")
 
             logger.debug(
                 f"Processing metric generation: metric_file={metric_file}, "
@@ -163,7 +237,7 @@ class GenerationHooks(AgentHooks):
         if isinstance(result_dict, dict):
             filepaths = result_dict.get("semantic_model_files", [])
             if filepaths and isinstance(filepaths, list):
-                return filepaths
+                return [self._resolve_path(p, "semantic") for p in filepaths if p]
 
         return []
 
@@ -321,6 +395,7 @@ class GenerationHooks(AgentHooks):
                     if len(parts) > 1:
                         file_path = parts[-1].strip()
 
+            file_path = self._resolve_path(file_path, "sql_summary")
             logger.debug(f"Extracted file_path: {file_path}")
 
             if not file_path or not os.path.exists(file_path):
@@ -387,6 +462,7 @@ class GenerationHooks(AgentHooks):
                     if len(parts) > 1:
                         file_path = parts[-1].strip()
 
+            file_path = self._resolve_path(file_path, "ext_knowledge")
             logger.debug(f"Extracted file_path: {file_path}")
 
             if not file_path or not os.path.exists(file_path):

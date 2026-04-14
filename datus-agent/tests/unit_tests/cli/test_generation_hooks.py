@@ -176,6 +176,94 @@ class TestExtractFilepaths:
         assert paths == []
 
 
+class TestResolvePath:
+    def _make_hooks(self, broker, sem="/ws/sm", sql="/ws/sql", ext="/ws/ext", namespace="ns_a"):
+        cfg = MagicMock()
+        cfg.current_namespace = namespace
+        cfg.path_manager = MagicMock()
+        cfg.path_manager.semantic_model_path = MagicMock(return_value=Path(sem))
+        cfg.path_manager.sql_summary_path = MagicMock(return_value=Path(sql))
+        cfg.path_manager.ext_knowledge_path = MagicMock(return_value=Path(ext))
+        return GenerationHooks(broker=broker, agent_config=cfg), cfg
+
+    def test_absolute_path_unchanged(self, broker):
+        h, _ = self._make_hooks(broker)
+        assert h._resolve_path("/abs/path/to/file.yml", "semantic") == "/abs/path/to/file.yml"
+
+    def test_relative_joined_for_semantic(self, broker):
+        h, _ = self._make_hooks(broker)
+        assert h._resolve_path("orders.yml", "semantic") == "/ws/sm/orders.yml"
+
+    def test_relative_joined_for_sql_summary(self, broker):
+        h, _ = self._make_hooks(broker)
+        assert h._resolve_path("q_001.yaml", "sql_summary") == "/ws/sql/q_001.yaml"
+
+    def test_relative_joined_for_ext_knowledge(self, broker):
+        h, _ = self._make_hooks(broker)
+        assert h._resolve_path("gmv.yaml", "ext_knowledge") == "/ws/ext/gmv.yaml"
+
+    def test_nested_relative_joined(self, broker):
+        h, _ = self._make_hooks(broker)
+        assert h._resolve_path("metrics/orders_metrics.yml", "semantic") == "/ws/sm/metrics/orders_metrics.yml"
+
+    def test_empty_path_returns_unchanged(self, broker):
+        h, _ = self._make_hooks(broker)
+        assert h._resolve_path("", "semantic") == ""
+
+    def test_unknown_kind_leaves_relative_unchanged(self, broker):
+        h, _ = self._make_hooks(broker)
+        assert h._resolve_path("orders.yml", "unknown") == "orders.yml"
+
+    def test_no_agent_config_leaves_relative_unchanged(self, broker):
+        h = GenerationHooks(broker=broker, agent_config=None)
+        assert h._resolve_path("orders.yml", "semantic") == "orders.yml"
+
+    def test_rejects_traversal_escape(self, broker):
+        """Relative paths that escape the workspace root must be rejected."""
+        h, _ = self._make_hooks(broker)
+        assert h._resolve_path("../../etc/passwd", "semantic") == "../../etc/passwd"
+
+    def test_rejects_traversal_escape_that_normalizes_outside(self, broker):
+        """`a/../../b` normalizes outside the workspace and must be rejected."""
+        h, _ = self._make_hooks(broker)
+        assert h._resolve_path("a/../../b.yml", "semantic") == "a/../../b.yml"
+
+    def test_allows_traversal_that_stays_inside(self, broker):
+        """`metrics/../orders.yml` normalizes inside the workspace and is allowed."""
+        h, _ = self._make_hooks(broker)
+        assert h._resolve_path("metrics/../orders.yml", "semantic") == "/ws/sm/orders.yml"
+
+    def test_rejects_symlink_that_escapes_workspace(self, broker, tmp_path):
+        """A symlink inside the workspace whose target is outside must be rejected."""
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.yml").write_text("x")
+        (workspace / "leak.yml").symlink_to(outside / "secret.yml")
+
+        h, _ = self._make_hooks(broker, sem=str(workspace))
+        # Textually the path looks inside the workspace, but realpath dereferences
+        # the symlink to /…/outside/secret.yml which escapes the workspace root.
+        assert h._resolve_path("leak.yml", "semantic") == "leak.yml"
+
+    def test_uses_current_namespace_at_call_time(self, broker):
+        """Sub-agent switches change current_namespace; resolution must follow."""
+        h, cfg = self._make_hooks(broker, namespace="ns_a")
+        h._resolve_path("orders.yml", "semantic")
+        cfg.path_manager.semantic_model_path.assert_called_with("ns_a")
+
+        cfg.current_namespace = "ns_b"
+        h._resolve_path("orders.yml", "semantic")
+        cfg.path_manager.semantic_model_path.assert_called_with("ns_b")
+
+    def test_extract_filepaths_resolves_relative_entries(self, broker):
+        h, _ = self._make_hooks(broker)
+        result = {"result": {"semantic_model_files": ["orders.yml", "/abs/customers.yml"]}}
+        paths = h._extract_filepaths_from_result(result)
+        assert paths == ["/ws/sm/orders.yml", "/abs/customers.yml"]
+
+
 # ---------------------------------------------------------------------------
 # Tests: _process_single_file
 # ---------------------------------------------------------------------------
@@ -1050,3 +1138,90 @@ class TestSyncSemanticToDbBooleanCoercion:
         assert len(table_rows) >= 1
         assert type(table_rows[0]["create_metric"]) is bool
         assert type(table_rows[0]["is_partition"]) is bool
+
+
+# ---------------------------------------------------------------------------
+# Tests: _get_base_dir edge cases (resolver missing / exception)
+# ---------------------------------------------------------------------------
+
+
+class TestGetBaseDirEdgeCases:
+    def test_returns_none_when_resolver_attr_is_none(self, broker):
+        """path_manager exists but the named resolver attribute is None."""
+        cfg = MagicMock()
+        cfg.current_namespace = "ns"
+        cfg.path_manager = MagicMock(spec=[])  # no attrs → getattr returns None
+        h = GenerationHooks(broker=broker, agent_config=cfg)
+        assert h._get_base_dir("semantic") is None
+
+    def test_returns_none_when_resolver_raises(self, broker):
+        """Exceptions raised by the resolver are caught and return None."""
+        cfg = MagicMock()
+        cfg.current_namespace = "ns"
+        cfg.path_manager = MagicMock()
+        cfg.path_manager.semantic_model_path = MagicMock(side_effect=RuntimeError("boom"))
+        h = GenerationHooks(broker=broker, agent_config=cfg)
+        assert h._get_base_dir("semantic") is None
+
+
+class TestResolvePathCommonpathValueError:
+    def test_returns_original_when_commonpath_raises_value_error(self, broker):
+        """When os.path.commonpath raises ValueError (e.g. mixed drives), original path is returned."""
+        cfg = MagicMock()
+        cfg.current_namespace = "ns"
+        cfg.path_manager = MagicMock()
+        cfg.path_manager.semantic_model_path = MagicMock(return_value=Path("/ws/sm"))
+        h = GenerationHooks(broker=broker, agent_config=cfg)
+        with patch("datus.cli.generation_hooks.os.path.commonpath", side_effect=ValueError("mixed drives")):
+            assert h._resolve_path("orders.yml", "semantic") == "orders.yml"
+
+
+# ---------------------------------------------------------------------------
+# Tests: _handle_end_metric_generation resolves relative paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+class TestHandleEndMetricGeneration:
+    async def test_missing_metric_file_warns_and_returns(self, hooks):
+        hooks._extract_metric_generation_result = MagicMock(return_value=(None, None, {}))
+        hooks._process_single_file = AsyncMock()
+        hooks._process_metric_with_semantic_model = AsyncMock()
+        await hooks._handle_end_metric_generation({"result": {}})
+        hooks._process_single_file.assert_not_awaited()
+        hooks._process_metric_with_semantic_model.assert_not_awaited()
+
+    async def test_resolves_relative_paths_via_resolve_path(self, hooks):
+        """Relative metric_file and semantic_model_file must be resolved through _resolve_path."""
+        hooks._extract_metric_generation_result = MagicMock(
+            return_value=("metrics/orders.yml", "semantic/orders.yml", {"m": "SELECT 1"})
+        )
+        hooks._process_metric_with_semantic_model = AsyncMock()
+        hooks._resolve_path = MagicMock(side_effect=lambda p, k: f"/ws/sm/{p}" if p else p)
+
+        await hooks._handle_end_metric_generation({"result": {"metric_file": "metrics/orders.yml"}})
+
+        hooks._resolve_path.assert_any_call("metrics/orders.yml", "semantic")
+        hooks._resolve_path.assert_any_call("semantic/orders.yml", "semantic")
+        hooks._process_metric_with_semantic_model.assert_awaited_once_with(
+            "/ws/sm/semantic/orders.yml", "/ws/sm/metrics/orders.yml", {"m": "SELECT 1"}
+        )
+
+    async def test_no_semantic_model_falls_back_to_single_file(self, hooks):
+        hooks._extract_metric_generation_result = MagicMock(return_value=("metrics/orders.yml", None, {"m": "SQL"}))
+        hooks._process_single_file = AsyncMock()
+        hooks._resolve_path = MagicMock(side_effect=lambda p, k: f"/ws/sm/{p}" if p else p)
+
+        await hooks._handle_end_metric_generation({"result": {}})
+
+        hooks._process_single_file.assert_awaited_once_with("/ws/sm/metrics/orders.yml", metric_sqls={"m": "SQL"})
+
+    async def test_cancelled_exception_absorbed(self, hooks):
+        hooks._extract_metric_generation_result = MagicMock(return_value=("m.yml", None, {}))
+        hooks._resolve_path = MagicMock(side_effect=lambda p, k: p)
+        hooks._process_single_file = AsyncMock(side_effect=GenerationCancelledException("user-cancel"))
+        await hooks._handle_end_metric_generation({"result": {}})  # must not raise
+
+    async def test_unexpected_exception_absorbed(self, hooks):
+        hooks._extract_metric_generation_result = MagicMock(side_effect=RuntimeError("boom"))
+        await hooks._handle_end_metric_generation({"result": {}})  # must not raise
