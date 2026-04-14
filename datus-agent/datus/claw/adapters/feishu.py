@@ -77,6 +77,10 @@ class FeishuAdapter(ChannelAdapter):
     encryption, heartbeat, and reconnection.
     """
 
+    @property
+    def supports_streaming(self) -> bool:
+        return True
+
     def __init__(
         self,
         channel_id: str,
@@ -141,9 +145,9 @@ class FeishuAdapter(ChannelAdapter):
             chat_type = getattr(message, "chat_type", None)
 
             # Auto-learn bot_open_id from the first group @mention.
-            # With im:message.group_at_msg:readonly, the bot only receives
-            # messages that @mention it, so the mention whose open_id differs
-            # from the sender is the bot itself.
+            # With im:message.group_msg:readonly the bot receives all group
+            # messages; in the first @mention the open_id that differs from
+            # the sender is the bot itself.
             if chat_type == "group" and not self._bot_open_id and message.mentions:
                 sender_oid = sender.sender_id.open_id if sender and sender.sender_id else ""
                 for m in message.mentions:
@@ -425,7 +429,12 @@ class FeishuAdapter(ChannelAdapter):
             return await self._start_stream(message, text)
         else:
             # Subsequent message — append content to existing card
-            state.accumulated += f"\n\n{text}"
+            # Delta chunks (token-level) are concatenated directly;
+            # complete messages are separated by blank lines.
+            if message.is_delta:
+                state.accumulated += text
+            else:
+                state.accumulated += f"\n\n{text}"
             await self._update_card_content(stream_id)
             return None
 

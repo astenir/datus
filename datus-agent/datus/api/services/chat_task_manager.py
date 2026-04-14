@@ -17,9 +17,11 @@ from datus.agent.node.agentic_node import AgenticNode
 from datus.agent.node.chat_agentic_node import ChatAgenticNode
 from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode
 from datus.api.models.cli_models import (
+    SSEDataType,
     SSEEndData,
     SSEErrorData,
     SSEEvent,
+    SSEMessageData,
     SSEPingData,
     SSESessionData,
     StreamChatInput,
@@ -35,6 +37,111 @@ from datus.utils.loggings import get_logger
 logger = get_logger(__name__)
 
 HEARTBEAT_INTERVAL = 10  # seconds
+
+
+def is_thinking_only_content(content_items) -> bool:
+    """Return True if all content items are thinking chunks (i.e. a delta message).
+
+    Used by both the SSE coalescing logic and the bridge outbound conversion
+    to avoid duplicating the detection heuristic.
+    """
+    return bool(content_items) and all(getattr(item, "type", "") == "thinking" for item in content_items)
+
+
+def _is_thinking_delta(event: SSEEvent) -> bool:
+    """Return True if *event* is a thinking delta (consecutive-mergeable)."""
+    if event.event != "message":
+        return False
+    data = event.data
+    if not isinstance(data, SSEMessageData):
+        return False
+    if data.type not in (SSEDataType.CREATE_MESSAGE, SSEDataType.APPEND_MESSAGE):
+        return False
+    return is_thinking_only_content(data.payload.content)
+
+
+def _delta_message_id(event: SSEEvent) -> str:
+    """Extract the message_id from a thinking-delta event.
+
+    Callers must ensure *event* passes ``_is_thinking_delta`` first.
+    """
+    data = event.data
+    if isinstance(data, SSEMessageData):
+        return data.payload.message_id
+    return ""
+
+
+def _coalesce_deltas(events: list[SSEEvent]) -> list[SSEEvent]:
+    """Merge consecutive thinking-delta events **for the same message** into single events.
+
+    Non-delta events pass through unchanged and break any ongoing run of deltas.
+    A change in ``message_id`` between adjacent deltas also breaks the run so
+    that deltas from different logical messages are never merged together.
+    """
+    if not events:
+        return []
+
+    result: list[SSEEvent] = []
+    run_start: int | None = None  # index of first delta in the current run
+    run_msg_id: str = ""  # message_id of the current run
+
+    for i, ev in enumerate(events):
+        if _is_thinking_delta(ev):
+            msg_id = _delta_message_id(ev)
+            if run_start is None:
+                run_start = i
+                run_msg_id = msg_id
+            elif msg_id != run_msg_id:
+                # Different message — flush the current run and start a new one
+                result.append(_merge_delta_run(events[run_start:i]))
+                run_start = i
+                run_msg_id = msg_id
+        else:
+            # Flush any accumulated delta run before emitting this non-delta
+            if run_start is not None:
+                result.append(_merge_delta_run(events[run_start:i]))
+                run_start = None
+            result.append(ev)
+
+    # Flush trailing delta run
+    if run_start is not None:
+        result.append(_merge_delta_run(events[run_start:]))
+
+    return result
+
+
+def _merge_delta_run(run: list[SSEEvent]) -> SSEEvent:
+    """Merge a non-empty run of thinking-delta events into a single event."""
+    if len(run) == 1:
+        return run[0]
+
+    first = run[0]
+    # Concatenate the text from content[0].payload["content"] of each event
+    parts: list[str] = []
+    for ev in run:
+        data = ev.data
+        if not isinstance(data, SSEMessageData):  # guaranteed by caller; guard for safety
+            continue
+        for item in data.payload.content:
+            parts.append(item.payload.get("content", ""))
+
+    merged_content_items = copy.deepcopy(first.data.payload.content)  # type: ignore[union-attr]
+    # Replace the first item's text with the concatenated text
+    if merged_content_items:
+        merged_content_items[0].payload["content"] = "".join(parts)
+        # Keep only one content item for the merged event
+        merged_content_items = merged_content_items[:1]
+
+    merged_payload = copy.deepcopy(first.data.payload)  # type: ignore[union-attr]
+    merged_payload.content = merged_content_items
+    merged_data = SSEMessageData(type=first.data.type, payload=merged_payload)  # type: ignore[union-attr]
+
+    return SSEEvent(
+        id=first.id,
+        event=first.event,
+        data=merged_data,
+        timestamp=first.timestamp,
+    )
 
 
 def _fill_database_context(
@@ -200,10 +307,11 @@ class ChatTaskManager:
             if ping_event is not None:
                 yield ping_event
 
-            for event in new_events:
+            coalesced = _coalesce_deltas(new_events)
+            for event in coalesced:
                 yield event
-                cursor += 1
-                task.consumer_offset = cursor
+            cursor += len(new_events)
+            task.consumer_offset = cursor
 
             if is_done and cursor >= len(task.events):
                 break
