@@ -1,6 +1,6 @@
 [project]
 name = "datus-storage-base"
-version = "0.1.1"
+version = "0.1.2"
 description = "Abstract interfaces for Datus storage backends (vector & RDB)"
 requires-python = ">=3.12"
 license = "Apache-2.0"

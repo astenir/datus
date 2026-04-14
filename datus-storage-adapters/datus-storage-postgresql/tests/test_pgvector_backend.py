@@ -3,11 +3,11 @@
 import pandas as pd
 import pyarrow as pa
 import pytest
+from conftest import MockEmbeddingFunction
 from psycopg_pool import PoolClosed
 
-from datus.storage.conditions import eq, and_, or_, not_
-from datus_storage_postgresql.vector.backend import PgVectorDb, PgVectorTable, PgvectorBackend
-from conftest import MockEmbeddingFunction
+from datus_storage_base.conditions import and_, eq, not_, or_
+from datus_storage_postgresql.vector.backend import PgvectorBackend, PgVectorDb, PgVectorTable
 
 
 @pytest.fixture
@@ -56,9 +56,7 @@ def table(db, test_schema, embedding_function):
         source_column="description",
     )
     with db.pool.connection() as conn:
-        conn.execute(
-            f"ALTER TABLE {tbl.table_name} ADD CONSTRAINT uq_test_vectors_id UNIQUE (id)"
-        )
+        conn.execute(f"ALTER TABLE {tbl.table_name} ADD CONSTRAINT uq_test_vectors_id UNIQUE (id)")
         conn.commit()
     return tbl
 
@@ -81,7 +79,6 @@ def _sample_df(ids, descriptions=None, categories=None):
 
 
 class TestBackendLifecycle:
-
     def test_initialize_stores_config(self, pg_config):
         b = PgvectorBackend()
         b.initialize(pg_config)
@@ -112,14 +109,12 @@ class TestBackendLifecycle:
                 pass
 
 
-
 # ==============================================================================
 # Database-level tests (PgVectorDb)
 # ==============================================================================
 
 
 class TestPgVectorDb:
-
     def test_table_exists(self, db, table):
         assert db.table_exists("test_vectors")
         assert not db.table_exists("nonexistent_table")
@@ -150,9 +145,9 @@ class TestPgVectorDb:
         with pytest.raises(TypeError, match="Unsupported schema type"):
             db.create_table("fail_tbl2", schema={"bad": "schema"})
 
-    def test_open_table_cached(self, db, table):
+    def test_open_table_cached(self, db, table, embedding_function):
         """open_table returns the cached handle if available."""
-        opened = db.open_table("test_vectors")
+        opened = db.open_table("test_vectors", embedding_function=embedding_function)
         assert opened is table
 
     def test_open_table_uncached(self, db, test_schema, embedding_function):
@@ -176,7 +171,9 @@ class TestPgVectorDb:
         db.drop_table("no_such_table_xyz", ignore_missing=True)
 
     def test_drop_table_missing_raises(self, db):
-        with pytest.raises(Exception):  # psycopg.errors.UndefinedTable
+        from psycopg.errors import UndefinedTable
+
+        with pytest.raises(UndefinedTable):
             db.drop_table("no_such_table_xyz", ignore_missing=False)
 
     def test_refresh_table(self, db, table):
@@ -191,7 +188,6 @@ class TestPgVectorDb:
 
 
 class TestVectorTableWrite:
-
     def test_add(self, table):
         table.add(_sample_df(["1", "2", "3"]))
         assert table.count_rows() == 3
@@ -256,7 +252,6 @@ class TestVectorTableWrite:
 
 
 class TestVectorTableSearch:
-
     def test_search_vector(self, table):
         table.add(_sample_df(["s1", "s2", "s3"]))
         results = table.search_vector(query_text="test", vector_column="vector", top_n=2)
@@ -265,7 +260,9 @@ class TestVectorTableSearch:
     def test_search_vector_with_where_str(self, table):
         table.add(_sample_df(["w1", "w2", "w3"], categories=["alpha", "beta", "alpha"]))
         results = table.search_vector(
-            query_text="test", vector_column="vector", top_n=10,
+            query_text="test",
+            vector_column="vector",
+            top_n=10,
             where="category = 'alpha'",
         )
         assert results.num_rows == 2
@@ -273,7 +270,9 @@ class TestVectorTableSearch:
     def test_search_vector_with_where_expr(self, table):
         table.add(_sample_df(["we1", "we2", "we3"], categories=["alpha", "beta", "alpha"]))
         results = table.search_vector(
-            query_text="test", vector_column="vector", top_n=10,
+            query_text="test",
+            vector_column="vector",
+            top_n=10,
             where=eq("category", "alpha"),
         )
         assert results.num_rows == 2
@@ -281,7 +280,9 @@ class TestVectorTableSearch:
     def test_search_vector_with_select_fields(self, table):
         table.add(_sample_df(["sel1"]))
         results = table.search_vector(
-            query_text="test", vector_column="vector", top_n=1,
+            query_text="test",
+            vector_column="vector",
+            top_n=1,
             select_fields=["id", "category"],
         )
         assert results.num_rows == 1
@@ -298,7 +299,9 @@ class TestVectorTableSearch:
     def test_search_hybrid_fallback(self, table):
         table.add(_sample_df(["h1"]))
         results = table.search_hybrid(
-            query_text="test", vector_source_column="description", top_n=1,
+            query_text="test",
+            vector_source_column="description",
+            top_n=1,
         )
         assert results.num_rows == 1
 
@@ -361,7 +364,6 @@ class TestVectorTableSearch:
 
 
 class TestCountRows:
-
     def test_count_no_filter(self, table):
         table.add(_sample_df(["c1", "c2", "c3"]))
         assert table.count_rows() == 3
@@ -384,7 +386,6 @@ class TestCountRows:
 
 
 class TestIndexOperations:
-
     def test_vector_index_cosine(self, table):
         table.add(_sample_df([f"vi{i}" for i in range(10)]))
         table.create_vector_index("vector", metric="cosine")
@@ -413,7 +414,6 @@ class TestIndexOperations:
 
 
 class TestVectorNamespace:
-
     def test_namespace_creates_schema(self, backend):
         db = backend.connect("vec_ns_test")
         assert db.namespace == "vec_ns_test"
@@ -452,7 +452,6 @@ class TestVectorNamespace:
 
 
 class TestArrowConversion:
-
     def test_rows_to_arrow_types(self, table):
         """Verify returned PyArrow table has correct types."""
         table.add(_sample_df(["ar1", "ar2"]))
@@ -466,3 +465,123 @@ class TestArrowConversion:
         assert result.num_rows == 0
         assert "id" in result.column_names
         assert "category" in result.column_names
+
+
+# ==============================================================================
+# Vector logical isolation tests
+# ==============================================================================
+
+
+@pytest.fixture
+def logical_backend(pg_config):
+    """Create a PgvectorBackend with logical isolation."""
+    config = {**pg_config, "isolation": "logical"}
+    b = PgvectorBackend()
+    b.initialize(config)
+    yield b
+    b.close()
+
+
+@pytest.fixture
+def logical_db(logical_backend):
+    """Connect with a namespace under logical isolation."""
+    return logical_backend.connect("tenant_a")
+
+
+def _drop_table_raw(pool, table_name):
+    """Drop a table directly via pool, bypassing logical isolation guard (test-only)."""
+    with pool.connection() as conn:
+        conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+        conn.commit()
+
+
+@pytest.fixture
+def logical_table(logical_db, test_schema, embedding_function):
+    """Create a test table under logical isolation."""
+    _drop_table_raw(logical_db.pool, "logical_vectors")
+    tbl = logical_db.create_table(
+        "logical_vectors",
+        schema=test_schema,
+        embedding_function=embedding_function,
+        vector_column="vector",
+        source_column="description",
+    )
+    return tbl
+
+
+class TestVectorLogicalIsolation:
+    def test_table_in_public_schema(self, logical_table):
+        """Logical isolation uses public schema."""
+        assert "." not in logical_table.table_name  # no schema prefix
+
+    def test_datasource_id_column_created(self, logical_db, logical_table):
+        """create_table auto-adds datasource_id column."""
+        with logical_db.pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_name = %s AND column_name = %s",
+                ("logical_vectors", "datasource_id"),
+            ).fetchall()
+            assert len(rows) == 1
+
+    def test_add_injects_datasource_id(self, logical_db, logical_table):
+        """add() auto-injects datasource_id."""
+        logical_table.add(_sample_df(["la1"]))
+        with logical_db.pool.connection() as conn:
+            rows = conn.execute("SELECT datasource_id FROM logical_vectors WHERE id = 'la1'").fetchall()
+            val = rows[0]["datasource_id"] if isinstance(rows[0], dict) else rows[0][0]
+            assert val == "tenant_a"
+
+    def test_search_all_filters_by_datasource(self, logical_backend, test_schema, embedding_function):
+        """search_all only returns rows for the connected namespace."""
+        db_a = logical_backend.connect("tenant_a")
+        db_b = logical_backend.connect("tenant_b")
+
+        _drop_table_raw(db_a.pool, "shared_vec")
+        tbl_a = db_a.create_table("shared_vec", schema=test_schema, embedding_function=embedding_function)
+        tbl_b = db_b.open_table("shared_vec", embedding_function=embedding_function)
+
+        tbl_a.add(_sample_df(["a1"]))
+        tbl_b.add(_sample_df(["b1", "b2"]))
+
+        assert tbl_a.count_rows() == 1
+        assert tbl_b.count_rows() == 2
+
+    def test_delete_scoped_to_datasource(self, logical_backend, test_schema, embedding_function):
+        """delete() only affects rows for the connected namespace."""
+        db_a = logical_backend.connect("tenant_a")
+        db_b = logical_backend.connect("tenant_b")
+
+        _drop_table_raw(db_a.pool, "del_vec")
+        tbl_a = db_a.create_table("del_vec", schema=test_schema, embedding_function=embedding_function)
+        tbl_b = db_b.open_table("del_vec", embedding_function=embedding_function)
+
+        tbl_a.add(_sample_df(["da1"]))
+        tbl_b.add(_sample_df(["db1"]))
+
+        tbl_a.delete(eq("id", "da1"))
+        assert tbl_a.count_rows() == 0
+        assert tbl_b.count_rows() == 1
+
+    def test_update_scoped_to_datasource(self, logical_backend, test_schema, embedding_function):
+        """update() only affects rows for the connected namespace."""
+        db_a = logical_backend.connect("tenant_a")
+        db_b = logical_backend.connect("tenant_b")
+
+        _drop_table_raw(db_a.pool, "upd_vec")
+        tbl_a = db_a.create_table("upd_vec", schema=test_schema, embedding_function=embedding_function)
+        tbl_b = db_b.open_table("upd_vec", embedding_function=embedding_function)
+
+        tbl_a.add(_sample_df(["ua1"], categories=["old"]))
+        tbl_b.add(_sample_df(["ub1"], categories=["old"]))
+
+        tbl_a.update(eq("id", "ua1"), {"category": "new"})
+        result_a = tbl_a.search_all()
+        result_b = tbl_b.search_all()
+        assert result_a.column("category")[0].as_py() == "new"
+        assert result_b.column("category")[0].as_py() == "old"
+
+    def test_search_all_excludes_datasource_id_from_results(self, logical_table):
+        """Default SELECT should not include datasource_id column."""
+        logical_table.add(_sample_df(["ex1"]))
+        result = logical_table.search_all()
+        assert "datasource_id" not in result.column_names

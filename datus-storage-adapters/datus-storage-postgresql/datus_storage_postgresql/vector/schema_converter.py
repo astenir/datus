@@ -22,6 +22,7 @@ def _validate_column_name(name: str) -> str:
         raise ValueError(f"Invalid column name: {name!r}")
     return name
 
+
 # Mapping from PyArrow types to PostgreSQL types
 _PA_TO_PG = {
     pa.string(): "TEXT",
@@ -105,17 +106,11 @@ def schema_to_create_table_sql(
     if unique_set:
         unknown = unique_set.difference(schema.names)
         if unknown:
-            raise ValueError(
-                f"Unknown unique_columns for table '{table_name}': {sorted(unknown)}"
-            )
+            raise ValueError(f"Unknown unique_columns for table '{table_name}': {sorted(unknown)}")
     columns = schema_to_columns(schema)
     col_defs = []
     for name, pg_type in columns:
         _validate_column_name(name)
         suffix = " UNIQUE" if name in unique_set else ""
         col_defs.append(f"    {name} {pg_type}{suffix}")
-    return (
-        f"CREATE TABLE IF NOT EXISTS {table_name} (\n"
-        + ",\n".join(col_defs)
-        + "\n)"
-    )
+    return f"CREATE TABLE IF NOT EXISTS {table_name} (\n" + ",\n".join(col_defs) + "\n)"

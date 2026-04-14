@@ -11,7 +11,7 @@ Three-layer architecture:
 import logging
 import re
 import threading
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
 import pyarrow as pa
@@ -19,6 +19,7 @@ from psycopg import sql as psql
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
+from datus_storage_base.backend_config import DATASOURCE_ID_COLUMN, IsolationType
 from datus_storage_base.conditions import WhereExpr, build_where
 from datus_storage_base.vector.base import BaseVectorBackend, EmbeddingFunction, VectorDatabase, VectorTable
 from datus_storage_postgresql.vector.schema_converter import schema_to_create_table_sql
@@ -52,6 +53,8 @@ class PgVectorTable(VectorTable):
         source_column: str = "description",
         vector_dim: int = 384,
         column_names: Optional[List[str]] = None,
+        isolation: IsolationType = IsolationType.PHYSICAL,
+        datasource_id: Optional[str] = None,
     ):
         self._table_name = table_name
         self._pool = pool
@@ -60,6 +63,8 @@ class PgVectorTable(VectorTable):
         self._source_column = source_column
         self._vector_dim = vector_dim
         self._column_names = column_names or []
+        self._isolation = isolation
+        self._datasource_id = datasource_id
 
     @property
     def table_name(self) -> str:
@@ -88,23 +93,34 @@ class PgVectorTable(VectorTable):
     # -- Write operations --
 
     def add(self, data: pd.DataFrame) -> None:
-        df = self._compute_embeddings_for_insert(data)
+        df = self._inject_datasource_df(data)
+        df = self._compute_embeddings_for_insert(df)
         self._insert_dataframe(df)
 
     def merge_insert(self, data: pd.DataFrame, on_column: str) -> None:
-        df = self._compute_embeddings_for_insert(data)
+        df = self._inject_datasource_df(data)
+        df = self._compute_embeddings_for_insert(df)
         self._upsert_dataframe(df, on_column)
 
     def delete(self, where: WhereExpr) -> None:
-        compiled = build_where(where)
-        if compiled:
-            sql = f"DELETE FROM {self._table_name} WHERE {compiled}"
+        if isinstance(where, str):
+            compiled = where
+        else:
+            compiled = build_where(where)
+        combined, ds_params = self._ds_where_fragment(compiled)
+        if combined:
+            sql = f"DELETE FROM {self._table_name} WHERE {combined}"
             with self._pool.connection() as conn:
-                conn.execute(sql)
+                conn.execute(sql, ds_params or None)
                 conn.commit()
 
     def update(self, where: WhereExpr, values: Dict[str, Any]) -> None:
-        compiled = build_where(where)
+        if self._isolation == IsolationType.LOGICAL and DATASOURCE_ID_COLUMN in values:
+            raise ValueError(f"{DATASOURCE_ID_COLUMN} is managed internally and cannot be updated")
+        if isinstance(where, str):
+            compiled = where
+        else:
+            compiled = build_where(where)
         set_parts = []
         params = []
         for col, val in values.items():
@@ -112,10 +128,11 @@ class PgVectorTable(VectorTable):
             set_parts.append(f"{col} = %s")
             params.append(val)
         set_clause = ", ".join(set_parts)
-        where_clause = f" WHERE {compiled}" if compiled else ""
+        combined, ds_params = self._ds_where_fragment(compiled)
+        where_clause = f" WHERE {combined}" if combined else ""
         sql = f"UPDATE {self._table_name} SET {set_clause}{where_clause}"
         with self._pool.connection() as conn:
-            conn.execute(sql, params)
+            conn.execute(sql, params + ds_params)
             conn.commit()
 
     # -- Search operations --
@@ -135,20 +152,21 @@ class PgVectorTable(VectorTable):
         where: WhereExpr = None,
         select_fields: Optional[List[str]] = None,
     ) -> pa.Table:
-        compiled = build_where(where)
+        if isinstance(where, str):
+            compiled = where
+        else:
+            compiled = build_where(where)
+        combined, ds_params = self._ds_where_fragment(compiled)
         query_embedding = self._compute_query_embedding(query_text)
 
         columns = self._validate_select_fields(select_fields) if select_fields else self._select_columns()
         _validate_identifier(vector_column)
-        where_clause = f"WHERE {compiled}" if compiled else ""
+        where_clause = f"WHERE {combined}" if combined else ""
         sql = (
-            f"SELECT {columns} FROM {self._table_name} "
-            f"{where_clause} "
-            f"ORDER BY {vector_column} <=> %s::vector "
-            f"LIMIT %s"
+            f"SELECT {columns} FROM {self._table_name} {where_clause} ORDER BY {vector_column} <=> %s::vector LIMIT %s"
         )
         with self._pool.connection() as conn:
-            rows = conn.execute(sql, (str(query_embedding), top_n)).fetchall()
+            rows = conn.execute(sql, ds_params + [str(query_embedding), top_n]).fetchall()
 
         return self._rows_to_arrow(rows, select_fields)
 
@@ -175,24 +193,32 @@ class PgVectorTable(VectorTable):
         select_fields: Optional[List[str]] = None,
         limit: Optional[int] = None,
     ) -> pa.Table:
-        compiled = build_where(where)
+        if isinstance(where, str):
+            compiled = where
+        else:
+            compiled = build_where(where)
+        combined, ds_params = self._ds_where_fragment(compiled)
         columns = self._validate_select_fields(select_fields) if select_fields else self._select_columns()
-        where_clause = f"WHERE {compiled}" if compiled else ""
+        where_clause = f"WHERE {combined}" if combined else ""
 
         limit_clause = f"LIMIT {int(limit)}" if limit is not None else ""
         sql = f"SELECT {columns} FROM {self._table_name} {where_clause} {limit_clause}"
 
         with self._pool.connection() as conn:
-            rows = conn.execute(sql).fetchall()
+            rows = conn.execute(sql, ds_params or None).fetchall()
 
         return self._rows_to_arrow(rows, select_fields)
 
     def count_rows(self, where: WhereExpr = None) -> int:
-        compiled = build_where(where)
-        where_clause = f"WHERE {compiled}" if compiled else ""
+        if isinstance(where, str):
+            compiled = where
+        else:
+            compiled = build_where(where)
+        combined, ds_params = self._ds_where_fragment(compiled)
+        where_clause = f"WHERE {combined}" if combined else ""
         sql = f"SELECT COUNT(*) AS cnt FROM {self._table_name} {where_clause}"
         with self._pool.connection() as conn:
-            row = conn.execute(sql).fetchone()
+            row = conn.execute(sql, ds_params or None).fetchone()
             if isinstance(row, dict):
                 return row["cnt"]
             return row[0] if row else 0
@@ -209,10 +235,7 @@ class PgVectorTable(VectorTable):
             "ip": "vector_ip_ops",
         }
         ops = ops_map.get(metric, "vector_cosine_ops")
-        sql = (
-            f"CREATE INDEX IF NOT EXISTS {index_name} "
-            f"ON {self._table_name} USING hnsw ({column} {ops})"
-        )
+        sql = f"CREATE INDEX IF NOT EXISTS {index_name} ON {self._table_name} USING hnsw ({column} {ops})"
         with self._pool.connection() as conn:
             conn.execute(sql)
             conn.commit()
@@ -224,9 +247,7 @@ class PgVectorTable(VectorTable):
             _validate_identifier(f)
 
         tsv_col = "tsv"
-        coalesce_parts = " || ' ' || ".join(
-            f"COALESCE({f}, '')" for f in field_names
-        )
+        coalesce_parts = " || ' ' || ".join(f"COALESCE({f}, '')" for f in field_names)
         table_token = self._table_name.rsplit(".", 1)[-1]
         index_name = f"idx_{table_token}_fts"
 
@@ -236,25 +257,41 @@ class PgVectorTable(VectorTable):
                 f"ADD COLUMN IF NOT EXISTS {tsv_col} tsvector "
                 f"GENERATED ALWAYS AS (to_tsvector('english', {coalesce_parts})) STORED"
             )
-            conn.execute(
-                f"CREATE INDEX IF NOT EXISTS {index_name} "
-                f"ON {self._table_name} USING gin ({tsv_col})"
-            )
+            conn.execute(f"CREATE INDEX IF NOT EXISTS {index_name} ON {self._table_name} USING gin ({tsv_col})")
             conn.commit()
 
     def create_scalar_index(self, column: str) -> None:
         _validate_identifier(column)
         table_token = self._table_name.rsplit(".", 1)[-1]
         index_name = f"idx_{table_token}_{column}_btree"
-        sql = (
-            f"CREATE INDEX IF NOT EXISTS {index_name} "
-            f"ON {self._table_name} ({column})"
-        )
+        sql = f"CREATE INDEX IF NOT EXISTS {index_name} ON {self._table_name} ({column})"
         with self._pool.connection() as conn:
             conn.execute(sql)
             conn.commit()
 
     # -- Private helpers --
+
+    def _ds_where_fragment(self, existing_compiled: Optional[str] = None) -> tuple:
+        """Build WHERE clause fragment with datasource_id for logical isolation.
+
+        Returns:
+            (clause_str, params_list) where clause_str may be empty and params
+            is a list of bind values for %s placeholders.
+        """
+        if self._isolation != IsolationType.LOGICAL or self._datasource_id is None:
+            return (existing_compiled or "", [])
+        ds_cond = f"{DATASOURCE_ID_COLUMN} = %s"
+        if existing_compiled:
+            return (f"{ds_cond} AND ({existing_compiled})", [self._datasource_id])
+        return (ds_cond, [self._datasource_id])
+
+    def _inject_datasource_df(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Force datasource_id column on DataFrame for logical isolation."""
+        if self._isolation != IsolationType.LOGICAL or self._datasource_id is None:
+            return df
+        df = df.copy()
+        df[DATASOURCE_ID_COLUMN] = self._datasource_id
+        return df
 
     def _compute_embeddings_for_insert(self, df: pd.DataFrame) -> pd.DataFrame:
         """Compute source embeddings and fill the vector column in the DataFrame."""
@@ -263,9 +300,7 @@ class PgVectorTable(VectorTable):
 
         if self._vector_column not in df.columns:
             df = df.copy()
-            df[self._vector_column] = self._embedding_fn.generate_embeddings(
-                df[self._source_column].tolist()
-            )
+            df[self._vector_column] = self._embedding_fn.generate_embeddings(df[self._source_column].tolist())
             return df
 
         missing = df[self._vector_column].isna()
@@ -323,20 +358,30 @@ class PgVectorTable(VectorTable):
         for c in columns:
             _validate_identifier(c)
         _validate_identifier(on_column)
+
+        # In logical mode, scope conflict target to tenant
+        if self._isolation == IsolationType.LOGICAL and self._datasource_id is not None:
+            conflict_target = f"{on_column}, {DATASOURCE_ID_COLUMN}"
+        else:
+            conflict_target = on_column
+
         col_names = ", ".join(columns)
         placeholders = ", ".join(["%s"] * len(columns))
-        update_cols = [c for c in columns if c != on_column]
+        skip_cols = {on_column}
+        if self._isolation == IsolationType.LOGICAL:
+            skip_cols.add(DATASOURCE_ID_COLUMN)
+        update_cols = [c for c in columns if c not in skip_cols]
         update_set = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
 
         if update_set:
             sql = (
                 f"INSERT INTO {self._table_name} ({col_names}) VALUES ({placeholders}) "
-                f"ON CONFLICT ({on_column}) DO UPDATE SET {update_set}"
+                f"ON CONFLICT ({conflict_target}) DO UPDATE SET {update_set}"
             )
         else:
             sql = (
                 f"INSERT INTO {self._table_name} ({col_names}) VALUES ({placeholders}) "
-                f"ON CONFLICT ({on_column}) DO NOTHING"
+                f"ON CONFLICT ({conflict_target}) DO NOTHING"
             )
 
         rows = []
@@ -354,11 +399,18 @@ class PgVectorTable(VectorTable):
                 cur.executemany(sql, rows)
             conn.commit()
 
+    @property
+    def _default_columns(self) -> List[str]:
+        """Return column names filtered for the current isolation mode."""
+        cols = self._column_names
+        if self._isolation == IsolationType.LOGICAL:
+            cols = [c for c in cols if c != DATASOURCE_ID_COLUMN]
+        return cols
+
     def _select_columns(self) -> str:
-        """Build the default SELECT column list."""
-        if self._column_names:
-            return ", ".join(self._column_names)
-        return "*"
+        """Build the default SELECT column list, excluding datasource_id in logical mode."""
+        cols = self._default_columns
+        return ", ".join(cols) if cols else "*"
 
     def _rows_to_arrow(
         self,
@@ -366,16 +418,27 @@ class PgVectorTable(VectorTable):
         select_fields: Optional[List[str]] = None,
     ) -> pa.Table:
         """Convert fetched rows (list of dicts) to a PyArrow Table."""
+        default_cols = self._default_columns
         if not rows:
             if select_fields:
                 arrays = {
-                    f: pa.array([], type=pa.list_(pa.float32(), list_size=self._vector_dim) if f == self._vector_column else pa.string())
+                    f: pa.array(
+                        [],
+                        type=pa.list_(pa.float32(), list_size=self._vector_dim)
+                        if f == self._vector_column
+                        else pa.string(),
+                    )
                     for f in select_fields
                 }
-            elif self._column_names:
+            elif default_cols:
                 arrays = {
-                    c: pa.array([], type=pa.list_(pa.float32(), list_size=self._vector_dim) if c == self._vector_column else pa.string())
-                    for c in self._column_names
+                    c: pa.array(
+                        [],
+                        type=pa.list_(pa.float32(), list_size=self._vector_dim)
+                        if c == self._vector_column
+                        else pa.string(),
+                    )
+                    for c in default_cols
                 }
             else:
                 return pa.table({})
@@ -384,7 +447,7 @@ class PgVectorTable(VectorTable):
         if isinstance(rows[0], dict):
             col_names = select_fields or list(rows[0].keys())
         else:
-            col_names = select_fields or self._column_names
+            col_names = select_fields or default_cols
 
         arrays = {}
         for idx, col in enumerate(col_names):
@@ -398,9 +461,7 @@ class PgVectorTable(VectorTable):
                         parsed.append(v)
                     else:
                         parsed.append(list(v) if v is not None else [0.0] * self._vector_dim)
-                arrays[col] = pa.array(
-                    parsed, type=pa.list_(pa.float32(), list_size=self._vector_dim)
-                )
+                arrays[col] = pa.array(parsed, type=pa.list_(pa.float32(), list_size=self._vector_dim))
             else:
                 arrays[col] = pa.array(values)
 
@@ -418,21 +479,30 @@ class PgVectorDb(VectorDatabase):
     Uses PostgreSQL schemas to implement namespace-based data isolation.
     """
 
-    def __init__(self, pool: ConnectionPool, config: Dict[str, Any], namespace: str = ""):
+    def __init__(
+        self,
+        pool: ConnectionPool,
+        config: Dict[str, Any],
+        namespace: str = "",
+        isolation: IsolationType = IsolationType.PHYSICAL,
+    ):
         self._pool = pool
         self._config = config
         self._namespace = namespace
-        self._schema = _validate_identifier(namespace) if namespace else "public"
+        self._isolation = isolation
         self._table_cache: Dict[tuple, PgVectorTable] = {}
+
+        if isolation == IsolationType.LOGICAL:
+            self._schema = "public"
+            self._datasource_id = namespace
+        else:
+            self._schema = _validate_identifier(namespace) if namespace else "public"
+            self._datasource_id = None
 
         # Ensure schema exists for non-public namespaces
         if self._schema != "public":
             with self._pool.connection() as conn:
-                conn.execute(
-                    psql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
-                        psql.Identifier(self._schema)
-                    )
-                )
+                conn.execute(psql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(psql.Identifier(self._schema)))
                 conn.commit()
 
     @property
@@ -453,8 +523,7 @@ class PgVectorDb(VectorDatabase):
     def table_exists(self, table_name: str) -> bool:
         with self._pool.connection() as conn:
             rows = conn.execute(
-                "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
-                "WHERE table_schema = %s AND table_name = %s)",
+                "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = %s AND table_name = %s)",
                 (self._schema, table_name),
             ).fetchone()
             if isinstance(rows, dict):
@@ -464,9 +533,7 @@ class PgVectorDb(VectorDatabase):
     def table_names(self, limit: int = 100) -> List[str]:
         with self._pool.connection() as conn:
             rows = conn.execute(
-                "SELECT table_name FROM information_schema.tables "
-                "WHERE table_schema = %s "
-                "ORDER BY table_name LIMIT %s",
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = %s ORDER BY table_name LIMIT %s",
                 (self._schema, limit),
             ).fetchall()
             return [r["table_name"] if isinstance(r, dict) else r[0] for r in rows]
@@ -492,6 +559,10 @@ class PgVectorDb(VectorDatabase):
         column_names = []
         if schema is not None:
             if isinstance(schema, pa.Schema):
+                # Inject datasource_id column for logical isolation
+                if self._isolation == IsolationType.LOGICAL:
+                    if DATASOURCE_ID_COLUMN not in schema.names:
+                        schema = schema.append(pa.field(DATASOURCE_ID_COLUMN, pa.string()))
                 ddl = schema_to_create_table_sql(qualified, schema, unique_columns=unique_columns)
                 column_names = [f.name for f in schema]
             else:
@@ -499,14 +570,26 @@ class PgVectorDb(VectorDatabase):
 
             with self._pool.connection() as conn:
                 conn.execute(ddl)
+                # Create indexes for logical isolation
+                if self._isolation == IsolationType.LOGICAL:
+                    table_token = table_name
+                    idx_name = f"idx_{table_token}_{DATASOURCE_ID_COLUMN}"
+                    conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {qualified} ({DATASOURCE_ID_COLUMN})")
+                    # Create composite unique indexes for upsert conflict targets
+                    if unique_columns:
+                        for ucol in unique_columns:
+                            _validate_identifier(ucol)
+                            comp_idx = f"idx_{table_token}_{ucol}_{DATASOURCE_ID_COLUMN}_uq"
+                            conn.execute(
+                                f"CREATE UNIQUE INDEX IF NOT EXISTS {comp_idx} "
+                                f"ON {qualified} ({ucol}, {DATASOURCE_ID_COLUMN})"
+                            )
                 conn.commit()
         elif not exist_ok:
             raise ValueError(f"Schema is required to create table '{table_name}'")
         else:
             if not self.table_exists(table_name):
-                raise ValueError(
-                    f"Table '{table_name}' does not exist and no schema was provided to create it."
-                )
+                raise ValueError(f"Table '{table_name}' does not exist and no schema was provided to create it.")
 
         table = PgVectorTable(
             table_name=qualified,
@@ -516,6 +599,8 @@ class PgVectorDb(VectorDatabase):
             source_column=source_column,
             vector_dim=vector_dim,
             column_names=column_names,
+            isolation=self._isolation,
+            datasource_id=self._datasource_id,
         )
         cache_key = (table_name, id(embedding_function), vector_dim, vector_column, source_column)
         self._table_cache[cache_key] = table
@@ -550,10 +635,7 @@ class PgVectorDb(VectorDatabase):
             column_names = [r["column_name"] if isinstance(r, dict) else r[0] for r in rows]
 
         if not column_names:
-            raise ValueError(
-                f"Table '{table_name}' not found in schema '{self._schema}'. "
-                "Use create_table() first."
-            )
+            raise ValueError(f"Table '{table_name}' not found in schema '{self._schema}'. Use create_table() first.")
 
         table = PgVectorTable(
             table_name=qualified,
@@ -563,6 +645,8 @@ class PgVectorDb(VectorDatabase):
             source_column=source_column,
             vector_dim=vector_dim,
             column_names=column_names,
+            isolation=self._isolation,
+            datasource_id=self._datasource_id,
         )
         self._table_cache[cache_key] = table
         return table
@@ -585,6 +669,12 @@ class PgVectorDb(VectorDatabase):
         return self.open_table(table_name, embedding_function, vector_column, source_column)
 
     def drop_table(self, table_name: str, ignore_missing: bool = False) -> None:
+        if self._isolation == IsolationType.LOGICAL:
+            raise RuntimeError(
+                f"drop_table('{table_name}') is not allowed in logical isolation mode "
+                "because the table is shared across all tenants. "
+                "Use delete() with a datasource_id filter to remove tenant data."
+            )
         qualified = self._qualified(table_name)
         if_exists = "IF EXISTS " if ignore_missing else ""
         sql = f"DROP TABLE {if_exists}{qualified}"
@@ -610,9 +700,11 @@ class PgvectorBackend(BaseVectorBackend):
         self._connections: List[PgVectorDb] = []
         self._pool: Optional[ConnectionPool] = None
         self._pool_lock = threading.Lock()
+        self._isolation: IsolationType = IsolationType.PHYSICAL
 
     def initialize(self, config: Dict[str, Any]) -> None:
         self._config = config
+        self._isolation = IsolationType(config.get("isolation", IsolationType.PHYSICAL.value))
 
     def _get_or_create_pool(self) -> ConnectionPool:
         """Return the shared connection pool, creating it on first use."""
@@ -648,9 +740,7 @@ class PgvectorBackend(BaseVectorBackend):
 
             # Ensure pgvector extension is available
             with pool.connection() as conn:
-                row = conn.execute(
-                    "SELECT 1 FROM pg_extension WHERE extname = 'vector'"
-                ).fetchone()
+                row = conn.execute("SELECT 1 FROM pg_extension WHERE extname = 'vector'").fetchone()
                 if not row:
                     try:
                         conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
@@ -673,7 +763,12 @@ class PgvectorBackend(BaseVectorBackend):
             namespace: Logical namespace for data isolation.
         """
         pool = self._get_or_create_pool()
-        db = PgVectorDb(pool=pool, config=self._config, namespace=namespace)
+        db = PgVectorDb(
+            pool=pool,
+            config=self._config,
+            namespace=namespace,
+            isolation=self._isolation,
+        )
         self._connections.append(db)
         return db
 
@@ -685,4 +780,3 @@ class PgvectorBackend(BaseVectorBackend):
             except Exception as e:
                 logger.warning("Error closing vector database connection pool: %s", e)
             self._pool = None
-

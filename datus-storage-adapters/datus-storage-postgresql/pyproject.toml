@@ -1,6 +1,6 @@
 [project]
 name = "datus-storage-postgresql"
-version = "0.1.1"
+version = "0.1.2"
 description = "PostgreSQL RDB and pgvector backend adapters for datus-agent"
 requires-python = ">=3.12"
 license = "Apache-2.0"
@@ -15,7 +15,7 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    "datus-storage-base>=0.1.1",
+    "datus-storage-base>=0.1.2",
     "psycopg[binary]>=3.1",
     "psycopg-pool>=3.1",
     "pgvector>=0.3.0",

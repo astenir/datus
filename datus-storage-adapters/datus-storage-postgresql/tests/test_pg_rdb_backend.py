@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import pytest
+from psycopg_pool import PoolClosed
 
 from datus_storage_base.rdb.base import (
     ColumnDef,
@@ -12,8 +13,6 @@ from datus_storage_base.rdb.base import (
     TableDefinition,
     WhereOp,
 )
-from psycopg_pool import PoolClosed
-
 from datus_storage_postgresql.rdb.backend import PgRdbDatabase, PgRdbTable, PostgresRdbBackend
 
 
@@ -57,7 +56,18 @@ def backend(pg_config):
 @pytest.fixture
 def db(backend):
     """Connect and return a PgRdbDatabase handle."""
-    return backend.connect(namespace="", store_db_name="test")
+    d = backend.connect(namespace="", store_db_name="test")
+    yield d
+    # Clean up all tables to prevent cross-test data leaks
+    try:
+        with d.get_connection() as conn:
+            rows = conn.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'").fetchall()
+            for row in rows:
+                tbl = row["tablename"] if isinstance(row, dict) else row[0]
+                conn.execute(f'DROP TABLE IF EXISTS "{tbl}" CASCADE')
+            conn.commit()
+    except Exception:
+        pass
 
 
 @pytest.fixture
@@ -83,7 +93,6 @@ def test_table_def():
 
 
 class TestBackendLifecycle:
-
     def test_initialize_missing_all_keys(self):
         b = PostgresRdbBackend()
         with pytest.raises(ValueError, match="Missing required"):
@@ -131,7 +140,6 @@ class TestBackendLifecycle:
 
 
 class TestEnsureTable:
-
     def test_returns_pg_rdb_table(self, db, test_table_def):
         table = db.ensure_table(test_table_def)
         assert isinstance(table, PgRdbTable)
@@ -210,7 +218,6 @@ class TestEnsureTable:
 
 
 class TestInsert:
-
     def test_basic(self, db, test_table_def):
         table = db.ensure_table(test_table_def)
         row_id = table.insert(TestItem(name="item1", value="val1", score=10))
@@ -232,7 +239,7 @@ class TestInsert:
     def test_none_fields_excluded(self, db, test_table_def):
         """Fields with None are excluded from INSERT, using DB defaults."""
         table = db.ensure_table(test_table_def)
-        row_id = table.insert(TestItem(name="no_score"))
+        table.insert(TestItem(name="no_score"))
         results = table.query(TestItem, where={"name": "no_score"})
         assert len(results) == 1
         # score should use DB default (0)
@@ -245,7 +252,6 @@ class TestInsert:
 
 
 class TestQuery:
-
     def test_all_rows(self, db, test_table_def):
         table = db.ensure_table(test_table_def)
         table.insert(TestItem(name="q1", value="v1", score=10))
@@ -308,9 +314,7 @@ class TestQuery:
         table = db.ensure_table(test_table_def)
         table.insert(TestItem(name="null1", value=None, score=10))
         table.insert(TestItem(name="null2", value="v2", score=20))
-        results = table.query(
-            TestItem, where=[("value", WhereOp.IS_NULL, None)]
-        )
+        results = table.query(TestItem, where=[("value", WhereOp.IS_NULL, None)])
         assert len(results) == 1
         assert results[0].name == "null1"
 
@@ -318,9 +322,7 @@ class TestQuery:
         table = db.ensure_table(test_table_def)
         table.insert(TestItem(name="nn1", value=None, score=10))
         table.insert(TestItem(name="nn2", value="v2", score=20))
-        results = table.query(
-            TestItem, where=[("value", WhereOp.IS_NOT_NULL, None)]
-        )
+        results = table.query(TestItem, where=[("value", WhereOp.IS_NOT_NULL, None)])
         assert len(results) == 1
         assert results[0].name == "nn2"
 
@@ -355,7 +357,6 @@ class TestQuery:
 
 
 class TestUpdate:
-
     def test_single_row(self, db, test_table_def):
         table = db.ensure_table(test_table_def)
         table.insert(TestItem(name="up1", value="old", score=10))
@@ -398,7 +399,6 @@ class TestUpdate:
 
 
 class TestDelete:
-
     def test_with_where(self, db, test_table_def):
         table = db.ensure_table(test_table_def)
         table.insert(TestItem(name="d1", value="v1"))
@@ -429,7 +429,6 @@ class TestDelete:
 
 
 class TestUpsert:
-
     def test_insert_new(self, db):
         table_def = TableDefinition(
             table_name="upsert_new",
@@ -485,7 +484,6 @@ class TestUpsert:
 
 
 class TestTransaction:
-
     def test_commit(self, db, test_table_def):
         table = db.ensure_table(test_table_def)
         with db.transaction():
@@ -522,7 +520,6 @@ class TestTransaction:
 
 
 class TestNamespace:
-
     def test_creates_schema(self, backend):
         db = backend.connect(namespace="test_ns_rdb", store_db_name="test")
         table_def = TableDefinition(
@@ -594,7 +591,6 @@ class TestNamespace:
 
 
 class TestConvenienceMethods:
-
     def test_execute_and_query(self, db, test_table_def):
         db.ensure_table(test_table_def)
         with db.get_connection() as conn:
@@ -651,3 +647,176 @@ class TestConvenienceMethods:
         with db.get_connection() as conn2:
             rows = db.execute_query(conn2, "SELECT name FROM test_items WHERE name = %s", ("p1",))
             assert len(rows) == 1
+
+
+# ==============================================================================
+# Logical isolation tests
+# ==============================================================================
+
+
+@pytest.fixture
+def logical_backend(pg_config):
+    """Create a PostgresRdbBackend with logical isolation."""
+    config = {**pg_config, "isolation": "logical"}
+    b = PostgresRdbBackend()
+    b.initialize(config)
+    yield b
+    b.close()
+
+
+@pytest.fixture
+def logical_db(logical_backend):
+    """Connect with a namespace under logical isolation."""
+    return logical_backend.connect(namespace="tenant_a", store_db_name="test")
+
+
+@pytest.fixture
+def logical_test_table_def():
+    """A table definition for logical isolation testing (separate from physical tests)."""
+    return TableDefinition(
+        table_name="logical_test_items",
+        columns=[
+            ColumnDef(name="id", col_type="INTEGER", primary_key=True, autoincrement=True),
+            ColumnDef(name="name", col_type="TEXT", nullable=False),
+            ColumnDef(name="value", col_type="TEXT"),
+            ColumnDef(name="score", col_type="INTEGER", default=0),
+        ],
+        indices=[
+            IndexDef(name="idx_logical_test_items_name", columns=["name"], unique=True),
+        ],
+    )
+
+
+@pytest.fixture
+def logical_table(logical_db, logical_test_table_def):
+    """Create table and clean data for logical isolation tests."""
+    table = logical_db.ensure_table(logical_test_table_def)
+    # Clean any leftover data from previous tests
+    with logical_db.get_connection() as conn:
+        conn.execute("DELETE FROM logical_test_items")
+        conn.commit()
+    return table
+
+
+class TestLogicalIsolation:
+    def test_table_in_public_schema(self, logical_db, logical_test_table_def):
+        """Logical isolation uses public schema, not namespace as schema."""
+        table = logical_db.ensure_table(logical_test_table_def)
+        assert table.table_name == "logical_test_items"  # no schema prefix
+
+    def test_datasource_id_column_created(self, logical_db, logical_test_table_def):
+        """ensure_table auto-adds datasource_id column."""
+        logical_db.ensure_table(logical_test_table_def)
+        with logical_db.get_connection() as conn:
+            rows = logical_db.execute_query(
+                conn,
+                "SELECT column_name FROM information_schema.columns WHERE table_name = %s AND column_name = %s",
+                ("logical_test_items", "datasource_id"),
+            )
+            assert len(rows) == 1
+
+    def test_datasource_id_index_created(self, logical_db, logical_test_table_def):
+        """ensure_table auto-creates B-tree index on datasource_id."""
+        logical_db.ensure_table(logical_test_table_def)
+        with logical_db.get_connection() as conn:
+            rows = logical_db.execute_query(
+                conn,
+                "SELECT indexname FROM pg_indexes WHERE tablename = %s AND indexname LIKE %s",
+                ("logical_test_items", "%datasource_id%"),
+            )
+            assert len(rows) >= 1
+
+    def test_insert_injects_datasource_id(self, logical_db, logical_table):
+        """Insert auto-injects datasource_id = namespace."""
+        logical_table.insert(TestItem(name="li1", value="v1"))
+        with logical_db.get_connection() as conn:
+            rows = logical_db.execute_query(
+                conn,
+                "SELECT datasource_id FROM logical_test_items WHERE name = %s",
+                ("li1",),
+            )
+            assert rows[0]["datasource_id"] == "tenant_a"
+
+    def test_query_filters_by_datasource_id(self, logical_backend, logical_test_table_def):
+        """Query only returns rows for the connected namespace."""
+        db_a = logical_backend.connect(namespace="tenant_a", store_db_name="test")
+        db_b = logical_backend.connect(namespace="tenant_b", store_db_name="test")
+
+        tbl_a = db_a.ensure_table(logical_test_table_def)
+        tbl_b = db_b.ensure_table(logical_test_table_def)
+
+        # Clean slate
+        with db_a.get_connection() as conn:
+            conn.execute("DELETE FROM logical_test_items")
+            conn.commit()
+
+        tbl_a.insert(TestItem(name="a1", value="from_a"))
+        tbl_b.insert(TestItem(name="b1", value="from_b"))
+        tbl_b.insert(TestItem(name="b2", value="from_b"))
+
+        assert len(tbl_a.query(TestItem)) == 1
+        assert len(tbl_b.query(TestItem)) == 2
+
+    def test_update_scoped_to_datasource(self, logical_backend, logical_test_table_def):
+        """Update only affects rows for the connected namespace."""
+        db_a = logical_backend.connect(namespace="tenant_a", store_db_name="test")
+        db_b = logical_backend.connect(namespace="tenant_b", store_db_name="test")
+
+        tbl_a = db_a.ensure_table(logical_test_table_def)
+        tbl_b = db_b.ensure_table(logical_test_table_def)
+
+        # Clean slate
+        with db_a.get_connection() as conn:
+            conn.execute("DELETE FROM logical_test_items")
+            conn.commit()
+
+        tbl_a.insert(TestItem(name="ua1", value="old"))
+        tbl_b.insert(TestItem(name="ub1", value="old"))
+
+        count = tbl_a.update({"value": "new"})
+        assert count == 1
+        assert tbl_a.query(TestItem)[0].value == "new"
+        assert tbl_b.query(TestItem)[0].value == "old"
+
+    def test_delete_scoped_to_datasource(self, logical_backend, logical_test_table_def):
+        """Delete only affects rows for the connected namespace."""
+        db_a = logical_backend.connect(namespace="tenant_a", store_db_name="test")
+        db_b = logical_backend.connect(namespace="tenant_b", store_db_name="test")
+
+        tbl_a = db_a.ensure_table(logical_test_table_def)
+        tbl_b = db_b.ensure_table(logical_test_table_def)
+
+        # Clean slate
+        with db_a.get_connection() as conn:
+            conn.execute("DELETE FROM logical_test_items")
+            conn.commit()
+
+        tbl_a.insert(TestItem(name="da1", value="v"))
+        tbl_b.insert(TestItem(name="db1", value="v"))
+
+        tbl_a.delete()
+        assert len(tbl_a.query(TestItem)) == 0
+        assert len(tbl_b.query(TestItem)) == 1
+
+    def test_upsert_injects_datasource_id(self, logical_db):
+        """Upsert auto-injects datasource_id."""
+        table_def = TableDefinition(
+            table_name="logical_upsert",
+            columns=[
+                ColumnDef(name="key_col", col_type="TEXT", primary_key=True),
+                ColumnDef(name="data", col_type="TEXT"),
+            ],
+        )
+        table = logical_db.ensure_table(table_def)
+        table.upsert(UpsertRecord(key_col="k1", data="d1"), ["key_col"])
+        results = table.query(UpsertRecord)
+        assert len(results) == 1
+        assert results[0].data == "d1"
+
+    def test_query_result_excludes_datasource_id(self, logical_table):
+        """Query results should not include datasource_id in model fields."""
+        logical_table.insert(TestItem(name="excl1", value="v1"))
+        results = logical_table.query(TestItem)
+        assert len(results) == 1
+        # TestItem has fields: id, name, value, score — no datasource_id
+        assert isinstance(results[0], TestItem)

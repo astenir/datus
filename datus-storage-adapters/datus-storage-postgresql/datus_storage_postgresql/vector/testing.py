@@ -9,6 +9,7 @@ import threading
 import uuid
 from typing import Any, Dict, Optional
 
+from datus_storage_base.backend_config import DATASOURCE_ID_COLUMN, IsolationType
 from datus_storage_base.testing import TestEnvConfig, VectorTestEnv
 
 logger = logging.getLogger(__name__)
@@ -63,10 +64,7 @@ class _SharedContainer:
 
     @classmethod
     def admin_conninfo(cls) -> str:
-        return (
-            f"host={cls._host} port={cls._port} "
-            f"user=datus_test password=datus_test dbname=datus_test"
-        )
+        return f"host={cls._host} port={cls._port} user=datus_test password=datus_test dbname=datus_test"
 
 
 class PgvectorTestEnv(VectorTestEnv):
@@ -78,6 +76,10 @@ class PgvectorTestEnv(VectorTestEnv):
     def __init__(self):
         self._dbname: Optional[str] = None
         self._config: Optional[Dict[str, Any]] = None
+        self._isolation = IsolationType.PHYSICAL
+
+    def set_isolation(self, isolation: IsolationType) -> None:
+        self._isolation = isolation
 
     def setup(self) -> None:
         import psycopg
@@ -134,26 +136,38 @@ class PgvectorTestEnv(VectorTestEnv):
             f"dbname={self._config['dbname']}"
         )
         with psycopg.connect(conninfo, autocommit=True) as conn:
-            if namespace:
-                conn.execute(
-                    sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(
-                        sql.Identifier(namespace)
-                    )
-                )
-            else:
+            if self._isolation == IsolationType.LOGICAL:
+                # Delete rows by datasource_id only in base tables that have the column
                 rows = conn.execute(
-                    "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
+                    "SELECT c.table_name FROM information_schema.columns c "
+                    "JOIN information_schema.tables t "
+                    "ON c.table_schema = t.table_schema AND c.table_name = t.table_name "
+                    "WHERE c.table_schema = 'public' AND c.column_name = %s "
+                    "AND t.table_type = 'BASE TABLE'",
+                    (DATASOURCE_ID_COLUMN,),
                 ).fetchall()
                 for row in rows:
-                    tbl = row[0] if not isinstance(row, dict) else row["tablename"]
+                    tbl = row[0] if not isinstance(row, dict) else row["table_name"]
                     conn.execute(
-                        sql.SQL("DROP TABLE IF EXISTS {} CASCADE").format(
-                            sql.Identifier(tbl)
-                        )
+                        sql.SQL("DELETE FROM {} WHERE {} = %s").format(
+                            sql.Identifier(tbl), sql.Identifier(DATASOURCE_ID_COLUMN)
+                        ),
+                        (namespace,),
                     )
+            else:
+                if namespace:
+                    conn.execute(sql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(sql.Identifier(namespace)))
+                else:
+                    rows = conn.execute("SELECT tablename FROM pg_tables WHERE schemaname = 'public'").fetchall()
+                    for row in rows:
+                        tbl = row[0] if not isinstance(row, dict) else row["tablename"]
+                        conn.execute(sql.SQL("DROP TABLE IF EXISTS {} CASCADE").format(sql.Identifier(tbl)))
 
     def get_config(self) -> TestEnvConfig:
-        return TestEnvConfig(backend_type="postgresql", params=dict(self._config or {}))
+        params = dict(self._config or {})
+        if self._isolation != IsolationType.PHYSICAL:
+            params["isolation"] = self._isolation.value
+        return TestEnvConfig(backend_type="postgresql", params=params)
 
 
 def create_test_env() -> PgvectorTestEnv:

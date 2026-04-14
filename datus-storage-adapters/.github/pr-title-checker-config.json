@@ -1,0 +1,16 @@
+{
+  "LABEL": {
+    "name": "title needs formatting",
+    "color": "EEEEEE"
+  },
+  "CHECKS": {
+    "prefixes": ["[BugFix]", "[Enhancement]", "[Feature]", "[Refactor]", "[UT]", "[Doc]", "[Tool]", "[Others]"],
+    "regexpFlags": "i",
+    "ignoreLabels" : ["dont-check-PRs-with-this-label", "meta"]
+  },
+  "MESSAGES": {
+    "success": "All OK",
+    "failure": "Missing type in the title of the pull request. [BugFix], [Enhancement], [Feature], [Refactor], [UT], [Doc], [Tool], [Others].",
+    "notice": ""
+  }
+}

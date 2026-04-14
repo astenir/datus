@@ -19,9 +19,11 @@ from psycopg import sql as psql
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
+from datus_storage_base.backend_config import DATASOURCE_ID_COLUMN, IsolationType
 from datus_storage_base.rdb.base import (
     BaseRdbBackend,
     ColumnDef,
+    IndexDef,
     IntegrityError,
     RdbDatabase,
     RdbTable,
@@ -93,11 +95,35 @@ def _pg_col_ddl(col: ColumnDef) -> str:
 class PgRdbTable(RdbTable):
     """PostgreSQL implementation of RdbTable (table-level CRUD)."""
 
-    def __init__(self, pool: ConnectionPool, qualified_name: str, local: threading.local, pk_column: str = "id"):
+    def __init__(
+        self,
+        pool: ConnectionPool,
+        qualified_name: str,
+        local: threading.local,
+        pk_column: str = "id",
+        isolation: IsolationType = IsolationType.PHYSICAL,
+        datasource_id: Optional[str] = None,
+    ):
         self._pool = pool
         self._qualified_name = qualified_name
         self._local = local
         self._pk_column = pk_column
+        self._isolation = isolation
+        self._datasource_id = datasource_id
+
+    def _inject_datasource_where(self, where: Optional[WhereClause]) -> Optional[WhereClause]:
+        """Prepend datasource_id condition for logical isolation."""
+        if self._isolation != IsolationType.LOGICAL or self._datasource_id is None:
+            return where
+        ds_condition = (DATASOURCE_ID_COLUMN, WhereOp.EQ, self._datasource_id)
+        conditions = _normalize_where(where)
+        return [ds_condition] + conditions
+
+    def _inject_datasource_into_record(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Add datasource_id to a record dict for logical isolation."""
+        if self._isolation != IsolationType.LOGICAL or self._datasource_id is None:
+            return data
+        return {**data, DATASOURCE_ID_COLUMN: self._datasource_id}
 
     @property
     def table_name(self) -> str:
@@ -154,13 +180,16 @@ class PgRdbTable(RdbTable):
 
     def insert(self, record: Any) -> int:
         data = {k: v for k, v in dataclasses.asdict(record).items() if v is not None}
+        data = self._inject_datasource_into_record(data)
         if not data:
             sql = f"INSERT INTO {self._qualified_name} DEFAULT VALUES RETURNING {self._pk_column}"
         else:
             columns = [_validate_identifier(k) for k in data.keys()]
             placeholders = ", ".join(["%s"] * len(columns))
             col_names = ", ".join(columns)
-            sql = f"INSERT INTO {self._qualified_name} ({col_names}) VALUES ({placeholders}) RETURNING {self._pk_column}"
+            sql = (
+                f"INSERT INTO {self._qualified_name} ({col_names}) VALUES ({placeholders}) RETURNING {self._pk_column}"
+            )
         try:
             with self._auto_conn() as conn:
                 cursor = conn.execute(sql, tuple(data.values()))
@@ -185,6 +214,7 @@ class PgRdbTable(RdbTable):
         columns: Optional[List[str]] = None,
         order_by: Optional[List[str]] = None,
     ) -> List[T]:
+        where = self._inject_datasource_where(where)
         if columns:
             for c in columns:
                 _validate_identifier(c)
@@ -195,9 +225,17 @@ class PgRdbTable(RdbTable):
         with self._auto_conn() as conn:
             cursor = conn.execute(sql, params)
             rows = cursor.fetchall()
-            return [model(**dict(row)) for row in rows]
+            results = []
+            for row in rows:
+                row_dict = dict(row)
+                row_dict.pop(DATASOURCE_ID_COLUMN, None)
+                results.append(model(**row_dict))
+            return results
 
     def update(self, data: Dict[str, Any], where: Optional[WhereClause] = None) -> int:
+        if self._isolation == IsolationType.LOGICAL and DATASOURCE_ID_COLUMN in data:
+            raise ValueError(f"{DATASOURCE_ID_COLUMN} is managed internally and cannot be updated")
+        where = self._inject_datasource_where(where)
         if not data:
             return 0
         for col in data.keys():
@@ -220,6 +258,7 @@ class PgRdbTable(RdbTable):
             raise
 
     def delete(self, where: Optional[WhereClause] = None) -> int:
+        where = self._inject_datasource_where(where)
         where_sql, params = self._build_where(where)
         sql = f"DELETE FROM {self._qualified_name}{where_sql}"
         with self._auto_conn() as conn:
@@ -228,8 +267,12 @@ class PgRdbTable(RdbTable):
 
     def upsert(self, record: Any, conflict_columns: List[str]) -> None:
         data = {k: v for k, v in dataclasses.asdict(record).items() if v is not None}
+        data = self._inject_datasource_into_record(data)
         if not data:
             raise ValueError("Cannot upsert a record with no non-None fields")
+        # In logical mode, scope conflict target to tenant
+        if self._isolation == IsolationType.LOGICAL and DATASOURCE_ID_COLUMN not in conflict_columns:
+            conflict_columns = list(conflict_columns) + [DATASOURCE_ID_COLUMN]
         columns = [_validate_identifier(k) for k in data.keys()]
         placeholders = ", ".join(["%s"] * len(columns))
         col_names = ", ".join(columns)
@@ -267,21 +310,30 @@ class PgRdbTable(RdbTable):
 class PgRdbDatabase(RdbDatabase):
     """PostgreSQL implementation of RdbDatabase (DDL + transaction)."""
 
-    def __init__(self, pool: ConnectionPool, namespace: str = "", store_db_name: str = ""):
+    def __init__(
+        self,
+        pool: ConnectionPool,
+        namespace: str = "",
+        store_db_name: str = "",
+        isolation: IsolationType = IsolationType.PHYSICAL,
+    ):
         self._pool = pool
         self._namespace = namespace
         self._store_db_name = store_db_name
-        self._schema = _validate_identifier(namespace) if namespace else "public"
+        self._isolation = isolation
         self._local = threading.local()
+
+        if isolation == IsolationType.LOGICAL:
+            self._schema = "public"
+            self._datasource_id = namespace
+        else:
+            self._schema = _validate_identifier(namespace) if namespace else "public"
+            self._datasource_id = None
 
         # Ensure schema exists for non-public namespaces
         if self._schema != "public":
             with self._pool.connection() as conn:
-                conn.execute(
-                    psql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(
-                        psql.Identifier(self._schema)
-                    )
-                )
+                conn.execute(psql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(psql.Identifier(self._schema)))
                 conn.commit()
 
     @property
@@ -308,9 +360,7 @@ class PgRdbDatabase(RdbDatabase):
         col_parts.extend(table_def.constraints)
 
         create_table = (
-            f"CREATE TABLE IF NOT EXISTS {qualified_name} (\n"
-            + ",\n".join(f"    {p}" for p in col_parts)
-            + "\n)"
+            f"CREATE TABLE IF NOT EXISTS {qualified_name} (\n" + ",\n".join(f"    {p}" for p in col_parts) + "\n)"
         )
         statements.append(create_table)
 
@@ -318,15 +368,70 @@ class PgRdbDatabase(RdbDatabase):
             unique = "UNIQUE " if idx.unique else ""
             idx_name = _validate_identifier(idx.name)
             cols = ", ".join(_validate_identifier(c) for c in idx.columns)
-            statements.append(
-                f"CREATE {unique}INDEX IF NOT EXISTS {idx_name} ON {qualified_name}({cols})"
-            )
+            statements.append(f"CREATE {unique}INDEX IF NOT EXISTS {idx_name} ON {qualified_name}({cols})")
 
         return statements
 
     def ensure_table(self, table_def: TableDefinition) -> PgRdbTable:
+        # For logical isolation, inject datasource_id column if not present
+        if self._isolation == IsolationType.LOGICAL:
+            has_datasource_col = any(c.name == DATASOURCE_ID_COLUMN for c in table_def.columns)
+            if not has_datasource_col:
+                extra_col = ColumnDef(
+                    name=DATASOURCE_ID_COLUMN,
+                    col_type="TEXT",
+                    nullable=False,
+                )
+                # Add datasource_id to unique indices so tenants don't conflict
+                patched_indices = []
+                for idx in table_def.indices:
+                    if idx.unique and DATASOURCE_ID_COLUMN not in idx.columns:
+                        patched_indices.append(
+                            IndexDef(
+                                name=idx.name,
+                                columns=list(idx.columns) + [DATASOURCE_ID_COLUMN],
+                                unique=True,
+                            )
+                        )
+                    else:
+                        patched_indices.append(idx)
+                # Add composite unique index for PK + datasource_id (needed for upsert ON CONFLICT)
+                pk_cols = [c.name for c in table_def.columns if c.primary_key]
+                if pk_cols:
+                    patched_indices.append(
+                        IndexDef(
+                            name=f"idx_{table_def.table_name}_pk_{DATASOURCE_ID_COLUMN}",
+                            columns=pk_cols + [DATASOURCE_ID_COLUMN],
+                            unique=True,
+                        )
+                    )
+                # Add standalone datasource_id index for filtering
+                patched_indices.append(
+                    IndexDef(
+                        name=f"idx_{table_def.table_name}_{DATASOURCE_ID_COLUMN}",
+                        columns=[DATASOURCE_ID_COLUMN],
+                    )
+                )
+                table_def = TableDefinition(
+                    table_name=table_def.table_name,
+                    columns=list(table_def.columns) + [extra_col],
+                    indices=patched_indices,
+                    constraints=list(table_def.constraints),
+                )
+
         qualified = self._qualified(table_def.table_name)
         ddl_statements = self._generate_ddl(qualified, table_def)
+
+        # For logical isolation, ensure datasource_id exists on pre-existing tables.
+        # CREATE TABLE IF NOT EXISTS is a no-op when the table already exists, so the
+        # column would be missing and subsequent CREATE INDEX statements would fail.
+        if self._isolation == IsolationType.LOGICAL:
+            ddl_statements.insert(
+                1,
+                f"ALTER TABLE {qualified} "
+                f"ADD COLUMN IF NOT EXISTS {DATASOURCE_ID_COLUMN} TEXT NOT NULL DEFAULT ''",
+            )
+
         try:
             with self._pool.connection() as conn:
                 for stmt in ddl_statements:
@@ -336,8 +441,7 @@ class PgRdbDatabase(RdbDatabase):
             ddl_text = "\n".join(ddl_statements)
             logger.exception("Auto-create table '%s' failed", table_def.table_name)
             raise RuntimeError(
-                f"Failed to create table '{table_def.table_name}'. "
-                f"Please create it manually:\n\n{ddl_text}"
+                f"Failed to create table '{table_def.table_name}'. Please create it manually:\n\n{ddl_text}"
             ) from e
 
         pk_column = "id"
@@ -346,7 +450,14 @@ class PgRdbDatabase(RdbDatabase):
                 pk_column = col.name
                 break
 
-        return PgRdbTable(self._pool, qualified, self._local, pk_column=pk_column)
+        return PgRdbTable(
+            self._pool,
+            qualified,
+            self._local,
+            pk_column=pk_column,
+            isolation=self._isolation,
+            datasource_id=self._datasource_id,
+        )
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
@@ -425,6 +536,7 @@ class PostgresRdbBackend(BaseRdbBackend):
         self._databases: List[PgRdbDatabase] = []
         self._pool: Optional[ConnectionPool] = None
         self._pool_lock = threading.Lock()
+        self._isolation: IsolationType = IsolationType.PHYSICAL
 
     def initialize(self, config: Dict[str, Any]) -> None:
         _REQUIRED_KEYS = ("host", "port", "user", "password", "dbname")
@@ -432,6 +544,7 @@ class PostgresRdbBackend(BaseRdbBackend):
         if missing:
             raise ValueError(f"Missing required PostgreSQL config keys: {', '.join(missing)}")
         self._config = config
+        self._isolation = IsolationType(config.get("isolation", IsolationType.PHYSICAL.value))
 
     def _get_or_create_pool(self) -> ConnectionPool:
         """Return the shared connection pool, creating it on first use."""
@@ -467,7 +580,12 @@ class PostgresRdbBackend(BaseRdbBackend):
             store_db_name: Logical store identifier.
         """
         pool = self._get_or_create_pool()
-        db = PgRdbDatabase(pool=pool, namespace=namespace, store_db_name=store_db_name)
+        db = PgRdbDatabase(
+            pool=pool,
+            namespace=namespace,
+            store_db_name=store_db_name,
+            isolation=self._isolation,
+        )
         self._databases.append(db)
         return db
 
@@ -479,4 +597,3 @@ class PostgresRdbBackend(BaseRdbBackend):
             except Exception as e:
                 logger.warning("Error closing connection pool: %s", e)
             self._pool = None
-
