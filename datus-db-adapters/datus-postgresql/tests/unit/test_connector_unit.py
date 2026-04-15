@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -193,28 +193,28 @@ def test_sys_schemas():
 @pytest.mark.acceptance
 def test_quote_identifier_basic():
     """Test _quote_identifier with basic identifier."""
-    assert PostgreSQLConnector._quote_identifier("table_name") == '"table_name"'
+    assert PostgreSQLConnector.quote_identifier(MagicMock(), "table_name") == '"table_name"'
 
 
 @pytest.mark.acceptance
 def test_quote_identifier_with_double_quotes():
     """Test _quote_identifier escapes double quotes."""
-    assert PostgreSQLConnector._quote_identifier('table"name') == '"table""name"'
+    assert PostgreSQLConnector.quote_identifier(MagicMock(), 'table"name') == '"table""name"'
 
 
 def test_quote_identifier_with_multiple_double_quotes():
     """Test _quote_identifier escapes multiple double quotes."""
-    assert PostgreSQLConnector._quote_identifier('ta"ble"name') == '"ta""ble""name"'
+    assert PostgreSQLConnector.quote_identifier(MagicMock(), 'ta"ble"name') == '"ta""ble""name"'
 
 
 def test_quote_identifier_empty_string():
     """Test _quote_identifier with empty string."""
-    assert PostgreSQLConnector._quote_identifier("") == '""'
+    assert PostgreSQLConnector.quote_identifier(MagicMock(), "") == '""'
 
 
 def test_quote_identifier_special_characters():
     """Test _quote_identifier with special characters."""
-    assert PostgreSQLConnector._quote_identifier("table-name_123") == '"table-name_123"'
+    assert PostgreSQLConnector.quote_identifier(MagicMock(), "table-name_123") == '"table-name_123"'
 
 
 @pytest.mark.acceptance

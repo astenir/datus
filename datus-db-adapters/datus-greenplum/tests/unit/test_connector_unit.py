@@ -161,13 +161,13 @@ def test_sys_schemas():
 @pytest.mark.acceptance
 def test_quote_identifier_basic():
     """Test _quote_identifier with basic identifier."""
-    assert GreenplumConnector._quote_identifier("table_name") == '"table_name"'
+    assert GreenplumConnector.quote_identifier(MagicMock(), "table_name") == '"table_name"'
 
 
 @pytest.mark.acceptance
 def test_quote_identifier_with_double_quotes():
     """Test _quote_identifier escapes double quotes."""
-    assert GreenplumConnector._quote_identifier('table"name') == '"table""name"'
+    assert GreenplumConnector.quote_identifier(MagicMock(), 'table"name') == '"table""name"'
 
 
 @pytest.mark.acceptance

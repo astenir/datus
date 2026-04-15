@@ -112,7 +112,7 @@ class SparkConnector(SQLAlchemyConnector):
     def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """Get list of table names."""
         db = database_name or self.database_name
-        result = self._execute_pandas(f"SHOW TABLES IN {self._quote_identifier(db)}")
+        result = self._execute_pandas(f"SHOW TABLES IN {self.quote_identifier(db)}")
         if result.empty:
             return []
         # SHOW TABLES returns (namespace, tableName, isTemporary) in Spark 3.x
@@ -128,7 +128,7 @@ class SparkConnector(SQLAlchemyConnector):
         """Get list of view names."""
         db = database_name or self.database_name
         try:
-            result = self._execute_pandas(f"SHOW VIEWS IN {self._quote_identifier(db)}")
+            result = self._execute_pandas(f"SHOW VIEWS IN {self.quote_identifier(db)}")
             if result.empty:
                 return []
             if len(result.columns) >= 2:
@@ -191,15 +191,15 @@ class SparkConnector(SQLAlchemyConnector):
         if database_name:
             from sqlalchemy import text
 
-            self.connection.execute(text(f"USE {self._quote_identifier(database_name)}"))
+            self.connection.execute(text(f"USE {self.quote_identifier(database_name)}"))
             self.connection.commit()
 
     # ==================== Utility Methods ====================
 
-    @staticmethod
-    def _quote_identifier(identifier: str) -> str:
-        """Safely wrap identifiers with backticks for Spark."""
-        escaped = identifier.replace("`", "``")
+    @override
+    def quote_identifier(self, name: str) -> str:
+        """Quote identifiers with backticks for Spark."""
+        escaped = name.replace("`", "``")
         return f"`{escaped}`"
 
     @override
@@ -217,8 +217,8 @@ class SparkConnector(SQLAlchemyConnector):
         """
         db = database_name or self.database_name
         if db:
-            return f"{self._quote_identifier(db)}.{self._quote_identifier(table_name)}"
-        return self._quote_identifier(table_name)
+            return f"{self.quote_identifier(db)}.{self.quote_identifier(table_name)}"
+        return self.quote_identifier(table_name)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert connector to serializable dictionary."""

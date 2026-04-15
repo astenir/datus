@@ -82,13 +82,13 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         already_connected = self.engine and self.connection and self._owns_engine
         super().connect()
         if not already_connected and self.catalog_name and self.catalog_name != self.default_catalog():
-            self.connection.execute(text(f"SET CATALOG {self._quote_identifier(self.catalog_name)}"))
+            self.connection.execute(text(f"SET CATALOG {self.quote_identifier(self.catalog_name)}"))
             self.connection.commit()
             logger.debug(f"Switched to catalog on first connect: {self.catalog_name}")
 
             # Now that the catalog is set, switch to the deferred database
             if self._deferred_database:
-                self.connection.execute(text(f"USE {self._quote_identifier(self._deferred_database)}"))
+                self.connection.execute(text(f"USE {self.quote_identifier(self._deferred_database)}"))
                 self.connection.commit()
                 self.database_name = self._deferred_database
                 logger.debug(f"Switched to deferred database: {self._deferred_database}")
@@ -141,11 +141,11 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
     def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
         """Switch catalog and/or database context on the persistent connection."""
         if catalog_name:
-            self.connection.execute(text(f"SET CATALOG {self._quote_identifier(catalog_name)}"))
+            self.connection.execute(text(f"SET CATALOG {self.quote_identifier(catalog_name)}"))
             self.connection.commit()
             logger.debug(f"Switched catalog to: {catalog_name}")
         if database_name:
-            self.connection.execute(text(f"USE {self._quote_identifier(database_name)}"))
+            self.connection.execute(text(f"USE {self.quote_identifier(database_name)}"))
             self.connection.commit()
 
     # ==================== Metadata Retrieval (Stateless, Catalog-Qualified) ====================
@@ -181,7 +181,7 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         # Use catalog-qualified information_schema — no SET CATALOG needed
         query = (
             f"SELECT TABLE_SCHEMA, TABLE_NAME "
-            f"FROM {self._quote_identifier(current_catalog)}.information_schema.{metadata_config.info_table} "
+            f"FROM {self.quote_identifier(current_catalog)}.information_schema.{metadata_config.info_table} "
             f"WHERE {where} {type_filter}"
         )
 
@@ -247,7 +247,7 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         # Use catalog-qualified information_schema
         query_sql = (
             f"SELECT TABLE_SCHEMA, TABLE_NAME, MATERIALIZED_VIEW_DEFINITION "
-            f"FROM {self._quote_identifier(current_catalog)}.information_schema.materialized_views"
+            f"FROM {self.quote_identifier(current_catalog)}.information_schema.materialized_views"
         )
 
         if database_name:
@@ -291,7 +291,7 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
     def get_databases(self, catalog_name: str = "", include_sys: bool = False) -> List[str]:
         """Get list of databases using catalog-qualified SHOW DATABASES."""
         current_catalog = self._resolve_catalog(catalog_name)
-        result = self._execute_pandas(f"SHOW DATABASES FROM {self._quote_identifier(current_catalog)}")
+        result = self._execute_pandas(f"SHOW DATABASES FROM {self.quote_identifier(current_catalog)}")
         if result.empty:
             return []
         databases = result.iloc[:, 0].tolist()

@@ -108,10 +108,10 @@ class MySQLConnector(SQLAlchemyConnector):
 
     # ==================== Utility Methods ====================
 
-    @staticmethod
-    def _quote_identifier(identifier: str) -> str:
-        """Safely wrap identifiers with backticks for MySQL-compatible dialects."""
-        escaped = identifier.replace("`", "``")
+    @override
+    def quote_identifier(self, name: str) -> str:
+        """Quote identifiers with backticks for MySQL-compatible dialects."""
+        escaped = name.replace("`", "``")
         return f"`{escaped}`"
 
     # ==================== Metadata Retrieval ====================
@@ -334,7 +334,7 @@ class MySQLConnector(SQLAlchemyConnector):
         """Switch database context using USE statement on the persistent connection."""
 
         if database_name:
-            self.connection.execute(text(f"USE {self._quote_identifier(database_name)}"))
+            self.connection.execute(text(f"USE {self.quote_identifier(database_name)}"))
             self.connection.commit()
 
     # ==================== Sample Data ====================
@@ -422,8 +422,8 @@ class MySQLConnector(SQLAlchemyConnector):
     ) -> str:
         """Build fully-qualified table name."""
         if database_name:
-            return f"{self._quote_identifier(database_name)}.{self._quote_identifier(table_name)}"
-        return self._quote_identifier(table_name)
+            return f"{self.quote_identifier(database_name)}.{self.quote_identifier(table_name)}"
+        return self.quote_identifier(table_name)
 
     @override
     def _reset_filter_tables(

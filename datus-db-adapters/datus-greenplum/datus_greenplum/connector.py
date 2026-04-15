@@ -93,7 +93,7 @@ class GreenplumConnector(PostgreSQLConnector):
             if result.empty or (len(result) == 1 and result["attname"][0] is None):
                 return "DISTRIBUTED RANDOMLY"
 
-            dist_cols = [self._quote_identifier(row) for row in result["attname"].tolist() if row is not None]
+            dist_cols = [self.quote_identifier(row) for row in result["attname"].tolist() if row is not None]
             if dist_cols:
                 return f"DISTRIBUTED BY ({', '.join(dist_cols)})"
             return "DISTRIBUTED RANDOMLY"
