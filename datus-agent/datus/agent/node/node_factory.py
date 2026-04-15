@@ -60,6 +60,16 @@ def create_interactive_node(
 
             return GenTableAgenticNode(agent_config=agent_config, execution_mode="interactive")
 
+        elif subagent_name == "gen_job":
+            from datus.agent.node.gen_job_agentic_node import GenJobAgenticNode
+
+            return GenJobAgenticNode(agent_config=agent_config, execution_mode="interactive")
+
+        elif subagent_name == "migration":
+            from datus.agent.node.migration_agentic_node import MigrationAgenticNode
+
+            return MigrationAgenticNode(agent_config=agent_config, execution_mode="interactive")
+
         elif subagent_name == "gen_report" or node_class_type == "gen_report":
             from datus.agent.node.gen_report_agentic_node import GenReportAgenticNode
 
@@ -72,6 +82,26 @@ def create_interactive_node(
                 tools=None,
                 node_name=subagent_name,
                 scope=scope,
+            )
+
+        elif subagent_name == "explore" or node_class_type == "explore":
+            # Wire the read-only `explore` sub-agent into the interactive
+            # path. `ExploreAgenticNode` is a first-class node type (see
+            # datus/configuration/node_type.py TYPE_EXPLORE) that exposes
+            # db_tools / context_search / filesystem in read-only mode. It's
+            # used by the DAComp runner to chain explore -> dbt_layered so
+            # the second agent sees pre-flight data-reality findings in its
+            # user prompt instead of having to run the discovery itself.
+            from datus.agent.node.explore_agentic_node import ExploreAgenticNode
+
+            return ExploreAgenticNode(
+                node_id=f"{subagent_name}{node_id_suffix}",
+                description=f"Explore node for {subagent_name}",
+                node_type="explore",
+                input_data=None,
+                agent_config=agent_config,
+                tools=None,
+                node_name=subagent_name,
             )
 
         elif subagent_name == "gen_skill":
@@ -120,6 +150,7 @@ def create_node_input(
     catalog: Optional[str] = None,
     database: Optional[str] = None,
     db_schema: Optional[str] = None,
+    scoped_tables=None,
     at_tables=None,
     at_metrics=None,
     at_sqls=None,
@@ -141,14 +172,25 @@ def create_node_input(
         plan_mode: Whether to enable plan mode.
     """
     from datus.agent.node.gen_ext_knowledge_agentic_node import GenExtKnowledgeAgenticNode
+    from datus.agent.node.gen_job_agentic_node import GenJobAgenticNode
     from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
     from datus.agent.node.gen_report_agentic_node import GenReportAgenticNode
     from datus.agent.node.gen_semantic_model_agentic_node import GenSemanticModelAgenticNode
     from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode
     from datus.agent.node.gen_table_agentic_node import GenTableAgenticNode
+    from datus.agent.node.migration_agentic_node import MigrationAgenticNode
     from datus.agent.node.sql_summary_agentic_node import SqlSummaryAgenticNode
 
-    if isinstance(node, (GenSemanticModelAgenticNode, GenMetricsAgenticNode, GenTableAgenticNode)):
+    if isinstance(
+        node,
+        (
+            GenSemanticModelAgenticNode,
+            GenMetricsAgenticNode,
+            GenTableAgenticNode,
+            GenJobAgenticNode,
+            MigrationAgenticNode,
+        ),
+    ):
         from datus.schemas.semantic_agentic_node_models import SemanticNodeInput
 
         return SemanticNodeInput(
@@ -204,6 +246,22 @@ def create_node_input(
             reference_sql=at_sqls,
             prompt_language=prompt_language,
             plan_mode=plan_mode,
+        )
+
+    # ExploreAgenticNode is a read-only data exploration node. It takes
+    # ExploreNodeInput (user_message + optional database). This branch is
+    # required for the DAComp runner's explore -> dbt_layered chain where
+    # the runner instantiates an `explore` sub-agent via
+    # create_interactive_node() and then needs a matching input type.
+    from datus.agent.node.explore_agentic_node import ExploreAgenticNode
+
+    if isinstance(node, ExploreAgenticNode):
+        from datus.schemas.explore_agentic_node_models import ExploreNodeInput
+
+        return ExploreNodeInput(
+            user_message=user_message,
+            database=database,
+            scoped_tables=list(scoped_tables) if scoped_tables else None,
         )
 
     from datus.agent.node.gen_skill_agentic_node import SkillCreatorAgenticNode

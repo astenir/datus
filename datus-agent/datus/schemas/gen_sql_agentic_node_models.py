@@ -35,6 +35,10 @@ class GenSQLNodeInput(BaseInput):
     schemas: Optional[list[TableSchema]] = Field(default=None, description="Table schemas to use")
     metrics: Optional[list[Metric]] = Field(default=None, description="Metrics to use")
     reference_sql: Optional[list[ReferenceSql]] = Field(default=None, description="Reference SQL to reference")
+    reference_date: Optional[str] = Field(
+        default=None,
+        description="Pinned reference date for deterministic SQL generation and validation",
+    )
     plan_mode: bool = Field(default=False, description="Enable plan mode for multi-step task planning")
     auto_execute_plan: bool = Field(default=False, description="Auto-execute plan without confirmation")
 

@@ -4,6 +4,7 @@
 
 import io
 import json
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, time
@@ -208,6 +209,21 @@ def llm_result2json(llm_str: str, expected_type: type[Dict | List] = dict) -> Un
         # Ensure the result is of the expected type (dict or list)
         if not isinstance(result, (dict, list)):
             return None
+
+        # Scrub bogus backslash escapes in the `sql` field. Some LLMs
+        # emit `\(` / `\)` / `\[` / `\]` / `\;` in JSON strings when they
+        # get confused between SQL, regex, and LaTeX contexts. These
+        # sequences are never valid in any SQL dialect; their presence
+        # is always a model mistake and left intact they cause
+        # downstream parser errors. Strip only the backslash, keep the
+        # character itself — but preserve content inside single-quoted
+        # string literals to avoid corrupting legitimate SQL values.
+        if isinstance(result, dict) and isinstance(result.get("sql"), str):
+            result["sql"] = re.sub(
+                r"'(?:''|[^'])*'|\\([()[\];])",
+                lambda m: m.group(0) if m.group(1) is None else m.group(1),
+                result["sql"],
+            )
 
         # If it's a dict, check if it has meaningful content
         if isinstance(result, dict):

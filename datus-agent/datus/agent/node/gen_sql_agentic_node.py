@@ -96,6 +96,10 @@ class GenSQLAgenticNode(AgenticNode):
         self.filesystem_func_tool: Optional[FilesystemFuncTool] = None
         self._platform_doc_tool: Optional[PlatformDocSearchTool] = None
         self.reference_template_tools: Optional[ReferenceTemplateTools] = None
+        # PlanTool instance when `plan_tools` is declared in the sub-agent's
+        # `tools:` list. Distinct from `plan_hooks` below, which is only
+        # active in full plan_mode workflows.
+        self.plan_tool = None
 
         # Initialize plan mode attributes
         self.plan_mode_active = False
@@ -176,6 +180,7 @@ class GenSQLAgenticNode(AgenticNode):
                 db_schema=workflow.task.schema_name,
                 schemas=workflow.context.table_schemas,
                 metrics=workflow.context.metrics,
+                reference_date=workflow.task.current_date,
                 plan_mode=plan_mode,
                 auto_execute_plan=auto_execute_plan,
             )
@@ -188,6 +193,7 @@ class GenSQLAgenticNode(AgenticNode):
             self.input.db_schema = workflow.task.schema_name
             self.input.schemas = workflow.context.table_schemas
             self.input.metrics = workflow.context.metrics
+            self.input.reference_date = workflow.task.current_date
             self.input.plan_mode = plan_mode
             self.input.auto_execute_plan = auto_execute_plan
 
@@ -263,16 +269,35 @@ class GenSQLAgenticNode(AgenticNode):
         except Exception as e:
             logger.error(f"Failed to setup platform_doc_search tools: {e}")
 
+    def _needs_multi_connector(self) -> bool:
+        """Check if the current node config requires multi-connector mode.
+
+        Multi-connector mode is needed when the node uses tools that access
+        multiple databases (e.g. transfer_query_result for cross-db migration).
+        """
+        tools_str = self.node_config.get("tools", "")
+        return "transfer_query_result" in tools_str
+
     def _setup_db_tools(self):
-        """Setup database tools."""
+        """Setup database tools.
+
+        Uses multi-connector mode (DBManager) when the node needs cross-database
+        access (e.g. migration subagent), otherwise single-connector mode.
+        """
         try:
-            db_manager = db_manager_instance(self.agent_config.namespaces)
-            conn = db_manager.get_conn(self.agent_config.current_database, self.agent_config.current_database)
-            self.db_func_tool = DBFuncTool(
-                conn,
-                agent_config=self.agent_config,
-                sub_agent_name=self.node_config.get("system_prompt"),
-            )
+            if self._needs_multi_connector():
+                self.db_func_tool = DBFuncTool.create_dynamic(
+                    self.agent_config,
+                    sub_agent_name=self.node_config.get("system_prompt"),
+                )
+            else:
+                db_manager = db_manager_instance(self.agent_config.namespaces)
+                conn = db_manager.get_conn(self.agent_config.current_database, self.agent_config.current_database)
+                self.db_func_tool = DBFuncTool(
+                    conn,
+                    agent_config=self.agent_config,
+                    sub_agent_name=self.node_config.get("system_prompt"),
+                )
             self.tools.extend(self.db_func_tool.available_tools())
         except Exception as e:
             logger.error(f"Failed to setup database tools: {e}")
@@ -321,6 +346,26 @@ class GenSQLAgenticNode(AgenticNode):
         except Exception as e:
             logger.error(f"Failed to setup date parsing tools: {e}")
 
+    def _setup_plan_tools(self):
+        """Setup plan/todo tools so the agent can track multi-step work.
+
+        PlanTool exposes `todo_read`, `todo_write`, and `todo_update`, backed
+        by the agent's conversation session. Unlike plan_mode — which is a
+        full interactive replan workflow — this just makes the todo surface
+        available as regular function tools, so a long-horizon task (e.g.
+        generating a complex marts table with 30+ output columns) can write
+        a plan up front and check off items as it goes, avoiding
+        MaxTurnsExceeded and drift.
+        """
+        try:
+            from datus.tools.func_tool.plan_tools import PlanTool
+
+            session, _ = self._get_or_create_session()
+            self.plan_tool = PlanTool(session)
+            self.tools.extend(self.plan_tool.available_tools())
+        except Exception as e:
+            logger.error(f"Failed to setup plan tools: {e}")
+
     def _setup_filesystem_tools(self):
         """Setup filesystem tools (all available tools)."""
         try:
@@ -345,6 +390,8 @@ class GenSQLAgenticNode(AgenticNode):
                     self._setup_reference_template_tools()
                 elif base_type == "date_parsing_tools":
                     self._setup_date_parsing_tools()
+                elif base_type == "plan_tools":
+                    self._setup_plan_tools()
                 elif base_type == "filesystem_tools":
                     self._setup_filesystem_tools()
                 elif base_type == "platform_doc_tools":
@@ -361,6 +408,8 @@ class GenSQLAgenticNode(AgenticNode):
                 self._setup_reference_template_tools()
             elif pattern == "date_parsing_tools":
                 self._setup_date_parsing_tools()
+            elif pattern == "plan_tools":
+                self._setup_plan_tools()
             elif pattern == "filesystem_tools":
                 self._setup_filesystem_tools()
             elif pattern == "platform_doc_tools":
@@ -386,13 +435,21 @@ class GenSQLAgenticNode(AgenticNode):
                 tool_instance = self.context_search_tools
             elif tool_type == "db_tools":
                 if not self.db_func_tool:
-                    db_manager = db_manager_instance(self.agent_config.namespaces)
-                    conn = db_manager.get_conn(self.agent_config.current_database, self.agent_config.current_database)
-                    self.db_func_tool = DBFuncTool(
-                        conn,
-                        agent_config=self.agent_config,
-                        sub_agent_name=self.node_config.get("system_prompt"),
-                    )
+                    if self._needs_multi_connector():
+                        self.db_func_tool = DBFuncTool.create_dynamic(
+                            self.agent_config,
+                            sub_agent_name=self.node_config.get("system_prompt"),
+                        )
+                    else:
+                        db_manager = db_manager_instance(self.agent_config.namespaces)
+                        conn = db_manager.get_conn(
+                            self.agent_config.current_database, self.agent_config.current_database
+                        )
+                        self.db_func_tool = DBFuncTool(
+                            conn,
+                            agent_config=self.agent_config,
+                            sub_agent_name=self.node_config.get("system_prompt"),
+                        )
                 tool_instance = self.db_func_tool
             elif tool_type == "date_parsing_tools":
                 if not self.date_parsing_tools:
@@ -692,8 +749,6 @@ class GenSQLAgenticNode(AgenticNode):
             response_content = ""
             sql_content = None
             tokens_used = 0
-            last_successful_output = None
-
             logger.debug(f"Tools available : {len(self.tools)} tools - {[tool.name for tool in self.tools]}")
             logger.debug(f"MCP servers available : {len(self.mcp_servers)} servers - {list(self.mcp_servers.keys())}")
 
@@ -710,56 +765,7 @@ class GenSQLAgenticNode(AgenticNode):
             ):
                 yield stream_action
 
-                # Collect response content from successful actions
-                if stream_action.status == ActionStatus.SUCCESS and stream_action.output:
-                    if isinstance(stream_action.output, dict):
-                        last_successful_output = stream_action.output
-                        # Look for content in various possible fields
-                        response_content = (
-                            stream_action.output.get("content", "")
-                            or stream_action.output.get("response", "")
-                            or stream_action.output.get("raw_output", "")
-                            or response_content
-                        )
-
-            # If we still don't have response_content, check the last successful output
-            if not response_content and last_successful_output:
-                logger.debug(f"Trying to extract response from last_successful_output: {last_successful_output}")
-                # Try different fields that might contain the response
-                response_content = (
-                    last_successful_output.get("content", "")
-                    or last_successful_output.get("text", "")
-                    or last_successful_output.get("response", "")
-                    or last_successful_output.get("raw_output", "")
-                    or str(last_successful_output)  # Fallback to string representation
-                )
-
-            # Extract SQL directly from summary_report action if available
-            sql_content = None
-            for stream_action in reversed(action_history_manager.get_actions()):
-                if stream_action.action_type == "summary_report" and stream_action.output:
-                    if isinstance(stream_action.output, dict):
-                        sql_content = stream_action.output.get("sql")
-                        # Also get the markdown/content if response_content is still empty
-                        if not response_content:
-                            response_content = (
-                                stream_action.output.get("markdown", "")
-                                or stream_action.output.get("content", "")
-                                or stream_action.output.get("response", "")
-                            )
-                        if sql_content:  # Found SQL, stop searching
-                            logger.debug(f"Extracted SQL from summary_report action: {sql_content[:100]}...")
-                            break
-
-            # Fallback: try to extract SQL and output from response_content if not found
-            if not sql_content:
-                extracted_sql, extracted_output = self._extract_sql_and_output_from_response(
-                    {"content": response_content}
-                )
-                if extracted_sql:
-                    sql_content = extracted_sql
-                if extracted_output:
-                    response_content = extracted_output
+            response_content, sql_content = self._collect_final_response(action_history_manager)
 
             logger.debug(f"Final response_content: '{response_content}' (length: {len(response_content)})")
             logger.debug(f"Final sql_content: {sql_content[:100] if sql_content else 'None'}...")
@@ -1107,6 +1113,63 @@ class GenSQLAgenticNode(AgenticNode):
         except Exception as e:
             logger.warning(f"Failed to extract SQL and output from response: {e}")
             return None, None
+
+    def _collect_final_response(
+        self,
+        action_history_manager: ActionHistoryManager,
+    ) -> tuple[str, Optional[str]]:
+        """Collect final response text and SQL from accumulated action history."""
+
+        response_content = ""
+        last_successful_output = None
+        for stream_action in action_history_manager.get_actions():
+            if stream_action.status == ActionStatus.SUCCESS and stream_action.output:
+                if isinstance(stream_action.output, dict):
+                    last_successful_output = stream_action.output
+                    response_content = (
+                        stream_action.output.get("content", "")
+                        or stream_action.output.get("response", "")
+                        or stream_action.output.get("raw_output", "")
+                        or response_content
+                    )
+
+        if not response_content and last_successful_output:
+            logger.debug(f"Trying to extract response from last_successful_output: {last_successful_output}")
+            response_content = (
+                last_successful_output.get("content", "")
+                or last_successful_output.get("text", "")
+                or last_successful_output.get("response", "")
+                or last_successful_output.get("raw_output", "")
+            )
+            if not response_content:
+                logger.warning(
+                    f"Falling back to str() for response content: keys={list(last_successful_output.keys())}"
+                )
+                response_content = str(last_successful_output)
+
+        sql_content = None
+        for stream_action in reversed(action_history_manager.get_actions()):
+            if stream_action.action_type == "summary_report" and stream_action.output:
+                if isinstance(stream_action.output, dict):
+                    sql_content = stream_action.output.get("sql")
+                    if not response_content:
+                        response_content = (
+                            stream_action.output.get("markdown", "")
+                            or stream_action.output.get("content", "")
+                            or stream_action.output.get("response", "")
+                        )
+                    if sql_content:
+                        logger.debug(f"Extracted SQL from summary_report action: {sql_content[:100]}...")
+                        break
+
+        if not sql_content:
+            extracted_sql, extracted_output = self._extract_sql_and_output_from_response({"content": response_content})
+            if extracted_sql:
+                sql_content = extracted_sql
+            if extracted_output:
+                response_content = extracted_output
+
+        return response_content, sql_content
 
 
 def prepare_template_context(
