@@ -143,9 +143,14 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         passed explicitly, the stored ``self.database_name`` is NOT carried
         over: it belongs to the old catalog and may not exist in the new
         one, which would fail ``USE <db>`` after ``SET CATALOG <new>``.
+
+        The per-call ``catalog_name`` is normalized via ``_resolve_catalog``
+        (e.g. the ``"def"`` alias → ``default_catalog``) before both the
+        divergence check and the downstream ``SET CATALOG``, so aliases are
+        compared and applied consistently.
         """
-        if catalog_name and not database_name and catalog_name != self.catalog_name:
-            effective_catalog = catalog_name
+        resolved_catalog = self._resolve_catalog(catalog_name) if catalog_name else ""
+        if resolved_catalog and not database_name and resolved_catalog != self.catalog_name:
             effective_database = ""
             effective_schema = schema_name or self.schema_name
             engine = self._ensure_engine()
@@ -153,7 +158,7 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
             try:
                 self.do_switch_context(
                     conn,
-                    catalog_name=effective_catalog,
+                    catalog_name=resolved_catalog,
                     database_name=effective_database,
                     schema_name=effective_schema,
                 )
@@ -167,7 +172,11 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
             finally:
                 conn.close()
         else:
-            with super()._conn(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name) as conn:
+            with super()._conn(
+                catalog_name=resolved_catalog or catalog_name,
+                database_name=database_name,
+                schema_name=schema_name,
+            ) as conn:
                 yield conn
 
     @override
