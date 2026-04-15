@@ -71,8 +71,8 @@ class TestSqlSummaryAgenticNodeInit:
         assert "read_file" in tool_names
         assert "write_file" in tool_names
         assert "edit_file" in tool_names
-        assert "read_multiple_files" in tool_names
-        assert "list_directory" in tool_names
+        assert "glob" in tool_names
+        assert "grep" in tool_names
 
         # Tool instances should be initialized
         assert node.filesystem_func_tool is not None
@@ -148,8 +148,8 @@ class TestSqlSummaryAgenticNodeExecution:
                 build_tool_then_response(
                     tool_calls=[
                         MockToolCall(
-                            name="list_directory",
-                            arguments=json.dumps({"path": "."}),
+                            name="glob",
+                            arguments=json.dumps({"pattern": "*"}),
                         ),
                     ],
                     content=response_content,
@@ -169,7 +169,7 @@ class TestSqlSummaryAgenticNodeExecution:
 
         # Should include TOOL actions from real tool execution
         tool_actions = [a for a in actions if a.role == ActionRole.TOOL]
-        assert len(tool_actions) >= 2  # PROCESSING + SUCCESS for list_directory
+        assert len(tool_actions) >= 2  # PROCESSING + SUCCESS for glob
 
         # Verify tool was actually executed
         tool_success_actions = [a for a in tool_actions if a.status == ActionStatus.SUCCESS]
