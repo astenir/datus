@@ -2,15 +2,18 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+from contextlib import contextmanager
 from typing import Any, Dict, List, Set, Union, override
 
 from sqlalchemy import text
 
 from datus_db_core import (
     CatalogSupportMixin,
+    ExecuteSQLResult,
     MaterializedViewSupportMixin,
     get_logger,
     list_to_in_str,
+    parse_context_switch,
 )
 from datus_mysql import MySQLConnector
 
@@ -129,6 +132,59 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
             conn.execute(text(f"USE {self.quote_identifier(database_name)}"))
             conn.commit()
             logger.debug(f"Switched database to: {database_name}")
+
+    @contextmanager
+    @override
+    def _conn(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        """Checkout a connection with catalog-aware context.
+
+        When a per-call ``catalog_name`` override targets a catalog different
+        from the stored thread-local catalog and no ``database_name`` is
+        passed explicitly, the stored ``self.database_name`` is NOT carried
+        over: it belongs to the old catalog and may not exist in the new
+        one, which would fail ``USE <db>`` after ``SET CATALOG <new>``.
+        """
+        if catalog_name and not database_name and catalog_name != self.catalog_name:
+            effective_catalog = catalog_name
+            effective_database = ""
+            effective_schema = schema_name or self.schema_name
+            engine = self._ensure_engine()
+            conn = engine.connect()
+            try:
+                self.do_switch_context(
+                    conn,
+                    catalog_name=effective_catalog,
+                    database_name=effective_database,
+                    schema_name=effective_schema,
+                )
+                yield conn
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise
+            finally:
+                conn.close()
+        else:
+            with super()._conn(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name) as conn:
+                yield conn
+
+    @override
+    def execute_content_set(self, sql: str) -> ExecuteSQLResult:
+        """Execute USE/SET, clearing stored database on SET CATALOG.
+
+        Mirrors ``switch_catalog()``: when the catalog changes, the stored
+        ``database_name`` no longer refers to a valid database under the
+        new catalog, so it is cleared to avoid a stale ``USE`` on the next
+        checkout.
+        """
+        result = super().execute_content_set(sql)
+        if result.success:
+            context = parse_context_switch(sql=sql, dialect=self.dialect)
+            if context and context.get("target") == "catalog" and context.get("catalog_name"):
+                self.database_name = ""
+        return result
 
     # ==================== Metadata Retrieval (Stateless, Catalog-Qualified) ====================
 

@@ -153,6 +153,21 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     - BaseSqlConnector: Base functionality for SQL databases
     - SchemaNamespaceMixin: Support for database.schema.table naming
     - MaterializedViewSupportMixin: Support for materialized views
+
+    Thread safety:
+        This connector is NOT thread-safe when callers pass per-call
+        ``catalog_name`` / ``database_name`` / ``schema_name`` overrides to
+        ``execute_*`` methods. Those methods invoke ``do_switch_context``,
+        which mutates the shared ``self.connection`` (via ``SET search_path``)
+        and the shared ``self.schema_name`` attribute. Concurrent calls with
+        different context overrides can interleave on the same connection and
+        cause queries to run against the wrong schema.
+
+        Recommended workarounds:
+            - Serialize access to a single ``RedshiftConnector`` instance
+              (e.g. with an external lock) when context overrides are used.
+            - Create a separate ``RedshiftConnector`` per thread / request
+              so each owns its own connection and context state.
     """
 
     def __init__(self, config: Union[RedshiftConfig, dict]):
