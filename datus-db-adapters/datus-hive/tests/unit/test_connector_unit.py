@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -209,22 +209,22 @@ def test_normalize_configuration_string_values():
 
 def test_quote_identifier_basic():
     """Test _quote_identifier with basic identifier."""
-    assert HiveConnector._quote_identifier("table_name") == "`table_name`"
+    assert HiveConnector.quote_identifier(MagicMock(), "table_name") == "`table_name`"
 
 
 def test_quote_identifier_with_backticks():
     """Test _quote_identifier escapes backticks."""
-    assert HiveConnector._quote_identifier("table`name") == "`table``name`"
+    assert HiveConnector.quote_identifier(MagicMock(), "table`name") == "`table``name`"
 
 
 def test_quote_identifier_empty_string():
     """Test _quote_identifier with empty string."""
-    assert HiveConnector._quote_identifier("") == "``"
+    assert HiveConnector.quote_identifier(MagicMock(), "") == "``"
 
 
 def test_quote_identifier_special_characters():
     """Test _quote_identifier with special characters."""
-    assert HiveConnector._quote_identifier("table-name_123") == "`table-name_123`"
+    assert HiveConnector.quote_identifier(MagicMock(), "table-name_123") == "`table-name_123`"
 
 
 # ==================== full_name Tests ====================

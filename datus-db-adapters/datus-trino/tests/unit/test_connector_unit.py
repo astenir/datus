@@ -430,9 +430,9 @@ def test_do_switch_context_database():
 
 def test_quote_identifier():
     """Test _quote_identifier uses double quotes."""
-    assert TrinoConnector._quote_identifier("table") == '"table"'
+    assert TrinoConnector.quote_identifier(MagicMock(), "table") == '"table"'
 
 
 def test_quote_identifier_with_special_chars():
     """Test _quote_identifier escapes double quotes."""
-    assert TrinoConnector._quote_identifier('my"table') == '"my""table"'
+    assert TrinoConnector.quote_identifier(MagicMock(), 'my"table') == '"my""table"'

@@ -113,11 +113,7 @@ class PostgreSQLConnector(SQLAlchemyConnector):
 
     # ==================== Utility Methods ====================
 
-    @staticmethod
-    def _quote_identifier(identifier: str) -> str:
-        """Safely wrap identifiers with double quotes for PostgreSQL."""
-        escaped = identifier.replace('"', '""')
-        return f'"{escaped}"'
+    # quote_identifier: uses BaseSqlConnector default (ANSI double quotes)
 
     def _build_connection_string(self, database_name: str) -> str:
         """Build a PostgreSQL connection string for a given database."""
@@ -269,7 +265,7 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             col_defs = []
             pk_cols = []
             for col in columns:
-                col_def = f"    {self._quote_identifier(col['name'])} {col['type']}"
+                col_def = f"    {self.quote_identifier(col['name'])} {col['type']}"
                 if not col.get("nullable", True):
                     col_def += " NOT NULL"
                 if col.get("default_value"):
@@ -281,7 +277,7 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             ddl = f"CREATE TABLE {full_name} (\n"
             ddl += ",\n".join(col_defs)
             if pk_cols:
-                pk_names = ", ".join(self._quote_identifier(c) for c in pk_cols)
+                pk_names = ", ".join(self.quote_identifier(c) for c in pk_cols)
                 ddl += f",\n    PRIMARY KEY ({pk_names})"
             ddl += "\n);"
             return ddl
@@ -591,10 +587,10 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         database_name = database_name or self.database_name
         schema_name = schema_name or self.schema_name
         if database_name and schema_name:
-            return f"{self._quote_identifier(database_name)}.{self._quote_identifier(schema_name)}.{self._quote_identifier(table_name)}"
+            return f"{self.quote_identifier(database_name)}.{self.quote_identifier(schema_name)}.{self.quote_identifier(table_name)}"
         if schema_name:
-            return f"{self._quote_identifier(schema_name)}.{self._quote_identifier(table_name)}"
-        return self._quote_identifier(table_name)
+            return f"{self.quote_identifier(schema_name)}.{self.quote_identifier(table_name)}"
+        return self.quote_identifier(table_name)
 
     @override
     def _reset_filter_tables(

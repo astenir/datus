@@ -56,6 +56,15 @@ class BaseSqlConnector(ABC):
             except Exception:
                 pass
 
+    def quote_identifier(self, name: str) -> str:
+        """Quote an identifier using the dialect-appropriate quoting character.
+
+        Default uses ANSI SQL double quotes. Subclasses should override
+        for dialects that use a different quoting style (e.g. backticks).
+        """
+        escaped = name.replace('"', '""')
+        return f'"{escaped}"'
+
     def execute(
         self,
         input_params: Any,

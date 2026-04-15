@@ -136,7 +136,7 @@ class HiveConnector(SQLAlchemyConnector):
         self.connect()
         database_name = database_name or self.database_name
         if database_name:
-            sql = f"SHOW TABLES IN {self._quote_identifier(database_name)}"
+            sql = f"SHOW TABLES IN {self.quote_identifier(database_name)}"
         else:
             sql = "SHOW TABLES"
         result = self._execute_pandas(sql)
@@ -148,7 +148,7 @@ class HiveConnector(SQLAlchemyConnector):
         self.connect()
         database_name = database_name or self.database_name
         if database_name:
-            sql = f"SHOW VIEWS IN {self._quote_identifier(database_name)}"
+            sql = f"SHOW VIEWS IN {self.quote_identifier(database_name)}"
         else:
             sql = "SHOW VIEWS"
         try:
@@ -328,10 +328,10 @@ class HiveConnector(SQLAlchemyConnector):
 
         return []
 
-    @staticmethod
-    def _quote_identifier(identifier: str) -> str:
-        """Safely wrap identifiers with backticks for Hive."""
-        escaped = identifier.replace("`", "``")
+    @override
+    def quote_identifier(self, name: str) -> str:
+        """Quote identifiers with backticks for Hive."""
+        escaped = name.replace("`", "``")
         return f"`{escaped}`"
 
     @override
@@ -345,13 +345,13 @@ class HiveConnector(SQLAlchemyConnector):
         """Build fully-qualified table name."""
         db = database_name or self.database_name
         if db:
-            return f"{self._quote_identifier(db)}.{self._quote_identifier(table_name)}"
-        return self._quote_identifier(table_name)
+            return f"{self.quote_identifier(db)}.{self.quote_identifier(table_name)}"
+        return self.quote_identifier(table_name)
 
     def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
         """Switch database context using USE statement."""
         if database_name:
-            self.execute_ddl(f"USE {self._quote_identifier(database_name)}")
+            self.execute_ddl(f"USE {self.quote_identifier(database_name)}")
             self.database_name = database_name
 
     @classmethod

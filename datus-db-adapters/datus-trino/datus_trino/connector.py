@@ -226,11 +226,7 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
 
     # ==================== Full Name Construction ====================
 
-    @staticmethod
-    def _quote_identifier(identifier: str) -> str:
-        """Safely wrap identifiers with double quotes for Trino."""
-        escaped = identifier.replace('"', '""')
-        return f'"{escaped}"'
+    # quote_identifier: uses BaseSqlConnector default (ANSI double quotes)
 
     @override
     def full_name(
@@ -250,12 +246,11 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
 
         if catalog and schema:
             return (
-                f"{self._quote_identifier(catalog)}.{self._quote_identifier(schema)}"
-                f".{self._quote_identifier(table_name)}"
+                f"{self.quote_identifier(catalog)}.{self.quote_identifier(schema)}.{self.quote_identifier(table_name)}"
             )
         elif schema:
-            return f"{self._quote_identifier(schema)}.{self._quote_identifier(table_name)}"
-        return self._quote_identifier(table_name)
+            return f"{self.quote_identifier(schema)}.{self.quote_identifier(table_name)}"
+        return self.quote_identifier(table_name)
 
     @override
     def _sqlalchemy_schema(

@@ -343,9 +343,9 @@ def test_do_switch_context_noop_without_database():
 
 def test_quote_identifier():
     """Test _quote_identifier uses backticks."""
-    assert SparkConnector._quote_identifier("table") == "`table`"
+    assert SparkConnector.quote_identifier(MagicMock(), "table") == "`table`"
 
 
 def test_quote_identifier_with_special_chars():
     """Test _quote_identifier escapes backticks."""
-    assert SparkConnector._quote_identifier("my`table") == "`my``table`"
+    assert SparkConnector.quote_identifier(MagicMock(), "my`table") == "`my``table`"

@@ -103,10 +103,10 @@ class ClickHouseConnector(SQLAlchemyConnector):
 
     # ==================== Utility Methods ====================
 
-    @staticmethod
-    def _quote_identifier(identifier: str) -> str:
-        """Safely wrap identifiers with backticks for ClickHouse-compatible dialects."""
-        escaped = identifier.replace("`", "``")
+    @override
+    def quote_identifier(self, name: str) -> str:
+        """Quote identifiers with backticks for ClickHouse."""
+        escaped = name.replace("`", "``")
         return f"`{escaped}`"
 
     # ==================== Metadata Retrieval ====================
@@ -415,8 +415,8 @@ class ClickHouseConnector(SQLAlchemyConnector):
     ) -> str:
         """Build fully-qualified table name."""
         if database_name:
-            return f"{self._quote_identifier(database_name)}.{self._quote_identifier(table_name)}"
-        return self._quote_identifier(table_name)
+            return f"{self.quote_identifier(database_name)}.{self.quote_identifier(table_name)}"
+        return self.quote_identifier(table_name)
 
     @override
     def _reset_filter_tables(
