@@ -552,7 +552,7 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         based on the effective database_name.
         """
         if schema_name:
-            conn.execute(text(f"SET search_path TO {self._quote_identifier(schema_name)}"))
+            conn.execute(text(f"SET search_path TO {self.quote_identifier(schema_name)}"))
             conn.commit()
 
     # ==================== Sample Data ====================

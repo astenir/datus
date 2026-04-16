@@ -332,7 +332,7 @@ class ClickHouseConnector(SQLAlchemyConnector):
         if database_name:
             from sqlalchemy import text
 
-            conn.execute(text(f"USE {self._quote_identifier(database_name)}"))
+            conn.execute(text(f"USE {self.quote_identifier(database_name)}"))
             conn.commit()
 
     # ==================== Sample Data ====================
