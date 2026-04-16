@@ -170,6 +170,117 @@ class SessionManager:
         else:
             logger.warning(f"Attempted to delete non-existent session: {session_id}")
 
+    def copy_session(self, source_session_id: str, target_node_name: str) -> str:
+        """Copy a session to a new one with a different node-name prefix.
+
+        All messages and turn_usage rows are copied.  The new session_id uses
+        ``target_node_name`` as prefix so that
+        :meth:`ChatCommands._extract_node_type_from_session_id` resolves the
+        correct node type.
+
+        Args:
+            source_session_id: The session to copy from.
+            target_node_name: Node name for the new session_id prefix
+                (e.g. ``"gensql"``, ``"chat"``).
+
+        Returns:
+            The new session ID.
+        """
+        self._validate_session_id(source_session_id)
+        new_session_id = f"{target_node_name}_session_{uuid.uuid4().hex[:8]}"
+
+        source_db_path = os.path.join(self.session_dir, f"{source_session_id}.db")
+        if not os.path.exists(source_db_path):
+            # No persisted session data to copy; return new id so the node starts fresh
+            return new_session_id
+
+        # Read all messages, message_structure, and turn_usage from source.
+        # We must preserve agent_messages.id so that message_structure.message_id
+        # references remain valid in the new DB; AdvancedSQLiteSession.get_items()
+        # relies on a JOIN between agent_messages and message_structure, so copying
+        # agent_messages alone would result in an empty conversation history.
+        with sqlite3.connect(source_db_path, timeout=5.0) as src_conn:
+            cursor = src_conn.cursor()
+            cursor.execute(
+                "SELECT id, message_data, created_at FROM agent_messages WHERE session_id = ? ORDER BY id",
+                (source_session_id,),
+            )
+            message_rows = cursor.fetchall()
+
+            structure_rows: list = []
+            try:
+                cursor.execute(
+                    "SELECT message_id, branch_id, message_type, sequence_number, "
+                    "user_turn_number, branch_turn_number, tool_name, created_at "
+                    "FROM message_structure WHERE session_id = ? ORDER BY sequence_number",
+                    (source_session_id,),
+                )
+                structure_rows = cursor.fetchall()
+            except sqlite3.OperationalError:
+                pass
+
+            turn_usage_rows: list = []
+            try:
+                cursor.execute(
+                    "SELECT branch_id, user_turn_number, requests, input_tokens, "
+                    "output_tokens, total_tokens, input_tokens_details, "
+                    "output_tokens_details, created_at "
+                    "FROM turn_usage WHERE session_id = ?",
+                    (source_session_id,),
+                )
+                turn_usage_rows = cursor.fetchall()
+            except sqlite3.OperationalError:
+                pass
+
+        # Materialize tables in the new DB first (short-lived session is released
+        # before bulk inserts), then use a single raw connection with executemany
+        # for all writes. Avoids two concurrent connections on the same file and
+        # is substantially faster for long histories.
+        new_db_path = os.path.join(self.session_dir, f"{new_session_id}.db")
+        AdvancedSQLiteSession(session_id=new_session_id, db_path=new_db_path, create_tables=True)
+
+        with sqlite3.connect(new_db_path, timeout=5.0) as new_conn:
+            new_conn.execute(
+                "INSERT OR IGNORE INTO agent_sessions (session_id) VALUES (?)",
+                (new_session_id,),
+            )
+            # Preserve id to keep message_structure.message_id references valid.
+            new_conn.executemany(
+                "INSERT INTO agent_messages (id, session_id, message_data, created_at) VALUES (?, ?, ?, ?)",
+                [
+                    (msg_id, new_session_id, message_data, created_at)
+                    for msg_id, message_data, created_at in message_rows
+                ],
+            )
+            new_conn.executemany(
+                "INSERT INTO message_structure "
+                "(session_id, message_id, branch_id, message_type, sequence_number, "
+                "user_turn_number, branch_turn_number, tool_name, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(new_session_id, *row) for row in structure_rows],
+            )
+            new_conn.executemany(
+                "INSERT OR IGNORE INTO turn_usage "
+                "(session_id, branch_id, user_turn_number, requests, input_tokens, "
+                "output_tokens, total_tokens, input_tokens_details, "
+                "output_tokens_details, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [(new_session_id, *row) for row in turn_usage_rows],
+            )
+            new_conn.commit()
+
+        # Cache a fresh session pointing at the populated DB (tables already exist).
+        self._sessions[new_session_id] = AdvancedSQLiteSession(
+            session_id=new_session_id, db_path=new_db_path, create_tables=False
+        )
+
+        logger.info(
+            f"Copied session {source_session_id} -> {new_session_id} "
+            f"({len(message_rows)} messages, {len(structure_rows)} structure rows, "
+            f"{len(turn_usage_rows)} turn_usage rows)"
+        )
+        return new_session_id
+
     def rewind_session(
         self,
         source_session_id: str,
@@ -247,17 +358,22 @@ class SessionManager:
         if not kept_rows:
             raise ValueError(f"No messages to keep for turn {up_to_user_turn}")
 
+        kept_message_ids = {row[0] for row in kept_rows}
+
         # Create the new session database
         new_db_path = os.path.join(self.session_dir, f"{new_session_id}.db")
         new_session = AdvancedSQLiteSession(session_id=new_session_id, db_path=new_db_path, create_tables=True)
         # Store in cache
         self._sessions[new_session_id] = new_session
 
-        # Read turn_usage rows for kept turns from source DB
-        turn_usage_rows = []
+        # Read turn_usage and message_structure rows for kept turns from source DB.
+        # message_structure must be copied so that AdvancedSQLiteSession.get_items()
+        # (which JOINs agent_messages with message_structure) returns the rewound history.
+        turn_usage_rows: list = []
+        structure_rows: list = []
         with sqlite3.connect(source_db_path, timeout=5.0) as src_conn:
+            cursor = src_conn.cursor()
             try:
-                cursor = src_conn.cursor()
                 cursor.execute(
                     "SELECT branch_id, user_turn_number, requests, input_tokens, "
                     "output_tokens, total_tokens, input_tokens_details, "
@@ -270,16 +386,55 @@ class SessionManager:
                 # turn_usage table may not exist in older databases
                 pass
 
-        # Insert session record, messages, and turn_usage into the new DB
+            try:
+                cursor.execute(
+                    "SELECT message_id, branch_id, message_type, sequence_number, "
+                    "user_turn_number, branch_turn_number, tool_name, created_at "
+                    "FROM message_structure WHERE session_id = ? ORDER BY sequence_number",
+                    (source_session_id,),
+                )
+                structure_rows = [row for row in cursor.fetchall() if row[0] in kept_message_ids]
+            except sqlite3.OperationalError:
+                pass
+
+        # Insert session record, messages, message_structure, and turn_usage into the new DB.
+        # Preserve agent_messages.id so message_structure.message_id references remain valid.
         with sqlite3.connect(new_db_path, timeout=5.0) as new_conn:
             new_conn.execute(
                 "INSERT OR IGNORE INTO agent_sessions (session_id) VALUES (?)",
                 (new_session_id,),
             )
-            for _, _, message_data, created_at in kept_rows:
+            for msg_id, _, message_data, created_at in kept_rows:
                 new_conn.execute(
-                    "INSERT INTO agent_messages (session_id, message_data, created_at) VALUES (?, ?, ?)",
-                    (new_session_id, message_data, created_at),
+                    "INSERT INTO agent_messages (id, session_id, message_data, created_at) VALUES (?, ?, ?, ?)",
+                    (msg_id, new_session_id, message_data, created_at),
+                )
+            for (
+                message_id,
+                branch_id,
+                message_type,
+                sequence_number,
+                user_turn_number,
+                branch_turn_number,
+                tool_name,
+                created_at,
+            ) in structure_rows:
+                new_conn.execute(
+                    "INSERT INTO message_structure "
+                    "(session_id, message_id, branch_id, message_type, sequence_number, "
+                    "user_turn_number, branch_turn_number, tool_name, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        new_session_id,
+                        message_id,
+                        branch_id,
+                        message_type,
+                        sequence_number,
+                        user_turn_number,
+                        branch_turn_number,
+                        tool_name,
+                        created_at,
+                    ),
                 )
             for usage_row in turn_usage_rows:
                 new_conn.execute(

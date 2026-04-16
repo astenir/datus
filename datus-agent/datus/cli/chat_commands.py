@@ -74,37 +74,32 @@ class ChatCommands:
             # Create new node only if switching from subagent to regular
             return bool(self.current_subagent_name)
 
-    def _trigger_compact_for_current_node(self):
-        """Trigger compact on current node before switching."""
-        if self.current_node and hasattr(self.current_node, "_manual_compact"):
-            try:
+    def _is_agent_switch(self, subagent_name: str = None) -> bool:
+        """Check if this is a node type switch (not a fresh start)."""
+        if self.current_node is None:
+            return False
+        effective_current = self.current_subagent_name or ""
+        effective_new = subagent_name or ""
+        return effective_current != effective_new
 
-                async def _get_info():
-                    return await self.current_node.get_session_info()
+    def _copy_session_for_switch(self, prev_session_id: str, new_node) -> str:
+        """Copy session data from the previous node to a new session matching the new node's name prefix.
 
-                session_info = asyncio.run(_get_info())
-                if session_info.get("session_id"):
-                    self.console.print("[yellow]Switching node, compacting current session...[/]")
+        Uses :meth:`SessionManager.copy_session` so that the new session_id prefix
+        matches ``new_node.get_node_name()`` and :meth:`_extract_node_type_from_session_id`
+        resolves the correct type on ``.resume``.
 
-                    async def run_compact():
-                        return await self.current_node._manual_compact()
+        Returns:
+            New session_id with the correct node-name prefix.
+        """
+        from datus.models.session_manager import SessionManager
 
-                    result = asyncio.run(run_compact())
-
-                    if result.get("success"):
-                        self.console.print("[green]✓ Session compacted successfully![/]")
-                        logger.info(
-                            f"Session compact details - New Token Count: {result.get('new_token_count', 'N/A')}"
-                            f"Tokens Saved: {result.get('tokens_saved', 'N/A')}"
-                            f"Compression Ratio: {result.get('compression_ratio', 'N/A')}"
-                        )
-                    else:
-                        error_msg = result.get("error", "Unknown error occurred")
-                        self.console.print(f"[bold red]✗ Failed to compact session:[/] {error_msg}")
-
-            except Exception as e:
-                logger.error(f"Compact error during node switch: {e}")
-                self.console.print(f"[bold red]Compact error:[/] {str(e)}")
+        try:
+            session_manager = SessionManager(self.cli.agent_config.session_dir, scope=self.cli.scope)
+            return session_manager.copy_session(prev_session_id, new_node.get_node_name())
+        except Exception as e:
+            logger.warning(f"Failed to copy session on agent switch, starting fresh: {e}")
+            return new_node.session_id  # fall back to whatever the node already has (None → auto-generate)
 
     def _create_new_node(self, subagent_name: str = None):
         """Create new node based on subagent_name and configuration.
@@ -153,14 +148,12 @@ class ChatCommands:
         message: str,
         plan_mode: bool = False,
         subagent_name: Optional[str] = None,
-        compact_when_new_subagent: bool = True,
     ):
         """Execute a chat command in interactive REPL mode."""
         self._execute_chat(
             message,
             plan_mode=plan_mode,
             subagent_name=subagent_name,
-            compact_when_new_subagent=compact_when_new_subagent,
             interactive=True,
         )
 
@@ -200,7 +193,6 @@ class ChatCommands:
         message: str,
         plan_mode: bool = False,
         subagent_name: Optional[str] = None,
-        compact_when_new_subagent: bool = True,
         interactive: bool = True,
     ):
         """Core chat execution logic shared by interactive and non-interactive modes."""
@@ -214,23 +206,28 @@ class ChatCommands:
             if interactive:
                 # Decision logic: determine if we need to create a new node
                 need_new_node = self._should_create_new_node(subagent_name)
-
-                # If creating new node and have existing node, trigger compact
-                if need_new_node and self.current_node is not None and compact_when_new_subagent:
-                    self._trigger_compact_for_current_node()
+                is_switch = self._is_agent_switch(subagent_name)
 
                 # Get or create node
                 if need_new_node:
+                    # Copy session when switching agents to preserve conversation
+                    # while keeping the session_id prefix consistent with the new node type.
+                    prev_session_id = None
+                    if is_switch and self.current_node and hasattr(self.current_node, "session_id"):
+                        prev_session_id = self.current_node.session_id
                     self.current_node = self._create_new_node(subagent_name)
+                    if prev_session_id:
+                        self.current_node.session_id = self._copy_session_for_switch(prev_session_id, self.current_node)
                     self.current_subagent_name = subagent_name if subagent_name else None
-                    self.all_turn_actions = []
+                    if not is_switch:
+                        self.all_turn_actions = []
                     if not subagent_name:
                         self.chat_node = self.current_node
 
                 current_node = self.current_node
 
                 # Show session info for existing session
-                if not need_new_node:
+                if not need_new_node or is_switch:
                     session_info = asyncio.run(current_node.get_session_info())
                     if session_info.get("session_id"):
                         session_display = (

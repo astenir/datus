@@ -551,6 +551,33 @@ class TestManualCompact:
         assert node._session is None
         assert node.session_id is None
 
+    @pytest.mark.asyncio
+    async def test_manual_compact_lazy_loads_session_after_resume(self):
+        """After .resume sets session_id but leaves _session None, compact must still work.
+
+        Regression: previously _manual_compact aborted with
+        "Cannot compact: no model or session available" because resume does not
+        eagerly open the SQLite session.
+        """
+        node = _make_node()
+        node.ephemeral = False
+        node.session_id = "resumed_session"
+        node._session = None  # Simulate post-resume state
+        mock_model = MagicMock()
+        mock_model.generate_with_tools = AsyncMock(
+            return_value={"content": "Resumed summary", "usage": {"output_tokens": 50}}
+        )
+        # create_session is what _get_or_create_session will call via self.model.
+        mock_model.create_session = MagicMock(return_value=MagicMock())
+        node.model = mock_model
+
+        result = await node._manual_compact()
+
+        # _get_or_create_session should have been invoked to materialize the session.
+        mock_model.create_session.assert_called_once_with("resumed_session")
+        assert result["success"] is True
+        assert result["summary"] == "Resumed summary"
+
 
 # ---------------------------------------------------------------------------
 # TestCountSessionTokens
@@ -559,29 +586,134 @@ class TestManualCompact:
 
 class TestCountSessionTokens:
     @pytest.mark.asyncio
-    async def test_count_tokens_no_session(self):
+    async def test_count_tokens_no_actions_no_session(self):
         node = _make_node()
         node._session = None
         result = await node._count_session_tokens()
         assert result == 0
 
     @pytest.mark.asyncio
-    async def test_count_tokens_with_session(self):
+    async def test_count_tokens_uses_last_call_input_tokens(self):
+        """Primary path: last_call_input_tokens from the most recent action's usage."""
+        node = _make_node()
+        action = ActionHistory.create_action(
+            role=ActionRole.ASSISTANT,
+            action_type="chat",
+            messages="ok",
+            input_data={},
+            output_data={"usage": {"last_call_input_tokens": 5000, "input_tokens": 8000, "total_tokens": 12000}},
+            status=ActionStatus.SUCCESS,
+        )
+        node.actions.append(action)
+        result = await node._count_session_tokens()
+        assert result == 5000
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_falls_back_to_input_tokens(self):
+        """When last_call_input_tokens is 0, fall back to input_tokens."""
+        node = _make_node()
+        action = ActionHistory.create_action(
+            role=ActionRole.ASSISTANT,
+            action_type="chat",
+            messages="ok",
+            input_data={},
+            output_data={"usage": {"last_call_input_tokens": 0, "input_tokens": 8000, "total_tokens": 12000}},
+            status=ActionStatus.SUCCESS,
+        )
+        node.actions.append(action)
+        result = await node._count_session_tokens()
+        assert result == 8000
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_falls_back_to_turn_usage(self):
+        """When actions have no usage, fall back to last turn in turn_usage table."""
         node = _make_node()
         mock_session = MagicMock()
-        mock_session.get_session_usage = AsyncMock(return_value={"total_tokens": 1234})
+        mock_session.get_turn_usage = AsyncMock(
+            return_value=[
+                {"user_turn_number": 1, "total_tokens": 500},
+                {"user_turn_number": 2, "total_tokens": 1234},
+            ]
+        )
         node._session = mock_session
         result = await node._count_session_tokens()
         assert result == 1234
 
     @pytest.mark.asyncio
-    async def test_count_tokens_empty_usage(self):
+    async def test_count_tokens_empty_actions_empty_turn_usage(self):
         node = _make_node()
         mock_session = MagicMock()
-        mock_session.get_session_usage = AsyncMock(return_value={})
+        mock_session.get_turn_usage = AsyncMock(return_value=[])
         node._session = mock_session
         result = await node._count_session_tokens()
         assert result == 0
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_ignores_subagent_depth_actions(self):
+        """Sub-agent (depth>0) ASSISTANT actions must not pollute parent context estimate.
+
+        Regression: the scan must skip child/tool usage so that only root-level
+        (depth == 0) assistant actions contribute to the context window estimate.
+        Here the only depth>0 assistant has large usage; the parent's estimate
+        should fall back to turn_usage (or 0) instead of reading the child's.
+        """
+        node = _make_node()
+        subagent_action = ActionHistory.create_action(
+            role=ActionRole.ASSISTANT,
+            action_type="chat",
+            messages="sub",
+            input_data={},
+            output_data={"usage": {"last_call_input_tokens": 99999, "input_tokens": 99999, "total_tokens": 99999}},
+            status=ActionStatus.SUCCESS,
+        )
+        subagent_action.depth = 1  # simulate sub-agent nesting
+        node.actions.append(subagent_action)
+
+        mock_session = MagicMock()
+        mock_session.get_turn_usage = AsyncMock(return_value=[{"user_turn_number": 1, "total_tokens": 321}])
+        node._session = mock_session
+
+        result = await node._count_session_tokens()
+        # Must NOT return 99999 from the depth>0 action; fall back to turn_usage's 321.
+        assert result == 321
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_breaks_at_root_user_message(self):
+        """Scan stops at the most recent root-level USER action to scope to the current turn.
+
+        An older ASSISTANT action preceding the latest root USER message must
+        NOT be used, even if it has usage. This guards against bleed-over from
+        the previous turn's usage into the current turn's estimate.
+        """
+        node = _make_node()
+        # Older turn's assistant reply with usage (should be ignored after USER break).
+        old_assistant = ActionHistory.create_action(
+            role=ActionRole.ASSISTANT,
+            action_type="chat",
+            messages="old",
+            input_data={},
+            output_data={"usage": {"last_call_input_tokens": 7777}},
+            status=ActionStatus.SUCCESS,
+        )
+        old_assistant.depth = 0
+        # Latest root user message marks the boundary of the current turn.
+        latest_user = ActionHistory.create_action(
+            role=ActionRole.USER,
+            action_type="chat",
+            messages="new question",
+            input_data={},
+            status=ActionStatus.SUCCESS,
+        )
+        latest_user.depth = 0
+        node.actions.extend([old_assistant, latest_user])
+
+        mock_session = MagicMock()
+        mock_session.get_turn_usage = AsyncMock(return_value=[{"user_turn_number": 1, "total_tokens": 111}])
+        node._session = mock_session
+
+        result = await node._count_session_tokens()
+        # Reverse scan hits latest_user first -> break -> fall back to turn_usage (111).
+        assert result == 111
 
 
 # ---------------------------------------------------------------------------
@@ -854,8 +986,17 @@ class TestGetSessionInfoExtended:
         node = _make_simple_node()
         node.session_id = "sess_x"
         node._session = MagicMock()
-        node._session.get_session_usage = AsyncMock(return_value={"total_tokens": 500})
         node.context_length = 4000
+        # Provide usage via actions (primary path for _count_session_tokens)
+        action = ActionHistory.create_action(
+            role=ActionRole.ASSISTANT,
+            action_type="chat",
+            messages="ok",
+            input_data={},
+            output_data={"usage": {"last_call_input_tokens": 500, "input_tokens": 800, "total_tokens": 1200}},
+            status=ActionStatus.SUCCESS,
+        )
+        node.actions.append(action)
 
         result = asyncio.run(node.get_session_info())
         assert result["session_id"] == "sess_x"
@@ -1104,8 +1245,16 @@ class TestAutoCompactExtended:
         node = _make_simple_node()
         node.model = MagicMock()
         node.context_length = 10000
-        node._session = MagicMock()
-        node._session.get_session_usage = AsyncMock(return_value={"total_tokens": 100})
+        # Provide usage via actions (primary path for _count_session_tokens)
+        action = ActionHistory.create_action(
+            role=ActionRole.ASSISTANT,
+            action_type="chat",
+            messages="ok",
+            input_data={},
+            output_data={"usage": {"last_call_input_tokens": 100, "input_tokens": 200, "total_tokens": 300}},
+            status=ActionStatus.SUCCESS,
+        )
+        node.actions.append(action)
 
         result = asyncio.run(node._auto_compact())
         assert result is False
@@ -1115,7 +1264,16 @@ class TestAutoCompactExtended:
         node.model = MagicMock()
         node.context_length = 1000
         node._session = MagicMock()
-        node._session.get_session_usage = AsyncMock(return_value={"total_tokens": 950})
+        # Provide usage via actions
+        action = ActionHistory.create_action(
+            role=ActionRole.ASSISTANT,
+            action_type="chat",
+            messages="ok",
+            input_data={},
+            output_data={"usage": {"last_call_input_tokens": 950, "input_tokens": 1500, "total_tokens": 2000}},
+            status=ActionStatus.SUCCESS,
+        )
+        node.actions.append(action)
         node.model.generate_with_tools = AsyncMock(return_value={"content": "summary", "usage": {"output_tokens": 50}})
         node.model.delete_session = MagicMock()
         node.session_id = "sess_auto"

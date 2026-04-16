@@ -4,7 +4,7 @@
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ScopedContextLists(BaseModel):
@@ -68,9 +68,43 @@ class SubAgentConfig(BaseModel):
     prompt_version: Optional[str] = Field(default="1.0", init=True, description="System Prompt version")
     prompt_language: str = Field(default="en", init=True, description="System Prompt language")
     scoped_kb_path: Optional[str] = Field(default=None, init=True, description="Path to scoped KB storage")
+    subagents: Optional[str] = Field(
+        default=None, description="Comma-separated subagent types, or '*' for all (excluding self)"
+    )
 
     class Config:
         populate_by_name = True
+
+    @field_validator("subagents", mode="before")
+    @classmethod
+    def _normalize_subagents(cls, value: Any) -> Optional[str]:
+        """Normalize the subagents field.
+
+        - ``None`` / empty / blank strings collapse to ``None``.
+        - Leading/trailing whitespace and duplicate entries are stripped.
+        - If ``*`` appears anywhere, it is collapsed to the single canonical
+          wildcard ``"*"`` (``*, foo`` -> ``"*"``).
+        """
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise TypeError("subagents must be a string")
+        stripped = value.strip()
+        if not stripped:
+            return None
+        tokens: List[str] = []
+        seen: set = set()
+        for raw in stripped.split(","):
+            tok = raw.strip()
+            if not tok or tok in seen:
+                continue
+            seen.add(tok)
+            tokens.append(tok)
+        if not tokens:
+            return None
+        if "*" in tokens:
+            return "*"
+        return ",".join(tokens)
 
     def has_scoped_context(self) -> bool:
         return self.scoped_context and not self.scoped_context.is_empty
@@ -97,6 +131,9 @@ class SubAgentConfig(BaseModel):
         if self.node_class:
             payload["node_class"] = self.node_class
 
+        if self.subagents is not None:
+            payload["subagents"] = self.subagents
+
         # scoped_kb_path is deprecated: sub-agents now use the shared global
         # storage with WHERE filters, so we no longer persist this field.
 
@@ -112,3 +149,10 @@ class SubAgentConfig(BaseModel):
         if not self.tools or not self.tools.strip():
             return []
         return [tool.strip() for tool in self.tools.split(",") if tool.strip()]
+
+    @property
+    def subagent_list(self) -> List[str]:
+        """Parse subagents field into a list. Returns empty list for None/empty, ['*'] for '*'."""
+        if not self.subagents or not self.subagents.strip():
+            return []
+        return [s.strip() for s in self.subagents.split(",") if s.strip()]
