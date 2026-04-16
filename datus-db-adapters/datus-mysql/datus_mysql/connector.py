@@ -75,7 +75,6 @@ class MySQLConnector(SQLAlchemyConnector):
         elif not isinstance(config, MySQLConfig):
             raise TypeError(f"config must be MySQLConfig or dict, got {type(config)}")
 
-        self.config = config
         self.host = config.host
         self.port = config.port
         self.username = config.username
@@ -92,6 +91,9 @@ class MySQLConnector(SQLAlchemyConnector):
         )
 
         super().__init__(connection_string, dialect="mysql")
+        # Set after super().__init__() so BaseSqlConnector doesn't overwrite
+        # with a plain ConnectionConfig (which lacks charset, autocommit, etc.)
+        self.config = config
         self._default_database = database
 
     # ==================== System Resources ====================

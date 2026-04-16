@@ -68,7 +68,6 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         elif not isinstance(config, PostgreSQLConfig):
             raise TypeError(f"config must be PostgreSQLConfig or dict, got {type(config)}")
 
-        self.config = config
         self.host = config.host
         self.port = config.port
         self.username = config.username
@@ -90,6 +89,9 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             dialect="postgresql",
             timeout_seconds=config.timeout_seconds,
         )
+        # Set after super().__init__() so BaseSqlConnector doesn't overwrite
+        # with a plain ConnectionConfig (which lacks sslmode, etc.)
+        self.config = config
         self._default_database = database
         self._default_schema = config.schema_name or "public"
         self._engines: OrderedDict = OrderedDict()  # LRU cache: database_name -> engine

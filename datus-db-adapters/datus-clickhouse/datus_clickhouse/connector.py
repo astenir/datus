@@ -70,7 +70,6 @@ class ClickHouseConnector(SQLAlchemyConnector):
         elif not isinstance(config, ClickHouseConfig):
             raise TypeError(f"config must be ClickHouseConfig or dict, got {type(config)}")
 
-        self.config = config
         self.host = config.host
         self.port = config.port
         self.username = config.username
@@ -87,6 +86,9 @@ class ClickHouseConnector(SQLAlchemyConnector):
             dialect="clickhouse",
             timeout_seconds=config.timeout_seconds,
         )
+        # Set after super().__init__() so BaseSqlConnector doesn't overwrite
+        # with a plain ConnectionConfig (which lacks ClickHouse-specific fields)
+        self.config = config
         self._default_database = database
 
     # ==================== System Resources ====================
