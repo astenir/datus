@@ -109,6 +109,13 @@ class EditAgentInput(BaseModel):
     skills: Optional[List[str]] = None
     scoped_context: Optional[dict] = None
     permissions: Optional[dict] = None
+    catalogs: Optional[List[str]] = Field(
+        default=None,
+        description="Catalog access patterns (e.g., 'production_db.*', 'production_db.public.*')",
+    )
+    subjects: Optional[List[str]] = Field(
+        default=None, description="Subject access patterns (e.g., 'Finance.Revenue.*')"
+    )
     hooks: Optional[dict] = None
     rules: Optional[list[str]] = None
     max_turns: Optional[int] = None
