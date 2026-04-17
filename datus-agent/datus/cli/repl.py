@@ -45,7 +45,7 @@ from datus.configuration.agent_config_loader import configuration_manager, load_
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.node_models import SQLContext
 from datus.tools.db_tools.db_manager import db_manager_instance
-from datus.utils.constants import SYS_SUB_AGENTS, DBType, SQLType
+from datus.utils.constants import HIDDEN_SYS_SUB_AGENTS, SYS_SUB_AGENTS, DBType, SQLType
 from datus.utils.exceptions import setup_exception_handler
 from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import parse_sql_type
@@ -604,10 +604,17 @@ class DatusCLI:
         <name>   -> set directly
         """
         args = args.strip()
+        # Mirror SubagentCompleter._load_subagents(): drop HIDDEN_SYS_SUB_AGENTS
+        # (e.g. feedback — invokable via "/<name>" but not a default-agent
+        # choice) and out-of-namespace scoped subagents.
+        if getattr(self, "subagent_completer", None) is not None:
+            visible_subagents = set(self.subagent_completer._available_subagents)
+        else:
+            visible_subagents = {name for name in self.available_subagents if name not in HIDDEN_SYS_SUB_AGENTS}
+
         if not args:
-            # Interactive selector
             current_default = self.default_agent or "chat"
-            choices = {name: name for name in sorted(self.available_subagents)}
+            choices = {name: name for name in sorted(visible_subagents)}
             self.console.print("[bold]Select default agent:[/] (Up/Down to navigate, Enter to confirm)")
             selected = select_choice(self.console, choices, default=current_default)
             if selected == current_default:
@@ -615,7 +622,7 @@ class DatusCLI:
                 return
             args = selected
 
-        if args not in self.available_subagents:
+        if args not in visible_subagents:
             self.console.print(f"[bold red]Error:[/] Unknown agent '{args}'. Run '.agent' to see available agents.")
             return
 

@@ -407,6 +407,53 @@ class TestTaskExecution:
         result = await task_tool.task(type="nonexistent", prompt="test")
         assert result.success == 0
         assert "disallowed subagent type" in result.error
+        # repr of the offending value is included so hidden characters become visible
+        assert "'nonexistent'" in result.error
+
+    @pytest.mark.asyncio
+    async def test_execute_type_with_whitespace_is_normalized(self, task_tool):
+        """LLM sometimes emits ``" gen_sql "`` — _execute_node must strip before matching."""
+        mock_action = Mock(spec=ActionHistory)
+        mock_action.status = ActionStatus.SUCCESS
+        mock_action.role = ActionRole.TOOL
+        mock_action.output = {"sql": "SELECT 1", "response": "ok", "tokens_used": 1, "success": True}
+
+        mock_node = MagicMock()
+
+        async def mock_stream(ahm):
+            yield mock_action
+
+        mock_node.execute_stream_with_interactions = mock_stream
+
+        with patch.object(task_tool, "_create_node", return_value=mock_node) as create:
+            with patch.object(task_tool, "_build_node_input", return_value=Mock()):
+                result = await task_tool.task(type="  gen_sql\n", prompt="test")
+
+        assert result.success == 1
+        # The normalized (stripped) type is what gets passed to _create_node.
+        create.assert_called_once_with("gen_sql")
+
+    @pytest.mark.asyncio
+    async def test_execute_type_with_quotes_is_normalized(self, task_tool):
+        """LLM sometimes wraps the type in quotes — outer quotes must be stripped."""
+        mock_action = Mock(spec=ActionHistory)
+        mock_action.status = ActionStatus.SUCCESS
+        mock_action.role = ActionRole.TOOL
+        mock_action.output = {"sql": "SELECT 1", "response": "ok", "tokens_used": 1, "success": True}
+
+        mock_node = MagicMock()
+
+        async def mock_stream(ahm):
+            yield mock_action
+
+        mock_node.execute_stream_with_interactions = mock_stream
+
+        with patch.object(task_tool, "_create_node", return_value=mock_node) as create:
+            with patch.object(task_tool, "_build_node_input", return_value=Mock()):
+                result = await task_tool.task(type='"gen_sql"', prompt="test")
+
+        assert result.success == 1
+        create.assert_called_once_with("gen_sql")
 
     @pytest.mark.asyncio
     async def test_execute_missing_type(self, task_tool):
@@ -829,9 +876,13 @@ class TestBuildTaskDescriptionFileStorage:
 @pytest.mark.ci
 class TestGetAvailableTypesBuiltIn:
     def test_includes_all_builtin_types(self, task_tool):
-        """All 4 SYS_SUB_AGENTS appear in available types."""
+        """All SYS_SUB_AGENTS appear in available types, except 'feedback'
+        which is a top-level node and not task()-delegatable."""
         types = task_tool._get_available_types()
         for name in SYS_SUB_AGENTS:
+            if name == "feedback":
+                assert name not in types, "feedback must not be exposed as a delegatable subagent"
+                continue
             assert name in types, f"{name} not found in available types"
 
     def test_no_duplicates(self, task_tool):
@@ -851,10 +902,12 @@ class TestGetAvailableTypesBuiltIn:
         assert types.count("gen_sql_summary") == 1
 
     def test_builtin_types_sorted(self, task_tool):
-        """Built-in types appear in sorted order after gen_sql."""
+        """Built-in types appear in sorted order after gen_sql (excluding 'feedback',
+        which is not task()-delegatable)."""
         types = task_tool._get_available_types()
         builtin_in_list = [t for t in types if t in SYS_SUB_AGENTS]
-        assert builtin_in_list == sorted(SYS_SUB_AGENTS)
+        expected = sorted(name for name in SYS_SUB_AGENTS if name != "feedback")
+        assert builtin_in_list == expected
 
 
 # ── Built-in subagent: _resolve_node_type ──────────────────────────
@@ -1157,6 +1210,10 @@ class TestBuildTaskDescriptionBuiltIn:
     def test_contains_all_builtin_types(self, task_tool):
         desc = task_tool._build_task_description()
         for name in SYS_SUB_AGENTS:
+            if name == "feedback":
+                # feedback is a top-level node; must not be advertised to the LLM
+                assert name not in desc, "feedback must not appear in task description"
+                continue
             assert name in desc, f"{name} not found in task description"
 
     def test_contains_builtin_descriptions(self, task_tool):

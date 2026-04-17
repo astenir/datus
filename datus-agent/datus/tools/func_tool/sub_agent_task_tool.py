@@ -529,12 +529,29 @@ class SubAgentTaskTool:
         self, subagent_type: str, prompt: str, description: str = "", call_id: Optional[str] = None
     ) -> FuncToolResult:
         """Execute a subagent by running an AgenticNode's execute_stream."""
-        # Validate subagent type against the allowlist to prevent privilege escalation
+        # Validate subagent type against the allowlist to prevent privilege escalation.
+        # Normalize the LLM-supplied value first — strip whitespace/newlines and the
+        # surrounding quotes some models wrap around string arguments — before
+        # comparing against the discoverable allowlist.
         allowed_types = self._get_available_types()
-        if subagent_type not in allowed_types:
+        raw_subagent_type = subagent_type
+        normalized = subagent_type.strip().strip("\"'") if isinstance(subagent_type, str) else subagent_type
+        if normalized in allowed_types:
+            subagent_type = normalized
+        else:
+            logger.warning(
+                "Subagent type rejected: raw=%r normalized=%r parent=%r allowed=%r",
+                raw_subagent_type,
+                normalized,
+                self._parent_node_name,
+                allowed_types,
+            )
             return FuncToolResult(
                 success=0,
-                error=f"Unknown or disallowed subagent type: '{subagent_type}'. Available types: {allowed_types}",
+                error=(
+                    f"Unknown or disallowed subagent type: {raw_subagent_type!r} "
+                    f"(normalized {normalized!r}). Available types: {allowed_types}"
+                ),
             )
 
         node = self._create_node(subagent_type)
@@ -879,6 +896,18 @@ class SubAgentTaskTool:
                 }
             )
 
+        # Feedback result: has 'items_saved' key
+        items_saved = output.get("items_saved")
+        if items_saved is not None:
+            return FuncToolResult(
+                result={
+                    "response": response,
+                    "items_saved": items_saved,
+                    "storage_summary": output.get("storage_summary"),
+                    "tokens_used": tokens,
+                }
+            )
+
         # Generic format
         return FuncToolResult(
             result={
@@ -966,15 +995,20 @@ class SubAgentTaskTool:
         return [t for t in self._discover_all_types() if t != self._parent_node_name]
 
     def _discover_all_types(self) -> List[str]:
-        """Return every subagent type that can currently be instantiated."""
+        """Return every subagent type that can currently be instantiated.
+
+        'feedback' is a top-level AgenticNode (invoked directly by the CLI/API),
+        not a delegatable subagent, so it is excluded here even though it lives
+        in SYS_SUB_AGENTS (which only guards reserved system names).
+        """
         types = ["explore"]
-        types.extend(sorted(SYS_SUB_AGENTS))
+        types.extend(sorted(name for name in SYS_SUB_AGENTS if name != "feedback"))
 
         if self.agent_config and hasattr(self.agent_config, "agentic_nodes"):
             current_database = self.agent_config.current_database
 
             for name, config in self.agent_config.agentic_nodes.items():
-                if name in ("chat", "explore") or name in SYS_SUB_AGENTS:
+                if name in ("chat", "explore", "feedback") or name in SYS_SUB_AGENTS:
                     continue
 
                 # If scoped_context is configured, namespace must match current namespace
