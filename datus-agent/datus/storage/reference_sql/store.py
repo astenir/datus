@@ -2,9 +2,11 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+import os
 from typing import Any, Dict, List, Optional
 
 import pyarrow as pa
+import yaml
 
 from datus.configuration.agent_config import AgentConfig
 from datus.storage.base import EmbeddingModel
@@ -187,6 +189,238 @@ class ReferenceSqlStorage(BaseSubjectEmbeddingStore):
             )
         """
         return self.delete_entry(subject_path, name, extra_conditions=extra_conditions)
+
+    def update_entry(
+        self,
+        subject_path: List[str],
+        name: str,
+        update_values: Dict[str, Any],
+        extra_conditions: Optional[List] = None,
+    ) -> bool:
+        """Update a reference SQL entry in the vector DB and sync changes to the source YAML file.
+
+        Args:
+            subject_path: Subject hierarchy path (e.g., ['Analytics', 'Reports'])
+            name: Name of the reference SQL entry to update
+            update_values: Dictionary of fields to update
+            extra_conditions: Additional filter conditions
+
+        Returns:
+            True if updated successfully, False if entry not found
+        """
+        full_path = list(subject_path) + [name]
+        entries = self.search_all_reference_sql(
+            subject_path=full_path,
+            select_fields=["name", "filepath"],
+            extra_conditions=extra_conditions,
+        )
+        filepaths = list({e.get("filepath") for e in entries if e.get("filepath")})
+
+        result = super().update_entry(subject_path, name, update_values, extra_conditions)
+        if not result:
+            return False
+
+        for filepath in filepaths:
+            self._sync_reference_sql_update_to_yaml(filepath, update_values)
+
+        return result
+
+    # ``comment`` (the YAML data key, not ``#`` annotations) is intentionally excluded:
+    # it is an internal reserved field, and dropping it here means an incoming
+    # update_values["comment"] is ignored so the existing ``comment:`` key in the
+    # file is not overwritten. This says nothing about ``#`` annotations — see the
+    # sync method's docstring for that caveat.
+    _SYNCABLE_FIELDS = {"sql", "summary", "search_text", "tags"}
+
+    def _sync_reference_sql_update_to_yaml(self, filepath: str, update_values: Dict[str, Any]) -> None:
+        """Sync update_values to the source YAML file for a reference SQL entry.
+
+        Only keys in _SYNCABLE_FIELDS are written back to the YAML file; all other
+        keys in ``update_values`` (including the reserved ``comment`` data key) are
+        ignored, leaving those YAML keys untouched.
+
+        Caveat — ``#`` annotations: this helper goes through ``yaml.safe_load`` /
+        ``yaml.safe_dump``, which do not preserve hand-authored ``#`` comments or
+        blank lines. Any such annotations in the source file are lost whenever an
+        update actually rewrites the file. Preserving them would require a
+        round-trip loader (e.g. ``ruamel.yaml(typ="rt")``); that is out of scope.
+
+        Args:
+            filepath: Path to the YAML file to update
+            update_values: Dictionary of fields to sync
+        """
+        if not os.path.exists(filepath):
+            return
+
+        try:
+            with open(filepath, encoding="utf-8") as f:
+                doc = yaml.safe_load(f)
+
+            if not isinstance(doc, dict):
+                return
+
+            updated = False
+            for key, value in update_values.items():
+                if key in self._SYNCABLE_FIELDS:
+                    doc[key] = value
+                    updated = True
+
+            if not updated:
+                return
+
+            with open(filepath, "w", encoding="utf-8") as f:
+                yaml.safe_dump(doc, f, allow_unicode=True, sort_keys=False)
+
+            logger.info(f"Updated reference SQL in yaml file: {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to update yaml file {filepath}: {e}")
+
+    def rename(self, old_path: List[str], new_path: List[str]) -> bool:
+        """Rename or move a reference SQL entry and sync subject_tree to YAML.
+
+        When the parent subject path changes, update the top-level
+        ``subject_tree`` field in the YAML file to reflect the new path.
+
+        Args:
+            old_path: Current full path (subject_path + name)
+            new_path: Target full path (subject_path + name)
+
+        Returns:
+            True on successful rename.
+        """
+        # Pre-query filepaths BEFORE the rename, using the old path
+        filepaths: List[str] = []
+        if len(old_path) >= 2:
+            try:
+                entries = self.search_all_reference_sql(
+                    subject_path=old_path,
+                    select_fields=["name", "filepath"],
+                )
+                filepaths = list({e.get("filepath") for e in entries if e.get("filepath")})
+            except Exception as e:
+                logger.warning(f"Failed to query filepath before reference sql rename: {e}")
+
+        result = super().rename(old_path, new_path)
+
+        # Sync subject_tree to YAML only when the parent path actually changes;
+        # also sync the top-level ``name`` field when the entry basename changes.
+        old_parent = old_path[:-1] if len(old_path) >= 2 else []
+        new_parent = new_path[:-1] if len(new_path) >= 2 else []
+        old_name = old_path[-1] if old_path else ""
+        new_name = new_path[-1] if new_path else ""
+        if result and filepaths:
+            parent_changed = old_parent != new_parent
+            name_changed = old_name != new_name
+            for filepath in filepaths:
+                if parent_changed:
+                    self._sync_reference_sql_subject_tree_to_yaml(filepath, new_parent)
+                if name_changed:
+                    self._sync_reference_sql_name_to_yaml(filepath, old_name, new_name)
+
+        return result
+
+    def _sync_reference_sql_subject_tree_to_yaml(self, filepath: str, new_parent_path: List[str]) -> None:
+        """Update the top-level ``subject_tree`` field in a reference SQL YAML file.
+
+        Args:
+            filepath: Path to the YAML file
+            new_parent_path: New subject path components (excluding the entry name)
+        """
+        if not os.path.exists(filepath):
+            return
+
+        try:
+            with open(filepath, encoding="utf-8") as f:
+                doc = yaml.safe_load(f)
+
+            if not isinstance(doc, dict):
+                return
+
+            doc["subject_tree"] = "/".join(new_parent_path)
+
+            with open(filepath, "w", encoding="utf-8") as f:
+                yaml.safe_dump(doc, f, allow_unicode=True, sort_keys=False)
+
+            logger.info(f"Updated subject_tree in reference SQL yaml file: {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to sync subject_tree to yaml {filepath}: {e}")
+
+    def _sync_reference_sql_name_to_yaml(self, filepath: str, old_name: str, new_name: str) -> None:
+        """Update the top-level ``name`` field in a reference SQL YAML file after a rename.
+
+        Only rewrites the file when the existing ``name`` matches ``old_name``; this avoids
+        clobbering files that contain a different entry but happen to share a filepath.
+
+        Args:
+            filepath: Path to the YAML file
+            old_name: The previous entry name (for safety check)
+            new_name: The new entry name
+        """
+        if not os.path.exists(filepath):
+            return
+
+        try:
+            with open(filepath, encoding="utf-8") as f:
+                doc = yaml.safe_load(f)
+
+            if not isinstance(doc, dict):
+                return
+            if doc.get("name") != old_name:
+                return
+
+            doc["name"] = new_name
+
+            with open(filepath, "w", encoding="utf-8") as f:
+                yaml.safe_dump(doc, f, allow_unicode=True, sort_keys=False)
+
+            logger.info(f"Updated name '{old_name}' -> '{new_name}' in reference SQL yaml file: {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to sync name to yaml {filepath}: {e}")
+
+    def sync_yaml_subject_tree_for_subtree(self, root_node_id: int) -> None:
+        """Sync the ``subject_tree`` field in reference SQL YAML files for a subtree.
+
+        Intended to be called AFTER a subject_tree node has been renamed or moved
+        (via ``SubjectTreeStore.rename``). Walks ``root_node_id`` and all descendant
+        nodes, re-computes each node's full path from the (already updated)
+        subject_tree, and rewrites the top-level ``subject_tree`` field for every
+        reference SQL whose ``subject_node_id`` matches.
+
+        Vector DB rows are not touched here -- only the YAML files on disk.
+
+        Args:
+            root_node_id: ID of the renamed/moved subject node.
+        """
+        try:
+            descendants = self.subject_tree.get_descendants(root_node_id)
+        except Exception as e:
+            logger.warning(f"Failed to enumerate descendants of node {root_node_id}: {e}")
+            return
+
+        node_ids = [root_node_id] + [d["node_id"] for d in descendants]
+
+        for node_id in node_ids:
+            try:
+                new_parent_path = self.subject_tree.get_full_path(node_id)
+            except Exception as e:
+                logger.warning(f"Failed to compute full path for node {node_id}: {e}")
+                continue
+
+            if not new_parent_path:
+                continue
+
+            try:
+                entries = self.list_entries(node_id)
+            except Exception as e:
+                logger.warning(f"Failed to list reference SQL entries under node {node_id}: {e}")
+                continue
+
+            seen: set = set()
+            for entry in entries:
+                filepath = entry.get("filepath")
+                if filepath and filepath not in seen:
+                    seen.add(filepath)
+                    self._sync_reference_sql_subject_tree_to_yaml(filepath, new_parent_path)
 
 
 class ReferenceSqlRAG:
