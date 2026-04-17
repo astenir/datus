@@ -83,7 +83,6 @@ class AgenticNode(Node):
         self.session_id: Optional[str] = None
         self._session: Optional[AdvancedSQLiteSession] = None
         self.ephemeral: bool = False  # When True, use in-memory session (no SQLite persistence)
-        self.last_summary: Optional[str] = None
         self.context_length: Optional[int] = None
 
         # Permission and skill management
@@ -306,11 +305,11 @@ class AgenticNode(Node):
         Get or create the session for this node.
 
         Returns:
-            Tuple of (session, summary) where summary is the conversation summary
-            from previous compact (if any), None otherwise
+            Tuple of (session, summary). The summary slot is always None now
+            that compaction persists the summary directly into the session
+            history; it is kept in the return type for backward compatibility
+            with existing call sites that unpack two values.
         """
-        summary = None
-
         if self._session is None:
             if self.session_id is None:
                 self.session_id = self._generate_session_id()
@@ -329,15 +328,7 @@ class AgenticNode(Node):
                     self._session = self.model.create_session(self.session_id)
                     logger.debug(f"Created session: {self.session_id}")
 
-                # If we have a summary from previous compact, return it
-                if self.last_summary:
-                    summary = self.last_summary
-                    logger.debug(f"Returning summary from previous compact: {len(summary)} chars")
-
-                    # Clear the summary after using it once
-                    self.last_summary = None
-
-        return self._session, summary
+        return self._session, None
 
     async def _count_session_tokens(self) -> int:
         """
@@ -390,7 +381,12 @@ class AgenticNode(Node):
     async def _manual_compact(self) -> dict:
         """
         Manually compact the session by summarizing conversation history.
-        This clears the session and stores summary for next session creation.
+
+        Generates an LLM summary of the current session, clears the session's
+        history, then writes a `user marker + assistant summary` pair back
+        into the SAME session so subsequent LLM requests and UI history reads
+        see the summary as the new visible turn. The session_id / .db file
+        are preserved; no new session is created.
 
         Returns:
             Dict with success, summary, and summary_token count
@@ -419,9 +415,6 @@ class AgenticNode(Node):
         try:
             logger.info(f"Starting manual compacting for session {self.session_id}")
 
-            # Store old session info for logging
-            old_session_id = self.session_id
-
             # 1. Generate summary using LLM with existing session
             summarization_prompt = (
                 "Summarize our conversation up to this point. The summary should be a concise yet comprehensive "
@@ -447,24 +440,34 @@ class AgenticNode(Node):
                 logger.error(f"Failed to generate summary with LLM: {e}")
                 return {"success": False, "summary": "", "summary_token": 0}
 
-            # 2. Store summary for next session creation
-            self.last_summary = summary
-            logger.info(f"Stored summary for next session: {len(summary)} characters")
-
-            # 3. Clear current session
-            if old_session_id:
-                try:
-                    self.model.delete_session(old_session_id)
-                    logger.debug(f"Deleted old session: {old_session_id}")
-                except Exception as e:
-                    logger.warning(f"Failed to delete old session {old_session_id}: {e}")
-
-            # Clear session references
-            self.session_id = None
-            self._session = None
+            # 2. Persist summary back into the session: clear the existing history
+            #    and append a user/assistant pair so the summary becomes the new
+            #    visible turn. Subsequent LLM requests will pick it up as context
+            #    via the OpenAI Agents SDK session, and UI history reads will
+            #    surface the summary instead of an empty session.
+            try:
+                await self._session.clear_session()
+                await self._session.add_items(
+                    [
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": "[Previous conversation was compacted to save context. Summary below.]",
+                        },
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": summary}],
+                        },
+                    ]
+                )
+            except Exception as persist_err:
+                logger.error(f"Failed to persist compact summary: {persist_err}")
+                return {"success": False, "summary": "", "summary_token": 0}
 
             logger.info(
-                f"Manual compacting completed. Cleared session: {old_session_id}, Summary stored: {len(summary)} chars"
+                f"Manual compacting completed. Session {self.session_id} cleared and "
+                f"summary persisted ({len(summary)} chars, {summary_token} output tokens)"
             )
             return {"success": True, "summary": summary, "summary_token": summary_token}
 

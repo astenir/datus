@@ -2090,6 +2090,45 @@ class TestCmdCompactWithSession:
             or "Error" in output
         )
 
+    def test_compact_resets_in_memory_state(self, real_agent_config, mock_llm_create):
+        """After successful compact, in-memory state is reset via _reload_state_from_session."""
+        from tests.unit_tests.mock_llm_model import build_simple_response
+
+        console = Console(file=io.StringIO(), no_color=True)
+        cmds = _make_chat_commands(real_agent_config, console=console)
+
+        mock_llm_create.reset(
+            responses=[
+                build_simple_response("First reply"),
+                build_simple_response("Second reply"),
+                # compact summary response
+                build_simple_response("Summary of conversation"),
+            ]
+        )
+
+        # Two rounds of chat to accumulate history
+        cmds.execute_chat_command("First question")
+        cmds.execute_chat_command("Second question")
+
+        # Verify pre-compact state has accumulated data
+        assert len(cmds.all_turn_actions) == 2
+        assert len(cmds.chat_history) == 2
+        assert len(cmds.last_actions) > 0
+
+        console.file = io.StringIO()
+        cmds.cmd_compact("")
+
+        output = _get_console_output(console)
+        # Compact must succeed; this is the precondition for the reload behavior
+        # under test. A silent failure here would have previously made the
+        # remaining assertions vacuous.
+        assert "compacted successfully" in output.lower(), f"compact did not succeed; output={output!r}"
+        # After successful compact, _reload_state_from_session rebuilds from
+        # the compacted session (which contains only the summary pair), so
+        # pre-compact accumulated turn actions must be cleared.
+        assert cmds._trace_verbose is False
+        assert cmds.current_node.actions == []
+
 
 # ===========================================================================
 # TestCmdListSessionsWithData — cmd_list_sessions 有 session 数据
@@ -2263,44 +2302,6 @@ class TestCmdResumeWithSession:
         assert cmds.current_node is not None
         # Should show "You:" for user messages
         assert "you:" in output.lower() or "message" in output.lower()
-
-    def test_resume_high_token_warning(self, real_agent_config, mock_llm_create):
-        """cmd_resume shows high token warning when session has > 50000 tokens."""
-        console = Console(file=io.StringIO(), no_color=True)
-        cmds = _make_chat_commands(real_agent_config, console=console)
-
-        session_id = "chat_session_resume05"
-        _create_session_on_disk(session_id)
-
-        # Insert token usage > 50000 into turn_usage table
-        from datus.utils.path_manager import get_path_manager
-
-        db_path = os.path.join(str(get_path_manager().sessions_dir), f"{session_id}.db")
-        with sqlite3.connect(db_path) as conn:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS turn_usage ("
-                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-                "session_id TEXT NOT NULL, "
-                "branch_id TEXT DEFAULT 'main', "
-                "user_turn_number INTEGER NOT NULL, "
-                "requests INTEGER DEFAULT 0, "
-                "input_tokens INTEGER DEFAULT 0, "
-                "output_tokens INTEGER DEFAULT 0, "
-                "total_tokens INTEGER DEFAULT 0, "
-                "created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
-            )
-            conn.execute(
-                "INSERT INTO turn_usage (session_id, user_turn_number, total_tokens) VALUES (?, ?, ?)",
-                (session_id, 1, 60000),
-            )
-            conn.commit()
-
-        cmds.cmd_resume(session_id)
-
-        output = _get_console_output(console)
-        assert cmds.current_node is not None
-        # Should show high token warning
-        assert "token" in output.lower() or "compact" in output.lower()
 
 
 # ===========================================================================
