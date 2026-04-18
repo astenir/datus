@@ -200,6 +200,19 @@ class TestInitDirsAndCopyFiles:
         assert "conf" in args
         assert "data" in args
 
+    def test_init_dirs_omits_project_scoped_sessions(self, tmp_path):
+        """Bootstrap must not request 'sessions' — it is project-scoped and
+        raises DatusException(410000) when project_name is empty (which it
+        always is during initial configure)."""
+        cfg = _make_configure(tmp_path)
+
+        mock_pm = MagicMock()
+        with patch("datus.cli.interactive_configure.get_path_manager", return_value=mock_pm):
+            cfg._init_dirs()
+
+        args = mock_pm.ensure_dirs.call_args[0]
+        assert "sessions" not in args
+
     def test_copy_files_handles_errors_gracefully(self, tmp_path):
         """_copy_files() swallows exceptions from copy_data_file without raising."""
         cfg = _make_configure(tmp_path)
@@ -348,6 +361,47 @@ class TestLoadProviderCatalog:
             result = cfg._load_provider_catalog()
 
         assert result == {"providers": {}, "model_overrides": {}}
+
+    def test_overlays_remote_models_into_local_catalog(self, tmp_path):
+        """_load_provider_catalog applies the remote overlay through resolve_provider_models."""
+        catalog_data = _make_provider_catalog()
+        overlaid = _make_provider_catalog()
+        overlaid["providers"]["openai"]["models"] = ["remote-gpt-a", "remote-gpt-b"]
+
+        with (
+            patch(
+                "datus.cli.interactive_configure.read_data_file_text",
+                return_value=yaml.dump(catalog_data),
+            ),
+            patch(
+                "datus.cli.provider_model_catalog.resolve_provider_models",
+                return_value=overlaid,
+            ) as mock_resolve,
+        ):
+            cfg = _make_configure(tmp_path)
+            result = cfg._load_provider_catalog()
+
+        assert mock_resolve.called
+        assert result["providers"]["openai"]["models"] == ["remote-gpt-a", "remote-gpt-b"]
+
+    def test_falls_back_to_local_catalog_when_resolver_raises(self, tmp_path):
+        """When resolve_provider_models blows up, _load_provider_catalog keeps the local yaml."""
+        catalog_data = _make_provider_catalog()
+
+        with (
+            patch(
+                "datus.cli.interactive_configure.read_data_file_text",
+                return_value=yaml.dump(catalog_data),
+            ),
+            patch(
+                "datus.cli.provider_model_catalog.resolve_provider_models",
+                side_effect=RuntimeError("helper exploded"),
+            ),
+        ):
+            cfg = _make_configure(tmp_path)
+            result = cfg._load_provider_catalog()
+
+        assert result["providers"]["openai"]["models"] == ["gpt-4o", "gpt-4-turbo"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
