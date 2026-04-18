@@ -68,8 +68,8 @@ class GenMetricsAgenticNode(AgenticNode):
             if isinstance(agentic_node_config, dict):
                 self.max_turns = agentic_node_config.get("max_turns", 40)
 
-        self.metrics_dir = str(agent_config.path_manager.semantic_model_path(agent_config.current_database))
-        self.knowledge_base_dir = str(agent_config.path_manager.knowledge_base_home)
+        self.metrics_dir = str(agent_config.path_manager.semantic_model_path())
+        self.knowledge_base_dir = str(agent_config.path_manager.subject_dir)
 
         from datus.configuration.node_type import NodeType
 
@@ -133,7 +133,7 @@ class GenMetricsAgenticNode(AgenticNode):
         try:
             self.filesystem_func_tool = FilesystemFuncTool(
                 root_path=self.knowledge_base_dir,
-                path_normalizer=make_kb_path_normalizer(self.agent_config, default_kind="metric"),
+                path_normalizer=make_kb_path_normalizer(default_kind="metric"),
             )
 
             self.tools.extend(self.filesystem_func_tool.available_tools())

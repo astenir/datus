@@ -7,13 +7,38 @@ Centralized path management for all .datus related directories and files.
 
 This module provides a unified interface for managing all paths related to the
 .datus directory structure. The home directory is determined from agent.yml config.
+
+Storage layout (refactored):
+
+- ``{project_root}/subject/{semantic_models, sql_summaries, ext_knowledge}/``
+  — knowledge-base content lives alongside the project so every CWD gets its
+  own copy. There is no per-namespace subdirectory anymore.
+- ``{project_root}/.datus/skills/`` — project-level skills.
+- ``{datus_home}/sessions/{project_name}/`` — sessions sharded by project.
+- ``{datus_home}/data/`` — storage-backend root.  Each backend owns its own
+  project isolation strategy (e.g. a ``{project_name}/`` subdirectory for
+  file-based backends, a schema/collection name for remote backends).
+  Non-backend callers that still want a project-scoped on-disk location (e.g.
+  document/ storage) should use :pyattr:`DatusPathManager.project_data_dir`.
+- ``{datus_home}/{conf, logs, template, run, benchmark, workspace, skills, ...}``
+  — global, shared across projects.
 """
 
+import re
 from contextvars import ContextVar, Token
 from pathlib import Path
 from typing import Any, Optional, Union
 
+from datus.utils.exceptions import DatusException, ErrorCode
+
 PathLike = Union[str, Path]
+
+# Defense-in-depth guard for the project_name path segment.  AgentConfig already
+# validates or normalizes project_name before it reaches the path manager, but
+# this class is a public API and takes project_name directly in tests/SaaS
+# callers, so we re-check to keep ``~/.datus/data/{project_name}`` and
+# ``~/.datus/sessions/{project_name}`` safely sandboxed.
+_PROJECT_NAME_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
 
 
 class DatusPathManager:
@@ -33,21 +58,40 @@ class DatusPathManager:
     def __init__(
         self,
         datus_home: Optional[PathLike] = None,
-        knowledge_base_home: Optional[PathLike] = None,
+        project_name: Optional[str] = None,
+        project_root: Optional[PathLike] = None,
     ):
         """
         Initialize the path manager.
 
         Args:
             datus_home: Custom .datus root directory. If None, defaults to ~/.datus
-            knowledge_base_home: Custom root for knowledge-base directories
-                (``semantic_models``, ``sql_summaries``, ``ext_knowledge``).
-                If None, falls back to ``datus_home`` so behavior is unchanged.
+            project_name: Logical project identifier used to shard ``sessions/`` and
+                ``data/`` under ``datus_home``. Callers should pass a sanitized name
+                (e.g. via ``datus.configuration.agent_config._normalize_project_name``).
+                Non-project callers that only need global paths (``conf``/``logs``/...)
+                may leave this empty; accessing ``project_data_dir`` or
+                ``sessions_dir`` without a project_name raises ``DatusException``.
+            project_root: Root directory for project-scoped KB content (the
+                ``subject/`` tree and ``.datus/skills``). Defaults to ``Path.cwd()``.
         """
         self._datus_home = self.resolve_home(datus_home)
-        self._knowledge_base_home = (
-            Path(knowledge_base_home).expanduser().resolve() if knowledge_base_home else self._datus_home
-        )
+        self._project_name = self._validate_project_name_segment(project_name)
+        self._project_root = Path(project_root).expanduser().resolve() if project_root else Path.cwd().resolve()
+
+    @staticmethod
+    def _validate_project_name_segment(project_name: Optional[str]) -> str:
+        """Reject project names that would escape or reshape the shard directory."""
+        if not project_name:
+            return ""
+        if not _PROJECT_NAME_SEGMENT_RE.match(project_name):
+            raise ValueError(
+                f"Invalid project_name {project_name!r}: must match "
+                f"{_PROJECT_NAME_SEGMENT_RE.pattern} (no path separators or traversal "
+                f"components). Sanitize via datus.configuration.agent_config."
+                f"_normalize_project_name before constructing DatusPathManager."
+            )
+        return project_name
 
     @staticmethod
     def resolve_home(datus_home: Optional[PathLike] = None) -> Path:
@@ -61,14 +105,8 @@ class DatusPathManager:
         Update the datus home directory.
 
         Deprecated compatibility helper.
-        Prefer creating a new ``DatusPathManager(new_home)`` and passing it explicitly.
-
-        Also resets ``knowledge_base_home`` to track ``new_home`` to avoid stale cross-tenant
-        state in long-running processes. Callers that need a separate knowledge root
-        must construct a new ``DatusPathManager(new_home, knowledge_base_home=...)`` instead.
-
-        Args:
-            new_home: New home directory path (can include ~)
+        Prefer creating a new ``DatusPathManager(new_home, ...)`` and passing it
+        explicitly.
         """
         import warnings
 
@@ -78,8 +116,6 @@ class DatusPathManager:
             stacklevel=2,
         )
         self._datus_home = self.resolve_home(new_home)
-        # Reset knowledge_base_home to match so stale KB paths from a prior tenant don't leak.
-        self._knowledge_base_home = self._datus_home
 
     @property
     def datus_home(self) -> Path:
@@ -87,9 +123,14 @@ class DatusPathManager:
         return self._datus_home
 
     @property
-    def knowledge_base_home(self) -> Path:
-        """Root directory for knowledge-base data (semantic_models, sql_summaries, ext_knowledge)."""
-        return self._knowledge_base_home
+    def project_name(self) -> str:
+        """Logical project name used to shard ``sessions/`` and ``data/``."""
+        return self._project_name
+
+    @property
+    def project_root(self) -> Path:
+        """Project root directory (typically the CWD at startup)."""
+        return self._project_root
 
     @property
     def conf_dir(self) -> Path:
@@ -98,8 +139,31 @@ class DatusPathManager:
 
     @property
     def data_dir(self) -> Path:
-        """Data directory: ~/.datus/data"""
+        """Storage-backend root: ``~/.datus/data``.
+
+        This is intentionally project-agnostic so each storage backend can own
+        its isolation strategy (e.g. a ``{project_name}/`` subdirectory, a
+        schema name, a collection prefix).  Callers that need an on-disk
+        project-scoped directory for non-backend use should use
+        :pyattr:`project_data_dir` instead.
+        """
         return self._datus_home / "data"
+
+    @property
+    def project_data_dir(self) -> Path:
+        """Project-scoped local data directory: ``~/.datus/data/{project_name}``.
+
+        Requires ``project_name`` to be set; raises ``DatusException`` when it
+        is empty. Intended for non-backend callers (e.g. ``document/`` storage)
+        that want a project-sharded on-disk location. Storage backends should
+        use :pyattr:`data_dir` and apply their own isolation.
+        """
+        if not self._project_name:
+            raise DatusException(
+                ErrorCode.STORAGE_FAILED,
+                message="project_data_dir requires a non-empty project_name.",
+            )
+        return self._datus_home / "data" / self._project_name
 
     @property
     def logs_dir(self) -> Path:
@@ -108,8 +172,17 @@ class DatusPathManager:
 
     @property
     def sessions_dir(self) -> Path:
-        """Sessions directory: ~/.datus/sessions"""
-        return self._datus_home / "sessions"
+        """Sessions directory: ``~/.datus/sessions/{project_name}``.
+
+        Requires ``project_name`` to be set; raises ``DatusException`` when it
+        is empty.
+        """
+        if not self._project_name:
+            raise DatusException(
+                ErrorCode.STORAGE_FAILED,
+                message="sessions_dir requires a non-empty project_name.",
+            )
+        return self._datus_home / "sessions" / self._project_name
 
     @property
     def template_dir(self) -> Path:
@@ -165,19 +238,29 @@ class DatusPathManager:
         return path
 
     @property
+    def subject_dir(self) -> Path:
+        """Project-scoped knowledge-base root: ``{project_root}/subject``."""
+        return self._project_root / "subject"
+
+    @property
     def semantic_models_dir(self) -> Path:
-        """Semantic models directory: {knowledge_base_home}/semantic_models"""
-        return self._knowledge_base_home / "semantic_models"
+        """Semantic models directory: ``{project_root}/subject/semantic_models``."""
+        return self.subject_dir / "semantic_models"
 
     @property
     def sql_summaries_dir(self) -> Path:
-        """SQL summaries directory: {knowledge_base_home}/sql_summaries"""
-        return self._knowledge_base_home / "sql_summaries"
+        """SQL summaries directory: ``{project_root}/subject/sql_summaries``."""
+        return self.subject_dir / "sql_summaries"
 
     @property
     def ext_knowledge_dir(self) -> Path:
-        """ext knowledge directory: {knowledge_base_home}/ext_knowledge"""
-        return self._knowledge_base_home / "ext_knowledge"
+        """ext knowledge directory: ``{project_root}/subject/ext_knowledge``."""
+        return self.subject_dir / "ext_knowledge"
+
+    @property
+    def project_skills_dir(self) -> Path:
+        """Project-level skills directory: ``{project_root}/.datus/skills``."""
+        return self._project_root / ".datus" / "skills"
 
     # Valid directory names mapping
     _VALID_DIR_NAMES = {
@@ -192,9 +275,11 @@ class DatusPathManager:
         "save": "save_dir",
         "workspace": "workspace_dir",
         "trajectory": "trajectory_dir",
+        "subject": "subject_dir",
         "semantic_models": "semantic_models_dir",
         "sql_summaries": "sql_summaries_dir",
         "ext_knowledge": "ext_knowledge_dir",
+        "project_skills": "project_skills_dir",
     }
 
     # Configuration file paths
@@ -234,27 +319,12 @@ class DatusPathManager:
 
     def rag_storage_path(self) -> Path:
         """
-        RAG storage path (unified for all namespaces).
+        RAG storage path (unified per project).
 
         Returns:
-            Path: ~/.datus/data/datus_db
+            Path: ``{project_data_dir}/datus_db`` (i.e. ``{home}/data/{project_name}/datus_db``)
         """
-        path = self.data_dir / "datus_db"
-        # Ensure the directory exists
-        path.mkdir(parents=True, exist_ok=True)
-        return path
-
-    def sub_agent_path(self, agent_name: str) -> Path:
-        """
-        Sub-agent storage path.
-
-        Args:
-            agent_name: Sub-agent name
-
-        Returns:
-            Path: ~/.datus/data/sub_agents/{agent_name}
-        """
-        path = self.data_dir / "sub_agents" / agent_name
+        path = self.project_data_dir / "datus_db"
         # Ensure the directory exists
         path.mkdir(parents=True, exist_ok=True)
         return path
@@ -267,53 +337,44 @@ class DatusPathManager:
             session_id: Session identifier
 
         Returns:
-            Path: ~/.datus/sessions/{session_id}.db
+            Path: ``{sessions_dir}/{session_id}.db``
         """
         # Ensure the parent directory exists
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
         return self.sessions_dir / f"{session_id}.db"
 
-    def semantic_model_path(self, namespace: str) -> Path:
+    def semantic_model_path(self) -> Path:
         """
-        Semantic model path for a namespace.
-
-        Args:
-            namespace: Namespace name
+        Semantic model directory for the current project.
 
         Returns:
-            Path: ~/.datus/semantic_models/{namespace}
+            Path: ``{project_root}/subject/semantic_models``
         """
-        path = self.semantic_models_dir / namespace
+        path = self.semantic_models_dir
         # Ensure the directory exists
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def sql_summary_path(self, namespace: str) -> Path:
+    def sql_summary_path(self) -> Path:
         """
-        SQL summary path for a namespace.
-
-        Args:
-            namespace: Namespace name
+        SQL summary directory for the current project.
 
         Returns:
-            Path: ~/.datus/sql_summaries/{namespace}
+            Path: ``{project_root}/subject/sql_summaries``
         """
-        path = self.sql_summaries_dir / namespace
+        path = self.sql_summaries_dir
         # Ensure the directory exists
         path.mkdir(parents=True, exist_ok=True)
         return path
 
-    def ext_knowledge_path(self, namespace: str) -> Path:
+    def ext_knowledge_path(self) -> Path:
         """
-        Ext knowledge path for a namespace.
-
-        Args:
-            namespace: Namespace name
+        External knowledge directory for the current project.
 
         Returns:
-            Path: ~/.datus/ext_knowledge/{namespace}
+            Path: ``{project_root}/subject/ext_knowledge``
         """
-        path = self.ext_knowledge_dir / namespace
+        path = self.ext_knowledge_dir
         # Ensure the directory exists
         path.mkdir(parents=True, exist_ok=True)
         return path
@@ -357,8 +418,8 @@ class DatusPathManager:
         Args:
             *dirs: Directory names to ensure. If empty, ensures all standard directories.
                    Valid names: conf, data, logs, sessions, template, sample, run,
-                   benchmark, save, workspace, trajectory, semantic_models,
-                   sql_summaries
+                   benchmark, save, workspace, trajectory, subject, semantic_models,
+                   sql_summaries, ext_knowledge, project_skills
 
         Raises:
             ValueError: If an invalid directory name is provided
@@ -393,7 +454,8 @@ class DatusPathManager:
 # Context-local path manager for legacy helpers that do not receive ``AgentConfig`` directly.
 # Unlike the previous process-wide fallback, this does not leak across threads/tasks.
 # We store the full ``DatusPathManager`` instance (not just the home path string) so that
-# ``knowledge_base_home`` and any other instance-level state survives the ContextVar round-trip.
+# ``project_name`` / ``project_root`` and any other instance-level state survives the
+# ContextVar round-trip.
 _current_path_manager: ContextVar[Optional["DatusPathManager"]] = ContextVar("datus_current_path_manager", default=None)
 
 
@@ -404,8 +466,8 @@ def set_current_path_manager(
 ) -> Token:
     """Set the current context-local path manager used by ``get_path_manager()``.
 
-    The full ``DatusPathManager`` instance is stored, so ``knowledge_base_home`` and
-    any instance-level state is preserved for implicit callers.
+    The full ``DatusPathManager`` instance is stored, so ``project_name`` /
+    ``project_root`` and any instance-level state is preserved for implicit callers.
     """
     if path_manager is None and agent_config is not None:
         path_manager = getattr(agent_config, "path_manager", None)

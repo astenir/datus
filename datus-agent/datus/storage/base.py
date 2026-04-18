@@ -45,16 +45,18 @@ class StorageBase:
 
         Args:
             db: Optional pre-created VectorDatabase connection.
-                If provided, it is used directly instead of the global
-                namespace connection.  This allows stores like DocumentStore
-                to use per-platform isolated databases.
+                If provided, it is used directly instead of opening a new
+                connection bound to the active project. Stores that need
+                a composite-project scope (e.g. ``DocumentStore``) pass
+                their own ``db`` built from the desired project.
         """
         if db is not None:
             self.db: VectorDatabase = db
         else:
             from datus.storage.backend_holder import create_vector_connection
+            from datus.utils.path_manager import get_path_manager
 
-            self.db = create_vector_connection()
+            self.db = create_vector_connection(get_path_manager().project_name)
 
     def _get_current_timestamp(self) -> str:
         """Get current timestamp in ISO format (UTC)."""
@@ -189,19 +191,12 @@ class BaseEmbeddingStore(StorageBase):
     def truncate_scoped(self) -> None:
         """Delete all rows visible to the current connection.
 
-        In ``IsolationType.LOGICAL`` mode the backend automatically scopes
-        the delete to the current ``datasource_id``.  In ``PHYSICAL`` mode
-        this drops the entire table (equivalent to ``truncate()``).
+        With PHYSICAL-only isolation this is equivalent to ``truncate()``
+        (drops the whole table); the method is retained as a stable alias
+        for call sites that previously relied on row-scoped deletion under
+        LOGICAL isolation.
         """
-        from datus.storage.backend_holder import get_isolation_type
-
-        self._ensure_table_ready()
-        if get_isolation_type() == "logical":
-            # LOGICAL mode — delete scoped rows via backend's _ds_where()
-            self.table.delete(None)
-        else:
-            # PHYSICAL mode — drop the whole table
-            self.truncate()
+        self.truncate()
 
     def _ensure_table(self, schema: Optional[pa.Schema] = None):
         if self.db.table_exists(self.table_name):

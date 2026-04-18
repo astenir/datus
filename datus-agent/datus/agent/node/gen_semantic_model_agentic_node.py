@@ -68,8 +68,11 @@ class GenSemanticModelAgenticNode(AgenticNode):
             if isinstance(agentic_node_config, dict):
                 self.max_turns = agentic_node_config.get("max_turns", 40)
 
-        self.semantic_model_dir = str(agent_config.path_manager.semantic_model_path(agent_config.current_database))
-        self.knowledge_base_dir = str(agent_config.path_manager.knowledge_base_home)
+        self.semantic_model_dir = str(agent_config.path_manager.semantic_model_path())
+        # ``knowledge_base_dir`` is the sandbox root for FilesystemFuncTool. It
+        # now points at the project-scoped ``subject/`` directory so tools can
+        # browse all three KB subfolders but not escape the project.
+        self.knowledge_base_dir = str(agent_config.path_manager.subject_dir)
 
         from datus.configuration.node_type import NodeType
 
@@ -192,7 +195,7 @@ class GenSemanticModelAgenticNode(AgenticNode):
         try:
             self.filesystem_func_tool = FilesystemFuncTool(
                 root_path=self.knowledge_base_dir,
-                path_normalizer=make_kb_path_normalizer(self.agent_config, default_kind="semantic"),
+                path_normalizer=make_kb_path_normalizer(default_kind="semantic"),
             )
 
             self.tools.extend(self.filesystem_func_tool.available_tools())
@@ -621,9 +624,7 @@ class GenSemanticModelAgenticNode(AgenticNode):
 
             from datus.cli.generation_hooks import resolve_kb_sandbox_path
 
-            full_path = resolve_kb_sandbox_path(
-                semantic_model_file, "semantic", self.agent_config, self.knowledge_base_dir
-            )
+            full_path = resolve_kb_sandbox_path(semantic_model_file, "semantic", self.knowledge_base_dir)
             if not full_path:
                 logger.warning(f"Semantic model file rejected by sandbox check: {semantic_model_file!r}")
                 return

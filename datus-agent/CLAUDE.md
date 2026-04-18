@@ -36,6 +36,24 @@ bash build_scripts/build_test_data.sh       # Build test knowledge base
 
 ## Architecture Patterns
 
+### Storage Layout
+
+- **Project-scoped (CWD)**:
+  - `./subject/{semantic_models, sql_summaries, ext_knowledge}/` — knowledge-base
+    content is anchored to the project root so every CWD ships its own copy.
+  - `./.datus/skills/` — project-level skills; takes precedence over
+    `~/.datus/skills`.
+- **Global (`~/.datus/`), sharded per project where relevant**:
+  - `~/.datus/sessions/{project_name}/{session_id}.db`
+  - `~/.datus/data/{project_name}/datus_db/` (LanceDB, document stores, etc.)
+  - `~/.datus/{conf, logs, template, run, benchmark, workspace, skills, ...}` —
+    shared across projects.
+- **`project_name` derivation**: `os.getcwd().replace("/", "-").lstrip("-")`
+  (falls back to `_root` for empty / root `/`; truncates long paths with a
+  7-char md5 suffix). See `datus.configuration.agent_config._normalize_project_name`.
+- **`agent.knowledge_base_home`**: removed. KB content is anchored to
+  `{project_root}/subject/`; the YAML field is silently ignored if left in.
+
 ### Adding a New Node
 
 1. Create `datus/agent/node/{name}_node.py`

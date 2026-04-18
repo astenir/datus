@@ -48,10 +48,16 @@ def _init_vector_backend(tmp_path):
     """Initialize storage backends with tmp_path so data goes to a temp directory, not project root."""
     from datus.storage.backend_holder import init_backends
     from datus.storage.registry import clear_storage_registry
+    from datus.utils.path_manager import DatusPathManager, reset_path_manager, set_current_path_manager
 
     init_backends(data_dir=str(tmp_path))
-    yield
-    clear_storage_registry()
+    pm = DatusPathManager(datus_home=tmp_path, project_name="saas_test", project_root=tmp_path)
+    token = set_current_path_manager(pm)
+    try:
+        yield
+    finally:
+        reset_path_manager(token)
+        clear_storage_registry()
 
 
 # ---------------------------------------------------------------------------
@@ -640,10 +646,15 @@ class TestAgentConfigSkipInitDirs:
         )
 
     def test_skip_init_dirs_sets_rag_base_path(self, tmp_path):
-        """With skip_init_dirs=True, rag_base_path is computed directly without path_manager."""
+        """With skip_init_dirs=True, rag_base_path points at the project-sharded
+        on-disk directory (``project_data_dir``).  ``data_dir`` is the backend
+        root and intentionally project-agnostic; the sharding happens one
+        level deeper via ``project_data_dir``."""
         config = self._make_config(tmp_path, skip_init_dirs=True)
-        expected = str((tmp_path / "saas_home").resolve() / "data")
+        expected = str(config.path_manager.project_data_dir)
         assert config.rag_base_path == expected
+        # Must not equal the un-sharded backend root any more.
+        assert config.rag_base_path != str(config.path_manager.data_dir)
 
     def test_skip_init_dirs_empty_save_dir(self, tmp_path):
         """With skip_init_dirs=True, _save_dir and _trajectory_dir are empty strings."""
@@ -698,11 +709,12 @@ class TestAgentConfigSkipInitDirs:
                     "base_url": "http://localhost:0",
                 },
             },
-            storage={"workspace_root": str(tmp_path / "workspace")},
+            project_root=str(tmp_path / "workspace"),
+            storage={"database": {"registry_name": "openai"}},
             skip_init_dirs=True,
         )
         assert config.storage_configs == {}
-        assert config.workspace_root == str(tmp_path / "workspace")
+        assert config.project_root == str((tmp_path / "workspace").resolve())
 
 
 # ===========================================================================

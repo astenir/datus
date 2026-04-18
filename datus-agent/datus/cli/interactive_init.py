@@ -792,7 +792,7 @@ def init_metadata_and_log_result(namespace_name: str, config_path: str, console:
                 agent_config.save_storage_config("database")
                 from datus.storage.backend_holder import create_vector_connection
 
-                db = create_vector_connection(namespace_name)
+                db = create_vector_connection(agent_config.project_name)
                 try:
                     db.drop_table("schema_metadata", ignore_missing=True)
                     db.drop_table("schema_value", ignore_missing=True)
@@ -882,14 +882,14 @@ def do_init_sql_and_log_result(
 
             from datus.storage.backend_holder import create_vector_connection
 
-            db = create_vector_connection(agent_config.current_database)
+            db = create_vector_connection(agent_config.project_name)
             try:
                 db.drop_table("reference_sql", ignore_missing=True)
                 logger.info("Dropped existing reference_sql table")
             finally:
                 db.close()
-            # Also clear sql_summaries/{namespace} directory (YAML files)
-            sql_summary_dir = agent_config.path_manager.sql_summary_path(agent_config.current_database)
+            # Also clear the sql_summaries directory (YAML files)
+            sql_summary_dir = agent_config.path_manager.sql_summary_path()
             if sql_summary_dir.exists() and not safe_rmtree(sql_summary_dir, "SQL summary directory", force=force):
                 console.print("[yellow]Cancelled by user[/yellow]")
                 return False, None

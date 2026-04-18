@@ -3,9 +3,8 @@ agent:
   # Using relative path for portability across different environments
   home: .datus_test_data
   target: deepseek
-  workspace_root: .datus_test_data/workspace
+  project_root: .datus_test_data/workspace
 
-  knowledge_base_home: .datus_test_data/knowledge_base # Configuration to simulate real-world scenarios
   models:
     deepseek:
       type: deepseek

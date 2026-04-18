@@ -53,7 +53,7 @@ class ExplorerService:
         self.reference_sql_rag = ReferenceSqlRAG(agent_config, datasource_id=self.datasource_id)
         self.knowledge_rag = ExtKnowledgeRAG(agent_config, datasource_id=self.datasource_id)
         self.semantic_model_rag = SemanticModelRAG(agent_config, datasource_id=self.datasource_id)
-        self.subject_tree_store = get_subject_tree_store(namespace=self.datasource_id)
+        self.subject_tree_store = get_subject_tree_store(project=agent_config.project_name)
 
     def _gen_reference_sql_id(self, sql: str) -> str:
         """Generate a stable identifier for reference SQL entries."""
@@ -763,7 +763,6 @@ class ExplorerService:
 
             from datus.api.models.config_models import ErrorCode
             from datus.cli.generation_hooks import GenerationHooks
-            from datus.utils.path_manager import DatusPathManager
 
             logger.info(f"Creating metric at parent path: {request.subject_path}")
 
@@ -833,9 +832,9 @@ class ExplorerService:
                     errorMessage=f"Metric '{metric_name}' already exists at path: {'/'.join(parent_path)}",
                 )
 
-            # Step 3: Determine file path
-            path_manager = DatusPathManager(datus_home=self.agent_config.home)
-            semantic_dir = path_manager.semantic_model_path(self.agent_config.current_namespace)
+            # Step 3: Determine file path. Use the agent_config's own path_manager so
+            # the project_root/subject anchoring propagates to derived paths.
+            semantic_dir = self.agent_config.path_manager.semantic_model_path()
             file_path = os.path.join(str(semantic_dir), "metrics", f"{metric_name}.yml")
 
             # Step 4: Check for file conflict
