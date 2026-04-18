@@ -22,7 +22,6 @@ from datus.storage.reference_sql.store import ReferenceSqlRAG
 from datus.storage.semantic_model.store import SemanticModelRAG
 from datus.tools.db_tools import connector_registry
 from datus.utils.constants import DBType
-from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
@@ -38,16 +37,6 @@ _KIND_TO_SUBDIR = {
     "semantic": "semantic_models",
     "metric": "semantic_models",
     "sql_summary": "sql_summaries",
-    "ext_knowledge": "ext_knowledge",
-}
-
-# write_file `file_type` argument values used by the LLM mapped to internal kinds.
-_FILE_TYPE_ALIASES = {
-    "semantic": "semantic",
-    "semantic_model": "semantic",
-    "metric": "metric",
-    "metrics": "metric",
-    "sql_summary": "sql_summary",
     "ext_knowledge": "ext_knowledge",
 }
 
@@ -77,12 +66,20 @@ def normalize_kb_relative_path(path: str, kind: Optional[str]) -> str:
         return path
     if parts[0] == "..":
         return path
+    # After the ``subject/`` relocation, prompts emit fully-qualified paths
+    # like ``subject/semantic_models/orders.yml``. ``_resolve_path`` joins the
+    # result with ``kb_home`` (``{project_root}/subject``), so strip a leading
+    # ``subject/`` segment first to avoid ``subject/subject/...`` drift.
+    if parts[0] == "subject":
+        parts = parts[1:]
+        if not parts:
+            return path
     subdir = _KIND_TO_SUBDIR.get(kind or "")
     if not subdir:
-        return path
+        return "/".join(parts)
     head = parts[0]
     if head in set(_KIND_TO_SUBDIR.values()):
-        return path
+        return "/".join(parts)
     return f"{subdir}/{'/'.join(parts)}"
 
 
@@ -123,40 +120,6 @@ def resolve_kb_sandbox_path(
         logger.warning(f"Rejected path {raw_path!r} for kind={kind}: cannot verify containment under sandbox.")
         return None
     return candidate
-
-
-def make_kb_path_normalizer(default_kind: Optional[str] = None):
-    """
-    Build a ``FilesystemFuncTool.path_normalizer`` closure that silently prefixes
-    relative paths with the correct KB subdir under ``subject/``.
-
-    The closure accepts an optional ``strict_kind`` kwarg. When set (used for
-    mutating tool ops — ``write_file`` / ``edit_file``), cross-kind writes are
-    rejected: a node whose ``default_kind`` is ``semantic`` cannot write to a
-    path already prefixed with ``sql_summaries/`` or ``ext_knowledge/``. Reads
-    stay lax so the LLM can still browse peer KB artifacts.
-    """
-    expected_subdir = _KIND_TO_SUBDIR.get(default_kind or "")
-    known_subdirs = set(_KIND_TO_SUBDIR.values())
-
-    def _normalize(path: str, file_type: Optional[str], *, strict_kind: bool = False) -> str:
-        if strict_kind and expected_subdir and path and not os.path.isabs(path):
-            parts = [p for p in path.replace("\\", "/").split("/") if p]
-            head = parts[0] if parts else ""
-            if head in known_subdirs and head != expected_subdir:
-                raise DatusException(
-                    code=ErrorCode.TOOL_INVALID_INPUT,
-                    message=(
-                        f"Write to '{head}/' is not allowed from a {default_kind!r} node; "
-                        f"this node may only write under '{expected_subdir}/'."
-                    ),
-                )
-            kind = default_kind
-        else:
-            kind = _FILE_TYPE_ALIASES.get(file_type or "", default_kind)
-        return normalize_kb_relative_path(path, kind)
-
-    return _normalize
 
 
 class GenerationHooks(AgentHooks):

@@ -26,11 +26,10 @@ from datus.cli.execution_state import InteractionCancelled
 from datus.cli.generation_hooks import (
     GenerationCancelledException,
     GenerationHooks,
-    make_kb_path_normalizer,
     normalize_kb_relative_path,
     resolve_kb_sandbox_path,
 )
-from datus.tools.func_tool.filesystem_tools import FilesystemFuncTool
+from datus.tools.func_tool.filesystem_tools import FilesystemFuncTool  # noqa: F401
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -1515,71 +1514,30 @@ class TestNormalizeKbRelativePath:
 
 
 # ---------------------------------------------------------------------------
-# Tests: make_kb_path_normalizer factory
-# ---------------------------------------------------------------------------
-
-
-class TestMakeKbPathNormalizer:
-    def test_uses_default_kind_when_file_type_missing(self):
-        normalizer = make_kb_path_normalizer(default_kind="semantic")
-        assert normalizer("orders.yaml", None) == "semantic_models/orders.yaml"
-
-    def test_file_type_overrides_default_kind(self):
-        normalizer = make_kb_path_normalizer(default_kind="semantic")
-        assert normalizer("q_001.yaml", "sql_summary") == "sql_summaries/q_001.yaml"
-
-    def test_file_type_aliases_recognized(self):
-        normalizer = make_kb_path_normalizer(default_kind=None)
-        assert normalizer("orders.yaml", "semantic_model") == "semantic_models/orders.yaml"
-        assert normalizer("metrics/x.yaml", "metric") == "semantic_models/metrics/x.yaml"
-        assert normalizer("notes.yaml", "ext_knowledge") == "ext_knowledge/notes.yaml"
-
-    def test_strict_kind_rejects_cross_kind_write(self):
-        """Mutating ops (strict_kind=True) must reject writes to peer kinds' subdirs."""
-        from datus.utils.exceptions import DatusException, ErrorCode
-
-        normalizer = make_kb_path_normalizer(default_kind="semantic")
-        # Read-lax: cross-kind reads still allowed.
-        assert normalizer("sql_summaries/q.yaml", None) == "sql_summaries/q.yaml"
-        # Write-strict: the same cross-kind path is refused.
-        with pytest.raises(DatusException) as exc_info:
-            normalizer("sql_summaries/q.yaml", None, strict_kind=True)
-        assert exc_info.value.code == ErrorCode.TOOL_INVALID_INPUT
-        assert "Write to 'sql_summaries/' is not allowed" in str(exc_info.value)
-
-    def test_strict_kind_ignores_file_type_override(self):
-        """In strict mode, file_type cannot be used to switch kinds."""
-        normalizer = make_kb_path_normalizer(default_kind="semantic")
-        # Without strict: file_type override is honored.
-        assert normalizer("q.yaml", "sql_summary") == "sql_summaries/q.yaml"
-        # With strict: override is ignored; default_kind wins.
-        assert normalizer("q.yaml", "sql_summary", strict_kind=True) == "semantic_models/q.yaml"
-
-    def test_strict_kind_allows_own_kind_prefix(self):
-        """Own-kind prefix is accepted in strict mode."""
-        normalizer = make_kb_path_normalizer(default_kind="semantic")
-        assert normalizer("semantic_models/orders.yml", None, strict_kind=True) == "semantic_models/orders.yml"
-
-
-# ---------------------------------------------------------------------------
-# Tests: hook + tool agreement — _resolve_path finds files written via the
-# same normalizer regardless of whether the LLM emitted a naked filename.
+# Tests: hook + tool agreement — _resolve_path finds files written by the
+# tool (naked filename path was a normalizer concern; with normalizer gone
+# the LLM writes the full prefix, so the hook resolver must keep returning
+# the same absolute path regardless of which form the caller uses).
 # ---------------------------------------------------------------------------
 
 
 class TestHookAndToolPathAgreement:
-    def test_resolve_path_finds_naked_file_after_normalized_write(self, tmp_path, real_agent_config):
-        """FilesystemFuncTool writes orders.yml → hook resolves 'orders.yml' to the same on-disk path."""
+    def test_resolve_path_finds_file_written_with_full_prefix(self, tmp_path, real_agent_config):
+        """FilesystemFuncTool writes subject/semantic_models/orders.yml → hook resolves the same on-disk path."""
         subject_root = Path(str(real_agent_config.path_manager.subject_dir))
+        project_root = subject_root.parent
 
         tool = FilesystemFuncTool(
-            root_path=str(subject_root),
-            path_normalizer=make_kb_path_normalizer(default_kind="semantic"),
+            root_path=str(project_root),
+            current_node="gen_semantic_model",
         )
-        write_result = tool.write_file("orders.yml", "id: orders\n", file_type="semantic_model")
+        write_result = tool.write_file("subject/semantic_models/orders.yml", "id: orders\n")
         assert write_result.success == 1
 
         hooks = GenerationHooks(broker=None, agent_config=real_agent_config)
+        # Hook's legacy resolver still accepts naked filenames via
+        # normalize_kb_relative_path; the resolver path is decoupled from
+        # the fs tool.
         resolved = hooks._resolve_path("orders.yml", "semantic")
 
         on_disk = subject_root / "semantic_models" / "orders.yml"
