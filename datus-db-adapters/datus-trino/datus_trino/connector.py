@@ -184,6 +184,75 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
             logger.warning(f"Failed to get views: {e}")
             return []
 
+    def _show_create_definition(self, object_kind: str, catalog: str, schema: str, table: str) -> str:
+        """Run `SHOW CREATE TABLE/VIEW` and return the first cell (the DDL text)."""
+        sql = f'SHOW CREATE {object_kind} "{catalog}"."{schema}"."{table}"'
+        result = self._execute_pandas(sql)
+        if result.empty:
+            return ""
+        return str(result.iloc[0, 0])
+
+    def _objects_with_ddl(
+        self,
+        object_kind: str,
+        names: List[str],
+        catalog: str,
+        schema: str,
+        tables_filter: Optional[List[str]],
+    ) -> List[Dict[str, str]]:
+        """Assemble `[{identifier, catalog_name, database_name, schema_name, table_name,
+        table_type, definition}, ...]` for the requested object kind."""
+        result: List[Dict[str, str]] = []
+        for name in names:
+            full = self.full_name(catalog_name=catalog, schema_name=schema, table_name=name)
+            if tables_filter and full not in tables_filter:
+                continue
+            try:
+                ddl = self._show_create_definition(object_kind, catalog, schema, name)
+            except Exception as e:
+                logger.warning(f"Could not get DDL for {full}: {e}")
+                ddl = f"-- DDL not available for {name}"
+            result.append(
+                {
+                    "identifier": full,
+                    "catalog_name": catalog,
+                    "database_name": schema,
+                    "schema_name": schema,
+                    "table_name": name,
+                    "table_type": object_kind.lower(),
+                    "definition": ddl,
+                }
+            )
+        return result
+
+    @override
+    def get_tables_with_ddl(
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        tables: Optional[List[str]] = None,
+    ) -> List[Dict[str, str]]:
+        """Get tables with DDL statements (via `SHOW CREATE TABLE`)."""
+        catalog = catalog_name or self.catalog_name
+        schema = schema_name or database_name or self.schema_name
+        filter_tables = self._reset_filter_tables(tables, catalog_name, database_name, schema_name)
+        names = self.get_tables(catalog_name=catalog, schema_name=schema)
+        return self._objects_with_ddl("TABLE", names, catalog, schema, filter_tables)
+
+    @override
+    def get_views_with_ddl(
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+    ) -> List[Dict[str, str]]:
+        """Get views with DDL statements (via `SHOW CREATE VIEW`)."""
+        catalog = catalog_name or self.catalog_name
+        schema = schema_name or database_name or self.schema_name
+        names = self.get_views(catalog_name=catalog, schema_name=schema)
+        return self._objects_with_ddl("VIEW", names, catalog, schema, None)
+
     @override
     def get_schema(
         self,

@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-from typing import Any, Dict, Optional, Set, Union, override
+from typing import Any, Dict, List, Optional, Set, Union, override
 
 from datus_db_core import get_logger
 from datus_postgresql import PostgreSQLConnector
@@ -59,6 +59,15 @@ class GreenplumConnector(PostgreSQLConnector):
             "pg_aoseg",
             "pg_bitmapindex",
         }
+
+    @override
+    def get_materialized_views(
+        self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> List[str]:
+        """Greenplum 6.x does not expose a `pg_matviews` system view, and materialized
+        views themselves are not part of the GP 6 core. Returning an empty list keeps
+        callers (e.g. `DBFuncTool.list_tables`) from raising when probing for MVs."""
+        return []
 
     # ==================== DDL Generation ====================
 
