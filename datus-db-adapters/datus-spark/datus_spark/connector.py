@@ -140,6 +140,71 @@ class SparkConnector(SQLAlchemyConnector):
             logger.warning(f"Failed to get views: {e}")
             return []
 
+    def _show_create_definition(self, db: str, table: str) -> str:
+        """Run `SHOW CREATE TABLE` and return the first cell (the DDL text)."""
+        sql = f"SHOW CREATE TABLE {self.full_name(database_name=db, table_name=table)}"
+        result = self._execute_pandas(sql)
+        if result.empty:
+            return ""
+        return str(result.iloc[0, 0])
+
+    def _objects_with_ddl(
+        self,
+        object_type: str,
+        names: List[str],
+        db: str,
+        tables_filter: Optional[List[str]],
+    ) -> List[Dict[str, str]]:
+        """Assemble DDL payloads matching the shape other adapters return."""
+        result: List[Dict[str, str]] = []
+        for name in names:
+            full = self.full_name(database_name=db, table_name=name)
+            if tables_filter and full not in tables_filter:
+                continue
+            try:
+                ddl = self._show_create_definition(db, name)
+            except Exception as e:
+                logger.warning(f"Could not get DDL for {full}: {e}")
+                ddl = f"-- DDL not available for {name}"
+            result.append(
+                {
+                    "identifier": full,
+                    "catalog_name": "",
+                    "database_name": db,
+                    "schema_name": db,
+                    "table_name": name,
+                    "table_type": object_type,
+                    "definition": ddl,
+                }
+            )
+        return result
+
+    @override
+    def get_tables_with_ddl(
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+        tables: Optional[List[str]] = None,
+    ) -> List[Dict[str, str]]:
+        """Get tables with DDL statements (via `SHOW CREATE TABLE`)."""
+        db = database_name or self.database_name
+        filter_tables = self._reset_filter_tables(tables, catalog_name, database_name, schema_name)
+        names = self.get_tables(catalog_name=catalog_name, database_name=db, schema_name=schema_name)
+        return self._objects_with_ddl("table", names, db, filter_tables)
+
+    @override
+    def get_views_with_ddl(
+        self,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+    ) -> List[Dict[str, str]]:
+        """Get views with DDL statements (via `SHOW CREATE TABLE`; Spark treats views the same way)."""
+        db = database_name or self.database_name
+        names = self.get_views(catalog_name=catalog_name, database_name=db, schema_name=schema_name)
+        return self._objects_with_ddl("view", names, db, None)
+
     @override
     def get_schema(
         self,
