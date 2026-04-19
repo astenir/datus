@@ -283,6 +283,11 @@ class TestPermissionHooks:
         # Should not raise any exception
         await hooks.on_tool_start(context, agent, tool)
 
+        # ALLOW permission: broker.request must never be invoked to prompt the
+        # user. `mock_broker.assert_not_called()` only checks the mock itself as
+        # a callable — `mock_broker.request(...)` would slip past it silently.
+        mock_broker.request.assert_not_called()
+
     @pytest.mark.asyncio
     async def test_on_tool_start_deny(self, mock_broker):
         """Test on_tool_start raises exception when permission is DENY."""
@@ -347,6 +352,11 @@ class TestPermissionHooks:
 
         # Should not raise because of session approval
         await hooks.on_tool_start(context, agent, tool)
+
+        # ASK permission with session approval: broker.request must NOT be
+        # invoked to re-prompt the user. `mock_broker.assert_not_called()` only
+        # checks the mock as a callable and would not catch a child-method call.
+        mock_broker.request.assert_not_called()
 
 
 class TestPermissionHooksIntegration:
