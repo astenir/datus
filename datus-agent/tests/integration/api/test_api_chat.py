@@ -98,6 +98,7 @@ def chat_datus_service(chat_agent_config):
 @pytest_asyncio.fixture(scope="module")
 async def chat_client(chat_agent_config, chat_datus_service):
     """AsyncClient wired to the full FastAPI app with real DatusService."""
+    import datus.api.deps as deps_mod
     from datus.api.auth import NoAuthProvider
     from datus.api.deps import init_deps
     from datus.api.service import DatusAPIService, create_app
@@ -115,22 +116,40 @@ async def chat_client(chat_agent_config, chat_datus_service):
 
     mod = _svc_mod()
     saved = mod.service
-    mod.service = DatusAPIService(agent_args)
-
-    ns = "bird_school"
+    saved_deps = (
+        deps_mod._auth_provider,
+        deps_mod._service_cache,
+        deps_mod._namespace,
+        deps_mod._default_source,
+        deps_mod._default_interactive,
+        deps_mod._stream_thinking,
+    )
     cache = DatusServiceCache(max_size=4)
-    init_deps(NoAuthProvider(namespace=ns), cache, namespace=ns)
 
     async def _factory():
         return chat_datus_service
 
-    await cache.get_or_create(ns, _factory)
-
+    # Enter try/finally BEFORE mutating globals so failures during setup
+    # (DatusAPIService, init_deps, cache.get_or_create) still unwind the
+    # patched module state and shut the cache down cleanly.
     try:
+        mod.service = DatusAPIService(agent_args)
+        init_deps(NoAuthProvider(), cache, namespace="bird_school")
+        await cache.get_or_create("default", _factory)
+
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", timeout=120.0) as c:
             yield c
     finally:
         mod.service = saved
+        (
+            deps_mod._auth_provider,
+            deps_mod._service_cache,
+            deps_mod._namespace,
+            deps_mod._default_source,
+            deps_mod._default_interactive,
+            deps_mod._stream_thinking,
+        ) = saved_deps
+        # Shut the cache down last so if it raises the globals are already restored.
         await cache.shutdown()
 
 
@@ -225,8 +244,10 @@ class TestAPIChatN9:
                 events = parse_sse_body(resp.text)
                 assert len(events) >= 1
                 ids = [e["id"] for e in events if e.get("id", -1) >= 0]
-                if len(ids) >= 2:
-                    assert ids[0] == 0
+                # Resume must replay numbered events as a contiguous sequence
+                # starting at id=0. Empty list matches list(range(0)) == [],
+                # so the check is unconditional — no hidden skip branch.
+                assert ids == list(range(len(ids))), f"resume events must be a contiguous 0..N sequence, got {ids}"
             else:
                 assert resp.json().get("errorCode") == "TASK_NOT_FOUND"
         finally:
@@ -282,14 +303,25 @@ class TestAPIChatN9:
             "stop_sess",
         )
         try:
+            # If the task is still running when we arrive, send /stop and wait
+            # for it to terminate. If it already finished on its own (fast
+            # LLM / small workload), we skip the stop call — the terminal-
+            # state assert below still fires, so the test never silently passes.
+            stop_success: bool | None = None
             if task.status == "running":
                 body = (await chat_client.post("/api/v1/chat/stop", json={"session_id": "stop_sess"})).json()
-                assert body["success"] is True
+                stop_success = body["success"]
                 for _ in range(20):
                     await asyncio.sleep(0.5)
                     if task.status != "running":
                         break
-                assert task.status in ("cancelled", "completed", "error")
+            # Unconditional terminal-state check — applies whether we stopped
+            # the task or it finished on its own.
+            assert task.status in ("cancelled", "completed", "error"), (
+                f"task should reach a terminal state, got {task.status}"
+            )
+            # Only assert stop-endpoint success if we actually called it.
+            assert stop_success in (None, True), f"chat/stop must report success when invoked, got {stop_success}"
         finally:
             await _cleanup_task(chat_datus_service, task)
 
