@@ -36,7 +36,7 @@ pytestmark = pytest.mark.ci
 # ---------------------------------------------------------------------------
 
 
-class TestArgumentParser:
+class TestAPIArgumentParser:
     def test_defaults(self):
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("DATUS_NAMESPACE", None)
@@ -113,6 +113,7 @@ class TestEnsureParentDir:
         target = tmp_path / "file.txt"
         _ensure_parent_dir(target)
         _ensure_parent_dir(target)
+        assert target.parent.is_dir(), "parent dir must still exist after second call"
 
 
 class TestReadPid:
@@ -149,7 +150,9 @@ class TestWriteRemovePidFile:
         assert not pid_file.exists()
 
     def test_remove_does_not_raise_when_missing(self, tmp_path):
-        _remove_pid_file(tmp_path / "nonexistent.pid")
+        missing = tmp_path / "nonexistent.pid"
+        _remove_pid_file(missing)
+        assert not missing.exists(), "pid file should still be absent — nothing was created"
 
 
 class TestIsProcessRunning:
@@ -250,10 +253,13 @@ class TestRedirectStdio:
 
 class TestDefaultPaths:
     def test_returns_pid_and_log_paths(self, tmp_path):
-        with patch(
-            "datus.configuration.agent_config_loader.get_agent_home",
-            return_value=str(tmp_path),
-        ), patch("datus.utils.path_manager.DatusPathManager") as mock_pm_cls:
+        with (
+            patch(
+                "datus.configuration.agent_config_loader.get_agent_home",
+                return_value=str(tmp_path),
+            ),
+            patch("datus.utils.path_manager.DatusPathManager") as mock_pm_cls,
+        ):
             mock_pm = mock_pm_cls.return_value
             mock_pm.pid_file_path.return_value = tmp_path / "datus-agent-api.pid"
             mock_pm.logs_dir = tmp_path / "logs"
@@ -414,6 +420,9 @@ class TestRemovePidFileErrorPath:
         pid_file.write_text("1")
         with patch.object(Path, "unlink", side_effect=OSError("denied")):
             _remove_pid_file(pid_file)  # must not raise
+        # unlink was mocked to raise, so the file should still be on disk —
+        # proves the OSError was swallowed, not that unlink was never called.
+        assert pid_file.exists(), "pid file should remain since unlink was blocked"
 
 
 # ---------------------------------------------------------------------------
