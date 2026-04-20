@@ -6,7 +6,7 @@
 
 Interactive wizard to configure LLM provider, database connections, and workspace settings.
 
-Writes configuration to `~/.datus/conf/agent.yml` using the `service.databases` format.
+Writes configuration to `~/.datus/conf/agent.yml` using the `services.databases` format.
 
 ```bash
 datus configure
@@ -29,12 +29,13 @@ agent:
       base_url: https://api.deepseek.com
       api_key: sk-xxx
       model: deepseek-chat
-  service:
+  services:
     databases:
       my_duckdb:
         type: duckdb
         uri: ./data.duckdb
         default: true
+    semantic_layer: {}
     bi_tools: {}
     schedulers: {}
   project_root: ~/.datus/workspace
@@ -77,7 +78,7 @@ datus init
 
 ### `datus service list`
 
-Show all configured databases, BI tools, and schedulers.
+Show all configured databases, semantic adapters, BI tools, and schedulers.
 
 ```bash
 datus service list
@@ -151,7 +152,7 @@ agent:
 **New format:**
 ```yaml
 agent:
-  service:
+  services:
     databases:
       db1:
         type: sqlite

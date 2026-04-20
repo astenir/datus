@@ -1,10 +1,10 @@
-# Service Configuration
+# Database Configuration
 
-Configure database connections and services for your data sources.
+Configure database connections under `agent.services.databases`.
 
 ## Overview
 
-The service configuration in Datus Agent organizes database connections under `service.databases` in `agent.yml`. Each database is an independent entry with its own connection parameters.
+The runtime services in Datus Agent live under `agent.services` in `agent.yml`. This page focuses on database connections in `services.databases`. Semantic adapters, BI tools, and schedulers are documented on their sibling pages.
 
 Key features:
 
@@ -14,15 +14,15 @@ Key features:
 - **Plugin Adapters**: Install additional database adapters via `datus-agent configure`
 - **Dynamic Discovery**: Glob pattern-based database discovery for multiple database files
 
-> **Migration note**: The old `namespace:` config format is auto-migrated to `service.databases` at runtime. You can also run `python -m datus.configuration.config_migrator --config conf/agent.yml` to migrate offline.
+> **Migration note**: The old `namespace:` config format is auto-migrated to `services.databases` at runtime. You can also run `python -m datus.configuration.config_migrator --config conf/agent.yml` to migrate offline.
 
 ## Configuration Structure
 
-Databases are configured under `agent.service.databases`. Each entry is an independent database connection:
+Databases are configured under `agent.services.databases`. Each entry is an independent database connection:
 
 ```yaml
 agent:
-  service:
+  services:
     databases:
       my_snowflake:
         type: snowflake
@@ -35,9 +35,33 @@ agent:
         type: duckdb
         uri: ./data/analytics.duckdb
 
-    bi_tools: {}       # Future: BI tool connections
-    schedulers: {}     # Future: Scheduler connections
+    semantic_layer:
+      metricflow: {}
+
+    bi_tools:
+      superset:
+        type: superset
+        api_url: http://localhost:8088
+        username: ${SUPERSET_USER}
+        password: ${SUPERSET_PASSWORD}
+
+    schedulers:
+      airflow_prod:
+        type: airflow
+        api_base_url: ${AIRFLOW_URL}
+        username: ${AIRFLOW_USER}
+        password: ${AIRFLOW_PASSWORD}
+        dags_folder: ${AIRFLOW_DAGS_DIR}
 ```
+
+## Service Sections
+
+| Section | Purpose | Selector |
+|---------|---------|----------|
+| `services.databases` | Database connections used by SQL and KB operations | `--database` / current database / default database |
+| `services.semantic_layer` | Semantic adapter configuration such as MetricFlow | `semantic_adapter` |
+| `services.bi_tools` | BI platform credentials and dataset materialization config | `bi_platform` |
+| `services.schedulers` | Scheduler service instances such as Airflow | `scheduler_service` |
 
 ## Supported Database Types
 
@@ -77,7 +101,29 @@ my_sqlite:
 ```yaml
 my_duckdb:
   type: duckdb
-  uri: ./data/analytics.duckdb
+  uri: duckdb:////Users/xxx/data/analytics.duckdb
+```
+
+### MySQL
+```yaml
+my_mysql:
+  type: mysql
+  host: localhost
+  port: 3306
+  username: ${MYSQL_USER}
+  password: ${MYSQL_PASSWORD}
+  database: analytics
+```
+
+### PostgreSQL
+```yaml
+my_postgresql:
+  type: postgresql
+  host: localhost
+  port: 5432
+  username: ${POSTGRES_USER}
+  password: ${POSTGRES_PASSWORD}
+  database: analytics
 ```
 
 ### Path Pattern (Multiple Files)
@@ -112,6 +158,7 @@ Supported patterns: `*.sqlite`, `**/*.sqlite`, `data/2024/*.db`
 - **Snowflake**: `account`, `warehouse`, `role`, `schema`
 - **StarRocks**: `catalog`
 - **SQLite/DuckDB**: `path_pattern` for glob-based discovery
+- **MySQL/PostgreSQL**: `host`, `port`, `username`, `password`, `database`
 
 ## Managing Databases
 
@@ -192,4 +239,7 @@ password: "actual_password"
 ## See Also
 
 - [Database Adapters](../adapters/db_adapters.md) - Install plugin adapters for MySQL, Snowflake, StarRocks, and more
+- [Semantic Layer Configuration](semantic_layer.md) - Configure semantic adapters
+- [BI Tools Configuration](bi_tools.md) - Configure Superset or Grafana
+- [Scheduler Configuration](schedulers.md) - Configure Airflow services
 - [CLI Commands](../cli-commands.md) - Full CLI reference including configure, init, and service commands
