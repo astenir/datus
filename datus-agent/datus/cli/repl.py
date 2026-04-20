@@ -27,13 +27,16 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.lexers import PygmentsLexer
 from prompt_toolkit.styles import Style, merge_styles, style_from_pygments_cls
 from rich.console import Console
+from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 if TYPE_CHECKING:
     from datus.agent.workflow_runner import WorkflowRunner
 
 from datus_db_core import BaseSqlConnector
 
+from datus import __version__
 from datus.cli._cli_utils import prompt_input, select_choice
 from datus.cli.agent_commands import AgentCommands
 from datus.cli.autocomplete import AtReferenceCompleter, CustomPygmentsStyle, CustomSqlLexer, SubagentCompleter
@@ -43,6 +46,8 @@ from datus.cli.context_commands import ContextCommands
 from datus.cli.metadata_commands import MetadataCommands
 from datus.cli.status_bar import StatusBarProvider
 from datus.cli.sub_agent_commands import SubAgentCommands
+from datus.cli.tui import DatusApp, tui_enabled
+from datus.cli.tui.app import EXIT_SENTINEL
 from datus.configuration.agent_config_loader import configuration_manager, load_agent_config
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.node_models import SQLContext
@@ -53,6 +58,17 @@ from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import parse_sql_type
 
 logger = get_logger(__name__)
+
+
+DATUS_BANNER_TEXT = (
+    "██████╗   █████╗  ████████╗ ██╗   ██╗ ███████╗\n"
+    "██╔══██╗ ██╔══██╗ ╚══██╔══╝ ██║   ██║ ██╔════╝\n"
+    "██║  ██║ ███████║    ██║    ██║   ██║ ███████╗\n"
+    "██║  ██║ ██╔══██║    ██║    ██║   ██║ ╚════██║\n"
+    "██████╔╝ ██║  ██║    ██║    ╚██████╔╝ ███████║\n"
+    "╚═════╝  ╚═╝  ╚═╝    ╚═╝     ╚═════╝  ╚══════╝"
+)
+_BANNER_MIN_WIDTH = 60
 
 
 class CommandType(Enum):
@@ -134,9 +150,20 @@ class DatusCLI:
         if hasattr(self.agent_config, "agentic_nodes") and self.agent_config.agentic_nodes:
             self.available_subagents.update(name for name in self.agent_config.agentic_nodes.keys() if name != "chat")
 
+        # TUI mode: use persistent prompt_toolkit Application with pinned
+        # status bar + input. Requires a TTY on both stdin/stdout and can be
+        # disabled via ``DATUS_TUI=0`` as an escape hatch.
+        self._use_tui = self.interactive and tui_enabled()
+        self.tui_app: Optional[DatusApp] = None
+
         self.at_completer: AtReferenceCompleter
         if self.interactive:
-            self._init_prompt_session()
+            # Both paths build completers, lexers and styles via the same
+            # helpers so feature parity is preserved.
+            if self._use_tui:
+                self._init_tui_app()
+            else:
+                self._init_prompt_session()
         else:
             self.at_completer = AtReferenceCompleter(self.agent_config, available_subagents=self.available_subagents)
 
@@ -332,6 +359,184 @@ class DatusCLI:
         tokens.append(("class:prompt", prompt_text))
         return tokens
 
+    def _build_app_style(self) -> Style:
+        """Return the prompt_toolkit Style used by both PromptSession and TUI.
+
+        Declaring it once keeps status-bar/input coloring in sync between the
+        two input paths and avoids drift when new status-bar segments are
+        added.
+        """
+        return merge_styles(
+            [
+                style_from_pygments_cls(CustomPygmentsStyle),
+                Style.from_dict(
+                    {
+                        "prompt": "ansigreen bold",
+                        "input-prompt": "ansigreen bold",
+                        "input-prompt.busy": "ansibrightblack",
+                        "input-area": "",
+                        "status-bar": "#9a9aaa",
+                        "status-bar.brand": "#ffd866 bold",
+                        "status-bar.plan": "#9a9aaa",
+                        "status-bar.sep": "#9a9aaa",
+                        "status-bar.agent": "#9a9aaa",
+                        "status-bar.connector": "#9a9aaa",
+                        "status-bar.model": "#9a9aaa",
+                        "status-bar.tokens": "#9a9aaa",
+                        "status-bar.ctx": "#9a9aaa",
+                        "status-bar.running": "#ffb86c bold",
+                        "separator": "#444444",
+                    }
+                ),
+            ]
+        )
+
+    def _status_tokens_for_tui(self) -> List[Tuple[str, str]]:
+        """Build status-bar tokens for the persistent TUI layout.
+
+        Shares :class:`StatusBarProvider` with the PromptSession path so both
+        modes present the same brand/plan/agent/connector/model/tokens/ctx
+        segments.
+        """
+        try:
+            state = self._status_bar_provider.current_state()
+            return state.to_formatted_tokens()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"status bar render failed: {e}")
+            return []
+
+    def _init_tui_app(self) -> None:
+        """Create the persistent ``DatusApp`` and register REPL bindings."""
+        # The Tab handler matches the legacy PromptSession behavior
+        # (trigger completion only, no navigation). Additional bindings —
+        # Shift+Tab plan-mode toggle, Ctrl+O trace details, ESC interrupt —
+        # are wired in later phases.
+        from prompt_toolkit.lexers import PygmentsLexer
+
+        # The TUI path still relies on the same AtReferenceCompleter handle
+        # that downstream code queries for subagent state, so attach it
+        # before constructing the app.
+        completer = self.create_combined_completer()
+
+        self.tui_app = DatusApp(
+            status_tokens_fn=self._status_tokens_for_tui,
+            dispatch_fn=self._dispatch_command_text,
+            completer=completer,
+            history=self.history,
+            lexer=PygmentsLexer(CustomSqlLexer),
+            style=self._build_app_style(),
+            input_prompt_fn=self._get_prompt_text,
+        )
+
+        @self.tui_app.key_bindings.add("tab")
+        def _tab(event):  # noqa: ANN001 - prompt_toolkit signature
+            buffer = event.app.current_buffer
+            if buffer.complete_state:
+                buffer.complete_next()
+            else:
+                buffer.start_completion(select_first=False)
+
+        @self.tui_app.key_bindings.add("s-tab")
+        def _s_tab(event):  # noqa: ANN001
+            """Shift+Tab: Toggle Plan Mode on/off.
+
+            Unlike the PromptSession handler, the TUI must not call
+            ``event.app.exit()`` — that would tear down the persistent
+            Application. Instead the REPL just flips the flag and asks the
+            layout to repaint; the status-bar's ``PLAN`` segment is driven
+            by :meth:`StatusBarState.to_formatted_tokens` so a single
+            ``invalidate`` is enough to reflect the change.
+            """
+            from datus.cli.tui.console_bridge import run_in_terminal_sync
+
+            self.plan_mode_active = not self.plan_mode_active
+            active = self.plan_mode_active
+
+            def _announce() -> None:
+                if active:
+                    self.console.print("[bold green]Plan Mode Activated![/]")
+                    self.console.print("[dim]Enter your planning task and press Enter to generate plan[/]")
+                else:
+                    self.console.print("[yellow]Plan Mode Deactivated[/]")
+
+            # Printing via ``run_in_terminal`` keeps the pinned status-bar +
+            # input intact: prompt_toolkit temporarily moves them out of the
+            # way, emits the message, then restores them at the bottom.
+            run_in_terminal_sync(_announce)
+            event.app.invalidate()
+
+        @self.tui_app.key_bindings.add("c-o")
+        def _c_o(event):  # noqa: ANN001
+            """Ctrl+O: toggle verbose during a live stream, or expand the
+            last chat's inline trace details when idle."""
+            from datus.cli.tui.console_bridge import run_in_terminal_sync
+
+            chat_commands = getattr(self, "chat_commands", None)
+            if chat_commands is None:
+                return
+
+            # Live stream active: toggle verbose on the streaming context
+            # (mirrors the key_callbacks entry the termios listener used to
+            # wire for Ctrl+O outside the TUI).
+            streaming_ctx = getattr(chat_commands, "current_streaming_ctx", None)
+            if streaming_ctx is not None:
+                try:
+                    streaming_ctx.toggle_verbose()
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.debug(f"toggle_verbose failed: {exc}")
+                return
+
+            last_actions = getattr(chat_commands, "last_actions", None)
+            if not last_actions:
+                return
+
+            def _show() -> None:
+                chat_commands.display_inline_trace_details(last_actions)
+
+            run_in_terminal_sync(_show)
+
+        @self.tui_app.key_bindings.add("escape")
+        def _esc(event):  # noqa: ANN001
+            """Escape: interrupt the running agent loop.
+
+            prompt_toolkit debounces ESC so this handler only fires for a
+            standalone key press, not for the leading byte of arrow-key
+            escape sequences (``\\x1b[A`` etc.). While idle the binding is
+            a no-op so default Buffer behavior (no-op for ESC in insert
+            mode) is preserved.
+            """
+            if not self.tui_app._agent_running.is_set():
+                return
+
+            chat_commands = getattr(self, "chat_commands", None)
+            current_node = getattr(chat_commands, "current_node", None) if chat_commands else None
+            controller = getattr(current_node, "interrupt_controller", None) if current_node else None
+            if controller is not None:
+                try:
+                    controller.interrupt()
+                except Exception as exc:  # pragma: no cover - defensive
+                    logger.debug(f"interrupt_controller.interrupt failed: {exc}")
+
+        @self.tui_app.key_bindings.add("c-c")
+        def _c_c(event):  # noqa: ANN001
+            """Ctrl+C: interrupt agent while running, clear buffer when idle.
+
+            Overrides the default DatusApp binding because the TUI needs a
+            handle to the chat node's interrupt_controller, which only
+            DatusCLI can resolve.
+            """
+            if self.tui_app._agent_running.is_set():
+                chat_commands = getattr(self, "chat_commands", None)
+                current_node = getattr(chat_commands, "current_node", None) if chat_commands else None
+                controller = getattr(current_node, "interrupt_controller", None) if current_node else None
+                if controller is not None:
+                    try:
+                        controller.interrupt()
+                    except Exception as exc:  # pragma: no cover - defensive
+                        logger.debug(f"interrupt_controller.interrupt failed: {exc}")
+                return
+            event.app.current_buffer.reset()
+
     def _init_prompt_session(self):
         # Setup prompt session with custom key bindings
         self.session = PromptSession(
@@ -344,24 +549,7 @@ class DatusCLI:
             enable_history_search=True,
             search_ignore_case=True,
             erase_when_done=True,
-            style=merge_styles(
-                [
-                    style_from_pygments_cls(CustomPygmentsStyle),
-                    Style.from_dict(
-                        {
-                            "prompt": "ansigreen bold",
-                            "status-bar": "#9a9aaa",
-                            "status-bar.brand": "#ffd866 bold",
-                            "status-bar.plan": "#9a9aaa",
-                            "status-bar.sep": "#9a9aaa",
-                            "status-bar.agent": "#9a9aaa",
-                            "status-bar.model": "#9a9aaa",
-                            "status-bar.tokens": "#9a9aaa",
-                            "status-bar.ctx": "#9a9aaa",
-                        }
-                    ),
-                ]
-            ),
+            style=self._build_app_style(),
             complete_while_typing=True,
         )
 
@@ -387,8 +575,78 @@ class DatusCLI:
             ]
         )
 
+    def _dispatch_command_text(self, user_input_raw: str) -> Optional[str]:
+        """Parse and execute a single user command.
+
+        Shared by both the PromptSession loop and the TUI worker thread. When
+        invoked from the TUI, this function runs on a :class:`ThreadPoolExecutor`
+        worker so ``asyncio.run(...)`` inside chat commands does not collide
+        with the prompt_toolkit Application's event loop on the main thread.
+
+        Returns :data:`EXIT_SENTINEL` when the user requested an exit so the
+        caller can tear down the TUI; returns ``None`` otherwise.
+        """
+        if user_input_raw is None:
+            return None
+        user_input = user_input_raw.strip()
+        if not user_input:
+            return None
+
+        # Re-echo user input with syntax highlighting. In TUI mode the input
+        # TextArea clears on Enter, so echoing via the patched stdout keeps a
+        # transcript of what was submitted. In PromptSession mode
+        # ``erase_when_done=True`` removes the prompt line, so the echo is
+        # still useful.
+        prompt_text = self._get_prompt_text()
+        try:
+            self._echo_user_input(prompt_text, user_input)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"echo_user_input failed: {e}")
+
+        try:
+            cmd_type, cmd, args = self._parse_command(user_input)
+            if cmd_type == CommandType.EXIT:
+                return EXIT_SENTINEL
+            if cmd_type == CommandType.SQL:
+                self._execute_sql(user_input)
+            elif cmd_type == CommandType.TOOL:
+                self._execute_tool_command(cmd, args)
+            elif cmd_type == CommandType.CONTEXT:
+                self._execute_context_command(cmd, args)
+            elif cmd_type == CommandType.CHAT:
+                self._execute_chat_command(args, subagent_name=cmd)
+            elif cmd_type == CommandType.INTERNAL:
+                self._execute_internal_command(cmd, args)
+                # ``.rewind`` sets ``_prefill_input`` from inside the internal
+                # command. In TUI mode the buffer was already drained before
+                # dispatch, so push the rewound message back into the live
+                # input area here. ``set_input_text`` schedules the mutation
+                # onto the prompt_toolkit loop, so it is safe from the worker.
+                if self._use_tui and self.tui_app is not None and self._prefill_input:
+                    self.tui_app.set_input_text(self._prefill_input)
+                    self._prefill_input = None
+        except KeyboardInterrupt:
+            # Interrupt during a single command dispatch is non-fatal: the
+            # outer loop (or TUI event loop) stays alive.
+            pass
+        except Exception as e:
+            if "exit" in str(e).lower() and "app" in str(e).lower():
+                # Shift+Tab plan-mode toggle historically surfaced as an app
+                # exit event; treat it as benign.
+                pass
+            else:
+                logger.error(f"Error: {str(e)}")
+                self.console.print(f"[bold red]Error:[/] {str(e)}")
+        return None
+
     def run(self):
         """Run the REPL loop."""
+        if self._use_tui and self.tui_app is not None:
+            return self._run_tui()
+        return self._run_prompt_session()
+
+    def _run_prompt_session(self):
+        """Classic ``PromptSession`` main loop (used for non-TTY fallback)."""
         self._print_welcome()
 
         while True:
@@ -409,42 +667,44 @@ class DatusCLI:
                         self.chat_commands.display_inline_trace_details(self.chat_commands.last_actions)
                     continue
                 self._prefill_input = None
-                user_input = user_input_raw.strip()
 
-                if not user_input:
-                    continue
-
-                # Re-echo user input with syntax highlighting (prompt_toolkit erased on submit)
-                self._echo_user_input(prompt_text, user_input)
-
-                # Parse and execute the command
-                cmd_type, cmd, args = self._parse_command(user_input)
-                if cmd_type == CommandType.EXIT:
+                result = self._dispatch_command_text(user_input_raw)
+                if result == EXIT_SENTINEL:
                     return True
-
-                # Execute the command based on type
-                if cmd_type == CommandType.SQL:
-                    self._execute_sql(user_input)
-                elif cmd_type == CommandType.TOOL:
-                    self._execute_tool_command(cmd, args)
-                elif cmd_type == CommandType.CONTEXT:
-                    self._execute_context_command(cmd, args)
-                elif cmd_type == CommandType.CHAT:
-                    self._execute_chat_command(args, subagent_name=cmd)
-                elif cmd_type == CommandType.INTERNAL:
-                    self._execute_internal_command(cmd, args)
 
             except KeyboardInterrupt:
                 continue
             except EOFError:
                 return 0
             except Exception as e:
-                # Check if this is an exit event (for plan mode toggle)
                 if "exit" in str(e).lower() and "app" in str(e).lower():
-                    # This is expected from shift+tab toggle, continue loop
                     continue
                 logger.error(f"Error: {str(e)}")
                 self.console.print(f"[bold red]Error:[/] {str(e)}")
+
+    def _run_tui(self):
+        """Persistent TUI main loop.
+
+        The prompt_toolkit Application owns the main thread; user input is
+        dispatched to :meth:`_dispatch_command_text` on a worker thread so
+        long-running agent loops do not block UI redraws, and so that
+        ``asyncio.run(...)`` inside those handlers does not collide with the
+        Application's event loop.
+        """
+        self._print_welcome()
+
+        # Prefill support mirrors the PromptSession path: ``.rewind`` stores
+        # the replayed user message in ``_prefill_input`` and expects the
+        # next prompt to display it as pre-filled editable text.
+        if self._prefill_input:
+            self.tui_app.set_input_text(self._prefill_input)
+            self._prefill_input = None
+
+        try:
+            self.tui_app.run()
+        except KeyboardInterrupt:
+            return 0
+        return True
 
     def _async_init_agent(self):
         """Initialize the agent asynchronously as a background coroutine.
@@ -459,7 +719,6 @@ class DatusCLI:
             return
 
         self.agent_initializing = True
-        self.console.print("[dim]Initializing AI capabilities in background...[/]")
 
         # Capture the current ContextVar state so the background task sees
         # ``set_current_path_manager`` bindings made in the main thread.
@@ -1139,39 +1398,65 @@ class DatusCLI:
         self.selected_catalog_path = selected_path
         self.selected_catalog_data = selected_data
 
-    def _print_welcome(self):
-        """Print the welcome message."""
-        welcome_text = """
-[bold green]Datus[/] - [bold]AI-powered SQL command-line interface[/]
-Type '.help' for a list of commands or '.exit' to quit.
-"""
-        self.console.print(welcome_text)
-
+    def _build_banner_panel(self) -> Panel:
+        """Build the unified startup banner as a Rich Panel."""
         database = (
             getattr(self.args, "database", "")
             or getattr(self.args, "namespace", "")
             or getattr(self.agent_config, "current_database", "")
         )
-        if database:
-            self.console.print(f"Database [bold green]{database}[/] selected")
+        db_type = getattr(self.agent_config, "db_type", "") or ""
+
+        if self.db_connector and database:
+            db_line = f"[bold green]{database}[/]"
+            if db_type:
+                db_line += f"  [dim]({db_type})[/]"
+            if self.cli_context.current_db_name and self.cli_context.current_db_name != database:
+                db_line += f"  [dim]using {self.cli_context.current_db_name}[/]"
+        elif database:
+            db_line = f"[bold green]{database}[/]  [yellow]not connected[/]"
         else:
-            self.console.print("[yellow]Warning: No database selected, please use .database to select a database[/]")
-        # Display connection info
-        if self.db_connector:
-            db_info = f"Connected to [bold green]{self.agent_config.db_type}[/]"
-            if self.cli_context.current_db_name:
-                db_info += f" using database [bold]{self.cli_context.current_db_name}[/]"
+            db_line = "[yellow]not selected  (use .database to choose)[/]"
 
-            self.console.print(db_info)
+        context_summary = self.cli_context.get_context_summary() if self.db_connector else "No context available"
+        show_context = context_summary and context_summary != "No context available"
 
-            # Show CLI context summary
-            context_summary = self.cli_context.get_context_summary()
-            if context_summary != "No context available":
-                self.console.print(f"[dim]Context: {context_summary}[/]")
+        use_art = self.console.width >= _BANNER_MIN_WIDTH
+        body = Table.grid(padding=(0, 0))
+        body.add_column()
 
-            self.console.print("Type SQL statements or use ! @ . commands to interact.")
+        if use_art:
+            body.add_row(Text(DATUS_BANNER_TEXT, style="bold"))
         else:
-            self.console.print("[yellow]Warning: No database connection initialized.[/]")
+            body.add_row(Text(f"DATUS v{__version__}", style="bold"))
+        body.add_row(Text(""))
+        body.add_row(Text("AI-powered SQL command-line interface", style="bold"))
+        body.add_row(Text(""))
+
+        info = Table.grid(padding=(0, 2))
+        info.add_column(style="dim", justify="left", no_wrap=True)
+        info.add_column()
+        info.add_row("Database", Text.from_markup(db_line))
+        if show_context:
+            info.add_row("Context", Text.from_markup(f"[dim]{context_summary}[/]"))
+        body.add_row(info)
+        body.add_row(Text(""))
+        body.add_row(Text.from_markup("[dim]Type .help for commands, .exit to quit[/]"))
+
+        return Panel(
+            body,
+            title=f"v{__version__}",
+            title_align="left",
+            padding=(1, 2),
+        )
+
+    def _print_welcome(self):
+        """Print the unified startup banner.
+
+        Also used as the Ctrl+O clear-screen header callback so the banner
+        reappears at the top after verbose-mode toggles redraw the terminal.
+        """
+        self.console.print(self._build_banner_panel())
 
     def prompt_input(self, message: str, default: str = "", choices: list = None, multiline: bool = False):
         """
