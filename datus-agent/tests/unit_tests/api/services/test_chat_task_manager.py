@@ -40,8 +40,8 @@ class TestFillDatabaseContext:
 
     def test_known_database_updates_namespace_and_db(self, real_agent_config):
         """Known database in namespaces updates current_namespace and current_database."""
-        # real_agent_config has "california_schools" in service.databases
-        # After the namespace→service.databases refactor, each DB is its own namespace key
+        # real_agent_config has "california_schools" in services.databases
+        # After the namespace→services.databases refactor, each DB is its own namespace key
         _fill_database_context(real_agent_config, database="california_schools")
         assert real_agent_config.current_namespace == "california_schools"
         assert real_agent_config.current_database == "california_schools"
@@ -174,12 +174,18 @@ class TestChatTaskManagerBehavior:
         """shutdown completes cleanly with no tasks."""
         manager = ChatTaskManager()
         await manager.shutdown()
+        assert manager._tasks == {}
+        assert manager._completed_tasks == {}
+        assert manager.has_active_tasks() is False
 
     @pytest.mark.asyncio
     async def test_wait_all_tasks_completes_without_tasks(self):
         """wait_all_tasks completes cleanly with no tasks."""
         manager = ChatTaskManager()
         await manager.wait_all_tasks()
+        assert manager._tasks == {}
+        assert manager._completed_tasks == {}
+        assert manager.has_active_tasks() is False
 
     @pytest.mark.asyncio
     async def test_push_event_appends_to_buffer(self):
@@ -297,10 +303,14 @@ class TestStartChat:
 
         manager = ChatTaskManager()
         request = StreamChatInput(message="wait test", session_id="wait-test")
-        await manager.start_chat(real_agent_config, request)
+        task = await manager.start_chat(real_agent_config, request)
 
         # wait_all_tasks should return (tasks may finish quickly with mock LLM)
         await manager.wait_all_tasks()
+        assert task.asyncio_task.done() is True
+        assert manager._tasks == {}
+        assert manager.get_task("wait-test") is task
+        assert manager.has_active_tasks() is False
         await manager.shutdown()
 
     async def test_consume_events_yields_ping_when_idle(self, monkeypatch):

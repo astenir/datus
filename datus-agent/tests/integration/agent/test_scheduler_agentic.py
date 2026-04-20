@@ -43,11 +43,8 @@ def scheduler_agent_config():
         pytest.skip("DEEPSEEK_API_KEY not set")
     if not _is_airflow_running():
         pytest.skip(f"Airflow not reachable at {AIRFLOW_URL}. Run docker compose up -d")
-    try:
-        import datus_scheduler_airflow  # noqa: F401
-        import datus_scheduler_core  # noqa: F401
-    except ImportError:
-        pytest.skip("datus-scheduler-core or datus-scheduler-airflow package not installed")
+    pytest.importorskip("datus_scheduler_core")
+    pytest.importorskip("datus_scheduler_airflow")
 
     from tests.conftest import load_acceptance_config
 
@@ -59,19 +56,23 @@ def scheduler_agent_config():
     config.agentic_nodes["scheduler"] = {
         "system_prompt": "scheduler",
         "max_turns": 30,
+        "scheduler_service": "airflow_local",
     }
 
-    # Ensure scheduler config points to the running Airflow
-    config.scheduler_config = {
-        "name": "airflow_local",
-        "type": "airflow",
-        "api_base_url": AIRFLOW_URL,
-        "username": AIRFLOW_USER,
-        "password": AIRFLOW_PASS,
-        "dags_folder": "/tmp/dags",
-        "dag_discovery_timeout": 60,
-        "dag_discovery_poll_interval": 5,
+    # Ensure scheduler service config points to the running Airflow
+    config.services.schedulers = {
+        "airflow_local": {
+            "name": "airflow_local",
+            "type": "airflow",
+            "api_base_url": AIRFLOW_URL,
+            "username": AIRFLOW_USER,
+            "password": AIRFLOW_PASS,
+            "dags_folder": "/tmp/dags",
+            "dag_discovery_timeout": 60,
+            "dag_discovery_poll_interval": 5,
+        }
     }
+    config.init_scheduler_services(config.services.schedulers)
 
     return config
 

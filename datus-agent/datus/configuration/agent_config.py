@@ -150,13 +150,14 @@ class DbConfig:
 
 
 @dataclass
-class ServiceConfig:
-    """Structured service configuration: databases, BI tools, schedulers.
+class ServicesConfig:
+    """Structured services configuration: databases, semantic layer, BI tools, schedulers.
 
     Replaces the old flat 'namespace' config. Each database is an independent entry.
     """
 
     databases: Dict[str, DbConfig] = field(default_factory=dict)
+    semantic_layer: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     bi_tools: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     schedulers: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
@@ -171,17 +172,18 @@ class ServiceConfig:
         return None
 
     @classmethod
-    def from_dict(cls, raw: Dict[str, Any]) -> "ServiceConfig":
-        """Parse service config from agent.yml 'service' section."""
+    def from_dict(cls, raw: Dict[str, Any]) -> "ServicesConfig":
+        """Parse services config from agent.yml 'services' section."""
         return cls(
-            databases={},  # populated by AgentConfig._init_service_config()
+            databases={},  # populated by AgentConfig._init_services_config()
+            semantic_layer=raw.get("semantic_layer", {}),
             bi_tools=raw.get("bi_tools", {}),
             schedulers=raw.get("schedulers", {}),
         )
 
     @classmethod
     def migrate_from_namespace(cls, namespace_config: Dict[str, Any]) -> Dict[str, Any]:
-        """Convert old namespace config format to new service.databases format.
+        """Convert old namespace config format to new services.databases format.
 
         Old format:
             namespace:
@@ -194,7 +196,7 @@ class ServiceConfig:
                     uri: ...
 
         New format:
-            service:
+            services:
               databases:
                 db1:
                   type: sqlite
@@ -218,7 +220,7 @@ class ServiceConfig:
                 databases[ns_name] = ns_cfg
             else:
                 databases[ns_name] = ns_cfg
-        return {"databases": databases, "bi_tools": {}, "schedulers": {}}
+        return {"databases": databases, "semantic_layer": {}, "bi_tools": {}, "schedulers": {}}
 
 
 @dataclass
@@ -409,7 +411,9 @@ class AgentConfig:
     _current_database: str
     _project_name: str
     _trajectory_dir: str
-    service: ServiceConfig
+    services: ServicesConfig
+    scheduler_services: Dict[str, Dict[str, Any]]
+    semantic_layer_configs: Dict[str, Dict[str, Any]]
 
     def __init__(self, nodes: Dict[str, NodeConfig], **kwargs):
         """
@@ -451,8 +455,9 @@ class AgentConfig:
         self.api_config: Dict[str, Any] = kwargs.get("api", {}) or {}
         self.agentic_nodes = kwargs.get("agentic_nodes", {})
         self.dashboard_config: Dict[str, DashboardConfig] = {}
-        self.init_dashboard(kwargs.get("dashboard", {}))
-        self.scheduler_config: Dict[str, Any] = kwargs.get("scheduler", {})
+        self.scheduler_services = {}
+        self.scheduler_config: Dict[str, Any] = {}
+        self.semantic_layer_configs = {}
 
         for name, raw_config in self.agentic_nodes.items():
             if not _SAFE_NAME_RE.match(name):
@@ -484,15 +489,22 @@ class AgentConfig:
             if k != "plan":
                 # Store workflow configuration, supporting both list format and {steps: [], config: {}} format
                 self.custom_workflows[k] = v
-        # Initialize service config (databases, bi_tools, schedulers)
-        # Supports both new 'service' format and legacy 'namespace' format with auto-migration
-        service_raw = kwargs.get("service", {})
-        namespace_raw = kwargs.get("namespace", {})
-        if not service_raw and namespace_raw:
-            logger.info("Migrating legacy 'namespace' config to 'service.databases' format")
-            service_raw = ServiceConfig.migrate_from_namespace(namespace_raw)
-        self.service = ServiceConfig.from_dict(service_raw)
-        self._init_service_config(service_raw.get("databases", {}))
+        # Initialize services config (databases, semantic layer, BI tools, schedulers)
+        # Supports the new 'services' format and legacy 'namespace' format with auto-migration
+        services_raw = kwargs.get("services") or {}
+        namespace_raw = kwargs.get("namespace") or {}
+        if not isinstance(services_raw, dict):
+            services_raw = {}
+        if not isinstance(namespace_raw, dict):
+            namespace_raw = {}
+        if not services_raw and namespace_raw:
+            logger.info("Migrating legacy 'namespace' config to 'services.databases' format")
+            services_raw = ServicesConfig.migrate_from_namespace(namespace_raw)
+        self.services = ServicesConfig.from_dict(services_raw)
+        self._init_services_config(services_raw.get("databases", {}))
+        self.init_semantic_layer(self.services.semantic_layer)
+        self.init_dashboard(self.services.bi_tools)
+        self.init_scheduler_services(self.services.schedulers)
 
         # SaaS mode: skip _init_dirs() because callers want only derived paths here,
         # not full local directory / backend initialization.
@@ -585,16 +597,16 @@ class AgentConfig:
 
     @current_database.setter
     def current_database(self, value):
-        """Set the current database name (must exist in service.databases)."""
+        """Set the current database name (must exist in services.databases)."""
         if not value:
             return
-        if value not in self.service.databases:
+        if value not in self.services.databases:
             raise DatusException(
                 ErrorCode.COMMON_CONFIG_ERROR,
-                message=f"No database configuration named `{value}` found. Available: {list(self.service.databases.keys())}",
+                message=f"No database configuration named `{value}` found. Available: {list(self.services.databases.keys())}",
             )
         self._current_database = value
-        self.db_type = self.service.databases[value].type
+        self.db_type = self.services.databases[value].type
 
     @property
     def project_name(self) -> str:
@@ -635,7 +647,7 @@ class AgentConfig:
     def current_namespace(self, value: str):
         """Backward-compat: setting current_namespace now sets current_database.
 
-        Accepts a database name from service.databases. Also accepts legacy namespace names
+        Accepts a database name from services.databases. Also accepts legacy namespace names
         which are auto-migrated to database names.
         """
         if not value:
@@ -643,7 +655,7 @@ class AgentConfig:
                 code=ErrorCode.COMMON_FIELD_REQUIRED,
                 message_args={"field_name": "database"},
             )
-        if value not in self.service.databases:
+        if value not in self.services.databases:
             raise DatusException(
                 code=ErrorCode.COMMON_UNSUPPORTED,
                 message_args={"field_name": "database", "your_value": value},
@@ -651,20 +663,20 @@ class AgentConfig:
         if value == self._current_database:
             return
         self._current_database = value
-        db_config = self.service.databases[value]
+        db_config = self.services.databases[value]
         self.db_type = db_config.type
 
     @property
     def namespaces(self) -> Dict[str, Dict[str, DbConfig]]:
-        """Backward-compat: wraps service.databases in old namespace structure.
+        """Backward-compat: wraps services.databases in old namespace structure.
 
         Each database entry becomes its own "namespace" with a single db inside,
         so DBManager only initializes one connection per namespace key.
         """
-        return {db_name: {db_name: db_config} for db_name, db_config in self.service.databases.items()}
+        return {db_name: {db_name: db_config} for db_name, db_config in self.services.databases.items()}
 
-    def _init_service_config(self, databases_config: Dict[str, Any]):
-        """Parse service.databases section into ServiceConfig.databases."""
+    def _init_services_config(self, databases_config: Dict[str, Any]):
+        """Parse services.databases section into ServicesConfig.databases."""
         for db_name, db_config_dict in databases_config.items():
             if not isinstance(db_config_dict, dict):
                 continue
@@ -684,12 +696,12 @@ class AgentConfig:
                     db_config = _parse_single_file_db(db_config_dict, db_type)
                     db_config.logic_name = db_name
                     db_config.default = is_default
-                    self.service.databases[db_name] = db_config
+                    self.services.databases[db_name] = db_config
             else:
                 db_config = DbConfig.filter_kwargs(DbConfig, db_config_dict)
                 db_config.logic_name = db_name
                 db_config.default = is_default
-                self.service.databases[db_name] = db_config
+                self.services.databases[db_name] = db_config
 
     def _parse_glob_pattern_flat(self, base_name: str, path_pattern: str, db_type: str):
         """Parse glob pattern and register each matched file as an independent database entry."""
@@ -714,7 +726,7 @@ class AgentConfig:
                 schema="",
                 logic_name=entry_name,
             )
-            self.service.databases[entry_name] = child_config
+            self.services.databases[entry_name] = child_config
 
         if not any_db_path:
             logger.warning(
@@ -764,7 +776,7 @@ class AgentConfig:
 
     def current_db_config(self, db_name: str = "") -> DbConfig:
         """Get a database config by name, or the current/default one."""
-        databases = self.service.databases
+        databases = self.services.databases
         if db_name and db_name in databases:
             return databases[db_name]
         if self._current_database and self._current_database in databases:
@@ -772,7 +784,7 @@ class AgentConfig:
         if len(databases) == 1:
             return list(databases.values())[0]
         if not db_name:
-            default = self.service.default_database
+            default = self.services.default_database
             if default:
                 return databases[default]
         raise DatusException(
@@ -782,7 +794,109 @@ class AgentConfig:
 
     def current_db_configs(self) -> Dict[str, DbConfig]:
         """Backward-compat: returns all databases (was namespace-scoped, now returns all)."""
-        return self.service.databases
+        return self.services.databases
+
+    def default_scheduler_service(self) -> Optional[str]:
+        defaults = [name for name, cfg in self.scheduler_services.items() if cfg.get("default")]
+        if len(defaults) > 1:
+            raise DatusException(
+                ErrorCode.COMMON_CONFIG_ERROR,
+                message=(
+                    "Multiple scheduler services are marked with `default: true` in "
+                    "`agent.services.schedulers`. Keep at most one default scheduler."
+                ),
+            )
+        if defaults:
+            return defaults[0]
+        if len(self.scheduler_services) == 1:
+            return next(iter(self.scheduler_services))
+        return None
+
+    def get_scheduler_config(self, service_name: Optional[str] = None) -> Dict[str, Any]:
+        if service_name:
+            if service_name not in self.scheduler_services:
+                raise DatusException(
+                    ErrorCode.COMMON_CONFIG_ERROR,
+                    message=(
+                        f"No scheduler service named `{service_name}` found. "
+                        f"Available: {list(self.scheduler_services.keys())}"
+                    ),
+                )
+            return self.scheduler_services[service_name]
+
+        default_service = self.default_scheduler_service()
+        if default_service:
+            return self.scheduler_services[default_service]
+
+        if not self.scheduler_services:
+            raise DatusException(
+                ErrorCode.COMMON_CONFIG_ERROR,
+                message="No scheduler configured in `agent.services.schedulers`.",
+            )
+
+        raise DatusException(
+            ErrorCode.COMMON_CONFIG_ERROR,
+            message=(
+                "Multiple scheduler services are configured in `agent.services.schedulers`, "
+                "set `scheduler_service` on the scheduler node."
+            ),
+        )
+
+    def resolve_semantic_adapter(self, adapter_type: Optional[str] = None) -> Optional[str]:
+        normalized = str(adapter_type or "").lower().strip()
+        if normalized:
+            if not self.semantic_layer_configs:
+                return normalized
+            if normalized in self.semantic_layer_configs:
+                return normalized
+            raise DatusException(
+                ErrorCode.COMMON_CONFIG_ERROR,
+                message=(
+                    f"No semantic layer named `{normalized}` found in `agent.services.semantic_layer`. "
+                    f"Available: {list(self.semantic_layer_configs.keys())}"
+                ),
+            )
+
+        if not self.semantic_layer_configs:
+            return None
+        if len(self.semantic_layer_configs) == 1:
+            return next(iter(self.semantic_layer_configs))
+        raise DatusException(
+            ErrorCode.COMMON_CONFIG_ERROR,
+            message=(
+                "Multiple semantic layers are configured in `agent.services.semantic_layer`, "
+                "set `semantic_adapter` on the semantic node."
+            ),
+        )
+
+    def get_semantic_layer_config(self, adapter_type: Optional[str] = None) -> Dict[str, Any]:
+        resolved_adapter = self.resolve_semantic_adapter(adapter_type)
+        if not resolved_adapter or resolved_adapter not in self.semantic_layer_configs:
+            return {}
+        return dict(self.semantic_layer_configs[resolved_adapter])
+
+    def build_semantic_adapter_config(
+        self,
+        adapter_type: Optional[str] = None,
+        database_name: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        resolved_adapter = self.resolve_semantic_adapter(adapter_type)
+        if not resolved_adapter:
+            return None
+
+        config = self.get_semantic_layer_config(resolved_adapter)
+        config.setdefault("type", resolved_adapter)
+
+        db_name = database_name or config.get("namespace") or self.current_database or self.services.default_database
+        if db_name:
+            config.setdefault("namespace", db_name)
+            db_config = _db_config_to_semantic_adapter_config(self.current_db_config(db_name))
+            if db_config:
+                config.setdefault("db_config", db_config)
+
+        config.setdefault("semantic_models_path", str(self.path_manager.semantic_model_path()))
+        config.setdefault("agent_home", self.home)
+        return config
 
     @property
     def output_dir(self) -> str:
@@ -911,8 +1025,8 @@ class AgentConfig:
             db_arg = kwargs.get("database", "") or kwargs.get("namespace", "")
             if db_arg:
                 self.current_namespace = db_arg  # uses the compat setter
-            elif self.service.default_database:
-                self.current_namespace = self.service.default_database
+            elif self.services.default_database:
+                self.current_namespace = self.services.default_database
         if kwargs.get("benchmark", ""):
             benchmark_platform = kwargs["benchmark"]
             # Validate benchmark is supported (will raise exception if not)
@@ -979,15 +1093,15 @@ class AgentConfig:
 
     def _current_db_config(self) -> Dict[str, DbConfig]:
         """Backward-compat: returns all database configs."""
-        if not self._current_database and not self.service.databases:
+        if not self._current_database and not self.services.databases:
             raise DatusException(
                 code=ErrorCode.COMMON_FIELD_REQUIRED,
                 message="Database is required, please run with --database <database>",
             )
-        return self.service.databases
+        return self.services.databases
 
     def current_db_name_type(self, db_name: str) -> tuple[str, str]:
-        databases = self.service.databases
+        databases = self.services.databases
         if db_name and db_name in databases:
             return db_name, databases[db_name].type
         if self._current_database and self._current_database in databases:
@@ -1075,9 +1189,20 @@ class AgentConfig:
     def init_dashboard(self, param: Dict[str, Any]):
         if not isinstance(param, dict):
             return
-        for platform, auth_params in param.items():
+        self.dashboard_config = {}
+        for service_name, auth_params in param.items():
             if not isinstance(auth_params, dict):
                 continue
+            platform = str(service_name)
+            declared_type = auth_params.get("type")
+            if declared_type and str(declared_type) != platform:
+                raise DatusException(
+                    ErrorCode.COMMON_CONFIG_ERROR,
+                    message=(
+                        f"BI tool `{service_name}` must use the same key and type in `agent.services.bi_tools`. "
+                        f"Got key `{service_name}` with type `{declared_type}`."
+                    ),
+                )
             api_url_raw = auth_params.get("api_url", "")
             username_raw = auth_params.get("username", "")
             password_raw = auth_params.get("password", "")
@@ -1086,19 +1211,63 @@ class AgentConfig:
             username = resolve_env(str(username_raw)) if username_raw else ""
             password = resolve_env(str(password_raw)) if password_raw else ""
             api_key = resolve_env(str(api_key_raw)) if api_key_raw else ""
-            dataset_db_raw = auth_params.get("dataset_db")
-            dataset_db = None
-            if isinstance(dataset_db_raw, dict):
-                dataset_db = {k: resolve_env(str(v)) if isinstance(v, str) else v for k, v in dataset_db_raw.items()}
+            dataset_db = _resolve_nested_value(auth_params.get("dataset_db"))
             self.dashboard_config[platform] = DashboardConfig(
                 platform=platform,
                 api_url=api_url,
                 username=username,
                 password=password,
                 api_key=api_key,
-                extra=auth_params.get("extra", {}),
+                extra=_resolve_nested_value(auth_params.get("extra", {})),
                 dataset_db=dataset_db,
             )
+
+    def init_scheduler_services(self, param: Dict[str, Any]):
+        if not isinstance(param, dict):
+            return
+
+        self.scheduler_services = {}
+        for service_name, raw_config in param.items():
+            if not isinstance(raw_config, dict):
+                continue
+            resolved = _resolve_nested_value(raw_config)
+            resolved.setdefault("name", service_name)
+            scheduler_type = str(resolved.get("type") or "").lower().strip()
+            if not scheduler_type:
+                raise DatusException(
+                    ErrorCode.COMMON_CONFIG_ERROR,
+                    message=(
+                        f"Scheduler service `{service_name}` must declare a scheduler `type` in "
+                        f"`agent.services.schedulers.{service_name}`."
+                    ),
+                )
+            resolved["type"] = scheduler_type
+            self.scheduler_services[service_name] = resolved
+
+        default_service = self.default_scheduler_service()
+        self.scheduler_config = self.scheduler_services.get(default_service, {}) if default_service else {}
+
+    def init_semantic_layer(self, param: Dict[str, Any]):
+        if not isinstance(param, dict):
+            return
+
+        self.semantic_layer_configs = {}
+        for service_name, raw_config in param.items():
+            if not isinstance(raw_config, dict):
+                continue
+            normalized_name = str(service_name).lower().strip()
+            resolved = _resolve_nested_value(raw_config)
+            declared_type = str(resolved.get("type") or normalized_name).lower().strip()
+            if declared_type != normalized_name:
+                raise DatusException(
+                    ErrorCode.COMMON_CONFIG_ERROR,
+                    message=(
+                        f"Semantic layer `{service_name}` must use the adapter type as the key in "
+                        f"`agent.services.semantic_layer`. Got key `{service_name}` with type `{declared_type}`."
+                    ),
+                )
+            resolved["type"] = normalized_name
+            self.semantic_layer_configs[normalized_name] = resolved
 
 
 def resolve_env(value: str) -> str:
@@ -1114,6 +1283,38 @@ def resolve_env(value: str) -> str:
         return os.getenv(env_var, f"<MISSING:{env_var}>")
 
     return re.sub(pattern, replace_env, value)
+
+
+def _db_config_to_semantic_adapter_config(db_config: Optional[DbConfig]) -> Optional[Dict[str, str]]:
+    if not db_config:
+        return None
+
+    raw = db_config.to_dict()
+    extra = raw.get("extra")
+    semantic_db_config = {
+        key: str(value)
+        for key, value in raw.items()
+        if value is not None
+        and value != ""
+        and key not in ("extra", "logic_name", "path_pattern", "catalog", "default")
+    }
+    # Merge connector-specific `extra` fields without overwriting explicit top-level keys
+    if isinstance(extra, dict):
+        for key, value in extra.items():
+            if value is None or value == "":
+                continue
+            semantic_db_config.setdefault(key, str(value))
+    return semantic_db_config
+
+
+def _resolve_nested_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return resolve_env(value)
+    if isinstance(value, dict):
+        return {k: _resolve_nested_value(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_resolve_nested_value(item) for item in value]
+    return value
 
 
 def load_model_config(data: dict) -> ModelConfig:
