@@ -3,6 +3,7 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 from abc import ABC, abstractmethod
+from contextvars import ContextVar
 from typing import Any, Dict, Iterator, List, Literal, Optional, Set, Tuple
 
 from datus_db_core.config import ConnectionConfig
@@ -14,20 +15,60 @@ from datus_db_core.sql_utils import metadata_identifier, parse_sql_type
 logger = get_logger(__name__)
 
 
+_UNSET = object()
+
+
 class BaseSqlConnector(ABC):
+    def __new__(cls, *args, **kwargs):
+        instance = super().__new__(cls)
+        # ContextVar: works with both threading and asyncio (per-task isolation).
+        # Always initialized in __new__ so it survives mocked __init__ in tests.
+        instance._catalog_var = ContextVar(f"catalog_{id(instance)}", default=_UNSET)
+        instance._database_var = ContextVar(f"database_{id(instance)}", default=_UNSET)
+        instance._schema_var = ContextVar(f"schema_{id(instance)}", default=_UNSET)
+        instance._default_catalog = ""
+        instance._default_database = ""
+        instance._default_schema = ""
+        return instance
+
     def __init__(self, config: ConnectionConfig, dialect: str):
         self.config = config
         self.timeout_seconds = config.timeout_seconds
-        self.connection: Any = None
         self.dialect = dialect
-        self.catalog_name = ""
-        self.database_name = ""
-        self.schema_name = ""
+
+    # --- Context-isolated properties ---
+    # Each thread/async-task sees its own catalog/database/schema values.
+    # Unset contexts fall back to the defaults set during __init__.
+
+    @property
+    def catalog_name(self) -> str:
+        val = self._catalog_var.get()
+        return val if val is not _UNSET else self._default_catalog
+
+    @catalog_name.setter
+    def catalog_name(self, value: str):
+        self._catalog_var.set(value)
+
+    @property
+    def database_name(self) -> str:
+        val = self._database_var.get()
+        return val if val is not _UNSET else self._default_database
+
+    @database_name.setter
+    def database_name(self, value: str):
+        self._database_var.set(value)
+
+    @property
+    def schema_name(self) -> str:
+        val = self._schema_var.get()
+        return val if val is not _UNSET else self._default_schema
+
+    @schema_name.setter
+    def schema_name(self, value: str):
+        self._schema_var.set(value)
 
     def close(self):
-        if self.connection:
-            self.connection.close()
-            self.connection = None
+        pass
 
     def connect(self):
         return
@@ -37,11 +78,6 @@ class BaseSqlConnector(ABC):
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type:
-            try:
-                self._safe_rollback()
-            except Exception as e:
-                logger.warning(f"Failed to rollback during cleanup: {e}")
         try:
             self.close()
         except Exception as e:
@@ -69,6 +105,9 @@ class BaseSqlConnector(ABC):
         self,
         input_params: Any,
         result_format: Optional[Literal["csv", "arrow", "pandas", "list"]] = None,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
     ) -> ExecuteSQLResult:
         self.validate_input(input_params)
         if isinstance(input_params, dict):
@@ -76,24 +115,30 @@ class BaseSqlConnector(ABC):
         sql_query = input_params.sql_query.strip()
         if result_format is None:
             result_format = getattr(input_params, "result_format", "csv") or "csv"
+        # Only pass context kwargs when explicitly set (backward compatible)
+        ctx = {
+            k: v
+            for k, v in [("catalog_name", catalog_name), ("database_name", database_name), ("schema_name", schema_name)]
+            if v
+        }
         try:
             sql_type = parse_sql_type(sql_query, self.dialect)
             if sql_type == SQLType.INSERT:
-                result = self.execute_insert(sql_query)
+                result = self._call_with_ctx(self.execute_insert, sql_query, ctx)
             elif sql_type in (SQLType.UPDATE, SQLType.MERGE):
-                result = self.execute_update(sql_query)
+                result = self._call_with_ctx(self.execute_update, sql_query, ctx)
             elif sql_type == SQLType.DELETE:
-                result = self.execute_delete(sql_query)
+                result = self._call_with_ctx(self.execute_delete, sql_query, ctx)
             elif sql_type == SQLType.CONTENT_SET:
                 result = self.execute_content_set(sql_query)
             elif sql_type == SQLType.DDL:
-                result = self.execute_ddl(sql_query)
+                result = self._call_with_ctx(self.execute_ddl, sql_query, ctx)
             elif sql_type == SQLType.SELECT:
-                result = self.execute_query(sql_query, result_format)
+                result = self._call_with_ctx(self.execute_query, sql_query, ctx, result_format)
             elif sql_type == SQLType.METADATA_SHOW:
-                result = self.execute_query(sql_query, result_format)
+                result = self._call_with_ctx(self.execute_query, sql_query, ctx, result_format)
             elif sql_type == SQLType.EXPLAIN:
-                result = self.execute_explain(sql_query, result_format)
+                result = self._call_with_ctx(self.execute_explain, sql_query, ctx, result_format)
             else:
                 return ExecuteSQLResult(
                     success=False,
@@ -117,15 +162,21 @@ class BaseSqlConnector(ABC):
             )
 
     @abstractmethod
-    def execute_insert(self, sql: str) -> ExecuteSQLResult:
+    def execute_insert(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         raise NotImplementedError()
 
     @abstractmethod
-    def execute_update(self, sql: str) -> ExecuteSQLResult:
+    def execute_update(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         raise NotImplementedError()
 
     @abstractmethod
-    def execute_delete(self, sql: str) -> ExecuteSQLResult:
+    def execute_delete(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         raise NotImplementedError()
 
     def validate_input(self, input_params: Any):
@@ -145,7 +196,12 @@ class BaseSqlConnector(ABC):
 
     @abstractmethod
     def execute_query(
-        self, sql: str, result_format: Literal["csv", "arrow", "pandas", "list"] = "csv"
+        self,
+        sql: str,
+        result_format: Literal["csv", "arrow", "pandas", "list"] = "csv",
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
     ) -> ExecuteSQLResult:
         raise NotImplementedError()
 
@@ -159,7 +215,9 @@ class BaseSqlConnector(ABC):
         raise NotImplementedError()
 
     @abstractmethod
-    def execute_ddl(self, sql: str) -> ExecuteSQLResult:
+    def execute_ddl(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         raise NotImplementedError()
 
     @abstractmethod
@@ -236,13 +294,31 @@ class BaseSqlConnector(ABC):
     ) -> List[Dict[str, str]]:
         raise NotImplementedError()
 
+    @staticmethod
+    def _call_with_ctx(method, sql, ctx, *args, **extra_kwargs):
+        """Call an execute method with context kwargs, raising if unsupported."""
+        if ctx:
+            try:
+                return method(sql, *args, **extra_kwargs, **ctx)
+            except TypeError as e:
+                if "unexpected keyword argument" in str(e):
+                    raise TypeError(
+                        f"{method.__qualname__} does not accept per-call context overrides: {sorted(ctx)}"
+                    ) from e
+                raise
+        return method(sql, *args, **extra_kwargs)
+
     def switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        self.connect()
-        self.do_switch_context(
-            catalog_name=catalog_name,
-            database_name=database_name,
-            schema_name=schema_name,
-        )
+        """Update context state and apply to live session if applicable.
+
+        For SQLAlchemy connectors: context is applied per-operation via _conn().
+        For native connectors (Redshift/Snowflake): also calls _apply_live_context()
+        to execute USE/SET on the persistent connection.
+
+        State is updated only after _apply_live_context succeeds, so a failed
+        live switch does not leave thread-local context out of sync.
+        """
+        self._apply_live_context(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name)
         if catalog_name:
             self.catalog_name = catalog_name
         if database_name:
@@ -250,7 +326,38 @@ class BaseSqlConnector(ABC):
         if schema_name:
             self.schema_name = schema_name
 
-    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+    def _apply_live_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        """Apply context to a persistent connection (for native connectors).
+
+        Auto-detects connectors with persistent connections (e.g., Redshift,
+        Snowflake) and calls their old-style do_switch_context() to execute
+        USE/SET on the live session.
+        """
+        connection = getattr(self, "connection", None)
+        if connection is not None:
+            # Native connector with persistent connection — call old-style do_switch_context
+            import inspect as _inspect
+
+            sig = _inspect.signature(self.do_switch_context)
+            params = list(sig.parameters.keys())
+            if params and params[0] != "conn":
+                # Old signature: do_switch_context(self, catalog_name, database_name, schema_name)
+                self.do_switch_context(
+                    catalog_name=catalog_name,
+                    database_name=database_name,
+                    schema_name=schema_name,
+                )
+            else:
+                # New signature: do_switch_context(self, conn, ...)
+                self.do_switch_context(
+                    connection,
+                    catalog_name=catalog_name,
+                    database_name=database_name,
+                    schema_name=schema_name,
+                )
+
+    def do_switch_context(self, conn: Any, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        """Apply context (USE/SET CATALOG) to a given connection. Subclasses override."""
         return None
 
     def get_schema(

@@ -153,6 +153,21 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
     - BaseSqlConnector: Base functionality for SQL databases
     - SchemaNamespaceMixin: Support for database.schema.table naming
     - MaterializedViewSupportMixin: Support for materialized views
+
+    Thread safety:
+        This connector is NOT thread-safe when callers pass per-call
+        ``catalog_name`` / ``database_name`` / ``schema_name`` overrides to
+        ``execute_*`` methods. Those methods invoke ``do_switch_context``,
+        which mutates the shared ``self.connection`` (via ``SET search_path``)
+        and the shared ``self.schema_name`` attribute. Concurrent calls with
+        different context overrides can interleave on the same connection and
+        cause queries to run against the wrong schema.
+
+        Recommended workarounds:
+            - Serialize access to a single ``RedshiftConnector`` instance
+              (e.g. with an external lock) when context overrides are used.
+            - Create a separate ``RedshiftConnector`` per thread / request
+              so each owns its own connection and context state.
     """
 
     def __init__(self, config: Union[RedshiftConfig, dict]):
@@ -444,7 +459,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             raise _handle_redshift_exception(e, sql)
 
     @override
-    def execute_ddl(self, sql: str) -> ExecuteSQLResult:
+    def execute_ddl(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """
         Execute DDL (Data Definition Language) statement.
 
@@ -456,10 +473,14 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         Returns:
             ExecuteSQLResult with execution status
         """
-        return self._execute_update_or_delete(sql)
+        return self._execute_update_or_delete(
+            sql, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name
+        )
 
     @override
-    def execute_insert(self, sql: str) -> ExecuteSQLResult:
+    def execute_insert(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """
         Execute INSERT statement.
 
@@ -469,6 +490,8 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         Returns:
             ExecuteSQLResult with number of rows inserted
         """
+        if catalog_name or database_name or schema_name:
+            self.do_switch_context(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name)
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute(sql)
@@ -496,7 +519,9 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             )
 
     @override
-    def execute_update(self, sql: str) -> ExecuteSQLResult:
+    def execute_update(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """
         Execute UPDATE statement.
 
@@ -506,10 +531,14 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         Returns:
             ExecuteSQLResult with number of rows updated
         """
-        return self._execute_update_or_delete(sql)
+        return self._execute_update_or_delete(
+            sql, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name
+        )
 
     @override
-    def execute_delete(self, sql: str) -> ExecuteSQLResult:
+    def execute_delete(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """
         Execute DELETE statement.
 
@@ -519,9 +548,13 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         Returns:
             ExecuteSQLResult with number of rows deleted
         """
-        return self._execute_update_or_delete(sql)
+        return self._execute_update_or_delete(
+            sql, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name
+        )
 
-    def _execute_update_or_delete(self, sql: str) -> ExecuteSQLResult:
+    def _execute_update_or_delete(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """
         Execute UPDATE, DELETE, or DDL statement.
 
@@ -533,6 +566,8 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         Returns:
             ExecuteSQLResult with execution status
         """
+        if catalog_name or database_name or schema_name:
+            self.do_switch_context(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name)
         try:
             with self.connection.cursor() as cursor:
                 cursor.execute(sql)
@@ -596,7 +631,12 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
 
     @override
     def execute_query(
-        self, sql: str, result_format: Literal["csv", "arrow", "pandas", "list"] = "csv"
+        self,
+        sql: str,
+        result_format: Literal["csv", "arrow", "pandas", "list"] = "csv",
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
     ) -> ExecuteSQLResult:
         """
         Execute query and return results in specified format.
@@ -608,6 +648,8 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         Returns:
             ExecuteSQLResult with results in requested format
         """
+        if catalog_name or database_name or schema_name:
+            self.do_switch_context(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name)
         # Route to appropriate execution method based on format
         if result_format == "csv":
             return self.execute_csv(sql)

@@ -62,21 +62,20 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
         self._verify_ssl = config.verify
 
         self.dialect = TRINO_DIALECT
-        self.catalog_name = config.catalog
-        self.schema_name = config.schema_name
-        self.database_name = config.schema_name  # In Trino, schemas map to databases
+        self._default_catalog = config.catalog
+        self._default_schema = config.schema_name
+        self._default_database = config.schema_name  # In Trino, schemas map to databases
 
     # ==================== Connection Management ====================
 
     @override
-    def connect(self):
-        """Initialize connection pool with SSL verification setting."""
-        if self.engine and self.connection and self._owns_engine:
-            return
-
-        try:
-            self._safe_close()
-
+    def _ensure_engine(self):
+        """Create engine with SSL verification setting. Thread-safe."""
+        if self.engine and self._owns_engine:
+            return self.engine
+        with self._engine_lock:
+            if self.engine and self._owns_engine:
+                return self.engine
             self.engine = create_engine(
                 self.connection_string,
                 pool_size=10,
@@ -86,11 +85,8 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
                 pool_pre_ping=True,
                 connect_args={"verify": self._verify_ssl},
             )
-            self.connection = self.engine.connect()
             self._owns_engine = True
-        except Exception as e:
-            self._force_reset()
-            raise self._handle_exception(e, "", "connection") from e
+            return self.engine
 
     # ==================== Context Manager Support ====================
 
@@ -174,8 +170,9 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
         catalog = catalog_name or self.catalog_name
         schema = schema_name or database_name or self.schema_name
         try:
+            safe_schema = schema.replace("'", "''")
             result = self._execute_pandas(
-                f"SELECT table_name FROM \"{catalog}\".information_schema.views WHERE table_schema = '{schema}'"
+                f"SELECT table_name FROM \"{catalog}\".information_schema.views WHERE table_schema = '{safe_schema}'"
             )
             if result.empty:
                 return []
@@ -268,12 +265,15 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
         catalog = catalog_name or self.catalog_name
         schema = schema_name or database_name or self.schema_name
 
+        safe_catalog = catalog.replace("'", "''")
+        safe_schema = schema.replace("'", "''")
+        safe_table = table_name.replace("'", "''")
         sql = (
             f"SELECT column_name, data_type, is_nullable, column_default, comment "
             f'FROM "{catalog}".information_schema.columns '
-            f"WHERE table_catalog = '{catalog}' "
-            f"AND table_schema = '{schema}' "
-            f"AND table_name = '{table_name}' "
+            f"WHERE table_catalog = '{safe_catalog}' "
+            f"AND table_schema = '{safe_schema}' "
+            f"AND table_name = '{safe_table}' "
             f"ORDER BY ordinal_position"
         )
         query_result = self._execute_pandas(sql)
@@ -330,14 +330,9 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
         return schema if schema else None
 
     @override
-    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        """Switch catalog/schema context."""
-        if catalog_name:
-            self.catalog_name = catalog_name
-        if database_name or schema_name:
-            schema = schema_name or database_name
-            self.schema_name = schema
-            self.database_name = schema
+    def do_switch_context(self, conn, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        """No-op: Trino uses fully-qualified names. Context is tracked in thread-local state."""
+        pass
 
     # ==================== Utility Methods ====================
 

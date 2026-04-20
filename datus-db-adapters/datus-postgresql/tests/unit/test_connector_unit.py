@@ -396,3 +396,117 @@ def test_connector_schema_name_default():
         connector = PostgreSQLConnector(config)
 
         assert connector.schema_name == "public"
+
+
+# ==================== _get_engine LRU Cache Tests ====================
+
+
+def _make_connector():
+    """Helper: create a PostgreSQLConnector with mocked parent __init__."""
+    import threading
+
+    config = PostgreSQLConfig(username="user", password="pass", database="default_db")
+    with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
+        connector = PostgreSQLConnector(config)
+    # Parent __init__ is mocked, so set attributes that _get_engine needs
+    connector._engine_lock = threading.Lock()
+    connector.engine = None
+    connector._owns_engine = False
+    connector.timeout_seconds = 30
+    return connector
+
+
+def test_get_engine_returns_same_engine_for_same_db():
+    """Requesting the same database twice returns the cached engine."""
+    connector = _make_connector()
+    with patch("datus_postgresql.connector.create_engine", return_value=MagicMock()) as mock_ce:
+        e1 = connector._get_engine("db1")
+        e2 = connector._get_engine("db1")
+
+    assert e1 is e2
+    mock_ce.assert_called_once()
+
+
+def test_get_engine_creates_different_engines_per_db():
+    """Different databases get different engines."""
+    connector = _make_connector()
+    engines = [MagicMock(), MagicMock()]
+    with patch("datus_postgresql.connector.create_engine", side_effect=engines):
+        e1 = connector._get_engine("db1")
+        e2 = connector._get_engine("db2")
+
+    assert e1 is not e2
+
+
+def test_get_engine_evicts_lru_when_over_max():
+    """When cache exceeds max_engines, the least-recently-used engine is disposed."""
+    connector = _make_connector()
+    connector._max_engines = 3
+
+    created_engines = []
+
+    def make_engine(*args, **kwargs):
+        e = MagicMock()
+        created_engines.append(e)
+        return e
+
+    with patch("datus_postgresql.connector.create_engine", side_effect=make_engine):
+        connector._get_engine("db1")
+        connector._get_engine("db2")
+        connector._get_engine("db3")
+        # All 3 fit within max_engines=3
+        assert len(connector._engines) == 3
+        created_engines[0].dispose.assert_not_called()
+
+        # Adding a 4th should evict db1 (LRU)
+        connector._get_engine("db4")
+        assert len(connector._engines) == 3
+        assert "db1" not in connector._engines
+        created_engines[0].dispose.assert_called_once()
+
+
+def test_get_engine_lru_access_refreshes_order():
+    """Accessing an existing engine moves it to most-recently-used, protecting it from eviction."""
+    connector = _make_connector()
+    connector._max_engines = 3
+
+    created_engines = {}
+
+    def make_engine(*args, **kwargs):
+        e = MagicMock()
+        created_engines[len(created_engines)] = e
+        return e
+
+    with patch("datus_postgresql.connector.create_engine", side_effect=make_engine):
+        connector._get_engine("db1")  # engines[0]
+        connector._get_engine("db2")  # engines[1]
+        connector._get_engine("db3")  # engines[2]
+
+        # Access db1 again — moves it to MRU
+        connector._get_engine("db1")
+
+        # Add db4 — should evict db2 (now LRU), NOT db1
+        connector._get_engine("db4")
+
+    assert "db1" in connector._engines
+    assert "db2" not in connector._engines
+    assert "db3" in connector._engines
+    assert "db4" in connector._engines
+    created_engines[1].dispose.assert_called_once()  # db2 evicted
+
+
+def test_close_disposes_all_cached_engines():
+    """close() disposes all cached engines and clears the cache."""
+    connector = _make_connector()
+
+    mock_engines = [MagicMock(), MagicMock()]
+    with patch("datus_postgresql.connector.create_engine", side_effect=mock_engines):
+        connector._get_engine("db1")
+        connector._get_engine("db2")
+
+    with patch("datus_sqlalchemy.SQLAlchemyConnector.close"):
+        connector.close()
+
+    for e in mock_engines:
+        e.dispose.assert_called_once()
+    assert len(connector._engines) == 0

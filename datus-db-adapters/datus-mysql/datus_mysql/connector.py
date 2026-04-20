@@ -75,7 +75,6 @@ class MySQLConnector(SQLAlchemyConnector):
         elif not isinstance(config, MySQLConfig):
             raise TypeError(f"config must be MySQLConfig or dict, got {type(config)}")
 
-        self.config = config
         self.host = config.host
         self.port = config.port
         self.username = config.username
@@ -92,7 +91,10 @@ class MySQLConnector(SQLAlchemyConnector):
         )
 
         super().__init__(connection_string, dialect="mysql")
-        self.database_name = database
+        # Set after super().__init__() so BaseSqlConnector doesn't overwrite
+        # with a plain ConnectionConfig (which lacks charset, autocommit, etc.)
+        self.config = config
+        self._default_database = database
 
     # ==================== System Resources ====================
 
@@ -138,7 +140,8 @@ class MySQLConnector(SQLAlchemyConnector):
 
         # Build WHERE clause
         if database_name:
-            where = f"TABLE_SCHEMA = '{database_name}'"
+            safe_db = database_name.replace("'", "''")
+            where = f"TABLE_SCHEMA = '{safe_db}'"
         else:
             where = f"{list_to_in_str('TABLE_SCHEMA not in', list(self._sys_databases()))}"
 
@@ -289,8 +292,8 @@ class MySQLConnector(SQLAlchemyConnector):
                 COLUMN_DEFAULT as `Default`,
                 COLUMN_COMMENT as Comment
             FROM INFORMATION_SCHEMA.COLUMNS
-            WHERE TABLE_SCHEMA = '{database_name}'
-              AND TABLE_NAME = '{table_name}'
+            WHERE TABLE_SCHEMA = '{database_name.replace("'", "''")}'
+              AND TABLE_NAME = '{table_name.replace("'", "''")}'
             ORDER BY ORDINAL_POSITION
         """
         query_result = self._execute_pandas(sql)
@@ -330,12 +333,11 @@ class MySQLConnector(SQLAlchemyConnector):
         return database_name or self.database_name
 
     @override
-    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        """Switch database context using USE statement on the persistent connection."""
-
+    def do_switch_context(self, conn, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        """Apply database context to a connection using USE statement."""
         if database_name:
-            self.connection.execute(text(f"USE {self.quote_identifier(database_name)}"))
-            self.connection.commit()
+            conn.execute(text(f"USE {self.quote_identifier(database_name)}"))
+            conn.commit()
 
     # ==================== Sample Data ====================
 

@@ -309,20 +309,17 @@ def test_context_manager_support():
 
 
 def test_do_switch_context_uses_persistent_connection():
-    """do_switch_context must execute USE on self.connection, not a temp connection."""
+    """do_switch_context executes USE on the given connection."""
     config = SparkConfig(username="test_user", database="db")
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = SparkConnector(config)
-        connector.connection = MagicMock()
-        connector.engine = MagicMock()
+        mock_conn = MagicMock()
 
-        connector.do_switch_context(database_name="new_db")
+        connector.do_switch_context(mock_conn, database_name="new_db")
 
-        connector.connection.execute.assert_called_once()
-        connector.connection.commit.assert_called_once()
-        # Must NOT create a temp connection via engine.connect()
-        connector.engine.connect.assert_not_called()
+        mock_conn.execute.assert_called_once()
+        mock_conn.commit.assert_called_once()
 
 
 def test_do_switch_context_noop_without_database():
@@ -331,11 +328,11 @@ def test_do_switch_context_noop_without_database():
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = SparkConnector(config)
-        connector.connection = MagicMock()
+        mock_conn = MagicMock()
 
-        connector.do_switch_context()
+        connector.do_switch_context(mock_conn)
 
-        connector.connection.execute.assert_not_called()
+        mock_conn.execute.assert_not_called()
 
 
 # ==================== Quote Identifier Tests ====================

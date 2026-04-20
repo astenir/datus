@@ -2,10 +2,10 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Set, Union, override
 from urllib.parse import quote_plus
 
-from pandas import DataFrame
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, text
 
@@ -68,7 +68,6 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         elif not isinstance(config, PostgreSQLConfig):
             raise TypeError(f"config must be PostgreSQLConfig or dict, got {type(config)}")
 
-        self.config = config
         self.host = config.host
         self.port = config.port
         self.username = config.username
@@ -90,8 +89,13 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             dialect="postgresql",
             timeout_seconds=config.timeout_seconds,
         )
-        self.database_name = database
-        self.schema_name = config.schema_name or "public"
+        # Set after super().__init__() so BaseSqlConnector doesn't overwrite
+        # with a plain ConnectionConfig (which lacks sslmode, etc.)
+        self.config = config
+        self._default_database = database
+        self._default_schema = config.schema_name or "public"
+        self._engines: OrderedDict = OrderedDict()  # LRU cache: database_name -> engine
+        self._max_engines = 8
 
     # ==================== System Resources ====================
 
@@ -124,24 +128,6 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             f"@{self.host}:{self.port}/{database_name}?sslmode={self.config.sslmode}"
         )
 
-    def _execute_on_database(self, sql: str, database_name: str) -> DataFrame:
-        """Execute a query on a specific database using a temporary connection.
-
-        Thread-safe: creates an isolated connection without mutating self.
-        """
-        if database_name == self.database_name:
-            return self._execute_pandas(sql)
-
-        conn_str = self._build_connection_string(database_name)
-        engine = create_engine(conn_str)
-        try:
-            with engine.connect() as conn:
-                result = conn.execute(text(sql))
-                rows = [row._asdict() for row in result.fetchall()]
-                return DataFrame(rows)
-        finally:
-            engine.dispose()
-
     # ==================== Metadata Retrieval ====================
 
     def _get_metadata(
@@ -173,8 +159,9 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         if table_type == "mv":
             # pg_matviews is scoped to the current database connection.
             # Use a temporary connection if a different database is requested (thread-safe).
+            safe_schema = schema_name.replace("'", "''") if schema_name else ""
             if schema_name:
-                where = f"schemaname = '{schema_name}'"
+                where = f"schemaname = '{safe_schema}'"
             else:
                 where = f"{list_to_in_str('schemaname not in', list(self._sys_schemas()))}"
 
@@ -183,11 +170,13 @@ class PostgreSQLConnector(SQLAlchemyConnector):
                 FROM pg_matviews
                 WHERE {where}
             """
-            query_result = self._execute_on_database(query, database_name)
+            query_result = self._execute_pandas(query, database_name=database_name)
         else:
             # Tables and views use information_schema (supports table_catalog filter)
+            safe_schema = schema_name.replace("'", "''") if schema_name else ""
+            safe_db = database_name.replace("'", "''") if database_name else ""
             if schema_name:
-                where = f"table_schema = '{schema_name}'"
+                where = f"table_schema = '{safe_schema}'"
             else:
                 where = f"{list_to_in_str('table_schema not in', list(self._sys_schemas()))}"
 
@@ -199,9 +188,9 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             query = f"""
                 SELECT table_schema, table_name
                 FROM information_schema.{metadata_config.info_table}
-                WHERE table_catalog = '{database_name}' AND {where} {type_filter}
+                WHERE table_catalog = '{safe_db}' AND {where} {type_filter}
             """
-            query_result = self._execute_pandas(query)
+            query_result = self._execute_pandas(query, database_name=database_name)
 
         # Format results
         result = []
@@ -234,10 +223,13 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         """
         full_name = self.full_name(schema_name=schema_name, table_name=table_name)
 
+        safe_schema = schema_name.replace("'", "''") if schema_name else ""
+        safe_table = table_name.replace("'", "''") if table_name else ""
+
         if object_type == "VIEW":
             # Get view definition
             sql = f"""
-                SELECT pg_get_viewdef('{schema_name}.{table_name}'::regclass, true) as definition
+                SELECT pg_get_viewdef('{safe_schema}.{safe_table}'::regclass, true) as definition
             """
             result = self._execute_pandas(sql)
             if not result.empty and result["definition"][0]:
@@ -249,7 +241,7 @@ class PostgreSQLConnector(SQLAlchemyConnector):
             sql = f"""
                 SELECT definition
                 FROM pg_matviews
-                WHERE schemaname = '{schema_name}' AND matviewname = '{table_name}'
+                WHERE schemaname = '{safe_schema}' AND matviewname = '{safe_table}'
             """
             result = self._execute_pandas(sql)
             if not result.empty and result["definition"][0]:
@@ -393,6 +385,10 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         database_name = database_name or self.database_name
         schema_name = schema_name or self.schema_name
 
+        safe_db = database_name.replace("'", "''") if database_name else ""
+        safe_schema = schema_name.replace("'", "''") if schema_name else ""
+        safe_table = table_name.replace("'", "''") if table_name else ""
+
         # Use INFORMATION_SCHEMA to get schema with comments
         sql = f"""
             SELECT
@@ -410,16 +406,16 @@ class PostgreSQLConnector(SQLAlchemyConnector):
                     ON tc.constraint_name = kcu.constraint_name
                     AND tc.table_schema = kcu.table_schema
                 WHERE tc.constraint_type = 'PRIMARY KEY'
-                    AND tc.table_schema = '{schema_name}'
-                    AND tc.table_name = '{table_name}'
+                    AND tc.table_schema = '{safe_schema}'
+                    AND tc.table_name = '{safe_table}'
             ) pk ON c.column_name = pk.column_name
             LEFT JOIN pg_catalog.pg_statio_all_tables st
                 ON st.schemaname = c.table_schema AND st.relname = c.table_name
             LEFT JOIN pg_catalog.pg_description pgd
                 ON pgd.objoid = st.relid AND pgd.objsubid = c.ordinal_position
-            WHERE c.table_catalog = '{database_name}'
-              AND c.table_schema = '{schema_name}'
-              AND c.table_name = '{table_name}'
+            WHERE c.table_catalog = '{safe_db}'
+              AND c.table_schema = '{safe_schema}'
+              AND c.table_name = '{safe_table}'
             ORDER BY c.ordinal_position
         """
         query_result = self._execute_pandas(sql)
@@ -458,7 +454,8 @@ class PostgreSQLConnector(SQLAlchemyConnector):
     def get_schemas(self, catalog_name: str = "", database_name: str = "", include_sys: bool = False) -> List[str]:
         """Get list of schemas in the current database."""
         database_name = database_name or self.database_name
-        sql = f"SELECT schema_name FROM information_schema.schemata WHERE catalog_name = '{database_name}'"
+        safe_db = database_name.replace("'", "''") if database_name else ""
+        sql = f"SELECT schema_name FROM information_schema.schemata WHERE catalog_name = '{safe_db}'"
         result = self._execute_pandas(sql)
         schemas = result["schema_name"].tolist()
 
@@ -475,21 +472,88 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         """Get schema name for SQLAlchemy Inspector."""
         return schema_name or self.schema_name
 
-    @override
-    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        """Switch database/schema context.
+    def _get_engine(self, database_name: str = ""):
+        """Get or create engine for the given database. Thread-safe.
 
-        PostgreSQL requires reconnection to switch databases.
-        Schema switching only updates self.schema_name since all queries
-        use explicit schema qualification via full_name().
+        PostgreSQL requires different connection strings per database,
+        so each database gets its own engine with connection pool.
+        Uses LRU eviction (max 8 engines) to avoid holding too many connections.
         """
-        if database_name and database_name != self.database_name:
-            self.connection_string = self._build_connection_string(database_name)
-            self.close()
-            self.connect()
-            self.database_name = database_name
+        db = database_name or self.database_name
+        with self._engine_lock:
+            if db in self._engines:
+                self._engines.move_to_end(db)
+                return self._engines[db]
+            conn_str = self._build_connection_string(db)
+            engine = create_engine(
+                conn_str,
+                pool_size=5,
+                max_overflow=10,
+                pool_timeout=self.timeout_seconds,
+                pool_recycle=3600,
+                pool_pre_ping=True,
+            )
+            self._engines[db] = engine
+            while len(self._engines) > self._max_engines:
+                _, evicted = self._engines.popitem(last=False)
+                try:
+                    evicted.dispose()
+                except Exception as e:
+                    logger.warning(f"Error disposing evicted engine: {e}")
+            return engine
+
+    @override
+    def _conn(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        """Checkout connection from the correct per-database engine. Thread-safe.
+
+        Overrides base _conn() to avoid writing to shared self.engine.
+        Each thread gets a connection from the engine matching its database_name.
+        """
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _pg_conn():
+            effective_database = database_name or self.database_name
+            effective_schema = schema_name or self.schema_name
+            effective_catalog = catalog_name or self.catalog_name
+            engine = self._get_engine(effective_database)
+            conn = engine.connect()
+            try:
+                self.do_switch_context(conn, effective_catalog, effective_database, effective_schema)
+                yield conn
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise
+            finally:
+                conn.close()
+
+        return _pg_conn()
+
+    @override
+    def close(self):
+        """Dispose all engines (per-database pool + parent engine)."""
+        for engine in self._engines.values():
+            try:
+                engine.dispose()
+            except Exception as e:
+                logger.warning(f"Error disposing engine: {e}")
+        self._engines.clear()
+        # Dispose parent engine that may have been created via connect()/_ensure_engine()
+        super().close()
+
+    @override
+    def do_switch_context(self, conn, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        """Apply schema context to a connection.
+
+        Database switching is handled by _conn() which picks the right engine
+        based on the effective database_name.
+        """
         if schema_name:
-            self.schema_name = schema_name
+            conn.execute(text(f"SET search_path TO {self.quote_identifier(schema_name)}"))
+            conn.commit()
 
     # ==================== Sample Data ====================
 

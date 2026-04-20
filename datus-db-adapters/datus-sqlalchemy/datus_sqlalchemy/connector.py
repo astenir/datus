@@ -2,6 +2,8 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+import threading
+from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple, override
 
 from pandas import DataFrame
@@ -41,7 +43,10 @@ logger = get_logger(__name__)
 class SQLAlchemyConnector(BaseSqlConnector):
     """
     Base SQLAlchemy connector for database adapters.
-    Provides common SQLAlchemy functionality with Arrow support.
+
+    Thread-safe: each operation checks out a connection from the engine pool,
+    applies the current thread's context via do_switch_context(), executes,
+    and returns the connection to the pool.
     """
 
     def __init__(self, connection_string: str, dialect: str = "", timeout_seconds: int = 30):
@@ -62,11 +67,11 @@ class SQLAlchemyConnector(BaseSqlConnector):
         super().__init__(config, dialect)
         self.connection_string = connection_string
         self.engine = None
-        self.connection = None
         self._owns_engine = False
+        self._engine_lock = threading.Lock()
 
     def __del__(self):
-        """Destructor to ensure connections are properly closed."""
+        """Destructor to ensure engine is properly disposed."""
         try:
             self.close()
         except Exception:
@@ -74,106 +79,88 @@ class SQLAlchemyConnector(BaseSqlConnector):
 
     # ==================== Connection Management ====================
 
-    def _check_connection(self) -> bool:
-        """Check if the persistent connection is still alive."""
-        try:
-            self.connection.execute(text("SELECT 1"))
-            return True
-        except Exception:
-            return False
+    def _ensure_engine(self):
+        """Create the SQLAlchemy engine with connection pool if not exists.
+
+        Returns the engine to use. Callers must use the return value rather
+        than ``self.engine`` to avoid races when subclasses maintain multiple
+        engines (e.g. PostgreSQL engine-per-database).
+        """
+        if self.engine and self._owns_engine:
+            return self.engine
+        with self._engine_lock:
+            # Double-check after acquiring lock
+            if self.engine and self._owns_engine:
+                return self.engine
+            try:
+                if self.dialect not in ("duckdb", "sqlite"):
+                    self.engine = create_engine(
+                        self.connection_string,
+                        pool_size=10,
+                        max_overflow=20,
+                        pool_timeout=self.timeout_seconds,
+                        pool_recycle=3600,
+                        pool_pre_ping=True,
+                    )
+                else:
+                    self.engine = create_engine(self.connection_string)
+                self._owns_engine = True
+                return self.engine
+            except Exception as e:
+                self.engine = None
+                self._owns_engine = False
+                raise self._handle_exception(e, "", "connection") from e
 
     @override
     def connect(self):
-        """Establish connection to the database, reconnecting if stale."""
-        if self.engine and self.connection and self._owns_engine:
-            if self._check_connection():
-                return
-            # Connection is stale, rebuild it
-            logger.warning("Stale connection detected, reconnecting...")
-            needs_context_replay = True
-            self._force_reset()
-        else:
-            needs_context_replay = False
+        """Backward-compatible alias for _ensure_engine()."""
+        self._ensure_engine()
 
+    @contextmanager
+    def _conn(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        """Checkout a connection from pool with context applied.
+
+        Args:
+            catalog_name: Override thread-local catalog (empty = use thread-local)
+            database_name: Override thread-local database (empty = use thread-local)
+            schema_name: Override thread-local schema (empty = use thread-local)
+
+        Usage:
+            with self._conn(database_name="db1") as conn:
+                result = conn.execute(text(sql))
+        """
+        effective_catalog = catalog_name or self.catalog_name
+        effective_database = database_name or self.database_name
+        effective_schema = schema_name or self.schema_name
+        engine = self._ensure_engine()
+        conn = engine.connect()
         try:
-            self._safe_close()
-
-            # Create engine with connection pool
-            if self.dialect not in ("duckdb", "sqlite"):
-                self.engine = create_engine(
-                    self.connection_string,
-                    pool_size=10,  # Increased for parallel execution
-                    max_overflow=20,  # Allow more overflow connections
-                    pool_timeout=self.timeout_seconds,
-                    pool_recycle=3600,
-                    pool_pre_ping=True,  # Verify connections before use
-                )
-            else:
-                self.engine = create_engine(self.connection_string)
-
-            self.connection = self.engine.connect()
-            self._owns_engine = True
-
-        except Exception as e:
-            self._force_reset()
-            raise self._handle_exception(e, "", "connection") from e
-
-        # Replay switched context after stale reconnect
-        if needs_context_replay:
             self.do_switch_context(
-                catalog_name=self.catalog_name,
-                database_name=self.database_name,
-                schema_name=self.schema_name,
+                conn,
+                catalog_name=effective_catalog,
+                database_name=effective_database,
+                schema_name=effective_schema,
             )
-
-        if not (self.engine and self.connection):
-            self._force_reset()
-            raise DatusDbException(
-                ErrorCode.DB_CONNECTION_FAILED,
-                message_args={"error_message": "Failed to establish connection"},
-            )
+            yield conn
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
 
     @override
     def close(self):
-        """Close the database connection."""
+        """Dispose the engine and its connection pool."""
         try:
-            if self.connection:
-                self.connection.close()
-                self.connection = None
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
             self._owns_engine = False
         except Exception as e:
             logger.warning(f"Error disposing engine: {str(e)}")
-
-    def _safe_close(self):
-        """Safely close connection, ignoring errors."""
-        try:
-            self.close()
-        except Exception:
-            pass
-
-    def _force_reset(self):
-        """Force reset engine on error."""
-        try:
-            self._safe_rollback()
-            if self.connection:
-                try:
-                    self.connection.close()
-                except Exception:
-                    pass
-                self.connection = None
-            if self.engine:
-                try:
-                    self.engine.dispose()
-                except Exception:
-                    pass
-                self.engine = None
-            self._owns_engine = False
-        except Exception:
-            self.engine = None
-            self._owns_engine = False
 
     # ==================== Error Handling ====================
 
@@ -205,8 +192,7 @@ class SQLAlchemyConnector(BaseSqlConnector):
         if isinstance(e, (OperationalError, InterfaceError)):
             # Transaction rollback errors
             if any(kw in error_msg_lower for kw in ["invalid transaction", "can't reconnect"]):
-                logger.warning("Invalid transaction state detected, resetting connection")
-                self._force_reset()
+                logger.warning("Invalid transaction state detected")
                 return DatusDbException(ErrorCode.DB_TRANSACTION_FAILED, message_args=message_args)
 
             # Timeout errors
@@ -253,12 +239,18 @@ class SQLAlchemyConnector(BaseSqlConnector):
 
     @override
     def execute_query(
-        self, sql: str, result_format: Literal["csv", "arrow", "pandas", "list"] = "csv"
+        self,
+        sql: str,
+        result_format: Literal["csv", "arrow", "pandas", "list"] = "csv",
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
     ) -> ExecuteSQLResult:
         """Execute SELECT query."""
         try:
-            self.connect()
-            result = self._execute_query(sql)
+            result = self._execute_query(
+                sql, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name
+            )
             row_count = len(result)
 
             # Format result based on requested format
@@ -281,7 +273,9 @@ class SQLAlchemyConnector(BaseSqlConnector):
             ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql)
 
-    def _execute_query(self, sql: str) -> List[Dict[str, Any]]:
+    def _execute_query(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> List[Dict[str, Any]]:
         """Internal query execution returning list of dicts."""
         if parse_sql_type(sql, self.dialect) in (
             SQLType.INSERT,
@@ -296,106 +290,112 @@ class SQLAlchemyConnector(BaseSqlConnector):
                 message="Only SELECT and metadata queries are supported",
             )
 
-        self.connect()
         try:
-            result = self.connection.execute(text(sql))
-            rows = result.fetchall()
-            return [row._asdict() for row in rows]
+            with self._conn(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name) as conn:
+                result = conn.execute(text(sql))
+                rows = result.fetchall()
+                return [row._asdict() for row in rows]
         except DatusDbException:
-            self._safe_rollback()
             raise
         except Exception as e:
-            self._safe_rollback()
             raise self._handle_exception(e, sql, "query") from e
 
     @override
-    def execute_insert(self, sql: str) -> ExecuteSQLResult:
+    def execute_insert(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """Execute INSERT statement."""
         try:
-            self.connect()
-            res = self.connection.execute(text(sql))
-            self.connection.commit()
+            with self._conn(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name) as conn:
+                res = conn.execute(text(sql))
+                conn.commit()
 
-            # Get inserted primary key or row count
-            inserted_pk = None
-            try:
-                if hasattr(res, "inserted_primary_key") and res.inserted_primary_key:
-                    inserted_pk = res.inserted_primary_key
-            except Exception:
-                pass
+                # Get inserted primary key or row count
+                inserted_pk = None
+                try:
+                    if hasattr(res, "inserted_primary_key") and res.inserted_primary_key:
+                        inserted_pk = res.inserted_primary_key
+                except Exception:
+                    pass
 
-            lastrowid = getattr(res, "lastrowid", None)
-            return_value = inserted_pk if inserted_pk else (lastrowid if lastrowid else res.rowcount)
+                lastrowid = getattr(res, "lastrowid", None)
+                return_value = inserted_pk if inserted_pk else (lastrowid if lastrowid else res.rowcount)
 
-            return ExecuteSQLResult(
-                success=True,
-                sql_query=sql,
-                sql_return=str(return_value),
-                row_count=res.rowcount,
-            )
+                return ExecuteSQLResult(
+                    success=True,
+                    sql_query=sql,
+                    sql_return=str(return_value),
+                    row_count=res.rowcount,
+                )
         except Exception as e:
-            self._safe_rollback()
             ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql, sql_return="", row_count=0)
 
     @override
-    def execute_update(self, sql: str) -> ExecuteSQLResult:
+    def execute_update(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """Execute UPDATE statement."""
         try:
-            self.connect()
-            res = self.connection.execute(text(sql))
-            self.connection.commit()
-            return ExecuteSQLResult(
-                success=True,
-                sql_query=sql,
-                sql_return=str(res.rowcount),
-                row_count=res.rowcount,
-            )
+            with self._conn(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name) as conn:
+                res = conn.execute(text(sql))
+                conn.commit()
+                return ExecuteSQLResult(
+                    success=True,
+                    sql_query=sql,
+                    sql_return=str(res.rowcount),
+                    row_count=res.rowcount,
+                )
         except Exception as e:
-            self._safe_rollback()
             ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql, sql_return="", row_count=0)
 
     @override
-    def execute_delete(self, sql: str) -> ExecuteSQLResult:
+    def execute_delete(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """Execute DELETE statement."""
         try:
-            self.connect()
-            res = self.connection.execute(text(sql))
-            self.connection.commit()
-            return ExecuteSQLResult(
-                success=True,
-                sql_query=sql,
-                sql_return=str(res.rowcount),
-                row_count=res.rowcount,
-            )
+            with self._conn(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name) as conn:
+                res = conn.execute(text(sql))
+                conn.commit()
+                return ExecuteSQLResult(
+                    success=True,
+                    sql_query=sql,
+                    sql_return=str(res.rowcount),
+                    row_count=res.rowcount,
+                )
         except Exception as e:
-            self._safe_rollback()
             ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql, sql_return="", row_count=0)
 
     @override
-    def execute_ddl(self, sql: str) -> ExecuteSQLResult:
+    def execute_ddl(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """Execute DDL statement (CREATE, ALTER, DROP, etc.)."""
         try:
-            self.connect()
-            res = self.connection.execute(text(sql))
-            self.connection.commit()
-            return ExecuteSQLResult(
-                success=True,
-                sql_query=sql,
-                sql_return=str(res.rowcount),
-                row_count=res.rowcount,
-            )
+            with self._conn(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name) as conn:
+                res = conn.execute(text(sql))
+                conn.commit()
+                return ExecuteSQLResult(
+                    success=True,
+                    sql_query=sql,
+                    sql_return=str(res.rowcount),
+                    row_count=res.rowcount,
+                )
         except Exception as e:
-            self._safe_rollback()
             ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, sql_query=sql, error=str(ex))
 
-    def execute_pandas(self, sql: str) -> ExecuteSQLResult:
+    def execute_pandas(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """Execute query and return pandas DataFrame."""
         try:
-            df = self._execute_pandas(sql)
+            df = self._execute_pandas(
+                sql, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name
+            )
             return ExecuteSQLResult(
                 success=True,
                 sql_query=sql,
@@ -407,15 +407,22 @@ class SQLAlchemyConnector(BaseSqlConnector):
             ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql)
 
-    def _execute_pandas(self, sql: str) -> DataFrame:
+    def _execute_pandas(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> DataFrame:
         """Internal pandas execution."""
-        return DataFrame(self._execute_query(sql))
+        return DataFrame(
+            self._execute_query(sql, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name)
+        )
 
-    def execute_csv(self, sql: str) -> ExecuteSQLResult:
+    def execute_csv(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """Execute query and return CSV format."""
         try:
-            self.connect()
-            df = self._execute_pandas(sql)
+            df = self._execute_pandas(
+                sql, catalog_name=catalog_name, database_name=database_name, schema_name=schema_name
+            )
             return ExecuteSQLResult(
                 success=True,
                 sql_query=sql,
@@ -434,28 +441,30 @@ class SQLAlchemyConnector(BaseSqlConnector):
                 result_format="csv",
             )
 
-    def execute_arrow(self, sql: str) -> ExecuteSQLResult:
+    def execute_arrow(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         """Execute query and return Arrow table."""
         try:
-            self.connect()
-            result = self.connection.execute(text(sql))
-            if result.returns_rows:
-                df = DataFrame(result.fetchall(), columns=result.keys())
-                table = Table.from_pandas(df)
+            with self._conn(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name) as conn:
+                result = conn.execute(text(sql))
+                if result.returns_rows:
+                    df = DataFrame(result.fetchall(), columns=result.keys())
+                    table = Table.from_pandas(df)
+                    return ExecuteSQLResult(
+                        success=True,
+                        sql_query=sql,
+                        sql_return=table,
+                        row_count=len(df),
+                        result_format="arrow",
+                    )
                 return ExecuteSQLResult(
                     success=True,
                     sql_query=sql,
-                    sql_return=table,
-                    row_count=len(df),
+                    sql_return=result.rowcount,
+                    row_count=0,
                     result_format="arrow",
                 )
-            return ExecuteSQLResult(
-                success=True,
-                sql_query=sql,
-                sql_return=result.rowcount,
-                row_count=0,
-                result_format="arrow",
-            )
         except Exception as e:
             ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(
@@ -470,12 +479,12 @@ class SQLAlchemyConnector(BaseSqlConnector):
     @override
     def execute_content_set(self, sql: str) -> ExecuteSQLResult:
         """Execute USE/SET commands."""
-        self.connect()
         try:
-            self.connection.execute(text(sql))
-            self.connection.commit()
+            with self._conn() as conn:
+                conn.execute(text(sql))
+                conn.commit()
 
-            # Update context if applicable
+            # Update thread-local context if applicable
             if self.dialect != "sqlite":
                 context = parse_context_switch(sql=sql, dialect=self.dialect)
                 if context:
@@ -488,46 +497,48 @@ class SQLAlchemyConnector(BaseSqlConnector):
 
             return ExecuteSQLResult(success=True, sql_query=sql, sql_return="Successful", row_count=0)
         except Exception as e:
-            self._safe_rollback()
             ex = e if isinstance(e, DatusDbException) else self._handle_exception(e, sql)
             return ExecuteSQLResult(success=False, error=str(ex), sql_query=sql)
 
-    def execute_queries(self, queries: List[str]) -> List[Any]:
-        """Execute multiple queries."""
+    def execute_queries(
+        self, queries: List[str], catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> List[Any]:
+        """Execute multiple queries on a single connection (batch atomicity)."""
         results = []
-        self.connect()
         try:
-            for query in queries:
-                result = self.connection.execute(text(query))
-                if result.returns_rows:
-                    df = DataFrame(result.fetchall(), columns=list(result.keys()))
-                    results.append(df.to_dict(orient="records"))
-                else:
-                    query_lower = query.strip().lower()
-                    if query_lower.startswith("insert"):
-                        inserted_pk = None
-                        try:
-                            if hasattr(result, "inserted_primary_key") and result.inserted_primary_key:
-                                inserted_pk = result.inserted_primary_key
-                        except Exception:
-                            pass
-                        lastrowid = getattr(result, "lastrowid", None)
-                        results.append(inserted_pk if inserted_pk else (lastrowid if lastrowid else result.rowcount))
-                    elif query_lower.startswith(("update", "delete")):
-                        results.append(result.rowcount)
+            with self._conn(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name) as conn:
+                for query in queries:
+                    result = conn.execute(text(query))
+                    if result.returns_rows:
+                        df = DataFrame(result.fetchall(), columns=list(result.keys()))
+                        results.append(df.to_dict(orient="records"))
                     else:
-                        results.append(None)
-            self.connection.commit()
+                        query_lower = query.strip().lower()
+                        if query_lower.startswith("insert"):
+                            inserted_pk = None
+                            try:
+                                if hasattr(result, "inserted_primary_key") and result.inserted_primary_key:
+                                    inserted_pk = result.inserted_primary_key
+                            except Exception:
+                                pass
+                            lastrowid = getattr(result, "lastrowid", None)
+                            results.append(
+                                inserted_pk if inserted_pk else (lastrowid if lastrowid else result.rowcount)
+                            )
+                        elif query_lower.startswith(("update", "delete")):
+                            results.append(result.rowcount)
+                        else:
+                            results.append(None)
+                conn.commit()
         except SQLAlchemyError as e:
-            self._safe_rollback()
             raise self._handle_exception(e, "\n".join(queries), "batch query") from e
         return results
 
     def test_connection(self) -> bool:
         """Test database connection."""
-        self.connect()
         try:
-            self._execute_query("SELECT 1")
+            with self._conn() as conn:
+                conn.execute(text("SELECT 1"))
             return True
         except Exception as e:
             if isinstance(e, DatusDbException):
@@ -541,22 +552,20 @@ class SQLAlchemyConnector(BaseSqlConnector):
 
     def _inspector(self) -> Inspector:
         """Get SQLAlchemy inspector."""
-        self.connect()
+        engine = self._ensure_engine()
         try:
-            return inspect(self.engine)
+            return inspect(engine)
         except Exception as e:
             raise self._handle_exception(e, operation="inspector creation") from e
 
     def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """Get list of tables."""
-        self.connect()
         sqlalchemy_schema = self._sqlalchemy_schema(catalog_name, database_name, schema_name)
         inspector = self._inspector()
         return inspector.get_table_names(schema=sqlalchemy_schema)
 
     def get_views(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """Get list of views."""
-        self.connect()
         sqlalchemy_schema = self._sqlalchemy_schema(catalog_name, database_name, schema_name)
         inspector = self._inspector()
         try:
@@ -690,23 +699,38 @@ class SQLAlchemyConnector(BaseSqlConnector):
 
     # ==================== Streaming Methods ====================
 
-    def execute_csv_iterator(self, sql: str, max_rows: int = 100, with_header: bool = True) -> Iterator[Tuple]:
-        """Execute query and return CSV rows in batches."""
-        self.connect()
+    def execute_csv_iterator(
+        self,
+        sql: str,
+        max_rows: int = 100,
+        with_header: bool = True,
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
+    ) -> Iterator[Tuple]:
+        """Execute query and return CSV rows in batches.
+
+        Warning: The underlying pool connection stays checked out for the
+        lifetime of this generator.  Callers must fully consume the iterator
+        or explicitly call ``.close()`` on it to return the connection to
+        the pool.  Abandoning an unconsumed iterator may starve the pool
+        until the generator is garbage-collected.
+        """
         try:
-            result = self.connection.execute(text(sql).execution_options(stream_results=True, max_row_buffer=max_rows))
-            if result.returns_rows:
-                if with_header:
-                    yield result.keys()
-                while True:
-                    batch_rows = result.fetchmany(max_rows)
-                    if not batch_rows:
-                        break
-                    for row in batch_rows:
-                        yield row
-            else:
-                if with_header:
-                    yield ()
-                yield from []
+            with self._conn(catalog_name=catalog_name, database_name=database_name, schema_name=schema_name) as conn:
+                result = conn.execute(text(sql).execution_options(stream_results=True, max_row_buffer=max_rows))
+                if result.returns_rows:
+                    if with_header:
+                        yield result.keys()
+                    while True:
+                        batch_rows = result.fetchmany(max_rows)
+                        if not batch_rows:
+                            break
+                        for row in batch_rows:
+                            yield row
+                else:
+                    if with_header:
+                        yield ()
+                    yield from []
         except Exception as e:
             raise self._handle_exception(e) from e

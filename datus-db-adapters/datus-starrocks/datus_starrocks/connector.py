@@ -2,15 +2,18 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+from contextlib import contextmanager
 from typing import Any, Dict, List, Set, Union, override
 
 from sqlalchemy import text
 
 from datus_db_core import (
     CatalogSupportMixin,
+    ExecuteSQLResult,
     MaterializedViewSupportMixin,
     get_logger,
     list_to_in_str,
+    parse_context_switch,
 )
 from datus_mysql import MySQLConnector
 
@@ -64,34 +67,12 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
             timeout_seconds=config.timeout_seconds,
         )
         super().__init__(mysql_config)
-
-        self.catalog_name = config.catalog
         self._deferred_database = config.database if needs_catalog_switch else ""
-        self.database_name = config.database or ""
+        self._default_catalog = self.default_catalog() if config.catalog in ("", None, "def") else config.catalog
+        self._default_database = config.database or ""
+
         # Override dialect to StarRocks
         self.dialect = "starrocks"
-
-    # ==================== Connection Management ====================
-
-    @override
-    def connect(self):
-        """Establish connection and switch to configured catalog on first connect.
-
-        Reconnect context replay is handled by the base class via do_switch_context().
-        """
-        already_connected = self.engine and self.connection and self._owns_engine
-        super().connect()
-        if not already_connected and self.catalog_name and self.catalog_name != self.default_catalog():
-            self.connection.execute(text(f"SET CATALOG {self.quote_identifier(self.catalog_name)}"))
-            self.connection.commit()
-            logger.debug(f"Switched to catalog on first connect: {self.catalog_name}")
-
-            # Now that the catalog is set, switch to the deferred database
-            if self._deferred_database:
-                self.connection.execute(text(f"USE {self.quote_identifier(self._deferred_database)}"))
-                self.connection.commit()
-                self.database_name = self._deferred_database
-                logger.debug(f"Switched to deferred database: {self._deferred_database}")
 
     # ==================== Context Manager Support ====================
 
@@ -124,11 +105,14 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
     def switch_catalog(self, catalog_name: str) -> None:
         """Switch to a different catalog.
 
+        Clears database_name because the old database may not exist
+        in the new catalog.
+
         Args:
             catalog_name: Name of the catalog to switch to
         """
         self.switch_context(catalog_name=catalog_name)
-        self.catalog_name = catalog_name
+        self.database_name = ""
 
     def _resolve_catalog(self, catalog_name: str = "") -> str:
         """Resolve the effective catalog name, falling back to configured or default."""
@@ -138,15 +122,78 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         return catalog
 
     @override
-    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        """Switch catalog and/or database context on the persistent connection."""
+    def do_switch_context(self, conn, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        """Apply catalog and/or database context to a connection."""
         if catalog_name:
-            self.connection.execute(text(f"SET CATALOG {self.quote_identifier(catalog_name)}"))
-            self.connection.commit()
+            conn.execute(text(f"SET CATALOG {self.quote_identifier(catalog_name)}"))
+            conn.commit()
             logger.debug(f"Switched catalog to: {catalog_name}")
         if database_name:
-            self.connection.execute(text(f"USE {self.quote_identifier(database_name)}"))
-            self.connection.commit()
+            conn.execute(text(f"USE {self.quote_identifier(database_name)}"))
+            conn.commit()
+            logger.debug(f"Switched database to: {database_name}")
+
+    @contextmanager
+    @override
+    def _conn(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        """Checkout a connection with catalog-aware context.
+
+        When a per-call ``catalog_name`` override targets a catalog different
+        from the stored thread-local catalog and no ``database_name`` is
+        passed explicitly, the stored ``self.database_name`` is NOT carried
+        over: it belongs to the old catalog and may not exist in the new
+        one, which would fail ``USE <db>`` after ``SET CATALOG <new>``.
+
+        The per-call ``catalog_name`` is normalized via ``_resolve_catalog``
+        (e.g. the ``"def"`` alias → ``default_catalog``) before both the
+        divergence check and the downstream ``SET CATALOG``, so aliases are
+        compared and applied consistently.
+        """
+        resolved_catalog = self._resolve_catalog(catalog_name) if catalog_name else ""
+        if resolved_catalog and not database_name and resolved_catalog != self.catalog_name:
+            effective_database = ""
+            effective_schema = schema_name or self.schema_name
+            engine = self._ensure_engine()
+            conn = engine.connect()
+            try:
+                self.do_switch_context(
+                    conn,
+                    catalog_name=resolved_catalog,
+                    database_name=effective_database,
+                    schema_name=effective_schema,
+                )
+                yield conn
+            except Exception:
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
+                raise
+            finally:
+                conn.close()
+        else:
+            with super()._conn(
+                catalog_name=resolved_catalog or catalog_name,
+                database_name=database_name,
+                schema_name=schema_name,
+            ) as conn:
+                yield conn
+
+    @override
+    def execute_content_set(self, sql: str) -> ExecuteSQLResult:
+        """Execute USE/SET, clearing stored database on SET CATALOG.
+
+        Mirrors ``switch_catalog()``: when the catalog changes, the stored
+        ``database_name`` no longer refers to a valid database under the
+        new catalog, so it is cleared to avoid a stale ``USE`` on the next
+        checkout.
+        """
+        result = super().execute_content_set(sql)
+        if result.success:
+            context = parse_context_switch(sql=sql, dialect=self.dialect)
+            if context and context.get("target") == "catalog" and context.get("catalog_name"):
+                self.database_name = ""
+        return result
 
     # ==================== Metadata Retrieval (Stateless, Catalog-Qualified) ====================
 
@@ -172,7 +219,8 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
 
         # Build WHERE clause
         if database_name:
-            where = f"TABLE_SCHEMA = '{database_name}'"
+            safe_db = database_name.replace("'", "''")
+            where = f"TABLE_SCHEMA = '{safe_db}'"
         else:
             where = list_to_in_str("TABLE_SCHEMA NOT IN", list(self._sys_databases()))
 
@@ -251,7 +299,8 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         )
 
         if database_name:
-            query_sql = f"{query_sql} WHERE TABLE_SCHEMA = '{database_name}'"
+            safe_db = database_name.replace("'", "''")
+            query_sql = f"{query_sql} WHERE TABLE_SCHEMA = '{safe_db}'"
         else:
             ignore_dbs = list(self._sys_databases())
             query_sql = f"{query_sql} {list_to_in_str('WHERE TABLE_SCHEMA NOT IN', ignore_dbs)}"
@@ -342,7 +391,7 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
     @override
     def close(self):
         """
-        Close connection with special handling for PyMySQL cleanup errors.
+        Close engine with special handling for PyMySQL cleanup errors.
 
         StarRocks may trigger PyMySQL struct.pack errors during cleanup,
         which we safely ignore.
@@ -362,10 +411,6 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
 
             if any(err in error_str for err in pymysql_errors):
                 logger.debug(f"Ignoring PyMySQL cleanup error: {e}")
-
-                # Force cleanup of connection variables
-                if hasattr(self, "connection"):
-                    self.connection = None
                 if hasattr(self, "engine"):
                     try:
                         if self.engine:
@@ -374,8 +419,8 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
                         pass
                     finally:
                         self.engine = None
+                self._owns_engine = False
             else:
-                # Re-raise unexpected errors
                 logger.error(f"Unexpected close error: {e}")
                 raise
 

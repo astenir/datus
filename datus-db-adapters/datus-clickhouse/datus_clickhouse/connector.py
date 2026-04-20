@@ -70,7 +70,6 @@ class ClickHouseConnector(SQLAlchemyConnector):
         elif not isinstance(config, ClickHouseConfig):
             raise TypeError(f"config must be ClickHouseConfig or dict, got {type(config)}")
 
-        self.config = config
         self.host = config.host
         self.port = config.port
         self.username = config.username
@@ -87,7 +86,10 @@ class ClickHouseConnector(SQLAlchemyConnector):
             dialect="clickhouse",
             timeout_seconds=config.timeout_seconds,
         )
-        self.database_name = database
+        # Set after super().__init__() so BaseSqlConnector doesn't overwrite
+        # with a plain ConnectionConfig (which lacks ClickHouse-specific fields)
+        self.config = config
+        self._default_database = database
 
     # ==================== System Resources ====================
 
@@ -325,10 +327,13 @@ class ClickHouseConnector(SQLAlchemyConnector):
         return database_name or self.database_name
 
     @override
-    def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
-        """Switch database context. Updates default database for subsequent full_name() calls."""
+    def do_switch_context(self, conn, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        """Apply database context to a connection using USE statement."""
         if database_name:
-            self.database_name = database_name
+            from sqlalchemy import text
+
+            conn.execute(text(f"USE {self.quote_identifier(database_name)}"))
+            conn.commit()
 
     # ==================== Sample Data ====================
 

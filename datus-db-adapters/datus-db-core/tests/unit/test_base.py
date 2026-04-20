@@ -23,17 +23,28 @@ class ConcreteConnector(BaseSqlConnector):
             config = ConnectionConfig()
         super().__init__(config, dialect)
 
-    def execute_insert(self, sql: str) -> ExecuteSQLResult:
+    def execute_insert(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         return ExecuteSQLResult(success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv")
 
-    def execute_update(self, sql: str) -> ExecuteSQLResult:
+    def execute_update(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         return ExecuteSQLResult(success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv")
 
-    def execute_delete(self, sql: str) -> ExecuteSQLResult:
+    def execute_delete(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         return ExecuteSQLResult(success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv")
 
     def execute_query(
-        self, sql: str, result_format: Literal["csv", "arrow", "pandas", "list"] = "csv"
+        self,
+        sql: str,
+        result_format: Literal["csv", "arrow", "pandas", "list"] = "csv",
+        catalog_name: str = "",
+        database_name: str = "",
+        schema_name: str = "",
     ) -> ExecuteSQLResult:
         return ExecuteSQLResult(
             success=True,
@@ -52,7 +63,9 @@ class ConcreteConnector(BaseSqlConnector):
             result_format="pandas",
         )
 
-    def execute_ddl(self, sql: str) -> ExecuteSQLResult:
+    def execute_ddl(
+        self, sql: str, catalog_name: str = "", database_name: str = "", schema_name: str = ""
+    ) -> ExecuteSQLResult:
         return ExecuteSQLResult(success=True, sql_query=sql, row_count=0, sql_return="", result_format="csv")
 
     def execute_csv(self, sql: str) -> ExecuteSQLResult:
@@ -80,12 +93,59 @@ class ConcreteConnector(BaseSqlConnector):
         )
 
 
+class ContextAwareConnector(ConcreteConnector):
+    """Connector whose execute methods accept context kwargs and record what was passed.
+
+    last_context/last_context_keys are per-thread so concurrent tests can
+    inspect each thread's result without races.
+    """
+
+    _CTX_KEYS = {"catalog_name", "database_name", "schema_name"}
+
+    def __init__(self, config=None, dialect="snowflake"):
+        import threading
+
+        super().__init__(config, dialect)
+        self._local = threading.local()
+
+    @property
+    def last_context(self):
+        return getattr(self._local, "last_context", {})
+
+    @property
+    def last_context_keys(self):
+        return getattr(self._local, "last_context_keys", set())
+
+    def _record(self, **kwargs):
+        self._local.last_context_keys = set(kwargs.keys()) & self._CTX_KEYS
+        self._local.last_context = {k: kwargs.get(k, "") for k in self._CTX_KEYS}
+
+    def execute_insert(self, sql: str, **kwargs):
+        self._record(**kwargs)
+        return ExecuteSQLResult(success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv")
+
+    def execute_update(self, sql: str, **kwargs):
+        self._record(**kwargs)
+        return ExecuteSQLResult(success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv")
+
+    def execute_delete(self, sql: str, **kwargs):
+        self._record(**kwargs)
+        return ExecuteSQLResult(success=True, sql_query=sql, row_count=1, sql_return="", result_format="csv")
+
+    def execute_query(self, sql: str, result_format: Literal["csv", "arrow", "pandas", "list"] = "csv", **kwargs):
+        self._record(**kwargs)
+        return ExecuteSQLResult(success=True, sql_query=sql, row_count=0, sql_return="", result_format=result_format)
+
+    def execute_ddl(self, sql: str, **kwargs):
+        self._record(**kwargs)
+        return ExecuteSQLResult(success=True, sql_query=sql, row_count=0, sql_return="", result_format="csv")
+
+
 class TestBaseSqlConnectorInit:
     def test_init_defaults(self):
         connector = ConcreteConnector()
         assert connector.dialect == "snowflake"
         assert connector.timeout_seconds == 30
-        assert connector.connection is None
         assert connector.catalog_name == ""
         assert connector.database_name == ""
         assert connector.schema_name == ""
@@ -98,18 +158,9 @@ class TestBaseSqlConnectorInit:
 
 
 class TestClose:
-    def test_close_with_connection(self):
-        connector = ConcreteConnector()
-        mock_conn = MagicMock()
-        connector.connection = mock_conn
-        connector.close()
-        mock_conn.close.assert_called_once()
-        assert connector.connection is None
-
-    def test_close_without_connection(self):
+    def test_close_no_error(self):
         connector = ConcreteConnector()
         connector.close()  # Should not raise
-        assert connector.connection is None
 
 
 class TestContextManager:
@@ -126,12 +177,11 @@ class TestContextManager:
             connector.__exit__(None, None, None)
             mock_close.assert_called_once()
 
-    def test_exit_with_exception_calls_rollback(self):
+    def test_exit_with_exception_calls_close(self):
         connector = ConcreteConnector()
-        mock_conn = MagicMock()
-        connector.connection = mock_conn
-        connector.__exit__(ValueError, ValueError("test"), None)
-        mock_conn.rollback.assert_called_once()
+        with patch.object(connector, "close") as mock_close:
+            connector.__exit__(ValueError, ValueError("test"), None)
+            mock_close.assert_called_once()
 
     def test_exit_returns_false(self):
         connector = ConcreteConnector()
@@ -298,27 +348,107 @@ class TestExecuteErrorHandling:
             mock.assert_called_once_with("SELECT 1", "arrow")
 
 
+class TestExecuteContextPassThrough:
+    """Test that execute() forwards catalog/database/schema to sub-methods via _call_with_ctx."""
+
+    def test_select_receives_context(self):
+        connector = ContextAwareConnector()
+        connector.execute({"sql_query": "SELECT 1"}, catalog_name="cat", database_name="db", schema_name="sch")
+        assert connector.last_context == {"catalog_name": "cat", "database_name": "db", "schema_name": "sch"}
+
+    def test_insert_receives_context(self):
+        connector = ContextAwareConnector()
+        connector.execute({"sql_query": "INSERT INTO t VALUES (1)"}, database_name="db")
+        assert connector.last_context["database_name"] == "db"
+
+    def test_update_receives_context(self):
+        connector = ContextAwareConnector()
+        connector.execute({"sql_query": "UPDATE t SET col=1"}, catalog_name="cat")
+        assert connector.last_context["catalog_name"] == "cat"
+
+    def test_delete_receives_context(self):
+        connector = ContextAwareConnector()
+        connector.execute({"sql_query": "DELETE FROM t WHERE id=1"}, schema_name="sch")
+        assert connector.last_context["schema_name"] == "sch"
+
+    def test_ddl_receives_context(self):
+        connector = ContextAwareConnector()
+        connector.execute({"sql_query": "CREATE TABLE t (id INT)"}, database_name="db", schema_name="sch")
+        assert connector.last_context["database_name"] == "db"
+        assert connector.last_context["schema_name"] == "sch"
+
+    def test_empty_context_not_forwarded(self):
+        """When no context is passed, no context kwargs reach the sub-method."""
+        connector = ContextAwareConnector()
+        connector.execute({"sql_query": "SELECT 1"})
+        assert connector.last_context_keys == set()
+
+    def test_partial_context_only_forwards_non_empty(self):
+        """Only non-empty context values are forwarded as kwargs."""
+        connector = ContextAwareConnector()
+        connector.execute({"sql_query": "SELECT 1"}, database_name="db")
+        assert connector.last_context_keys == {"database_name"}
+        assert connector.last_context["database_name"] == "db"
+
+
+class TestCallWithCtx:
+    """Test _call_with_ctx: context forwarding and TypeError fallback."""
+
+    def test_forwards_context_when_method_accepts_it(self):
+        connector = ContextAwareConnector()
+        ctx = {"catalog_name": "cat", "database_name": "db"}
+        result = BaseSqlConnector._call_with_ctx(connector.execute_insert, "INSERT INTO t VALUES (1)", ctx)
+        assert result.success is True
+        assert connector.last_context["catalog_name"] == "cat"
+        assert connector.last_context["database_name"] == "db"
+
+    def test_raises_when_method_rejects_context(self):
+        """Methods without context kwargs trigger a clear TypeError."""
+
+        def no_ctx_method(sql: str) -> ExecuteSQLResult:
+            return ExecuteSQLResult(success=True, sql_query=sql, row_count=0, sql_return="", result_format="csv")
+
+        ctx = {"catalog_name": "cat"}
+        with pytest.raises(TypeError, match="does not accept per-call context overrides"):
+            BaseSqlConnector._call_with_ctx(no_ctx_method, "INSERT INTO t VALUES (1)", ctx)
+
+    def test_empty_ctx_skips_forwarding(self):
+        connector = ConcreteConnector()
+        result = BaseSqlConnector._call_with_ctx(connector.execute_insert, "INSERT INTO t VALUES (1)", {})
+        assert result.success is True
+
+    def test_passes_extra_args(self):
+        connector = ContextAwareConnector()
+        ctx = {"database_name": "db"}
+        result = BaseSqlConnector._call_with_ctx(connector.execute_query, "SELECT 1", ctx, "arrow")
+        assert result.success is True
+        assert result.result_format == "arrow"
+        assert connector.last_context["database_name"] == "db"
+
+    def test_internal_type_error_propagates(self):
+        """A TypeError raised inside the method body must not be swallowed."""
+
+        def buggy_insert(sql, catalog_name="", database_name="", schema_name=""):
+            raise TypeError("unsupported operand type(s) for +: 'int' and 'str'")
+
+        ctx = {"catalog_name": "cat"}
+        with pytest.raises(TypeError, match="unsupported operand"):
+            BaseSqlConnector._call_with_ctx(buggy_insert, "INSERT INTO t VALUES (1)", ctx)
+
+
 class TestSwitchContext:
     def test_switch_context_updates_names(self):
         connector = ConcreteConnector()
-        with patch.object(connector, "connect"):
-            connector.switch_context(catalog_name="cat", database_name="db", schema_name="sch")
+        connector.switch_context(catalog_name="cat", database_name="db", schema_name="sch")
         assert connector.catalog_name == "cat"
         assert connector.database_name == "db"
         assert connector.schema_name == "sch"
-
-    def test_switch_context_calls_connect(self):
-        connector = ConcreteConnector()
-        with patch.object(connector, "connect") as mock:
-            connector.switch_context(database_name="db")
-            mock.assert_called_once()
 
     def test_switch_context_partial_update(self):
         connector = ConcreteConnector()
         connector.catalog_name = "old_cat"
         connector.database_name = "old_db"
-        with patch.object(connector, "connect"):
-            connector.switch_context(schema_name="new_sch")
+        connector.switch_context(schema_name="new_sch")
         assert connector.catalog_name == "old_cat"
         assert connector.database_name == "old_db"
         assert connector.schema_name == "new_sch"
@@ -339,24 +469,73 @@ class TestExecuteExplain:
             mock.assert_called_once_with("EXPLAIN SELECT 1", "csv")
 
 
-class TestSafeRollback:
-    def test_rollback_called(self):
-        connector = ConcreteConnector()
-        mock_conn = MagicMock()
-        connector.connection = mock_conn
-        connector._safe_rollback()
-        mock_conn.rollback.assert_called_once()
+class TestThreadLocalContext:
+    def test_thread_local_isolation(self):
+        """Two threads switching context see their own values."""
+        import threading
 
-    def test_rollback_no_connection(self):
         connector = ConcreteConnector()
-        connector._safe_rollback()  # Should not raise
+        results = {}
 
-    def test_rollback_exception_suppressed(self):
+        def worker(thread_id, db_name):
+            connector.switch_context(database_name=db_name)
+            import time
+
+            time.sleep(0.05)
+            results[thread_id] = connector.database_name
+
+        t1 = threading.Thread(target=worker, args=(1, "db1"))
+        t2 = threading.Thread(target=worker, args=(2, "db2"))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert results[1] == "db1"
+        assert results[2] == "db2"
+
+    def test_default_context_for_new_threads(self):
+        """New threads get the default context, not another thread's context."""
+        import threading
+
         connector = ConcreteConnector()
-        mock_conn = MagicMock()
-        mock_conn.rollback.side_effect = RuntimeError("rollback failed")
-        connector.connection = mock_conn
-        connector._safe_rollback()  # Should not raise
+        connector._default_database = "default_db"
+        connector.switch_context(database_name="main_thread_db")
+
+        results = {}
+
+        def worker():
+            results["db"] = connector.database_name
+
+        t = threading.Thread(target=worker)
+        t.start()
+        t.join()
+
+        assert results["db"] == "default_db"
+        assert connector.database_name == "main_thread_db"
+
+    def test_concurrent_execute_with_different_contexts(self):
+        """Two threads calling execute() with different contexts don't interfere."""
+        import threading
+        import time
+
+        connector = ContextAwareConnector()
+        results = {}
+
+        def worker(thread_id, db_name):
+            connector.execute({"sql_query": "SELECT 1"}, database_name=db_name)
+            time.sleep(0.05)
+            results[thread_id] = connector.last_context.copy()
+
+        t1 = threading.Thread(target=worker, args=(1, "db1"))
+        t2 = threading.Thread(target=worker, args=(2, "db2"))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert results[1]["database_name"] == "db1"
+        assert results[2]["database_name"] == "db2"
 
 
 class TestListToInStr:
