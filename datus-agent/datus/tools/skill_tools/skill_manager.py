@@ -12,6 +12,8 @@ to provide a unified interface for skill operations.
 import fnmatch
 import logging
 from typing import TYPE_CHECKING, List, Optional, Tuple
+from xml.sax.saxutils import escape as xml_escape
+from xml.sax.saxutils import quoteattr as xml_quoteattr
 
 from datus.tools.permission.permission_config import PermissionLevel
 from datus.tools.skill_tools.skill_config import SkillConfig, SkillMetadata
@@ -206,19 +208,42 @@ class SkillManager:
         """
         skills = self.get_available_skills(node_name, patterns, node_class=node_class)
 
-        if not skills:
-            return ""
-
         lines = ["<available_skills>"]
-        for skill in skills:
-            lines.append(f'<skill name="{skill.name}">')
-            lines.append(f"  <description>{skill.description}</description>")
-            if skill.tags:
-                lines.append(f"  <tags>{', '.join(skill.tags)}</tags>")
-            lines.append("</skill>")
+        if not skills:
+            # Emit an explicit empty block instead of returning "" so the LLM
+            # has a definitive signal that no skills are available. Without
+            # this, an LLM asked "what skills can I use?" tends to hallucinate
+            # names from adjacent tool schemas — most commonly the subagent
+            # types enumerated by the ``task()`` tool — and then calls
+            # ``load_skill()`` with a subagent name.
+            lines.append("  (none)")
+        else:
+            for skill in skills:
+                # XML-escape every interpolated field — SKILL.md metadata is
+                # author-controlled (especially for marketplace-installed
+                # skills), and an unescaped ``</available_skills>`` or similar
+                # control sequence inside a description/tag would otherwise
+                # close the block early and open a prompt-injection channel
+                # right before our guardrail lines below.
+                lines.append(f"<skill name={xml_quoteattr(skill.name)}>")
+                lines.append(f"  <description>{xml_escape(skill.description or '')}</description>")
+                if skill.tags:
+                    tags_text = ", ".join(xml_escape(tag) for tag in skill.tags)
+                    lines.append(f"  <tags>{tags_text}</tags>")
+                lines.append("</skill>")
         lines.append("</available_skills>")
         lines.append("")
-        lines.append('To use a skill, call: load_skill(skill_name="<skill_name>")')
+        if skills:
+            lines.append('To use a skill, call: load_skill(skill_name="<skill_name>")')
+            lines.append(
+                "The list above is exhaustive. Only load names that appear in it. "
+                "Subagent names from the `task()` tool are NOT skill names."
+            )
+        else:
+            lines.append(
+                "No skills are available to this agent. Do not call load_skill(). "
+                "Subagent names from the `task()` tool are NOT skill names."
+            )
 
         return "\n".join(lines)
 
