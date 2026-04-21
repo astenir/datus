@@ -74,6 +74,12 @@ class AgenticNode(Node):
 
     DEFAULT_SUBAGENTS = "explore"
 
+    # When True, this node's ``SkillFuncTool`` loads skills in *authoring* mode:
+    # ``allowed_agents`` scoping on ``load_skill`` is bypassed so the agent can
+    # read any skill by name (used by ``gen_skill`` for edit/optimize flows).
+    # Visibility in ``<available_skills>`` is still filtered normally.
+    SKILL_AUTHORING_MODE: bool = False
+
     def __init__(
         self,
         node_id: str,
@@ -198,6 +204,34 @@ class AgenticNode(Node):
             template_name = class_name
 
         return template_name.lower()
+
+    def get_node_class_name(self) -> str:
+        """Canonical identifier for this node's underlying class.
+
+        ``get_node_name()`` may return a per-instance alias when a subagent is
+        registered under a custom id (e.g. ``my_dashboard`` backed by
+        ``GenDashboardAgenticNode``). Scoping mechanisms like
+        ``SkillMetadata.allowed_agents`` need a stable class-level identifier so
+        a whitelist written against the canonical class (``gen_dashboard``)
+        still applies to all aliases of that class.
+
+        Resolution order:
+        1. ``type(self).NODE_NAME`` if the subclass declares it — the
+           recommended form, used by ``gen_dashboard``, ``gen_table``,
+           ``scheduler``, ``gen_skill`` etc.
+        2. Otherwise derive from the class name via the *base*
+           ``AgenticNode.get_node_name`` (e.g. ``ExploreAgenticNode`` →
+           ``explore``). This is the safety net for alias-capable subclasses
+           that haven't added ``NODE_NAME``: we must NOT fall back to
+           ``self.get_node_name()``, since overrides there return the alias.
+
+        Returns:
+            A stable class-level identifier independent of any alias.
+        """
+        node_class = getattr(type(self), "NODE_NAME", None)
+        if node_class:
+            return node_class
+        return AgenticNode.get_node_name(self)
 
     def _get_system_prompt(
         self, conversation_summary: Optional[str] = None, prompt_version: Optional[str] = None
@@ -786,6 +820,8 @@ class AgenticNode(Node):
             self.skill_func_tool = SkillFuncTool(
                 manager=self.skill_manager,
                 node_name=self.get_node_name(),
+                node_class=self.get_node_class_name(),
+                authoring_mode=self.SKILL_AUTHORING_MODE,
             )
             logger.info(
                 f"Skill func tools activated for node '{self.get_node_name()}' with pattern '{skill_patterns_str}'"
@@ -915,6 +951,7 @@ class AgenticNode(Node):
         return self.skill_manager.generate_available_skills_xml(
             node_name=self.get_node_name(),
             patterns=skill_patterns,
+            node_class=self.get_node_class_name(),
         )
 
     def _get_tool_category(self, tool_name: str) -> str:
