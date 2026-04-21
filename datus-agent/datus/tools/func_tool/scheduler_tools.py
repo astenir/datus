@@ -49,11 +49,17 @@ class SchedulerTools(BaseTool):
         config = self._selected_scheduler_config()
         platform = config.get("type", "airflow")
 
-        # Multi-tenant Airflow: auto-inject agent.project_name so users don't
-        # have to restate it in the scheduler section of agent.yml. Each Datus
-        # instance gets its own DAG subdirectory and dag_id prefix, preventing
-        # collisions when many instances share one Airflow cluster. Users can
-        # still override explicitly in agent.yml (setdefault preserves it).
+        # For Airflow, the adapter config's ``project_name`` is a
+        # filesystem-namespace knob ONLY — it controls the DAG subdirectory
+        # (``{dags_folder_root}/{project_name}/``) so multiple Datus
+        # instances writing DAG files to the same Airflow cluster never
+        # collide on disk. It does NOT auto-derive a ``dag_id_prefix``
+        # anymore (the two concerns were split in datus-scheduler-airflow
+        # 0.2.0), so reads aren't silently filtered by the Datus workspace.
+        # Auto-injecting the Datus workspace identifier is safe: it stays
+        # on the file side, and users who want list-level multi-tenant
+        # isolation opt in by setting ``dag_id_prefix`` explicitly in
+        # ``services.schedulers.<name>``.
         if platform == "airflow":
             config.setdefault("project_name", self.agent_config.project_name)
 

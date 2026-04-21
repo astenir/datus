@@ -42,12 +42,14 @@ from datus.cli.autocomplete import (
     AtReferenceCompleter,
     CustomPygmentsStyle,
     CustomSqlLexer,
+    ServiceCommandCompleter,
     SlashCommandCompleter,
 )
 from datus.cli.bi_dashboard import BiDashboardCommands
 from datus.cli.chat_commands import ChatCommands
 from datus.cli.context_commands import ContextCommands
 from datus.cli.metadata_commands import MetadataCommands
+from datus.cli.service_commands import ServiceCommands
 from datus.cli.slash_registry import GROUP_ORDER, GROUP_TITLES, iter_visible, lookup
 from datus.cli.status_bar import StatusBarProvider
 from datus.cli.sub_agent_commands import SubAgentCommands
@@ -224,6 +226,7 @@ class DatusCLI:
         self.metadata_commands = MetadataCommands(self)
         self.sub_agent_commands = SubAgentCommands(self)
         self.bi_dashboard_commands = BiDashboardCommands(self)
+        self.service_commands = ServiceCommands(self)
         self._status_bar_provider = StatusBarProvider(self)
 
         # Dictionary of available commands - created after handlers are initialized
@@ -294,6 +297,7 @@ class DatusCLI:
             "mcp": self._cmd_mcp,
             "skill": self._cmd_skill,
             "bootstrap-bi": self.bi_dashboard_commands.cmd,
+            "services": self.service_commands.cmd_services,
         }
 
     @property
@@ -624,6 +628,7 @@ class DatusCLI:
         from datus.cli.autocomplete import SQLCompleter
 
         sql_completer = SQLCompleter()
+        self.service_completer = ServiceCommandCompleter(self)
         self.at_completer = AtReferenceCompleter(
             self.agent_config, available_subagents=self.available_subagents
         )  # Router for @Table / @Metrics / @Sql inline references
@@ -634,7 +639,8 @@ class DatusCLI:
 
         return merge_completers(
             [
-                self.slash_completer,  # Top-level slash commands (highest priority)
+                self.service_completer,  # .<service>.<method> dispatcher completer (highest priority)
+                self.slash_completer,  # Top-level slash commands
                 self.at_completer,  # @Table / @Metrics / @Sql inline references
                 sql_completer,  # SQL keyword completer (lowest priority)
             ]
@@ -1108,7 +1114,8 @@ class DatusCLI:
         # fail loudly.
         if text.startswith("/"):
             parts = text[1:].split(maxsplit=1)
-            token = parts[0].lower() if parts and parts[0] else ""
+            raw_token = parts[0] if parts and parts[0] else ""
+            token = raw_token.lower()
             args = parts[1] if len(parts) > 1 else ""
             spec = lookup(token) if token else None
             if spec is not None:
@@ -1116,7 +1123,14 @@ class DatusCLI:
                 # ``_cmd_exit`` gets to close the DB connector before the
                 # handler returns ``EXIT_SENTINEL`` to the outer loop.
                 return CommandType.SLASH, f"/{spec.name}", args
-            return CommandType.UNKNOWN, f"/{token}", ""
+            # Dynamic service routes (``/<service>`` for method listing or
+            # ``/<service>.<method>`` for invocation) are resolved in
+            # ``_execute_slash_command`` via ``ServiceCommands.dispatch``.
+            # Preserve the raw token's casing because service / method
+            # registry lookups respect the user's configured names.
+            if raw_token:
+                return CommandType.SLASH, f"/{raw_token}", args
+            return CommandType.UNKNOWN, "/", ""
 
         # Legacy prefix hints: ``.xxx`` / ``@catalog`` / ``@subject`` used to
         # be live commands. Surface a rename hint instead of running them so
@@ -1323,12 +1337,18 @@ class DatusCLI:
     def _execute_slash_command(self, cmd: str, args: str):
         """Execute a slash command resolved via ``SLASH_COMMANDS`` registry.
 
+        Falls back to :meth:`ServiceCommands.dispatch` for dynamic
+        ``/<service>.<method>`` routes (BI / scheduler / semantic methods
+        enumerated at runtime, not statically registered in the registry).
+
         Returns ``EXIT_SENTINEL`` when the handler requested shutdown (``/exit``
         / ``/quit``) so the dispatcher can forward it to the outer loop.
         """
         logger.debug(f"Executing slash command: '{cmd}' with args: '{args}'")
         handler = self.commands.get(cmd)
         if handler is None:
+            if self.service_commands.dispatch(cmd, args):
+                return None
             self.console.print(f"[bold red]Unknown command:[/] {cmd}. Type /help.")
             return None
         result = handler(args)

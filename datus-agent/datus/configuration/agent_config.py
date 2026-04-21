@@ -360,6 +360,10 @@ class DocumentConfig:
 
 @dataclass
 class DashboardConfig:
+    # Service alias — the key under ``services.bi_platforms`` in agent.yml.
+    # Used for CLI addressing (``/<platform>.<method>``) and ``dashboard_config``
+    # dict lookup. May be an arbitrary user-chosen name (``superset_prod``,
+    # ``grafana_staging``, ...).
     platform: str
     api_url: str = ""
     # use login or api_key
@@ -369,6 +373,12 @@ class DashboardConfig:
     extra: Optional[Dict[str, Any]] = field(default_factory=dict, init=True)
     # BI platform's dataset database: {uri: "postgresql+psycopg2://...", schema: "public"}
     dataset_db: Optional[Dict[str, Any]] = field(default=None, init=True)
+    # The actual adapter kind this service targets — what
+    # ``datus_bi_core.adapter_registry`` looks up. Defaults to ``platform``
+    # when the user omits ``type`` (single-instance config). Set explicitly
+    # to enable multi-instance deployments where the alias differs from the
+    # adapter type (``platform=superset_prod``, ``adapter_type=superset``).
+    adapter_type: str = ""
 
 
 logger = get_logger(__name__)
@@ -1218,15 +1228,16 @@ class AgentConfig:
             if not isinstance(auth_params, dict):
                 continue
             platform = str(service_name)
+            # ``type`` is the adapter kind (``superset`` / ``grafana`` / ...).
+            # When omitted, default to the key — preserves the single-instance
+            # convention ``services.bi_platforms.superset: { api_url: ... }``.
+            # When provided and different from the key, the user is opting
+            # into a multi-instance deployment (alias ``superset_prod`` or
+            # similar); we keep both fields on ``DashboardConfig`` so the
+            # BIFuncTool / probe path looks up the right adapter while the
+            # CLI / dashboard_config still key by the user-chosen alias.
             declared_type = auth_params.get("type")
-            if declared_type and str(declared_type) != platform:
-                raise DatusException(
-                    ErrorCode.COMMON_CONFIG_ERROR,
-                    message=(
-                        f"BI platform `{service_name}` must use the same key and type in `agent.services.bi_platforms`. "
-                        f"Got key `{service_name}` with type `{declared_type}`."
-                    ),
-                )
+            adapter_type = str(declared_type).strip() if declared_type else platform
             api_url_raw = auth_params.get("api_url", "")
             username_raw = auth_params.get("username", "")
             password_raw = auth_params.get("password", "")
@@ -1244,6 +1255,7 @@ class AgentConfig:
                 api_key=api_key,
                 extra=_resolve_nested_value(auth_params.get("extra", {})),
                 dataset_db=dataset_db,
+                adapter_type=adapter_type,
             )
 
     def init_scheduler_services(self, param: Dict[str, Any]):

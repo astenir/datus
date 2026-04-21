@@ -1053,6 +1053,169 @@ class SlashCommandCompleter(Completer):
             )
 
 
+class ServiceCommandCompleter(Completer):
+    """Completer for ``/<service>.<method>`` CLI routing.
+
+    Produces three tiers of completions (all under the ``/`` slash prefix so
+    this completer composes with ``SlashCommandCompleter`` without the two
+    fighting over the first stroke):
+
+    1. ``/<partial>`` — service names discovered from
+       ``ServiceClientRegistry``, only when ``<partial>`` doesn't match any
+       static slash command. The ``/services`` meta-command itself is owned
+       by the slash registry, not here.
+    2. ``/<service>.<partial>`` — read-only method names that the service's
+       ``available_tools()`` actually advertises (so capability-gated methods
+       like ``get_chart_data`` are omitted when unsupported).
+    3. ``/<service>.<method> --<partial>`` — parameter flags (derived from
+       the tool's ``params_json_schema``) plus ``--help``.
+
+    Non-slash-prefixed input yields nothing so the completer composes cleanly
+    with ``SQLCompleter`` / ``AtReferenceCompleter`` in ``merge_completers``.
+    """
+
+    def __init__(self, cli: Any):
+        # Keep a loose reference so we can reach the lazy
+        # ``service_commands.registry`` — constructing the registry at init
+        # time would pin ``agent_config`` before background init finishes.
+        self.cli = cli
+
+    def _registry(self):
+        commands = getattr(self.cli, "service_commands", None)
+        if commands is None:
+            return None
+        try:
+            return commands.registry
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug(f"ServiceCommandCompleter: registry unavailable: {exc}")
+            return None
+
+    def get_completions(self, document: Document, complete_event=None) -> Iterable[Completion]:
+        text = document.text_before_cursor
+        if not text.startswith("/"):
+            return
+
+        registry = self._registry()
+        if registry is None:
+            return
+
+        if " " in text:
+            cmd_part, _, args_part = text.partition(" ")
+            yield from self._complete_args(cmd_part, args_part, registry)
+            return
+
+        yield from self._complete_cmd(text, registry)
+
+    # ------------------------------------------------------------------ #
+    # Tier 1 / 2: service name + method name
+    # ------------------------------------------------------------------ #
+
+    def _complete_cmd(self, cmd_part: str, registry) -> Iterable[Completion]:
+        body = cmd_part[1:]  # drop leading '/'
+        if "." not in body:
+            # Completing ``/service``. ``/services`` itself is provided by
+            # the slash registry via ``SlashCommandCompleter``, so skip it
+            # here to avoid duplicate entries.
+            from datus.cli.service_client import service_type_label
+
+            for name, service_type, status in registry.list_services():
+                slashed = f"/{name}"
+                if slashed.lower().startswith(cmd_part.lower()):
+                    label = service_type_label(service_type)
+                    if status == "missing adapter":
+                        display = f"{slashed}  ({label}, missing adapter)"
+                    else:
+                        display = f"{slashed}  ({label})"
+                    yield Completion(
+                        slashed,
+                        start_position=-len(cmd_part),
+                        display=display,
+                        style="class:keyword",
+                    )
+            return
+
+        service_name, _, method_partial = body.partition(".")
+        client = registry.get(service_name)
+        if client is None:
+            return
+        # Skip method enumeration when the adapter package is not installed.
+        # Without this check, ``ServiceClient._exposed()`` falls back to the
+        # static allow-list (because ``available_tools()`` raises), and we
+        # would offer methods that ``dispatch`` will immediately reject with
+        # "adapter not installed" on Enter — surprising to the user.
+        if not registry.adapter_available(service_name):
+            from datus.cli.service_client import service_type_label
+
+            label = service_type_label(client.service_type)
+            yield Completion(
+                "",
+                start_position=0,
+                display=f"[{label} '{client.service_name}' missing adapter — run `/{client.service_name}` for the install hint]",
+                style="class:keyword",
+            )
+            return
+        prefix = f"/{service_name}."
+        for name, doc in client.list_methods():
+            if not name.lower().startswith(method_partial.lower()) and method_partial:
+                continue
+            display = f"{prefix}{name}  {doc[:50]}" if doc else f"{prefix}{name}"
+            yield Completion(
+                f"{prefix}{name} ",
+                start_position=-len(cmd_part),
+                display=display,
+                style="class:keyword",
+            )
+
+    # ------------------------------------------------------------------ #
+    # Tier 3: --flag completions inside the args
+    # ------------------------------------------------------------------ #
+
+    def _complete_args(self, cmd_part: str, args_part: str, registry) -> Iterable[Completion]:
+        body = cmd_part[1:]
+        if "." not in body:
+            return
+        service_name, _, method_name = body.partition(".")
+        client = registry.get(service_name)
+        if client is None:
+            return
+        # No adapter → suppress flag completion; the command can't run anyway.
+        if not registry.adapter_available(service_name):
+            return
+        tool = client.get_tool(method_name)
+        if tool is None:
+            return
+
+        tokens = args_part.split(" ")
+        last = tokens[-1] if tokens else ""
+        if not last.startswith("--"):
+            return
+        flag_body = last[2:]
+        if "=" in flag_body:
+            # Cursor is past the ``=``; value-level completion is out of scope.
+            return
+
+        props = (tool.params_json_schema or {}).get("properties") or {}
+        suggestions: List[Tuple[str, str]] = [("--help", "show parameter schema")]
+        for pname, pinfo in props.items():
+            if pname == "self":
+                continue
+            desc = ""
+            if isinstance(pinfo, dict):
+                desc = pinfo.get("description", "") or ""
+            suggestions.append((f"--{pname}=", desc))
+
+        for text, desc in suggestions:
+            if not text.startswith(last):
+                continue
+            display = f"{text}  {desc[:50]}" if desc else text
+            yield Completion(
+                text,
+                start_position=-len(last),
+                display=display,
+                style="class:keyword",
+            )
+
+
 class AtReferenceParser:
     """
     Independent parser for extracting @Table, @Metrics, and @Sql references from text.

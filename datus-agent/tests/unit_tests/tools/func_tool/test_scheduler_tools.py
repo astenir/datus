@@ -132,11 +132,15 @@ class TestGetAdapter:
                 adapter = tools._get_adapter()
         assert adapter is mock_adapter
 
-    def test_airflow_injects_project_name_from_agent_config(self):
-        """For Airflow, _get_adapter must auto-inject agent.project_name into the
-        scheduler config so each Datus instance lands in its own DAG subdirectory
-        and gets its own dag_id prefix — without users having to repeat the value
-        in agent.yml's scheduler section."""
+    def test_airflow_injects_project_name_as_file_namespace_only(self):
+        """Datus auto-injects ``agent.project_name`` into the Airflow
+        adapter config — but *only* for the filesystem-namespace role
+        (DAG subdirectory under ``dags_folder_root``). In the adapter
+        0.2.0+ schema ``project_name`` no longer drives ``dag_id_prefix``
+        defaulting, so list/get operations aren't silently filtered by
+        the Datus workspace. Users who want list-level multi-tenant
+        isolation set ``dag_id_prefix`` explicitly in agent.yml.
+        """
         agent_cfg = _make_agent_config(
             scheduler_config={
                 "name": "airflow_local",
@@ -145,7 +149,8 @@ class TestGetAdapter:
                 "username": "admin",
                 "password": "admin",
                 "dags_folder_root": "/opt/airflow/dags",
-                # Note: no project_name here — adapter expects the tool to inject it
+                # Deliberately no explicit project_name — adapter expects
+                # Datus to fill it from agent.project_name.
             }
         )
         agent_cfg.project_name = "reports-team"
@@ -159,10 +164,12 @@ class TestGetAdapter:
         ):
             tools._get_adapter()
 
-        # Verify the injected project_name reached create_adapter
         call_kwargs = mock_registry.create_adapter.call_args.kwargs
         assert call_kwargs["platform"] == "airflow"
+        # File-namespace is auto-filled so DAG files land in a per-workspace subdir.
         assert call_kwargs["config"]["project_name"] == "reports-team"
+        # dag_id_prefix is NOT auto-set — that's an explicit opt-in.
+        assert "dag_id_prefix" not in call_kwargs["config"]
 
     def test_airflow_explicit_project_name_takes_precedence(self):
         """setdefault semantics: if user writes project_name in agent.yml, Datus
