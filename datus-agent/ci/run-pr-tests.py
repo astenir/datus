@@ -60,7 +60,6 @@ PR_ACCEPTANCE_TARGETS = [
     "tests/unit_tests/agent/node/test_sql_summary_agentic_node.py",
     "tests/unit_tests/agent/node/test_skill_creator_agentic_node.py",
     "tests/unit_tests/agent/node/test_gen_job_agentic_node.py",
-    "tests/unit_tests/agent/node/test_migration_agentic_node.py",
     "tests/integration/api/test_api.py",
     "tests/integration/cli/test_cli_commands.py",
     "tests/integration/cli/test_cli_textual.py",
@@ -305,6 +304,23 @@ def select_impacted_unit_tests(changed_files: list[str]) -> list[str]:
     return _dedupe_preserve(impacted)
 
 
+def _filter_existing_paths(paths: list[str]) -> list[str]:
+    """Drop mapped test targets that no longer exist on disk.
+
+    The diff may reference files that were deleted in the PR. Passing a
+    non-existent path to pytest aborts the entire collection with
+    "file or directory not found", which masks real test results.
+    """
+    existing: list[str] = []
+    for path in paths:
+        if path.endswith("/"):
+            if os.path.isdir(path):
+                existing.append(path)
+        elif os.path.exists(path):
+            existing.append(path)
+    return existing
+
+
 def find_compare_branch(base_ref: str) -> str | None:
     """Determine the compare branch for diff-cover."""
     if base_ref in _COMPARE_BRANCH_CACHE:
@@ -427,6 +443,7 @@ def list_changed_files(base_ref: str) -> list[str]:
 def resolve_impacted_unit_tests(base_ref: str) -> list[str]:
     changed_files = list_changed_files(base_ref)
     impacted = select_impacted_unit_tests(changed_files)
+    impacted = _filter_existing_paths(impacted)
     if impacted:
         log(f"Impacted unit-test targets: {', '.join(impacted)}")
     else:

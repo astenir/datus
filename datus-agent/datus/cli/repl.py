@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 from datus_db_core import BaseSqlConnector
 
 from datus import __version__
-from datus.cli._cli_utils import prompt_input, select_choice
+from datus.cli._cli_utils import prompt_input
 from datus.cli.agent_commands import AgentCommands
 from datus.cli.autocomplete import (
     AtReferenceCompleter,
@@ -840,6 +840,38 @@ class DatusCLI:
         # is the standard way to bridge from a foreign thread into an asyncio loop.
         self._bg_loop.call_soon_threadsafe(lambda: self._bg_loop.create_task(_runner()))
 
+    def run_on_bg_loop(self, coro):
+        """Run a coroutine on the persistent background event loop and block until done.
+
+        ``asyncio.run(coro)`` creates and then tears down a fresh loop on every
+        call. When a chat turn leaves asyncio Tasks owned by ``prompt_toolkit``
+        (for example the ``wait_for_cpr_responses`` Task created while rendering
+        an interactive ``ask_user`` prompt), the Future those Tasks await lives
+        on the short-lived loop. Subsequent turns tear that loop down while the
+        Task is still pending — Python's GC then raises
+        ``got Future pending attached to a different loop`` when finalizing the
+        orphaned Task. Routing chat stream coroutines through this single
+        persistent background loop keeps every Future/Task on the same loop
+        across turns, eliminating the cross-loop GC warning and the
+        ``Press ENTER to continue`` terminal hang it triggers.
+
+        Args:
+            coro: Coroutine to execute on ``_bg_loop``.
+
+        Returns:
+            The coroutine's return value.
+        """
+        future = asyncio.run_coroutine_threadsafe(coro, self._bg_loop)
+        try:
+            return future.result()
+        except KeyboardInterrupt:
+            # Main thread received Ctrl+C while the coroutine was running on
+            # _bg_loop. Propagate cancellation to the bg loop so the running
+            # Task stops promptly, then re-raise so callers still see the
+            # KeyboardInterrupt they already handle.
+            self._bg_loop.call_soon_threadsafe(future.cancel)
+            raise
+
     def _background_init_agent(self):
         """Background function that initializes the agent (runs inside the
         background loop's executor)."""
@@ -1038,11 +1070,10 @@ class DatusCLI:
 
         if not args:
             current_default = self.default_agent or "chat"
-            choices = {name: name for name in sorted(visible_subagents)}
-            self.console.print("[bold]Select default agent:[/] (Up/Down to navigate, Enter to confirm)")
-            selected = select_choice(self.console, choices, default=current_default)
-            if selected == current_default:
-                self.console.print(f"[dim]Default agent unchanged: {current_default}[/]")
+            selected = self._run_agent_picker(sorted(visible_subagents), current_default)
+            if selected is None or selected == current_default:
+                if selected == current_default:
+                    self.console.print(f"[dim]Default agent unchanged: {current_default}[/]")
                 return
             args = selected
 
@@ -1057,6 +1088,24 @@ class DatusCLI:
         else:
             self.default_agent = args
             self.console.print(f"[bold green]Default agent set to: {args}[/]")
+
+    def _run_agent_picker(self, agents: List[str], current: str) -> Optional[str]:
+        """Run the standalone ``AgentPickerApp`` and return the user's choice.
+
+        Wraps ``app.run()`` in :meth:`DatusApp.suspend_input` when the outer
+        TUI is active so the nested Application can own ``stdin`` without
+        fighting the persistent TUI Application. Mirrors the helper used
+        by ``/model`` and ``/language`` so all three pickers handle stdin
+        the same way.
+        """
+        from datus.cli.agent_picker_app import AgentPickerApp
+
+        app = AgentPickerApp(console=self.console, agents=agents, current=current)
+        tui_app = getattr(self, "tui_app", None)
+        if tui_app is not None:
+            with tui_app.suspend_input():
+                return app.run()
+        return app.run()
 
     def _cmd_switch_namespace(self, args: str):
         if args.strip() == "":

@@ -74,6 +74,13 @@ class AgenticNode(Node):
 
     DEFAULT_SUBAGENTS = "explore"
 
+    # Default skill patterns injected into ``<available_skills>`` when the user's
+    # ``agent.yml`` does not override ``skills:`` for this node. Subclasses declare
+    # the skills their workflow expects so every built-in subagent works out of
+    # the box without forcing users to wire each skill manually. Set to an explicit
+    # empty string in yml to opt out of the defaults.
+    DEFAULT_SKILLS: Optional[str] = None
+
     # When True, this node's ``SkillFuncTool`` loads skills in *authoring* mode:
     # ``allowed_agents`` scoping on ``load_skill`` is bypassed so the agent can
     # read any skill by name (used by ``gen_skill`` for edit/optimize flows).
@@ -867,6 +874,14 @@ class AgenticNode(Node):
         setup_tools() resets self.tools = [] after __init__ completes.
         """
         skill_patterns_str = self.node_config.get("skills")
+        if skill_patterns_str is None:
+            # Fall back to the subclass-declared defaults so built-in subagents
+            # work out of the box. An explicit empty string in yml opts out.
+            skill_patterns_str = type(self).DEFAULT_SKILLS
+            if skill_patterns_str:
+                # Persist the resolved pattern so <available_skills> filtering
+                # and any downstream reader sees the same value.
+                self.node_config["skills"] = skill_patterns_str
         if not skill_patterns_str:
             return
 
@@ -897,6 +912,40 @@ class AgenticNode(Node):
             )
         except Exception as e:
             logger.error(f"Failed to setup skill func tools: {e}")
+
+    @staticmethod
+    def _merge_skill_patterns(existing_skills: Any, injected_skills: List[str]) -> str:
+        """Merge runtime-injected skill patterns into the user's configured list.
+
+        Platform-aware subagents (``scheduler``, ``gen_dashboard``, etc.) need to
+        append a ``{platform}-*`` skill based on config without overriding the
+        user's ``skills:`` yml entry. This helper merges the two sources,
+        deduplicates, and returns the canonical comma-separated string that
+        ``_setup_skill_func_tools`` expects.
+
+        Args:
+            existing_skills: Value of ``node_config["skills"]`` — either a
+                comma-separated string, a list of patterns, or ``None``.
+            injected_skills: Skill names the subclass wants to guarantee.
+
+        Returns:
+            Comma-separated pattern string with injected skills appended after
+            the user's patterns and duplicates removed (first occurrence wins).
+        """
+        merged_patterns: List[str] = []
+
+        if isinstance(existing_skills, str):
+            merged_patterns.extend([pattern.strip() for pattern in existing_skills.split(",") if pattern.strip()])
+        elif isinstance(existing_skills, list):
+            merged_patterns.extend(
+                [pattern.strip() for pattern in existing_skills if isinstance(pattern, str) and pattern.strip()]
+            )
+
+        for skill in injected_skills:
+            if skill not in merged_patterns:
+                merged_patterns.append(skill)
+
+        return ", ".join(merged_patterns)
 
     def _setup_ask_user_tool(self):
         """Setup ask-user tool so the agent can ask clarifying questions.

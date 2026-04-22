@@ -36,6 +36,11 @@ class GenDashboardAgenticNode(AgenticNode):
 
     NODE_NAME = "gen_dashboard"
 
+    # Dashboard skills are injected dynamically by ``_setup_dashboard_skills``
+    # based on the configured BI platform (only {platform}-dashboard is added,
+    # not every platform). Leave ``DEFAULT_SKILLS`` empty so the base-class
+    # fallback does not over-expose unrelated platforms.
+
     def __init__(
         self,
         agent_config: AgentConfig,
@@ -126,24 +131,6 @@ class GenDashboardAgenticNode(AgenticNode):
             skills_to_inject,
         )
         self._setup_skill_func_tools()
-
-    @staticmethod
-    def _merge_skill_patterns(existing_skills: Any, injected_skills: list[str]) -> str:
-        """Merge injected skill patterns into existing node skill filters without duplicates."""
-        merged_patterns: list[str] = []
-
-        if isinstance(existing_skills, str):
-            merged_patterns.extend([pattern.strip() for pattern in existing_skills.split(",") if pattern.strip()])
-        elif isinstance(existing_skills, list):
-            merged_patterns.extend(
-                [pattern.strip() for pattern in existing_skills if isinstance(pattern, str) and pattern.strip()]
-            )
-
-        for skill in injected_skills:
-            if skill not in merged_patterns:
-                merged_patterns.append(skill)
-
-        return ", ".join(merged_patterns)
 
     def _setup_bi_tools(self):
         """Setup BI tools based on bi_platform config.
