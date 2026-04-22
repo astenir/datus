@@ -25,6 +25,7 @@ from datus.agent.node.chat_agentic_node import ChatAgenticNode
 from datus.cli._cli_utils import select_choice
 from datus.cli.action_display.display import ActionHistoryDisplay
 from datus.cli.execution_state import ExecutionInterrupted, auto_submit_interaction
+from datus.cli.list_selector_app import ListItem, ListSelectorApp
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.schemas.node_models import SQLContext
 from datus.utils.loggings import get_logger
@@ -542,7 +543,7 @@ class ChatCommands:
 
         except Exception as e:
             logger.error(f"Chat error: {str(e)}")
-            self.console.print(f"[bold red]Error:[/] {str(e)}")
+            self.console.print(f"[red]Error:[/] {str(e)}")
             if _is_model_config_error(e):
                 self.console.print("[yellow]Hint: Use /model to configure or switch your model.[/]")
 
@@ -739,12 +740,12 @@ class ChatCommands:
         """
         try:
             self.console.print()
-            self.console.print(f"[bold green]External Knowledge File:[/] [cyan]{ext_knowledge_file}[/]")
+            self.console.print(f"[green]External Knowledge File:[/] [cyan]{ext_knowledge_file}[/]")
 
         except Exception as e:
             logger.error(f"Error displaying external knowledge file: {e}")
             # Fallback to simple display
-            self.console.print(f"\n[bold green]External Knowledge File:[/] {ext_knowledge_file}")
+            self.console.print(f"\n[green]External Knowledge File:[/] {ext_knowledge_file}")
 
     def _make_input_collector(self, esc_guard):
         """Create a synchronous input collector callback for INTERACTION actions.
@@ -1026,7 +1027,7 @@ class ChatCommands:
                 # Determine node type for display
                 node_type = "Chat" if isinstance(self.current_node, ChatAgenticNode) else "Subagent"
 
-                self.console.print(f"[bold green]{node_type} Session Info:[/]")
+                self.console.print(f"[green]{node_type} Session Info:[/]")
                 self.console.print(f"  Session ID: {session_info['session_id']}")
                 self.console.print(f"  Action Count: {session_info['action_count']}")
                 self.console.print(f"  Total Conversations: {len(self.chat_history)}")
@@ -1135,11 +1136,11 @@ class ChatCommands:
                 self._reload_state_from_session()
             else:
                 error_msg = result.get("error", "Unknown error occurred")
-                self.console.print(f"[bold red]✗ Failed to compact session:[/] {error_msg}")
+                self.console.print(f"[red]✗ Failed to compact session:[/] {error_msg}")
 
         except Exception as e:
             logger.error(f"Error during manual compact: {e}")
-            self.console.print(f"[bold red]Error:[/] {str(e)}")
+            self.console.print(f"[red]Error:[/] {str(e)}")
 
     def _reload_state_from_session(self):
         """Reload in-memory state from the current session after compaction.
@@ -1208,7 +1209,6 @@ class ChatCommands:
 
     def cmd_resume(self, args: str):
         """Resume a previous chat session for the active agent."""
-        from datus.cli._cli_utils import select_list
         from datus.models.session_manager import SessionManager, session_matches_agent
 
         try:
@@ -1243,10 +1243,7 @@ class ChatCommands:
                     reverse=True,
                 )
 
-                # Build items for interactive list selector (two-line per item)
-                # Line 1: first user message (no newlines, clip to screen width)
-                # Line 2: session_id, updated time, message count
-                list_items = []
+                items = []
                 for info in session_infos:
                     sid = info["session_id"]
                     raw_first_msg = info.get("first_user_message", "") or ""
@@ -1257,18 +1254,26 @@ class ChatCommands:
                         first_msg = "(empty)"
                     updated = (info.get("updated_at") or info.get("latest_message_at") or "N/A")[:19]
                     msg_count = str(info.get("message_count", 0))
-                    list_items.append([first_msg, sid, f"Updated: {updated}", f"Msgs: {msg_count}"])
+                    items.append(
+                        ListItem(key=sid, primary=first_msg, secondary=f"{sid}  Updated: {updated}  Msgs: {msg_count}")
+                    )
 
-                idx = select_list(self.console, list_items)
-                if idx is None:
+                app = ListSelectorApp(title=f"Resume session ({agent_label})", items=items)
+                tui_app = getattr(self.cli, "tui_app", None)
+                if tui_app is not None:
+                    with tui_app.suspend_input():
+                        selection = app.run()
+                else:
+                    selection = app.run()
+                if selection is None:
                     self.console.print("[dim]Cancelled.[/]")
                     return
 
-                target_session_id = session_infos[idx]["session_id"]
+                target_session_id = selection.key
 
             # Validate the session exists
             if not session_manager.session_exists(target_session_id):
-                self.console.print(f"[bold red]Session not found:[/] {target_session_id}")
+                self.console.print(f"[red]Session not found:[/] {target_session_id}")
                 return
 
             # Extract node type and create the appropriate node
@@ -1290,7 +1295,7 @@ class ChatCommands:
 
             messages = session_manager.get_session_messages(target_session_id)
             if messages:
-                self.console.print(f"\n[bold green]Session resumed![/] Showing {len(messages)} message(s):\n")
+                self.console.print(f"\n[green]Session resumed![/] Showing {len(messages)} message(s):\n")
                 action_display = ActionHistoryDisplay(self.console)
                 last_assistant_actions = []
                 for msg in messages:
@@ -1334,7 +1339,7 @@ class ChatCommands:
 
         except Exception as e:
             logger.error(f"Error resuming session: {e}")
-            self.console.print(f"[bold red]Error:[/] {str(e)}")
+            self.console.print(f"[red]Error:[/] {str(e)}")
 
     def cmd_rewind(self, args: str) -> Optional[str]:
         """Rewind the current session to before a specific user turn.
@@ -1346,7 +1351,6 @@ class ChatCommands:
         Returns:
             The selected user message text, or None if cancelled/error.
         """
-        from datus.cli._cli_utils import select_list
         from datus.models.session_manager import SessionManager
 
         try:
@@ -1384,28 +1388,31 @@ class ChatCommands:
                 try:
                     turn_num = int(turn_str)
                 except ValueError:
-                    self.console.print("[bold red]Invalid input. Please enter a number.[/]")
+                    self.console.print("[red]Invalid input. Please enter a number.[/]")
                     return
                 if turn_num < 1 or turn_num > len(user_turns):
-                    self.console.print(f"[bold red]Invalid turn number. Must be between 1 and {len(user_turns)}.[/]")
+                    self.console.print(f"[red]Invalid turn number. Must be between 1 and {len(user_turns)}.[/]")
                     return
             else:
-                # Interactive list selector (two-line per item)
-                # Line 1: user message (no newlines, clip to screen width)
-                # Line 2: turn number, timestamp
-                list_items = []
+                items = []
                 for idx, turn_msg in enumerate(user_turns, 1):
                     content = (turn_msg.get("content", "") or "").replace("\n", " ").replace("\r", " ")
                     if not content:
                         content = "(empty)"
                     timestamp = (turn_msg.get("created_at") or "")[:19]
-                    list_items.append([content, f"Turn: {idx}", timestamp])
+                    items.append(ListItem(key=str(idx), primary=content, secondary=f"Turn: {idx}  {timestamp}"))
 
-                selected = select_list(self.console, list_items)
-                if selected is None:
+                app = ListSelectorApp(title="Rewind to before turn", items=items)
+                tui_app = getattr(self.cli, "tui_app", None)
+                if tui_app is not None:
+                    with tui_app.suspend_input():
+                        selection = app.run()
+                else:
+                    selection = app.run()
+                if selection is None:
                     self.console.print("[dim]Cancelled.[/]")
                     return
-                turn_num = selected + 1
+                turn_num = int(selection.key)
 
             # Get the selected user message to return for input prefill
             rewind_user_message = user_turns[turn_num - 1].get("content", "")
@@ -1422,7 +1429,7 @@ class ChatCommands:
                 self.all_turn_actions = []
                 self.last_actions = []
                 self.console.print(
-                    f"\n[bold green]Rewound to before turn 1.[/] New session: [cyan]{new_node.session_id}[/]\n"
+                    f"\n[green]Rewound to before turn 1.[/] New session: [cyan]{new_node.session_id}[/]\n"
                 )
                 self.console.print("[green]Selected message placed in input buffer.[/]")
                 return rewind_user_message
@@ -1448,7 +1455,7 @@ class ChatCommands:
             new_messages = session_manager.get_session_messages(new_session_id)
             if new_messages:
                 self.console.print(
-                    f"\n[bold green]Rewound to before turn {turn_num}.[/] "
+                    f"\n[green]Rewound to before turn {turn_num}.[/] "
                     f"New session: [cyan]{new_session_id}[/] ({len(new_messages)} messages)\n"
                 )
                 action_display = ActionHistoryDisplay(self.console)
@@ -1490,7 +1497,7 @@ class ChatCommands:
 
         except Exception as e:
             logger.error(f"Error rewinding session: {e}")
-            self.console.print(f"[bold red]Error:[/] {str(e)}")
+            self.console.print(f"[red]Error:[/] {str(e)}")
         return None
 
     def add_in_sql_context(self, sql: str, explanation: str, incremental_actions: List[ActionHistory]):
