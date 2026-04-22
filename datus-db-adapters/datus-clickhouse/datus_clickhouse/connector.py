@@ -11,6 +11,7 @@ from datus_db_core import (
     TABLE_TYPE,
     DatusDbException,
     ErrorCode,
+    MigrationTargetMixin,
     get_logger,
     list_to_in_str,
 )
@@ -54,7 +55,12 @@ def _get_metadata_config(table_type: TABLE_TYPE) -> TableMetadataNames:
     return METADATA_DICT[table_type]
 
 
-class ClickHouseConnector(SQLAlchemyConnector):
+_CLICKHOUSE_INTEGER_TYPES = frozenset(
+    {"INT", "INTEGER", "BIGINT", "SMALLINT", "TINYINT", "INT2", "INT4", "INT8", "INT16", "INT32", "INT64", "UINT64"}
+)
+
+
+class ClickHouseConnector(SQLAlchemyConnector, MigrationTargetMixin):
     """ClickHouse database connector."""
 
     def __init__(self, config: Union[ClickHouseConfig, dict]):
@@ -448,3 +454,143 @@ class ClickHouseConnector(SQLAlchemyConnector):
             return table_name
         else:
             return f"{catalog_name}.{database_name}.{table_name}" if catalog_name else f"{database_name}.{table_name}"
+
+    # ==================== MigrationTargetMixin ====================
+
+    def describe_migration_capabilities(self) -> Dict[str, Any]:
+        return {
+            "supported": True,
+            "dialect_family": "clickhouse",
+            "requires": [
+                "ENGINE clause (e.g., ENGINE = MergeTree())",
+                "ORDER BY clause (tuple of sort keys, may be empty tuple ())",
+            ],
+            "forbids": [
+                "VARCHAR (use String)",
+                "BOOLEAN / BOOL (use UInt8)",
+                "DECIMAL without precision",
+                "DUPLICATE KEY (StarRocks-only)",
+                "DISTRIBUTED BY (StarRocks-only)",
+            ],
+            "type_hints": {
+                "VARCHAR": "String",
+                "TEXT": "String",
+                "CHAR": "FixedString(n)",
+                "BOOLEAN": "UInt8",
+                "TIMESTAMP": "DateTime64(3)",
+                "DECIMAL(p,s)": "Decimal(p,s)",
+                "INTEGER": "Int32",
+                "BIGINT": "Int64",
+                "SMALLINT": "Int16",
+                "TINYINT": "Int8",
+                "DOUBLE": "Float64",
+                "FLOAT": "Float32",
+                "UUID": "UUID",
+                "HUGEINT": "Int128",
+                "LARGEINT": "Int128",
+            },
+            "example_ddl": (
+                "CREATE TABLE db.t (\n"
+                "  id Int64,\n"
+                "  name String,\n"
+                "  created_at DateTime64(3)\n"
+                ") ENGINE = MergeTree() ORDER BY id"
+            ),
+        }
+
+    def suggest_table_layout(self, columns: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if not columns:
+            return {"engine": "MergeTree()", "order_by": []}
+
+        keys = self._ch_score_keys(columns, max_keys=1)
+        return {"engine": "MergeTree()", "order_by": keys}
+
+    @staticmethod
+    def _ch_score_keys(columns: List[Dict[str, Any]], max_keys: int = 1) -> List[str]:
+        import re as _re
+
+        scored = []
+        for col in columns:
+            name = col["name"]
+            col_type = str(col.get("type", "")).upper()
+            base_type = _re.sub(r"\(.*\)", "", col_type).strip()
+            nullable = col.get("nullable", True)
+
+            score = 0
+            if name.lower() == "id" or name.lower().endswith("_id"):
+                score += 100
+            if base_type in _CLICKHOUSE_INTEGER_TYPES:
+                score += 50
+            # ClickHouse ORDER BY columns should ideally be non-nullable
+            if not nullable:
+                score += 20
+            # DateTime columns also make excellent ORDER BY keys
+            if "DATE" in base_type or "TIME" in base_type:
+                score += 30
+
+            scored.append((score, name))
+
+        scored.sort(key=lambda x: (-x[0], x[1]))
+
+        if scored[0][0] == 0:
+            return [columns[0]["name"]]
+
+        return [name for score, name in scored[:max_keys]]
+
+    def validate_ddl(self, ddl: str) -> List[str]:
+        errors: List[str] = []
+        upper = ddl.upper()
+
+        if "ENGINE" not in upper:
+            errors.append("ClickHouse CREATE TABLE requires an ENGINE clause (e.g., ENGINE = MergeTree())")
+        if "ORDER BY" not in upper:
+            errors.append("ClickHouse CREATE TABLE requires an ORDER BY clause (may be empty tuple ())")
+
+        # Re-check VARCHAR only as a column type, not as e.g. 'FixedString' -> both contain 'STRING'
+        # Split into column definitions to check the types.
+        import re as _re
+
+        # Matches 'VARCHAR' as a standalone token, followed by optional (n)
+        if _re.search(r"\bVARCHAR\s*(\([^)]*\))?", upper):
+            errors.append("ClickHouse does not support VARCHAR; use String instead")
+        if _re.search(r"\bBOOLEAN\b", upper) or _re.search(r"\bBOOL\b", upper):
+            errors.append("ClickHouse does not support BOOLEAN/BOOL; use UInt8 instead")
+
+        if "DUPLICATE KEY" in upper:
+            errors.append("DUPLICATE KEY is StarRocks-only syntax; ClickHouse uses ORDER BY tuple")
+        if "DISTRIBUTED BY" in upper:
+            errors.append("DISTRIBUTED BY is StarRocks syntax; ClickHouse uses Distributed engine with separate DDL")
+
+        return errors
+
+    def map_source_type(self, source_dialect: str, source_type: str) -> Optional[str]:
+        import re as _re
+
+        base = _re.sub(r"\(.*\)", "", source_type.strip().upper()).strip()
+        overrides = {
+            "VARCHAR": "String",
+            "TEXT": "String",
+            "STRING": "String",
+            "CHAR": "String",
+            "BOOLEAN": "UInt8",
+            "BOOL": "UInt8",
+            "TIMESTAMP": "DateTime64(3)",
+            "TIMESTAMPTZ": "DateTime64(3, 'UTC')",
+            "DATETIME": "DateTime64(3)",
+            "INTEGER": "Int32",
+            "INT": "Int32",
+            "INT4": "Int32",
+            "BIGINT": "Int64",
+            "INT8": "Int64",
+            "SMALLINT": "Int16",
+            "INT2": "Int16",
+            "TINYINT": "Int8",
+            "DOUBLE": "Float64",
+            "FLOAT8": "Float64",
+            "FLOAT": "Float32",
+            "FLOAT4": "Float32",
+            "REAL": "Float32",
+            "HUGEINT": "Int128",
+            "LARGEINT": "Int128",
+        }
+        return overrides.get(base)
