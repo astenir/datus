@@ -35,6 +35,7 @@ from datus_db_core import (
     ErrorCode,
     ExecuteSQLResult,
     MaterializedViewSupportMixin,
+    MigrationTargetMixin,
     SchemaNamespaceMixin,
     get_logger,
     parse_context_switch,
@@ -139,7 +140,7 @@ def _validate_sql_identifier(identifier: str, identifier_type: str = "identifier
         )
 
 
-class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedViewSupportMixin):
+class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedViewSupportMixin, MigrationTargetMixin):
     """
     Connector for Amazon Redshift databases using native Redshift SDK.
 
@@ -1409,3 +1410,110 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
         else:
             # Just table name (will use current schema from search_path)
             return f'"{table_name}"'
+
+    # ==================== MigrationTargetMixin ====================
+
+    def describe_migration_capabilities(self) -> Dict[str, Any]:
+        return {
+            "supported": True,
+            "dialect_family": "redshift",
+            "requires": [],  # DISTKEY/SORTKEY are strongly recommended but not required
+            "forbids": [
+                "DUPLICATE KEY (StarRocks-only)",
+                "DISTRIBUTED BY HASH ... BUCKETS (StarRocks-only)",
+                "ENGINE = ... (MySQL/ClickHouse syntax)",
+                "SERIAL (use IDENTITY(1,1) in Redshift)",
+                "VARCHAR(MAX) (Redshift max is 65535; length must be explicit)",
+            ],
+            "type_hints": {
+                "DISTKEY": "Add DISTKEY(<col>) for even data distribution; prefer a high-cardinality join key",
+                "SORTKEY": "Add SORTKEY(<col>) for date/timestamp columns used in filters",
+                "ENCODE": "Add ENCODE <scheme> per column for compression; AZ64 is a good default",
+                "unbounded VARCHAR": "VARCHAR with explicit length (max 65535)",
+                "JSON": "SUPER (preferred for semi-structured data)",
+                "JSONB": "SUPER",
+                "HUGEINT": "NUMERIC(38,0)",
+                "LARGEINT": "NUMERIC(38,0)",
+                "BOOLEAN": "BOOLEAN",
+                "TIMESTAMP WITH TIME ZONE": "TIMESTAMPTZ",
+            },
+            "example_ddl": (
+                "CREATE TABLE public.t (\n"
+                "  id BIGINT IDENTITY(1,1),\n"
+                "  event_date DATE,\n"
+                "  amount NUMERIC(18,2)\n"
+                ")\n"
+                "DISTKEY(id)\n"
+                "SORTKEY(event_date)"
+            ),
+        }
+
+    def suggest_table_layout(self, columns: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Suggest DISTKEY (high-cardinality key) + SORTKEY (date/time columns)."""
+        if not columns:
+            return {}
+        import re as _re
+
+        _INT_TYPES = {"INT", "INTEGER", "BIGINT", "SMALLINT", "INT2", "INT4", "INT8"}
+
+        # DISTKEY preference: *_id integer columns → any INT column → first column (preserve input order)
+        distkey = None
+        scored = []
+        for idx, col in enumerate(columns):
+            name = col["name"]
+            col_type = str(col.get("type", "")).upper()
+            base_type = _re.sub(r"\(.*\)", "", col_type).strip()
+            score = 0
+            if name.lower() == "id" or name.lower().endswith("_id"):
+                score += 100
+            if base_type in _INT_TYPES:
+                score += 50
+            scored.append((score, idx, name))
+        # Sort by score desc, then by input order (stable fallback to first column when all scored 0)
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        distkey = scored[0][2] if scored else columns[0]["name"]
+
+        # SORTKEY preference: date/time columns
+        sortkey: List[str] = []
+        for col in columns:
+            base_type = _re.sub(r"\(.*\)", "", str(col.get("type", "")).upper()).strip()
+            if base_type in ("DATE", "DATETIME", "TIMESTAMP", "TIMESTAMPTZ", "TIME"):
+                sortkey.append(col["name"])
+
+        layout: Dict[str, Any] = {"distkey": distkey}
+        if sortkey:
+            layout["sortkey"] = sortkey[:2]  # Redshift compound sortkey max is reasonable to keep small
+        return layout
+
+    def validate_ddl(self, ddl: str) -> List[str]:
+        errors: List[str] = []
+        upper = ddl.upper()
+        if "DUPLICATE KEY" in upper:
+            errors.append("DUPLICATE KEY is StarRocks-only syntax; Redshift uses DISTKEY/SORTKEY")
+        if "BUCKETS" in upper and "DISTRIBUTED BY" in upper:
+            errors.append("DISTRIBUTED BY ... BUCKETS is StarRocks syntax; Redshift uses DISTKEY")
+        if "ENGINE =" in upper or "ENGINE=" in upper:
+            errors.append("ENGINE clause is MySQL/ClickHouse syntax; not supported by Redshift")
+        if "SERIAL" in upper:
+            # Check as a word-boundary match to avoid false positives on column names
+            import re as _re
+
+            if _re.search(r"\bSERIAL\b", upper):
+                errors.append("Redshift does not support SERIAL; use IDENTITY(1,1) instead")
+        if "VARCHAR(MAX)" in upper.replace(" ", ""):
+            errors.append("Redshift does not support VARCHAR(MAX); use VARCHAR(<explicit length up to 65535>)")
+        return errors
+
+    def map_source_type(self, source_dialect: str, source_type: str) -> Optional[str]:
+        import re as _re
+
+        base = _re.sub(r"\(.*\)", "", source_type.strip().upper()).strip()
+        overrides = {
+            "HUGEINT": "NUMERIC(38,0)",
+            "LARGEINT": "NUMERIC(38,0)",
+            "JSON": "SUPER",
+            "JSONB": "SUPER",
+            "VARIANT": "SUPER",
+            "DATETIME": "TIMESTAMP",
+        }
+        return overrides.get(base)
