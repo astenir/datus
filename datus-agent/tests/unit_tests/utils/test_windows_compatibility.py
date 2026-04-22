@@ -1,3 +1,4 @@
+from importlib import import_module
 from unittest.mock import patch
 
 import pytest
@@ -18,12 +19,9 @@ from datus.utils.path_utils import get_files_from_glob_pattern
 def test_multiprocessing_start_method_base(platform_name, expected_method):
     with patch("platform.system", return_value=platform_name):
         with patch("multiprocessing.set_start_method") as mock_set:
-            import importlib
-
-            import datus.models.base
-
-            importlib.reload(datus.models.base)
-
+            base_module = import_module("datus.models.base")
+            mock_set.reset_mock()
+            base_module.configure_multiprocessing_start_method()
             mock_set.assert_called_once_with(expected_method, force=True)
 
 
@@ -39,13 +37,28 @@ def test_multiprocessing_start_method_base(platform_name, expected_method):
 def test_multiprocessing_start_method_embedding(platform_name, expected_method):
     with patch("platform.system", return_value=platform_name):
         with patch("multiprocessing.set_start_method") as mock_set:
-            import importlib
-
-            import datus.storage.embedding_models
-
-            importlib.reload(datus.storage.embedding_models)
-
+            embedding_module = import_module("datus.storage.embedding_models")
+            mock_set.reset_mock()
+            embedding_module.configure_multiprocessing_start_method()
             mock_set.assert_called_once_with(expected_method, force=True)
+
+
+def test_multiprocessing_start_method_base_ignores_runtime_error():
+    with patch("platform.system", return_value="Linux"):
+        with patch("multiprocessing.set_start_method", side_effect=RuntimeError("already set")) as mock_set:
+            base_module = import_module("datus.models.base")
+            mock_set.reset_mock()
+            base_module.configure_multiprocessing_start_method()
+            mock_set.assert_called_once_with("fork", force=True)
+
+
+def test_multiprocessing_start_method_embedding_ignores_runtime_error():
+    with patch("platform.system", return_value="Linux"):
+        with patch("multiprocessing.set_start_method", side_effect=RuntimeError("already set")) as mock_set:
+            embedding_module = import_module("datus.storage.embedding_models")
+            mock_set.reset_mock()
+            embedding_module.configure_multiprocessing_start_method()
+            mock_set.assert_called_once_with("fork", force=True)
 
 
 def test_detect_toxicology_db(tmp_path):
