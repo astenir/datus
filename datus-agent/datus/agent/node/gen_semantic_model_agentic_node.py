@@ -18,7 +18,6 @@ from datus.cli.generation_hooks import GenerationHooks
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.semantic_agentic_node_models import SemanticNodeInput, SemanticNodeResult
-from datus.tools.db_tools.db_manager import db_manager_instance
 from datus.tools.func_tool import DBFuncTool
 from datus.tools.func_tool.filesystem_tools import FilesystemFuncTool
 from datus.tools.func_tool.gen_semantic_model_tools import GenSemanticModelTools
@@ -68,7 +67,7 @@ class GenSemanticModelAgenticNode(AgenticNode):
             if isinstance(agentic_node_config, dict):
                 self.max_turns = agentic_node_config.get("max_turns", 40)
 
-        self.semantic_model_dir = str(agent_config.path_manager.semantic_model_path())
+        self.semantic_model_dir = str(agent_config.path_manager.semantic_model_path(agent_config.current_datasource))
         # ``knowledge_base_dir`` is the sandbox root for FilesystemFuncTool. It
         # now points at the project-scoped ``subject/`` directory so tools can
         # browse all three KB subfolders but not escape the project.
@@ -136,12 +135,7 @@ class GenSemanticModelAgenticNode(AgenticNode):
     def _setup_db_tools(self):
         """Setup database tools."""
         try:
-            db_manager = db_manager_instance(self.agent_config.namespaces)
-            conn = db_manager.get_conn(self.agent_config.current_datasource, self.agent_config.current_datasource)
-            self.db_func_tool = DBFuncTool(
-                conn,
-                agent_config=self.agent_config,
-            )
+            self.db_func_tool = DBFuncTool(agent_config=self.agent_config)
             # Add standard database tools
             self.tools.extend(self.db_func_tool.available_tools())
             logger.debug("Added database tools from DBFuncTool")
@@ -250,6 +244,8 @@ class GenSemanticModelAgenticNode(AgenticNode):
         Returns:
             Dictionary of template variables
         """
+        from datus.utils.node_utils import build_datasource_prompt_context
+
         context = {}
 
         # Tool name lists for template display
@@ -259,9 +255,10 @@ class GenSemanticModelAgenticNode(AgenticNode):
         context["knowledge_base_dir"] = self.knowledge_base_dir
         # Filesystem tool is now rooted at project_root (not subject/), so the
         # LLM must pass the full ``subject/<kind>/…`` relative path.
-        context["kind_subdir"] = "subject/semantic_models"
+        context["kind_subdir"] = f"subject/semantic_models/{self.agent_config.current_datasource}"
         context["current_datasource"] = self.agent_config.current_datasource
         context["has_ask_user_tool"] = self.ask_user_tool is not None
+        context.update(build_datasource_prompt_context(self.agent_config))
 
         logger.debug(f"Prepared template context: {context}")
         return context

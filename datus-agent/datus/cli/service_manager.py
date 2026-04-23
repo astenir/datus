@@ -6,7 +6,7 @@
 """
 Manage command for Services (datasources, semantic layer, BI tools, schedulers).
 
-Replaces the legacy NamespaceManager. Works with the new services.datasources
+Replaces the legacy DatasourceManager. Works with the new services.datasources
 config structure where each datasource is an independent entry.
 """
 
@@ -60,7 +60,7 @@ class ServiceManager:
         except DatusException as e:
             if e.code == ErrorCode.COMMON_FILE_NOT_FOUND:
                 console.print("Configuration file not found.")
-                console.print("Please run 'datus configure' first to create the configuration.")
+                console.print("Please run 'datus init' first to create the configuration.")
                 console.print("Or specify a config file with --config <path>")
             else:
                 console.print(f"{e.message}")
@@ -307,11 +307,6 @@ class ServiceManager:
             }
 
             configure_manager.update(updates={"services": services_section}, delete_old_key=True)
-            # Remove legacy namespace key if it exists
-            if "namespace" in configure_manager.data:
-                del configure_manager.data["namespace"]
-                configure_manager.save()
-
             console.print(f"Configuration saved to {configure_manager.config_path}")
             return True
         except Exception as e:

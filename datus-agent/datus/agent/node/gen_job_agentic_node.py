@@ -106,8 +106,8 @@ class GenJobAgenticNode(AgenticNode):
     def _setup_db_tools(self):
         """Setup database tools including DDL, DML, transfer, and migration-target helpers."""
         try:
-            self.db_func_tool = DBFuncTool.create_dynamic(
-                self.agent_config,
+            self.db_func_tool = DBFuncTool(
+                agent_config=self.agent_config,
                 sub_agent_name=self.NODE_NAME,
             )
             # Standard read-only tools (list_tables, describe_table, read_query, etc.)
@@ -149,10 +149,13 @@ class GenJobAgenticNode(AgenticNode):
             logger.error(f"Failed to setup filesystem tools: {e}")
 
     def _prepare_template_context(self, user_input: SemanticNodeInput) -> dict:
+        from datus.utils.node_utils import build_datasource_prompt_context
+
         context = {}
         context["native_tools"] = ", ".join([tool.name for tool in self.tools]) if self.tools else "None"
         context["mcp_tools"] = ", ".join(list(self.mcp_servers.keys())) if self.mcp_servers else "None"
         context["has_ask_user_tool"] = self.ask_user_tool is not None
+        context.update(build_datasource_prompt_context(self.agent_config))
         logger.debug(f"Prepared template context: {context}")
         return context
 

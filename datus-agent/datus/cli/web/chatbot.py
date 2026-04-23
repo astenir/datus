@@ -11,6 +11,7 @@ Streamlit-based implementation with a lightweight FastAPI static-file server.
 """
 
 import argparse
+import asyncio
 import json
 import os
 import webbrowser
@@ -45,7 +46,7 @@ def _build_agent_args(args: argparse.Namespace) -> argparse.Namespace:
     ``create_app`` / ``DatusAPIService``.
     """
     agent_args = argparse.Namespace(
-        namespace=args.datasource,
+        datasource=args.datasource,
         config=getattr(args, "config", None),
         debug=getattr(args, "debug", False),
         # Fields expected by DatusAPIService but not present in CLI args
@@ -187,11 +188,15 @@ def run_web_interface(args: argparse.Namespace) -> None:
     _schedule_browser_open(url)
 
     try:
-        uvicorn.run(
+        # Use Config + Server + asyncio.run() instead of uvicorn.run() to avoid
+        # loop_factory incompatibility with PyCharm/pydevd asyncio patches.
+        config = uvicorn.Config(
             app,
             host=host,
             port=port,
             log_level="debug" if getattr(args, "debug", False) else "info",
         )
+        server = uvicorn.Server(config)
+        asyncio.run(server.serve())
     except KeyboardInterrupt:
         logger.info("Web server stopped")

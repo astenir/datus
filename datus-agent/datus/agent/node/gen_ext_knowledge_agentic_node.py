@@ -24,7 +24,6 @@ from datus.schemas.action_history import ActionHistory, ActionHistoryManager, Ac
 from datus.schemas.compare_node_models import CompareInput
 from datus.schemas.ext_knowledge_agentic_node_models import ExtKnowledgeNodeInput, ExtKnowledgeNodeResult
 from datus.schemas.node_models import SQLContext, SqlTask
-from datus.tools.db_tools.db_manager import db_manager_instance
 from datus.tools.func_tool import DBFuncTool
 from datus.tools.func_tool.base import FuncToolResult
 from datus.tools.func_tool.context_search import ContextSearchTools
@@ -160,9 +159,7 @@ class GenExtKnowledgeAgenticNode(AgenticNode):
         # Hardcoded tool configuration: specific methods from generation_tools and filesystem_tools
         # filesystem_tools: read_file, write_file, edit_file
         # Chat node uses all available tools by default
-        db_manager = db_manager_instance(self.agent_config.namespaces)
-        self.conn = db_manager.get_conn(self.agent_config.current_datasource, self.agent_config.current_datasource)
-        self.db_func_tool = DBFuncTool(self.conn, agent_config=self.agent_config)
+        self.db_func_tool = DBFuncTool(agent_config=self.agent_config)
         self.context_search_tools = ContextSearchTools(self.agent_config)
         if self.db_func_tool:
             self.tools.extend(self.db_func_tool.available_tools())
@@ -217,7 +214,7 @@ class GenExtKnowledgeAgenticNode(AgenticNode):
         from datus.utils.exceptions import DatusException, ErrorCode
 
         try:
-            result = self.conn.execute_query(gold_sql, result_format="pandas")
+            result = self.db_func_tool.connector.execute_query(gold_sql, result_format="pandas")
         except Exception as e:
             raise DatusException(
                 code=ErrorCode.NODE_EXT_KNOWLEDGE_GOLD_SQL_INVALID,
@@ -282,7 +279,7 @@ Do NOT give up. Continue iterating until verify_sql returns success=1.
         if not hasattr(self, "_gold_sql") or not self._gold_sql:
             return VerifyResult(success=True, match_rate=1.0)
 
-        connector = self.conn
+        connector = self.db_func_tool.connector
 
         # Execute user SQL
         try:
@@ -536,6 +533,8 @@ Do NOT give up. Continue iterating until verify_sql returns success=1.
         Returns:
             Dictionary of template variables
         """
+        from datus.utils.node_utils import build_datasource_prompt_context
+
         context = {}
 
         context["native_tools"] = ", ".join([tool.name for tool in self.tools]) if self.tools else "None"
@@ -544,6 +543,7 @@ Do NOT give up. Continue iterating until verify_sql returns success=1.
         # Filesystem tool is rooted at project_root; full path required.
         context["kind_subdir"] = "subject/ext_knowledge"
         context["current_datasource"] = self.agent_config.current_datasource
+        context.update(build_datasource_prompt_context(self.agent_config))
         context["has_filesystem_tools"] = bool(self.filesystem_func_tool)
         context["has_ask_user_tool"] = self.ask_user_tool is not None
         context["has_gold_sql"] = bool(gold_sql)

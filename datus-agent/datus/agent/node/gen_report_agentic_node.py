@@ -17,7 +17,6 @@ from datus.cli.execution_state import ExecutionInterrupted
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.gen_report_agentic_node_models import GenReportNodeInput, GenReportNodeResult
-from datus.tools.db_tools.db_manager import db_manager_instance
 from datus.tools.func_tool import ContextSearchTools, DBFuncTool, FilesystemFuncTool
 from datus.tools.func_tool.semantic_tools import SemanticTools
 from datus.utils.loggings import get_logger
@@ -146,7 +145,7 @@ class GenReportAgenticNode(AgenticNode):
             self._setup_filesystem_tools()
 
         # Rebuild subagent task tool so repeated setup_tools() calls (e.g. via
-        # ChatCommands.update_chat_node_tools after a namespace switch) keep the
+        # ChatCommands.update_chat_node_tools after a datasource switch) keep the
         # "task" tool available for delegation.
         self._setup_sub_agent_task_tool()
         if self.sub_agent_task_tool:
@@ -205,10 +204,7 @@ class GenReportAgenticNode(AgenticNode):
     def _setup_db_tools(self):
         """Setup database tools."""
         try:
-            db_manager = db_manager_instance(self.agent_config.namespaces)
-            conn = db_manager.get_conn(self.agent_config.current_datasource, self.agent_config.current_datasource)
             self.db_func_tool = DBFuncTool(
-                conn,
                 agent_config=self.agent_config,
                 sub_agent_name=self.node_config.get("system_prompt"),
             )
@@ -266,12 +262,7 @@ class GenReportAgenticNode(AgenticNode):
                 tool_instance = self.semantic_tools
             elif tool_type == "db_tools":
                 if not self.db_func_tool:
-                    db_manager = db_manager_instance(self.agent_config.namespaces)
-                    conn = db_manager.get_conn(
-                        self.agent_config.current_datasource, self.agent_config.current_datasource
-                    )
                     self.db_func_tool = DBFuncTool(
-                        conn,
                         agent_config=self.agent_config,
                         sub_agent_name=self.node_config.get("system_prompt"),
                     )
@@ -331,10 +322,12 @@ class GenReportAgenticNode(AgenticNode):
         # Add agent description from configuration
         context["agent_description"] = self.node_config.get("agent_description", "")
 
-        # Add namespace info
+        # Add datasource info
         if self.agent_config:
-            context["namespace"] = getattr(self.agent_config, "current_datasource", None)
-            context["db_name"] = getattr(self.agent_config, "current_datasource", None)
+            from datus.utils.node_utils import build_datasource_prompt_context
+
+            context.update(build_datasource_prompt_context(self.agent_config))
+            context["db_name"] = context.get("datasource")
 
         from datus.utils.time_utils import get_default_current_date
 

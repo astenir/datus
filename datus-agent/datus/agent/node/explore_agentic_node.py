@@ -19,7 +19,6 @@ from datus.cli.execution_state import ExecutionInterrupted
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.explore_agentic_node_models import ExploreNodeInput, ExploreNodeResult
-from datus.tools.db_tools.db_manager import db_manager_instance
 from datus.tools.func_tool import ContextSearchTools, DBFuncTool, FilesystemFuncTool
 from datus.tools.func_tool.base import trans_to_function_tool
 from datus.tools.func_tool.date_parsing_tools import DateParsingTools
@@ -113,14 +112,10 @@ class ExploreAgenticNode(AgenticNode):
     def _setup_db_tools(self):
         """Setup database tools (all are read-only)."""
         try:
-            db_manager = db_manager_instance(self.agent_config.namespaces)
-            namespace = self.agent_config.current_datasource
-            conn = db_manager.get_conn(namespace, self.agent_config.current_datasource)
             dynamic_scoped_tables = None
             if isinstance(self.input, ExploreNodeInput) and self.input.scoped_tables:
                 dynamic_scoped_tables = self.input.scoped_tables
             self.db_func_tool = DBFuncTool(
-                conn,
                 agent_config=self.agent_config,
                 sub_agent_name=self.get_node_name(),
                 scoped_tables=dynamic_scoped_tables,
@@ -178,12 +173,14 @@ class ExploreAgenticNode(AgenticNode):
         version = prompt_version or self.node_config.get("prompt_version")
         template_name = "explore_system"
 
+        from datus.utils.node_utils import build_datasource_prompt_context
+
         context = {
             "has_db_tools": bool(self.db_func_tool),
             "has_context_search_tools": bool(self.context_search_tools),
             "has_filesystem_tools": bool(self.filesystem_func_tool),
             "has_date_parsing_tools": bool(self.date_parsing_tools),
-            "namespace": getattr(self.agent_config, "current_datasource", None) if self.agent_config else None,
+            **build_datasource_prompt_context(self.agent_config),
             "workspace_root": self._resolve_workspace_root(),
             "conversation_summary": conversation_summary,
             "current_date": get_default_current_date(None),

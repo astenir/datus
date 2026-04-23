@@ -20,7 +20,6 @@ from datus.cli.execution_state import ExecutionInterrupted
 from datus.configuration.agent_config import AgentConfig
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.gen_skill_agentic_node_models import SkillCreatorNodeInput, SkillCreatorNodeResult
-from datus.tools.db_tools.db_manager import db_manager_instance
 from datus.tools.func_tool import DBFuncTool, FilesystemFuncTool
 from datus.utils.loggings import get_logger
 
@@ -146,12 +145,7 @@ class SkillCreatorAgenticNode(AgenticNode):
     def _setup_db_tools(self):
         """Setup database tools (optional, for understanding schema when creating data-related skills)."""
         try:
-            db_manager = db_manager_instance(self.agent_config.namespaces)
-            conn = db_manager.get_conn(self.agent_config.current_datasource, self.agent_config.current_datasource)
-            self.db_func_tool = DBFuncTool(
-                conn,
-                agent_config=self.agent_config,
-            )
+            self.db_func_tool = DBFuncTool(agent_config=self.agent_config)
             self.tools.extend(self.db_func_tool.available_tools())
         except Exception as e:
             logger.warning(f"Failed to setup database tools, continuing without: {e}")
@@ -273,6 +267,8 @@ class SkillCreatorAgenticNode(AgenticNode):
             else:
                 skill_directories = ["./.datus/skills", "~/.datus/skills"]
 
+        from datus.utils.node_utils import build_datasource_prompt_context
+
         context = {
             "has_db_tools": bool(self.db_func_tool),
             "has_filesystem_tools": bool(self.filesystem_func_tool),
@@ -283,6 +279,7 @@ class SkillCreatorAgenticNode(AgenticNode):
             "workspace_root": self._resolve_workspace_root(),
             "conversation_summary": conversation_summary,
             "current_date": get_default_current_date(None),
+            **build_datasource_prompt_context(self.agent_config),
         }
 
         try:
