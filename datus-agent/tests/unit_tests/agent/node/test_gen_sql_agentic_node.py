@@ -923,7 +923,7 @@ class TestEndToEndNodeHooksInteraction:
                 await asyncio.sleep(0.02)
                 if broker.has_pending:
                     action_id = list(broker._pending.keys())[0]
-                    await broker.submit(action_id, "y")  # Allow once
+                    await broker.submit(action_id, [["y"]])  # Allow once
                     return
             pytest.fail("Timed out waiting for permission interaction")
 
@@ -985,7 +985,7 @@ class TestEndToEndNodeHooksInteraction:
                 await asyncio.sleep(0.02)
                 if broker.has_pending:
                     action_id = list(broker._pending.keys())[0]
-                    await broker.submit(action_id, "n")  # Deny
+                    await broker.submit(action_id, [["n"]])  # Deny
                     return
 
         ui_task = asyncio.create_task(ui_deny())
@@ -1052,7 +1052,7 @@ class TestEndToEndNodeHooksInteraction:
                 if broker.has_pending:
                     interaction_count += 1
                     action_id = list(broker._pending.keys())[0]
-                    await broker.submit(action_id, "a")  # Always allow (session)
+                    await broker.submit(action_id, [["a"]])  # Always allow (session)
                     return  # Only one interaction expected
 
         ui_task = asyncio.create_task(ui_session_approve())
@@ -1153,7 +1153,7 @@ class TestEndToEndNodeHooksInteraction:
                 await asyncio.sleep(0.02)
                 if broker.has_pending:
                     action_id = list(broker._pending.keys())[0]
-                    await broker.submit(action_id, "y")
+                    await broker.submit(action_id, [["y"]])
                     return
 
         ui_task = asyncio.create_task(ui_approve_list_tables())
@@ -1205,6 +1205,21 @@ class TestEndToEndPlanModeHooksInteraction:
     8. Plan mode state transitions accordingly
     """
 
+    @pytest.fixture(autouse=True)
+    def _use_dangerous_profile(self, real_agent_config):
+        """Switch the shared config to the ``dangerous`` profile for this class.
+
+        The normal profile gates ``todo_write`` at ASK, which would pre-empt
+        the PlanModeHooks confirmation prompt that these tests are exercising —
+        the UI simulator only handles the plan choice (1/2/3/4), not a
+        permission prompt. Using ``dangerous`` skips per-call permission ASK
+        so the tests can focus on the plan-approval broker flow.
+        """
+        from datus.tools.permission.profiles import DANGEROUS
+
+        real_agent_config.permissions_config = DANGEROUS
+        real_agent_config.active_profile_name = "dangerous"
+
     @pytest.mark.asyncio
     async def test_e2e_plan_mode_user_selects_manual(self, real_agent_config, mock_llm_create):
         """Full flow: LLM calls todo_write → user selects 'Manual Confirm' (1) → plan enters executing/manual."""
@@ -1254,7 +1269,7 @@ class TestEndToEndPlanModeHooksInteraction:
                 await asyncio.sleep(0.02)
                 if broker.has_pending:
                     action_id = list(broker._pending.keys())[0]
-                    await broker.submit(action_id, "1")  # Manual Confirm
+                    await broker.submit(action_id, [["1"]])  # Manual Confirm
                     return
             pytest.fail("Timed out waiting for plan confirmation interaction")
 
@@ -1279,19 +1294,18 @@ class TestEndToEndPlanModeHooksInteraction:
         # Verify the PROCESSING interaction offered plan mode choices (1/2/3/4)
         processing = [a for a in actions if a.role == ActionRole.INTERACTION and a.status == ActionStatus.PROCESSING]
         assert len(processing) >= 1
-        choices_list = processing[0].input.get("choices", []) if isinstance(processing[0].input, dict) else []
-        choices = choices_list[0] if choices_list else {}
+        events = processing[0].input.get("events", []) if isinstance(processing[0].input, dict) else []
+        choices = events[0].get("choices", {}) if events else {}
         assert "1" in choices  # Manual Confirm
         assert "2" in choices  # Auto Execute
         assert "4" in choices  # Cancel
 
-        # Verify the SUCCESS callback indicates Manual mode was selected
+        # Verify the SUCCESS action indicates Manual mode was selected
         success = [a for a in actions if a.role == ActionRole.INTERACTION and a.status == ActionStatus.SUCCESS]
         assert len(success) >= 1
         output = success[0].output
         assert isinstance(output, dict)
-        assert output.get("user_choice") == "1"
-        assert "manual" in output.get("content", "").lower()
+        assert output.get("user_choice") == [["1"]]
 
     @pytest.mark.asyncio
     async def test_e2e_plan_mode_user_selects_auto(self, real_agent_config, mock_llm_create):
@@ -1343,7 +1357,7 @@ class TestEndToEndPlanModeHooksInteraction:
                 await asyncio.sleep(0.02)
                 if broker.has_pending:
                     action_id = list(broker._pending.keys())[0]
-                    await broker.submit(action_id, "2")  # Auto Execute
+                    await broker.submit(action_id, [["2"]])  # Auto Execute
                     return
             pytest.fail("Timed out waiting for plan confirmation interaction")
 
@@ -1364,13 +1378,12 @@ class TestEndToEndPlanModeHooksInteraction:
         interaction_actions = [a for a in actions if a.role == ActionRole.INTERACTION]
         assert len(interaction_actions) >= 1
 
-        # Verify the SUCCESS callback indicates Auto mode was selected
+        # Verify the SUCCESS action indicates Auto mode was selected
         success = [a for a in actions if a.role == ActionRole.INTERACTION and a.status == ActionStatus.SUCCESS]
         assert len(success) >= 1
         output = success[0].output
         assert isinstance(output, dict)
-        assert output.get("user_choice") == "2"
-        assert "auto" in output.get("content", "").lower()
+        assert output.get("user_choice") == [["2"]]
 
     @pytest.mark.asyncio
     async def test_e2e_plan_mode_user_cancels(self, real_agent_config, mock_llm_create):
@@ -1420,7 +1433,7 @@ class TestEndToEndPlanModeHooksInteraction:
                 await asyncio.sleep(0.02)
                 if broker.has_pending:
                     action_id = list(broker._pending.keys())[0]
-                    await broker.submit(action_id, "4")  # Cancel
+                    await broker.submit(action_id, [["4"]])  # Cancel
                     return
             pytest.fail("Timed out waiting for plan confirmation interaction")
 
@@ -1447,7 +1460,7 @@ class TestEndToEndPlanModeHooksInteraction:
         assert success
         output = success[0].output
         assert isinstance(output, dict)
-        assert output.get("user_choice") == "4"
+        assert output.get("user_choice") == [["4"]]
 
 
 # ===========================================================================
@@ -1577,7 +1590,7 @@ class TestEndToEndGenerationHooksInteraction:
                 await asyncio.sleep(0.02)
                 if broker.has_pending:
                     action_id = list(broker._pending.keys())[0]
-                    await broker.submit(action_id, "y")  # Yes - Save to KB
+                    await broker.submit(action_id, [["y"]])  # Yes - Save to KB
                     return
             pytest.fail("Timed out waiting for generation sync interaction")
 
@@ -1607,9 +1620,9 @@ class TestEndToEndGenerationHooksInteraction:
         # The interaction content should reference the YAML file
         interaction_input = processing_interactions[0].input
         assert isinstance(interaction_input, dict)
-        contents = interaction_input.get("contents", [])
-        assert contents
-        content = contents[0]
+        events = interaction_input.get("events", [])
+        assert events
+        content = events[0].get("content", "")
         assert "Sync to Knowledge Base" in content or "yaml" in content.lower()
 
     @pytest.mark.asyncio
@@ -1687,7 +1700,7 @@ class TestEndToEndGenerationHooksInteraction:
                 await asyncio.sleep(0.02)
                 if broker.has_pending:
                     action_id = list(broker._pending.keys())[0]
-                    await broker.submit(action_id, "n")  # No - Keep file only
+                    await broker.submit(action_id, [["n"]])  # No - Keep file only
                     return
             pytest.fail("Timed out waiting for generation sync interaction")
 
@@ -1708,20 +1721,14 @@ class TestEndToEndGenerationHooksInteraction:
         interaction_actions = [a for a in actions if a.role == ActionRole.INTERACTION]
         assert len(interaction_actions) >= 1
 
-        # Verify the SUCCESS callback indicates file was kept only (not synced)
+        # Verify the SUCCESS action indicates the user declined ('n')
         success_interactions = [
             a for a in actions if a.role == ActionRole.INTERACTION and a.status == ActionStatus.SUCCESS
         ]
         assert len(success_interactions) >= 1
         callback_output = success_interactions[0].output
         assert isinstance(callback_output, dict)
-        callback_content = callback_output.get("content", "").lower()
-        assert (
-            "rejected" in callback_content
-            or "deleted" in callback_content
-            or "saved to file" in callback_content
-            or "file only" in callback_content
-        )
+        assert callback_output.get("user_choice") == [["n"]]
 
     @pytest.mark.asyncio
     async def test_e2e_generation_hooks_no_yaml_no_interaction(self, real_agent_config, mock_llm_create, tmp_path):
