@@ -412,6 +412,106 @@ class TestGenDashboardToolSetup:
 
 
 # ---------------------------------------------------------------------------
+# Permission Hook Wiring Tests
+# ---------------------------------------------------------------------------
+
+
+class TestGenDashboardPermissionWiring:
+    """Without proper wiring ``bi_tools.delete_*`` DENY rules silently leak."""
+
+    def test_tool_category_map_registers_bi_tools(self, real_agent_config, mock_llm_create):
+        """Every BI tool must land in the ``bi_tools`` category.
+
+        Falling back to the ``tools`` catch-all would prevent
+        ``bi_tools.delete_*`` DENY rules in the ``normal`` profile from
+        matching ``delete_chart`` / ``delete_dataset`` — the exact bug that
+        leaked destructive calls to Superset in production.
+        """
+        _add_dashboard_config(real_agent_config)
+        _bi_core_mock.adapter_registry.get.return_value = lambda **kwargs: FullMockAdapter()
+        with patch.dict(sys.modules, _BI_MODULES_PATCH):
+            from datus.agent.node.gen_dashboard_agentic_node import GenDashboardAgenticNode
+
+            node = GenDashboardAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+            mapping = node._tool_category_map()
+            assert "bi_tools" in mapping
+            bi_names = {t.name for t in mapping["bi_tools"]}
+            assert {"delete_chart", "delete_dataset", "delete_dashboard"}.issubset(bi_names)
+
+    def test_compose_hooks_yields_permission_hooks(self, real_agent_config, mock_llm_create):
+        """``generate_with_tools_stream`` must receive a real hook, not None.
+
+        A ``None`` hook means the permission_manager never intercepts tool
+        calls — rules defined in the profile are effectively ignored.
+        """
+        _add_dashboard_config(real_agent_config)
+        _bi_core_mock.adapter_registry.get.return_value = lambda **kwargs: FullMockAdapter()
+        with patch.dict(sys.modules, _BI_MODULES_PATCH):
+            from datus.agent.node.gen_dashboard_agentic_node import GenDashboardAgenticNode
+            from datus.tools.permission.permission_hooks import PermissionHooks
+
+            node = GenDashboardAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+            hooks = node._compose_hooks()
+            assert isinstance(hooks, PermissionHooks)
+
+    def test_tool_registry_routes_delete_chart_to_bi_tools(self, real_agent_config, mock_llm_create):
+        """After ``_ensure_permission_hooks`` runs, registry must classify ``delete_chart``.
+
+        ``PermissionHooks._get_category_and_pattern`` looks up tool names in
+        the registry; without this category mapping all BI tools fall into
+        the generic ``tools`` bucket and profile rules under ``bi_tools``
+        can never match.
+        """
+        _add_dashboard_config(real_agent_config)
+        _bi_core_mock.adapter_registry.get.return_value = lambda **kwargs: FullMockAdapter()
+        with patch.dict(sys.modules, _BI_MODULES_PATCH):
+            from datus.agent.node.gen_dashboard_agentic_node import GenDashboardAgenticNode
+
+            node = GenDashboardAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+            node._ensure_permission_hooks()
+            assert node.tool_registry.get("delete_chart") == "bi_tools"
+            assert node.tool_registry.get("delete_dataset") == "bi_tools"
+            assert node.tool_registry.get("list_dashboards") == "bi_tools"
+
+    def test_no_denied_tools_injected_into_prompt(self, real_agent_config, mock_llm_create):
+        """The prompt must NOT list DENY'd tool names.
+
+        An earlier iteration injected a ``<denied_tools>`` block that spelled
+        out ``delete_chart`` / ``delete_dataset`` — that's leaky prompt
+        engineering and duplicates work the permission layer should do at
+        runtime. Keep the system prompt profile-agnostic.
+        """
+        _add_dashboard_config(real_agent_config)
+        _bi_core_mock.adapter_registry.get.return_value = lambda **kwargs: FullMockAdapter()
+        real_agent_config.active_profile_name = "normal"
+        with patch.dict(sys.modules, _BI_MODULES_PATCH):
+            from datus.agent.node.gen_dashboard_agentic_node import GenDashboardAgenticNode
+
+            node = GenDashboardAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+            prompt = node._finalize_system_prompt("base prompt")
+            assert "<denied_tools>" not in prompt
+            assert "bi_tools.delete_chart" not in prompt
+
+    def test_template_does_not_instruct_ask_user_before_delete(self, real_agent_config, mock_llm_create):
+        """Permission profile owns destructive confirmation — the template
+        should NOT tell the LLM to ``ask_user`` before every delete.
+
+        When both layers ask, users see two prompts for the same operation
+        (LLM ``ask_user`` confirmation + permission ASK) — or in ``normal``
+        they confirm via ``ask_user`` only for the delete to hard-fail
+        afterwards. Remove the rule entirely.
+        """
+        _add_dashboard_config(real_agent_config)
+        _bi_core_mock.adapter_registry.get.return_value = lambda **kwargs: FullMockAdapter()
+        with patch.dict(sys.modules, _BI_MODULES_PATCH):
+            from datus.agent.node.gen_dashboard_agentic_node import GenDashboardAgenticNode
+
+            node = GenDashboardAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+            prompt = node._get_system_prompt(template_context=node._prepare_template_context())
+            assert "Always confirm with the user before deleting" not in prompt
+
+
+# ---------------------------------------------------------------------------
 # Auto-detect Platform Tests
 # ---------------------------------------------------------------------------
 
@@ -501,7 +601,6 @@ class TestGenDashboardRegistration:
         from datus.schemas.gen_dashboard_agentic_node_models import GenDashboardNodeInput
 
         result = NodeType.type_input(NodeType.TYPE_GEN_DASHBOARD, {}, ignore_require_check=True)
-        assert result is not None
         assert isinstance(result, GenDashboardNodeInput)
         assert result.database is None
 
@@ -538,7 +637,6 @@ class TestGenDashboardRegistration:
                 input_data=input_data,
                 agent_config=real_agent_config,
             )
-            assert node.input is not None
             assert node.input.user_message == "Create a sales dashboard"
 
     def test_from_dict_input_deserialization(self, real_agent_config, mock_llm_create):
@@ -561,7 +659,6 @@ class TestGenDashboardRegistration:
                 "metadata": {},
             }
             node = Node.from_dict(node_dict, agent_config=real_agent_config)
-            assert node.input is not None
             assert node.input.user_message == "List dashboards"
 
     def test_from_dict_result_deserialization(self, real_agent_config, mock_llm_create):
@@ -589,7 +686,6 @@ class TestGenDashboardRegistration:
                 "metadata": {},
             }
             node = Node.from_dict(node_dict, agent_config=real_agent_config)
-            assert node.result is not None
             assert node.result.response == "Dashboard created"
             assert node.result.dashboard_result == {"dashboard_id": 42}
 
@@ -779,6 +875,73 @@ class TestGenDashboardTemplateContext:
             assert ctx["has_dashboard_write"] is False
             assert ctx["has_chart_write"] is False
             assert ctx["has_dataset_write"] is False
+            assert ctx["has_bi_tools"] is False
+            # No platform resolved → no attempt to build adapter → no error captured.
+            assert ctx["bi_setup_error"] is None
+
+    def test_bi_setup_error_captured_on_adapter_failure(self, real_agent_config, mock_llm_create):
+        """Adapter construction failure (e.g. version mismatch) is captured, not swallowed."""
+        _add_dashboard_config(real_agent_config)
+
+        def _raise_boom(**kwargs):
+            raise RuntimeError("version mismatch: PaginatedResult not exported")
+
+        _bi_core_mock.adapter_registry.get.return_value = _raise_boom
+        with patch.dict(sys.modules, _BI_MODULES_PATCH):
+            from datus.agent.node.gen_dashboard_agentic_node import GenDashboardAgenticNode
+
+            node = GenDashboardAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+            assert node.bi_func_tool is None
+            assert "superset" in node._bi_setup_error
+            assert "version mismatch" in node._bi_setup_error
+
+            ctx = node._prepare_template_context()
+            assert ctx["has_bi_tools"] is False
+            assert ctx["bi_setup_error"] == node._bi_setup_error
+
+    def test_bi_setup_error_captured_on_import_error(self, real_agent_config, mock_llm_create):
+        """ImportError also captures a user-facing error message."""
+        _add_dashboard_config(real_agent_config)
+        with patch.dict(sys.modules, {"datus_bi_core": None}):
+            from datus.agent.node.gen_dashboard_agentic_node import GenDashboardAgenticNode
+
+            node = GenDashboardAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+            assert node.bi_func_tool is None
+            assert "not installed" in node._bi_setup_error
+            assert "superset" in node._bi_setup_error
+
+    def test_system_prompt_warns_when_bi_setup_failed(self, real_agent_config, mock_llm_create):
+        """Rendered prompt surfaces the failure so the LLM can tell the user."""
+        _add_dashboard_config(real_agent_config)
+
+        def _raise_boom(**kwargs):
+            raise RuntimeError("adapter construction blew up")
+
+        _bi_core_mock.adapter_registry.get.return_value = _raise_boom
+        with patch.dict(sys.modules, _BI_MODULES_PATCH):
+            from datus.agent.node.gen_dashboard_agentic_node import GenDashboardAgenticNode
+
+            node = GenDashboardAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+            prompt = node._get_system_prompt(template_context=node._prepare_template_context())
+            assert "BI Platform Unavailable" in prompt
+            assert "adapter construction blew up" in prompt
+            # Should NOT tell the model to load bi-validation when no skills are loaded.
+            assert "Post-Creation Validation" not in prompt
+
+    def test_system_prompt_omits_validation_when_readonly(self, real_agent_config, mock_llm_create):
+        """Read-only adapter (no write tools) → Post-Creation Validation section is suppressed."""
+        _add_dashboard_config(real_agent_config)
+        _bi_core_mock.adapter_registry.get.return_value = lambda **kwargs: ReadOnlyMockAdapter()
+        with patch.dict(sys.modules, _BI_MODULES_PATCH):
+            from datus.agent.node.gen_dashboard_agentic_node import GenDashboardAgenticNode
+
+            node = GenDashboardAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+            prompt = node._get_system_prompt(template_context=node._prepare_template_context())
+            assert "Post-Creation Validation" not in prompt
+            # bi-validation must not be hard-referenced outside <available_skills>.
+            # It may still appear as an example inside the removed block — so guard
+            # specifically against the old mandatory wording.
+            assert 'load_skill(skill_name="bi-validation")' not in prompt
 
     def test_fallback_system_prompt(self, real_agent_config, mock_llm_create):
         """Fallback prompt should mention the BI platform and role."""
@@ -1111,3 +1274,61 @@ class TestCollectCreatedResources:
         result = GenDashboardAgenticNode._collect_created_resources(ahm)
 
         assert result == {}  # no id means not collected
+
+
+class TestSanitizeError:
+    """``_sanitize_error`` redacts credentials before the error reaches the prompt.
+
+    ``_bi_setup_error`` is rendered into the system prompt, so anything
+    that slips past this sanitizer leaks credentials into the LLM context.
+    """
+
+    def test_redacts_user_pass_in_url(self):
+        from datus.agent.node.gen_dashboard_agentic_node import GenDashboardAgenticNode
+
+        msg = GenDashboardAgenticNode._sanitize_error(Exception("failed at https://admin:s3cret@bi.example.com/login"))
+        assert "s3cret" not in msg
+        assert "<redacted>@" in msg
+
+    def test_redacts_key_value_query_string(self):
+        from datus.agent.node.gen_dashboard_agentic_node import GenDashboardAgenticNode
+
+        msg = GenDashboardAgenticNode._sanitize_error(
+            Exception("connect fail password=hunter2 other=ok api_key=ABC123")
+        )
+        assert "hunter2" not in msg
+        assert "ABC123" not in msg
+        assert "other=ok" in msg
+
+    def test_redacts_json_dict_style_password(self):
+        from datus.agent.node.gen_dashboard_agentic_node import GenDashboardAgenticNode
+
+        msg = GenDashboardAgenticNode._sanitize_error(Exception('body={"username": "alice", "password": "s3cret"}'))
+        assert "s3cret" not in msg
+        assert "alice" in msg
+
+    def test_redacts_bearer_authorization_header(self):
+        from datus.agent.node.gen_dashboard_agentic_node import GenDashboardAgenticNode
+
+        msg = GenDashboardAgenticNode._sanitize_error(Exception("401 with Authorization: Bearer eyJhbGciOi-leaked"))
+        assert "eyJhbGciOi-leaked" not in msg
+        assert "<redacted>" in msg.lower()
+
+    def test_redacts_basic_authorization_header(self):
+        from datus.agent.node.gen_dashboard_agentic_node import GenDashboardAgenticNode
+
+        msg = GenDashboardAgenticNode._sanitize_error(Exception("authorization: Basic dXNlcjpwYXNz"))
+        assert "dXNlcjpwYXNz" not in msg
+
+    def test_truncates_very_long_error_message(self):
+        from datus.agent.node.gen_dashboard_agentic_node import GenDashboardAgenticNode
+
+        msg = GenDashboardAgenticNode._sanitize_error(Exception("x" * 500))
+        assert msg.endswith("...")
+        # ``Exception: `` prefix (~12 chars) + 300 body chars + ``...``.
+        assert len(msg) <= 320
+
+    def test_preserves_type_name_for_empty_message(self):
+        from datus.agent.node.gen_dashboard_agentic_node import GenDashboardAgenticNode
+
+        assert GenDashboardAgenticNode._sanitize_error(RuntimeError("")) == "RuntimeError"

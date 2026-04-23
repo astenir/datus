@@ -58,12 +58,10 @@ class TestSpecIntegrity:
 class TestLookup:
     def test_canonical_name_resolves(self):
         spec = lookup("help")
-        assert spec is not None
         assert spec.name == "help"
 
     def test_alias_resolves_to_canonical(self):
         spec = lookup("quit")
-        assert spec is not None
         assert spec.name == "exit"
 
     def test_unknown_token_returns_none(self):
@@ -101,3 +99,18 @@ class TestHandlerMapAlignment:
         for spec in SLASH_COMMANDS:
             needle = f'"{spec.name}"'
             assert needle in source, f"Handler for '{spec.name}' missing in _build_slash_handler_map"
+
+
+def test_profile_command_registered():
+    from datus.cli.slash_registry import SLASH_COMMANDS
+
+    names = {spec.name for spec in SLASH_COMMANDS}
+    assert "profile" in names
+
+
+def test_profile_command_is_in_system_group():
+    from datus.cli.slash_registry import SLASH_COMMANDS
+
+    spec = next(s for s in SLASH_COMMANDS if s.name == "profile")
+    assert spec.group == "system"
+    assert "profile" in spec.summary.lower()  # non-empty and autocomplete-relevant

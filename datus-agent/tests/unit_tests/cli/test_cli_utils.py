@@ -56,8 +56,11 @@ class TestSelectChoiceBasic:
 
     @pytest.mark.ci
     def test_free_text_sentinel_constant(self):
-        assert isinstance(_FREE_TEXT_SENTINEL, str)
-        assert len(_FREE_TEXT_SENTINEL) > 0
+        # Double-underscore wrapping makes the value unambiguous as a sentinel
+        # so it cannot collide with a real user-entered answer string.
+        assert _FREE_TEXT_SENTINEL.startswith("__")
+        assert _FREE_TEXT_SENTINEL.endswith("__")
+        assert "free_text" in _FREE_TEXT_SENTINEL
 
     @pytest.mark.ci
     @patch("prompt_toolkit.Application")
@@ -260,7 +263,6 @@ class TestSelectList:
         """Up arrow at top wraps to bottom."""
         items = [["a"], ["b"], ["c"]]
         kb = _capture_list_kb(items)
-        assert kb is not None
         # Press up from index 0 → should wrap to index 2
         handler = _find_handler(kb, "up")
         event = _make_event()
@@ -276,7 +278,6 @@ class TestSelectList:
         """Down arrow at bottom wraps to top."""
         items = [["a"], ["b"]]
         kb = _capture_list_kb(items)
-        assert kb is not None
         handler = _find_handler(kb, "down")
         # Press down twice from index 0 → index 1 → wraps to index 0
         handler(_make_event())
@@ -290,7 +291,6 @@ class TestSelectList:
         """Scrolling offset adjusts when selected goes past max_visible."""
         items = [[str(i)] for i in range(20)]
         kb = _capture_list_kb(items, max_visible=5)
-        assert kb is not None
         handler = _find_handler(kb, "down")
         # Navigate down 6 times (past max_visible=5)
         for _ in range(6):
@@ -312,7 +312,6 @@ class TestSelectList:
         """Pressing Escape exits with None."""
         items = [["a"], ["b"]]
         kb = _capture_list_kb(items)
-        assert kb is not None
         handler = _find_handler(kb, "escape")
         event = _make_event()
         handler(event)
@@ -323,7 +322,6 @@ class TestSelectList:
         """Pressing Ctrl+C exits with None."""
         items = [["a"], ["b"]]
         kb = _capture_list_kb(items)
-        assert kb is not None
         handler = _find_handler(kb, "c-c")
         event = _make_event()
         handler(event)
@@ -334,7 +332,6 @@ class TestSelectList:
         """select_list works correctly with headers provided."""
         items = [["val1", "val2"], ["val3", "val4"]]
         kb = _capture_list_kb(items, headers=["Col A", "Col B"])
-        assert kb is not None
         # Confirm first item selected
         enter_event = _make_event()
         _find_handler(kb, "enter")(enter_event)
@@ -345,7 +342,6 @@ class TestSelectList:
         """PageDown jumps forward."""
         items = [[str(i)] for i in range(20)]
         kb = _capture_list_kb(items, max_visible=5)
-        assert kb is not None
         _find_handler(kb, "pagedown")(_make_event())
         enter_event = _make_event()
         _find_handler(kb, "enter")(enter_event)
@@ -356,7 +352,6 @@ class TestSelectList:
         """PageUp jumps backward."""
         items = [[str(i)] for i in range(20)]
         kb = _capture_list_kb(items, max_visible=5)
-        assert kb is not None
         # Go down 10, then page up (max(0, 10-5) = 5)
         for _ in range(10):
             _find_handler(kb, "down")(_make_event())
@@ -464,7 +459,10 @@ class TestPromptInputMultilineKeyBindings:
 
             prompt_input(MagicMock(), message="test", multiline=True)
 
-        assert captured.get("key_bindings") is not None
+        # Multiline mode must install a KeyBindings with at least one binding
+        # so Enter can be remapped to "insert newline" rather than submit.
+        kb = captured.get("key_bindings")
+        assert kb.bindings, "multiline mode should register at least one key binding"
         assert captured.get("multiline") is True
 
     @pytest.mark.ci
@@ -499,15 +497,13 @@ class TestPromptInputMultilineKeyBindings:
 
         kb = captured["key_bindings"]
 
+        # _find_handler returns None when no binding matches, so calling it
+        # below raises TypeError — a strong failure signal if Enter isn't
+        # bound in multiline mode. Direct assertion on behaviour follows.
+        enter_handler = _find_handler(kb, "enter")
         event = MagicMock()
-        for binding in kb.bindings:
-            for key in binding.keys:
-                key_str = key.value if hasattr(key, "value") else str(key)
-                if key_str in ("enter", "c-m"):
-                    binding.handler(event)
-                    event.current_buffer.validate_and_handle.assert_called_once()
-                    return
-        pytest.fail("No enter handler found")
+        enter_handler(event)
+        event.current_buffer.validate_and_handle.assert_called_once()
 
     @pytest.mark.ci
     def test_multiline_no_newline_binding(self):
@@ -524,7 +520,6 @@ class TestPromptInputMultilineKeyBindings:
             prompt_input(MagicMock(), message="test", multiline=True)
 
         kb = captured.get("key_bindings")
-        assert kb is not None
         for binding in kb.bindings:
             assert len(binding.keys) == 1, "Should only have single-key bindings (enter), no multi-key sequences"
 

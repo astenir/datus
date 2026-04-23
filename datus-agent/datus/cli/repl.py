@@ -47,6 +47,7 @@ from datus.cli.autocomplete import (
 )
 from datus.cli.bi_dashboard import BiDashboardCommands
 from datus.cli.chat_commands import ChatCommands
+from datus.cli.cli_styles import print_error, print_info, print_success, print_warning
 from datus.cli.context_commands import ContextCommands
 from datus.cli.language_commands import LanguageCommands
 from datus.cli.list_selector_app import ListItem, ListSelectorApp
@@ -149,6 +150,10 @@ class DatusCLI:
         # Load agent config first so path-dependent helpers use the configured home.
         self.agent_config = load_agent_config(create_if_missing=True, **vars(self.args))
         self.configuration_manager = configuration_manager()
+
+        # Active permission profile name. Initialized from agent_config;
+        # mutated by /profile. StatusBarProvider reads this for display.
+        self.active_profile: str = getattr(self.agent_config, "active_profile_name", "normal")
 
         # Bind the process-wide path-manager ContextVar once so implicit callers
         # (e.g. ``get_path_manager()`` inside storage init) resolve against the
@@ -307,6 +312,7 @@ class DatusCLI:
             "bootstrap-bi": self.bi_dashboard_commands.cmd,
             "model": self.model_commands.cmd_model,
             "services": self.service_commands.cmd_services,
+            "profile": self._cmd_profile,
         }
 
     @property
@@ -441,6 +447,9 @@ class DatusCLI:
                         "status-bar": "#9a9aaa",
                         "status-bar.brand": "#ffd866 bold",
                         "status-bar.plan": "#9a9aaa",
+                        "status-bar.profile": "#9a9aaa",
+                        "status-bar.profile.auto": "ansicyan",
+                        "status-bar.profile.dangerous": "ansired",
                         "status-bar.sep": "#9a9aaa",
                         "status-bar.agent": "#9a9aaa",
                         "status-bar.connector": "#9a9aaa",
@@ -1073,6 +1082,29 @@ class DatusCLI:
             self.default_agent = args
             self.console.print(f"[green]Default agent set to: {args}[/]")
 
+    def _run_profile_picker(self, current: str) -> Optional[str]:
+        """Run the standalone ProfilePickerApp; return selection or None."""
+        from datus.cli.profile_picker_app import ProfilePickerApp
+
+        app = ProfilePickerApp(console=self.console, current=current)
+        tui_app = getattr(self, "tui_app", None)
+        if tui_app is not None:
+            with tui_app.suspend_input():
+                return app.run()
+        return app.run()
+
+    def _run_dangerous_confirm(self) -> bool:
+        """Run the standalone DangerousConfirmApp; return True only if
+        the user explicitly enabled Dangerous."""
+        from datus.cli.profile_picker_app import DangerousConfirmApp
+
+        app = DangerousConfirmApp(console=self.console)
+        tui_app = getattr(self, "tui_app", None)
+        if tui_app is not None:
+            with tui_app.suspend_input():
+                return app.run()
+        return app.run()
+
     def _parse_command(self, text: str) -> Tuple[CommandType, str, str]:
         """Classify raw user input into a ``CommandType`` + canonical cmd + args.
 
@@ -1487,6 +1519,97 @@ class DatusCLI:
             except Exception as e:
                 logger.warning(f"Database connection closed failed, reason:{e}")
         return EXIT_SENTINEL
+
+    def _cmd_profile(self, args: str) -> None:
+        """Open the profile selection picker and apply the choice.
+
+        Delegates to ``_run_profile_picker`` / ``_run_dangerous_confirm``
+        (inline prompt_toolkit pickers mirroring ``/agent``). Selecting
+        ``dangerous`` triggers a second confirmation every session
+        transition per spec decision #5.
+        """
+        from datus.tools.permission.permission_config import PermissionConfig
+        from datus.tools.permission.profiles import PROFILE_NAMES, build_effective_config, get_profile
+
+        current = getattr(self.agent_config, "active_profile_name", self.active_profile)
+        choice = self._run_profile_picker(current)
+
+        if choice is None:
+            return
+
+        if choice not in PROFILE_NAMES:
+            print_error(self.console, f"Unknown profile: {choice}")
+            return
+
+        if choice == current:
+            print_info(self.console, f"Already on {choice}.")
+            return
+
+        # Dangerous second confirmation — every session transition re-confirms.
+        if choice == "dangerous":
+            confirmed = self._run_dangerous_confirm()
+            if not confirmed:
+                print_warning(self.console, "Dangerous mode cancelled.")
+                return
+
+        # Rebuild the user rules (exclude the profile key) and preserve the
+        # new profile's default unless the user explicitly set one.
+        # Mirrors build_effective_config in profiles.py. If you change one,
+        # change both.
+        raw_permissions = getattr(self.agent_config, "_raw_permissions", {}) or {}
+        raw_user = {k: v for k, v in raw_permissions.items() if k != "profile"}
+        try:
+            new_effective = build_effective_config(choice, raw_user)
+        except Exception as e:
+            # Mirror startup: if ``permissions.rules`` can't be parsed, refuse
+            # to install a permissive profile base that would silently drop
+            # restrictive overrides. Fail closed to ``normal`` with a clear
+            # user-facing message instead of silently expanding privileges.
+            logger.warning(f"Failed to rebuild effective permissions for {choice!r}: {e}. Falling back to 'normal'.")
+            print_error(
+                self.console,
+                f"permissions.rules in agent.yml is malformed ({e}); refusing to switch to "
+                f"{choice!r} and falling back to 'normal'.",
+            )
+            choice = "normal"
+            new_effective = get_profile("normal")
+
+        # Reconstruct the user_rules_cfg for switch_profile (it takes a
+        # separable override, not a pre-merged config).
+        user_rules_cfg: Optional[PermissionConfig] = None
+        if raw_user:
+            if "default" not in raw_user and "default_permission" not in raw_user:
+                base = get_profile(choice)
+                dp = base.default_permission
+                raw_user = {
+                    **raw_user,
+                    "default_permission": dp.value if hasattr(dp, "value") else dp,
+                }
+            try:
+                user_rules_cfg = PermissionConfig.from_dict(raw_user)
+            except Exception as e:
+                logger.warning(f"Malformed user rules for {choice!r}: {e}. Applying profile base only.")
+                user_rules_cfg = None
+
+        # Apply the runtime switch FIRST. If ``switch_profile`` raises
+        # (unknown profile, malformed override, etc.) the config still
+        # reports the *old* profile so the status bar and PermissionManager
+        # stay consistent instead of publishing a half-applied state.
+        prior_approvals = 0
+        current_node = getattr(self.chat_commands, "current_node", None)
+        if current_node is not None and hasattr(current_node, "permission_manager"):
+            prior_approvals = len(getattr(current_node.permission_manager, "_session_approvals", {}))
+            try:
+                current_node.permission_manager.switch_profile(choice, user_overrides=user_rules_cfg)
+            except Exception as e:
+                print_error(self.console, f"Profile switch failed: {e}")
+                return
+
+        self.agent_config.permissions_config = new_effective
+        self.agent_config.active_profile_name = choice
+        self.active_profile = choice
+        print_success(self.console, f"Profile switched: {current} → {choice}")
+        print_info(self.console, f"Session approvals cleared (was: {prior_approvals})")
 
     def catalogs_callback(self, selected_path: str = "", selected_data: Optional[Dict[str, Any]] = None):
         if not selected_path:

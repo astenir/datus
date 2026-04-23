@@ -569,6 +569,11 @@ class AgentConfig:
             self._backend_config = backend_config
             init_backends(backend_config, data_dir=str(self.path_manager.data_dir))
 
+        # Active profile name — set by ``_init_permissions_config``. Pre-seed
+        # so downstream readers always see a valid string even if permission
+        # init raises.
+        self.active_profile_name: str = "normal"
+        self._raw_permissions: Dict[str, Any] = {}
         # Initialize unified permission system
         self.permissions_config = self._init_permissions_config(kwargs.get("permissions", {}))
 
@@ -739,22 +744,68 @@ class AgentConfig:
     def _init_permissions_config(self, permissions_raw: Dict[str, Any]):
         """Initialize unified permission configuration.
 
+        Loads the base profile (default: ``normal``) and layers user-supplied
+        ``rules`` on top via ``PermissionConfig.merge_with`` (last-match-wins).
+        Sets ``self.active_profile_name`` so the CLI status bar and
+        ``/profile`` command can read the source of truth from one place.
+        Stashes the raw dict in ``self._raw_permissions`` so ``/profile`` can
+        rebuild the effective config on switch without re-reading YAML.
+
         Args:
-            permissions_raw: Raw permissions config from agent.yml
+            permissions_raw: Raw permissions config from agent.yml. May be
+                empty ({}) — treated as "no profile override, no user rules",
+                equivalent to ``{"profile": "normal", "rules": []}``.
 
         Returns:
-            PermissionConfig instance or None
+            PermissionConfig instance. A profile is always applied, so the
+            return is never ``None``.
         """
+        from datus.tools.permission.profiles import build_effective_config, get_profile
+
         if not permissions_raw:
-            return None
+            permissions_raw = {}
+        elif not isinstance(permissions_raw, dict):
+            logger.warning(
+                "Invalid permissions section in agent.yml: expected mapping, got %s. Falling back to 'normal'.",
+                type(permissions_raw).__name__,
+            )
+            permissions_raw = {}
+        # Stash a copy so /profile can rebuild effective config on switch
+        # without re-reading YAML.
+        self._raw_permissions = dict(permissions_raw)
+        requested_profile = permissions_raw.get("profile") or "normal"
+        if not isinstance(requested_profile, str):
+            logger.warning(
+                "Invalid permissions.profile in agent.yml: %r. Falling back to 'normal'.",
+                requested_profile,
+            )
+            requested_profile = "normal"
 
         try:
-            from datus.tools.permission.permission_config import PermissionConfig
+            get_profile(requested_profile)  # validate only; result used below
+            self.active_profile_name = requested_profile
+        except ValueError as e:
+            logger.warning(f"Invalid profile {requested_profile!r} in agent.yml: {e}. Falling back to 'normal'.")
+            self.active_profile_name = "normal"
 
-            return PermissionConfig.from_dict(permissions_raw)
+        # Remove the ``profile`` key so the helper only sees user overrides.
+        user_raw = {k: v for k, v in permissions_raw.items() if k != "profile"}
+        try:
+            return build_effective_config(self.active_profile_name, user_raw)
         except Exception as e:
-            logger.warning(f"Failed to initialize permissions config: {e}")
-            return None
+            # Fail closed: malformed ``permissions.rules`` almost always means the
+            # user was trying to *tighten* an otherwise permissive profile. If
+            # the selected profile is ``dangerous`` and we silently dropped the
+            # overrides we'd hand the user an ALLOW-everything posture — the
+            # opposite of their intent. Fall back to ``normal`` (plus logged
+            # warning) so the worst-case is an over-prompt, never an under-gate.
+            logger.warning(
+                f"Invalid permissions.rules in agent.yml: {e}. "
+                f"Falling back to 'normal' profile instead of '{self.active_profile_name}' to avoid "
+                f"silently weakening the posture."
+            )
+            self.active_profile_name = "normal"
+            return get_profile("normal")
 
     def _init_skills_config(self, skills_raw: Dict[str, Any]):
         """Initialize skills configuration.

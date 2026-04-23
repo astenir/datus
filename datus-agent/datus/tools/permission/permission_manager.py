@@ -14,6 +14,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, List, Optional
 
 from datus.tools.permission.permission_config import PermissionConfig, PermissionLevel, PermissionRule
+from datus.tools.permission.profiles import get_profile
 
 if TYPE_CHECKING:
     from datus.tools.func_tool.base import Tool
@@ -50,21 +51,60 @@ class PermissionManager:
         self,
         global_config: Optional[PermissionConfig] = None,
         node_overrides: Optional[Dict[str, PermissionConfig]] = None,
+        active_profile: str = "normal",
     ):
         """Initialize the permission manager.
 
         Args:
-            global_config: Global permission configuration from agent.yml
-            node_overrides: Per-node permission overrides (node_name -> config)
+            global_config: Global permission configuration. Typically the
+                result of ``profile_base.merge_with(user_rules)`` built by
+                :meth:`AgentConfig._init_permissions_config`.
+            node_overrides: Per-node permission overrides (node_name -> config).
+            active_profile: Name of the currently active profile. The rules
+                baked into ``global_config`` are authoritative; this string
+                is what the status bar displays and what :meth:`switch_profile`
+                mutates. Defaults to ``"normal"``.
         """
-        self.global_config = global_config or PermissionConfig()
+        # Copy the incoming config — ``get_profile`` returns shared module-level
+        # objects, and ``add_persistent_rule`` mutates ``global_config.rules``
+        # via ``insert(0, …)``. Without copying, every manager would share the
+        # same rules list and leak persistent rules into unrelated nodes.
+        self.global_config = self._copy_config(global_config) if global_config else PermissionConfig()
         self.node_overrides = node_overrides or {}
+        self.active_profile = active_profile
         self._permission_callback: Optional[Callable[[str, str, Dict[str, Any]], Awaitable[bool]]] = None
 
         # Cache for session-approved permissions (tool_category.tool_name -> approved)
         self._session_approvals: Dict[str, bool] = {}
 
-        logger.debug(f"PermissionManager initialized with {len(self.global_config.rules)} global rules")
+        # Rules injected at runtime that must survive profile switches.
+        # E.g. chat adds ``skills.skill_execute_command → ASK`` at setup time
+        # as a belt-and-braces safeguard; a ``/profile dangerous`` switch
+        # should not silently drop that safeguard.
+        self._persistent_rules: List[PermissionRule] = []
+
+        logger.debug(
+            f"PermissionManager initialized: profile={self.active_profile}, "
+            f"{len(self.global_config.rules)} global rules"
+        )
+
+    @staticmethod
+    def _copy_config(config: PermissionConfig) -> PermissionConfig:
+        """Return a shallow copy of a ``PermissionConfig`` with a fresh rules list.
+
+        Only copies when the input is actually a ``PermissionConfig``. Some
+        unit tests stub ``agent_config.permissions_config`` with a
+        ``MagicMock`` — reconstructing a ``PermissionConfig`` around mocked
+        attributes would fail Pydantic validation, so fall back to returning
+        the input untouched. The copy semantic only matters when the source
+        is a real profile singleton anyway.
+        """
+        if not isinstance(config, PermissionConfig):
+            return config
+        return PermissionConfig(
+            default_permission=config.default_permission,
+            rules=list(config.rules),
+        )
 
     def set_permission_callback(self, callback: Callable[[str, str, Dict[str, Any]], Awaitable[bool]]) -> None:
         """Set callback for ASK permission user prompts.
@@ -77,17 +117,24 @@ class PermissionManager:
     def get_effective_config(self, node_name: str) -> PermissionConfig:
         """Get effective permission config for a node (global + overrides).
 
-        Args:
-            node_name: Name of the agentic node
-
-        Returns:
-            Merged PermissionConfig
+        Node overrides without an explicit ``default`` / ``default_permission``
+        key inherit the profile base's default instead of ``PermissionConfig.from_dict``'s
+        built-in ``allow`` — otherwise an ``agentic_nodes.<name>.permissions.rules``
+        block quietly flips the node into ALLOW mode and bypasses the
+        surrounding profile posture.
         """
         node_override = self.node_overrides.get(node_name)
 
         # Convert dict to PermissionConfig if needed
         if node_override is not None and isinstance(node_override, dict):
-            node_override = PermissionConfig.from_dict(node_override)
+            raw = node_override
+            if "default" not in raw and "default_permission" not in raw:
+                dp = self.global_config.default_permission
+                raw = {
+                    **raw,
+                    "default_permission": dp.value if hasattr(dp, "value") else dp,
+                }
+            node_override = PermissionConfig.from_dict(raw)
 
         return self.global_config.merge_with(node_override)
 
@@ -268,6 +315,70 @@ class PermissionManager:
     def clear_session_approvals(self) -> None:
         """Clear all session approvals (e.g., on session end)."""
         self._session_approvals.clear()
+
+    def add_persistent_rule(self, rule: PermissionRule) -> None:
+        """Register a rule that must survive future ``switch_profile`` calls.
+
+        Used by nodes that inject belt-and-braces safeguards after setup
+        (e.g. ``skills.skill_execute_command → ASK`` in chat). Without this,
+        a runtime ``/profile dangerous`` rebuild of ``global_config`` would
+        silently drop the injected rule and weaken the shell-command gate.
+        """
+        self._persistent_rules.append(rule)
+        # Also install immediately so the current session picks it up.
+        if not any(r.tool == rule.tool and r.pattern == rule.pattern for r in self.global_config.rules):
+            self.global_config.rules.insert(0, rule)
+
+    def switch_profile(
+        self,
+        profile_name: str,
+        user_overrides: Optional[PermissionConfig] = None,
+    ) -> None:
+        """Switch to a different permission profile at runtime.
+
+        Replaces ``global_config`` with ``get_profile(profile_name)`` merged
+        with ``user_overrides`` (if any), updates ``active_profile``, and
+        clears ``_session_approvals`` so prior ``always-allow`` grants never
+        leak across profiles (spec decision #7). Any rules registered via
+        :meth:`add_persistent_rule` are re-applied after the rebuild so
+        runtime safeguards (chat's bash ASK, etc.) don't get dropped.
+
+        Args:
+            profile_name: One of ``"normal"``, ``"auto"``, ``"dangerous"``.
+            user_overrides: Optional user rules to layer on top (typically
+                reconstructed from ``agent.yml``'s ``permissions.rules``).
+
+        Raises:
+            DatusException: if ``profile_name`` is not a known profile.
+        """
+        try:
+            base = get_profile(profile_name)
+        except ValueError as exc:
+            from datus.utils.exceptions import DatusException, ErrorCode
+
+            raise DatusException(
+                code=ErrorCode.COMMON_CONFIG_ERROR,
+                message_args={"config_error": str(exc)},
+            ) from exc
+        # Copy before merging/mutating — ``get_profile`` returns shared
+        # module-level configs and ``merge_with`` without overrides returns
+        # the same instance, so mutating ``global_config.rules`` below would
+        # corrupt the singleton.
+        base_copy = self._copy_config(base)
+        self.global_config = base_copy.merge_with(user_overrides) if user_overrides else base_copy
+        # Re-inject persistent rules at the front so last-match-wins still
+        # lets explicit YAML rules override them, while bare profile defaults
+        # don't clobber their safety posture.
+        for rule in self._persistent_rules:
+            if not any(r.tool == rule.tool and r.pattern == rule.pattern for r in self.global_config.rules):
+                self.global_config.rules.insert(0, rule)
+        self.active_profile = profile_name
+        self._session_approvals.clear()
+        logger.info(
+            f"Profile switched to '{profile_name}': "
+            f"{len(self.global_config.rules)} effective rules, "
+            f"session approvals cleared"
+        )
 
     def _get_tool_category(self, tool_name: str) -> str:
         """Determine tool category from tool name.
