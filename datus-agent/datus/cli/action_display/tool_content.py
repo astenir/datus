@@ -960,15 +960,36 @@ def _build_describe_table(action: ActionHistory, verbose: bool) -> ToolCallConte
 
 
 def _build_read_query(action: ActionHistory, verbose: bool) -> ToolCallContent:
-    """read_query / query: show row × column count."""
+    """read_query / query: show row × column count.
+
+    Handles both raised-exception failures (``action.status == FAILED``) and
+    tool-reported failures (``FuncToolResult(success=0)``). The latter leaves
+    ``action.status`` at ``SUCCESS`` because no exception bubbled up, but the
+    icon must still flip to ✗ and the user must see the underlying error
+    rather than a phantom ``0 rows`` compact result.
+    """
     tc = make_base_content(action)
+    data = parse_output_data(action.output)
+    tool_error: Optional[str] = None
+    # Treat both the canonical ``success == 0`` shape AND an ``error``-only
+    # payload as failure. Some tool paths populate ``error`` without the
+    # ``success`` field (older adapters, nested results); without the second
+    # clause the compact mode still renders a success-looking result on a
+    # broken call.
+    if data is not None and (data.get("success") == 0 or data.get("error")):
+        tool_error = str(data.get("error") or "Failed")
+        tc.status_mark = "✗"
+
     if verbose:
         tc.args_lines = extract_args_markup(action)
         if action.output:
             tc.output_lines = _format_read_query_output_markup(action.output)
     else:
-        data = parse_output_data(action.output)
-        if data:
+        if action.status == ActionStatus.FAILED:
+            tc.compact_result = f"{action.output if isinstance(action.output, str) else 'Failed'}"
+        elif tool_error is not None:
+            tc.compact_result = tool_error
+        elif data:
             # Check top-level and nested result for rows / columns
             rows = data.get("original_rows")
             cols = None

@@ -117,6 +117,13 @@ class SkillManager:
         # subagent aliases still pick up class-level scoping.
         all_skills = [s for s in all_skills if s.is_allowed_for(node_name, node_class)]
 
+        # Exclude validator skills. They are driven exclusively by
+        # ValidationHook and must NOT be exposed in the main agent's
+        # <available_skills> list or via SkillFuncTool — otherwise the
+        # validator body would run twice (softly by the main agent + hardly
+        # by the hook). See ValidationHook design doc (Part §5.3).
+        all_skills = [s for s in all_skills if not s.is_validator()]
+
         logger.debug(f"Available skills for {node_name}: {[s.name for s in all_skills]}")
         return all_skills
 
@@ -155,6 +162,22 @@ class SkillManager:
         skill = self.registry.get_skill(skill_name)
         if not skill:
             return False, f"Skill '{skill_name}' not found", None
+
+        # Validator skills are driven exclusively by ``ValidationHook`` and
+        # must never be resolved through the main SkillFuncTool path. If a
+        # hallucinated / cached skill name leaks through, refusing here
+        # preserves the "runs once, by hook" invariant noted above at the
+        # ``get_available_skills`` filter.
+        if skill.is_validator():
+            logger.warning(
+                "Skill '%s' is a validator and cannot be loaded directly; it runs via ValidationHook only",
+                skill_name,
+            )
+            return (
+                False,
+                f"Skill '{skill_name}' is a validator — executed by ValidationHook, not loadable here",
+                None,
+            )
 
         # Enforce ``allowed_agents`` scope unless an authoring workflow opts
         # out. Matches both the alias and the canonical class name so that

@@ -221,6 +221,19 @@ class DBFuncTool:
         connector = self._get_connector(datasource)
         return connector.database_name
 
+    @staticmethod
+    def _active_database_of(connector: Any) -> str:
+        """Return the connector's active physical database as a plain string.
+
+        Some test fixtures use ``MagicMock`` connectors — attribute access
+        returns a ``Mock`` instance that is truthy, so a naive
+        ``getattr(c, "database_name", "") or ""`` leaks a Mock into the
+        ``TableTarget.database`` slot. Production connectors expose this as
+        a ``str``; this helper enforces that contract.
+        """
+        val = getattr(connector, "database_name", None)
+        return val if isinstance(val, str) else ""
+
     def _determine_field_order(self) -> Sequence[str]:
         dialect = getattr(self._primary_connector, "dialect", "") or ""
         fields: List[str] = []
@@ -1162,13 +1175,23 @@ class DBFuncTool:
                 # Commit to release locks (critical for SQLAlchemy-based connectors)
                 if hasattr(connector, "connection") and hasattr(connector.connection, "commit"):
                     connector.connection.commit()
-                return FuncToolResult(
-                    result={
-                        "message": "DDL executed successfully",
-                        "sql": cleaned,
-                        "datasource": datasource or self._default_datasource,
-                    }
+                from datus.validation.target_extractor import extract_ddl_target
+
+                effective_ds = datasource or self._default_datasource
+                target = extract_ddl_target(
+                    cleaned,
+                    effective_ds,
+                    active_database=self._active_database_of(connector),
+                    dialect=getattr(connector, "dialect", ""),
                 )
+                result_payload: Dict[str, Any] = {
+                    "message": "DDL executed successfully",
+                    "sql": cleaned,
+                    "datasource": effective_ds,
+                }
+                if target is not None:
+                    result_payload["deliverable_target"] = target.model_dump(by_alias=True, exclude_none=True)
+                return FuncToolResult(result=result_payload)
             else:
                 return FuncToolResult(success=0, error=result.error)
         except Exception as e:
@@ -1291,16 +1314,28 @@ class DBFuncTool:
                     "Note: the write has already been committed.",
                 )
 
-            return FuncToolResult(
-                result={
-                    "message": "Write executed successfully",
-                    "sql": normalized_sql,
-                    "sql_type": sql_type.value,
-                    "row_count": row_count,
-                    "datasource": datasource or self._default_datasource,
-                    "dry_run": dry_run,
-                }
+            from datus.validation.target_extractor import extract_dml_target
+
+            effective_ds = datasource or self._default_datasource
+            target = extract_dml_target(
+                normalized_sql,
+                effective_ds,
+                active_database=self._active_database_of(connector),
+                dialect=getattr(connector, "dialect", ""),
             )
+            result_payload: Dict[str, Any] = {
+                "message": "Write executed successfully",
+                "sql": normalized_sql,
+                "sql_type": sql_type.value,
+                "row_count": row_count,
+                "datasource": effective_ds,
+                "dry_run": dry_run,
+            }
+            if target is not None:
+                if row_count is not None:
+                    target = target.model_copy(update={"rows_affected": row_count})
+                result_payload["deliverable_target"] = target.model_dump(by_alias=True, exclude_none=True)
+            return FuncToolResult(result=result_payload)
         except Exception as e:
             return FuncToolResult(success=0, error=f"Write execution failed: {str(e)}")
 
@@ -1391,6 +1426,25 @@ class DBFuncTool:
                 "Do NOT fall back to a different target datasource — STOP and report this error to the user.",
             )
 
+        # Authoritative source row count — wrap the user's source_sql in a COUNT
+        # subquery so reconciliation does not need to re-run anything later.
+        # One extra query is cheap on OLTP engines and still acceptable on
+        # warehouse engines; see ValidationHook design doc §5.4.
+        source_row_count: Optional[int] = None
+        try:
+            if hasattr(source_conn, "execute_query"):
+                count_sql = f"SELECT COUNT(*) AS __datus_count FROM ({cleaned_sql}) AS __datus_src"
+                count_result = source_conn.execute_query(count_sql)
+                if count_result.success and count_result.sql_return:
+                    # execute_query returns a list of rows; first row, first col is the count
+                    first_row = count_result.sql_return[0]
+                    if isinstance(first_row, dict):
+                        source_row_count = int(next(iter(first_row.values())))
+                    else:
+                        source_row_count = int(first_row[0])
+        except Exception as e:
+            logger.debug("Source row count pre-check failed (non-fatal): %s", e)
+
         # Execute source query
         try:
             if not hasattr(source_conn, "execute_pandas"):
@@ -1407,6 +1461,13 @@ class DBFuncTool:
 
         # Check row limit
         row_count = len(df)
+        # If the wrapped COUNT(*) pre-check could not run (unsupported
+        # subquery on some engines, connector shape mismatch), the full
+        # source result is still materialized in ``df`` — use its row
+        # count as the authoritative ``source_row_count`` so Layer A's
+        # parity check remains meaningful instead of being skipped.
+        if source_row_count is None:
+            source_row_count = row_count
         if row_count > self._TRANSFER_MAX_ROWS:
             return FuncToolResult(
                 success=0,
@@ -1440,7 +1501,20 @@ class DBFuncTool:
                     "target_datasource": target_datasource or self._default_datasource,
                     "mode": mode,
                     "rows_transferred": 0,
+                    # Leave as None when the pre-count failed; 0 is a legitimate
+                    # verified value (empty source). See _build_transfer_target.
+                    "source_row_count": source_row_count,
+                    "source_row_count_verified": source_row_count is not None,
+                    "transferred_row_count": 0,
                     "batch_size": batch_size,
+                    "deliverable_target": self._build_transfer_target(
+                        source_datasource=source_datasource,
+                        target_datasource=target_datasource or self._default_datasource,
+                        target_table=target_table,
+                        source_row_count=source_row_count,
+                        transferred_row_count=0,
+                        target_active_database=self._active_database_of(target_conn),
+                    ),
                 }
             )
 
@@ -1500,6 +1574,16 @@ class DBFuncTool:
             )
 
         logger.info(f"Transferred {rows_written} rows to {target_table} (mode={mode})")
+        if source_row_count is None:
+            # Pre-count failed silently (logged at debug above). Do NOT
+            # backfill with rows_written — that would make Layer A's
+            # transfer-parity invariant trivially pass and defeat the point
+            # of verifying source vs target row counts. Leave as None so
+            # ``_run_row_count_parity`` skips instead of faking equality.
+            logger.warning(
+                "Transfer parity check will be skipped — source row pre-count was unavailable for transfer to %s",
+                target_table,
+            )
         return FuncToolResult(
             result={
                 "message": "Transfer completed successfully",
@@ -1509,9 +1593,64 @@ class DBFuncTool:
                 "target_datasource": target_datasource or self._default_datasource,
                 "mode": mode,
                 "rows_transferred": rows_written,
+                "source_row_count": source_row_count,
+                "source_row_count_verified": source_row_count is not None,
+                "transferred_row_count": rows_written,
                 "batch_size": batch_size,
+                "deliverable_target": self._build_transfer_target(
+                    source_datasource=source_datasource,
+                    target_datasource=target_datasource or self._default_datasource,
+                    target_table=target_table,
+                    source_row_count=source_row_count,
+                    transferred_row_count=rows_written,
+                    target_active_database=self._active_database_of(target_conn),
+                ),
             }
         )
+
+    @staticmethod
+    def _build_transfer_target(
+        source_datasource: str,
+        target_datasource: str,
+        target_table: str,
+        source_row_count: Optional[int],
+        transferred_row_count: int,
+        target_active_database: str = "",
+    ) -> Dict[str, Any]:
+        """Construct the ``deliverable_target`` payload for a transfer call.
+
+        ``source_row_count=None`` signals "could not verify" (pre-count SQL
+        failed). ``model_dump(exclude_none=True)`` drops it from the payload
+        so ``_run_row_count_parity`` treats the check as skipped instead of
+        trivially equal to ``transferred_row_count``.
+
+        ``TableTarget.database`` gets the *physical* database the transfer
+        wrote into — taken from the parsed ``target_table`` identifier when
+        it carries a ``db.schema.table`` qualifier, otherwise from the
+        target connector's active namespace (``target_active_database``),
+        with a final fallback to the datasource key for backward compat.
+        """
+        from datus.utils.sql_utils import parse_table_name_parts
+        from datus.validation.report import DBRef, TableTarget, TransferTarget
+
+        parts = parse_table_name_parts(target_table)
+        parsed_db = parts.get("database_name") or parts.get("catalog_name") or None
+        schema = parts.get("schema_name") or None
+        table = parts.get("table_name") or target_table
+        effective_database = parsed_db or target_active_database or target_datasource
+
+        tgt = TransferTarget(
+            source=DBRef(name=source_datasource),
+            target=TableTarget(
+                datasource=target_datasource,
+                database=effective_database,
+                db_schema=schema,
+                table=table,
+            ),
+            source_row_count=source_row_count,
+            transferred_row_count=transferred_row_count,
+        )
+        return tgt.model_dump(by_alias=True, exclude_none=True)
 
     # ==================== Migration Target Wrappers ====================
     #

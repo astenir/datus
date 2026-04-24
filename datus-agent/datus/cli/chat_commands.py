@@ -15,7 +15,7 @@ import re
 import subprocess
 import sys
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 
 from rich.markdown import Markdown
 from rich.panel import Panel
@@ -545,29 +545,42 @@ class ChatCommands:
                 final_action = None
 
             if final_action:
-                if (
-                    final_action.output
-                    and isinstance(final_action.output, dict)
-                    and final_action.status == ActionStatus.SUCCESS
-                ):
-                    sql = final_action.output.get("sql")
-                    response = final_action.output.get("response")
+                if final_action.output and isinstance(final_action.output, dict):
+                    is_success = final_action.status == ActionStatus.SUCCESS
+                    has_validation_report = bool(final_action.output.get("validation_report"))
 
-                    extracted_sql, extracted_output = self._extract_sql_and_output_from_content(response)
-                    sql = sql or extracted_sql
+                    if is_success:
+                        sql = final_action.output.get("sql")
+                        response = final_action.output.get("response")
 
-                    clean_output = self._resolve_clean_output(sql, response, extracted_output)
+                        extracted_sql, extracted_output = self._extract_sql_and_output_from_content(response)
+                        sql = sql or extracted_sql
 
-                    if sql:
-                        self.add_in_sql_context(sql, clean_output, incremental_actions)
+                        clean_output = self._resolve_clean_output(sql, response, extracted_output)
 
-                    self._render_final_response(final_action, skip_markdown_body=streamed_body)
+                        if sql:
+                            self.add_in_sql_context(sql, clean_output, incremental_actions)
 
-                    # Merge node_final_action back for history tracking
-                    all_actions = incremental_actions + ([node_final_action] if node_final_action else [])
-                    self.last_actions = all_actions
-                    self.all_turn_actions.append((message, all_actions))
-                    self._trace_verbose = False  # reset toggle for new chat round
+                    # Always render when either the action succeeded OR it failed
+                    # with a validation_report — otherwise users of exhausted-retry
+                    # runs don't see why their deliverable was blocked. The helper
+                    # itself gates downstream SQL / markdown rendering by status;
+                    # ``skip_markdown_body`` is forwarded so the streaming
+                    # context's already-flushed body does not get reprinted.
+                    if is_success or has_validation_report:
+                        self._render_final_response(final_action, skip_markdown_body=streamed_body)
+
+                    if is_success or has_validation_report:
+                        # Merge node_final_action back for history tracking.
+                        # FAILED-with-validation_report turns are kept so
+                        # Ctrl+O (``_full_screen_reprint``) can replay them;
+                        # without this, the new "render on FAILED" branch in
+                        # ``_render_turn_response`` is unreachable because
+                        # ``all_turn_actions`` never sees the failed turn.
+                        all_actions = incremental_actions + ([node_final_action] if node_final_action else [])
+                        self.last_actions = all_actions
+                        self.all_turn_actions.append((message, all_actions))
+                        self._trace_verbose = False  # reset toggle for new chat round
 
                     # End-of-turn full-screen reprint — mirrors the Ctrl+O
                     # toggle so the viewport ends up with a clean, fully
@@ -614,12 +627,19 @@ class ChatCommands:
                 accumulated body to the scrollback — without this guard the
                 user sees the same answer twice.
         """
-        if (
-            not final_action
-            or not final_action.output
-            or not isinstance(final_action.output, dict)
-            or final_action.status != ActionStatus.SUCCESS
-        ):
+        if not final_action or not final_action.output or not isinstance(final_action.output, dict):
+            return
+
+        # Render the validation report regardless of success/failure. When the
+        # retry budget is exhausted the node emits status=FAILED with a
+        # ``validation_report`` payload — that's precisely when the user needs
+        # to see *why* things blocked, so this cannot live behind the SUCCESS
+        # guard below.
+        validation_report = final_action.output.get("validation_report")
+        if validation_report:
+            self._display_validation_report(validation_report)
+
+        if final_action.status != ActionStatus.SUCCESS:
             return
 
         sql = final_action.output.get("sql")
@@ -647,6 +667,113 @@ class ChatCommands:
 
         if clean_output and not skip_markdown_body:
             self._display_markdown_response(clean_output)
+
+    def _display_validation_report(self, report: Any) -> None:
+        """Render a compact validation panel for ValidationHook output.
+
+        Shows a per-check list with icons / severity colors plus any warnings
+        (e.g. malformed validator skill output). Rendered between other
+        artifacts (SQL, semantic model) and the main markdown response so the
+        user sees it inline with the final assistant turn.
+
+        All interpolated user / connector / validator values are run through
+        :func:`rich.markup.escape` — they can legitimately contain ``[`` (list
+        reprs, error messages, path names) which Rich would otherwise parse
+        as markup tags (potentially raising ``MarkupError`` or swallowing
+        subsequent text).
+        """
+        from rich.markup import escape as _rich_escape
+
+        if not isinstance(report, dict):
+            return
+        checks = report.get("checks") or []
+        warnings = report.get("warnings") or []
+        if not checks and not warnings:
+            return
+
+        passed = sum(1 for c in checks if isinstance(c, dict) and c.get("passed"))
+        failed = sum(1 for c in checks if isinstance(c, dict) and not c.get("passed"))
+        has_blocking = any(
+            isinstance(c, dict) and not c.get("passed") and c.get("severity") == "blocking" for c in checks
+        )
+
+        if has_blocking:
+            border_style = "red"
+            header_mark = "✗"
+            header_label = "FAILED"
+        elif failed > 0:
+            border_style = "yellow"
+            header_mark = "⚠"
+            header_label = "WARNINGS"
+        else:
+            border_style = "green"
+            header_mark = "✓"
+            header_label = "PASSED"
+
+        target = report.get("target") or {}
+        target_str = ""
+        if isinstance(target, dict):
+            ttype = target.get("type")
+            if ttype == "table":
+                schema = target.get("schema") or target.get("db_schema")
+                tname = target.get("table")
+                db = target.get("database")
+                fqn = f"{schema}.{tname}" if schema else tname
+                target_str = f"table [cyan]{_rich_escape(str(db))}.{_rich_escape(str(fqn))}[/]"
+            elif ttype == "transfer":
+                src = (target.get("source") or {}).get("name", "?")
+                tgt = target.get("target") or {}
+                tgt_schema = tgt.get("schema") or tgt.get("db_schema")
+                tgt_name = tgt.get("table")
+                tgt_fqn = f"{tgt_schema}.{tgt_name}" if tgt_schema else tgt_name
+                target_str = (
+                    f"transfer [cyan]{_rich_escape(str(src))}[/] → "
+                    f"[cyan]{_rich_escape(str(tgt.get('database')))}.{_rich_escape(str(tgt_fqn))}[/]"
+                )
+            elif ttype == "session":
+                n = len(target.get("targets") or [])
+                target_str = f"session with [cyan]{n}[/] target(s)"
+
+        lines = []
+        header = f"[bold]{header_mark} {header_label}[/]"
+        if target_str:
+            header += f" — {target_str}"
+        lines.append(header)
+        lines.append(f"[dim]{passed} passed, {failed} failed[/]")
+
+        for c in checks:
+            if not isinstance(c, dict):
+                continue
+            mark = "✓" if c.get("passed") else "✗"
+            if c.get("passed"):
+                color = "green"
+            elif c.get("severity") == "blocking":
+                color = "red"
+            else:
+                color = "yellow"
+            source = _rich_escape(str(c.get("source", "?")))
+            name = _rich_escape(str(c.get("name", "?")))
+            detail_parts = []
+            observed = c.get("observed")
+            if observed:
+                detail_parts.append(_rich_escape(f"observed={observed}"))
+            if not c.get("passed"):
+                err = c.get("error")
+                if err:
+                    detail_parts.append(_rich_escape(str(err)))
+            detail = f" — [dim]{'; '.join(detail_parts)}[/]" if detail_parts else ""
+            lines.append(f"  [{color}]{mark}[/] {name} [dim]({source})[/]{detail}")
+
+        for w in warnings:
+            lines.append(f"  [yellow]⚠[/] [dim]{_rich_escape(str(w))}[/]")
+
+        panel = Panel(
+            "\n".join(lines),
+            title="Validation Report",
+            border_style=border_style,
+            expand=False,
+        )
+        self.cli.console.print(panel)
 
     def _get_turn_token_usage_from_node(self, node) -> Optional[dict]:
         """Get detailed token usage from the node's session manager."""
@@ -1021,13 +1148,24 @@ class ChatCommands:
         action_display = ActionHistoryDisplay(self.console, live_state=getattr(self.cli, "live_state", None))
 
         def _render_turn_response(turn_actions: List[ActionHistory]) -> None:
-            """Callback to render the final response for each turn."""
+            """Callback to render the final response for each turn.
+
+            Render on SUCCESS, or on FAILED when a ``validation_report`` was
+            attached — otherwise Ctrl+O verbose mode hides blocking validation
+            details from runs whose retry budget was exhausted.
+            """
             final_action = self._find_node_final_action(turn_actions)
-            if final_action and final_action.depth == 0 and final_action.status == ActionStatus.SUCCESS:
-                # The viewport was just cleared — render the final Markdown
-                # body here. ``skip_markdown_body`` stays False because the
-                # streaming context's scrollback push is not visible in the
-                # viewport after the clear.
+            if not final_action or final_action.depth != 0:
+                return
+            # The viewport was just cleared — render the final Markdown
+            # body here. ``skip_markdown_body`` stays False because the
+            # streaming context's scrollback push is not visible in the
+            # viewport after the clear.
+            if final_action.status == ActionStatus.SUCCESS:
+                self._render_final_response(final_action)
+                return
+            output = final_action.output if isinstance(final_action.output, dict) else None
+            if output and output.get("validation_report"):
                 self._render_final_response(final_action)
 
         if self.all_turn_actions:

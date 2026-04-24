@@ -1,63 +1,80 @@
 ---
 name: table-validation
-description: Validate warehouse tables after DDL or writes using existing database tools for schema checks, row-count gates, null ratios, ranges, accepted values, regex checks, and duplicate detection
+description: Validate the column contract of a newly written table — column set, types, and nullability match expectations. Object existence and row counts are handled by the builtin layer and are out of scope. Data-content assertions belong to project-level validator skills.
 tags:
   - data-engineering
   - validation
   - schema
-  - data-quality
-  - sql
-version: "1.0.0"
+  - contract
+version: "3.0.0"
 user_invocable: false
 disable_model_invocation: false
 allowed_agents:
   - gen_table
   - gen_job
+kind: validator
+trigger:
+  - on_end
+severity: blocking
+mode: llm
+targets: []
 ---
 
 # Table Validation
 
-Use this skill when a table has been created or written and you need to verify both:
+Verify the **column contract** of a table that was just created or written:
+columns present, declared types correct, nullability correct. This skill is
+deliberately narrow.
 
-- schema contract
-- post-write data quality
+## Target shape (important)
 
-This skill assumes you can use existing database tools such as `describe_table`, `get_table_ddl`, and `read_query`. Prefer direct validation queries over prose reasoning.
+`ValidationHook.on_end` invokes this skill with the **whole session**, not
+a single table. The target you receive is a `SessionTarget` whose
+`.targets` is a list of `TableTarget` / `TransferTarget` records — one
+per mutating tool call in the run. When a node writes multiple tables
+(CTAS scaffolding, layered ETL), **loop over `session.targets`** and run
+the checks below independently for each `TableTarget`. Skip
+`TransferTarget` entries — they are covered by
+`migration-reconciliation`. Emit one `CheckResult` per (target, check)
+pair so the retry prompt can tell the agent which specific table failed.
 
-## When to use this skill
+**Explicitly out of scope**:
 
-Activate when you need to validate one or more of:
+- *Object exists* and *row count > 0* — already checked by the builtin
+  validation layer before this skill runs. The hook supplies you with those
+  results in the precheck context; do not re-run `describe_table` just to
+  confirm the table exists.
+- Data-content assertions (null ratios, value ranges, accepted values, regex
+  format, duplicates, uniqueness). CTAS from an empty source, idempotent
+  upserts, schema-only bootstrapping, and partition scaffolding are legitimate
+  patterns that produce zero-row tables; blocking on those would cause false
+  positives. If you need data-content rules for a specific table, author a
+  project-level validator skill under `./.datus/skills/` or
+  `~/.datus/skills/` with a `targets:` filter.
 
-- object existence
-- missing / extra columns
-- type or nullability mismatches
-- row-count gates
-- null ratios
-- numeric ranges
-- accepted values
-- regex / format rules
-- uniqueness / duplicate keys
+## Checks in scope
 
-## Core workflow
+1. **Column set** — every expected column name appears in the actual table,
+   and (when strict match is requested) no unexpected columns appear.
+2. **Types** — each expected column's declared type matches.
+3. **Nullability** — each expected column's nullability matches.
 
-1. Confirm the exact target table and expected grain.
-2. Run schema checks first.
-3. Run row-count and cheap aggregate checks next.
-4. Run duplicate and format checks after the cheap gates pass.
-5. Return a compact pass / fail report with observed values and failing sample filters when useful.
+## When there is no explicit column contract
 
-## Checklist
+If the caller did not supply an expected column set / type map, there is
+**nothing for this skill to check** — emit the JSON block with
+`"checks": []` and return. The builtin layer has already confirmed existence
+and row count; duplicating that check here only produces false negatives when
+catalog/database/schema identifiers are ambiguous.
 
-- Validation sequence: [references/checklist.md](references/checklist.md)
+## Tools
 
-Use the checklist to decide which queries to run with existing tools. Do not wait for prebuilt templates; write the smallest useful validation SQL directly with `read_query`.
+Use `describe_table` and `get_table_ddl` to introspect the target. Do **not**
+run `read_query` for counting rows or sampling data — out of scope.
 
-## Output expectations
+## Output
 
-At minimum, return:
-
-- target table
-- executed checks
-- observed values
-- pass / fail status
-- blocking issues that must be fixed before downstream use
+Emit the standard validator JSON block (see the output contract appended by
+the hook). Use `severity: "blocking"` only for column contract violations
+that would break downstream consumers. Mismatches that are cosmetic or
+widening-safe should be `severity: "advisory"`.

@@ -69,15 +69,21 @@ Activate when you need to:
 
 ### Phase 5: Reconcile
 
-Run all reconciliation checks using `read_query(database=...)` on both source and target. Checks must be executed in this order:
+Cross-database reconciliation (row count, null ratio, min/max, distinct
+count, duplicate key, sample diff, numeric aggregates) is normally driven
+by the `migration-reconciliation` validator skill via ValidationHook at
+the end of the agent run — **provided
+`agent.validation.skill_validators_enabled` is on** (the default). When
+the validator is enabled, focus on correct transfer execution and let
+the hook drive reconciliation; if it reports blocking failures they will
+be injected back into this conversation so you can fix the transfer and
+retry.
 
-1. **Row count** - Total row count comparison
-2. **Null ratio** - Null count per column comparison
-3. **Min/max** - Range comparison for numeric and date columns
-4. **Distinct count** - Cardinality comparison for key columns
-5. **Duplicate key** - Check for duplicate keys in target
-6. **Sample diff** - Key-based row sample comparison (top 10)
-7. **Numeric aggregate** - SUM/AVG comparison for numeric columns
+**When skill validators are disabled**, the hook cannot reconcile for
+you. In that case you MUST run row-count parity and at least one
+sanity-check query (e.g. distinct-count on the join key) manually using
+`read_query(datasource=<source>)` vs `read_query(datasource=<target>)`
+before declaring the migration done.
 
 ### Phase 6: Report
 
