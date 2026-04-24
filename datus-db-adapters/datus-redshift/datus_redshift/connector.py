@@ -1494,12 +1494,12 @@ class RedshiftConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedView
             errors.append("DISTRIBUTED BY ... BUCKETS is StarRocks syntax; Redshift uses DISTKEY")
         if "ENGINE =" in upper or "ENGINE=" in upper:
             errors.append("ENGINE clause is MySQL/ClickHouse syntax; not supported by Redshift")
-        if "SERIAL" in upper:
-            # Check as a word-boundary match to avoid false positives on column names
-            import re as _re
+        import re as _re
 
-            if _re.search(r"\bSERIAL\b", upper):
-                errors.append("Redshift does not support SERIAL; use IDENTITY(1,1) instead")
+        # Word-boundary match covers SERIAL, BIGSERIAL, SMALLSERIAL while avoiding
+        # false positives on column names like SERIAL_NUMBER.
+        if _re.search(r"\b(?:BIG|SMALL)?SERIAL\b", upper):
+            errors.append("Redshift does not support SERIAL/BIGSERIAL/SMALLSERIAL; use IDENTITY(1,1) instead")
         if "VARCHAR(MAX)" in upper.replace(" ", ""):
             errors.append("Redshift does not support VARCHAR(MAX); use VARCHAR(<explicit length up to 65535>)")
         return errors

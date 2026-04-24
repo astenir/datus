@@ -24,7 +24,7 @@ class TestDescribeMigrationCapabilities:
     def test_supported_true(self, connector):
         assert connector.describe_migration_capabilities()["supported"] is True
 
-    def test_dialect_family_postgres_like(self, connector):
+    def test_dialect_family_redshift(self, connector):
         assert connector.describe_migration_capabilities()["dialect_family"] == "redshift"
 
     def test_type_hints_mention_distkey_sortkey(self, connector):

@@ -9,7 +9,7 @@ after a migration transfer. Dialect-agnostic: uses standard SQL only.
 """
 
 import re
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from datus_db_core.logging import get_logger
 
@@ -49,6 +49,7 @@ def build_reconciliation_checks(
     target_table: str,
     columns: List[dict],
     key_columns: Optional[List[str]] = None,
+    quote_identifier: Optional[Callable[[str], str]] = None,
 ) -> List[dict]:
     """Build reconciliation check SQL pairs for source vs target comparison.
 
@@ -58,10 +59,15 @@ def build_reconciliation_checks(
         columns: List of column defs with name, type, nullable.
         key_columns: Optional list of key/PK column names. If None or empty,
                      key-dependent checks (duplicate_key, sample_diff) are skipped.
+        quote_identifier: Optional callable to quote identifiers per dialect.
+                          Defaults to double-quote quoting (ANSI SQL). Pass a
+                          backtick-quoting callable for MySQL/StarRocks/ClickHouse,
+                          or the connector's own quote_identifier when available.
 
     Returns:
         List of check dicts, each with: name, source_query, target_query.
     """
+    quote = quote_identifier or _quote_identifier
     checks = []
     has_keys = bool(key_columns)
 
@@ -80,10 +86,10 @@ def build_reconciliation_checks(
         src_parts = []
         tgt_parts = []
         for col in nullable_cols:
-            qname = _quote_identifier(col["name"])
+            qname = quote(col["name"])
             alias = col["name"].replace('"', "")
-            src_parts.append(f"COUNT(*) - COUNT({qname}) AS {_quote_identifier(alias + '_null_count')}")
-            tgt_parts.append(f"COUNT(*) - COUNT({qname}) AS {_quote_identifier(alias + '_null_count')}")
+            src_parts.append(f"COUNT(*) - COUNT({qname}) AS {quote(alias + '_null_count')}")
+            tgt_parts.append(f"COUNT(*) - COUNT({qname}) AS {quote(alias + '_null_count')}")
 
         src_parts.append("COUNT(*) AS total")
         tgt_parts.append("COUNT(*) AS total")
@@ -102,10 +108,10 @@ def build_reconciliation_checks(
         src_parts = []
         tgt_parts = []
         for col in minmax_cols:
-            qname = _quote_identifier(col["name"])
+            qname = quote(col["name"])
             alias = col["name"].replace('"', "")
-            min_alias = _quote_identifier(alias + "_min")
-            max_alias = _quote_identifier(alias + "_max")
+            min_alias = quote(alias + "_min")
+            max_alias = quote(alias + "_max")
             src_parts.append(f"MIN({qname}) AS {min_alias}, MAX({qname}) AS {max_alias}")
             tgt_parts.append(f"MIN({qname}) AS {min_alias}, MAX({qname}) AS {max_alias}")
 
@@ -121,7 +127,7 @@ def build_reconciliation_checks(
     distinct_cols = key_columns if has_keys else [c["name"] for c in columns]
     if distinct_cols:
         if has_keys and len(distinct_cols) > 1:
-            key_expr = ", ".join(_quote_identifier(c) for c in distinct_cols)
+            key_expr = ", ".join(quote(c) for c in distinct_cols)
             checks.append(
                 {
                     "name": "distinct_count",
@@ -130,12 +136,8 @@ def build_reconciliation_checks(
                 }
             )
         else:
-            src_parts = [
-                f"COUNT(DISTINCT {_quote_identifier(c)}) AS {_quote_identifier(c + '_distinct')}" for c in distinct_cols
-            ]
-            tgt_parts = [
-                f"COUNT(DISTINCT {_quote_identifier(c)}) AS {_quote_identifier(c + '_distinct')}" for c in distinct_cols
-            ]
+            src_parts = [f"COUNT(DISTINCT {quote(c)}) AS {quote(c + '_distinct')}" for c in distinct_cols]
+            tgt_parts = [f"COUNT(DISTINCT {quote(c)}) AS {quote(c + '_distinct')}" for c in distinct_cols]
             checks.append(
                 {
                     "name": "distinct_count",
@@ -146,7 +148,7 @@ def build_reconciliation_checks(
 
     # 5. Duplicate key — only if key columns provided
     if has_keys:
-        quoted_keys = [_quote_identifier(k) for k in key_columns]
+        quoted_keys = [quote(k) for k in key_columns]
         key_str = ", ".join(quoted_keys)
         if len(key_columns) > 1:
             all_keys = ", ".join(quoted_keys)
@@ -180,9 +182,9 @@ def build_reconciliation_checks(
 
     # 6. Sample diff — key-based sample, only if key columns provided
     if has_keys:
-        quoted_keys = [_quote_identifier(k) for k in key_columns]
+        quoted_keys = [quote(k) for k in key_columns]
         key_order = ", ".join(quoted_keys)
-        all_cols = ", ".join(_quote_identifier(c["name"]) for c in columns)
+        all_cols = ", ".join(quote(c["name"]) for c in columns)
         checks.append(
             {
                 "name": "sample_diff",
@@ -197,10 +199,10 @@ def build_reconciliation_checks(
         src_parts = []
         tgt_parts = []
         for col in numeric_cols:
-            qname = _quote_identifier(col["name"])
+            qname = quote(col["name"])
             alias = col["name"].replace('"', "")
-            sum_alias = _quote_identifier(alias + "_sum")
-            avg_alias = _quote_identifier(alias + "_avg")
+            sum_alias = quote(alias + "_sum")
+            avg_alias = quote(alias + "_avg")
             src_parts.append(f"SUM({qname}) AS {sum_alias}, AVG({qname}) AS {avg_alias}")
             tgt_parts.append(f"SUM({qname}) AS {sum_alias}, AVG({qname}) AS {avg_alias}")
 

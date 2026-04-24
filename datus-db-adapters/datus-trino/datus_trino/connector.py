@@ -382,7 +382,14 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin, MigrationTargetMi
             )
             rows = getattr(result, "sql_return", None) or []
             if rows and isinstance(rows, list) and rows[0]:
-                connector_name = str(rows[0][0] if isinstance(rows[0], (list, tuple)) else rows[0]).lower()
+                first = rows[0]
+                if isinstance(first, dict):
+                    raw = first.get("connector_name", "")
+                elif isinstance(first, (list, tuple)):
+                    raw = first[0] if first else ""
+                else:
+                    raw = first
+                connector_name = str(raw).lower()
                 if "iceberg" in connector_name:
                     return "iceberg"
                 if "delta" in connector_name:

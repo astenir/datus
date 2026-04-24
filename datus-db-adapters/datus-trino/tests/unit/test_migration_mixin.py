@@ -71,11 +71,10 @@ class TestDescribeMigrationCapabilitiesGeneric:
         monkeypatch.setattr(connector, "_detect_catalog_type", lambda: "unknown")
         return connector
 
-    def test_supported_with_note(self, generic_connector):
+    def test_supported_generic_capabilities(self, generic_connector):
         result = generic_connector.describe_migration_capabilities()
         assert result["supported"] is True
         assert result["dialect_family"] == "trino-generic"
-        assert "note" in result or len(result.get("type_hints", {})) >= 0
 
     def test_detection_failure_does_not_raise(self, connector, monkeypatch):
         def _raise():
@@ -85,6 +84,7 @@ class TestDescribeMigrationCapabilitiesGeneric:
         # Should swallow exception and return generic
         result = connector.describe_migration_capabilities()
         assert result["supported"] is True
+        assert result["dialect_family"] == "trino-generic"
 
 
 class TestValidateDdl:

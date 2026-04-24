@@ -156,9 +156,10 @@ class SQLAlchemyConnector(BaseSqlConnector, MigrationTargetMixin):
     def close(self):
         """Dispose the engine and its connection pool."""
         try:
-            if self.engine:
-                self.engine.dispose()
-                self.engine = None
+            engine = getattr(self, "engine", None)
+            if engine:
+                engine.dispose()
+            self.engine = None
             self._owns_engine = False
         except Exception as e:
             logger.warning(f"Error disposing engine: {str(e)}")

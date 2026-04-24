@@ -475,7 +475,7 @@ class ClickHouseConnector(SQLAlchemyConnector, MigrationTargetMixin):
             "type_hints": {
                 "VARCHAR": "String",
                 "TEXT": "String",
-                "CHAR": "FixedString(n)",
+                "CHAR": "String (use FixedString(n) for fixed-length semantics)",
                 "BOOLEAN": "UInt8",
                 "TIMESTAMP": "DateTime64(3)",
                 "DECIMAL(p,s)": "Decimal(p,s)",

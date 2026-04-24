@@ -480,9 +480,10 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
                 "CREATE TABLE db.t (\n"
                 "  id BIGINT NOT NULL,\n"
                 "  name VARCHAR(255)\n"
-                ")\n"
+                ") ENGINE=OLAP\n"
                 "DUPLICATE KEY(id)\n"
-                "DISTRIBUTED BY HASH(id) BUCKETS 10"
+                "DISTRIBUTED BY HASH(id) BUCKETS 10\n"
+                'PROPERTIES ("replication_num" = "1")'
             ),
         }
 
