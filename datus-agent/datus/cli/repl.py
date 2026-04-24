@@ -48,7 +48,14 @@ from datus.cli.autocomplete import (
 )
 from datus.cli.bi_dashboard import BiDashboardCommands
 from datus.cli.chat_commands import ChatCommands
-from datus.cli.cli_styles import PASTE_COLLAPSE_THRESHOLD, print_error, print_info, print_success, print_warning
+from datus.cli.cli_styles import (
+    PASTE_COLLAPSE_THRESHOLD,
+    STATUS_BAR_STYLE,
+    print_error,
+    print_info,
+    print_success,
+    print_warning,
+)
 from datus.cli.context_commands import ContextCommands
 from datus.cli.effort_commands import EffortCommands
 from datus.cli.language_commands import LanguageCommands
@@ -242,6 +249,10 @@ class DatusCLI:
         from datus.cli.datasource_commands import DatasourceCommands
 
         self.datasource_commands = DatasourceCommands(self)
+
+        from datus.cli.background_sync import BackgroundSchemaSyncManager
+
+        self.bg_sync = BackgroundSchemaSyncManager(self)
         self._status_bar_provider = StatusBarProvider(self)
 
         # Dictionary of available commands - created after handlers are initialized
@@ -334,15 +345,21 @@ class DatusCLI:
 
         @kb.add("tab")
         def _(event):
-            """The Tab key triggers completion only, not navigation."""
+            """Tab confirms the highlighted completion (arrow keys navigate)."""
             buffer = event.app.current_buffer
 
             if buffer.complete_state:
-                # If the menu is already open, close it.
-                buffer.complete_next()
+                cs = buffer.complete_state
+                comp = cs.current_completion
+                if comp is not None:
+                    buffer.apply_completion(comp)
+                else:
+                    buffer.complete_next()
+                    cs = buffer.complete_state
+                    if cs and cs.current_completion is not None:
+                        buffer.apply_completion(cs.current_completion)
             else:
-                # If the menu is incomplete, trigger completion.
-                buffer.start_completion(select_first=False)
+                buffer.start_completion(select_first=True)
 
         @kb.add("s-tab")
         def _(event):
@@ -442,56 +459,7 @@ class DatusCLI:
         return merge_styles(
             [
                 style_from_pygments_cls(CustomPygmentsStyle),
-                Style.from_dict(
-                    {
-                        "prompt": "ansigreen bold",
-                        "input-prompt": "ansigreen bold",
-                        "input-prompt.busy": "ansibrightblack",
-                        "input-prompt.hint": "italic #9a9aaa",
-                        "input-area": "",
-                        "status-bar": "#9a9aaa",
-                        "status-bar.brand": "#ffd866 bold",
-                        "status-bar.plan": "#9a9aaa",
-                        "status-bar.profile": "#9a9aaa",
-                        "status-bar.profile.auto": "ansicyan",
-                        "status-bar.profile.dangerous": "ansired",
-                        "status-bar.sep": "#9a9aaa",
-                        "status-bar.agent": "#9a9aaa",
-                        "status-bar.connector": "#9a9aaa",
-                        "status-bar.model": "#9a9aaa",
-                        "status-bar.tokens": "#9a9aaa",
-                        "status-bar.ctx": "#9a9aaa",
-                        "status-bar.running": "#ffb86c bold",
-                        "status-bar.dot": "#ffb86c bold",
-                        "separator": "#444444",
-                        # Slash-command autocomplete popup. Every row pins
-                        # ``bg:default`` so the menu blends into the terminal
-                        # palette instead of prompt_toolkit's stock teal-on-
-                        # white block. prompt_toolkit's default style for
-                        # ``.current`` ships with ``reverse`` (swaps fg/bg,
-                        # producing a highlighted bar); ``noreverse`` strips
-                        # that so the selection is conveyed by text color
-                        # alone — bold bright cyan — with no colored band.
-                        "completion-menu": "bg:default",
-                        "completion-menu.completion": "bg:default fg:default",
-                        "completion-menu.completion.current": "noreverse bg:default fg:ansibrightcyan bold",
-                        "completion-menu.meta.completion": "bg:default fg:ansibrightblack",
-                        "completion-menu.meta.completion.current": "noreverse bg:default fg:ansibrightcyan bold",
-                        "hint": "#9a9aaa italic",
-                        # Pinned subagent/tool rolling-window lines. Dim grey
-                        # to match the scrollback ``[dim]`` styling used by the
-                        # Rich renderers so the visual weight stays consistent
-                        # between the pinned region and the append area.
-                        "subagent-live": "#6e6e6e",
-                        "processing-live": "#6e6e6e",
-                        # Pinned subagent header: plain cyan on the
-                        # "⏺ subagent_type" prefix, default colour on the
-                        # parenthesised goal so the prompt text does not
-                        # compete visually with the subagent name.
-                        "subagent-header-live": "ansicyan",
-                        "subagent-header-goal-live": "",
-                    }
-                ),
+                Style.from_dict(STATUS_BAR_STYLE),
             ]
         )
 
@@ -552,9 +520,17 @@ class DatusCLI:
         def _tab(event):  # noqa: ANN001 - prompt_toolkit signature
             buffer = event.app.current_buffer
             if buffer.complete_state:
-                buffer.complete_next()
+                cs = buffer.complete_state
+                comp = cs.current_completion
+                if comp is not None:
+                    buffer.apply_completion(comp)
+                else:
+                    buffer.complete_next()
+                    cs = buffer.complete_state
+                    if cs and cs.current_completion is not None:
+                        buffer.apply_completion(cs.current_completion)
             else:
-                buffer.start_completion(select_first=False)
+                buffer.start_completion(select_first=True)
 
         @self.tui_app.key_bindings.add("s-tab")
         def _s_tab(event):  # noqa: ANN001
@@ -933,6 +909,7 @@ class DatusCLI:
             self.agent_commands.update_agent_reference()
             self._pre_load_storage()
             self._workflow_runner = self._create_workflow_runner()
+            self._maybe_schedule_startup_sync()
             # self.console.print("[dim]Agent initialized successfully in background[/]")
         except Exception as e:
             self.console.print(f"[red]Error:[/]Failed to initialize agent in background: {str(e)}")
@@ -944,6 +921,23 @@ class DatusCLI:
         """Preload rag to avoid unnecessary printing"""
         if self.at_completer:
             self.at_completer.reload_data()
+
+    def _maybe_schedule_startup_sync(self) -> None:
+        """Kick off a one-shot background metadata sync for the default
+        datasource so the first ``@Table`` completion after launch reflects
+        any tables added since the last ``datus agent init``. Gated by
+        ``agent.autocomplete.background_sync_on_startup``.
+        """
+        bg_sync = getattr(self, "bg_sync", None)
+        if bg_sync is None:
+            return
+        ac = getattr(self.agent_config, "autocomplete", None)
+        if ac is None or not getattr(ac, "background_sync_on_startup", False):
+            return
+        current = getattr(self.agent_config, "current_datasource", "")
+        if not current:
+            return
+        bg_sync.schedule(datasource=current, reason="startup")
 
     # Historical ``_rebuild_llm_after_switch`` removed. ``/model`` now persists
     # the new target via :meth:`AgentConfig.set_active_*` and the Agent reads
@@ -1715,6 +1709,9 @@ class DatusCLI:
                 self.db_connector.close()
             except Exception as e:
                 logger.warning(f"Database connection closed failed, reason:{e}")
+        bg_sync = getattr(self, "bg_sync", None)
+        if bg_sync is not None:
+            bg_sync.shutdown()
         return EXIT_SENTINEL
 
     def _cmd_profile(self, args: str) -> None:
