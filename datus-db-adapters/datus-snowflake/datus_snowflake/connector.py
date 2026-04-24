@@ -30,6 +30,7 @@ from datus_db_core import (
     ErrorCode,
     ExecuteSQLResult,
     MaterializedViewSupportMixin,
+    MigrationTargetMixin,
     SchemaNamespaceMixin,
     get_logger,
     list_to_in_str,
@@ -88,7 +89,7 @@ def _handle_snowflake_exception(e: Exception, sql: str = "") -> DatusDbException
         return DatusDbException(ErrorCode.DB_FAILED, message_args={"error_message": str(e)})
 
 
-class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedViewSupportMixin):
+class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedViewSupportMixin, MigrationTargetMixin):
     """
     Connector for Snowflake databases using native Snowflake SDK.
 
@@ -962,3 +963,82 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
         else:
             full_name = f'"{table_name}"'
         return full_name if not database_name else f'"{database_name}".{full_name}'
+
+    # ==================== MigrationTargetMixin ====================
+
+    def describe_migration_capabilities(self) -> Dict[str, Any]:
+        return {
+            "supported": True,
+            "dialect_family": "snowflake",
+            "requires": [],  # Snowflake handles partitioning transparently (micro-partitions)
+            "forbids": [
+                "DUPLICATE KEY (StarRocks-only)",
+                "DISTRIBUTED BY HASH ... BUCKETS (StarRocks-only)",
+                "ENGINE = MergeTree (ClickHouse-only)",
+            ],
+            "type_hints": {
+                "unbounded VARCHAR": "VARCHAR (up to 16MB; length often omitted)",
+                "TEXT": "VARCHAR or TEXT (aliases)",
+                "JSON": "VARIANT (preferred for semi-structured data)",
+                "JSONB": "VARIANT",
+                "MAP": "OBJECT",
+                "ARRAY": "ARRAY",
+                "HUGEINT": "NUMBER(38,0)",
+                "LARGEINT": "NUMBER(38,0)",
+                "DECIMAL(p,s)": "NUMBER(p,s)",
+                "TIMESTAMP WITH TIME ZONE": "TIMESTAMP_TZ",
+                "TIMESTAMP": "TIMESTAMP_NTZ",
+                "BOOLEAN": "BOOLEAN",
+                "UUID": "VARCHAR(36)",
+                "clustering": "Optional WITH CLUSTER BY (<cols>) for large tables queried by date/tenant",
+            },
+            "example_ddl": (
+                "CREATE TABLE db.schema.t (\n"
+                "  id NUMBER(38,0),\n"
+                "  event_date DATE,\n"
+                "  payload VARIANT,\n"
+                "  created_at TIMESTAMP_NTZ\n"
+                ")\n"
+                "CLUSTER BY (event_date)"
+            ),
+        }
+
+    def suggest_table_layout(self, columns: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Suggest optional CLUSTER BY on date/timestamp columns for larger tables."""
+        if not columns:
+            return {}
+        import re as _re
+
+        for col in columns:
+            base_type = _re.sub(r"\(.*\)", "", str(col.get("type", "")).upper()).strip()
+            if base_type in ("DATE", "DATETIME", "TIMESTAMP", "TIMESTAMP_NTZ", "TIMESTAMP_TZ", "TIMESTAMP_LTZ"):
+                return {"cluster_by": [col["name"]]}
+        # No date column — defer to LLM / user judgment
+        return {}
+
+    def validate_ddl(self, ddl: str) -> List[str]:
+        errors: List[str] = []
+        upper = ddl.upper()
+        if "DUPLICATE KEY" in upper:
+            errors.append("DUPLICATE KEY is StarRocks-only syntax; Snowflake uses CLUSTER BY")
+        if "DISTRIBUTED BY" in upper:
+            errors.append("DISTRIBUTED BY is StarRocks/Greenplum syntax; Snowflake uses CLUSTER BY")
+        if "ENGINE =" in upper or "ENGINE=" in upper:
+            errors.append("ENGINE clause is MySQL/ClickHouse syntax; not supported by Snowflake")
+        return errors
+
+    def map_source_type(self, source_dialect: str, source_type: str) -> Optional[str]:
+        import re as _re
+
+        base = _re.sub(r"\(.*\)", "", source_type.strip().upper()).strip()
+        overrides = {
+            "HUGEINT": "NUMBER(38,0)",
+            "LARGEINT": "NUMBER(38,0)",
+            "JSON": "VARIANT",
+            "JSONB": "VARIANT",
+            "MAP": "OBJECT",
+            "STRUCT": "OBJECT",
+            "DATETIME": "TIMESTAMP_NTZ",
+            "TIMESTAMPTZ": "TIMESTAMP_TZ",
+        }
+        return overrides.get(base)

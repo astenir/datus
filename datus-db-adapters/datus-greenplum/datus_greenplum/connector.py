@@ -4,12 +4,14 @@
 
 from typing import Any, Dict, List, Optional, Set, Union, override
 
-from datus_db_core import get_logger
+from datus_db_core import MigrationTargetMixin, get_logger
 from datus_postgresql import PostgreSQLConnector
 
 from .config import GreenplumConfig
 
 logger = get_logger(__name__)
+
+_GREENPLUM_INTEGER_TYPES = frozenset({"INT", "INTEGER", "BIGINT", "SMALLINT", "INT2", "INT4", "INT8"})
 
 
 def _escape_literal(value: str) -> str:
@@ -17,7 +19,7 @@ def _escape_literal(value: str) -> str:
     return value.replace("'", "''")
 
 
-class GreenplumConnector(PostgreSQLConnector):
+class GreenplumConnector(PostgreSQLConnector, MigrationTargetMixin):
     """Greenplum database connector.
 
     Greenplum is based on PostgreSQL and uses the same wire protocol.
@@ -181,3 +183,93 @@ class GreenplumConnector(PostgreSQLConnector):
             logger.warning(f"Could not get storage info for {schema_name}.{table_name}: {e}")
 
         return None
+
+    # ==================== MigrationTargetMixin ====================
+
+    def describe_migration_capabilities(self) -> Dict[str, Any]:
+        return {
+            "supported": True,
+            "dialect_family": "postgres-like",
+            "requires": [],  # DISTRIBUTED BY is recommended, not strictly required
+            "forbids": [
+                "DUPLICATE KEY (StarRocks-only)",
+                "DISTRIBUTED BY HASH with BUCKETS (StarRocks-only; use DISTRIBUTED BY without BUCKETS)",
+            ],
+            "type_hints": {
+                "HUGEINT": "NUMERIC(38,0) (Greenplum has no HUGEINT)",
+                "unbounded VARCHAR": "TEXT (prefer over unbounded VARCHAR)",
+                "TIMESTAMP WITH TIME ZONE": "TIMESTAMPTZ",
+                "distribution": "Add DISTRIBUTED BY (<col>) or DISTRIBUTED RANDOMLY for even data layout",
+            },
+            "example_ddl": (
+                "CREATE TABLE public.t (\n  id BIGINT NOT NULL,\n  name VARCHAR(255)\n)\nDISTRIBUTED BY (id)"
+            ),
+        }
+
+    def suggest_table_layout(self, columns: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if not columns:
+            return {"distributed_by": []}
+
+        keys = self._gp_score_keys(columns, max_keys=1)
+        return {"distributed_by": keys}
+
+    @staticmethod
+    def _gp_score_keys(columns: List[Dict[str, Any]], max_keys: int = 1) -> List[str]:
+        """Select distribution columns for Greenplum.
+
+        Priority:
+          1. Columns with 'id' or '_id' suffix (+100)
+          2. INT/BIGINT type columns (+50)
+          3. Non-nullable columns (+10)
+        """
+        import re as _re
+
+        scored = []
+        for col in columns:
+            name = col["name"]
+            col_type = str(col.get("type", "")).upper()
+            base_type = _re.sub(r"\(.*\)", "", col_type).strip()
+            nullable = col.get("nullable", True)
+
+            score = 0
+            if name.lower() == "id" or name.lower().endswith("_id"):
+                score += 100
+            if base_type in _GREENPLUM_INTEGER_TYPES:
+                score += 50
+            if not nullable:
+                score += 10
+
+            scored.append((score, name))
+
+        scored.sort(key=lambda x: (-x[0], x[1]))
+
+        if scored[0][0] == 0:
+            return [columns[0]["name"]]
+
+        return [name for score, name in scored[:max_keys]]
+
+    def validate_ddl(self, ddl: str) -> List[str]:
+        errors: List[str] = []
+        upper = ddl.upper()
+
+        if "DUPLICATE KEY" in upper:
+            errors.append("DUPLICATE KEY is StarRocks-only syntax; Greenplum uses DISTRIBUTED BY or PRIMARY KEY")
+        if "BUCKETS" in upper and "DISTRIBUTED BY HASH" in upper:
+            errors.append(
+                "DISTRIBUTED BY HASH(...) BUCKETS N is StarRocks syntax; Greenplum uses DISTRIBUTED BY (<cols>)"
+            )
+        if "ENGINE =" in upper or "ENGINE=" in upper:
+            errors.append("ENGINE clause is MySQL/ClickHouse syntax; not supported in Greenplum")
+
+        return errors
+
+    def map_source_type(self, source_dialect: str, source_type: str) -> Optional[str]:
+        import re as _re
+
+        base = _re.sub(r"\(.*\)", "", source_type.strip().upper()).strip()
+        overrides = {
+            "HUGEINT": "NUMERIC(38,0)",
+            "DATETIME": "TIMESTAMP",
+            "LARGEINT": "NUMERIC(38,0)",
+        }
+        return overrides.get(base)

@@ -11,6 +11,7 @@ from datus_db_core import (
     CatalogSupportMixin,
     ExecuteSQLResult,
     MaterializedViewSupportMixin,
+    MigrationTargetMixin,
     get_logger,
     list_to_in_str,
     parse_context_switch,
@@ -21,8 +22,10 @@ from .config import StarRocksConfig
 
 logger = get_logger(__name__)
 
+_INTEGER_TYPES = frozenset({"INT", "INTEGER", "BIGINT", "SMALLINT", "TINYINT", "INT2", "INT4", "INT8", "LARGEINT"})
 
-class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSupportMixin):
+
+class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSupportMixin, MigrationTargetMixin):
     """
     StarRocks database connector.
 
@@ -452,3 +455,117 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
                 self.close()
             except Exception as e:
                 logger.debug(f"Ignoring cleanup error during test: {e}")
+
+    # ==================== MigrationTargetMixin ====================
+
+    def describe_migration_capabilities(self) -> Dict[str, Any]:
+        return {
+            "supported": True,
+            "dialect_family": "mysql-like",
+            "requires": [
+                "One of DUPLICATE KEY / PRIMARY KEY / UNIQUE KEY / AGGREGATE KEY",
+                "DISTRIBUTED BY HASH(cols) BUCKETS N",
+            ],
+            "forbids": ["AUTO_INCREMENT", "FOREIGN KEY", "FULLTEXT INDEX", "CHECK"],
+            "type_hints": {
+                "unbounded VARCHAR": "VARCHAR(65533)",
+                "TEXT": "STRING",
+                "TIMESTAMP": "DATETIME",
+                "TIMESTAMPTZ": "DATETIME",
+                "TIME": "VARCHAR(20) (StarRocks has no native TIME)",
+                "UUID": "VARCHAR(36)",
+                "HUGEINT": "LARGEINT",
+            },
+            "example_ddl": (
+                "CREATE TABLE db.t (\n"
+                "  id BIGINT NOT NULL,\n"
+                "  name VARCHAR(255)\n"
+                ") ENGINE=OLAP\n"
+                "DUPLICATE KEY(id)\n"
+                "DISTRIBUTED BY HASH(id) BUCKETS 10\n"
+                'PROPERTIES ("replication_num" = "1")'
+            ),
+        }
+
+    def suggest_table_layout(self, columns: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if not columns:
+            return {"duplicate_key": [], "distributed_by": [], "buckets": 10}
+
+        keys = self._score_keys(columns, max_keys=3)
+        return {"duplicate_key": keys, "distributed_by": keys, "buckets": 10}
+
+    @staticmethod
+    def _score_keys(columns: List[Dict[str, Any]], max_keys: int = 3) -> List[str]:
+        """Select key columns using priority rules.
+
+        Priority:
+          1. Columns with 'id' or '_id' suffix (+100)
+          2. INT/BIGINT type columns (+50)
+          3. Non-nullable columns preferred (+10)
+          4. Fallback to first column
+        """
+        import re as _re
+
+        scored = []
+        for col in columns:
+            name = col["name"]
+            col_type = str(col.get("type", "")).upper()
+            base_type = _re.sub(r"\(.*\)", "", col_type).strip()
+            nullable = col.get("nullable", True)
+
+            score = 0
+            if name.lower() == "id" or name.lower().endswith("_id"):
+                score += 100
+            if base_type in _INTEGER_TYPES:
+                score += 50
+            if not nullable:
+                score += 10
+
+            scored.append((score, name))
+
+        scored.sort(key=lambda x: (-x[0], x[1]))
+
+        if scored[0][0] == 0:
+            return [columns[0]["name"]]
+
+        return [name for score, name in scored[:max_keys] if score > 0] or [columns[0]["name"]]
+
+    def validate_ddl(self, ddl: str) -> List[str]:
+        errors: List[str] = []
+        upper = ddl.upper()
+
+        has_duplicate_key = "DUPLICATE KEY" in upper and "ON DUPLICATE KEY" not in upper
+        if not (has_duplicate_key or any(k in upper for k in ("PRIMARY KEY", "UNIQUE KEY", "AGGREGATE KEY"))):
+            errors.append("StarRocks DDL must define one of: DUPLICATE KEY / PRIMARY KEY / UNIQUE KEY / AGGREGATE KEY")
+
+        if "DISTRIBUTED BY" not in upper:
+            errors.append("StarRocks DDL must include a DISTRIBUTED BY clause")
+
+        if "AUTO_INCREMENT" in upper:
+            errors.append("StarRocks does not support AUTO_INCREMENT")
+
+        if "FOREIGN KEY" in upper:
+            errors.append("StarRocks does not support FOREIGN KEY")
+
+        if "FULLTEXT" in upper:
+            errors.append("StarRocks does not support FULLTEXT indexes")
+
+        return errors
+
+    def map_source_type(self, source_dialect: str, source_type: str) -> str | None:
+        base = source_type.strip().upper()
+        # Strip params for matching
+        import re as _re
+
+        base_noparam = _re.sub(r"\(.*\)", "", base).strip()
+        # Deterministic overrides for well-known pairings
+        overrides = {
+            "HUGEINT": "LARGEINT",
+            "TIMESTAMP": "DATETIME",
+            "TIMESTAMPTZ": "DATETIME",
+            "TIMESTAMP WITH TIME ZONE": "DATETIME",
+            "TEXT": "STRING",
+            "TIME": "VARCHAR(20)",
+            "UUID": "VARCHAR(36)",
+        }
+        return overrides.get(base_noparam)

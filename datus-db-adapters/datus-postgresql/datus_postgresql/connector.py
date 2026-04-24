@@ -13,6 +13,7 @@ from datus_db_core import (
     TABLE_TYPE,
     DatusDbException,
     ErrorCode,
+    MigrationTargetMixin,
     get_logger,
     list_to_in_str,
 )
@@ -52,7 +53,7 @@ def _get_metadata_config(table_type: TABLE_TYPE) -> TableMetadataNames:
     return METADATA_DICT[table_type]
 
 
-class PostgreSQLConnector(SQLAlchemyConnector):
+class PostgreSQLConnector(SQLAlchemyConnector, MigrationTargetMixin):
     """PostgreSQL database connector."""
 
     def __init__(self, config: Union[PostgreSQLConfig, dict]):
@@ -667,3 +668,66 @@ class PostgreSQLConnector(SQLAlchemyConnector):
         """Reset filter tables with full names."""
         schema_name = schema_name or self.schema_name
         return super()._reset_filter_tables(tables, "", database_name, schema_name)
+
+    # ==================== MigrationTargetMixin ====================
+
+    def describe_migration_capabilities(self) -> Dict[str, Any]:
+        return {
+            "supported": True,
+            "dialect_family": "postgres-like",
+            "requires": [],  # OLTP — no distribution/partition required
+            "forbids": [
+                "DUPLICATE KEY (StarRocks-only)",
+                "DISTRIBUTED BY HASH ... BUCKETS (StarRocks-only)",
+                "ENGINE = (MySQL/ClickHouse syntax)",
+            ],
+            "type_hints": {
+                "HUGEINT": "NUMERIC(38,0) (Postgres has no HUGEINT/LARGEINT)",
+                "LARGEINT": "NUMERIC(38,0)",
+                "unbounded VARCHAR": "TEXT (prefer TEXT over unbounded VARCHAR)",
+                "TIMESTAMP WITH TIME ZONE": "TIMESTAMPTZ",
+                "JSON": "JSONB (prefer for indexing)",
+                "BOOLEAN": "BOOLEAN (no TINYINT cast needed)",
+            },
+            "example_ddl": (
+                "CREATE TABLE public.t (\n"
+                "  id BIGSERIAL PRIMARY KEY,\n"
+                "  name VARCHAR(255),\n"
+                "  created_at TIMESTAMPTZ DEFAULT now()\n"
+                ")"
+            ),
+        }
+
+    def suggest_table_layout(self, columns: List[Dict[str, Any]]) -> Dict[str, Any]:
+        # Postgres is OLTP — no distribution keys or bucketing required
+        return {}
+
+    def validate_ddl(self, ddl: str) -> List[str]:
+        errors: List[str] = []
+        upper = ddl.upper()
+
+        if "DUPLICATE KEY" in upper:
+            errors.append("DUPLICATE KEY is StarRocks-only syntax; Postgres does not support it")
+        if "BUCKETS" in upper and "DISTRIBUTED BY" in upper:
+            errors.append("DISTRIBUTED BY ... BUCKETS is StarRocks syntax; Postgres does not support it")
+        if "ENGINE =" in upper or "ENGINE=" in upper:
+            errors.append("ENGINE clause is MySQL/ClickHouse syntax; not supported in Postgres")
+        if "ORDER BY" in upper and "CREATE TABLE" in upper:
+            # Rough heuristic: top-level ORDER BY inside CREATE TABLE is ClickHouse's
+            # MergeTree syntax. Postgres allows ORDER BY inside CTAS SELECT, so this
+            # check is intentionally loose (only flags when accompanied by ENGINE).
+            if "ENGINE" in upper:
+                errors.append("ORDER BY inside CREATE TABLE is ClickHouse syntax; use CREATE INDEX in Postgres")
+
+        return errors
+
+    def map_source_type(self, source_dialect: str, source_type: str) -> Optional[str]:
+        import re as _re
+
+        base = _re.sub(r"\(.*\)", "", source_type.strip().upper()).strip()
+        overrides = {
+            "HUGEINT": "NUMERIC(38,0)",
+            "LARGEINT": "NUMERIC(38,0)",
+            "DATETIME": "TIMESTAMP",
+        }
+        return overrides.get(base)

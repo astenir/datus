@@ -31,6 +31,7 @@ from datus_db_core import (
     DatusDbException,
     ErrorCode,
     ExecuteSQLResult,
+    MigrationTargetMixin,
     SQLType,
     get_logger,
     parse_context_switch,
@@ -40,7 +41,7 @@ from datus_db_core import (
 logger = get_logger(__name__)
 
 
-class SQLAlchemyConnector(BaseSqlConnector):
+class SQLAlchemyConnector(BaseSqlConnector, MigrationTargetMixin):
     """
     Base SQLAlchemy connector for database adapters.
 
@@ -155,9 +156,10 @@ class SQLAlchemyConnector(BaseSqlConnector):
     def close(self):
         """Dispose the engine and its connection pool."""
         try:
-            if self.engine:
-                self.engine.dispose()
-                self.engine = None
+            engine = getattr(self, "engine", None)
+            if engine:
+                engine.dispose()
+            self.engine = None
             self._owns_engine = False
         except Exception as e:
             logger.warning(f"Error disposing engine: {str(e)}")
@@ -734,3 +736,49 @@ class SQLAlchemyConnector(BaseSqlConnector):
                     yield from []
         except Exception as e:
             raise self._handle_exception(e) from e
+
+    # ==================== MigrationTargetMixin (generic fallback) ====================
+    #
+    # Conservative OLTP-style defaults. SQLAlchemy-backed adapters that have
+    # specific dialect needs (MySQL/Postgres/ClickHouse/Snowflake/Redshift/...)
+    # should override these methods; their overrides take precedence.
+
+    def describe_migration_capabilities(self) -> Dict[str, Any]:
+        return {
+            "supported": True,
+            "dialect_family": "sqlalchemy-generic",
+            "requires": [],
+            "forbids": [
+                "DUPLICATE KEY (StarRocks-only)",
+                "DISTRIBUTED BY HASH ... BUCKETS (StarRocks-only)",
+            ],
+            "type_hints": {
+                "unbounded VARCHAR": "VARCHAR with explicit length; many engines reject unbounded VARCHAR",
+                "HUGEINT": "DECIMAL(38,0)",
+                "LARGEINT": "DECIMAL(38,0)",
+            },
+            "example_ddl": "CREATE TABLE t (id BIGINT PRIMARY KEY, name VARCHAR(255))",
+        }
+
+    def suggest_table_layout(self, columns: List[Dict[str, Any]]) -> Dict[str, Any]:
+        # Generic fallback: no distribution / partition hints. LLM decides.
+        return {}
+
+    def validate_ddl(self, ddl: str) -> List[str]:
+        errors: List[str] = []
+        upper = ddl.upper()
+        if "DUPLICATE KEY" in upper and "ON DUPLICATE KEY" not in upper:
+            errors.append("DUPLICATE KEY is StarRocks-only syntax; not supported by generic SQLAlchemy target")
+        if "BUCKETS" in upper and "DISTRIBUTED BY" in upper:
+            errors.append("DISTRIBUTED BY ... BUCKETS is StarRocks syntax; not supported by generic SQLAlchemy target")
+        return errors
+
+    def map_source_type(self, source_dialect: str, source_type: str) -> Optional[str]:
+        import re as _re
+
+        base = _re.sub(r"\(.*\)", "", source_type.strip().upper()).strip()
+        overrides = {
+            "HUGEINT": "DECIMAL(38,0)",
+            "LARGEINT": "DECIMAL(38,0)",
+        }
+        return overrides.get(base)

@@ -7,7 +7,7 @@ from urllib.parse import quote_plus
 
 from sqlalchemy import create_engine
 
-from datus_db_core import CatalogSupportMixin, get_logger
+from datus_db_core import CatalogSupportMixin, MigrationTargetMixin, get_logger
 from datus_sqlalchemy import SQLAlchemyConnector
 
 from .config import TrinoConfig
@@ -17,7 +17,7 @@ logger = get_logger(__name__)
 TRINO_DIALECT = "trino"
 
 
-class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
+class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin, MigrationTargetMixin):
     """
     Trino database connector.
 
@@ -361,3 +361,172 @@ class TrinoConnector(SQLAlchemyConnector, CatalogSupportMixin):
                 self.close()
             except Exception as e:
                 logger.debug(f"Ignoring cleanup error during test: {e}")
+
+    # ==================== MigrationTargetMixin ====================
+
+    def _detect_catalog_type(self) -> str:
+        """Detect the current catalog's underlying connector type.
+
+        Returns one of: ``"hive"``, ``"iceberg"``, ``"delta"``, ``"jdbc"``,
+        ``"unknown"``. Queries ``system.metadata.catalogs`` when possible.
+        Callers may override (or tests monkeypatch) to provide a known type.
+        """
+        catalog = getattr(self, "catalog_name", "") or ""
+        if not catalog:
+            return "unknown"
+        try:
+            # system.metadata.catalogs lists catalog_name and connector_name
+            result = self.execute_query(
+                f"SELECT connector_name FROM system.metadata.catalogs WHERE catalog_name = '{catalog}'",
+                result_format="list",
+            )
+            rows = getattr(result, "sql_return", None) or []
+            if rows and isinstance(rows, list) and rows[0]:
+                first = rows[0]
+                if isinstance(first, dict):
+                    raw = first.get("connector_name", "")
+                elif isinstance(first, (list, tuple)):
+                    raw = first[0] if first else ""
+                else:
+                    raw = first
+                connector_name = str(raw).lower()
+                if "iceberg" in connector_name:
+                    return "iceberg"
+                if "delta" in connector_name:
+                    return "delta"
+                if "hive" in connector_name:
+                    return "hive"
+                if any(k in connector_name for k in ("mysql", "postgres", "oracle", "sqlserver", "jdbc")):
+                    return "jdbc"
+        except Exception as e:
+            logger.debug(f"_detect_catalog_type probe failed: {e}")
+        return "unknown"
+
+    def describe_migration_capabilities(self) -> Dict[str, Any]:
+        try:
+            catalog_type = self._detect_catalog_type()
+        except Exception as e:
+            logger.debug(f"_detect_catalog_type raised; falling back to generic: {e}")
+            catalog_type = "unknown"
+
+        if catalog_type == "hive":
+            return {
+                "supported": True,
+                "dialect_family": "trino-hive",
+                "requires": [],
+                "forbids": ["DUPLICATE KEY (StarRocks)", "ENGINE = ... (ClickHouse/MySQL)"],
+                "type_hints": {
+                    "format": "Add WITH (format = 'PARQUET') for efficient storage",
+                    "partitioned_by": "Use WITH (partitioned_by = ARRAY['col']) for partitioning",
+                    "bucketed_by": "Use WITH (bucketed_by = ARRAY['col'], bucket_count = N) for bucketing",
+                },
+                "example_ddl": (
+                    "CREATE TABLE catalog.schema.t (\n"
+                    "  id BIGINT,\n"
+                    "  ds VARCHAR\n"
+                    ") WITH (format = 'PARQUET', partitioned_by = ARRAY['ds'])"
+                ),
+            }
+        if catalog_type == "iceberg":
+            return {
+                "supported": True,
+                "dialect_family": "trino-iceberg",
+                "requires": [],
+                "forbids": ["DUPLICATE KEY (StarRocks)", "ENGINE = ... (ClickHouse/MySQL)"],
+                "type_hints": {
+                    "partitioning": "Use WITH (partitioning = ARRAY['month(ds)', 'bucket(id, 4)'])",
+                    "format": "Default format is PARQUET; ORC also supported",
+                    "location": "Optional WITH (location = 's3://...') for custom table location",
+                },
+                "example_ddl": (
+                    "CREATE TABLE catalog.schema.t (\n"
+                    "  id BIGINT,\n"
+                    "  ds DATE\n"
+                    ") WITH (partitioning = ARRAY['month(ds)'])"
+                ),
+            }
+        if catalog_type == "delta":
+            return {
+                "supported": True,
+                "dialect_family": "trino-delta",
+                "requires": [],
+                "forbids": ["DUPLICATE KEY (StarRocks)", "ENGINE = ... (ClickHouse/MySQL)"],
+                "type_hints": {
+                    "partitioned_by": "Use WITH (partitioned_by = ARRAY['col']) for partitioning",
+                    "location": "Optional WITH (location = 's3://...') for custom table location",
+                },
+                "example_ddl": (
+                    "CREATE TABLE catalog.schema.t (\n  id BIGINT,\n  ds DATE\n) WITH (partitioned_by = ARRAY['ds'])"
+                ),
+            }
+        if catalog_type == "jdbc":
+            return {
+                "supported": True,
+                "dialect_family": "trino-jdbc",
+                "requires": [],
+                "forbids": ["DUPLICATE KEY (StarRocks)", "ENGINE = ... (ClickHouse/MySQL)"],
+                "type_hints": {
+                    "note": "Trino JDBC catalogs pass DDL through to the underlying engine; "
+                    "check that engine's own requirements",
+                },
+                "example_ddl": ("CREATE TABLE catalog.schema.t (\n  id BIGINT,\n  name VARCHAR\n)"),
+            }
+        # unknown / generic
+        return {
+            "supported": True,
+            "dialect_family": "trino-generic",
+            "requires": [],
+            "forbids": ["DUPLICATE KEY (StarRocks)", "ENGINE = ... (ClickHouse/MySQL)"],
+            "type_hints": {},
+            "note": f"Catalog connector unknown ({getattr(self, 'catalog_name', '') or 'unset'}); "
+            "DDL requirements depend on underlying engine",
+            "example_ddl": "CREATE TABLE catalog.schema.t (\n  id BIGINT,\n  name VARCHAR\n)",
+        }
+
+    def suggest_table_layout(self, columns: List[Dict[str, Any]]) -> Dict[str, Any]:
+        if not columns:
+            return {}
+        try:
+            catalog_type = self._detect_catalog_type()
+        except Exception:
+            catalog_type = "unknown"
+
+        if catalog_type == "hive":
+            # Suggest partitioned_by only when a conventional partition column exists
+            partition_cols = [c["name"] for c in columns if c["name"].lower() in ("ds", "dt", "partition_date")]
+            layout: Dict[str, Any] = {"format": "PARQUET"}
+            if partition_cols:
+                layout["partitioned_by"] = partition_cols[:1]
+            return layout
+        if catalog_type == "iceberg":
+            partition_cols = [c["name"] for c in columns if c["name"].lower() in ("ds", "dt", "partition_date")]
+            if partition_cols:
+                return {"partitioning": [f"month({partition_cols[0]})"]}
+            return {}
+        return {}
+
+    def validate_ddl(self, ddl: str) -> List[str]:
+        errors: List[str] = []
+        upper = ddl.upper()
+
+        if "DUPLICATE KEY" in upper:
+            errors.append("DUPLICATE KEY is StarRocks-only syntax; Trino catalogs do not support it")
+        if "BUCKETS" in upper and "DISTRIBUTED BY" in upper:
+            errors.append(
+                "DISTRIBUTED BY ... BUCKETS is StarRocks syntax; Trino uses WITH (bucketed_by = ARRAY[...]) for Hive"
+            )
+        if "ENGINE =" in upper or "ENGINE=" in upper:
+            errors.append("ENGINE clause is MySQL/ClickHouse syntax; Trino uses WITH (...) table properties")
+        return errors
+
+    def map_source_type(self, source_dialect: str, source_type: str) -> Optional[str]:
+        import re as _re
+
+        base = _re.sub(r"\(.*\)", "", source_type.strip().upper()).strip()
+        overrides = {
+            "HUGEINT": "DECIMAL(38,0)",
+            "LARGEINT": "DECIMAL(38,0)",
+            "STRING": "VARCHAR",
+            "TEXT": "VARCHAR",
+        }
+        return overrides.get(base)

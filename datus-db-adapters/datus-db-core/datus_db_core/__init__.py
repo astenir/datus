@@ -7,12 +7,14 @@ from datus_db_core.config import ConnectionConfig
 from datus_db_core.constants import SQLType
 from datus_db_core.exceptions import DatusDbException, ErrorCode
 from datus_db_core.logging import get_logger
+from datus_db_core.migration import MigrationTargetMixin
 from datus_db_core.mixins import (
     CatalogSupportMixin,
     MaterializedViewSupportMixin,
     SchemaNamespaceMixin,
 )
 from datus_db_core.models import TABLE_TYPE, ExecuteSQLInput, ExecuteSQLResult
+from datus_db_core.reconciliation import build_reconciliation_checks
 from datus_db_core.registry import (
     AdapterMetadata,
     ConnectorRegistry,
@@ -35,6 +37,7 @@ __all__ = [
     "get_logger",
     "CatalogSupportMixin",
     "MaterializedViewSupportMixin",
+    "MigrationTargetMixin",
     "SchemaNamespaceMixin",
     "TABLE_TYPE",
     "ExecuteSQLInput",
@@ -42,6 +45,7 @@ __all__ = [
     "AdapterMetadata",
     "ConnectorRegistry",
     "connector_registry",
+    "build_reconciliation_checks",
     "metadata_identifier",
     "parse_context_switch",
     "parse_sql_type",

@@ -12,6 +12,7 @@ from datus_db_core import (
     TABLE_TYPE,
     DatusDbException,
     ErrorCode,
+    MigrationTargetMixin,
     get_logger,
     list_to_in_str,
 )
@@ -59,7 +60,7 @@ def _get_metadata_config(table_type: TABLE_TYPE) -> TableMetadataNames:
     return METADATA_DICT[table_type]
 
 
-class MySQLConnector(SQLAlchemyConnector):
+class MySQLConnector(SQLAlchemyConnector, MigrationTargetMixin):
     """MySQL database connector."""
 
     def __init__(self, config: Union[MySQLConfig, dict]):
@@ -438,3 +439,57 @@ class MySQLConnector(SQLAlchemyConnector):
         """Reset filter tables with full names."""
         database_name = database_name or self.database_name
         return super()._reset_filter_tables(tables, "", database_name, "")
+
+    # ==================== MigrationTargetMixin ====================
+
+    def describe_migration_capabilities(self) -> Dict[str, Any]:
+        return {
+            "supported": True,
+            "dialect_family": "mysql-like",
+            "requires": [],  # OLTP — no distribution/partition required
+            "forbids": [
+                "DUPLICATE KEY (StarRocks-only)",
+                "DISTRIBUTED BY HASH ... BUCKETS (StarRocks-only)",
+            ],
+            "type_hints": {
+                "HUGEINT": "DECIMAL(38,0) (MySQL has no HUGEINT)",
+                "LARGEINT": "DECIMAL(38,0)",
+                "unbounded VARCHAR": "VARCHAR(255) for indexed columns, TEXT otherwise",
+                "BOOLEAN": "TINYINT(1)",
+                "TIMESTAMP": "DATETIME (MySQL TIMESTAMP has 2038 limit)",
+            },
+            "example_ddl": (
+                "CREATE TABLE db.t (\n"
+                "  id BIGINT AUTO_INCREMENT PRIMARY KEY,\n"
+                "  name VARCHAR(255),\n"
+                "  created_at DATETIME DEFAULT CURRENT_TIMESTAMP\n"
+                ") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+            ),
+        }
+
+    def suggest_table_layout(self, columns: List[Dict[str, Any]]) -> Dict[str, Any]:
+        # MySQL is OLTP — no distribution keys required
+        return {}
+
+    def validate_ddl(self, ddl: str) -> List[str]:
+        errors: List[str] = []
+        upper = ddl.upper()
+
+        if "DUPLICATE KEY" in upper and "ON DUPLICATE KEY" not in upper:
+            errors.append("DUPLICATE KEY is StarRocks-only syntax; MySQL uses PRIMARY KEY / UNIQUE KEY")
+        if "BUCKETS" in upper and "DISTRIBUTED BY" in upper:
+            errors.append("DISTRIBUTED BY ... BUCKETS is StarRocks syntax; MySQL does not support it")
+        if "ORDER BY" in upper and "CREATE TABLE" in upper and ("ENGINE = MERGETREE" in upper or "MERGETREE" in upper):
+            errors.append("ENGINE = MergeTree is ClickHouse-only; MySQL supports InnoDB/MyISAM/Memory/etc.")
+
+        return errors
+
+    def map_source_type(self, source_dialect: str, source_type: str) -> Optional[str]:
+        import re as _re
+
+        base = _re.sub(r"\(.*\)", "", source_type.strip().upper()).strip()
+        overrides = {
+            "HUGEINT": "DECIMAL(38,0)",
+            "LARGEINT": "DECIMAL(38,0)",
+        }
+        return overrides.get(base)
