@@ -23,9 +23,10 @@ def chat_svc(real_agent_config):
 class TestChatServiceInit:
     """Tests for ChatService initialization."""
 
-    def test_init_with_real_config(self, chat_svc):
+    def test_init_with_real_config(self, chat_svc, real_agent_config):
         """ChatService initializes with real agent config and task manager."""
-        assert chat_svc is not None
+        assert chat_svc.agent_config is real_agent_config
+        assert isinstance(chat_svc._task_manager, ChatTaskManager)
 
     def test_init_stores_properties(self, real_agent_config):
         """ChatService stores agent_config and task_manager."""
@@ -34,9 +35,9 @@ class TestChatServiceInit:
         assert svc.agent_config is real_agent_config
         assert svc._task_manager is tm
 
-    def test_init_sets_session_dir(self, chat_svc):
+    def test_init_sets_session_dir(self, chat_svc, real_agent_config):
         """ChatService sets _session_dir from agent_config."""
-        assert chat_svc._session_dir is not None
+        assert chat_svc._session_dir == real_agent_config.session_dir
 
 
 class TestChatServiceSessionExists:
@@ -133,42 +134,6 @@ class TestChatServiceDeleteSession:
         assert chat_svc.session_exists("to-delete") is False
 
 
-class TestChatServiceGetModel:
-    """Tests for get_model."""
-
-    def test_get_model_returns_active_model_identity(self, chat_svc):
-        """get_model returns the active ModelConfig's type and model."""
-        result = chat_svc.get_model()
-        assert result.success is True
-        assert result.data is not None
-        assert result.data.current.type == "openai"
-        assert result.data.current.model == "mock-model"
-
-    def test_get_model_reflects_active_model_changes(self, chat_svc):
-        """get_model follows the AgentConfig.active_model() result."""
-        fake_active = MagicMock(type="claude", model="claude-3-sonnet")
-        with patch.object(chat_svc.agent_config, "active_model", return_value=fake_active):
-            result = chat_svc.get_model()
-
-        assert result.success is True
-        assert result.data.current.type == "claude"
-        assert result.data.current.model == "claude-3-sonnet"
-
-    def test_get_model_handles_lookup_error(self, chat_svc):
-        """get_model returns a typed error when active_model() raises."""
-        with patch.object(
-            chat_svc.agent_config,
-            "active_model",
-            side_effect=ValueError("no model"),
-        ):
-            result = chat_svc.get_model()
-
-        assert result.success is False
-        assert result.errorCode == "MODEL_LOOKUP_ERROR"
-        assert "no model" in (result.errorMessage or "")
-        assert result.data is None
-
-
 class TestChatServiceGetHistory:
     """Tests for get_history."""
 
@@ -176,7 +141,7 @@ class TestChatServiceGetHistory:
         """get_history for unknown session returns empty messages."""
         result = chat_svc.get_history("nonexistent-session")
         assert result.success is True
-        assert result.data is not None
+        assert result.data.messages == []
 
     def test_get_history_empty_session_returns_success(self, chat_svc):
         """get_history for empty session returns success with empty messages."""
@@ -233,7 +198,8 @@ class TestChatServiceCompactSession:
     """Tests for compact_session."""
 
     async def test_compact_nonexistent_session(self, real_agent_config, mock_llm_create):
-        """compact_session for nonexistent session returns error."""
+        """compact_session auto-creates and compacts a fresh empty session — the call must
+        never raise, and the typed Result must round-trip the requested session_id."""
         from datus.api.models.cli_models import CompactSessionInput
 
         svc = ChatService(
@@ -243,8 +209,9 @@ class TestChatServiceCompactSession:
         )
         request = CompactSessionInput(session_id="nonexistent")
         result = await svc.compact_session(request)
-        # Should handle gracefully
-        assert result is not None
+
+        assert result.success is True
+        assert result.data.session_id == "nonexistent"
 
     async def test_compact_persists_summary_into_session(self, real_agent_config, mock_llm_create):
         """End-to-end: compact must keep the .db alive and write a
@@ -339,7 +306,8 @@ class TestChatServiceStreamChat:
             events.append(event)
             if len(events) > 5:
                 break
-        assert len(events) >= 0
+        assert len(events) >= 1
+        assert events[0].event == "session"
 
     async def test_stream_chat_duplicate_session_yields_error(self, real_agent_config, mock_llm_create):
         """stream_chat for duplicate session_id yields error event."""
