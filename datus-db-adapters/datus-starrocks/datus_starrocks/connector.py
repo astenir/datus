@@ -534,7 +534,8 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         errors: List[str] = []
         upper = ddl.upper()
 
-        if not any(k in upper for k in ("DUPLICATE KEY", "PRIMARY KEY", "UNIQUE KEY", "AGGREGATE KEY")):
+        has_duplicate_key = "DUPLICATE KEY" in upper and "ON DUPLICATE KEY" not in upper
+        if not (has_duplicate_key or any(k in upper for k in ("PRIMARY KEY", "UNIQUE KEY", "AGGREGATE KEY"))):
             errors.append("StarRocks DDL must define one of: DUPLICATE KEY / PRIMARY KEY / UNIQUE KEY / AGGREGATE KEY")
 
         if "DISTRIBUTED BY" not in upper:
@@ -560,8 +561,11 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         # Deterministic overrides for well-known pairings
         overrides = {
             "HUGEINT": "LARGEINT",
+            "TIMESTAMP": "DATETIME",
             "TIMESTAMPTZ": "DATETIME",
             "TIMESTAMP WITH TIME ZONE": "DATETIME",
             "TEXT": "STRING",
+            "TIME": "VARCHAR(20)",
+            "UUID": "VARCHAR(36)",
         }
         return overrides.get(base_noparam)

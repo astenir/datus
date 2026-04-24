@@ -157,11 +157,11 @@ def build_reconciliation_checks(
                     "name": "duplicate_key",
                     "source_query": (
                         f"SELECT {all_keys}, COUNT(*) AS cnt FROM {source_table} "
-                        f"GROUP BY {key_str} HAVING COUNT(*) > 1 LIMIT 5"
+                        f"GROUP BY {key_str} HAVING COUNT(*) > 1 ORDER BY {key_str} LIMIT 5"
                     ),
                     "target_query": (
                         f"SELECT {all_keys}, COUNT(*) AS cnt FROM {target_table} "
-                        f"GROUP BY {key_str} HAVING COUNT(*) > 1 LIMIT 5"
+                        f"GROUP BY {key_str} HAVING COUNT(*) > 1 ORDER BY {key_str} LIMIT 5"
                     ),
                 }
             )
@@ -171,11 +171,11 @@ def build_reconciliation_checks(
                     "name": "duplicate_key",
                     "source_query": (
                         f"SELECT {key_str}, COUNT(*) AS cnt FROM {source_table} "
-                        f"GROUP BY {key_str} HAVING COUNT(*) > 1 LIMIT 5"
+                        f"GROUP BY {key_str} HAVING COUNT(*) > 1 ORDER BY {key_str} LIMIT 5"
                     ),
                     "target_query": (
                         f"SELECT {key_str}, COUNT(*) AS cnt FROM {target_table} "
-                        f"GROUP BY {key_str} HAVING COUNT(*) > 1 LIMIT 5"
+                        f"GROUP BY {key_str} HAVING COUNT(*) > 1 ORDER BY {key_str} LIMIT 5"
                     ),
                 }
             )
