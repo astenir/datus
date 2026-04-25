@@ -131,6 +131,21 @@ class TestExtractDDLTarget:
         assert t.db_schema == "public"
         assert t.table == "users"
 
+    def test_postgresql_alias_uses_sqlglot_postgres_dialect(self):
+        """Config uses ``postgresql`` while sqlglot calls the dialect
+        ``postgres``. Target extraction normalizes the name so a successfully
+        executed DDL does not get reported as failed after execution."""
+        t = extract_ddl_target(
+            "CREATE TABLE mydb.public.users (id INT)",
+            "default_db",
+            dialect="postgresql",
+        )
+        assert t is not None
+        assert t.catalog is None
+        assert t.database == "mydb"
+        assert t.db_schema == "public"
+        assert t.table == "users"
+
     def test_two_part_identifier_catalog_is_none(self):
         """Two-part ``schema.table`` leaves catalog unset."""
         t = extract_ddl_target("CREATE TABLE analytics.users (x INT)", "db1")

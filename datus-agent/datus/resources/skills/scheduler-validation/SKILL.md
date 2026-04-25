@@ -1,41 +1,67 @@
 ---
 name: scheduler-validation
-description: Validate scheduled ETL jobs by checking submission, triggerability, run status, and scheduler-side health before a pipeline change is considered complete
+description: Scheduler validator driven by ValidationHook — read-only static verification of scheduled jobs (schedule correctness, configuration, most recent run outcome). Does not trigger test runs.
 tags:
   - scheduler
   - orchestration
   - validation
   - data-engineering
-version: "1.0.0"
+version: "2.0.0"
 user_invocable: false
 disable_model_invocation: false
 allowed_agents:
   - scheduler
+kind: validator
+severity: blocking
+mode: llm
+targets:
+  - type: scheduler_job
 ---
 
 # Scheduler Validation
 
-Use this skill after a pipeline job is created or updated. You MUST complete ALL steps below before reporting success.
+Driven by `ValidationHook.on_end` for `scheduler` runs. The hook passes a
+`SessionTarget` containing every `SchedulerJobTarget` the run delivered.
+Iterate each target and run the checks below.
+
+## Target shape
+
+You receive `SessionTarget.targets` — loop over `SchedulerJobTarget` entries.
+Each carries `platform` + `job_id` + optional `job_name`.
+
+Layer A (the builtin hook) has already confirmed each job **exists** and
+**is not in a failed status**. Your job is to verify schedule correctness and
+recent runtime outcome when run history is available.
 
 ## Core workflow
 
-**IMPORTANT**: Every step is mandatory. Do NOT skip any step or report success without completing all checks.
+Read-only static verification. Never trigger a test run — scheduled jobs may
+be expensive / long-running / have downstream side effects. Runtime
+verification is the user's call.
 
-1. **Confirm job exists** — call `get_scheduler_job(job_id)` and verify:
-   - Job status is `active` (not paused or errored)
-   - Schedule expression matches the intended cron
-2. **Trigger a test run** — call `trigger_scheduler_job(job_id)` to start a manual run
-3. **Poll until completion** — call `list_job_runs(job_id, limit=1)` repeatedly (up to 5 attempts, 10s apart) until the run status is `success` or `failed`
-4. **If the run failed** — call `get_run_log(job_id, run_id)` to retrieve the error log, report the failure reason, and STOP (do not report success)
-5. **If the run succeeded** — report a compact verification summary
+For every `SchedulerJobTarget` in the session:
+
+1. **Verify schedule** — call `get_scheduler_job(job_id)` and confirm the
+   `schedule` expression matches the intended cron (e.g. user asked for
+   "daily" but job submitted `0 * * * *`).
+2. **Verify configuration** — check other fields returned by
+   `get_scheduler_job` (description, SQL path, job_type, connection id) match
+   the intended setup.
+3. **Inspect most recent run, if any** — call `list_job_runs(job_id, limit=1)`.
+   - No runs yet → advisory note "no runtime history; user-initiated trigger
+     required to verify runtime health". Not a blocking failure.
+   - Latest run `success` → report the success.
+   - Latest run `failed` → call `get_run_log(job_id, run_id)`, surface the
+     error as a blocking finding so the user can fix before the next schedule
+     window hits.
+   - Latest run `running` → advisory (in-progress; can't judge yet).
 
 ## Validation checklist (per job)
 
 | Check | Tool | What to verify |
 |-------|------|----------------|
 | Job exists | `get_scheduler_job` | Status is active, schedule is correct |
-| Test run triggered | `trigger_scheduler_job` | Returns a run_id |
-| Run completes | `list_job_runs` | Latest run status is `success` |
+| Latest run inspected | `list_job_runs` | Latest run status is `success`, or no run history is advisory |
 | Run log clean | `get_run_log` | No errors in output (only check on failure) |
 
 ## Output format
@@ -46,7 +72,7 @@ Report a table with these columns:
 |--------|-------------|
 | Job ID | The scheduler job identifier |
 | Schedule | Cron expression |
-| Test Run | PASS if run succeeded, FAIL + error summary otherwise |
+| Latest Run | PASS if latest run succeeded, FAIL + error summary if it failed, ADVISORY if absent/running |
 | Overall | PASS or FAIL |
 
-If the test run fails, include the error message from `get_run_log` so the user can diagnose the issue.
+If the latest run failed, include the error message from `get_run_log` so the user can diagnose the issue. Never call `trigger_scheduler_job`.

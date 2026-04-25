@@ -103,11 +103,19 @@ pip install datus-bi-superset datus-postgresql datus-semantic-metricflow datus-s
 ```yaml
 agent:
   services:
-    databases:
+    datasources:
       lever_duckdb:
         type: duckdb
         uri: "duckdb:///${DACOMP_HOME}/lever_workbench.duckdb"
         default: true
+      superset_serving:
+        type: postgresql
+        host: 127.0.0.1
+        port: 5433
+        database: superset_examples
+        schema: public
+        username: superset
+        password: superset
 
     semantic_layer:
       metricflow: {}
@@ -119,8 +127,8 @@ agent:
         username: admin
         password: admin
         dataset_db:
-          uri: "postgresql+psycopg2://superset:superset@127.0.0.1:5433/superset_examples"
-          schema: public
+          datasource_ref: superset_serving
+          bi_database_name: examples
 
     schedulers:
       airflow_prod:
@@ -239,23 +247,35 @@ SELECT COUNT(*) FROM marts.lever__recruitment_analytics_dashboard;
 - scheduler 返回 `job_id`
 - Airflow UI 中出现对应任务
 
-## 步骤 9：写入 Superset 并创建 Dashboard
+## 步骤 9：把 marts 表同步到 Superset serving DB
 
-当 marts 表已经稳定可查，就可以把它交给 BI subagent：
+上面的 marts 表是在 `lever_duckdb` 里生成的。调用 `gen_dashboard` 之前，需要先把它复制到
+`dataset_db.datasource_ref` 指向的 BI 注册数据库 `superset_serving`（Postgres）。
 
 ```text
-/gen_dashboard Create a recruiting operations dashboard in Superset from marts.lever__recruitment_analytics_dashboard. Include KPI tiles for requisitions, applications, interviews, offers, and hires, plus a funnel chart and a weekly trend chart.
+/gen_job Copy lever_duckdb.marts.lever__recruitment_analytics_dashboard to superset_serving.public.lever__recruitment_analytics_dashboard using replace mode, then verify the transferred row count.
+```
+
+完成后，这张表就位于 Superset 通过 `bi_database_name: examples` 识别的数据库中。
+
+## 步骤 10：创建 Superset Dashboard
+
+当表已经存在于 `superset_serving`，就可以把它交给 BI subagent：
+
+```text
+/gen_dashboard Create a recruiting operations dashboard in Superset from public.lever__recruitment_analytics_dashboard. Include KPI tiles for requisitions, applications, interviews, offers, and hires, plus a funnel chart and a weekly trend chart.
 ```
 
 这条 Superset 工作流内部会依次执行：
 
 ```text
-write_query -> create_dataset -> create_chart -> create_dashboard -> add_chart_to_dashboard
+list_bi_databases -> create_dataset -> create_chart -> create_dashboard -> add_chart_to_dashboard
 ```
 
-因为 `bi_platforms.superset.dataset_db` 已经指向本地 Superset 所用的 PostgreSQL，Datus 会把查询结果物化进去，并自动注册成 Superset dataset。
+数据准备是单独的 `gen_job` / `scheduler` 步骤。`gen_dashboard` 期望目标表或
+SQL dataset 已经存在于 BI 已注册的数据库中。
 
-## 步骤 10：验证端到端结果
+## 步骤 11：验证端到端结果
 
 走完整条链路后，你应该能确认：
 

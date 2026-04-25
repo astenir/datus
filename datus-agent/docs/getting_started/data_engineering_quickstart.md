@@ -103,11 +103,19 @@ Add the following minimum configuration to your `~/.datus/conf/agent.yml`:
 ```yaml
 agent:
   services:
-    databases:
+    datasources:
       lever_duckdb:
         type: duckdb
         uri: "duckdb:///${DACOMP_HOME}/lever_workbench.duckdb"
         default: true
+      superset_serving:
+        type: postgresql
+        host: 127.0.0.1
+        port: 5433
+        database: superset_examples
+        schema: public
+        username: superset
+        password: superset
 
     semantic_layer:
       metricflow: {}
@@ -119,8 +127,8 @@ agent:
         username: admin
         password: admin
         dataset_db:
-          uri: "postgresql+psycopg2://superset:superset@127.0.0.1:5433/superset_examples"
-          schema: public
+          datasource_ref: superset_serving
+          bi_database_name: examples
 
     schedulers:
       airflow_prod:
@@ -239,23 +247,38 @@ What to expect:
 - Airflow returns a `job_id`
 - the job becomes visible in the Airflow UI
 
-## Step 9: Write Into Superset and Create a Dashboard
+## Step 9: Promote the Marts Table to the Superset Serving DB
 
-Once the marts table exists, hand it to the BI subagent.
+The marts table above was built in `lever_duckdb`. Before `gen_dashboard` can
+create Superset assets, copy that table into the BI-registered
+`superset_serving` Postgres datasource referenced by `dataset_db.datasource_ref`.
 
 ```text
-/gen_dashboard Create a recruiting operations dashboard in Superset from marts.lever__recruitment_analytics_dashboard. Include KPI tiles for requisitions, applications, interviews, offers, and hires, plus a funnel chart and a weekly trend chart.
+/gen_job Copy lever_duckdb.marts.lever__recruitment_analytics_dashboard to superset_serving.public.lever__recruitment_analytics_dashboard using replace mode, then verify the transferred row count.
+```
+
+After this step, the table exists in the same database Superset knows as
+`bi_database_name: examples`.
+
+## Step 10: Create a Superset Dashboard
+
+Once the marts table exists in `superset_serving`, hand it to the BI subagent.
+
+```text
+/gen_dashboard Create a recruiting operations dashboard in Superset from public.lever__recruitment_analytics_dashboard. Include KPI tiles for requisitions, applications, interviews, offers, and hires, plus a funnel chart and a weekly trend chart.
 ```
 
 Under the hood, the Superset workflow is:
 
 ```text
-write_query -> create_dataset -> create_chart -> create_dashboard -> add_chart_to_dashboard
+list_bi_databases -> create_dataset -> create_chart -> create_dashboard -> add_chart_to_dashboard
 ```
 
-Because `bi_platforms.superset.dataset_db` points to the local Superset PostgreSQL service, Datus can materialize the query result and register it as a Superset dataset automatically.
+Data preparation is a separate `gen_job` / `scheduler` step. `gen_dashboard`
+expects the table or SQL dataset to already be available in the BI-registered
+database.
 
-## Step 10: Verify the End-to-End Result
+## Step 11: Verify the End-to-End Result
 
 You should now have:
 
