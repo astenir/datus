@@ -14,6 +14,7 @@ from datus.configuration.agent_config import AgentConfig
 from datus.storage.metric.store import MetricRAG
 from datus.storage.semantic_model.store import SemanticModelRAG
 from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
+from datus.tools.func_tool.generation_evidence import GenerationEvidence
 from datus.utils.loggings import get_logger
 from datus.utils.path_manager import get_path_manager
 
@@ -28,8 +29,9 @@ class GenerationTools:
     completing the generation process.
     """
 
-    def __init__(self, agent_config: AgentConfig):
+    def __init__(self, agent_config: AgentConfig, generation_evidence: Optional[GenerationEvidence] = None):
         self.agent_config = agent_config
+        self.generation_evidence = generation_evidence or GenerationEvidence()
         self.metric_rag = MetricRAG(agent_config)
         self.semantic_rag = SemanticModelRAG(agent_config)
 
@@ -149,7 +151,8 @@ class GenerationTools:
         Complete semantic model generation process.
 
         Call this tool when you have finished generating semantic model YAML files.
-        This tool triggers user confirmation workflow for syncing to vector store.
+        In interactive runs, the generation hook syncs these files to the Knowledge Base
+        directly after this tool returns.
 
         Args:
             semantic_model_files: List of generated semantic model YAML file paths.
@@ -159,9 +162,19 @@ class GenerationTools:
                 entries against the live agent_config datasource.
 
         Returns:
-            dict: Result containing confirmation message and semantic_model_files
+            dict: Result containing completion message and semantic_model_files
         """
         try:
+            if not self.generation_evidence.validation_passed:
+                return FuncToolResult(
+                    success=0,
+                    error=(
+                        "validate_semantic must pass before publishing semantic models. "
+                        "Call validate_semantic, fix any issues, and retry end_semantic_model_generation."
+                    ),
+                    result={"semantic_model_files": semantic_model_files},
+                )
+
             logger.info(
                 f"Semantic model generation completed for {len(semantic_model_files)} files: {semantic_model_files}"
             )
@@ -200,7 +213,7 @@ class GenerationTools:
                               Example: '{"revenue_total": "SELECT SUM(revenue) FROM orders GROUP BY date"}'
 
         Returns:
-            dict: Result containing confirmation message, file paths, metric SQLs, and sync status
+            dict: Result containing completion message, file paths, metric SQLs, and sync status
         """
         import json
 
@@ -215,6 +228,38 @@ class GenerationTools:
                     metric_sqls = parsed
                 except (json.JSONDecodeError, TypeError) as e:
                     logger.warning(f"Failed to parse metric_sqls_json: {e}")
+
+            if not self.generation_evidence.validation_passed:
+                return FuncToolResult(
+                    success=0,
+                    error=(
+                        "validate_semantic must pass before publishing metrics. "
+                        "Call validate_semantic, fix any issues, and retry end_metric_generation."
+                    ),
+                    result={
+                        "metric_file": metric_file,
+                        "semantic_model_file": semantic_model_file,
+                        "metric_sqls": metric_sqls,
+                    },
+                )
+
+            if not self.generation_evidence.metric_dry_run_passed:
+                return FuncToolResult(
+                    success=0,
+                    error=(
+                        "query_metrics(dry_run=True) must pass before publishing metrics. "
+                        "Run a dry-run query for the generated metric(s), fix any issues, and retry "
+                        "end_metric_generation."
+                    ),
+                    result={
+                        "metric_file": metric_file,
+                        "semantic_model_file": semantic_model_file,
+                        "metric_sqls": metric_sqls,
+                    },
+                )
+
+            if self.generation_evidence.metric_sqls:
+                metric_sqls = dict(self.generation_evidence.metric_sqls)
 
             logger.info(
                 f"Metric generation completed: metric_file={metric_file}, "
@@ -254,6 +299,21 @@ class GenerationTools:
                         "metric_sqls": metric_sqls,
                     },
                 )
+            metric_names = self._extract_metric_names_from_file(abs_metric)
+            if metric_names and not self.generation_evidence.has_metric_dry_run(metric_names):
+                return FuncToolResult(
+                    success=0,
+                    error=(
+                        "query_metrics(dry_run=True) must pass for generated metric(s): "
+                        f"{', '.join(metric_names)}. Run a dry-run query for these metric names, "
+                        "fix any issues, and retry end_metric_generation."
+                    ),
+                    result={
+                        "metric_file": metric_file,
+                        "semantic_model_file": semantic_model_file,
+                        "metric_sqls": metric_sqls,
+                    },
+                )
 
             # Auto-sync to Knowledge Base
             sync_result = self._sync_metric_to_db(abs_metric, abs_semantic, metric_sqls)
@@ -269,6 +329,10 @@ class GenerationTools:
                         "sync": sync_result,
                     },
                 )
+
+            self.generation_evidence.mark_kb_sync("metric")
+            if sync_result.get("semantic_synced"):
+                self.generation_evidence.mark_kb_sync("semantic")
 
             return FuncToolResult(
                 result={
@@ -315,6 +379,27 @@ class GenerationTools:
             "`create_metric: true` on semantic-model measures — those only emit "
             "metrics at MetricFlow runtime and are NOT synced to the Knowledge Base."
         )
+
+    @staticmethod
+    def _extract_metric_names_from_file(metric_file: str) -> List[str]:
+        """Return metric names declared in top-level ``metric:`` YAML blocks."""
+        try:
+            with open(metric_file, "r", encoding="utf-8") as f:
+                docs = list(yaml.safe_load_all(f))
+        except (OSError, yaml.YAMLError):
+            return []
+
+        names: List[str] = []
+        for doc in docs:
+            if not isinstance(doc, dict):
+                continue
+            metric = doc.get("metric")
+            if not isinstance(metric, dict):
+                continue
+            name = metric.get("name")
+            if isinstance(name, str) and name:
+                names.append(name)
+        return names
 
     def _sync_metric_to_db(
         self,
@@ -378,6 +463,8 @@ class GenerationTools:
                         metric_sqls=metric_sqls,
                         original_yaml_path=metric_file,
                     )
+                    if result.get("success"):
+                        result["semantic_synced"] = True
                 finally:
                     if os.path.exists(temp_file):
                         os.remove(temp_file)
@@ -386,8 +473,13 @@ class GenerationTools:
                 result = GenerationHooks._sync_semantic_to_db(
                     metric_file,
                     self.agent_config,
+                    include_semantic_objects=False,
+                    include_metrics=True,
                     metric_sqls=metric_sqls,
+                    original_yaml_path=metric_file,
                 )
+                if result.get("success"):
+                    result["semantic_synced"] = False
 
             if result.get("success"):
                 logger.info(f"Successfully synced metric to KB: {result.get('message')}")

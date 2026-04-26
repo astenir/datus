@@ -154,13 +154,23 @@ class TestCheckSemanticObjectExists:
 
 
 class TestEndSemanticModelGeneration:
+    def _mark_validated(self, generation_tools):
+        generation_tools.generation_evidence.validation_passed = True
+
+    def test_requires_validation(self, generation_tools):
+        result = generation_tools.end_semantic_model_generation(["/path/to/model.yaml"])
+        assert result.success == 0
+        assert "validate_semantic must pass" in result.error
+
     def test_success_single_file(self, generation_tools):
+        self._mark_validated(generation_tools)
         result = generation_tools.end_semantic_model_generation(["/path/to/model.yaml"])
         assert result.success == 1
         assert result.result["semantic_model_files"] == ["/path/to/model.yaml"]
         assert "1 file(s)" in result.result["message"]
 
     def test_success_multiple_files(self, generation_tools):
+        self._mark_validated(generation_tools)
         files = ["/path/model1.yaml", "/path/model2.yaml"]
         result = generation_tools.end_semantic_model_generation(files)
         assert result.success == 1
@@ -168,6 +178,7 @@ class TestEndSemanticModelGeneration:
         assert "2 file(s)" in result.result["message"]
 
     def test_exception_returns_failure(self, generation_tools):
+        self._mark_validated(generation_tools)
         # Trigger exception inside the method by making logger.info raise
         with patch("datus.tools.func_tool.generation_tools.logger") as mock_logger:
             mock_logger.info.side_effect = Exception("log failure")
@@ -177,6 +188,10 @@ class TestEndSemanticModelGeneration:
 
 
 class TestEndMetricGeneration:
+    def _mark_ready_to_publish(self, generation_tools):
+        generation_tools.generation_evidence.validation_passed = True
+        generation_tools.generation_evidence.metric_dry_run_passed = True
+
     def _patch_sync(self, generation_tools):
         """Patch get_path_manager, the pre-flight validator (so legacy tests
         can pass synthetic paths), and _sync_metric_to_db."""
@@ -190,7 +205,19 @@ class TestEndMetricGeneration:
             patch.object(generation_tools, "_sync_metric_to_db", return_value={"success": True, "message": "ok"}),
         )
 
+    def test_requires_validation(self, generation_tools):
+        result = generation_tools.end_metric_generation(metric_file="/path/metric.yaml")
+        assert result.success == 0
+        assert "validate_semantic must pass" in result.error
+
+    def test_requires_dry_run(self, generation_tools):
+        generation_tools.generation_evidence.validation_passed = True
+        result = generation_tools.end_metric_generation(metric_file="/path/metric.yaml")
+        assert result.success == 0
+        assert "query_metrics(dry_run=True) must pass" in result.error
+
     def test_success_basic(self, generation_tools):
+        self._mark_ready_to_publish(generation_tools)
         p1, p2, p3 = self._patch_sync(generation_tools)
         with p1, p2, p3:
             result = generation_tools.end_metric_generation(metric_file="/path/metric.yaml")
@@ -201,6 +228,7 @@ class TestEndMetricGeneration:
         assert result.result["sync"]["success"] is True
 
     def test_success_with_semantic_model(self, generation_tools):
+        self._mark_ready_to_publish(generation_tools)
         p1, p2, p3 = self._patch_sync(generation_tools)
         with p1, p2, p3:
             result = generation_tools.end_metric_generation(
@@ -210,6 +238,7 @@ class TestEndMetricGeneration:
         assert result.result["semantic_model_file"] == "/path/model.yaml"
 
     def test_success_with_metric_sqls_json(self, generation_tools):
+        self._mark_ready_to_publish(generation_tools)
         metric_sqls_json = json.dumps({"revenue_total": "SELECT SUM(revenue) FROM orders"})
         p1, p2, p3 = self._patch_sync(generation_tools)
         with p1, p2, p3:
@@ -220,6 +249,7 @@ class TestEndMetricGeneration:
         assert result.result["metric_sqls"] == {"revenue_total": "SELECT SUM(revenue) FROM orders"}
 
     def test_invalid_metric_sqls_json_ignored(self, generation_tools):
+        self._mark_ready_to_publish(generation_tools)
         p1, p2, p3 = self._patch_sync(generation_tools)
         with p1, p2, p3:
             result = generation_tools.end_metric_generation(
@@ -244,13 +274,20 @@ class TestEndMetricGenerationPreflight:
             return_value=mock_pm,
         )
 
+    @staticmethod
+    def _mark_ready_to_publish(generation_tools):
+        generation_tools.generation_evidence.validation_passed = True
+        generation_tools.generation_evidence.metric_dry_run_passed = True
+
     def test_rejects_missing_metric_file(self, generation_tools, tmp_path):
+        self._mark_ready_to_publish(generation_tools)
         with self._patch_path_resolution(generation_tools, tmp_path):
             result = generation_tools.end_metric_generation(metric_file=str(tmp_path / "missing.yaml"))
         assert result.success == 0
         assert "Metric file not found" in result.error
 
     def test_rejects_documentation_only_metric_file(self, generation_tools, tmp_path):
+        self._mark_ready_to_publish(generation_tools)
         bad = tmp_path / "frpm_metrics.yml"
         bad.write_text(
             "# Generated metric documentation\n\n"
@@ -269,6 +306,7 @@ class TestEndMetricGenerationPreflight:
         sync_mock.assert_not_called()
 
     def test_rejects_invalid_yaml(self, generation_tools, tmp_path):
+        self._mark_ready_to_publish(generation_tools)
         bad = tmp_path / "broken.yml"
         bad.write_text("name: x\n  bad-indent: : :\n")
         with (
@@ -281,6 +319,8 @@ class TestEndMetricGenerationPreflight:
         sync_mock.assert_not_called()
 
     def test_accepts_file_with_metric_block(self, generation_tools, tmp_path):
+        self._mark_ready_to_publish(generation_tools)
+        generation_tools.generation_evidence.metric_dry_run_metrics.add("revenue_total")
         good = tmp_path / "good_metric.yml"
         good.write_text("metric:\n  name: revenue_total\n  type: measure_proxy\n  type_params:\n    measure: revenue\n")
         with (
@@ -289,6 +329,19 @@ class TestEndMetricGenerationPreflight:
         ):
             result = generation_tools.end_metric_generation(metric_file=str(good))
         assert result.success == 1
+
+    def test_rejects_metric_not_covered_by_dry_run(self, generation_tools, tmp_path):
+        self._mark_ready_to_publish(generation_tools)
+        good = tmp_path / "good_metric.yml"
+        good.write_text("metric:\n  name: revenue_total\n  type: measure_proxy\n  type_params:\n    measure: revenue\n")
+        with (
+            self._patch_path_resolution(generation_tools, tmp_path),
+            patch.object(generation_tools, "_sync_metric_to_db") as sync_mock,
+        ):
+            result = generation_tools.end_metric_generation(metric_file=str(good))
+        assert result.success == 0
+        assert "revenue_total" in result.error
+        sync_mock.assert_not_called()
 
 
 class TestValidateMetricFileHasBlocks:
@@ -360,10 +413,14 @@ class TestSyncMetricToDb:
             result = generation_tools._sync_metric_to_db(str(metric_file))
 
         assert result["success"] is True
+        assert result["semantic_synced"] is False
         mock_sync.assert_called_once_with(
             str(metric_file),
             generation_tools.agent_config,
+            include_semantic_objects=False,
+            include_metrics=True,
             metric_sqls=None,
+            original_yaml_path=str(metric_file),
         )
 
     def test_metric_with_semantic_model_combines_files(self, generation_tools, tmp_path):
@@ -378,6 +435,7 @@ class TestSyncMetricToDb:
             result = generation_tools._sync_metric_to_db(str(metric_file), str(semantic_file), {"rev": "SELECT 1"})
 
         assert result["success"] is True
+        assert result["semantic_synced"] is True
         # Should have been called twice: first for semantic objects, then for metrics
         assert mock_sync.call_count == 2
         # First call: sync semantic objects
@@ -418,11 +476,15 @@ class TestSyncMetricToDb:
             result = generation_tools._sync_metric_to_db(str(metric_file), "/nonexistent/model.yaml")
 
         assert result["success"] is True
+        assert result["semantic_synced"] is False
         # Should call with metric file directly (not combined)
         mock_sync.assert_called_once_with(
             str(metric_file),
             generation_tools.agent_config,
+            include_semantic_objects=False,
+            include_metrics=True,
             metric_sqls=None,
+            original_yaml_path=str(metric_file),
         )
 
     def test_sync_failure_propagated(self, generation_tools, tmp_path):
