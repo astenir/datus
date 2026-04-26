@@ -212,7 +212,7 @@ tags: "revenue, region, aggregation"       # 逗号分隔的标签
 
 ### 快速开始
 
-使用 `datus --database <datasource>` 启动 Datus CLI，然后使用subagent命令：
+使用 `datus --datasource <datasource>` 启动 Datus CLI，然后使用subagent命令：
 
 ```bash
 /gen_semantic_model generate a semantic model for table <table_name>
@@ -237,7 +237,7 @@ graph LR
     A[用户请求] --> B[DDL 分析]
     B --> C[YAML 生成]
     C --> D[验证]
-    D --> E[存储]
+    D --> E[知识库同步]
 ```
 
 ### 验证和同步
@@ -292,8 +292,8 @@ data_source:
 
 - ✅ 从表 DDL 自动生成 YAML
 - ✅ 交互式验证和错误修复
-- ✅ 验证通过后自动同步
-- ✅ 知识库集成
+- ✅ 验证通过后同步到知识库
+- ✅ interactive 自动同步，workflow/API 显式同步
 - ✅ 防止重复
 - ✅ MetricFlow 兼容性
 
@@ -318,7 +318,7 @@ data_source:
 
 ### 快速开始
 
-使用 `datus --database <datasource>` 启动 Datus CLI，然后使用指标生成subagent：
+使用 `datus --datasource <datasource>` 启动 Datus CLI，然后使用指标生成subagent：
 
 ```bash
 /gen_metrics Generate a metric from this SQL: SELECT SUM(amount) FROM transactions, the corresponding question is total amount of all transactions
@@ -946,7 +946,7 @@ agent:
         password: "${SUPERSET_PASSWORD}"
         dataset_db:
           datasource_ref: serving_pg
-          bi_database_name: analytics_pg
+          bi_database_name: examples
 
   agentic_nodes:
     gen_dashboard:

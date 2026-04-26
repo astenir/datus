@@ -15,10 +15,10 @@
 datus-cli --datasource spidersnow --save_llm_trace
 
 # 主程序模式
-python datus/main.py run --datasource bird_sqlite --task "Query all users" --task_db_name test.db --save_llm_trace
+python -m datus.main run --datasource bird_sqlite --task_db_name test.db --task "Query all users" --save_llm_trace
 
 # Benchmark 模式
-python datus/main.py benchmark --datasource bird_sqlite --benchmark bird_dev --save_llm_trace
+python -m datus.main benchmark --datasource bird_sqlite --benchmark bird_dev --save_llm_trace
 ```
 
 ### 2. 配置文件
@@ -38,7 +38,7 @@ agent:
 
 ## 输出格式
 
-跟踪文件保存在 `trajectory_dir/{task_id}/` 目录中，每个节点生成一个 `{node_id}.yml` 文件。
+跟踪文件保存在 `trajectory_dir/{task_id}/` 目录中（`trajectory_dir` 是已配置的 trace 输出基础目录，通常为 `{agent.home}/trajectory/{datasource}/{timestamp}/`，其中 `--datasource` 控制 `{datasource}` 这一段），每个节点生成一个 `{node_id}.yml` 文件。
 
 ### YAML 文件结构
 
@@ -88,21 +88,21 @@ datus-cli --datasource local_duckdb --save_llm_trace
 
 ```bash
 # 分析不同节点的 LLM 输入/输出
-python datus/main.py benchmark --datasource bird_sqlite --benchmark bird_dev --save_llm_trace
+python -m datus.main benchmark --datasource bird_sqlite --benchmark bird_dev --save_llm_trace
 ```
 
 ### 3. 审计和合规
 
 ```bash
 # 记录所有 LLM 交互以进行审计
-python datus/main.py run --datasource prod --task "sensitive query" --save_llm_trace
+python -m datus.main run --datasource prod --task_db_name analytics --task "sensitive query" --save_llm_trace
 ```
 
 ### 4. MCP 调用跟踪
 
 ```bash
 # 启用 MCP 调用的详细跟踪，包括整个函数调用过程
-python datus/main.py run --datasource bird_sqlite --task "Complex query" --save_llm_trace
+python -m datus.main run --datasource bird_sqlite --task_db_name test.db --task "Complex query" --save_llm_trace
 ```
 
 ## 重要说明
