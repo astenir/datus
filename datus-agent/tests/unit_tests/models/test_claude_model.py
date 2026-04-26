@@ -177,7 +177,7 @@ class TestClaudeModelInit:
             model = ClaudeModel(_make_model_config())
         # Verify anthropic.Anthropic constructor was called (client is not merely assigned)
         mock_anthropic_cls.assert_called_once()
-        assert model.anthropic_client is not None
+        assert model.anthropic_client is mock_anthropic_cls.return_value
 
     def test_model_specs_contains_expected_models(self):
         model = _make_claude_model()
@@ -576,8 +576,13 @@ class TestDiagnoseOAuth401:
         cfg = _make_model_config(api_key="sk-ant-regular-key", auth_type="api_key")
         model = _make_claude_model(cfg)
         original_error = Exception("401 Unauthorized")
-        # Should return without raising
-        model._diagnose_oauth_401(original_error)
+        try:
+            result = model._diagnose_oauth_401(original_error)
+        except Exception as exc:  # pragma: no cover - failure path
+            pytest.fail(f"_diagnose_oauth_401 unexpectedly raised for non-OAuth token: {exc}")
+        # Helper is fire-and-return for non-OAuth tokens; verify it did not
+        # mutate state into an exception object or substitute the input error.
+        assert result is None
 
     def test_expired_token_raises_expired_error(self, tmp_path):
         """When credentials file shows expired token, raise CLAUDE_SUBSCRIPTION_TOKEN_EXPIRED."""
@@ -858,6 +863,226 @@ class TestGenerateWithMcpStream:
         assert actions[0].status == ActionStatus.PROCESSING
         assert actions[1].status == ActionStatus.FAILED
         assert actions[1].output["summary"] == "Failed"
+
+    @pytest.mark.asyncio
+    async def test_session_persists_user_and_assistant_across_turns(self):
+        """OAuth-subscription native path must persist multi-turn history through ``session``.
+
+        Regression: prior to the fix, ``_generate_with_mcp_stream`` ignored the
+        ``session`` parameter entirely, so subsequent turns started from an empty
+        history and the assistant could not see the user's prior message.
+        """
+        from datus.schemas.action_history import ActionHistoryManager
+
+        cfg = _make_model_config(use_native_api=True)
+        model = _make_claude_model(cfg)
+
+        # Two independent invocations on the same session — turn 1 then turn 2.
+        resp1 = _make_response([_make_text_block("answer-1")])
+        resp2 = _make_response([_make_text_block("answer-2")])
+        model.anthropic_client.messages.create.side_effect = [resp1, resp2]
+
+        # Session stub mimicking AdvancedSQLiteSession's get_items / add_items contract.
+        session = MagicMock()
+        session_store: list = []
+        session.get_items = AsyncMock(side_effect=lambda: list(session_store))
+        session.add_items = AsyncMock(side_effect=lambda items: session_store.extend(items))
+
+        ahm = ActionHistoryManager()
+        with patch("datus.models.claude_model.multiple_mcp_servers") as mock_mcp:
+            mock_mcp.return_value.__aenter__ = AsyncMock(return_value={})
+            mock_mcp.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            # Turn 1
+            async for _ in model._generate_with_mcp_stream(
+                prompt="hello",
+                mcp_servers={},
+                instruction="sys",
+                output_type={},
+                action_history_manager=ahm,
+                session=session,
+            ):
+                pass
+
+            # After turn 1: session should contain user "hello" and assistant "answer-1".
+            assert session.add_items.await_count == 1
+            assert any(
+                isinstance(item, dict) and item.get("role") == "user" and "hello" in str(item.get("content"))
+                for item in session_store
+            ), f"user prompt not stored: {session_store}"
+            assert any(
+                isinstance(item, dict) and item.get("role") == "assistant" and "answer-1" in str(item.get("content"))
+                for item in session_store
+            ), f"assistant final not stored: {session_store}"
+
+            # Turn 2
+            async for _ in model._generate_with_mcp_stream(
+                prompt="follow up",
+                mcp_servers={},
+                instruction="sys",
+                output_type={},
+                action_history_manager=ahm,
+                session=session,
+            ):
+                pass
+
+        # Anthropic API on turn 2 must have seen the prior turn's history.
+        assert model.anthropic_client.messages.create.call_count == 2
+        turn2_messages = model.anthropic_client.messages.create.call_args_list[1].kwargs["messages"]
+        flattened = str(turn2_messages)
+        assert "hello" in flattened, f"turn2 messages missing turn1 user: {turn2_messages}"
+        assert "answer-1" in flattened, f"turn2 messages missing turn1 assistant: {turn2_messages}"
+        assert "follow up" in flattened
+
+    @pytest.mark.asyncio
+    async def test_session_get_items_failure_falls_back_to_fresh_history(self):
+        """A broken session must not abort the turn — log and start fresh instead."""
+        from datus.schemas.action_history import ActionHistoryManager
+
+        cfg = _make_model_config(use_native_api=True)
+        model = _make_claude_model(cfg)
+
+        model.anthropic_client.messages.create.return_value = _make_response([_make_text_block("ok")])
+
+        session = MagicMock()
+        session.get_items = AsyncMock(side_effect=RuntimeError("disk error"))
+        session.add_items = AsyncMock()
+
+        ahm = ActionHistoryManager()
+        with patch("datus.models.claude_model.multiple_mcp_servers") as mock_mcp:
+            mock_mcp.return_value.__aenter__ = AsyncMock(return_value={})
+            mock_mcp.return_value.__aexit__ = AsyncMock(return_value=False)
+            actions = []
+            async for action in model._generate_with_mcp_stream(
+                prompt="probe",
+                mcp_servers={},
+                instruction="sys",
+                output_type={},
+                action_history_manager=ahm,
+                session=session,
+            ):
+                actions.append(action)
+
+        # Native turn still completed despite the load failure.
+        assert any(a.action_type == "final_response" for a in actions)
+        # And we still tried to persist this turn for the next call.
+        assert session.add_items.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_session_skip_persist_when_final_content_empty(self):
+        """When ``max_turns`` is exhausted while still tool-calling, ``final_content``
+        stays empty. Persisting an empty assistant text block would be rejected by
+        Anthropic on replay (``text content blocks must be non-empty``), so the
+        guard must skip ``add_items`` entirely.
+        """
+        from datus.schemas.action_history import ActionHistoryManager
+
+        cfg = _make_model_config(use_native_api=True)
+        model = _make_claude_model(cfg)
+
+        # Every turn keeps tool-calling; the loop exits via max_turns with no
+        # text response. Use max_turns=2 so the test is fast.
+        tool_block = _make_tool_use_block()
+        model.anthropic_client.messages.create.return_value = _make_response([tool_block])
+
+        func_tool = MagicMock()
+        func_tool.name = "read_query"
+        func_tool.description = ""
+        func_tool.params_json_schema = {"type": "object"}
+        func_tool.on_invoke_tool = AsyncMock(return_value="result")
+
+        session = MagicMock()
+        session.get_items = AsyncMock(return_value=[])
+        session.add_items = AsyncMock()
+
+        ahm = ActionHistoryManager()
+        with patch("datus.models.claude_model.multiple_mcp_servers") as mock_mcp:
+            mock_mcp.return_value.__aenter__ = AsyncMock(return_value={})
+            mock_mcp.return_value.__aexit__ = AsyncMock(return_value=False)
+            actions = []
+            async for action in model._generate_with_mcp_stream(
+                prompt="probe",
+                mcp_servers={},
+                instruction="sys",
+                output_type={},
+                max_turns=2,
+                func_tools=[func_tool],
+                action_history_manager=ahm,
+                session=session,
+            ):
+                actions.append(action)
+
+        # final_response still yielded so the caller gets a response.
+        final = next(a for a in actions if a.action_type == "final_response")
+        assert final.output["raw_output"] == ""
+        # Critically: we must NOT have persisted an empty assistant text block.
+        session.add_items.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_prompt_list_variant_is_normalized_to_string(self):
+        """The ``prompt`` parameter signature accepts ``List[Dict[str, str]]`` for
+        legacy callers; the native Anthropic ``text`` field requires a string, so
+        list inputs must be serialised rather than handed through verbatim.
+        """
+        from datus.schemas.action_history import ActionHistoryManager
+
+        cfg = _make_model_config(use_native_api=True)
+        model = _make_claude_model(cfg)
+
+        model.anthropic_client.messages.create.return_value = _make_response([_make_text_block("ok")])
+
+        list_prompt = [{"role": "user", "content": "structured-input"}]
+        ahm = ActionHistoryManager()
+        with patch("datus.models.claude_model.multiple_mcp_servers") as mock_mcp:
+            mock_mcp.return_value.__aenter__ = AsyncMock(return_value={})
+            mock_mcp.return_value.__aexit__ = AsyncMock(return_value=False)
+            async for _ in model._generate_with_mcp_stream(
+                prompt=list_prompt,
+                mcp_servers={},
+                instruction="sys",
+                output_type={},
+                action_history_manager=ahm,
+            ):
+                pass
+
+        # The user message sent to Anthropic must carry a single string ``text``
+        # field; the list payload should have been json-serialised.
+        call_messages = model.anthropic_client.messages.create.call_args.kwargs["messages"]
+        user_text = call_messages[0]["content"][0]["text"]
+        assert isinstance(user_text, str)
+        assert "structured-input" in user_text
+
+    @pytest.mark.asyncio
+    async def test_session_add_items_failure_does_not_break_turn(self):
+        """If persistence fails after a successful turn, the user still gets the response."""
+        from datus.schemas.action_history import ActionHistoryManager
+
+        cfg = _make_model_config(use_native_api=True)
+        model = _make_claude_model(cfg)
+
+        model.anthropic_client.messages.create.return_value = _make_response([_make_text_block("ok")])
+
+        session = MagicMock()
+        session.get_items = AsyncMock(return_value=[])
+        session.add_items = AsyncMock(side_effect=RuntimeError("disk full"))
+
+        ahm = ActionHistoryManager()
+        with patch("datus.models.claude_model.multiple_mcp_servers") as mock_mcp:
+            mock_mcp.return_value.__aenter__ = AsyncMock(return_value={})
+            mock_mcp.return_value.__aexit__ = AsyncMock(return_value=False)
+            actions = []
+            async for action in model._generate_with_mcp_stream(
+                prompt="probe",
+                mcp_servers={},
+                instruction="sys",
+                output_type={},
+                action_history_manager=ahm,
+                session=session,
+            ):
+                actions.append(action)
+
+        # The final action is still yielded even though persistence raised.
+        assert any(a.action_type == "final_response" for a in actions)
 
 
 class TestGenerateWithMcpWrapper:
