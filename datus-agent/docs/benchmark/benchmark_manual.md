@@ -22,7 +22,7 @@ Get started quickly with the built-in benchmark datasets.
 
 ```bash title="Terminal"
 pip install datus-agent
-datus-agent init
+datus           # then inside the REPL: /model, /datasource, /init
 ```
 
 ### Step 2: Configure Environment
@@ -326,7 +326,7 @@ datus-agent eval --datasource california_schools --benchmark california_schools 
 ```yaml
 agent:
   services:
-    databases:
+    datasources:
       california_schools:
         type: sqlite
         uri: sqlite:///benchmark/bird/dev_20240627/dev_databases/california_schools/california_schools.sqlite # Database file path. Use sqlite:/// for relative paths; sqlite://// for absolute paths.

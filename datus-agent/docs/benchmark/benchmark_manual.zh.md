@@ -22,7 +22,7 @@
 
 ```bash title="Terminal"
 pip install datus-agent
-datus-agent init
+datus           # 进入 REPL 后依次使用 /model、/datasource、/init
 ```
 
 ### 第二步：配置环境变量
@@ -325,7 +325,7 @@ datus-agent eval --datasource california_schools --benchmark california_schools 
 ```yaml
 agent:
   services:
-    databases:
+    datasources:
       california_schools:
         type: sqlite
         uri: sqlite:///benchmark/bird/dev_20240627/dev_databases/california_schools/california_schools.sqlite # 数据库文件路径，sqlite:///为相对路径； sqlite:////为绝对路径
