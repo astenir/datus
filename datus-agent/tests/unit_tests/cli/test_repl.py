@@ -150,13 +150,16 @@ class TestMaybeScheduleStartupSync:
         cli.bg_sync.schedule.assert_not_called()
 
     def test_startup_sync_noop_without_bg_sync_attribute(self, cli):
-        """Early-init callers can invoke this before bg_sync is wired."""
+        """Early-init callers can invoke this before bg_sync is wired —
+        the method must short-circuit without fabricating the attribute,
+        otherwise the eventual real wiring in ``__init__`` would attach
+        to an empty placeholder instead of the real
+        :class:`BackgroundSchemaSyncManager`."""
         self._configure(cli, on_startup=True, current_ds="local_db")
-        # Ensure attribute missing
         if hasattr(cli, "bg_sync"):
             delattr(cli, "bg_sync")
-        # Must not raise
         cli._maybe_schedule_startup_sync()
+        assert not hasattr(cli, "bg_sync")
 
 
 class TestCmdExitShutsDownBgSync:
@@ -167,11 +170,21 @@ class TestCmdExitShutsDownBgSync:
         cli.bg_sync.shutdown.assert_called_once_with()
 
     def test_exit_works_without_bg_sync(self, cli):
+        """``_cmd_exit`` must still close the DB connector and return
+        ``EXIT_SENTINEL`` when bg_sync was never wired — that path runs
+        when the REPL aborts early (e.g. config load failure) before
+        ``BackgroundSchemaSyncManager`` is constructed in ``__init__``."""
+        from datus.cli.tui.app import EXIT_SENTINEL
+
         if hasattr(cli, "bg_sync"):
             delattr(cli, "bg_sync")
-        cli.db_connector = MagicMock()
-        # Must not raise even when bg_sync is absent
-        cli._cmd_exit("")
+        connector = MagicMock()
+        cli.db_connector = connector
+
+        result = cli._cmd_exit("")
+
+        assert result == EXIT_SENTINEL
+        connector.close.assert_called_once_with()
 
 
 class TestCommandType:
@@ -980,8 +993,9 @@ class TestCmdAgent:
 
     def test_cmd_agent_no_args_opens_unified_tui(self, cli):
         """'.agent' (no args) opens the unified :class:`AgentApp` seeded
-        on the Built-in tab. A ``set_default`` selection from the app
-        updates ``default_agent``."""
+        on the Custom tab — that's the only tab where ``Enter`` still
+        sets a default after Built-in became config-only. A
+        ``set_default`` selection from the app updates ``default_agent``."""
         from datus.cli.agent_app import AgentSelection
 
         cli.available_subagents = {"chat", "gen_sql"}
@@ -990,7 +1004,7 @@ class TestCmdAgent:
             mock_cls.return_value.run.return_value = AgentSelection(kind="set_default", name="gen_sql")
             cli._cmd_agent("")
         mock_cls.assert_called_once()
-        assert mock_cls.call_args.kwargs["seed_tab"] == "builtin"
+        assert mock_cls.call_args.kwargs["seed_tab"] == "custom"
         assert cli.default_agent == "gen_sql"
 
     def test_cmd_subagent_opens_unified_tui_on_custom_tab(self, cli):

@@ -123,12 +123,15 @@ class TestSQLCompleterGetCompletions:
         assert "users" in texts
 
     def test_select_context_suggests_columns(self):
+        """In a SELECT projection context the completer should surface
+        registered column names matching the current prefix — that's the
+        whole point of feeding ``update_tables`` ahead of completion."""
         c = SQLCompleter()
         c.update_tables({"users": ["id", "name"]})
         doc = Document("SELECT n", cursor_position=8)
-        list(c.get_completions(doc))
-        # Depending on what "previous word" is, columns may be suggested
-        # At minimum it should not raise
+        completions = list(c.get_completions(doc))
+        texts = [comp.text for comp in completions]
+        assert "name" in texts
 
     def test_keyword_completion(self):
         c = SQLCompleter()
@@ -236,7 +239,7 @@ class TestAtReferenceParser:
     def test_parse_empty_text(self):
         parser = AtReferenceParser()
         result = parser.parse_input("")
-        assert result == {"tables": [], "metrics": [], "sqls": []}
+        assert result == {"tables": [], "metrics": [], "sqls": [], "agent": None}
 
     def test_parse_table_reference(self):
         parser = AtReferenceParser()
@@ -379,7 +382,6 @@ class TestDynamicAtReferenceCompleterReloadData:
         iteration.
         """
         import threading
-        import time
 
         snapshots = [
             {f"snap0_{i}": {} for i in range(50)},
@@ -419,10 +421,13 @@ class TestDynamicAtReferenceCompleterReloadData:
         w2.start()
         w1.join()
         w2.join()
-        # Give the reader one more tick to catch any final torn state
-        time.sleep(0.05)
         stop.set()
         r.join()
+        # Final read on the main thread to ensure no torn state survives
+        # past join — mirrors the reader contract without depending on
+        # wall-clock timing (the previous time.sleep(0.05) was a debug
+        # artifact that made the test flaky on busy CI hosts).
+        c.fuzzy_match("snap")
 
         assert errors == []
         # Final snapshot must be one of the valid ones (all keys share the
@@ -756,16 +761,37 @@ class TestAtReferenceCompleterDetectSubAgent:
 class TestAtReferenceCompleterParseAtContext:
     def test_parse_empty_input(self, real_agent_config):
         completer = AtReferenceCompleter(real_agent_config)
-        tables, metrics, sqls = completer.parse_at_context("")
+        tables, metrics, sqls, agent = completer.parse_at_context("")
         assert tables == []
         assert metrics == []
         assert sqls == []
+        assert agent is None
 
     def test_parse_triggers_ensure_loaded(self, real_agent_config):
         completer = AtReferenceCompleter(real_agent_config)
         assert completer.table_completer._loaded is False
         completer.parse_at_context("@Table users")
         assert completer.table_completer._loaded is True
+
+    def test_parse_unknown_agent_drops_silently(self, real_agent_config):
+        """A misspelt agent name must NOT be returned as a routing hint —
+        otherwise the chat agent would try to delegate to a nonexistent
+        subagent. The visibility provider gates this so typos surface as
+        a no-op (with a logger warning) rather than a hard failure."""
+        completer = AtReferenceCompleter(
+            real_agent_config,
+            visibility_provider=lambda: {"gen_sql"},
+        )
+        _t, _m, _s, agent = completer.parse_at_context("@Agent unknown_xxx do something")
+        assert agent is None
+
+    def test_parse_known_agent_returned(self, real_agent_config):
+        completer = AtReferenceCompleter(
+            real_agent_config,
+            visibility_provider=lambda: {"gen_sql", "gen_report"},
+        )
+        _t, _m, _s, agent = completer.parse_at_context("@Agent gen_sql write me a query")
+        assert agent == "gen_sql"
 
 
 class TestAtReferenceCompleterGetCompletions:
@@ -785,7 +811,7 @@ class TestAtReferenceCompleterGetCompletions:
         doc = Document("@", cursor_position=1)
         completions = list(completer.get_completions(doc, None))
         texts = [c.text for c in completions]
-        for opt in ("Table", "Metrics", "Sql", "File"):
+        for opt in ("Table", "Metrics", "Sql", "File", "Agent"):
             assert opt in texts
 
     def test_plain_text_without_at_yields_nothing(self, real_agent_config):
@@ -820,3 +846,62 @@ class TestAtReferenceCompleterGetCompletions:
         completions = list(completer.get_completions(doc, None))
         texts = [c.text for c in completions]
         assert "Table" in texts
+
+
+# ---------------------------------------------------------------------------
+# AtReferenceCompleter: @Agent fuzzy completion and visibility provider
+# ---------------------------------------------------------------------------
+
+
+class TestAtReferenceCompleterAgent:
+    """``@Agent`` is a routing hint, not a path reference: the completer
+    must surface the agent name + description regardless of whether the
+    user has typed the literal ``@Agent`` prefix or just ``@<fuzzy>``,
+    and the visibility provider must gate the catalog so HIDDEN system
+    subagents and ``chat`` never appear."""
+
+    def test_visibility_provider_filters_chat_and_hidden(self, real_agent_config):
+        completer = AtReferenceCompleter(
+            real_agent_config,
+            visibility_provider=lambda: {"chat", "gen_sql", "feedback"},
+        )
+        # ``chat`` is dropped inside _AgentReferenceCompleter regardless of
+        # what the provider returns; HIDDEN agents (e.g. ``feedback``) are
+        # already filtered upstream by the real provider, so the contract
+        # we exercise here is that whatever the provider returns minus
+        # ``chat`` is what the completer offers.
+        names = completer.agent_completer.visible_names()
+        assert "chat" not in names
+        assert "gen_sql" in names
+
+    def test_fuzzy_match_returns_matching_agents(self, real_agent_config):
+        completer = AtReferenceCompleter(
+            real_agent_config,
+            visibility_provider=lambda: {"gen_sql", "gen_report", "scheduler"},
+        )
+        result = completer.agent_completer.fuzzy_match("gen")
+        assert set(result) == {"gen_sql", "gen_report"}
+
+    def test_at_prefix_surfaces_agent_completion(self, real_agent_config):
+        completer = AtReferenceCompleter(
+            real_agent_config,
+            visibility_provider=lambda: {"gen_sql"},
+        )
+        doc = Document("@gen_sq", cursor_position=7)
+        completions = list(completer.get_completions(doc, None))
+        texts = [c.text for c in completions]
+        assert "@Agent gen_sql" in texts
+
+    def test_at_agent_prefix_lists_remaining_agents(self, real_agent_config):
+        """Once the user has typed ``@Agent `` the router delegates to
+        ``_AgentReferenceCompleter.get_completions`` so the menu shows
+        every visible agent — that's the parity behaviour with
+        ``@Table ``."""
+        completer = AtReferenceCompleter(
+            real_agent_config,
+            visibility_provider=lambda: {"gen_sql", "gen_report"},
+        )
+        doc = Document("@Agent ", cursor_position=7)
+        completions = list(completer.get_completions(doc, None))
+        texts = {c.text for c in completions}
+        assert {"gen_sql", "gen_report"}.issubset(texts)
