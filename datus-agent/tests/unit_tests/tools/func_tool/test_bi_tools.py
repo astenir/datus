@@ -8,6 +8,8 @@ from __future__ import annotations
 import sys
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # ---- Minimal stubs for datus_bi_core (so tests run without the package) ----
 
 
@@ -874,3 +876,104 @@ class TestGetBiServingTarget:
         result = tool.get_bi_serving_target()
         assert result.success == 0
         assert "dataset_db" in result.error
+
+
+class TestBIFuncToolResolvePlatform:
+    """``_resolved_platform`` resolution order — explicit > project pin >
+    global ``default: true`` flag (or single-entry shortcut) > error.
+    Mirrors ``get_scheduler_config`` / ``resolve_semantic_adapter`` so all
+    three sections behave identically."""
+
+    def _agent_cfg(self, *, dashboards, active=None, default=None):
+        """Build a minimal AgentConfig stub.
+
+        ``default`` lets a test pretend ``default_dashboard_service``
+        returned a specific value; ``None`` simulates "no default" so the
+        unique-shortcut / multi-without-default branches can be exercised.
+        Falling back to a key from ``dashboards`` when the test omits
+        ``default`` keeps the legacy single-entry tests passing without
+        forcing them to set up the resolver explicitly.
+        """
+
+        def _resolve_default():
+            if default is not None:
+                return default
+            if len(dashboards) == 1:
+                return next(iter(dashboards))
+            return None
+
+        cfg = MagicMock()
+        cfg.dashboard_config = dashboards
+        cfg.active_dashboard = MagicMock(return_value=active)
+        cfg.default_dashboard_service = MagicMock(side_effect=_resolve_default)
+        return cfg
+
+    def test_explicit_bi_service_wins_over_active(self):
+        from datus.tools.func_tool.bi_tools import BIFuncTool
+
+        cfg = self._agent_cfg(
+            dashboards={"superset": MagicMock(), "grafana": MagicMock()},
+            active="grafana",
+        )
+        tool = BIFuncTool(cfg, bi_service="superset")
+        assert tool._resolved_platform() == "superset"
+
+    def test_active_dashboard_used_when_multiple_configured(self):
+        from datus.tools.func_tool.bi_tools import BIFuncTool
+
+        cfg = self._agent_cfg(
+            dashboards={"superset": MagicMock(), "grafana": MagicMock()},
+            active="grafana",
+        )
+        tool = BIFuncTool(cfg)
+        assert tool._resolved_platform() == "grafana"
+
+    def test_stale_active_falls_through_to_unique(self):
+        from datus.tools.func_tool.bi_tools import BIFuncTool
+
+        cfg = self._agent_cfg(
+            dashboards={"superset": MagicMock()},
+            active="never_configured",
+        )
+        tool = BIFuncTool(cfg)
+        assert tool._resolved_platform() == "superset"
+
+    def test_no_active_with_unique_falls_back(self):
+        from datus.tools.func_tool.bi_tools import BIFuncTool
+
+        cfg = self._agent_cfg(dashboards={"superset": MagicMock()})
+        tool = BIFuncTool(cfg)
+        assert tool._resolved_platform() == "superset"
+
+    def test_global_default_used_when_multiple_configured(self):
+        from datus.tools.func_tool.bi_tools import BIFuncTool
+
+        cfg = self._agent_cfg(
+            dashboards={"superset": MagicMock(), "grafana": MagicMock()},
+            default="grafana",
+        )
+        tool = BIFuncTool(cfg)
+        assert tool._resolved_platform() == "grafana"
+
+    def test_active_pin_outranks_global_default(self):
+        from datus.tools.func_tool.bi_tools import BIFuncTool
+
+        cfg = self._agent_cfg(
+            dashboards={"superset": MagicMock(), "grafana": MagicMock()},
+            active="superset",
+            default="grafana",
+        )
+        tool = BIFuncTool(cfg)
+        assert tool._resolved_platform() == "superset"
+
+    def test_multiple_without_active_raises(self):
+        from datus.tools.func_tool.bi_tools import BIFuncTool
+        from datus.utils.exceptions import DatusException
+
+        cfg = self._agent_cfg(
+            dashboards={"superset": MagicMock(), "grafana": MagicMock()},
+            default=None,  # explicitly no default flag
+        )
+        tool = BIFuncTool(cfg)
+        with pytest.raises(DatusException, match="Multiple BI platforms"):
+            tool._resolved_platform()

@@ -60,25 +60,40 @@ class BIFuncTool:
     def _resolved_platform(self) -> Optional[str]:
         """Return the BI platform name to use.
 
-        Preference order:
+        Preference order (matches ``get_scheduler_config`` /
+        ``resolve_semantic_adapter``):
         1. Explicit ``bi_service`` passed to the constructor.
-        2. Auto-pick when ``agent_config.dashboard_config`` has exactly one entry.
-        3. Raise ``DatusException`` when multiple are configured and no
-           ``bi_service`` disambiguates — mirrors ``SemanticTools`` behavior.
+        2. Project-level default from ``./.datus/config.yml`` (read via
+           ``agent_config.active_dashboard()``). A stale override that
+           does not match any configured BI service is ignored with a
+           warning so the code falls through to the global default.
+        3. Global ``default: true`` flag (or single-entry shortcut) via
+           ``agent_config.default_dashboard_service()``.
+        4. Raise ``DatusException`` when multiple are configured without
+           a disambiguating flag.
         """
         if self.bi_service:
             return self.bi_service
         if self.agent_config is None:
             return None
         dashboard_config = getattr(self.agent_config, "dashboard_config", {}) or {}
-        if len(dashboard_config) == 1:
-            return next(iter(dashboard_config))
+        active_fn = getattr(self.agent_config, "active_dashboard", None)
+        if callable(active_fn):
+            active = active_fn()
+            if active and active in dashboard_config:
+                return active
+        default_fn = getattr(self.agent_config, "default_dashboard_service", None)
+        if callable(default_fn):
+            default = default_fn()
+            if default:
+                return default
         if len(dashboard_config) > 1:
             raise DatusException(
                 ErrorCode.COMMON_CONFIG_ERROR,
                 message=(
                     f"Multiple BI platforms configured ({list(dashboard_config.keys())}); "
-                    "pass `bi_service` explicitly to disambiguate."
+                    "pass `bi_service` explicitly, mark one entry with `default: true`, "
+                    "or pin one via `/services dashboard` and `p`."
                 ),
             )
         return None
