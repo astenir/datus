@@ -7,6 +7,7 @@ from datus.utils.text_utils import (
     LITELLM_EMPTY_PLACEHOLDER,
     LitellmPlaceholderStreamFilter,
     clean_text,
+    redact_uri,
     strip_litellm_placeholder,
 )
 
@@ -190,3 +191,48 @@ class TestLitellmPlaceholderStreamFilter:
         for ch in LITELLM_EMPTY_PLACEHOLDER:
             f.feed(ch)
         assert f.finalize() == ""
+
+
+class TestRedactUri:
+    def test_empty_string_returns_empty(self):
+        assert redact_uri("") == ""
+
+    def test_none_returns_none(self):
+        assert redact_uri(None) is None
+
+    def test_uri_with_user_and_password_redacted(self):
+        assert redact_uri("mysql://alice:secret@db.example.com:3306/sales") == (
+            "mysql://alice:***@db.example.com:3306/sales"
+        )
+
+    def test_uri_with_password_only_redacted(self):
+        assert redact_uri("postgresql://:secret@host/db") == "postgresql://***@host/db"
+
+    def test_uri_without_password_unchanged(self):
+        uri = "postgresql://alice@db.example.com:5432/sales"
+        assert redact_uri(uri) == uri
+
+    def test_uri_without_credentials_unchanged(self):
+        uri = "sqlite:///tmp/local.db"
+        assert redact_uri(uri) == uri
+
+    def test_query_and_fragment_preserved(self):
+        assert redact_uri("postgresql://u:p@host:5432/db?sslmode=require#frag") == (
+            "postgresql://u:***@host:5432/db?sslmode=require#frag"
+        )
+
+    def test_invalid_uri_without_password_returned_as_is(self):
+        # No password → early return, never touches the malformed port.
+        weird = "http://[::1]:bad/path"
+        assert redact_uri(weird) == weird
+
+    def test_ipv6_host_brackets_preserved(self):
+        assert redact_uri("postgresql://u:p@[::1]:5432/db") == "postgresql://u:***@[::1]:5432/db"
+
+    def test_ipv6_host_without_port_brackets_preserved(self):
+        assert redact_uri("postgresql://u:p@[::1]/db") == "postgresql://u:***@[::1]/db"
+
+    def test_malformed_port_with_password_omits_port(self):
+        # parts.port raises ValueError; we must not propagate, and the port
+        # is dropped from the redacted netloc rather than crashing.
+        assert redact_uri("http://u:p@example.com:bad/path") == "http://u:***@example.com/path"

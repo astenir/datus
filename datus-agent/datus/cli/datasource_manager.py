@@ -11,7 +11,6 @@ without requiring users to manually write conf/agent.yml files.
 """
 
 from getpass import getpass
-from urllib.parse import urlsplit, urlunsplit
 
 from rich.console import Console
 from rich.prompt import Confirm, Prompt
@@ -23,24 +22,10 @@ from datus.utils.constants import DBType
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.path_manager import get_path_manager
+from datus.utils.text_utils import redact_uri
 
 logger = get_logger(__name__)
 console = Console()
-
-
-def _redact_uri(uri: str) -> str:
-    """Redact any password in a database URI, keeping scheme/host/path visible."""
-    try:
-        parts = urlsplit(uri)
-    except ValueError:
-        return uri
-    if parts.password is None:
-        return uri
-    username = parts.username or ""
-    host = parts.hostname or ""
-    port = f":{parts.port}" if parts.port else ""
-    netloc = f"{username}:***@{host}{port}" if username else f"***@{host}{port}"
-    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
 def _validate_datasource_name(name: str) -> tuple[bool, str]:
@@ -153,7 +138,7 @@ class DatasourceManager:
             if db_config.host:
                 console.print(f"    Host: {db_config.host}:{db_config.port}")
             if db_config.uri:
-                console.print(f"    URI: {_redact_uri(db_config.uri)}")
+                console.print(f"    URI: {redact_uri(db_config.uri)}")
             if db_config.database:
                 console.print(f"    Database: {db_config.database}")
             if db_config.schema:

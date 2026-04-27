@@ -29,6 +29,7 @@ from datus.storage.semantic_model.store import SemanticModelRAG
 from datus.tools.db_tools.db_manager import DBManager
 from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import parse_table_name_parts
+from datus.utils.text_utils import redact_uri
 
 logger = get_logger(__name__)
 # Database types that do NOT support schema switching
@@ -596,5 +597,5 @@ def _get_uri(connector: BaseSqlConnector) -> str:
         return ""
     connection_string = getattr(connector, "connection_string", "")
     if connection_string:
-        return connection_string
+        return redact_uri(connection_string)
     return f"{connector.dialect}://"
