@@ -163,14 +163,14 @@ def test_exception_on_nonexistent_table(connector: GreenplumConnector):
 def test_full_name_with_schema(connector: GreenplumConnector):
     """Test full_name with schema."""
     full_name = connector.full_name(schema_name="myschema", table_name="mytable")
-    assert full_name == '"test"."myschema"."mytable"'
+    assert full_name == f'"{connector.database_name}"."myschema"."mytable"'
 
 
 @pytest.mark.integration
 def test_identifier(connector: GreenplumConnector):
     """Test identifier generation."""
     identifier = connector.identifier(schema_name="myschema", table_name="mytable")
-    assert identifier == "test.myschema.mytable"
+    assert identifier == f"{connector.database_name}.myschema.mytable"
 
 
 # ==================== Greenplum-Specific Tests ====================

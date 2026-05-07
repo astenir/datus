@@ -1,11 +1,10 @@
 services:
   hive-metastore:
     image: apache/hive:4.0.1
-    container_name: datus-hive-metastore
     environment:
       SERVICE_NAME: metastore
     ports:
-      - "9083:9083"
+      - "${HIVE_METASTORE_HOST_PORT:-9083}:9083"
     volumes:
       - hive_warehouse:/opt/hive/data/warehouse
     healthcheck:
@@ -17,14 +16,13 @@ services:
 
   hive-server:
     image: apache/hive:4.0.1
-    container_name: datus-hive-server
     environment:
       SERVICE_NAME: hiveserver2
       SERVICE_OPTS: "-Dhive.metastore.uris=thrift://hive-metastore:9083"
       IS_RESUME: "true"
     ports:
-      - "10000:10000"
-      - "10002:10002"
+      - "${HIVE_THRIFT_HOST_PORT:-10000}:10000"
+      - "${HIVE_WEBUI_HOST_PORT:-10002}:10002"
     depends_on:
       hive-metastore:
         condition: service_healthy

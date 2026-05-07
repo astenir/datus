@@ -48,6 +48,10 @@ def hive_catalog_setup() -> Generator[str, None, None]:
             )
             """
         )
+        try:
+            conn.get_databases(catalog_name=HIVE_CATALOG_NAME)
+        except Exception as e:
+            pytest.skip(f"Hive catalog not available: {e}")
         yield HIVE_CATALOG_NAME
     except Exception as e:
         pytest.skip(f"Failed to create Hive catalog: {e}")
