@@ -34,6 +34,9 @@ cd datus-greenplum && python -m pytest tests/unit/ -v
 
 # Integration tests (requires running Greenplum)
 cd datus-greenplum
-docker-compose up -d
+docker compose up -d
 python -m pytest tests/integration/ -v
 ```
+
+The compose environment uses Greenplum 6.27.1 and exposes
+`localhost:15432` with `gpadmin/pivotal` and database `test`.

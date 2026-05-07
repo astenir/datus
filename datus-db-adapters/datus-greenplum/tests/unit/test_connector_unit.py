@@ -319,27 +319,55 @@ def test_get_distribution_policy_by_column():
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = GreenplumConnector(config)
-        mock_df = pd.DataFrame({"attname": ["id", "name"]})
-        connector._execute_pandas = MagicMock(return_value=mock_df)
+        connector._execute_pandas = MagicMock(
+            side_effect=[
+                pd.DataFrame({"attname": ["distkey"]}),
+                pd.DataFrame({"attname": ["id", "name"]}),
+            ]
+        )
 
         result = connector._get_distribution_policy("public", "test_table")
 
         assert result == 'DISTRIBUTED BY ("id", "name")'
-        # Verify attrnums is used in query (not distkey)
-        sql_arg = connector._execute_pandas.call_args[0][0]
+        sql_arg = connector._execute_pandas.call_args_list[1][0][0]
+        assert "dp.distkey" in sql_arg
+        assert "dp.attrnums" not in sql_arg
+
+
+def test_get_distribution_policy_uses_attrnums_for_older_greenplum():
+    """Test _get_distribution_policy supports older Greenplum catalog shape."""
+    config = GreenplumConfig(username="gpadmin")
+
+    with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
+        connector = GreenplumConnector(config)
+        connector._execute_pandas = MagicMock(
+            side_effect=[
+                pd.DataFrame({"attname": ["attrnums"]}),
+                pd.DataFrame({"attname": ["id"]}),
+            ]
+        )
+
+        result = connector._get_distribution_policy("public", "test_table")
+
+        assert result == 'DISTRIBUTED BY ("id")'
+        sql_arg = connector._execute_pandas.call_args_list[1][0][0]
         assert "dp.attrnums" in sql_arg
         assert "dp.distkey" not in sql_arg
 
 
 @pytest.mark.acceptance
 def test_get_distribution_policy_random():
-    """Test _get_distribution_policy returns DISTRIBUTED RANDOMLY for null attrnums."""
+    """Test _get_distribution_policy returns DISTRIBUTED RANDOMLY for null keys."""
     config = GreenplumConfig(username="gpadmin")
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = GreenplumConnector(config)
-        mock_df = pd.DataFrame({"attname": [None]})
-        connector._execute_pandas = MagicMock(return_value=mock_df)
+        connector._execute_pandas = MagicMock(
+            side_effect=[
+                pd.DataFrame({"attname": ["distkey"]}),
+                pd.DataFrame({"attname": [None]}),
+            ]
+        )
 
         result = connector._get_distribution_policy("public", "test_table")
 
@@ -352,8 +380,12 @@ def test_get_distribution_policy_empty_result():
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = GreenplumConnector(config)
-        mock_df = pd.DataFrame({"attname": []})
-        connector._execute_pandas = MagicMock(return_value=mock_df)
+        connector._execute_pandas = MagicMock(
+            side_effect=[
+                pd.DataFrame({"attname": ["distkey"]}),
+                pd.DataFrame({"attname": []}),
+            ]
+        )
 
         result = connector._get_distribution_policy("public", "test_table")
 
@@ -367,7 +399,12 @@ def test_get_distribution_policy_error_returns_none():
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = GreenplumConnector(config)
-        connector._execute_pandas = MagicMock(side_effect=Exception("catalog error"))
+        connector._execute_pandas = MagicMock(
+            side_effect=[
+                pd.DataFrame({"attname": ["distkey"]}),
+                Exception("catalog error"),
+            ]
+        )
 
         result = connector._get_distribution_policy("public", "test_table")
 
@@ -380,12 +417,16 @@ def test_get_distribution_policy_escapes_input():
 
     with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
         connector = GreenplumConnector(config)
-        mock_df = pd.DataFrame({"attname": ["id"]})
-        connector._execute_pandas = MagicMock(return_value=mock_df)
+        connector._execute_pandas = MagicMock(
+            side_effect=[
+                pd.DataFrame({"attname": ["distkey"]}),
+                pd.DataFrame({"attname": ["id"]}),
+            ]
+        )
 
         connector._get_distribution_policy("it's", "tab'le")
 
-        sql_arg = connector._execute_pandas.call_args[0][0]
+        sql_arg = connector._execute_pandas.call_args_list[1][0][0]
         assert "it''s" in sql_arg
         assert "tab''le" in sql_arg
 

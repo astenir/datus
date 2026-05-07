@@ -45,6 +45,7 @@ class GreenplumConnector(PostgreSQLConnector, MigrationTargetMixin):
         super().__init__(config)
         # Keep reference to the original Greenplum config
         self.config = config
+        self._distribution_policy_key_column: Optional[str] = None
 
     # ==================== System Resources ====================
 
@@ -73,6 +74,31 @@ class GreenplumConnector(PostgreSQLConnector, MigrationTargetMixin):
 
     # ==================== DDL Generation ====================
 
+    def _get_distribution_policy_key_column(self) -> str:
+        """Return the catalog column that stores distribution key attnums."""
+        if self._distribution_policy_key_column is not None:
+            return self._distribution_policy_key_column
+
+        sql = """
+            SELECT attname
+            FROM pg_attribute
+            WHERE attrelid = 'pg_catalog.gp_distribution_policy'::regclass
+              AND attname IN ('distkey', 'attrnums')
+              AND NOT attisdropped
+            ORDER BY CASE attname WHEN 'distkey' THEN 0 ELSE 1 END
+            LIMIT 1
+        """
+        result = self._execute_pandas(sql)
+        if result.empty:
+            raise RuntimeError("Could not find distribution key column in gp_distribution_policy")
+
+        policy_key_column = str(result["attname"].iloc[0])
+        if policy_key_column not in {"distkey", "attrnums"}:
+            raise RuntimeError(f"Unexpected distribution key column: {policy_key_column}")
+
+        self._distribution_policy_key_column = policy_key_column
+        return policy_key_column
+
     def _get_distribution_policy(self, schema_name: str, table_name: str) -> Optional[str]:
         """Get distribution policy clause for a Greenplum table.
 
@@ -87,14 +113,15 @@ class GreenplumConnector(PostgreSQLConnector, MigrationTargetMixin):
         safe_table = _escape_literal(table_name)
 
         try:
-            # GP 4.x uses `attrnums` (int2vector); GP 5+ uses `distkey` (int2[])
+            # GP 5 and older use `attrnums`; GP 6+ renamed it to `distkey`.
+            policy_key_column = self._get_distribution_policy_key_column()
             sql = f"""
                 SELECT a.attname
                 FROM gp_distribution_policy dp
                 JOIN pg_class c ON dp.localoid = c.oid
                 JOIN pg_namespace n ON c.relnamespace = n.oid
                 LEFT JOIN pg_attribute a ON a.attrelid = c.oid
-                    AND a.attnum = ANY(dp.attrnums)
+                    AND a.attnum = ANY(dp.{policy_key_column})
                 WHERE n.nspname = '{safe_schema}'
                   AND c.relname = '{safe_table}'
                 ORDER BY a.attnum

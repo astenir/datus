@@ -178,6 +178,25 @@ def test_identifier(connector: GreenplumConnector):
 
 @pytest.mark.integration
 @pytest.mark.acceptance
+def test_distribution_policy_catalog_uses_distkey(connector: GreenplumConnector):
+    """Test the integration image covers the Greenplum 6+ distribution catalog."""
+    result = connector._execute_pandas(
+        """
+        SELECT attname
+        FROM pg_attribute
+        WHERE attrelid = 'pg_catalog.gp_distribution_policy'::regclass
+          AND attname IN ('distkey', 'attrnums')
+          AND NOT attisdropped
+        ORDER BY attname
+        """
+    )
+
+    columns = set(result["attname"].tolist())
+    assert columns == {"distkey"}
+
+
+@pytest.mark.integration
+@pytest.mark.acceptance
 def test_distribution_policy_by_column(connector: GreenplumConnector, config: GreenplumConfig):
     """Test DDL includes DISTRIBUTED BY for tables with explicit distribution key."""
     suffix = uuid.uuid4().hex[:8]
