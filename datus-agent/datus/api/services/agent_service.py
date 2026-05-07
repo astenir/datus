@@ -123,8 +123,10 @@ def _read_description(node: dict) -> str:
 def _parse_tools(value: Any) -> list[str]:
     """Normalize the yaml ``tools`` field to a list of pattern strings.
 
-    Accepts either a comma-separated string (legacy yaml form) or a list, and
-    trims surrounding whitespace from every entry. Empty entries are dropped.
+    Accepts either a comma-separated string (the canonical yaml form, which
+    the runtime in ``GenSQLAgenticNode.setup_tools`` calls ``str.split`` on)
+    or a list, and trims surrounding whitespace from every entry. Empty
+    entries are dropped.
     """
     if not value:
         return []
@@ -135,6 +137,235 @@ def _parse_tools(value: Any) -> list[str]:
     else:
         return []
     return [str(item).strip() for item in items if str(item).strip()]
+
+
+def _format_csv(value: Any) -> str:
+    """Render a list / tuple / string into the comma-separated yaml form.
+
+    The runtime expects ``tools``, ``mcp``, and the ``scoped_context`` path
+    fields (``catalogs``, ``subjects``, ``tables``, …) as comma-separated
+    strings — ``GenSQLAgenticNode.setup_tools`` and ``ScopedContext.as_lists``
+    both rely on ``str.split(",")`` to recover the entries. Persisting these
+    as yaml lists silently breaks both call sites, so the API normalizes on
+    write.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        items = value.split(",")
+    elif isinstance(value, (list, tuple)):
+        items = value
+    else:
+        return ""
+    cleaned = [str(item).strip() for item in items if str(item) and str(item).strip()]
+    return ", ".join(cleaned)
+
+
+def _parse_csv(value: Any) -> list[str]:
+    """Inverse of :func:`_format_csv` — split the yaml form back into a list."""
+    return _parse_tools(value)
+
+
+def _strip_leading_slashes(value: Any) -> list[str]:
+    """Trim and drop leading ``/`` from each entry in a path list.
+
+    Catalog / subject entries arrive from the editor as absolute-style paths
+    (``/Commerce/Orders/Average_Gross_Order_Value``), but the runtime stores
+    them without the leading slash so ``ScopedContext.as_lists`` and the
+    downstream lookups don't treat the slash as a separator. Normalizing on
+    write keeps both the API contract and the on-disk shape consistent —
+    ``["/A/B", "C"]`` → ``["A/B", "C"]``.
+    """
+    return [token.lstrip("/") for token in _parse_csv(value) if token.lstrip("/")]
+
+
+# Keys inside ``scoped_context`` that hold subject-tree path entries. The API's
+# flat ``subjects`` array is the union of all three; the runtime stores them
+# split because each store (metrics, reference SQL, ext_knowledge) owns its own
+# scope filter.
+_SUBJECT_BUCKET_KEYS: tuple[str, ...] = ("metrics", "sqls", "ext_knowledge")
+
+
+def _classify_subject_paths(
+    agent_config: AgentConfig,
+    subject_paths: list[str],
+    datasource_id: Optional[str] = None,
+) -> dict[str, list[str]]:
+    """Bucket subject paths into ``metrics`` / ``sqls`` / ``ext_knowledge``.
+
+    The API surfaces a single ``subjects`` array — dot-separated paths like
+    ``Commerce.Orders.Average_Order_Value.average_gross_order_value`` — that's
+    the merged union of all entries the editor's subject-tree exposes
+    (Metrics, Reference SQLs, Knowledge — see
+    ``ExplorerService.get_subject_list``). The runtime expects them split:
+    ``ScopedContext.metrics`` / ``.sqls`` / ``.ext_knowledge`` each drive an
+    independent scope filter.
+
+    For every input path:
+
+    1. Split via ``split_reference_path`` (handles quoted segments).
+    2. Resolve the parent subject node via ``SubjectTreeStore.get_node_by_path``.
+    3. Probe the metric / reference-sql / ext-knowledge stores for an entry
+       named ``parts[-1]`` under that node.
+    4. Bucket on the first store that owns the name.
+
+    Paths that don't resolve land in ``metrics`` so the user's selection is
+    never silently dropped. If the storage layer can't be initialized at all
+    (no datasource bound, registry unavailable, etc.) every path falls back
+    to ``metrics`` and a warning is logged — the editor's input survives the
+    round-trip even when the project hasn't bootstrapped its KB yet.
+    """
+    buckets: dict[str, list[str]] = {key: [] for key in _SUBJECT_BUCKET_KEYS}
+    if not subject_paths:
+        return buckets
+
+    try:
+        from datus.storage.ext_knowledge.store import ExtKnowledgeRAG
+        from datus.storage.metric.store import MetricRAG
+        from datus.storage.reference_sql.store import ReferenceSqlRAG
+        from datus.storage.registry import get_subject_tree_store
+        from datus.utils.reference_paths import split_reference_path
+    except ImportError:
+        logger.warning(
+            "Subject classification skipped — storage modules unavailable; routing all subjects to 'metrics'"
+        )
+        buckets["metrics"] = list(subject_paths)
+        return buckets
+
+    ds = datasource_id or getattr(agent_config, "current_datasource", None)
+    if not ds:
+        logger.warning(
+            "Subject classification skipped — no datasource bound on AgentConfig; routing all subjects to 'metrics'"
+        )
+        buckets["metrics"] = list(subject_paths)
+        return buckets
+
+    try:
+        subject_tree = get_subject_tree_store(project=agent_config.project_name)
+        metric_storage = MetricRAG(agent_config, datasource_id=ds).storage
+        sql_storage = ReferenceSqlRAG(agent_config, datasource_id=ds).reference_sql_storage
+        knowledge_storage = ExtKnowledgeRAG(agent_config, datasource_id=ds).store
+    except Exception:
+        logger.warning("Subject classification storage init failed — routing all subjects to 'metrics'", exc_info=True)
+        buckets["metrics"] = list(subject_paths)
+        return buckets
+
+    probes: tuple[tuple[str, Any], ...] = (
+        ("metrics", metric_storage),
+        ("sqls", sql_storage),
+        ("ext_knowledge", knowledge_storage),
+    )
+
+    for path in subject_paths:
+        parts = split_reference_path(path)
+        if not parts:
+            continue
+        parent_path, name = parts[:-1], parts[-1]
+
+        parent_node = None
+        if parent_path:
+            try:
+                parent_node = subject_tree.get_node_by_path(parent_path)
+            except Exception:
+                parent_node = None
+        node_id = parent_node.get("node_id") if isinstance(parent_node, dict) else None
+
+        bucket: Optional[str] = None
+        if node_id is not None:
+            for candidate, storage in probes:
+                try:
+                    matched = storage.list_entries(node_id, name=name, limit=1)
+                except Exception:
+                    matched = None
+                if matched:
+                    bucket = candidate
+                    break
+
+        buckets[bucket or "metrics"].append(path)
+
+    return buckets
+
+
+def _merge_subjects_from_scoped_context(scoped_ctx: Optional[dict]) -> list[str]:
+    """Flatten ``metrics`` / ``sqls`` / ``ext_knowledge`` back into one list.
+
+    Inverse of :func:`_classify_subject_paths`. Stored entries are returned
+    verbatim (canonical dot-separated form), with duplicates dropped while
+    preserving insertion order.
+    """
+    if not isinstance(scoped_ctx, dict):
+        return []
+    merged: list[str] = []
+    seen: set[str] = set()
+    for key in _SUBJECT_BUCKET_KEYS:
+        for token in _parse_csv(scoped_ctx.get(key)):
+            if token and token not in seen:
+                seen.add(token)
+                merged.append(token)
+    return merged
+
+
+def _build_scoped_context(
+    base: Optional[dict],
+    *,
+    datasource: Optional[str] = None,
+    catalogs: Any = None,
+    subject_buckets: Optional[dict[str, list[str]]] = None,
+) -> Optional[dict]:
+    """Merge API-level fields into a runtime-shaped ``scoped_context`` dict.
+
+    ``base`` carries any existing scoped_context payload (yaml-loaded for
+    edits, an explicit ``request.scoped_context`` for inputs that send one).
+
+    ``ScopedContext`` (``datus/schemas/agent_models.py``) only defines
+    ``datasource`` / ``tables`` / ``metrics`` / ``sqls`` / ``ext_knowledge``;
+    the API's ``catalogs`` array is the editor's name for the same scope as
+    runtime ``tables`` (catalog/database/schema/table identifiers consumed by
+    ``ScopedFilterBuilder.build_table_filter``), so this helper writes
+    ``catalogs`` into ``scoped_context.tables`` and never persists a
+    non-runtime ``catalogs`` key. Stale ``catalogs`` keys from earlier
+    versions of this API are dropped on write.
+
+    ``datasource`` mirrors the wizard's behavior — saving a subagent always
+    binds it to the active datasource so ``SubAgentConfig.is_in_datasource``
+    can gate at runtime. Passing an empty string clears the binding;
+    ``None`` leaves the existing value intact.
+
+    ``subject_buckets`` (pre-classified by :func:`_classify_subject_paths`)
+    are written to the runtime-visible ``metrics`` / ``sqls`` /
+    ``ext_knowledge`` keys; passing a non-``None`` ``subject_buckets``
+    rewrites all three bucket keys (an empty bucket clears its key), so the
+    API contract is "the caller's ``subjects`` list is the new full scope."
+
+    Returns ``None`` when the merged dict would be empty.
+    """
+    merged: dict = dict(base) if isinstance(base, dict) else {}
+
+    if datasource is not None:
+        if datasource:
+            merged["datasource"] = datasource
+        else:
+            merged.pop("datasource", None)
+
+    if catalogs is not None:
+        # Drop any non-runtime ``catalogs`` key written by earlier API versions —
+        # only ``tables`` is honored by ``ScopedFilterBuilder.build_table_filter``.
+        merged.pop("catalogs", None)
+        rendered = _format_csv(_strip_leading_slashes(catalogs))
+        if rendered:
+            merged["tables"] = rendered
+        else:
+            merged.pop("tables", None)
+
+    if subject_buckets is not None:
+        for key in _SUBJECT_BUCKET_KEYS:
+            rendered = _format_csv(subject_buckets.get(key, []))
+            if rendered:
+                merged[key] = rendered
+            else:
+                merged.pop(key, None)
+
+    return merged or None
 
 
 def _utc_now_iso() -> str:
@@ -283,6 +514,16 @@ class AgentService:
 
             created_at = _file_mtime_iso(configuration_manager().config_path)
 
+        # The API ``catalogs`` field maps to ``scoped_context.tables`` (the
+        # runtime-honored key consumed by ``ScopedFilterBuilder.build_table_filter``).
+        # ``subjects`` is recomposed from the three runtime buckets
+        # (``metrics`` / ``sqls`` / ``ext_knowledge``) — the inverse of the
+        # save-side classification. Stored dot-form (wizard convention) is
+        # converted to the API's slash-form on the way out.
+        scoped_ctx = agent.get("scoped_context") if isinstance(agent.get("scoped_context"), dict) else {}
+        catalogs = _strip_leading_slashes(scoped_ctx.get("tables"))
+        subjects = _merge_subjects_from_scoped_context(scoped_ctx)
+
         return Result(
             success=True,
             data={
@@ -294,8 +535,8 @@ class AgentService:
                     "created_at": created_at,
                     "tools": _parse_tools(agent.get("tools")),
                     "rules": agent.get("rules") or [],
-                    "catalogs": agent.get("catalogs") or [],
-                    "subjects": agent.get("subjects") or [],
+                    "catalogs": catalogs,
+                    "subjects": subjects,
                 }
             },
         )
@@ -367,15 +608,39 @@ class AgentService:
         # API field ``description`` is persisted as ``agent_description`` to
         # match what the runtime reads (sub_agent_task_tool / agentic_node /
         # the wizard all look up ``agent_description`` from agentic_nodes).
+        # ``tools`` is rendered as the comma-separated yaml form expected by
+        # ``GenSQLAgenticNode.setup_tools``; ``catalogs`` / ``subjects`` are
+        # nested under ``scoped_context`` so a single block describes the
+        # subagent's full reference scope.
         agent_entry = {
             "type": request.type or "gen_sql",
             "agent_description": request.description or "",
-            "tools": request.tools or [],
-            "catalogs": request.catalogs or [],
-            "subjects": request.subjects or [],
+            "tools": _format_csv(request.tools),
             "rules": request.rules or [],
             "created_at": _utc_now_iso(),
         }
+        # Bind the subagent to the active datasource (mirrors the wizard so
+        # ``SubAgentConfig.is_in_datasource`` can gate task delegation at runtime).
+        # ``request.datasource_id`` wins when set; otherwise fall back to the
+        # AgentConfig's current datasource.
+        datasource = request.datasource_id or getattr(agent_config, "current_datasource", "") or ""
+        subject_buckets = (
+            _classify_subject_paths(
+                agent_config,
+                list(request.subjects),
+                datasource_id=datasource or None,
+            )
+            if request.subjects
+            else None
+        )
+        scoped_ctx = _build_scoped_context(
+            base=None,
+            datasource=datasource,
+            catalogs=request.catalogs,
+            subject_buckets=subject_buckets,
+        )
+        if scoped_ctx:
+            agent_entry["scoped_context"] = scoped_ctx
         if request.prompt_template:
             agent_entry["prompt_template"] = request.prompt_template
         if request.prompt_version:
@@ -505,7 +770,75 @@ class AgentService:
         if "description" in update_data:
             update_data["agent_description"] = update_data.pop("description")
             agent.pop("description", None)
-        if not update_data and prompt_content is None:
+
+        # ``tools`` is persisted as the comma-separated yaml form expected by
+        # ``GenSQLAgenticNode.setup_tools`` (which calls ``str.split(",")``).
+        if "tools" in update_data:
+            update_data["tools"] = _format_csv(update_data["tools"])
+
+        # The API ``catalogs`` field maps to ``scoped_context.tables`` — that's
+        # the runtime-honored key consumed by
+        # ``ScopedFilterBuilder.build_table_filter``. ``subjects`` is *classified*
+        # (via the metric / reference-sql / ext-knowledge stores) and split
+        # across the runtime-visible ``metrics`` / ``sqls`` / ``ext_knowledge``
+        # keys, since ``ScopedContext`` has no flat ``subjects`` field. Editing
+        # any scope-related field also rewrites ``scoped_context.datasource`` to
+        # the active datasource so ``SubAgentConfig.is_in_datasource`` agrees
+        # with the saved binding. Pre-existing yaml-loaded scoped_context keys
+        # survive the merge; top-level ``catalogs`` / ``subjects`` from older
+        # edits are dropped so the read path can't see two competing copies.
+        catalogs_input = update_data.pop("catalogs", None)
+        subjects_input = update_data.pop("subjects", None)
+        scope_touched = catalogs_input is not None or subjects_input is not None or "scoped_context" in update_data
+        # Tracks deletions applied directly to ``agent`` (the live yaml dict)
+        # rather than through ``update_data``. ``agent.update(update_data)``
+        # below can't represent a key removal, so we have to bypass the
+        # ``not update_data`` short-circuit and force ``_save_agentic_nodes``
+        # to run when the only mutation was a pop.
+        agent_dict_mutated = False
+        if scope_touched:
+            base_ctx: dict = {}
+            existing = agent.get("scoped_context")
+            if isinstance(existing, dict):
+                base_ctx.update(existing)
+            request_ctx = update_data.pop("scoped_context", None)
+            if isinstance(request_ctx, dict):
+                base_ctx.update(request_ctx)
+            # Resolve the effective datasource *before* classification: if
+            # ``agent_config.current_datasource`` is unset but the agent
+            # already has a saved binding under ``scoped_context.datasource``,
+            # the classifier must use the saved DS to look up entries in the
+            # right metric / sql / ext_knowledge stores. Otherwise it would
+            # fall back to "no datasource → all metrics" and silently
+            # mis-bucket subjects against a binding that's about to be
+            # re-persisted by ``_build_scoped_context``.
+            datasource = getattr(agent_config, "current_datasource", "") or base_ctx.get("datasource") or ""
+            subject_buckets = None
+            if subjects_input is not None:
+                subject_buckets = _classify_subject_paths(
+                    agent_config,
+                    list(subjects_input),
+                    datasource_id=datasource or None,
+                )
+            merged = _build_scoped_context(
+                base=base_ctx,
+                datasource=datasource,
+                catalogs=catalogs_input,
+                subject_buckets=subject_buckets,
+            )
+            if merged:
+                update_data["scoped_context"] = merged
+            elif agent.pop("scoped_context", None) is not None:
+                # Scope was fully cleared — record the deletion so the
+                # subsequent save persists it instead of leaving the old
+                # block on disk.
+                agent_dict_mutated = True
+            if agent.pop("catalogs", None) is not None:
+                agent_dict_mutated = True
+            if agent.pop("subjects", None) is not None:
+                agent_dict_mutated = True
+
+        if not update_data and prompt_content is None and not agent_dict_mutated:
             return Result(success=True, data={"name": request.id, "id": request.id})
 
         # Merge update data into the agent entry

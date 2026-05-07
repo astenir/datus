@@ -12,8 +12,14 @@ from datus.api.services.agent_service import (
     VALID_TOOL_CATEGORIES,
     VALID_TOOL_METHODS,
     AgentService,
+    _build_scoped_context,
+    _classify_subject_paths,
+    _format_csv,
+    _merge_subjects_from_scoped_context,
     _normalize_created_at,
+    _parse_csv,
     _parse_tools,
+    _strip_leading_slashes,
     _utc_now_iso,
     _validate_tools,
     sanitize_agentic_node_name,
@@ -879,3 +885,732 @@ class TestEditAgent:
         # Legacy key must be cleared so downstream readers can't pick up
         # the old text.
         assert "description" not in entry
+
+
+class TestFormatAndParseCsv:
+    """Tests for _format_csv / _parse_csv — list ↔ comma-separated string."""
+
+    def test_list_renders_with_separator(self):
+        """A list is joined with ``", "`` so it matches the documented yaml form."""
+        rendered = _format_csv(["semantic_tools.*", "db_tools.*", "context_search_tools.list_subject_tree"])
+        assert rendered == "semantic_tools.*, db_tools.*, context_search_tools.list_subject_tree"
+
+    def test_string_input_is_normalized(self):
+        """A pre-formatted string is re-rendered with the canonical spacing."""
+        assert _format_csv("a,  b , c") == "a, b, c"
+
+    def test_empty_inputs_render_empty_string(self):
+        """``None`` / empty list / empty string all collapse to ``""``."""
+        assert _format_csv(None) == ""
+        assert _format_csv([]) == ""
+        assert _format_csv("") == ""
+
+    def test_blank_entries_are_dropped(self):
+        """Whitespace-only entries don't pollute the rendered string."""
+        assert _format_csv(["a", "", "  ", "b"]) == "a, b"
+
+    def test_round_trip_through_parse(self):
+        """``_parse_csv(_format_csv(items)) == items`` for trimmed entries."""
+        items = ["default_catalog.mart.mf_time_spine", "default_catalog.mart.raw_orders"]
+        assert _parse_csv(_format_csv(items)) == items
+
+
+class TestStripLeadingSlashes:
+    """Tests for _strip_leading_slashes — defensive normalizer for catalog inputs.
+
+    Catalogs in the API contract are dot-separated (e.g.
+    ``default_catalog.mart.raw_orders``), so the strip is normally a
+    no-op. The helper still runs for defensive normalization, and the
+    cases here pin down its mechanical behavior on path-style strings.
+    """
+
+    def test_each_entry_loses_leading_slash(self):
+        """A leading ``/`` is removed from every entry in the list."""
+        assert _strip_leading_slashes(["/foo/bar", "/baz"]) == ["foo/bar", "baz"]
+
+    def test_string_input_is_split_and_stripped(self):
+        """A pre-formatted comma-separated string is split before stripping."""
+        assert _strip_leading_slashes("/foo/bar, /baz") == ["foo/bar", "baz"]
+
+    def test_no_leading_slash_passes_through(self):
+        """Dot-form catalog entries (no leading slash) survive unchanged."""
+        assert _strip_leading_slashes(["default_catalog.mart.mf_time_spine", "default_catalog.mart.raw_orders"]) == [
+            "default_catalog.mart.mf_time_spine",
+            "default_catalog.mart.raw_orders",
+        ]
+
+    def test_inner_slashes_are_kept(self):
+        """Only the leading slash is trimmed — inner separators are preserved."""
+        assert _strip_leading_slashes(["/foo/bar"]) == ["foo/bar"]
+
+    def test_slash_only_entry_is_dropped(self):
+        """A bare ``/`` collapses to nothing and is filtered out."""
+        assert _strip_leading_slashes(["/", "/foo"]) == ["foo"]
+
+
+class TestBuildScopedContext:
+    """Tests for _build_scoped_context — fold catalogs/subject buckets into scoped_context."""
+
+    def test_catalogs_writes_runtime_tables_key(self):
+        """API ``catalogs`` lands on the runtime-honored ``tables`` key.
+
+        ``ScopedContext`` has no ``catalogs`` field; the runtime's table-scope
+        filter (``ScopedFilterBuilder.build_table_filter``) reads ``tables``,
+        so the editor's ``catalogs`` array is the same scope under a
+        different surface name. Catalog entries are dot-separated table
+        identifiers (``catalog.schema.table``) consumed by the right-aligned
+        token parser in ``ScopedFilterBuilder.build_table_filter``.
+        """
+        result = _build_scoped_context(
+            None,
+            catalogs=["default_catalog.mart.mf_time_spine", "default_catalog.mart.raw_orders"],
+        )
+        assert result == {"tables": "default_catalog.mart.mf_time_spine, default_catalog.mart.raw_orders"}
+
+    def test_subject_buckets_write_runtime_keys(self):
+        """``subject_buckets`` writes to ``metrics`` / ``sqls`` / ``ext_knowledge``.
+
+        Subject paths are stored verbatim in dot-form; no leading-slash
+        stripping happens since the API contract is dot-separated.
+        """
+        result = _build_scoped_context(
+            None,
+            catalogs=["default_catalog.mart.mf_time_spine"],
+            subject_buckets={
+                "metrics": ["Finance.Revenue.M1", "Sales.M2"],
+                "sqls": ["Finance.SQL.s1"],
+                "ext_knowledge": [],
+            },
+        )
+        # ext_knowledge is empty, so its key is omitted; subjects key never appears.
+        assert result == {
+            "tables": "default_catalog.mart.mf_time_spine",
+            "metrics": "Finance.Revenue.M1, Sales.M2",
+            "sqls": "Finance.SQL.s1",
+        }
+
+    def test_datasource_is_written_when_provided(self):
+        """A non-empty datasource is recorded under ``scoped_context.datasource``."""
+        result = _build_scoped_context(
+            None,
+            datasource="finance",
+            catalogs=["default_catalog.mart.mf_time_spine"],
+        )
+        assert result == {
+            "datasource": "finance",
+            "tables": "default_catalog.mart.mf_time_spine",
+        }
+
+    def test_empty_datasource_clears_existing_binding(self):
+        """An empty-string ``datasource`` removes a stale binding from ``base``."""
+        base = {"datasource": "old_ds", "tables": "default_catalog.mart.raw_orders"}
+        result = _build_scoped_context(base, datasource="")
+        assert result == {"tables": "default_catalog.mart.raw_orders"}
+
+    def test_none_datasource_preserves_existing_binding(self):
+        """``datasource=None`` leaves any existing binding intact."""
+        base = {"datasource": "keep_me"}
+        result = _build_scoped_context(base, catalogs=["default_catalog.mart.mf_time_spine"])
+        assert result == {"datasource": "keep_me", "tables": "default_catalog.mart.mf_time_spine"}
+
+    def test_catalogs_overwrites_tables_and_drops_legacy_catalogs_key(self):
+        """Catalogs fully rewrites ``tables`` and clears any non-runtime ``catalogs`` key.
+
+        Earlier API versions wrote ``scoped_context.catalogs`` directly. Once
+        the editor calls edit_agent again with catalogs the helper migrates
+        them under ``tables`` so the read path can't see two competing copies.
+        """
+        base = {
+            "tables": "default_catalog.mart.legacy_table",
+            "catalogs": "stale_legacy_pattern.*",
+            "metrics": "Finance.Revenue.daily_revenue",
+        }
+        result = _build_scoped_context(base, catalogs=["default_catalog.mart.raw_orders"])
+        assert result == {
+            "tables": "default_catalog.mart.raw_orders",
+            "metrics": "Finance.Revenue.daily_revenue",
+        }
+
+    def test_subject_buckets_overwrite_existing_bucket_keys(self):
+        """Passing subject_buckets fully rewrites the three bucket keys.
+
+        Empty bucket entries clear their key (rule: the editor's subjects array
+        is the new full scope for the agent).
+        """
+        base = {
+            "tables": "default_catalog.mart.raw_orders",
+            "metrics": "Finance.Revenue.old_metric",
+            "sqls": "Sales.stale_query",
+            "ext_knowledge": "Docs.stale_kb",
+        }
+        result = _build_scoped_context(
+            base,
+            subject_buckets={
+                "metrics": ["Finance.Revenue.daily_revenue"],
+                "sqls": [],
+                "ext_knowledge": [],
+            },
+        )
+        # tables survives; the three subject keys are rewritten — empty buckets clear.
+        assert result == {
+            "tables": "default_catalog.mart.raw_orders",
+            "metrics": "Finance.Revenue.daily_revenue",
+        }
+
+    def test_explicit_empty_catalogs_clears_existing_tables(self):
+        """Sending ``catalogs=[]`` removes the ``tables`` key from a base scoped_context."""
+        base = {"tables": "default_catalog.mart.raw_orders", "metrics": "Finance.Revenue.daily_revenue"}
+        result = _build_scoped_context(base, catalogs=[])
+        assert result == {"metrics": "Finance.Revenue.daily_revenue"}
+
+    def test_none_subject_buckets_preserves_existing_keys(self):
+        """``subject_buckets=None`` leaves any existing metrics/sqls/ext_knowledge intact."""
+        base = {"metrics": "Finance.Revenue.daily_revenue", "sqls": "Sales.region_query"}
+        result = _build_scoped_context(
+            base,
+            catalogs=["default_catalog.mart.mf_time_spine"],
+            subject_buckets=None,
+        )
+        assert result == {
+            "metrics": "Finance.Revenue.daily_revenue",
+            "sqls": "Sales.region_query",
+            "tables": "default_catalog.mart.mf_time_spine",
+        }
+
+    def test_empty_result_returns_none(self):
+        """When the merged dict ends up empty, return ``None`` so callers omit the block."""
+        assert _build_scoped_context(None) is None
+        assert _build_scoped_context({}, catalogs=[]) is None
+        assert _build_scoped_context(None, subject_buckets={"metrics": [], "sqls": [], "ext_knowledge": []}) is None
+
+
+class TestMergeSubjectsFromScopedContext:
+    """Tests for _merge_subjects_from_scoped_context — flatten the three buckets."""
+
+    def test_all_three_buckets_are_concatenated(self):
+        """metrics + sqls + ext_knowledge concatenate into a single subjects list."""
+        scoped = {
+            "metrics": "Commerce.Orders.Avg, Sales.Region",
+            "sqls": "finance.sql_a",
+            "ext_knowledge": "Docs.handbook",
+        }
+        assert _merge_subjects_from_scoped_context(scoped) == [
+            "Commerce.Orders.Avg",
+            "Sales.Region",
+            "finance.sql_a",
+            "Docs.handbook",
+        ]
+
+    def test_stored_entries_are_returned_verbatim(self):
+        """Stored dot-form entries are surfaced unchanged — no path rewriting on read."""
+        scoped = {"metrics": "finance.revenue.daily, sales.region"}
+        assert _merge_subjects_from_scoped_context(scoped) == [
+            "finance.revenue.daily",
+            "sales.region",
+        ]
+
+    def test_duplicates_across_buckets_are_dropped(self):
+        """A path that lands in multiple buckets only appears once in subjects."""
+        scoped = {"metrics": "shared", "sqls": "shared", "ext_knowledge": "unique"}
+        assert _merge_subjects_from_scoped_context(scoped) == ["shared", "unique"]
+
+    def test_missing_or_empty_buckets_yield_empty_list(self):
+        """Empty / non-dict inputs return an empty list."""
+        assert _merge_subjects_from_scoped_context(None) == []
+        assert _merge_subjects_from_scoped_context({}) == []
+        assert _merge_subjects_from_scoped_context({"tables": "t1"}) == []
+
+
+class TestClassifySubjectPaths:
+    """Tests for _classify_subject_paths — bucket subjects into metrics/sqls/ext_knowledge."""
+
+    def test_no_datasource_falls_back_to_metrics(self, real_agent_config):
+        """When the AgentConfig has no datasource bound, every subject defaults to metrics.
+
+        The fallback exists so the editor's input survives a save even when the
+        project hasn't bootstrapped its KB yet — losing the user's selection
+        silently would be the worse failure mode.
+        """
+        real_agent_config.current_datasource = ""
+        result = _classify_subject_paths(real_agent_config, ["Commerce.Orders.Avg", "Sales.Region"])
+        assert result == {
+            "metrics": ["Commerce.Orders.Avg", "Sales.Region"],
+            "sqls": [],
+            "ext_knowledge": [],
+        }
+
+    def test_empty_input_returns_empty_buckets(self, real_agent_config):
+        """An empty subjects list yields an empty bucket dict, not an error."""
+        result = _classify_subject_paths(real_agent_config, [])
+        assert result == {"metrics": [], "sqls": [], "ext_knowledge": []}
+
+    def test_storage_init_failure_falls_back_to_metrics(self, real_agent_config, monkeypatch):
+        """If the metric / sql / knowledge stores can't initialize, all subjects bucket as metrics.
+
+        Forcing a storage-init exception (here via a broken ``MetricRAG.__init__``)
+        exercises the defensive fallback so the API endpoint never raises a 500
+        on a save that the user can otherwise complete.
+        """
+        from datus.storage.metric.store import MetricRAG
+
+        def broken_init(self, *args, **kwargs):
+            raise RuntimeError("storage backend down")
+
+        monkeypatch.setattr(MetricRAG, "__init__", broken_init)
+        result = _classify_subject_paths(real_agent_config, ["Commerce.Orders.Avg"])
+        assert result["metrics"] == ["Commerce.Orders.Avg"]
+        assert result["sqls"] == []
+        assert result["ext_knowledge"] == []
+
+    def test_classifies_via_storage_lookup(self, real_agent_config, monkeypatch):
+        """Each path is bucketed by the first store whose ``list_entries`` matches the name.
+
+        Stubbing the three storages forces a deterministic classification that
+        doesn't depend on the test fixture pre-populating real KB data; the
+        probe order (metrics → sqls → ext_knowledge) is part of the contract.
+        """
+        from datus.storage.ext_knowledge.store import ExtKnowledgeRAG
+        from datus.storage.metric.store import MetricRAG
+        from datus.storage.reference_sql.store import ReferenceSqlRAG
+
+        class _StubStore:
+            def __init__(self, owns: set[str]):
+                self._owns = owns
+
+            def list_entries(self, node_id, name=None, limit=None):
+                return [{"name": name}] if name in self._owns else []
+
+        class _StubTree:
+            def get_node_by_path(self, path):
+                # Return a stable node_id regardless of path so the storages
+                # decide ownership purely by name.
+                return {"node_id": 1}
+
+        def fake_metric_init(self, *args, **kwargs):
+            self.storage = _StubStore({"my_metric"})
+
+        def fake_sql_init(self, *args, **kwargs):
+            self.reference_sql_storage = _StubStore({"my_sql"})
+
+        def fake_knowledge_init(self, *args, **kwargs):
+            self.store = _StubStore({"my_doc"})
+
+        monkeypatch.setattr(MetricRAG, "__init__", fake_metric_init)
+        monkeypatch.setattr(ReferenceSqlRAG, "__init__", fake_sql_init)
+        monkeypatch.setattr(ExtKnowledgeRAG, "__init__", fake_knowledge_init)
+        monkeypatch.setattr(
+            "datus.storage.registry.get_subject_tree_store",
+            lambda project: _StubTree(),
+        )
+
+        result = _classify_subject_paths(
+            real_agent_config,
+            [
+                "Commerce.Orders.my_metric",
+                "Finance.my_sql",
+                "Docs.my_doc",
+                "Unknown.path",
+            ],
+        )
+        # Unknown paths fall back to metrics so the editor's input survives the
+        # round-trip — losing the user's selection silently would be worse.
+        assert result["metrics"] == ["Commerce.Orders.my_metric", "Unknown.path"]
+        assert result["sqls"] == ["Finance.my_sql"]
+        assert result["ext_knowledge"] == ["Docs.my_doc"]
+
+
+@pytest.mark.asyncio
+class TestSubagentScopedContextRoundTrip:
+    """End-to-end checks for the create/edit/get pipeline.
+
+    The contract documented in
+    ``docs/subagent/customized_subagent.zh.md``: ``tools`` is persisted as a
+    comma-separated string (the runtime calls ``str.split(",")``), and
+    ``catalogs`` / ``subjects`` live under ``scoped_context`` so a single
+    block describes the subagent's reference scope.
+    """
+
+    async def test_create_persists_tools_as_csv_string(self, real_agent_config, agent_yml_with_singleton):
+        """Tools list is rendered as the comma-separated yaml form on disk."""
+        import yaml
+
+        from datus.api.models.agent_models import CreateAgentInput
+
+        svc = AgentService()
+        result = await svc.create_agent(
+            CreateAgentInput(
+                name="csv_tools_agent",
+                type="gen_sql",
+                tools=["semantic_tools.*", "db_tools.*", "context_search_tools.list_subject_tree"],
+            ),
+            real_agent_config,
+        )
+        assert result.success is True
+
+        with open(agent_yml_with_singleton) as f:
+            raw = yaml.safe_load(f)
+        entry = raw["agent"]["agentic_nodes"]["csv_tools_agent"]
+        assert entry["tools"] == "semantic_tools.*, db_tools.*, context_search_tools.list_subject_tree"
+
+    async def test_create_folds_catalogs_into_scoped_context_and_classifies_subjects(
+        self, real_agent_config, agent_yml_with_singleton
+    ):
+        """API top-level catalogs/subjects land inside ``scoped_context`` on save.
+
+        ``catalogs`` writes through to the runtime-honored ``tables`` key (no
+        ``catalogs`` key persists, since ``ScopedContext`` doesn't define one).
+        ``subjects`` is *classified* into metrics / sqls / ext_knowledge — no
+        flat ``subjects`` key ever appears on disk because each store owns
+        its own scope filter. Without pre-populated KB stores the classifier
+        falls back to metrics. ``scoped_context.datasource`` is bound to the
+        active datasource so ``SubAgentConfig.is_in_datasource`` agrees.
+        """
+        import yaml
+
+        from datus.api.models.agent_models import CreateAgentInput
+
+        svc = AgentService()
+        result = await svc.create_agent(
+            CreateAgentInput(
+                name="scoped_create_agent",
+                type="gen_sql",
+                catalogs=["default_catalog.mart.mf_time_spine", "default_catalog.mart.raw_orders"],
+                subjects=["Finance.Revenue.Daily"],
+            ),
+            real_agent_config,
+        )
+        assert result.success is True
+
+        with open(agent_yml_with_singleton) as f:
+            raw = yaml.safe_load(f)
+        entry = raw["agent"]["agentic_nodes"]["scoped_create_agent"]
+        # catalogs / subjects must NOT remain at the top level — that was the
+        # legacy shape before this change.
+        assert "catalogs" not in entry
+        assert "subjects" not in entry
+        scoped = entry.get("scoped_context")
+        assert isinstance(scoped, dict)
+        # Active datasource binding is recorded.
+        assert scoped["datasource"] == real_agent_config.current_datasource
+        # No non-runtime ``catalogs`` key — catalogs write through to ``tables``.
+        assert "catalogs" not in scoped
+        assert scoped["tables"] == "default_catalog.mart.mf_time_spine, default_catalog.mart.raw_orders"
+        # Subjects route to ``metrics`` (the fallback bucket) because the
+        # KB stores have no entry named "Daily" under "Finance.Revenue".
+        # No flat ``subjects`` key is persisted.
+        assert "subjects" not in scoped
+        assert scoped["metrics"] == "Finance.Revenue.Daily"
+
+    async def test_edit_migrates_tools_and_scoped_context(self, real_agent_config, agent_yml_with_singleton):
+        """An edit normalizes tools to CSV and rewrites scoped_context.
+
+        Legacy-shape entries (list-form tools, top-level catalogs/subjects)
+        get migrated: tools become a CSV string, catalogs lands in
+        ``scoped_context.catalogs``, and subjects are classified into the
+        runtime bucket keys (no flat ``subjects`` key persists).
+        """
+        import yaml
+
+        from datus.api.models.agent_models import EditAgentInput
+
+        # Seed a legacy-shape entry: list-form tools and top-level catalogs/subjects.
+        real_agent_config.agentic_nodes["legacy_scope"] = {
+            "type": "gen_sql",
+            "tools": ["db_tools.*"],
+            "catalogs": ["default_catalog.mart.legacy_table"],
+            "subjects": ["Legacy.Subject"],
+        }
+
+        svc = AgentService()
+        result = await svc.edit_agent(
+            EditAgentInput(
+                id="legacy_scope",
+                name="legacy_scope",
+                tools=["semantic_tools.*", "db_tools.*"],
+                catalogs=["default_catalog.mart.raw_orders"],
+                subjects=["Sales.Region"],
+            ),
+            real_agent_config,
+        )
+        assert result.success is True
+
+        with open(agent_yml_with_singleton) as f:
+            raw = yaml.safe_load(f)
+        entry = raw["agent"]["agentic_nodes"]["legacy_scope"]
+        assert entry["tools"] == "semantic_tools.*, db_tools.*"
+        # Top-level legacy keys must be cleared so the read path can't see two copies.
+        assert "catalogs" not in entry
+        assert "subjects" not in entry
+        scoped = entry["scoped_context"]
+        # Catalogs lands on ``tables`` — no non-runtime ``catalogs`` key persists.
+        assert "catalogs" not in scoped
+        assert scoped["tables"] == "default_catalog.mart.raw_orders"
+        # No flat ``subjects`` key — subjects are classified into runtime buckets.
+        assert "subjects" not in scoped
+        # Without pre-populated KB stores the classifier defaults to metrics.
+        assert scoped["metrics"] == "Sales.Region"
+        # The active datasource is rebound on every scope-touching edit.
+        assert scoped["datasource"] == real_agent_config.current_datasource
+
+    async def test_edit_preserves_existing_scoped_context_keys(self, real_agent_config, agent_yml_with_singleton):
+        """Editing catalogs rewrites ``tables`` but leaves metrics/sqls intact.
+
+        Catalogs maps to the runtime ``tables`` key, so an edit that touches
+        catalogs is expected to overwrite that field. The other scope keys
+        (``metrics`` / ``sqls`` / ``ext_knowledge``) must survive when
+        ``subjects`` is not part of the request.
+        """
+        import yaml
+
+        from datus.api.models.agent_models import EditAgentInput
+
+        real_agent_config.agentic_nodes["preserve_scope"] = {
+            "type": "gen_sql",
+            "scoped_context": {
+                "tables": "default_catalog.mart.legacy_table",
+                "metrics": "Finance.Revenue.daily_revenue",
+                "sqls": "Finance.Revenue.region_rollup",
+            },
+        }
+
+        svc = AgentService()
+        result = await svc.edit_agent(
+            EditAgentInput(
+                id="preserve_scope",
+                name="preserve_scope",
+                catalogs=["default_catalog.mart.raw_orders"],
+            ),
+            real_agent_config,
+        )
+        assert result.success is True
+
+        with open(agent_yml_with_singleton) as f:
+            raw = yaml.safe_load(f)
+        scoped = raw["agent"]["agentic_nodes"]["preserve_scope"]["scoped_context"]
+        # ``tables`` was rewritten by catalogs — there's no separate
+        # ``catalogs`` key in ``ScopedContext``. Other scope fields survive.
+        assert scoped["tables"] == "default_catalog.mart.raw_orders"
+        assert scoped["metrics"] == "Finance.Revenue.daily_revenue"
+        assert scoped["sqls"] == "Finance.Revenue.region_rollup"
+
+    async def test_get_returns_tools_as_list_and_extracts_scoped_paths(self, real_agent_config):
+        """The read path inverts the storage format the editor expects.
+
+        Catalog entries are recovered from the runtime ``tables`` key; subjects
+        are recomposed by merging the three runtime buckets (metrics / sqls /
+        ext_knowledge) into a single flat list. Stored entries surface in
+        their canonical dot-separated form unchanged.
+        """
+        real_agent_config.agentic_nodes["roundtrip_get"] = {
+            "type": "gen_sql",
+            "tools": "semantic_tools.*, db_tools.*, context_search_tools.list_subject_tree",
+            "scoped_context": {
+                "datasource": "finance",
+                "tables": "default_catalog.mart.mf_time_spine, default_catalog.mart.raw_orders",
+                "metrics": "Finance.Revenue.Daily, finance.revenue.weekly",
+                "sqls": "Sales.region_query",
+                "ext_knowledge": "Docs.handbook",
+            },
+            "created_at": "2026-04-30T09:20:31.545000Z",
+        }
+
+        svc = AgentService()
+        result = await svc.get_agent("roundtrip_get", real_agent_config)
+        assert result.success is True
+        agent = result.data["agent"]
+        assert agent["tools"] == [
+            "semantic_tools.*",
+            "db_tools.*",
+            "context_search_tools.list_subject_tree",
+        ]
+        # Catalogs come back from ``scoped_context.tables`` (the runtime key)
+        # in their canonical dot-separated form.
+        assert agent["catalogs"] == [
+            "default_catalog.mart.mf_time_spine",
+            "default_catalog.mart.raw_orders",
+        ]
+        # Subjects merge across all three buckets in probe order; entries
+        # surface verbatim in their stored dot-form.
+        assert agent["subjects"] == [
+            "Finance.Revenue.Daily",
+            "finance.revenue.weekly",
+            "Sales.region_query",
+            "Docs.handbook",
+        ]
+
+    async def test_round_trip_create_then_get(self, real_agent_config, agent_yml_with_singleton):
+        """Saving and re-reading yields the canonical dot-separated form.
+
+        Even though the on-disk shape changes (subjects gets split into
+        ``metrics`` / ``sqls`` / ``ext_knowledge``), the API contract round-
+        trips: the editor sees ``subjects`` and ``catalogs`` come back as
+        the same flat lists it sent.
+        """
+        from datus.api.models.agent_models import CreateAgentInput
+
+        svc = AgentService()
+        await svc.create_agent(
+            CreateAgentInput(
+                name="full_round_trip",
+                type="gen_sql",
+                tools=["semantic_tools.*", "db_tools.*"],
+                catalogs=["default_catalog.mart.raw_orders"],
+                subjects=["Commerce.Orders.Average_Order_Value.average_gross_order_value"],
+            ),
+            real_agent_config,
+        )
+
+        result = await svc.get_agent("full_round_trip", real_agent_config)
+        assert result.success is True
+        agent = result.data["agent"]
+        assert agent["tools"] == ["semantic_tools.*", "db_tools.*"]
+        assert agent["catalogs"] == ["default_catalog.mart.raw_orders"]
+        assert agent["subjects"] == ["Commerce.Orders.Average_Order_Value.average_gross_order_value"]
+
+    async def test_edit_clearing_scope_persists_to_yaml(self, real_agent_config, agent_yml_with_singleton):
+        """Clearing the entire scope must reach disk, not just the in-memory dict.
+
+        When the only thing the user changes is to wipe their scope
+        (``catalogs=[]`` and ``subjects=[]``), ``_build_scoped_context``
+        returns ``None`` and ``edit_agent`` removes ``scoped_context`` from
+        the live agent dict. The subsequent ``not update_data`` short-circuit
+        used to skip ``_save_agentic_nodes``, so the deletion was lost on
+        the next config reload — this test pins the fix in place.
+        """
+        import yaml
+
+        from datus.api.models.agent_models import EditAgentInput
+
+        # Seed an entry that already has a scope on disk. ``datasource`` is
+        # intentionally omitted so clearing catalogs/subjects fully empties
+        # the scoped_context dict — that's the path where merged is ``None``
+        # and the early-return previously skipped the save.
+        real_agent_config.agentic_nodes["clear_scope_agent"] = {
+            "type": "gen_sql",
+            "scoped_context": {
+                "tables": "default_catalog.mart.raw_orders",
+                "metrics": "Finance.Revenue.Daily",
+            },
+        }
+        agent_yml_with_singleton.write_text(
+            yaml.safe_dump(
+                {
+                    "agent": {
+                        "agentic_nodes": {
+                            "clear_scope_agent": real_agent_config.agentic_nodes["clear_scope_agent"],
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        # Reset the active datasource so the helper doesn't re-bind a fresh
+        # datasource value into scoped_context — that would leave the dict
+        # non-empty and avoid the bug entirely.
+        real_agent_config.current_datasource = ""
+
+        svc = AgentService()
+        result = await svc.edit_agent(
+            EditAgentInput(
+                id="clear_scope_agent",
+                name="clear_scope_agent",
+                catalogs=[],
+                subjects=[],
+            ),
+            real_agent_config,
+        )
+        assert result.success is True
+
+        with open(agent_yml_with_singleton) as f:
+            raw = yaml.safe_load(f)
+        entry = raw["agent"]["agentic_nodes"]["clear_scope_agent"]
+        # The whole scoped_context block is gone on disk, not just in memory.
+        assert "scoped_context" not in entry
+
+    async def test_edit_classifies_subjects_under_saved_datasource(
+        self, real_agent_config, agent_yml_with_singleton, monkeypatch
+    ):
+        """Classification uses the saved DS binding when ``current_datasource`` is unset.
+
+        Without the fix, ``_classify_subject_paths`` ran with
+        ``datasource_id=None`` and fell back to ``agent_config.current_datasource``
+        — which is empty in this scenario — so every subject was bucketed to
+        ``metrics`` regardless of which store actually owned it. With the fix,
+        ``edit_agent`` resolves the effective datasource from the saved
+        ``scoped_context.datasource`` first, so the SQL/knowledge stores are
+        actually probed and ownership wins.
+        """
+        from datus.api.models.agent_models import EditAgentInput
+        from datus.storage.ext_knowledge.store import ExtKnowledgeRAG
+        from datus.storage.metric.store import MetricRAG
+        from datus.storage.reference_sql.store import ReferenceSqlRAG
+
+        # Capture which datasource_id flows into the classifier so we can
+        # assert against the resolution rule directly.
+        captured: dict = {}
+
+        class _StubStore:
+            def __init__(self, owns: set[str]):
+                self._owns = owns
+
+            def list_entries(self, node_id, name=None, limit=None):
+                return [{"name": name}] if name in self._owns else []
+
+        class _StubTree:
+            def get_node_by_path(self, path):
+                return {"node_id": 1}
+
+        def fake_metric_init(self, agent_config, datasource_id=None):
+            captured["metric_ds"] = datasource_id
+            self.storage = _StubStore({"my_metric"})
+
+        def fake_sql_init(self, agent_config, datasource_id=None):
+            self.reference_sql_storage = _StubStore({"my_sql"})
+
+        def fake_knowledge_init(self, agent_config, datasource_id=None):
+            self.store = _StubStore({"my_doc"})
+
+        monkeypatch.setattr(MetricRAG, "__init__", fake_metric_init)
+        monkeypatch.setattr(ReferenceSqlRAG, "__init__", fake_sql_init)
+        monkeypatch.setattr(ExtKnowledgeRAG, "__init__", fake_knowledge_init)
+        monkeypatch.setattr(
+            "datus.storage.registry.get_subject_tree_store",
+            lambda project: _StubTree(),
+        )
+
+        # Seed an entry already bound to "finance" via scoped_context, then
+        # blank out the runtime's current_datasource so the only available
+        # binding is the saved one.
+        real_agent_config.agentic_nodes["edit_with_saved_ds"] = {
+            "type": "gen_sql",
+            "scoped_context": {
+                "datasource": "finance",
+                "tables": "default_catalog.mart.raw_orders",
+            },
+        }
+        real_agent_config.current_datasource = ""
+
+        svc = AgentService()
+        result = await svc.edit_agent(
+            EditAgentInput(
+                id="edit_with_saved_ds",
+                name="edit_with_saved_ds",
+                subjects=["Finance.SQL.my_sql", "Docs.handbook.my_doc", "Sales.unknown"],
+            ),
+            real_agent_config,
+        )
+        assert result.success is True
+        # The classifier must have been invoked with the saved datasource —
+        # without the fix it received None and fell back to the
+        # "no datasource → all metrics" branch.
+        assert captured.get("metric_ds") == "finance"
+
+        # SQL and knowledge entries land in their owning buckets; only the
+        # truly unmatched name falls back to metrics.
+        scoped = real_agent_config.agentic_nodes["edit_with_saved_ds"]["scoped_context"]
+        assert scoped["sqls"] == "Finance.SQL.my_sql"
+        assert scoped["ext_knowledge"] == "Docs.handbook.my_doc"
+        assert scoped["metrics"] == "Sales.unknown"
+        # Saved datasource binding survives the edit.
+        assert scoped["datasource"] == "finance"
