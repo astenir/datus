@@ -1,12 +1,12 @@
 # Greenplum test environment
 # Usage: docker compose up -d
-# Connect: PGPASSWORD=pivotal psql -h localhost -p 15432 -U gpadmin -d test
+# Connect: PGPASSWORD=pivotal psql -h localhost -p ${GREENPLUM_HOST_PORT:-15432} -U gpadmin -d test
 
 services:
   greenplum:
     image: woblerr/greenplum:6.27.1
     ports:
-      - "15432:5432"
+      - "${GREENPLUM_HOST_PORT:-15432}:5432"
     environment:
       GREENPLUM_PASSWORD: pivotal
       GREENPLUM_DATABASE_NAME: test
