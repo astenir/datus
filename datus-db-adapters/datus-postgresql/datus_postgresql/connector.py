@@ -157,41 +157,52 @@ class PostgreSQLConnector(SQLAlchemyConnector, MigrationTargetMixin):
         # Get metadata configuration
         metadata_config = _get_metadata_config(table_type)
 
+        safe_schema = schema_name.replace("'", "''") if schema_name else ""
+        sys_schemas = list(self._sys_schemas())
+
         if table_type == "mv":
             # pg_matviews is scoped to the current database connection.
             # Use a temporary connection if a different database is requested (thread-safe).
-            safe_schema = schema_name.replace("'", "''") if schema_name else ""
-            if schema_name:
-                where = f"schemaname = '{safe_schema}'"
-            else:
-                where = f"{list_to_in_str('schemaname not in', list(self._sys_schemas()))}"
+            base_query = "SELECT schemaname as table_schema, matviewname as table_name FROM pg_matviews"
 
-            query = f"""
-                SELECT schemaname as table_schema, matviewname as table_name
-                FROM pg_matviews
-                WHERE {where}
-            """
-            query_result = self._execute_pandas(query, database_name=database_name)
+            def _build_mv(case_insensitive: bool) -> str:
+                if schema_name:
+                    cmp = (
+                        f"lower(schemaname) = lower('{safe_schema}')"
+                        if case_insensitive
+                        else f"schemaname = '{safe_schema}'"
+                    )
+                else:
+                    cmp = list_to_in_str("schemaname not in", sys_schemas)
+                return f"{base_query} WHERE {cmp}"
+
+            query_result = self._execute_pandas(_build_mv(False), database_name=database_name)
+            if len(query_result) == 0 and schema_name:
+                query_result = self._execute_pandas(_build_mv(True), database_name=database_name)
+                self._raise_if_ambiguous_schema(query_result, schema_name)
         else:
             # Tables and views use information_schema (supports table_catalog filter)
-            safe_schema = schema_name.replace("'", "''") if schema_name else ""
             safe_db = database_name.replace("'", "''") if database_name else ""
-            if schema_name:
-                where = f"table_schema = '{safe_schema}'"
-            else:
-                where = f"{list_to_in_str('table_schema not in', list(self._sys_schemas()))}"
+            type_filter = (
+                list_to_in_str("and table_type in", metadata_config.table_types) if table_type == "table" else ""
+            )
+            base_query = f"SELECT table_schema, table_name FROM information_schema.{metadata_config.info_table}"
 
-            if table_type == "table":
-                type_filter = list_to_in_str("and table_type in", metadata_config.table_types)
-            else:
-                type_filter = ""
+            def _build_tv(case_insensitive: bool) -> str:
+                if schema_name:
+                    cmp = (
+                        f"lower(table_schema) = lower('{safe_schema}')"
+                        if case_insensitive
+                        else f"table_schema = '{safe_schema}'"
+                    )
+                else:
+                    cmp = list_to_in_str("table_schema not in", sys_schemas)
+                return f"{base_query} WHERE table_catalog = '{safe_db}' AND {cmp} {type_filter}"
 
-            query = f"""
-                SELECT table_schema, table_name
-                FROM information_schema.{metadata_config.info_table}
-                WHERE table_catalog = '{safe_db}' AND {where} {type_filter}
-            """
-            query_result = self._execute_pandas(query, database_name=database_name)
+            query_result = self._execute_pandas(_build_tv(False), database_name=database_name)
+            if len(query_result) == 0 and schema_name:
+                query_result = self._execute_pandas(_build_tv(True), database_name=database_name)
+                self._raise_if_ambiguous_schema(query_result, schema_name)
 
         # Format results
         result = []
@@ -390,36 +401,54 @@ class PostgreSQLConnector(SQLAlchemyConnector, MigrationTargetMixin):
         safe_schema = schema_name.replace("'", "''") if schema_name else ""
         safe_table = table_name.replace("'", "''") if table_name else ""
 
-        # Use INFORMATION_SCHEMA to get schema with comments
-        sql = f"""
-            SELECT
-                c.column_name as field,
-                c.data_type as type,
-                c.is_nullable as nullable,
-                c.column_default as default_value,
-                CASE WHEN pk.column_name IS NOT NULL THEN true ELSE false END as is_pk,
-                pgd.description as comment
-            FROM information_schema.columns c
-            LEFT JOIN (
-                SELECT kcu.column_name
-                FROM information_schema.table_constraints tc
-                JOIN information_schema.key_column_usage kcu
-                    ON tc.constraint_name = kcu.constraint_name
-                    AND tc.table_schema = kcu.table_schema
-                WHERE tc.constraint_type = 'PRIMARY KEY'
-                    AND tc.table_schema = '{safe_schema}'
-                    AND tc.table_name = '{safe_table}'
-            ) pk ON c.column_name = pk.column_name
-            LEFT JOIN pg_catalog.pg_statio_all_tables st
-                ON st.schemaname = c.table_schema AND st.relname = c.table_name
-            LEFT JOIN pg_catalog.pg_description pgd
-                ON pgd.objoid = st.relid AND pgd.objsubid = c.ordinal_position
-            WHERE c.table_catalog = '{safe_db}'
-              AND c.table_schema = '{safe_schema}'
-              AND c.table_name = '{safe_table}'
-            ORDER BY c.ordinal_position
-        """
-        query_result = self._execute_pandas(sql)
+        def _build_sql(case_insensitive: bool) -> str:
+            if case_insensitive:
+                schema_cmp = f"lower(c.table_schema) = lower('{safe_schema}')"
+                table_cmp = f"lower(c.table_name) = lower('{safe_table}')"
+                pk_schema_cmp = f"lower(tc.table_schema) = lower('{safe_schema}')"
+                pk_table_cmp = f"lower(tc.table_name) = lower('{safe_table}')"
+            else:
+                schema_cmp = f"c.table_schema = '{safe_schema}'"
+                table_cmp = f"c.table_name = '{safe_table}'"
+                pk_schema_cmp = f"tc.table_schema = '{safe_schema}'"
+                pk_table_cmp = f"tc.table_name = '{safe_table}'"
+            return f"""
+                SELECT
+                    c.table_schema as table_schema,
+                    c.table_name as table_name,
+                    c.column_name as field,
+                    c.data_type as type,
+                    c.is_nullable as nullable,
+                    c.column_default as default_value,
+                    CASE WHEN pk.column_name IS NOT NULL THEN true ELSE false END as is_pk,
+                    pgd.description as comment
+                FROM information_schema.columns c
+                LEFT JOIN (
+                    SELECT kcu.table_schema, kcu.table_name, kcu.column_name
+                    FROM information_schema.table_constraints tc
+                    JOIN information_schema.key_column_usage kcu
+                        ON tc.constraint_name = kcu.constraint_name
+                        AND tc.table_schema = kcu.table_schema
+                    WHERE tc.constraint_type = 'PRIMARY KEY'
+                        AND {pk_schema_cmp}
+                        AND {pk_table_cmp}
+                ) pk ON pk.table_schema = c.table_schema
+                    AND pk.table_name = c.table_name
+                    AND pk.column_name = c.column_name
+                LEFT JOIN pg_catalog.pg_statio_all_tables st
+                    ON st.schemaname = c.table_schema AND st.relname = c.table_name
+                LEFT JOIN pg_catalog.pg_description pgd
+                    ON pgd.objoid = st.relid AND pgd.objsubid = c.ordinal_position
+                WHERE c.table_catalog = '{safe_db}'
+                  AND {schema_cmp}
+                  AND {table_cmp}
+                ORDER BY c.table_schema, c.table_name, c.ordinal_position
+            """
+
+        query_result = self._execute_pandas(_build_sql(False))
+        if len(query_result) == 0:
+            query_result = self._execute_pandas(_build_sql(True))
+            self._raise_if_ambiguous_table(query_result, schema_name, table_name)
 
         result = []
         for i in range(len(query_result)):
@@ -435,6 +464,39 @@ class PostgreSQLConnector(SQLAlchemyConnector, MigrationTargetMixin):
                 }
             )
         return result
+
+    # ==================== Case-insensitive Fallback Helpers ====================
+
+    @staticmethod
+    def _raise_if_ambiguous_schema(query_result, schema_name: str) -> None:
+        """Raise if a case-insensitive schema fallback matches more than one stored schema name.
+
+        Why: PostgreSQL stores identifiers in their literal case in information_schema. When a
+        case-insensitive fallback finds e.g. both ``Foo`` and ``foo`` schemas, returning their
+        union would silently mix unrelated objects.
+        """
+        if len(query_result) == 0:
+            return
+        distinct = set(query_result["table_schema"].unique())
+        if len(distinct) > 1:
+            raise DatusDbException(
+                ErrorCode.COMMON_FIELD_INVALID,
+                f"Ambiguous schema_name '{schema_name}': case-insensitive match resolves to "
+                f"multiple stored schemas {sorted(distinct)}. Pass the exact (case-sensitive) name.",
+            )
+
+    @staticmethod
+    def _raise_if_ambiguous_table(query_result, schema_name: str, table_name: str) -> None:
+        """Raise if a case-insensitive table fallback matches more than one stored (schema,table)."""
+        if len(query_result) == 0:
+            return
+        distinct = set(zip(query_result["table_schema"], query_result["table_name"]))
+        if len(distinct) > 1:
+            raise DatusDbException(
+                ErrorCode.COMMON_FIELD_INVALID,
+                f"Ambiguous table '{schema_name}.{table_name}': case-insensitive match resolves to "
+                f"multiple stored tables {sorted(distinct)}. Pass the exact (case-sensitive) name.",
+            )
 
     # ==================== Database/Schema Management ====================
 
