@@ -120,11 +120,13 @@ class GreenplumConnector(PostgreSQLConnector, MigrationTargetMixin):
                 FROM gp_distribution_policy dp
                 JOIN pg_class c ON dp.localoid = c.oid
                 JOIN pg_namespace n ON c.relnamespace = n.oid
+                LEFT JOIN LATERAL unnest(dp.{policy_key_column}) WITH ORDINALITY AS dist(attnum, ord)
+                    ON TRUE
                 LEFT JOIN pg_attribute a ON a.attrelid = c.oid
-                    AND a.attnum = ANY(dp.{policy_key_column})
+                    AND a.attnum = dist.attnum
                 WHERE n.nspname = '{safe_schema}'
                   AND c.relname = '{safe_table}'
-                ORDER BY a.attnum
+                ORDER BY dist.ord
             """
             result = self._execute_pandas(sql)
 

@@ -222,6 +222,32 @@ def test_distribution_policy_by_column(connector: GreenplumConnector, config: Gr
 
 
 @pytest.mark.integration
+@pytest.mark.acceptance
+def test_distribution_policy_preserves_multi_column_order(connector: GreenplumConnector, config: GreenplumConfig):
+    """Test DDL preserves declared multi-column distribution key order."""
+    suffix = uuid.uuid4().hex[:8]
+    table_name = f"test_dist_col_order_{suffix}"
+
+    connector.execute_ddl(f"DROP TABLE IF EXISTS {table_name}")
+    connector.execute_ddl(
+        f"""
+        CREATE TABLE {table_name} (
+            id INTEGER,
+            name VARCHAR(50)
+        ) DISTRIBUTED BY (name, id)
+    """
+    )
+
+    try:
+        tables = connector.get_tables_with_ddl(schema_name=config.schema_name, tables=[table_name])
+        assert len(tables) == 1
+        ddl = tables[0]["definition"]
+        assert 'DISTRIBUTED BY ("name", "id")' in ddl
+    finally:
+        connector.execute_ddl(f"DROP TABLE IF EXISTS {table_name}")
+
+
+@pytest.mark.integration
 def test_distribution_policy_random(connector: GreenplumConnector, config: GreenplumConfig):
     """Test DDL includes DISTRIBUTED RANDOMLY for randomly distributed tables."""
     suffix = uuid.uuid4().hex[:8]

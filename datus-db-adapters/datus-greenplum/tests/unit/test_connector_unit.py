@@ -332,6 +332,9 @@ def test_get_distribution_policy_by_column():
         sql_arg = connector._execute_pandas.call_args_list[1][0][0]
         assert "dp.distkey" in sql_arg
         assert "dp.attrnums" not in sql_arg
+        assert "WITH ORDINALITY AS dist(attnum, ord)" in sql_arg
+        assert "ORDER BY dist.ord" in sql_arg
+        assert "ORDER BY a.attnum" not in sql_arg
 
 
 def test_get_distribution_policy_uses_attrnums_for_older_greenplum():
