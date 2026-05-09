@@ -6,6 +6,7 @@ cd "$ROOT_DIR"
 
 ALL_ADAPTERS=(postgresql mysql clickhouse starrocks trino greenplum hive spark)
 DOCKER_COMPOSE=()
+STARTED_ADAPTERS=()
 
 usage() {
   cat <<'USAGE'
@@ -274,6 +275,13 @@ cleanup_all() {
   done
 }
 
+cleanup_started() {
+  local adapter
+  for adapter in "${STARTED_ADAPTERS[@]}"; do
+    compose_down "$adapter"
+  done
+}
+
 cleanup_only=0
 dry_run=0
 changed_mode=0
@@ -430,11 +438,10 @@ if [ "$dry_run" -eq 1 ]; then
 fi
 
 preflight
-trap cleanup_all EXIT
+trap cleanup_started EXIT
 
 for adapter in "${selected_adapters[@]}"; do
   compose_file="$(adapter_compose "$adapter")"
-  package="$(adapter_package "$adapter")"
   test_path="$(adapter_test_path "$adapter")"
 
   if [ ! -f "$compose_file" ]; then
@@ -449,6 +456,7 @@ for adapter in "${selected_adapters[@]}"; do
   echo ""
   echo "=== Integration tests: $adapter ==="
   compose_down "$adapter"
+  STARTED_ADAPTERS+=("$adapter")
   export_adapter_env "$adapter"
   docker_compose -f "$compose_file" up -d --build
 
