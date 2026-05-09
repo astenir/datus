@@ -510,3 +510,181 @@ def test_close_disposes_all_cached_engines():
     for e in mock_engines:
         e.dispose.assert_called_once()
     assert len(connector._engines) == 0
+
+
+# ==================== Case-insensitive Fallback Tests ====================
+
+
+def _make_pg_connector_for_metadata(schema_name="public", database_name="testdb"):
+    """Helper: PostgreSQLConnector with mocked parent __init__ and a no-op connect()."""
+    config = PostgreSQLConfig(username="u", password="p", database=database_name, schema_name=schema_name)
+    with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
+        connector = PostgreSQLConnector(config)
+    connector.database_name = database_name
+    connector.schema_name = schema_name
+    connector.connect = MagicMock()
+    return connector
+
+
+_SCHEMA_COLS = [
+    "table_schema",
+    "table_name",
+    "field",
+    "type",
+    "nullable",
+    "default_value",
+    "is_pk",
+    "comment",
+]
+
+
+def _df(rows, columns):
+    import pandas as pd
+
+    return pd.DataFrame(rows, columns=columns)
+
+
+def test_get_schema_strict_match_hits_no_fallback():
+    """Exact case match returns rows from first query and never executes the lower() fallback."""
+    connector = _make_pg_connector_for_metadata()
+    df = _df(
+        [
+            ("public", "users", "id", "integer", "NO", None, True, None),
+            ("public", "users", "name", "text", "YES", None, False, None),
+        ],
+        _SCHEMA_COLS,
+    )
+    connector._execute_pandas = MagicMock(return_value=df)
+
+    result = connector.get_schema(schema_name="public", table_name="users")
+
+    assert connector._execute_pandas.call_count == 1
+    assert [c["name"] for c in result] == ["id", "name"]
+    assert result[0]["pk"] is True
+
+
+def test_get_schema_falls_back_to_lower_when_strict_empty():
+    """If strict match returns empty, fallback to lower() and use those rows."""
+    connector = _make_pg_connector_for_metadata()
+    empty = _df([], _SCHEMA_COLS)
+    fallback = _df(
+        [("public", "users", "id", "integer", "NO", None, True, None)],
+        _SCHEMA_COLS,
+    )
+    connector._execute_pandas = MagicMock(side_effect=[empty, fallback])
+
+    result = connector.get_schema(schema_name="PUBLIC", table_name="USERS")
+
+    assert connector._execute_pandas.call_count == 2
+    second_sql = connector._execute_pandas.call_args_list[1][0][0]
+    assert "lower(c.table_schema)" in second_sql
+    assert "lower(c.table_name)" in second_sql
+    assert len(result) == 1
+    assert result[0]["name"] == "id"
+
+
+def test_get_schema_lower_fallback_ambiguous_raises():
+    """If lower() fallback resolves to two distinct (schema,table) pairs, raise."""
+    connector = _make_pg_connector_for_metadata()
+    empty = _df([], _SCHEMA_COLS)
+    ambiguous = _df(
+        [
+            ("public", "Users", "id", "integer", "NO", None, True, None),
+            ("public", "users", "id", "integer", "NO", None, True, None),
+        ],
+        _SCHEMA_COLS,
+    )
+    connector._execute_pandas = MagicMock(side_effect=[empty, ambiguous])
+
+    with pytest.raises(DatusDbException, match="Ambiguous table"):
+        connector.get_schema(schema_name="public", table_name="USERS")
+
+
+def test_get_schema_both_queries_empty_returns_empty():
+    """If neither strict nor lower() fallback returns rows, return []."""
+    connector = _make_pg_connector_for_metadata()
+    empty = _df([], _SCHEMA_COLS)
+    connector._execute_pandas = MagicMock(side_effect=[empty, empty])
+
+    result = connector.get_schema(schema_name="public", table_name="missing")
+
+    assert result == []
+    assert connector._execute_pandas.call_count == 2
+
+
+def test_get_schema_empty_table_name_short_circuit():
+    """Empty table_name short-circuits before any SQL is executed."""
+    connector = _make_pg_connector_for_metadata()
+    connector._execute_pandas = MagicMock()
+
+    assert connector.get_schema(schema_name="public", table_name="") == []
+    connector._execute_pandas.assert_not_called()
+
+
+def test_get_metadata_strict_hit_no_fallback():
+    """_get_metadata uses only the strict query when it returns rows."""
+    connector = _make_pg_connector_for_metadata(schema_name="public")
+    df = _df([("public", "t1"), ("public", "t2")], ["table_schema", "table_name"])
+    connector._execute_pandas = MagicMock(return_value=df)
+
+    result = connector._get_metadata("table", schema_name="public")
+
+    assert connector._execute_pandas.call_count == 1
+    assert [m["table_name"] for m in result] == ["t1", "t2"]
+
+
+def test_get_metadata_falls_back_to_lower_when_strict_empty():
+    """_get_metadata falls back to lower() when strict returns empty and schema_name is provided."""
+    connector = _make_pg_connector_for_metadata(schema_name="public")
+    empty = _df([], ["table_schema", "table_name"])
+    fallback = _df([("public", "t1")], ["table_schema", "table_name"])
+    connector._execute_pandas = MagicMock(side_effect=[empty, fallback])
+
+    result = connector._get_metadata("table", schema_name="PUBLIC")
+
+    assert connector._execute_pandas.call_count == 2
+    second_sql = connector._execute_pandas.call_args_list[1][0][0]
+    assert "lower(table_schema)" in second_sql
+    assert [m["table_name"] for m in result] == ["t1"]
+
+
+def test_get_metadata_lower_fallback_ambiguous_raises():
+    """_get_metadata raises when lower() fallback resolves to multiple distinct schemas."""
+    connector = _make_pg_connector_for_metadata(schema_name="public")
+    empty = _df([], ["table_schema", "table_name"])
+    ambiguous = _df([("Public", "t1"), ("public", "t2")], ["table_schema", "table_name"])
+    connector._execute_pandas = MagicMock(side_effect=[empty, ambiguous])
+
+    with pytest.raises(DatusDbException, match="Ambiguous schema_name"):
+        connector._get_metadata("table", schema_name="PUBLIC")
+
+
+def test_get_metadata_no_schema_no_fallback():
+    """When schema_name is empty, _get_metadata excludes sys schemas and never falls back."""
+    connector = _make_pg_connector_for_metadata(schema_name="")
+    connector.schema_name = ""
+    df = _df([], ["table_schema", "table_name"])
+    connector._execute_pandas = MagicMock(return_value=df)
+
+    result = connector._get_metadata("table", schema_name="")
+
+    # Strict query already excludes sys schemas; no fallback for empty input
+    assert connector._execute_pandas.call_count == 1
+    sql = connector._execute_pandas.call_args_list[0][0][0]
+    assert "lower(" not in sql
+    assert result == []
+
+
+def test_get_metadata_mv_falls_back_to_lower_when_strict_empty():
+    """MV branch in _get_metadata also honors the case-insensitive fallback."""
+    connector = _make_pg_connector_for_metadata(schema_name="public")
+    empty = _df([], ["table_schema", "table_name"])
+    fallback = _df([("public", "mv1")], ["table_schema", "table_name"])
+    connector._execute_pandas = MagicMock(side_effect=[empty, fallback])
+
+    result = connector._get_metadata("mv", schema_name="PUBLIC")
+
+    assert connector._execute_pandas.call_count == 2
+    second_sql = connector._execute_pandas.call_args_list[1][0][0]
+    assert "lower(schemaname)" in second_sql
+    assert [m["table_name"] for m in result] == ["mv1"]
