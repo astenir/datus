@@ -1,16 +1,17 @@
 # Greenplum test environment
-# Usage: docker-compose up -d
-# Connect: psql -h localhost -p 15432 -U gpadmin -d postgres
+# Usage: docker compose up -d
+# Connect: PGPASSWORD=pivotal psql -h localhost -p 15432 -U gpadmin -d test
 
 services:
   greenplum:
-    image: datagrip/greenplum:latest
+    image: woblerr/greenplum:6.27.1
     ports:
       - "15432:5432"
     environment:
-      - ALLOW_HOST_CONNECTION=yes
+      GREENPLUM_PASSWORD: pivotal
+      GREENPLUM_DATABASE_NAME: test
     healthcheck:
-      test: ["CMD-SHELL", "psql -U gpadmin -d postgres -c 'SELECT 1'"]
+      test: ["CMD-SHELL", "su - gpadmin -c \"source /usr/local/greenplum-db/greenplum_path.sh && PGPASSWORD=pivotal psql -h localhost -p 5432 -U gpadmin -d test -c 'SELECT 1'\""]
       interval: 10s
       timeout: 5s
       retries: 10
