@@ -9,7 +9,11 @@ services:
     ports:
       - "${MYSQL_HOST_PORT:-3306}:3306"
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-ptest_password"]
+      test:
+        [
+          "CMD-SHELL",
+          "mysql --protocol=TCP -h 127.0.0.1 -P 3306 -u\"$${MYSQL_USER}\" -p\"$${MYSQL_PASSWORD}\" \"$${MYSQL_DATABASE}\" --connect-timeout=5 -e \"SELECT 1\" >/dev/null 2>&1",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
