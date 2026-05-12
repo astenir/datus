@@ -40,6 +40,8 @@ _PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
 # We leave room for prefixes/extensions by truncating to 200 chars + md5 suffix.
 _PROJECT_NAME_MAX_LEN = 200
 
+DEFAULT_SEMANTIC_ADAPTER = "metricflow"
+
 
 def _normalize_project_name(cwd: str) -> str:
     """Sanitize a CWD path into a flat, filesystem-safe project name.
@@ -1238,14 +1240,13 @@ class AgentConfig:
 
         Order: explicit ``adapter_type`` argument -> project-level pin
         (``./.datus/config.yml`` ``semantic:``) -> global ``default: true``
-        flag / single-entry shortcut. Raises when no semantic layer is
-        configured at all, or when multiple are configured without a clear
-        default — this matches the Dashboard / Scheduler resolution
-        contract so all three sections behave identically.
+        flag / single-entry shortcut -> built-in ``metricflow`` fallback when
+        no semantic layer is configured. Raises when multiple semantic layers
+        are configured without a clear default.
         """
         normalized = str(adapter_type or "").lower().strip()
         if normalized:
-            if normalized in self.semantic_layer_configs:
+            if not self.semantic_layer_configs or normalized in self.semantic_layer_configs:
                 return normalized
             raise DatusException(
                 ErrorCode.COMMON_CONFIG_ERROR,
@@ -1255,24 +1256,18 @@ class AgentConfig:
                 ),
             )
 
-        if not self.semantic_layer_configs:
-            raise DatusException(
-                ErrorCode.COMMON_CONFIG_ERROR,
-                message=(
-                    "No semantic layer configured under `agent.services.semantic_layer`. "
-                    "Add an entry (e.g. `metricflow: {}`) or run `/services semantic` to configure one."
-                ),
-            )
-
         active_override = self._active_semantic
         if active_override:
-            if active_override in self.semantic_layer_configs:
+            if not self.semantic_layer_configs or active_override in self.semantic_layer_configs:
                 return active_override
             logger.warning(
                 "Project override active_semantic=`%s` is not configured under "
                 "`agent.services.semantic_layer`; falling back to global default.",
                 active_override,
             )
+
+        if not self.semantic_layer_configs:
+            return DEFAULT_SEMANTIC_ADAPTER
 
         default_adapter = self.default_semantic_adapter()
         if default_adapter:
