@@ -5,6 +5,10 @@
 import threading
 from unittest.mock import MagicMock, patch
 
+import pytest
+from sqlalchemy import exc as sa_exc
+
+from datus_db_core import ErrorCode
 from datus_sqlalchemy import SQLAlchemyConnector
 
 
@@ -213,6 +217,51 @@ def test_execute_ddl_with_context_params():
         result = connector.execute_ddl("CREATE TABLE t (id INT)", catalog_name="cat", database_name="db")
 
     assert result.success is True
+
+
+# ==================== Error Classification Tests ====================
+
+
+@pytest.mark.parametrize(
+    ("exception", "expected_code"),
+    [
+        (
+            sa_exc.OperationalError("SELECT 1", {}, Exception("connection refused by server")),
+            ErrorCode.DB_CONNECTION_FAILED,
+        ),
+        (
+            sa_exc.OperationalError("SELECT 1", {}, Exception("connection timed out")),
+            ErrorCode.DB_CONNECTION_TIMEOUT,
+        ),
+        (
+            sa_exc.OperationalError("SELECT 1", {}, Exception("authentication failed for user")),
+            ErrorCode.DB_AUTHENTICATION_FAILED,
+        ),
+        (
+            sa_exc.InterfaceError("SELECT 1", {}, Exception("permission denied for table")),
+            ErrorCode.DB_PERMISSION_DENIED,
+        ),
+        (
+            sa_exc.ProgrammingError("SELCT 1", {}, Exception("syntax error at or near SELCT")),
+            ErrorCode.DB_EXECUTION_SYNTAX_ERROR,
+        ),
+        (
+            sa_exc.IntegrityError("INSERT INTO t VALUES (1)", {}, Exception("duplicate key value")),
+            ErrorCode.DB_CONSTRAINT_VIOLATION,
+        ),
+        (
+            sa_exc.TimeoutError("QueuePool limit reached"),
+            ErrorCode.DB_EXECUTION_TIMEOUT,
+        ),
+    ],
+)
+def test_handle_exception_classifies_common_failures(exception, expected_code):
+    """SQLAlchemy failures should map to stable Datus error categories."""
+    connector = DummySQLAlchemyConnector("sqlite://", dialect="sqlite")
+
+    classified = connector._handle_exception(exception, "SELECT 1", "query")
+
+    assert classified.code == expected_code
 
 
 # ==================== _conn() Rollback on Exception ====================
