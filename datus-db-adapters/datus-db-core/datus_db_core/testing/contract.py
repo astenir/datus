@@ -78,10 +78,36 @@ def assert_schema_columns(schema: Iterable[Mapping[str, Any]], expected_columns:
     assert not missing, f"Missing schema columns {missing}; actual columns: {sorted(actual)}"
 
 
+def _assert_payload(result: Any, operation: str) -> Sequence[Any]:
+    """Return a non-null result payload with a clear assertion message."""
+
+    payload = result.sql_return
+    assert payload is not None, f"{operation} returned no payload"
+    return payload
+
+
+def _cleanup_table_contract(connector: Any, case: TableContractCase, contract_error: BaseException | None) -> None:
+    cleanup_errors = []
+    for cleanup_sql in (*case.cleanup_sqls, case.drop_sql):
+        cleanup_result = connector.execute_ddl(cleanup_sql)
+        if not cleanup_result.success:
+            cleanup_errors.append(f"{cleanup_sql!r}: {getattr(cleanup_result, 'error', None)}")
+
+    if not cleanup_errors:
+        return
+
+    message = f"{case.adapter_name} contract cleanup failed: {'; '.join(cleanup_errors)}"
+    if contract_error is not None:
+        contract_error.add_note(message)
+        return
+    raise AssertionError(message)
+
+
 def assert_table_contract(connector: Any, case: TableContractCase) -> None:
     """Run the shared table contract against a live adapter connector."""
 
     connector.execute_ddl(case.drop_sql)
+    contract_error: BaseException | None = None
     try:
         assert_success(
             connector.execute_ddl(case.create_sql),
@@ -98,16 +124,19 @@ def assert_table_contract(connector: Any, case: TableContractCase) -> None:
 
         result = connector.execute({"sql_query": case.qualified_select_sql}, result_format="list")
         assert_success(result, f"{case.adapter_name} qualified contract SELECT")
-        assert result.sql_return, f"{case.adapter_name} qualified contract SELECT returned no rows"
-        (case.row_assert or assert_default_contract_row)(result.sql_return[0])
+        rows = _assert_payload(result, f"{case.adapter_name} qualified contract SELECT")
+        assert rows, f"{case.adapter_name} qualified contract SELECT returned no rows"
+        (case.row_assert or assert_default_contract_row)(rows[0])
 
         limited = connector.execute({"sql_query": case.limit_sql}, result_format="list")
         assert_success(limited, f"{case.adapter_name} LIMIT contract SELECT")
-        assert len(limited.sql_return) == case.limit_count
+        limited_rows = _assert_payload(limited, f"{case.adapter_name} LIMIT contract SELECT")
+        assert len(limited_rows) == case.limit_count
+    except BaseException as error:
+        contract_error = error
+        raise
     finally:
-        for cleanup_sql in case.cleanup_sqls:
-            connector.execute_ddl(cleanup_sql)
-        connector.execute_ddl(case.drop_sql)
+        _cleanup_table_contract(connector, case, contract_error)
 
 
 def assert_select_contract(connector: Any, case: SelectContractCase) -> None:
@@ -115,13 +144,16 @@ def assert_select_contract(connector: Any, case: SelectContractCase) -> None:
 
     result = connector.execute({"sql_query": case.select_sql}, result_format="list")
     assert_success(result, f"{case.adapter_name} typed SELECT contract")
-    assert result.sql_return, f"{case.adapter_name} typed SELECT contract returned no rows"
-    (case.row_assert or assert_default_contract_row)(result.sql_return[0])
+    rows = _assert_payload(result, f"{case.adapter_name} typed SELECT contract")
+    assert rows, f"{case.adapter_name} typed SELECT contract returned no rows"
+    (case.row_assert or assert_default_contract_row)(rows[0])
 
     limited = connector.execute({"sql_query": case.limit_sql}, result_format="list")
     assert_success(limited, f"{case.adapter_name} LIMIT contract SELECT")
-    assert len(limited.sql_return) == case.limit_count
+    limited_rows = _assert_payload(limited, f"{case.adapter_name} LIMIT contract SELECT")
+    assert len(limited_rows) == case.limit_count
 
     qualified = connector.execute({"sql_query": case.qualified_sql}, result_format="list")
     assert_success(qualified, f"{case.adapter_name} qualified identifier SELECT")
-    assert qualified.sql_return, f"{case.adapter_name} qualified identifier SELECT returned no rows"
+    qualified_rows = _assert_payload(qualified, f"{case.adapter_name} qualified identifier SELECT")
+    assert qualified_rows, f"{case.adapter_name} qualified identifier SELECT returned no rows"
