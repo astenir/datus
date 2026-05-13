@@ -376,7 +376,53 @@ wait_for_adapter_client_readiness() {
     starrocks)
       uv run --package datus-starrocks python datus-starrocks/scripts/wait_for_starrocks.py --timeout "${STARROCKS_READY_TIMEOUT:-300}"
       ;;
+    greenplum)
+      wait_for_greenplum_client_readiness
+      ;;
   esac
+}
+
+wait_for_greenplum_client_readiness() {
+  local timeout_seconds="${GREENPLUM_READY_TIMEOUT:-300}"
+  local deadline=$((SECONDS + timeout_seconds))
+  local probe_output="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/datus-greenplum-readiness-$$.log"
+
+  echo "Waiting for Greenplum client readiness at ${GREENPLUM_HOST:-127.0.0.1}:${GREENPLUM_PORT:-5432}/${GREENPLUM_DATABASE:-test}"
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if uv run --package datus-greenplum python - <<'PY' >"$probe_output" 2>&1; then
+import os
+
+import psycopg2
+
+conn = psycopg2.connect(
+    host=os.getenv("GREENPLUM_HOST", "127.0.0.1"),
+    port=int(os.getenv("GREENPLUM_PORT", "5432")),
+    user=os.getenv("GREENPLUM_USER", "gpadmin"),
+    password=os.getenv("GREENPLUM_PASSWORD", "pivotal"),
+    dbname=os.getenv("GREENPLUM_DATABASE", "test"),
+    connect_timeout=5,
+)
+try:
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT 1")
+        row = cursor.fetchone()
+        if not row or row[0] != 1:
+            raise RuntimeError(f"unexpected readiness result: {row!r}")
+finally:
+    conn.close()
+PY
+      echo "Greenplum client readiness probe succeeded"
+      return 0
+    fi
+    sleep 5
+  done
+
+  echo "Timed out waiting for Greenplum client readiness" >&2
+  if [ -s "$probe_output" ]; then
+    echo "Last Greenplum readiness probe output:" >&2
+    sed 's/^/  /' "$probe_output" >&2
+  fi
+  return 1
 }
 
 adapters_from_changed_files() {
