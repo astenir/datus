@@ -4,19 +4,27 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PACKAGE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$PACKAGE_DIR"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Force set test environment variables (override production values)
-export STARROCKS_HOST="localhost"
-export STARROCKS_PORT="9030"
-export STARROCKS_USER="root"
-export STARROCKS_PASSWORD=""
-export STARROCKS_CATALOG="default_catalog"
-export STARROCKS_DATABASE="test"
+# Set test defaults without overriding caller-provided values.
+export STARROCKS_HOST="${STARROCKS_HOST:-localhost}"
+export STARROCKS_PORT="${STARROCKS_PORT:-9030}"
+export STARROCKS_USER="${STARROCKS_USER:-root}"
+export STARROCKS_PASSWORD="${STARROCKS_PASSWORD:-}"
+export STARROCKS_CATALOG="${STARROCKS_CATALOG:-default_catalog}"
+export STARROCKS_DATABASE="${STARROCKS_DATABASE:-test}"
+
+wait_for_starrocks() {
+    uv run python scripts/wait_for_starrocks.py --timeout "${STARROCKS_READY_TIMEOUT:-300}"
+}
 
 # Function to run tests
 run_unit_tests() {
@@ -27,6 +35,7 @@ run_unit_tests() {
 run_integration_tests() {
     echo -e "${GREEN}Running integration tests (requires StarRocks)...${NC}"
     echo -e "${YELLOW}Using: ${STARROCKS_USER}@${STARROCKS_HOST}:${STARROCKS_PORT}/${STARROCKS_DATABASE}${NC}"
+    wait_for_starrocks
     uv run pytest tests/integration -v
 }
 
@@ -35,6 +44,7 @@ run_acceptance_tests() {
     echo -e "${YELLOW}Unit tests:${NC}"
     uv run pytest tests/ -m "acceptance and not integration" -v
     echo -e "\n${YELLOW}Integration tests:${NC}"
+    wait_for_starrocks
     uv run pytest tests/ -m "acceptance and integration" -v
 }
 

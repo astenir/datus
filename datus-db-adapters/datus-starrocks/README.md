@@ -161,9 +161,8 @@ result = connector.execute_query(f"SELECT * FROM {full_name} LIMIT 10")
 
 ```bash
 # 1. Start StarRocks test container
-docker compose up -d && sleep 60
-docker exec datus-starrocks-test mysql -h127.0.0.1 -P9030 -uroot \
-  -e "CREATE DATABASE IF NOT EXISTS test;"
+docker compose up -d
+uv run python scripts/wait_for_starrocks.py
 
 # 2. Run tests
 ./scripts/test.sh unit         # Unit tests (60 tests, ~0.03s)
@@ -178,9 +177,8 @@ TPC-H integration tests use a simplified TPC-H dataset (5 tables: region, nation
 
 ```bash
 # Start StarRocks and create test database
-docker compose up -d && sleep 60
-docker exec datus-starrocks-test mysql -h127.0.0.1 -P9030 -uroot \
-  -e "CREATE DATABASE IF NOT EXISTS test;"
+docker compose up -d
+uv run python scripts/wait_for_starrocks.py
 
 # Initialize TPC-H test data
 uv run python scripts/init_tpch_data.py

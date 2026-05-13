@@ -369,6 +369,16 @@ wait_for_service_health() {
   return 1
 }
 
+wait_for_adapter_client_readiness() {
+  local adapter="$1"
+
+  case "$adapter" in
+    starrocks)
+      uv run --package datus-starrocks python datus-starrocks/scripts/wait_for_starrocks.py --timeout "${STARROCKS_READY_TIMEOUT:-300}"
+      ;;
+  esac
+}
+
 adapters_from_changed_files() {
   local base_ref="$1"
   local changed_files=""
@@ -443,6 +453,7 @@ trap cleanup_started EXIT
 for adapter in "${selected_adapters[@]}"; do
   compose_file="$(adapter_compose "$adapter")"
   test_path="$(adapter_test_path "$adapter")"
+  package="$(adapter_package "$adapter")"
 
   if [ ! -f "$compose_file" ]; then
     echo "Missing compose file for $adapter: $compose_file" >&2
@@ -465,8 +476,9 @@ for adapter in "${selected_adapters[@]}"; do
     timeout_seconds="${spec##*:}"
     wait_for_service_health "$compose_file" "$service_name" "$timeout_seconds"
   done
+  wait_for_adapter_client_readiness "$adapter"
 
-  uv run --all-packages --with pytest --with pandas --with pyarrow pytest "$test_path" -m integration --tb=short --verbose
+  uv run --package "$package" --with pytest --with pandas --with pyarrow pytest "$test_path" -m integration --tb=short --verbose
 
   compose_down "$adapter"
 done
