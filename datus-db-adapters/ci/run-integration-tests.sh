@@ -373,53 +373,162 @@ wait_for_adapter_client_readiness() {
   local adapter="$1"
 
   case "$adapter" in
+    postgresql)
+      wait_for_python_connector_readiness "postgresql" "datus-postgresql"
+      ;;
+    mysql)
+      wait_for_python_connector_readiness "mysql" "datus-mysql"
+      ;;
+    clickhouse)
+      wait_for_python_connector_readiness "clickhouse" "datus-clickhouse"
+      ;;
     starrocks)
       uv run --package datus-starrocks python datus-starrocks/scripts/wait_for_starrocks.py --timeout "${STARROCKS_READY_TIMEOUT:-300}"
       ;;
+    trino)
+      wait_for_python_connector_readiness "trino" "datus-trino"
+      ;;
     greenplum)
-      wait_for_greenplum_client_readiness
+      wait_for_python_connector_readiness "greenplum" "datus-greenplum"
+      ;;
+    hive)
+      wait_for_python_connector_readiness "hive" "datus-hive"
+      ;;
+    spark)
+      wait_for_python_connector_readiness "spark" "datus-spark"
       ;;
   esac
 }
 
-wait_for_greenplum_client_readiness() {
-  local timeout_seconds="${GREENPLUM_READY_TIMEOUT:-300}"
-  local deadline=$((SECONDS + timeout_seconds))
-  local probe_output="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/datus-greenplum-readiness-$$.log"
+wait_for_python_connector_readiness() {
+  local adapter="$1"
+  local package="$2"
+  local timeout_env_name
+  local timeout_seconds
+  local deadline
+  local probe_output
 
-  echo "Waiting for Greenplum client readiness at ${GREENPLUM_HOST:-127.0.0.1}:${GREENPLUM_PORT:-5432}/${GREENPLUM_DATABASE:-test}"
+  timeout_env_name="$(echo "${adapter}_READY_TIMEOUT" | tr '[:lower:]' '[:upper:]')"
+  timeout_seconds="${!timeout_env_name:-300}"
+  deadline=$((SECONDS + timeout_seconds))
+  probe_output="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/datus-${adapter}-readiness-$$.log"
+
+  echo "Waiting for ${adapter} client readiness"
   while [ "$SECONDS" -lt "$deadline" ]; do
-    if uv run --package datus-greenplum python - <<'PY' >"$probe_output" 2>&1; then
+    if uv run --package "$package" --with pandas --with pyarrow python - "$adapter" <<'PY' >"$probe_output" 2>&1; then
 import os
+import sys
 
-import psycopg2
+adapter = sys.argv[1]
 
-conn = psycopg2.connect(
-    host=os.getenv("GREENPLUM_HOST", "127.0.0.1"),
-    port=int(os.getenv("GREENPLUM_PORT", "5432")),
-    user=os.getenv("GREENPLUM_USER", "gpadmin"),
-    password=os.getenv("GREENPLUM_PASSWORD", "pivotal"),
-    dbname=os.getenv("GREENPLUM_DATABASE", "test"),
-    connect_timeout=5,
-)
+if adapter == "postgresql":
+    from datus_postgresql import PostgreSQLConfig, PostgreSQLConnector
+
+    config = PostgreSQLConfig(
+        host=os.getenv("POSTGRESQL_HOST", "127.0.0.1"),
+        port=int(os.getenv("POSTGRESQL_PORT", "5432")),
+        username=os.getenv("POSTGRESQL_USER", "test_user"),
+        password=os.getenv("POSTGRESQL_PASSWORD", "test_password"),
+        database=os.getenv("POSTGRESQL_DATABASE", "test"),
+        schema_name=os.getenv("POSTGRESQL_SCHEMA", "public"),
+        timeout_seconds=5,
+    )
+    connector = PostgreSQLConnector(config)
+elif adapter == "mysql":
+    from datus_mysql import MySQLConfig, MySQLConnector
+
+    config = MySQLConfig(
+        host=os.getenv("MYSQL_HOST", "127.0.0.1"),
+        port=int(os.getenv("MYSQL_PORT", "3306")),
+        username=os.getenv("MYSQL_USER", "test_user"),
+        password=os.getenv("MYSQL_PASSWORD", "test_password"),
+        database=os.getenv("MYSQL_DATABASE", "test"),
+        timeout_seconds=5,
+    )
+    connector = MySQLConnector(config)
+elif adapter == "clickhouse":
+    from datus_clickhouse import ClickHouseConfig, ClickHouseConnector
+
+    config = ClickHouseConfig(
+        host=os.getenv("CLICKHOUSE_HOST", "127.0.0.1"),
+        port=int(os.getenv("CLICKHOUSE_PORT", "8123")),
+        username=os.getenv("CLICKHOUSE_USER", "default_user"),
+        password=os.getenv("CLICKHOUSE_PASSWORD", "default_test"),
+        database=os.getenv("CLICKHOUSE_DATABASE", "default_test"),
+        timeout_seconds=5,
+    )
+    connector = ClickHouseConnector(config)
+elif adapter == "trino":
+    from datus_trino import TrinoConfig, TrinoConnector
+
+    config = TrinoConfig(
+        host=os.getenv("TRINO_HOST", "127.0.0.1"),
+        port=int(os.getenv("TRINO_PORT", "8080")),
+        username=os.getenv("TRINO_USER", "trino"),
+        password=os.getenv("TRINO_PASSWORD", ""),
+        catalog=os.getenv("TRINO_CATALOG", "tpch"),
+        schema_name=os.getenv("TRINO_SCHEMA", "tiny"),
+        http_scheme=os.getenv("TRINO_HTTP_SCHEME", "http"),
+        timeout_seconds=5,
+    )
+    connector = TrinoConnector(config)
+elif adapter == "greenplum":
+    from datus_greenplum import GreenplumConfig, GreenplumConnector
+
+    config = GreenplumConfig(
+        host=os.getenv("GREENPLUM_HOST", "127.0.0.1"),
+        port=int(os.getenv("GREENPLUM_PORT", "5432")),
+        username=os.getenv("GREENPLUM_USER", "gpadmin"),
+        password=os.getenv("GREENPLUM_PASSWORD", "pivotal"),
+        database=os.getenv("GREENPLUM_DATABASE", "test"),
+        schema_name=os.getenv("GREENPLUM_SCHEMA", "public"),
+        timeout_seconds=5,
+    )
+    connector = GreenplumConnector(config)
+elif adapter == "hive":
+    from datus_hive import HiveConfig, HiveConnector
+
+    config = HiveConfig(
+        host=os.getenv("HIVE_HOST", "127.0.0.1"),
+        port=int(os.getenv("HIVE_PORT", "10000")),
+        username=os.getenv("HIVE_USERNAME", "hive"),
+        password=os.getenv("HIVE_PASSWORD", ""),
+        database=os.getenv("HIVE_DATABASE", "default"),
+        auth=os.getenv("HIVE_AUTH") or None,
+        timeout_seconds=5,
+    )
+    connector = HiveConnector(config)
+elif adapter == "spark":
+    from datus_spark import SparkConfig, SparkConnector
+
+    config = SparkConfig(
+        host=os.getenv("SPARK_HOST", "127.0.0.1"),
+        port=int(os.getenv("SPARK_PORT", "10000")),
+        username=os.getenv("SPARK_USER", "spark"),
+        password=os.getenv("SPARK_PASSWORD", ""),
+        database=os.getenv("SPARK_DATABASE", "default"),
+        auth_mechanism=os.getenv("SPARK_AUTH_MECHANISM", "NONE"),
+        timeout_seconds=5,
+    )
+    connector = SparkConnector(config)
+else:
+    raise RuntimeError(f"unsupported adapter readiness probe: {adapter}")
+
 try:
-    with conn.cursor() as cursor:
-        cursor.execute("SELECT 1")
-        row = cursor.fetchone()
-        if not row or row[0] != 1:
-            raise RuntimeError(f"unexpected readiness result: {row!r}")
+    if not connector.test_connection():
+        raise RuntimeError(f"{adapter} connector readiness test returned false")
 finally:
-    conn.close()
+    connector.close()
 PY
-      echo "Greenplum client readiness probe succeeded"
+      echo "${adapter} client readiness probe succeeded"
       return 0
     fi
     sleep 5
   done
 
-  echo "Timed out waiting for Greenplum client readiness" >&2
+  echo "Timed out waiting for ${adapter} client readiness" >&2
   if [ -s "$probe_output" ]; then
-    echo "Last Greenplum readiness probe output:" >&2
+    echo "Last ${adapter} readiness probe output:" >&2
     sed 's/^/  /' "$probe_output" >&2
   fi
   return 1
