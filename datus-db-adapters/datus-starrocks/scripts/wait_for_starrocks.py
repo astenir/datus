@@ -86,7 +86,8 @@ def check_starrocks_ready(config: StarRocksReadinessConfig) -> str:
                     """
                 )
                 cursor.execute(f"DROP TABLE IF EXISTS {quote_identifier(probe_table)}")
-            return f"{backend_detail}; database {config.database!r} accepts OLAP DDL"
+                return f"{backend_detail}; database {config.database!r} accepts OLAP DDL"
+            return f"{backend_detail}; no database DDL probe requested"
     finally:
         conn.close()
 
