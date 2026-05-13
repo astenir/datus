@@ -8,11 +8,7 @@ Initialize TPC-H sample data in StarRocks.
 
 Usage:
     # Start StarRocks first:
-    cd datus-starrocks && docker compose up -d && sleep 60
-
-    # Create test database:
-    docker exec datus-starrocks-test mysql -h127.0.0.1 -P9030 -uroot \
-        -e "CREATE DATABASE IF NOT EXISTS test;"
+    cd datus-starrocks && docker compose up -d
 
     # Then run this script:
     uv run python scripts/init_tpch_data.py
@@ -25,9 +21,16 @@ import argparse
 import logging
 import os
 import sys
+from pathlib import Path
 
 # Suppress adapter registry warnings in workspace dev environment
 logging.getLogger("datus.tools.db_tools.registry").setLevel(logging.ERROR)
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from wait_for_starrocks import StarRocksReadinessConfig, wait_for_starrocks_ready  # noqa: E402
 
 from datus_starrocks import StarRocksConfig, StarRocksConnector  # noqa: E402
 from datus_starrocks.tpch_data import ROW_COUNTS, TPCH_DATA, TPCH_DDL, TPCH_TABLES  # noqa: E402
@@ -71,9 +74,31 @@ def main():
         action="store_true",
         help="Drop existing TPC-H tables before creating",
     )
+    parser.add_argument(
+        "--wait-timeout",
+        type=int,
+        default=int(os.getenv("STARROCKS_READY_TIMEOUT", "300")),
+        help="Seconds to wait for StarRocks FE/BE readiness before loading data (default: 300)",
+    )
     args = parser.parse_args()
 
     print(f"Connecting to StarRocks at {args.host}:{args.port}...")
+    readiness_config = StarRocksReadinessConfig(
+        host=args.host,
+        port=args.port,
+        username=args.username,
+        password=args.password,
+        catalog=args.catalog,
+        database=args.database,
+    )
+    try:
+        detail = wait_for_starrocks_ready(readiness_config, timeout=args.wait_timeout, interval=5)
+        print(f"StarRocks readiness check passed: {detail}")
+    except TimeoutError as e:
+        print(f"Failed to connect to StarRocks: {e}")
+        print("  Start it with: cd datus-starrocks && docker compose up -d")
+        sys.exit(1)
+
     config = StarRocksConfig(
         host=args.host,
         port=args.port,
@@ -86,7 +111,7 @@ def main():
 
     if not conn.test_connection():
         print("Failed to connect to StarRocks. Is the server running?")
-        print("  Start it with: cd datus-starrocks && docker compose up -d && sleep 60")
+        print("  Start it with: cd datus-starrocks && docker compose up -d")
         sys.exit(1)
 
     print("Connected successfully!")
