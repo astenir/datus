@@ -88,6 +88,7 @@ def main():
         port=args.port,
         username=args.username,
         password=args.password,
+        catalog=args.catalog,
         database=args.database,
     )
     try:

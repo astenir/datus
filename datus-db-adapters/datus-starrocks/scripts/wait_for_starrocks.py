@@ -22,6 +22,7 @@ class StarRocksReadinessConfig:
     port: int
     username: str
     password: str
+    catalog: str
     database: str
 
 
@@ -29,8 +30,27 @@ def quote_identifier(identifier: str) -> str:
     return "`" + identifier.replace("`", "``") + "`"
 
 
+def table_identifier(catalog: str, database: str, table: str) -> str:
+    parts = [part for part in (catalog, database, table) if part]
+    return ".".join(quote_identifier(part) for part in parts)
+
+
 def is_alive(value: object) -> bool:
     return str(value).strip().lower() in {"true", "1", "yes"}
+
+
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than 0")
+    return parsed
+
+
+def positive_float(value: str) -> float:
+    parsed = float(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be greater than 0")
+    return parsed
 
 
 def check_starrocks_ready(config: StarRocksReadinessConfig) -> str:
@@ -72,11 +92,13 @@ def check_starrocks_ready(config: StarRocksReadinessConfig) -> str:
                 backend_detail = f"{len(alive_rows)} alive backend(s)"
 
             if config.database:
+                if config.catalog:
+                    cursor.execute(f"SET CATALOG {quote_identifier(config.catalog)}")
                 cursor.execute(f"CREATE DATABASE IF NOT EXISTS {quote_identifier(config.database)}")
-                cursor.execute(f"USE {quote_identifier(config.database)}")
+                full_probe_table = table_identifier(config.catalog, config.database, probe_table)
                 cursor.execute(
                     f"""
-                    CREATE TABLE {quote_identifier(probe_table)} (
+                    CREATE TABLE {full_probe_table} (
                         `id` INT
                     )
                     ENGINE=OLAP
@@ -85,7 +107,7 @@ def check_starrocks_ready(config: StarRocksReadinessConfig) -> str:
                     PROPERTIES ("replication_num" = "1")
                     """
                 )
-                cursor.execute(f"DROP TABLE IF EXISTS {quote_identifier(probe_table)}")
+                cursor.execute(f"DROP TABLE IF EXISTS {full_probe_table}")
                 return f"{backend_detail}; database {config.database!r} accepts OLAP DDL"
             return f"{backend_detail}; no database DDL probe requested"
     finally:
@@ -115,9 +137,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=int(os.getenv("STARROCKS_PORT", "9030")))
     parser.add_argument("--username", default=os.getenv("STARROCKS_USER", "root"))
     parser.add_argument("--password", default=os.getenv("STARROCKS_PASSWORD", ""))
+    parser.add_argument("--catalog", default=os.getenv("STARROCKS_CATALOG", "default_catalog"))
     parser.add_argument("--database", default=os.getenv("STARROCKS_DATABASE", "test"))
-    parser.add_argument("--timeout", type=int, default=int(os.getenv("STARROCKS_READY_TIMEOUT", "300")))
-    parser.add_argument("--interval", type=float, default=float(os.getenv("STARROCKS_READY_INTERVAL", "5")))
+    parser.add_argument(
+        "--timeout", type=positive_int, default=positive_int(os.getenv("STARROCKS_READY_TIMEOUT", "300"))
+    )
+    parser.add_argument(
+        "--interval",
+        type=positive_float,
+        default=positive_float(os.getenv("STARROCKS_READY_INTERVAL", "5")),
+    )
     return parser
 
 
@@ -128,10 +157,11 @@ def main() -> int:
         port=args.port,
         username=args.username,
         password=args.password,
+        catalog=args.catalog,
         database=args.database,
     )
 
-    print(f"Waiting for StarRocks at {config.host}:{config.port}/{config.database}...", flush=True)
+    print(f"Waiting for StarRocks at {config.host}:{config.port}/{config.catalog}/{config.database}...", flush=True)
     try:
         detail = wait_for_starrocks_ready(config, timeout=args.timeout, interval=args.interval)
     except TimeoutError as exc:
