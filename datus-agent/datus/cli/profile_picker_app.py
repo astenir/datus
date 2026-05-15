@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-"""Self-contained ``/profile`` pickers rendered as prompt_toolkit ``Application``s.
+"""Self-contained ``/permission`` pickers rendered as prompt_toolkit ``Application``s.
 
 Mirrors the dual-mode pattern of the other migrated wizards
 (:mod:`datus.cli.effort_app` et al): :meth:`run` constructs a transient
@@ -57,10 +57,11 @@ class ProfilePickerApp:
 
     _PROFILES = ("normal", "auto", "dangerous")
 
-    def __init__(self, console: Console, current: str = "normal"):
+    def __init__(self, console: Console, current: str = "normal", notice: Optional[str] = None):
         self._console = console
         self._current = current if current in self._PROFILES else "normal"
         self._idx = self._PROFILES.index(self._current)
+        self._notice = notice
         # Dual-mode finish hook (see ``EffortApp`` for the rationale).
         self._on_done: Optional[Callable[[Optional[str]], None]] = None
         self._app: Optional[Application] = None
@@ -85,7 +86,7 @@ class ProfilePickerApp:
             return None
         except Exception as exc:
             logger.error("ProfilePickerApp crashed: %s", exc)
-            print_error(self._console, f"/profile error: {exc}")
+            print_error(self._console, f"/permission error: {exc}")
             return None
         finally:
             self._on_done = None
@@ -161,9 +162,11 @@ class ProfilePickerApp:
             height=1,
         )
 
-        return HSplit(
+        children = [title_bar]
+        if self._notice:
+            children.append(Window(content=FormattedTextControl(self._render_notice), height=1))
+        children.extend(
             [
-                title_bar,
                 header_window,
                 Window(height=1, char="\u2500"),
                 self._list_window,
@@ -171,12 +174,16 @@ class ProfilePickerApp:
                 hint_window,
             ]
         )
+        return HSplit(children)
 
     def _render_header(self) -> List[Tuple[str, str]]:
         return [
             ("bold", "  Select permission profile"),
             ("", f"  [current: {self._current}]"),
         ]
+
+    def _render_notice(self) -> List[Tuple[str, str]]:
+        return [("ansiyellow", f"  {self._notice}")]
 
     def _render_list(self) -> List[Tuple[str, str]]:
         lines: List[Tuple[str, str]] = []
@@ -234,7 +241,7 @@ class DangerousConfirmApp:
             return False
         except Exception as exc:
             logger.error("DangerousConfirmApp crashed: %s", exc)
-            print_error(self._console, f"/profile confirm error: {exc}")
+            print_error(self._console, f"/permission confirm error: {exc}")
             return False
         finally:
             self._on_done = None

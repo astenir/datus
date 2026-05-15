@@ -174,7 +174,7 @@ class DatusCLI:
         self.configuration_manager = configuration_manager()
 
         # Active permission profile name. Initialized from agent_config;
-        # mutated by /profile. StatusBarProvider reads this for display.
+        # mutated by /permission. StatusBarProvider reads this for display.
         self.active_profile: str = getattr(self.agent_config, "active_profile_name", "normal")
 
         # Bind the process-wide path-manager ContextVar once so implicit callers
@@ -351,6 +351,7 @@ class DatusCLI:
             "effort": self.effort_commands.cmd_effort,
             "init": self.init_commands.cmd_init,
             "services": self.service_commands.cmd_services,
+            "permission": self._cmd_permission,
             "profile": self._cmd_profile,
         }
 
@@ -1479,11 +1480,11 @@ class DatusCLI:
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("Failed to refresh in-memory agent config: %s", exc)
 
-    def _run_profile_picker(self, current: str) -> Optional[str]:
+    def _run_profile_picker(self, current: str, notice: Optional[str] = None) -> Optional[str]:
         """Run ProfilePickerApp embedded in TUI when available."""
         from datus.cli.profile_picker_app import ProfilePickerApp
 
-        app = ProfilePickerApp(console=self.console, current=current)
+        app = ProfilePickerApp(console=self.console, current=current, notice=notice)
         tui_app = getattr(self, "tui_app", None)
         if tui_app is not None and getattr(tui_app, "_loop", None) is not None:
             return tui_app.run_wizard(app.build_embedded_panel)
@@ -1930,7 +1931,12 @@ class DatusCLI:
         return EXIT_SENTINEL
 
     def _cmd_profile(self, args: str) -> None:
-        """Open the profile selection picker and apply the choice.
+        """Deprecated alias for :meth:`_cmd_permission`."""
+
+        return DatusCLI._cmd_permission(self, args, notice="/profile is deprecated; use /permission instead.")
+
+    def _cmd_permission(self, args: str, notice: Optional[str] = None) -> None:
+        """Open the permission profile picker and apply the choice.
 
         Delegates to ``_run_profile_picker`` / ``_run_dangerous_confirm``
         (inline prompt_toolkit pickers mirroring ``/agent``). Selecting
@@ -1941,7 +1947,7 @@ class DatusCLI:
         from datus.tools.permission.profiles import PROFILE_NAMES, build_effective_config, get_profile
 
         current = getattr(self.agent_config, "active_profile_name", self.active_profile)
-        choice = self._run_profile_picker(current)
+        choice = self._run_profile_picker(current, notice=notice)
 
         if choice is None:
             return
