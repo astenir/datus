@@ -212,9 +212,9 @@ class TestActions:
     def test_install_emits_selection_with_version(self):
         marketplace = [{"name": "sql-opt", "latest_version": "2.1", "owner": "datus"}]
         app = _build(seed_tab="marketplace", marketplace=marketplace)
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._on_install()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert isinstance(sel, SkillSelection)
         assert sel.kind == "install"
         assert sel.name == "sql-opt"
@@ -223,22 +223,22 @@ class TestActions:
     def test_install_falls_back_to_latest_when_version_missing(self):
         marketplace = [{"name": "sql-opt", "owner": "datus"}]
         app = _build(seed_tab="marketplace", marketplace=marketplace)
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._on_install()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.version == "latest"
 
     def test_install_ignores_non_marketplace_row(self):
         app = _build(installed=[_meta("local-a")])
         # Cursor is on INSTALLED tab; _current_row returns SkillMetadata, not dict.
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._on_install()
         exit_mock.assert_not_called()
 
     def test_update_requires_marketplace_source(self):
         installed = [_meta("local-only", source="local")]
         app = _build(installed=installed)
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._on_update()
         exit_mock.assert_not_called()
         assert "not marketplace-sourced" in (app._error_message or "")
@@ -246,39 +246,39 @@ class TestActions:
     def test_update_on_marketplace_source_emits_selection(self):
         installed = [_meta("mkt-a", source="marketplace")]
         app = _build(installed=installed)
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._on_update()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.kind == "update"
         assert sel.name == "mkt-a"
 
     def test_remove_two_press_confirmation(self):
         installed = [_meta("foo", source="local")]
         app = _build(installed=installed)
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._on_remove()
             assert exit_mock.call_count == 0
             assert app._pending_remove == "foo"
             assert "Press r again" in (app._error_message or "")
             app._on_remove()
             assert exit_mock.call_count == 1
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.kind == "remove"
         assert sel.name == "foo"
         assert app._pending_remove is None
 
     def test_logout_emits_selection(self):
         app = _build()
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._on_logout()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.kind == "logout"
 
     def test_refresh_emits_selection(self):
         app = _build(seed_tab="marketplace")
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._on_refresh()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.kind == "refresh"
 
 
@@ -293,7 +293,7 @@ class TestLoginForm:
         app._enter_login_form()
         app._login_email.text = ""
         app._login_password.text = "pw"
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._submit_login_form()
         exit_mock.assert_not_called()
         assert "Email" in (app._error_message or "")
@@ -303,7 +303,7 @@ class TestLoginForm:
         app._enter_login_form()
         app._login_email.text = "me@example.com"
         app._login_password.text = ""
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._submit_login_form()
         exit_mock.assert_not_called()
         assert "Password" in (app._error_message or "")
@@ -314,9 +314,9 @@ class TestLoginForm:
         app._enter_login_form()
         app._login_email.text = "me@example.com"
         app._login_password.text = "secret"
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._submit_login_form()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.kind == "login"
         assert sel.email == "me@example.com"
         assert sel.password == "secret"
@@ -328,9 +328,9 @@ class TestLoginForm:
         app._login_email.text = "me@example.com"
         app._login_password.text = "secret"
         app._login_url.text = "https://override.example.com/"
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._submit_login_form()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.marketplace_url == "https://override.example.com/"
 
 
@@ -374,3 +374,108 @@ class TestDetailMapping:
 
     def test_detail_fields_for_unknown_type_returns_empty(self):
         assert SkillApp._detail_fields("nope") == []
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Dual-mode finish hook + embedded panel + standalone run() with mocked
+# Application.
+# ─────────────────────────────────────────────────────────────────────
+
+
+import asyncio  # noqa: E402
+
+from datus.cli.tui.wizard_host import EmbeddedWizard  # noqa: E402
+
+
+def _make_future():
+    loop = asyncio.new_event_loop()
+    return loop, loop.create_future()
+
+
+class TestEmbeddedPanel:
+    def test_build_embedded_panel_returns_wizard(self):
+        app = _build()
+        loop, fut = _make_future()
+        try:
+            panel = app.build_embedded_panel(fut)
+            assert isinstance(panel, EmbeddedWizard)
+            assert panel.done_future is fut
+            assert app._on_done is not None
+            # Embedded panels seed focus on the list window the layout
+            # builder wires up — pointing focus at None drops the cursor.
+            assert panel.first_focus is app._list_window
+        finally:
+            loop.close()
+
+    def test_embedded_finish_with_selection_resolves(self):
+        app = _build()
+        loop, fut = _make_future()
+        try:
+            app.build_embedded_panel(fut)
+            sel = SkillSelection(kind="refresh")
+            app._finish(sel)
+            assert fut.done() and fut.result() is sel
+        finally:
+            loop.close()
+
+    def test_embedded_finish_with_none_cancels(self):
+        app = _build()
+        loop, fut = _make_future()
+        try:
+            app.build_embedded_panel(fut)
+            app._finish(None)
+            assert fut.done() and fut.result() is None
+        finally:
+            loop.close()
+
+
+class TestFinishAndLayout:
+    def test_finish_without_on_done_is_noop(self):
+        app = _build()
+        assert app._on_done is None
+        app._finish(None)  # No raise.
+
+    def test_layout_returns_app_layout(self):
+        app = _build()
+        fake_layout = MagicMock()
+        app._app = MagicMock(layout=fake_layout)
+        assert app._layout() is fake_layout
+
+    def test_layout_falls_back_to_none_when_get_app_raises(self):
+        app = _build()
+        app._app = None
+        with patch("prompt_toolkit.application.get_app", side_effect=RuntimeError("no app")):
+            assert app._layout() is None
+
+    def test_focus_no_target_noop(self):
+        """``_focus(None)`` returns ``None`` via the early-out guard."""
+        app = _build()
+        app._app = None
+        assert app._focus(None) is None
+
+    def test_focus_dispatches_to_layout(self):
+        app = _build()
+        fake_layout = MagicMock()
+        app._app = MagicMock(layout=fake_layout)
+        sentinel = object()
+        app._focus(sentinel)
+        fake_layout.focus.assert_called_once_with(sentinel)
+
+
+class TestRunStandalone:
+    def test_run_returns_selection(self):
+        app = _build()
+        sel = SkillSelection(kind="refresh")
+        fake_app = MagicMock()
+        fake_app.run.return_value = sel
+        with patch("datus.cli.skill_app.Application", return_value=fake_app):
+            assert app.run() is sel
+        assert app._on_done is None
+        assert app._app is None
+
+    def test_run_keyboard_interrupt_returns_none(self):
+        app = _build()
+        fake_app = MagicMock()
+        fake_app.run.side_effect = KeyboardInterrupt
+        with patch("datus.cli.skill_app.Application", return_value=fake_app):
+            assert app.run() is None

@@ -24,7 +24,6 @@ from datus.tools.func_tool.gen_semantic_model_tools import GenSemanticModelTools
 from datus.tools.func_tool.generation_evidence import GenerationEvidence
 from datus.tools.func_tool.generation_tools import GenerationTools
 from datus.utils.loggings import get_logger
-from datus.utils.message_utils import MessagePart, build_structured_content
 
 logger = get_logger(__name__)
 
@@ -52,6 +51,7 @@ class GenSemanticModelAgenticNode(AgenticNode):
         execution_mode: Literal["interactive", "workflow"] = "interactive",
         scope: Optional[str] = None,
         is_subagent: bool = False,
+        session_id: Optional[str] = None,
     ):
         """
         Initialize the GenSemanticModelAgenticNode.
@@ -90,6 +90,7 @@ class GenSemanticModelAgenticNode(AgenticNode):
             mcp_servers={},
             scope=scope,
             is_subagent=is_subagent,
+            session_id=session_id,
         )
 
         # Setup tools
@@ -409,35 +410,7 @@ class GenSemanticModelAgenticNode(AgenticNode):
             # Get system instruction from template with enhanced context
             system_instruction = self._get_system_prompt(conversation_summary, template_context)
 
-            # Add context to user message if provided
-            enhanced_message = user_input.user_message
-            enhanced_parts = []
-
-            from datus.utils.node_utils import resolve_database_name_for_prompt
-
-            effective_db = resolve_database_name_for_prompt(
-                self.db_func_tool.connector if self.db_func_tool else None,
-                user_input.database or "",
-            )
-            if user_input.catalog or effective_db or user_input.db_schema:
-                context_parts = []
-                if user_input.catalog:
-                    context_parts.append(f"catalog: {user_input.catalog}")
-                if effective_db:
-                    context_parts.append(f"database: {effective_db}")
-                if user_input.db_schema:
-                    context_parts.append(f"schema: {user_input.db_schema}")
-                context_part_str = f"Context: {', '.join(context_parts)}"
-                enhanced_parts.append(context_part_str)
-
-            if enhanced_parts:
-                enhanced_context = "\n\n".join(enhanced_parts)
-                enhanced_message = build_structured_content(
-                    [
-                        MessagePart(type="enhanced", content=enhanced_context),
-                        MessagePart(type="user", content=user_input.user_message),
-                    ]
-                )
+            enhanced_message = self._build_enhanced_message(user_input)
 
             logger.debug(f"Tools available : {len(self.tools)} tools - {[tool.name for tool in self.tools]}")
             logger.debug(f"MCP servers available : {len(self.mcp_servers)} servers - {list(self.mcp_servers.keys())}")

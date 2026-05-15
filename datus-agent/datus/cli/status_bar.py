@@ -197,11 +197,52 @@ class StatusBarProvider:
             cached_tokens=cached,
             context_used=self._resolve_context_used(),
             context_total=self._resolve_context_total(),
-            plan_mode=bool(getattr(self._cli, "plan_mode_active", False)),
+            plan_mode=self._resolve_plan_mode(),
             agent_running=agent_running,
             profile=self._resolve_profile(),
             schema_sync_running=schema_sync_running,
         )
+
+    def _resolve_plan_mode(self) -> bool:
+        """Reflect plan-mode in real time, merging node and REPL signals.
+
+        Two sources can flip plan-mode mid-session:
+
+        1. ``confirm_plan`` (LLM tool call) calls ``node.deactivate_plan_mode()``
+           **synchronously while the turn is still running** — the REPL-side
+           ``self._cli.plan_mode_active`` toggle isn't synced back until the
+           turn ends (see ``repl._execute_chat_command``). Reading
+           ``node.plan_mode_active`` first lets the status bar's next paint
+           reflect the change within the timer tick instead of lagging a turn.
+
+        2. ``Shift+Tab`` flips ``self._cli.plan_mode_active`` between turns.
+           When no agent turn is in flight, the REPL toggle is the user's
+           authoritative intent — even if a previous ``confirm_plan`` left
+           ``node.plan_file_path`` allocated (it is intentionally preserved
+           to reuse the same markdown file on re-entry). The active turn is
+           detected via ``tui_app.agent_running``, which is cleared after
+           ``execute_chat_command`` (and its REPL toggle sync) completes.
+        """
+        node = self._current_node()
+        node_active = bool(getattr(node, "plan_mode_active", False)) if node is not None else False
+        if node_active:
+            return True
+        cli_toggle = bool(getattr(self._cli, "plan_mode_active", False))
+        if not cli_toggle:
+            return False
+        # cli toggle is on but the node disagrees. Trust the node mid-turn
+        # — a ``confirm_plan`` may have just flipped it off while the REPL
+        # toggle is still awaiting end-of-turn sync. Outside of a turn the
+        # toggle wins, so re-activating plan mode after a previous
+        # ``confirm_plan`` immediately re-lights the PLAN segment.
+        tui_app = getattr(self._cli, "tui_app", None)
+        if tui_app is not None:
+            try:
+                if tui_app.agent_running.is_set():
+                    return False
+            except Exception as e:  # pragma: no cover - defensive
+                logger.debug(f"status_bar: failed to read agent_running for plan mode: {e}")
+        return True
 
     def _resolve_profile(self) -> str:
         """Return the active profile name from the CLI, defaulting to ``normal``.

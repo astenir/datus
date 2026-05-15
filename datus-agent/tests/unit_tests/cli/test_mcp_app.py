@@ -299,37 +299,37 @@ class TestDetailMapping:
 class TestActions:
     def test_remove_two_press_confirmation(self):
         app = _build(servers=[_server("srv")])
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._on_remove()
             assert exit_mock.call_count == 0
             assert app._pending_remove == "srv"
             assert "Press r again" in (app._error_message or "")
             app._on_remove()
             assert exit_mock.call_count == 1
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.kind == "remove"
         assert sel.name == "srv"
         assert app._pending_remove is None
 
     def test_remove_without_selection_is_noop(self):
         app = _build()
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._on_remove()
         exit_mock.assert_not_called()
 
     def test_check_emits_selection(self):
         app = _build(servers=[_server("srv")])
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._on_check_current()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.kind == "check"
         assert sel.name == "srv"
 
     def test_refresh_emits_selection(self):
         app = _build()
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._on_refresh()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.kind == "refresh"
 
     def test_enter_tools_with_cache_sets_view(self):
@@ -338,7 +338,7 @@ class TestActions:
             tools_cache={"srv": [{"name": "t"}]},
         )
         app._focus_server = "srv"
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._enter_tools()
         exit_mock.assert_not_called()
         assert app._view is _View.TOOLS
@@ -346,9 +346,9 @@ class TestActions:
     def test_enter_tools_without_cache_emits_load_tools(self):
         app = _build(servers=[_server("srv")])
         app._focus_server = "srv"
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._enter_tools()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.kind == "load_tools"
         assert sel.name == "srv"
 
@@ -376,9 +376,9 @@ class TestAddForm:
         app._enter_add_form()
         app._add_name.text = "srv"
         app._add_command.text = "python"
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._submit_add_form()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.kind == "add"
         assert sel.name == "srv"
         assert sel.server_type == "stdio"
@@ -391,9 +391,9 @@ class TestAddForm:
         app._add_command.text = "uv"
         app._add_args.text = "run, mcp"
         app._add_env.text = '{"KEY": "value"}'
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._submit_add_form()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.config["args"] == ["run", "mcp"]
         assert sel.config["env"] == {"KEY": "value"}
 
@@ -401,7 +401,7 @@ class TestAddForm:
         app = _build()
         app._enter_add_form()
         app._add_name.text = "srv"
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._submit_add_form()
         exit_mock.assert_not_called()
         assert "Command" in (app._error_message or "")
@@ -409,7 +409,7 @@ class TestAddForm:
     def test_requires_name(self):
         app = _build()
         app._enter_add_form()
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._submit_add_form()
         exit_mock.assert_not_called()
         assert "Name" in (app._error_message or "")
@@ -423,9 +423,9 @@ class TestAddForm:
         app._add_url.text = "https://example.com/mcp"
         app._add_headers.text = '{"Authorization": "Bearer x"}'
         app._add_timeout.text = "15"
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._submit_add_form()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.server_type == "http"
         assert sel.config["url"] == "https://example.com/mcp"
         assert sel.config["headers"] == {"Authorization": "Bearer x"}
@@ -437,7 +437,7 @@ class TestAddForm:
         app._add_type_idx = _SERVER_TYPES.index("http")
         app._sync_add_focus_order()
         app._add_name.text = "remote"
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._submit_add_form()
         exit_mock.assert_not_called()
         assert "URL" in (app._error_message or "")
@@ -448,7 +448,7 @@ class TestAddForm:
         app._add_name.text = "srv"
         app._add_command.text = "python"
         app._add_env.text = "not json"
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._submit_add_form()
         exit_mock.assert_not_called()
         assert "Env" in (app._error_message or "")
@@ -461,7 +461,7 @@ class TestAddForm:
         app._add_name.text = "sse"
         app._add_url.text = "https://example"
         app._add_headers.text = "not json"
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._submit_add_form()
         exit_mock.assert_not_called()
         assert "Headers" in (app._error_message or "")
@@ -474,7 +474,7 @@ class TestAddForm:
         app._add_name.text = "x"
         app._add_url.text = "http://x"
         app._add_timeout.text = "not-a-number"
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._submit_add_form()
         exit_mock.assert_not_called()
         assert "Timeout" in (app._error_message or "")
@@ -493,9 +493,9 @@ class TestFilterForm:
         app._filter_enabled.text = "y"
         app._filter_allowed.text = "t1, t2"
         app._filter_blocked.text = "bad"
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._submit_filter_form()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.kind == "set_filter"
         assert sel.name == "srv"
         assert sel.filter_config["enabled"] is True
@@ -504,7 +504,7 @@ class TestFilterForm:
 
     def test_submit_without_selection_is_error(self):
         app = _build()
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._submit_filter_form()
         exit_mock.assert_not_called()
         assert "No server" in (app._error_message or "")
@@ -515,9 +515,9 @@ class TestFilterForm:
         app._filter_enabled.text = ""
         app._filter_allowed.text = ""
         app._filter_blocked.text = ""
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._submit_filter_form()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.filter_config["enabled"] is True
         assert sel.filter_config["allowed"] is None
 
@@ -525,23 +525,23 @@ class TestFilterForm:
         app = _build(servers=[_server("srv")])
         app._focus_server = "srv"
         app._filter_enabled.text = "no"
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._submit_filter_form()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.filter_config["enabled"] is False
 
     def test_drop_filter_emits_selection(self):
         app = _build(servers=[_server("srv")])
         app._focus_server = "srv"
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._drop_filter()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.kind == "remove_filter"
         assert sel.name == "srv"
 
     def test_drop_filter_without_selection_errors(self):
         app = _build()
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._drop_filter()
         exit_mock.assert_not_called()
         assert "No server" in (app._error_message or "")
@@ -661,3 +661,121 @@ class TestMCPSelection:
         )
         assert sel.server_type == "stdio"
         assert sel.config["command"] == "python"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Dual-mode finish hook + embedded panel + standalone run() with
+# mocked Application.
+# ─────────────────────────────────────────────────────────────────────
+
+
+import asyncio  # noqa: E402
+from unittest.mock import MagicMock  # noqa: E402
+
+from datus.cli.tui.wizard_host import EmbeddedWizard  # noqa: E402
+
+
+def _make_future():
+    loop = asyncio.new_event_loop()
+    return loop, loop.create_future()
+
+
+class TestEmbeddedPanel:
+    def test_build_embedded_panel_returns_wizard(self):
+        app = _build()
+        loop, fut = _make_future()
+        try:
+            panel = app.build_embedded_panel(fut)
+            assert isinstance(panel, EmbeddedWizard)
+            assert panel.done_future is fut
+            assert app._on_done is not None
+            # LIST view → first focus is the list window (built by the layout).
+            assert panel.first_focus is app._list_window
+        finally:
+            loop.close()
+
+    def test_embedded_finish_with_selection_resolves(self):
+        app = _build()
+        loop, fut = _make_future()
+        try:
+            app.build_embedded_panel(fut)
+            sel = MCPSelection(kind="cancel")
+            app._finish(sel)
+            assert fut.done() and fut.result() is sel
+        finally:
+            loop.close()
+
+    def test_embedded_finish_with_none_cancels(self):
+        app = _build()
+        loop, fut = _make_future()
+        try:
+            app.build_embedded_panel(fut)
+            app._finish(None)
+            assert fut.done() and fut.result() is None
+        finally:
+            loop.close()
+
+    def test_seed_add_form_first_focus_is_form_widget(self):
+        """When seeded into ADD_FORM the embedded panel must steer
+        first focus into the form's current widget — not the list
+        window, which is rendered behind the form."""
+        app = _build(seed_view="add_form")
+        loop, fut = _make_future()
+        try:
+            panel = app.build_embedded_panel(fut)
+            assert app._form_focus_order  # populated by seed
+            assert panel.first_focus is app._form_focus_order[app._form_focus_idx]
+        finally:
+            loop.close()
+
+
+class TestFinishAndLayout:
+    def test_finish_without_on_done_is_noop(self):
+        app = _build()
+        assert app._on_done is None
+        app._finish(None)
+
+    def test_layout_returns_app_layout(self):
+        app = _build()
+        fake_layout = MagicMock()
+        app._app = MagicMock(layout=fake_layout)
+        assert app._layout() is fake_layout
+
+    def test_layout_returns_none_when_get_app_raises(self):
+        app = _build()
+        app._app = None
+        with patch("prompt_toolkit.application.get_app", side_effect=RuntimeError("no app")):
+            assert app._layout() is None
+
+    def test_focus_no_target_noop(self):
+        """``_focus(None)`` returns ``None`` via the early-out guard; no
+        Application has to be bound."""
+        app = _build()
+        app._app = None
+        assert app._focus(None) is None
+
+    def test_focus_dispatches_to_layout(self):
+        app = _build()
+        fake_layout = MagicMock()
+        app._app = MagicMock(layout=fake_layout)
+        target = object()
+        app._focus(target)
+        fake_layout.focus.assert_called_once_with(target)
+
+
+class TestRunStandalone:
+    def test_run_returns_selection(self):
+        app = _build()
+        sel = MCPSelection(kind="cancel")
+        fake_app = MagicMock()
+        fake_app.run.return_value = sel
+        with patch("datus.cli.mcp_app.Application", return_value=fake_app):
+            assert app.run() is sel
+        assert app._on_done is None
+
+    def test_run_keyboard_interrupt_returns_none(self):
+        app = _build()
+        fake_app = MagicMock()
+        fake_app.run.side_effect = KeyboardInterrupt
+        with patch("datus.cli.mcp_app.Application", return_value=fake_app):
+            assert app.run() is None

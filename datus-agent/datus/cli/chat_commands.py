@@ -120,6 +120,14 @@ class ChatCommands:
         # to route ESC (interrupt) and Ctrl+O (verbose toggle) key bindings
         # to the currently running agent loop. ``None`` when idle.
         self.current_streaming_ctx = None
+        # In-progress turn's ``incremental_actions`` reference, published by
+        # the chat stream so :meth:`_full_screen_reprint` (triggered by
+        # ``DatusCLI._reflow_for_sidebar`` when the todo sidebar appears /
+        # disappears) can replay the running turn after wiping the buffer.
+        # Without this, the buffer clear loses everything the user has
+        # streamed since the last finished turn. ``None`` while idle; reset
+        # when each turn completes so a stale reference never re-renders.
+        self._current_incremental_actions: Optional[List[ActionHistory]] = None
 
     def update_chat_node_tools(self):
         """Update current node tools when datasource changes."""
@@ -146,34 +154,51 @@ class ChatCommands:
         effective_new = subagent_name or ""
         return effective_current != effective_new
 
-    def _copy_session_for_switch(self, prev_session_id: str, new_node) -> str:
+    def _copy_session_for_switch(self, prev_session_id: str, new_node_name: str) -> Optional[str]:
         """Copy session data from the previous node to a new session matching the new node's name prefix.
 
         Uses :meth:`SessionManager.copy_session` so that the new session_id prefix
-        matches ``new_node.get_node_name()`` and :meth:`_extract_node_type_from_session_id`
+        matches ``new_node_name`` and :meth:`_extract_node_type_from_session_id`
         resolves the correct type on ``.resume``.
 
+        Args:
+            prev_session_id: Source session id to clone from.
+            new_node_name: Target node name (``get_node_name()``) — used as the
+                copied session id's prefix. Resolved via
+                :func:`datus.agent.node.node_factory.resolve_node_name` so the
+                copy happens before the new node is constructed.
+
         Returns:
-            New session_id with the correct node-name prefix.
+            New session_id with the correct node-name prefix, or ``None`` when
+            the copy fails — callers should then let the new node generate a
+            fresh id eagerly in ``__init__``.
         """
         from datus.models.session_manager import SessionManager
 
         try:
             session_manager = SessionManager(self.cli.agent_config.session_dir, scope=self.cli.scope)
-            return session_manager.copy_session(prev_session_id, new_node.get_node_name())
+            return session_manager.copy_session(prev_session_id, new_node_name)
         except Exception as e:
             logger.warning(f"Failed to copy session on agent switch, starting fresh: {e}")
-            return new_node.session_id  # fall back to whatever the node already has (None → auto-generate)
+            return None
 
-    def _create_new_node(self, subagent_name: str = None):
+    def _create_new_node(self, subagent_name: str = None, session_id: Optional[str] = None):
         """Create new node based on subagent_name and configuration.
 
         Delegates to the shared node factory for actual node creation.
+
+        ``session_id`` is forwarded so the node's plan-mode state and
+        todolist (persisted under ``~/.datus/data/{project}/``) are
+        rehydrated *before* the first turn — used by the resume flow.
         """
         from datus.agent.node.node_factory import create_interactive_node
 
         return create_interactive_node(
-            subagent_name, self.cli.agent_config, node_id_suffix="_cli", scope=self.cli.scope
+            subagent_name,
+            self.cli.agent_config,
+            node_id_suffix="_cli",
+            scope=self.cli.scope,
+            session_id=session_id,
         )
 
     def create_node_input(
@@ -298,15 +323,22 @@ class ChatCommands:
                 # Get or create node
                 if need_new_node:
                     # Copy session when switching agents to preserve conversation
-                    # while keeping the session_id prefix consistent with the new node type.
+                    # while keeping the session_id prefix consistent with the new
+                    # node type. The copy runs *before* construction so the new
+                    # node opens the cloned .db directly — no post-construct mutation.
+                    from datus.agent.node.node_factory import resolve_node_name
+
                     prev_session_id = None
                     prev_node_name = None
+                    new_session_id: Optional[str] = None
                     if is_switch and self.current_node:
                         prev_session_id = getattr(self.current_node, "session_id", None)
                         prev_node_name = self.current_node.get_node_name()
-                    self.current_node = self._create_new_node(subagent_name)
                     if prev_session_id:
-                        self.current_node.session_id = self._copy_session_for_switch(prev_session_id, self.current_node)
+                        new_session_id = self._copy_session_for_switch(
+                            prev_session_id, resolve_node_name(subagent_name)
+                        )
+                    self.current_node = self._create_new_node(subagent_name, session_id=new_session_id)
                     if prev_node_name:
                         # Pass the previous node's name explicitly so downstream
                         # nodes (e.g. feedback) can route memory to the caller
@@ -331,6 +363,11 @@ class ChatCommands:
             # Initialize action history display
             action_display = ActionHistoryDisplay(self.console, live_state=getattr(self.cli, "live_state", None))
             incremental_actions = []
+            # Publish the live reference so ``_full_screen_reprint`` (driven
+            # by the sidebar reflow listener) can replay the running turn
+            # after wiping the buffer. The list grows by mutation, so the
+            # reference stays current without resync. Cleared in ``finally``.
+            self._current_incremental_actions = incremental_actions
             # Streaming text deltas (thinking_delta, depth=0) are routed to a
             # per-message bucket keyed by ``action.action_id`` (the
             # ``thinking_stream_id`` shared across all deltas + the paired
@@ -443,6 +480,14 @@ class ChatCommands:
                 banner_callback = getattr(self.cli, "_print_welcome", None)
                 if banner_callback is not None:
                     streaming_ctx.set_clear_header_callback(banner_callback)
+
+                # TUI mode binds Rich to TUIOutputBuffer, where Console.clear()
+                # + ESC[3J only injects unrecognised ANSI bytes. Hand the
+                # streaming context the buffer's own clear primitive so the
+                # mid-stream Ctrl+O verbose toggle wipes the viewport for real.
+                tui_output_buffer = getattr(self.cli, "_tui_output_buffer", None)
+                if tui_output_buffer is not None:
+                    streaming_ctx.set_clear_screen_callback(tui_output_buffer.clear)
 
                 # In TUI mode the persistent prompt_toolkit Application owns
                 # stdin, so the termios-based ``interrupt_on_escape`` listener
@@ -623,6 +668,10 @@ class ChatCommands:
             self.console.print(f"[red]Error:[/] {str(e)}")
             if _is_model_config_error(e):
                 self.console.print("[yellow]Hint: Use /model to configure or switch your model.[/]")
+        finally:
+            # Drop the in-progress reference so a later sidebar reflow does
+            # not replay actions from a turn that has already finished.
+            self._current_incremental_actions = None
 
     def _render_final_response(self, final_action: "ActionHistory", skip_markdown_body: bool = False) -> None:
         """Render the final response output (SQL, markdown, etc.) from a node action.
@@ -963,7 +1012,8 @@ class ChatCommands:
 
                 with esc_guard.paused():
                     app = InteractionApp(events)
-                    result = app.run()
+                    tui_app = getattr(self.cli, "tui_app", None)
+                    result = app.run(tui_app=tui_app)
                     return result.answers
             except Exception as e:
                 logger.error(f"Error collecting interaction input: {e}")
@@ -1132,13 +1182,26 @@ class ChatCommands:
         *,
         mode_label: Optional[str] = None,
         fallback_actions: Optional[List[ActionHistory]] = None,
+        in_progress_actions: Optional[List[ActionHistory]] = None,
     ) -> None:
         """Clear the screen and re-render the full multi-turn history.
 
         The viewport ends up with exactly what Ctrl+O produces: banner →
-        optional mode label → every turn's trace + final response. The
-        scrollback is unchanged (``patch_stdout`` cannot erase it), so
-        earlier content remains reachable by scrolling up.
+        optional mode label → every turn's trace + final response.
+
+        Two clearing strategies depending on TUI mode:
+
+        * **Full-screen TUI (current default)**: the Rich console is bound
+          to the in-memory :class:`TUIOutputBuffer`. ``Console.clear()`` /
+          ``sys.stdout.write("\\x1b[3J")`` would just inject raw ANSI
+          escapes into the buffer (which the ANSI parser does not
+          recognise as clear-screen) and corrupt the real terminal,
+          respectively. Instead, reset the buffer in place — the next
+          ``console.print`` lands in an empty buffer and produces the
+          same banner-then-history viewport.
+        * **Legacy non-full-screen** path: behave as before, using
+          terminal escape codes to wipe the viewport while leaving the
+          terminal-native scrollback intact.
 
         Args:
             verbose: Render style for action trace lines.
@@ -1148,9 +1211,13 @@ class ChatCommands:
                 single action list instead. Used by Ctrl+O on the very first
                 turn before ``all_turn_actions.append`` runs.
         """
-        self.console.clear()
-        sys.stdout.write("\033[3J")
-        sys.stdout.flush()
+        tui_output_buffer = getattr(self.cli, "_tui_output_buffer", None)
+        if tui_output_buffer is not None:
+            tui_output_buffer.clear()
+        else:
+            self.console.clear()
+            sys.stdout.write("\033[3J")
+            sys.stdout.flush()
         banner_callback = getattr(self.cli, "_print_welcome", None)
         if banner_callback is not None:
             banner_callback()
@@ -1186,6 +1253,11 @@ class ChatCommands:
         elif fallback_actions:
             action_display.render_action_history(fallback_actions, verbose=verbose)
             _render_turn_response(fallback_actions)
+        # Append the running turn's actions (driven by the sidebar reflow
+        # listener) after completed history so the user's in-flight stream
+        # survives the buffer wipe. Skipped when empty.
+        if in_progress_actions:
+            action_display.render_action_history(in_progress_actions, verbose=verbose)
 
     def display_inline_trace_details(self, actions: List[ActionHistory]) -> None:
         """Toggle action history between compact and verbose modes (post-run Ctrl+O)."""
@@ -1365,9 +1437,8 @@ class ChatCommands:
 
                 app = ListSelectorApp(title=f"Resume session ({agent_label})", items=items)
                 tui_app = getattr(self.cli, "tui_app", None)
-                if tui_app is not None:
-                    with tui_app.suspend_input():
-                        selection = app.run()
+                if tui_app is not None and getattr(tui_app, "_loop", None) is not None:
+                    selection = tui_app.run_wizard(app.build_embedded_panel)
                 else:
                     selection = app.run()
                 if selection is None:
@@ -1387,12 +1458,19 @@ class ChatCommands:
 
             self.console.print(f"[dim]Resuming session: {target_session_id} (type: {node_name})...[/]")
 
-            new_node = self._create_new_node(subagent_name)
-            new_node.session_id = target_session_id
+            # Pass session_id at construction so ``AgenticNode.__init__`` can
+            # rehydrate persisted plan-mode state (and the todolist disk-load
+            # path) before the first turn — see ``restore_plan_mode_state``.
+            new_node = self._create_new_node(subagent_name, session_id=target_session_id)
 
             # Update state
             self.current_node = new_node
             self.current_subagent_name = subagent_name
+
+            # Mirror restored plan-mode flag back to the REPL toggle so the
+            # bottom status bar reflects what the node believes (PLAN vs CHAT).
+            if hasattr(self.cli, "plan_mode_active"):
+                self.cli.plan_mode_active = bool(getattr(new_node, "plan_mode_active", False))
 
             # Show conversation history with full formatting
             from rich.rule import Rule
@@ -1508,9 +1586,8 @@ class ChatCommands:
 
                 app = ListSelectorApp(title="Session Rewind", items=items)
                 tui_app = getattr(self.cli, "tui_app", None)
-                if tui_app is not None:
-                    with tui_app.suspend_input():
-                        selection = app.run()
+                if tui_app is not None and getattr(tui_app, "_loop", None) is not None:
+                    selection = tui_app.run_wizard(app.build_embedded_panel)
                 else:
                     selection = app.run()
                 if selection is None:
@@ -1545,11 +1622,12 @@ class ChatCommands:
             node_name = self._extract_node_type_from_session_id(new_session_id)
             subagent_name = node_name if node_name != "chat" else None
 
-            new_node = self._create_new_node(subagent_name)
-            new_node.session_id = new_session_id
+            new_node = self._create_new_node(subagent_name, session_id=new_session_id)
 
             self.current_node = new_node
             self.current_subagent_name = subagent_name
+            if hasattr(self.cli, "plan_mode_active"):
+                self.cli.plan_mode_active = bool(getattr(new_node, "plan_mode_active", False))
 
             # Show the rewound conversation
             from rich.rule import Rule

@@ -140,6 +140,17 @@ class TestSyncModeSubagentGroups:
         parent_id = "parent-123"
 
         actions = [
+            # task PROCESSING anchors the group (Path A). Required for
+            # depth>0 actions below to slot in — orphan depth>0 actions
+            # are warned and dropped under the cleaned-up contract.
+            _make_action(
+                ActionRole.TOOL,
+                ActionStatus.PROCESSING,
+                action_id=parent_id,
+                action_type="task",
+                messages="task(gen_sql, revenue?)",
+                input_data={"type": "gen_sql", "prompt": "revenue?"},
+            ),
             _make_action(
                 ActionRole.USER,
                 ActionStatus.PROCESSING,
@@ -255,6 +266,14 @@ class TestSyncModeSubagentGroups:
 
         actions = [
             _make_action(
+                ActionRole.TOOL,
+                ActionStatus.PROCESSING,
+                action_id=parent_id,
+                action_type="task",
+                messages="task(gen_sql, test)",
+                input_data={"type": "gen_sql", "prompt": "test"},
+            ),
+            _make_action(
                 ActionRole.USER,
                 ActionStatus.PROCESSING,
                 depth=1,
@@ -293,6 +312,217 @@ class TestSyncModeSubagentGroups:
 
         output = buf.getvalue()
         assert "1 tool uses" in output  # Only the SUCCESS one counted
+
+
+@pytest.mark.ci
+class TestPathAGate:
+    """Regression coverage for the task-PROCESSING anchor contract.
+
+    The cleaned-up grouping model in
+    :class:`datus.cli.action_display.streaming.InlineStreamingContext`
+    requires every subagent group to be seeded by a depth=0 ``task``
+    PROCESSING action; depth>0 actions slot in via ``parent_action_id``
+    matching the seed's ``action_id``. The original bug was that
+    Path A's gate only accepted the *direct* input layout, so
+    model-emitted task actions (wrapped layout) silently fell through
+    to a now-removed depth>0 fallback path and produced double-wrapped
+    headers like ``⏺ load_skill(Tool call: load_skill(...))``.
+    """
+
+    def _build_ctx(self, actions):
+        buf = StringIO()
+        console = Console(file=buf, no_color=True)
+        display = ActionHistoryDisplay(console)
+        ctx = InlineStreamingContext(actions, display, sync_mode=True)
+        return ctx, buf
+
+    def test_wrapped_layout_task_processing_anchors_group(self):
+        """Model adapters emit task with ``input={"function_name": "task", "arguments": {...}}``.
+
+        The gate must accept this layout and anchor the group with the
+        subagent_type extracted from ``arguments.type`` — not bypass it
+        and let the first depth>0 child action seed a misnamed group.
+        Direct regression for the user-reported ``load_skill`` mis-render.
+        """
+        call_id = "call-wrapped-1"
+        actions = [
+            _make_action(
+                ActionRole.TOOL,
+                ActionStatus.PROCESSING,
+                action_id=call_id,
+                action_type="task",
+                messages='Tool call: task(\'{"type": "gen_table"}...\')',
+                input_data={
+                    "function_name": "task",
+                    "arguments": {
+                        "type": "gen_table",
+                        "prompt": "Build a sales rollup",
+                        "description": "sales rollup",
+                    },
+                },
+            ),
+            _make_action(
+                ActionRole.TOOL,
+                ActionStatus.SUCCESS,
+                depth=1,
+                action_type="load_skill",
+                messages='Tool call: load_skill(\'{"skill_name": "gen-table"}\')',
+                input_data={"function_name": "load_skill", "arguments": {"skill_name": "gen-table"}},
+                parent_action_id=call_id,
+            ),
+            _make_action(
+                ActionRole.SYSTEM,
+                ActionStatus.SUCCESS,
+                depth=1,
+                action_type=SUBAGENT_COMPLETE_ACTION_TYPE,
+                messages="complete",
+                output_data={"subagent_type": "gen_table", "tool_count": 1},
+                parent_action_id=call_id,
+            ),
+        ]
+        ctx, buf = self._build_ctx(actions)
+        ctx.run_sync()
+        output = buf.getvalue()
+
+        # Header pulls subagent_type from arguments.type, NOT from the
+        # inner load_skill action.
+        assert "gen_table" in output
+        assert "sales rollup" in output
+        # The inner tool name must NOT appear in the header position —
+        # i.e. there is no ``load_skill(Tool call: ...)`` double-wrap.
+        assert "Tool call: load_skill" not in output
+        assert "1 tool uses" in output
+
+    def test_direct_layout_task_processing_anchors_group(self):
+        """Bootstrap path builds task actions with the direct layout
+        (``input={"type": ..., "prompt": ..., "description": ...}``).
+        The gate must accept this layout identically to the wrapped case.
+        """
+        call_id = "call-direct-1"
+        actions = [
+            _make_action(
+                ActionRole.TOOL,
+                ActionStatus.PROCESSING,
+                action_id=call_id,
+                action_type="task",
+                messages="task(gen_sql_summary)",
+                input_data={
+                    "type": "gen_sql_summary",
+                    "prompt": "summarise orders.sql",
+                    "description": "orders.sql",
+                },
+            ),
+            _make_action(
+                ActionRole.TOOL,
+                ActionStatus.SUCCESS,
+                depth=1,
+                action_type="read_query",
+                messages="read_query",
+                input_data={"function_name": "read_query"},
+                parent_action_id=call_id,
+            ),
+            _make_action(
+                ActionRole.SYSTEM,
+                ActionStatus.SUCCESS,
+                depth=1,
+                action_type=SUBAGENT_COMPLETE_ACTION_TYPE,
+                messages="complete",
+                parent_action_id=call_id,
+            ),
+        ]
+        ctx, buf = self._build_ctx(actions)
+        ctx.run_sync()
+        output = buf.getvalue()
+        assert "gen_sql_summary" in output
+        assert "orders.sql" in output
+
+    def test_orphan_depth_gt_zero_action_is_warned_and_dropped(self, caplog):
+        """A depth>0 action without a preceding task PROCESSING anchor
+        must be warned about and dropped from the visible scrollback —
+        creating an on-the-fly group from such an action is what produced
+        the original double-wrap regression.
+        """
+        actions = [
+            _make_action(
+                ActionRole.TOOL,
+                ActionStatus.SUCCESS,
+                depth=1,
+                action_type="load_skill",
+                messages="load_skill('gen-table')",
+                input_data={"function_name": "load_skill", "arguments": {"skill_name": "gen-table"}},
+                parent_action_id="no-anchor-call-id",
+            ),
+        ]
+        ctx, buf = self._build_ctx(actions)
+        with caplog.at_level("WARNING", logger="datus.cli.action_display.streaming"):
+            ctx.run_sync()
+        output = buf.getvalue()
+
+        # Action is dropped from rendered output.
+        assert "load_skill" not in output
+        assert "Done" not in output
+        # No group was synthesised.
+        assert ctx._subagent_groups == {}
+        # Warning fires with the diagnostic kwargs.
+        warning_records = [r for r in caplog.records if r.levelname == "WARNING"]
+        assert warning_records, "expected an orphan-depth>0 warning"
+        msg = warning_records[-1].getMessage()
+        assert "orphan depth>0 action" in msg
+        assert "parent_action_id=no-anchor-call-id" in msg
+        assert "action_type=load_skill" in msg
+
+    @pytest.mark.parametrize(
+        "input_data,expected_type,expected_goal",
+        [
+            (
+                {"type": "explore", "description": "schema discovery"},
+                "explore",
+                "schema discovery",
+            ),
+            (
+                {
+                    "function_name": "task",
+                    "arguments": {"type": "explore", "description": "schema discovery"},
+                },
+                "explore",
+                "schema discovery",
+            ),
+            (
+                {
+                    "function_name": "task",
+                    "arguments": '{"type": "explore", "description": "schema discovery"}',
+                },
+                "explore",
+                "schema discovery",
+            ),
+        ],
+        ids=["direct", "wrapped_dict", "wrapped_json_string"],
+    )
+    def test_tui_live_header_segments_use_parsed_task_type(self, input_data, expected_type, expected_goal):
+        """TUI pinned-region header (``_build_subagent_header_segments``)
+        must canonicalise both layouts through :func:`parse_task_tool_input`,
+        matching ``ActionRenderer.render_subagent_header``. Regression for
+        the user-reported live header rendering as
+        ``⏺ task(Tool call: task('...'))`` instead of ``⏺ explore(...)`` —
+        the segment builder previously only handled the direct layout.
+        """
+        first_action = _make_action(
+            ActionRole.TOOL,
+            ActionStatus.PROCESSING,
+            depth=0,
+            action_type="task",
+            messages='Tool call: task(\'{"type": "explore"...}...\')',
+            input_data=input_data,
+        )
+        segments = InlineStreamingContext._build_subagent_header_segments(first_action)
+        # Segment 0 carries the cyan name; segment 1 (if present) carries
+        # the goal. Together they form the visible ⏺ header.
+        rendered = "".join(text for _style, text in segments)
+        assert f"\u23fa {expected_type}" in rendered
+        assert f"({expected_goal})" in rendered
+        # The model adapter's "Tool call: task(..." messages must NOT leak
+        # into the goal — that was the original double-wrap symptom.
+        assert "Tool call:" not in rendered
 
 
 # ── Unified reprint ──────────────────────────────────────────────
@@ -599,13 +829,17 @@ class TestTuiPath:
 
         ctx = InlineStreamingContext([], display, live_state=live_state)
         parent_id = "parent-tui"
+        # first_action is the outer task PROCESSING under the cleaned-up
+        # grouping contract — the subagent_type comes from ``input["type"]``,
+        # not from a depth=1 inner action's ``action_type``.
         first = _make_action(
             ActionRole.TOOL,
             ActionStatus.PROCESSING,
-            depth=1,
-            action_type="gen_metrics",
-            messages="task",
-            parent_action_id=parent_id,
+            depth=0,
+            action_id=parent_id,
+            action_type="task",
+            messages="task(gen_metrics)",
+            input_data={"type": "gen_metrics", "prompt": "compute base metrics"},
         )
         ctx._start_subagent_group(first, group_key=parent_id)
 
@@ -640,13 +874,16 @@ class TestTuiPath:
         ctx = InlineStreamingContext([], display, live_state=live_state)
 
         for parent_id, label in (("parent-A", "alpha"), ("parent-B", "beta")):
+            # Each subagent group is seeded by its own outer task
+            # PROCESSING action — same shape as production Path A.
             first = _make_action(
                 ActionRole.TOOL,
                 ActionStatus.PROCESSING,
-                depth=1,
-                action_type=label,
-                messages="task",
-                parent_action_id=parent_id,
+                depth=0,
+                action_id=parent_id,
+                action_type="task",
+                messages=f"task({label})",
+                input_data={"type": label, "prompt": f"{label} prompt"},
             )
             ctx._start_subagent_group(first, group_key=parent_id)
             for i in range(3):
@@ -1201,6 +1438,49 @@ class TestStreamingMarkdown:
         )
         assert buf.getvalue().count("final body text") == 1
         assert "wrapper-xyz" in ctx._markdown_stream_consumed_ids
+
+    def test_plan_preview_renders_after_streamed_preamble(self):
+        """Regression: ``broker.send`` plan_preview must NOT be swallowed by the same-turn dedup latch.
+
+        Reproduces the original report: LLM streams a "let me confirm" preamble,
+        then calls ``confirm_plan`` which pushes the plan markdown via
+        ``broker.send``. That action is also ASSISTANT/SUCCESS/depth=0 in TUI
+        mode, so the dedupe condition would have dropped it without the
+        ``action_type != "plan_preview"`` carve-out.
+        """
+        ctx, _live_state, buf = self._make_ctx()
+        # Step 1 — LLM streams preamble, finalize sets ``_turn_finalized``.
+        ctx._handle_thinking_delta(self._make_delta("Let me confirm the plan.\n\n", action_id="stream-1"))
+        ctx._print_completed_action(
+            _make_action(
+                ActionRole.ASSISTANT,
+                ActionStatus.SUCCESS,
+                action_type="response",
+                messages="Let me confirm the plan.",
+                output_data={"raw_output": "Let me confirm the plan."},
+                action_id="stream-1",
+            )
+        )
+        assert ctx._turn_finalized is True
+
+        # Step 2 — ``broker.send`` pushes the plan preview content.
+        plan_md = "# Final Plan\n\nStep A\nStep B"
+        ctx._print_completed_action(
+            _make_action(
+                ActionRole.ASSISTANT,
+                ActionStatus.SUCCESS,
+                action_type="plan_preview",
+                messages=plan_md,
+                input_data={"content": plan_md, "content_type": "markdown"},
+                output_data={"content": plan_md, "content_type": "markdown"},
+                action_id="preview-1",
+            )
+        )
+
+        # The plan body must actually land in the scrollback this time.
+        assert "Final Plan" in buf.getvalue()
+        assert "Step A" in buf.getvalue()
+        assert "Step B" in buf.getvalue()
 
     def test_unterminated_tail_with_paired_response_prints_once(self):
         """Regression: last paragraph without trailing ``\\n\\n`` must not duplicate.

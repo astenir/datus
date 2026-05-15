@@ -27,7 +27,7 @@ from datus.schemas.semantic_agentic_node_models import SemanticNodeResult
 from datus.tools.func_tool import DBFuncTool, FilesystemFuncTool
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
-from datus.utils.message_utils import MessagePart, build_structured_content
+from datus.utils.message_utils import build_structured_content
 from datus.validation import ValidationHook
 from datus.validation.report import build_retry_prompt
 
@@ -77,6 +77,7 @@ class DeliverableAgenticNode(AgenticNode):
         node_name: Optional[str] = None,
         scope: Optional[str] = None,
         is_subagent: bool = False,
+        session_id: Optional[str] = None,
     ):
         self.execution_mode = execution_mode
         # ``node_name`` supports custom aliases (``my_table: {node_class: gen_table}``).
@@ -99,6 +100,7 @@ class DeliverableAgenticNode(AgenticNode):
             mcp_servers={},
             scope=scope,
             is_subagent=is_subagent,
+            session_id=session_id,
         )
 
         self.db_func_tool: Optional[DBFuncTool] = None
@@ -492,10 +494,5 @@ class DeliverableAgenticNode(AgenticNode):
 
         if enhanced_parts:
             enhanced_context = "\n\n".join(enhanced_parts)
-            return build_structured_content(
-                [
-                    MessagePart(type="enhanced", content=enhanced_context),
-                    MessagePart(type="user", content=user_input.user_message),
-                ]
-            )
+            return build_structured_content(enhanced_context, user_input.user_message)
         return user_input.user_message

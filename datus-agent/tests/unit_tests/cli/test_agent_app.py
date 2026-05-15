@@ -131,7 +131,7 @@ class TestSetDefault:
         app._apply_seed()
         gen_sql_idx = app._builtin_names.index("gen_sql")
         app._list_cursor = gen_sql_idx
-        with patch.object(app._app, "exit") as exit_mock, patch.object(app._app.layout, "focus"):
+        with patch.object(app, "_finish") as exit_mock, patch.object(app, "_focus"):
             app._on_list_enter()
         exit_mock.assert_not_called()
         assert app._view == _View.BUILTIN_EDIT
@@ -145,7 +145,7 @@ class TestSetDefault:
         app._apply_seed()
         chat_idx = app._builtin_names.index("chat")
         app._list_cursor = chat_idx
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._on_list_enter()
         exit_mock.assert_not_called()
         assert app._view == _View.AGENT_LIST
@@ -156,9 +156,9 @@ class TestSetDefault:
         app._apply_seed()
         app._tab = _Tab.CUSTOM
         app._list_cursor = 1  # beta
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._on_list_enter()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.kind == "set_default"
         assert sel.name == "beta"
 
@@ -177,9 +177,9 @@ class TestCustomTabActions:
         app._apply_seed()
         app._tab = _Tab.CUSTOM
         app._list_cursor = len(app._custom_names)
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._on_list_enter()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.kind == "new_custom"
         assert sel.return_to_tab == "custom"
 
@@ -188,9 +188,9 @@ class TestCustomTabActions:
         app._apply_seed()
         app._tab = _Tab.CUSTOM
         app._list_cursor = 0
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._on_list_edit()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.kind == "edit_custom"
         assert sel.name == "alpha"
 
@@ -201,12 +201,12 @@ class TestCustomTabActions:
         app._apply_seed()
         app._tab = _Tab.CUSTOM
         app._list_cursor = 0
-        with patch.object(app._app, "exit") as exit_mock:
+        with patch.object(app, "_finish") as exit_mock:
             app._on_delete_custom()
             exit_mock.assert_not_called()
             assert app._pending_delete_custom == "alpha"
             app._on_delete_custom()
-        sel = exit_mock.call_args.kwargs["result"]
+        sel = exit_mock.call_args.args[0]
         assert sel.kind == "delete_custom"
         assert sel.name == "alpha"
         assert app._pending_delete_custom is None
@@ -224,7 +224,7 @@ class TestBuiltinEdit:
         # Pick a real built-in (not 'chat').
         gen_sql_idx = app._builtin_names.index("gen_sql")
         app._list_cursor = gen_sql_idx
-        with patch.object(app._app.layout, "focus"):
+        with patch.object(app, "_focus"):
             app._on_list_edit()
         assert app._view == _View.BUILTIN_EDIT
         assert app._edit_target == "gen_sql"
@@ -236,7 +236,7 @@ class TestBuiltinEdit:
         app._apply_seed()
         gen_sql_idx = app._builtin_names.index("gen_sql")
         app._list_cursor = gen_sql_idx
-        with patch.object(app._app.layout, "focus"):
+        with patch.object(app, "_focus"):
             app._on_list_edit()
         assert app._max_turns_input.text == "42"
 
@@ -249,7 +249,7 @@ class TestBuiltinEdit:
         app._apply_seed()
         gen_sql_idx = app._builtin_names.index("gen_sql")
         app._list_cursor = gen_sql_idx
-        with patch.object(app._app.layout, "focus"):
+        with patch.object(app, "_focus"):
             app._on_list_edit()
         app._max_turns_input.text = "15"
         app._submit_builtin_edit()
@@ -265,7 +265,7 @@ class TestBuiltinEdit:
         app._apply_seed()
         gen_sql_idx = app._builtin_names.index("gen_sql")
         app._list_cursor = gen_sql_idx
-        with patch.object(app._app.layout, "focus"):
+        with patch.object(app, "_focus"):
             app._on_list_edit()
         app._max_turns_input.text = "42"
         app._submit_builtin_edit()
@@ -276,7 +276,7 @@ class TestBuiltinEdit:
         app._apply_seed()
         gen_sql_idx = app._builtin_names.index("gen_sql")
         app._list_cursor = gen_sql_idx
-        with patch.object(app._app.layout, "focus"):
+        with patch.object(app, "_focus"):
             app._on_list_edit()
         app._max_turns_input.text = ""
         app._submit_builtin_edit()
@@ -287,7 +287,7 @@ class TestBuiltinEdit:
         app._apply_seed()
         gen_sql_idx = app._builtin_names.index("gen_sql")
         app._list_cursor = gen_sql_idx
-        with patch.object(app._app.layout, "focus"):
+        with patch.object(app, "_focus"):
             app._on_list_edit()
         app._max_turns_input.text = "not-a-number"
         app._submit_builtin_edit()
@@ -300,7 +300,7 @@ class TestBuiltinEdit:
         app._apply_seed()
         gen_sql_idx = app._builtin_names.index("gen_sql")
         app._list_cursor = gen_sql_idx
-        with patch.object(app._app.layout, "focus"):
+        with patch.object(app, "_focus"):
             app._on_list_edit()
         app._max_turns_input.text = "0"
         app._submit_builtin_edit()
@@ -340,3 +340,173 @@ class TestTabCycle:
         assert app._tab == _Tab.CUSTOM
         app._cycle_tab(-1)
         assert app._tab == _Tab.BUILTIN
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Dual-mode finish + embedded panel + standalone run() with mocked
+# Application — mirrors test_bootstrap_app.py.
+# ─────────────────────────────────────────────────────────────────────
+
+
+import asyncio  # noqa: E402
+
+from datus.cli.tui.wizard_host import EmbeddedWizard  # noqa: E402
+
+
+def _make_future():
+    loop = asyncio.new_event_loop()
+    return loop, loop.create_future()
+
+
+class TestEmbeddedPanel:
+    def test_build_embedded_panel_returns_wizard(self):
+        app = _build(agentic_nodes={"alpha": {}}, seed_tab="custom")
+        loop, fut = _make_future()
+        try:
+            panel = app.build_embedded_panel(fut)
+            assert isinstance(panel, EmbeddedWizard)
+            assert panel.done_future is fut
+            assert app._on_done is not None
+            # Initial focus is the list window the panel builds.
+            assert panel.first_focus is app._list_window
+        finally:
+            loop.close()
+
+    def test_embedded_finish_with_selection_resolves_future(self):
+        from datus.cli.agent_app import AgentSelection
+
+        app = _build(agentic_nodes={"alpha": {}}, seed_tab="custom")
+        loop, fut = _make_future()
+        try:
+            app.build_embedded_panel(fut)
+            sel = AgentSelection(kind="set_default", name="alpha")
+            app._finish(sel)
+            assert fut.done() and fut.result() is sel
+        finally:
+            loop.close()
+
+    def test_embedded_finish_with_none_cancels(self):
+        app = _build()
+        loop, fut = _make_future()
+        try:
+            app.build_embedded_panel(fut)
+            app._finish(None)
+            assert fut.done() and fut.result() is None
+        finally:
+            loop.close()
+
+
+class TestFinishAndLayout:
+    def test_finish_without_on_done_is_noop(self):
+        app = _build()
+        assert app._on_done is None
+        app._finish(None)  # No raise.
+
+    def test_layout_returns_app_layout_when_app_set(self):
+        from unittest.mock import MagicMock
+
+        app = _build()
+        fake_layout = MagicMock()
+        app._app = MagicMock(layout=fake_layout)
+        assert app._layout() is fake_layout
+
+    def test_layout_returns_none_when_no_app_and_get_app_raises(self):
+        from unittest.mock import patch
+
+        app = _build()
+        app._app = None
+        with patch("prompt_toolkit.application.get_app", side_effect=RuntimeError("no app")):
+            assert app._layout() is None
+
+    def test_focus_with_none_target_is_noop(self):
+        """``_focus(None)`` is the cancel-tab-cycle defensive path; must
+        return ``None`` and not raise even when no Application is bound."""
+
+        app = _build()
+        app._app = None
+        # Pin a fake layout so we can also assert ``focus`` was NOT called.
+        # (``_layout()`` falls back to ``get_app().layout`` when _app is None,
+        # which is unreachable here; the early ``target is None`` guard fires
+        # before that fallback.)
+        result = app._focus(None)
+        assert result is None
+
+    def test_focus_dispatches_to_layout(self):
+        from unittest.mock import MagicMock
+
+        app = _build()
+        fake_layout = MagicMock()
+        app._app = MagicMock(layout=fake_layout)
+        target = object()
+        app._focus(target)
+        fake_layout.focus.assert_called_once_with(target)
+
+
+class TestRunStandalone:
+    def test_run_returns_selection_from_app_exit(self):
+        from unittest.mock import MagicMock, patch
+
+        from datus.cli.agent_app import AgentSelection
+
+        app = _build(agentic_nodes={"alpha": {}}, seed_tab="custom")
+        sel = AgentSelection(kind="set_default", name="alpha")
+        fake_app = MagicMock()
+        fake_app.run.return_value = sel
+        with patch("datus.cli.agent_app.Application", return_value=fake_app):
+            result = app.run()
+        assert result is sel
+        assert app._on_done is None
+        assert app._app is None
+
+    def test_run_returns_none_on_keyboard_interrupt(self):
+        from unittest.mock import MagicMock, patch
+
+        app = _build()
+        fake_app = MagicMock()
+        fake_app.run.side_effect = KeyboardInterrupt
+        with patch("datus.cli.agent_app.Application", return_value=fake_app):
+            assert app.run() is None
+        assert app._on_done is None
+
+    def test_run_swallows_unexpected_exceptions(self):
+        from unittest.mock import MagicMock, patch
+
+        app = _build()
+        fake_app = MagicMock()
+        fake_app.run.side_effect = RuntimeError("boom")
+        with patch("datus.cli.agent_app.Application", return_value=fake_app):
+            assert app.run() is None
+
+
+class TestKeyBindingFinish:
+    """Escape on the list view and Ctrl+C globally must resolve the
+    embedded future with ``None`` — exercises the two ``_finish(None)``
+    paths that aren't covered by the existing class tests."""
+
+    def test_escape_on_list_view_cancels(self):
+        from prompt_toolkit.keys import Keys
+
+        app = _build(agentic_nodes={"alpha": {}}, seed_tab="custom")
+        loop, fut = _make_future()
+        try:
+            panel = app.build_embedded_panel(fut)
+            esc = [b for b in panel.key_bindings.bindings if Keys.Escape in b.keys]
+            assert esc
+            esc[0].handler(type("E", (), {"app": None})())
+            assert fut.done() and fut.result() is None
+        finally:
+            loop.close()
+
+    def test_ctrl_c_cancels_globally(self):
+        from prompt_toolkit.keys import Keys
+
+        app = _build()
+        loop, fut = _make_future()
+        try:
+            panel = app.build_embedded_panel(fut)
+            ctrl_c = [b for b in panel.key_bindings.bindings if Keys.ControlC in b.keys]
+            assert ctrl_c
+            ctrl_c[0].handler(type("E", (), {"app": None})())
+            assert fut.done() and fut.result() is None
+        finally:
+            loop.close()

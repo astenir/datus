@@ -12,8 +12,10 @@ streaming interactions with tool integration and action history management.
 from __future__ import annotations
 
 import asyncio
+import os
 import uuid
 from abc import abstractmethod
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional
 
 from agents import Tool
@@ -28,7 +30,10 @@ from datus.prompts.prompt_manager import get_prompt_manager
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.base import BaseInput, BaseResult
 from datus.utils.exceptions import DatusException, ErrorCode
+from datus.utils.json_utils import to_str
 from datus.utils.loggings import get_logger
+from datus.utils.message_utils import build_structured_content
+from datus.utils.node_utils import build_database_context
 
 if TYPE_CHECKING:
     from datus.agent.workflow import Workflow
@@ -99,6 +104,7 @@ class AgenticNode(Node):
         scope: Optional[str] = None,
         is_subagent: bool = False,
         memory_enabled: Optional[bool] = None,
+        session_id: Optional[str] = None,
     ):
         """
         Initialize the agentic node.
@@ -119,6 +125,11 @@ class AgenticNode(Node):
                 gen_report, feedback, etc.) default to ``False``; only ``chat`` and
                 custom/user-defined subagents default to ``True``. Pass an explicit
                 bool to override.
+            session_id: Optional resume target. When provided, the node opens
+                this session id and persisted plan-mode state on disk is
+                restored automatically. When ``None``, a fresh id is generated
+                eagerly here so ``session_id`` is guaranteed non-empty after
+                construction and never changes for the lifetime of the node.
         """
         # Initialize Node base class
         super().__init__(node_id, description, node_type, input_data, agent_config, tools)
@@ -127,7 +138,12 @@ class AgenticNode(Node):
         self.scope = scope
         self.mcp_servers = mcp_servers or {}
         self.actions: List[ActionHistory] = []
-        self.session_id: Optional[str] = None
+        # Resume target (or freshly generated id when caller passes ``None``).
+        # ``session_id`` is set once below — after ``get_node_name()`` is wired
+        # up — and is treated as immutable for the node's lifetime: resume /
+        # rewind / agent-switch flows allocate a NEW node with the desired id
+        # rather than rewriting this attribute.
+        self.session_id: str = session_id or ""
         self._session: Optional[AdvancedSQLiteSession] = None
         # Optional extra path layer between {sessions_dir}/{user_scope}/ and the .db
         # file. Set by SubAgentTaskTool to the parent's session_id so subagent dbs
@@ -218,6 +234,29 @@ class AgenticNode(Node):
         self.interaction_broker = InteractionBroker()
         self.interrupt_controller = InterruptController()
 
+        # Plan mode state (managed at base class, shared by all subclasses).
+        # Activated manually via REPL/CLI for the current primary agent; sub-agents
+        # spawned during execution do NOT inherit these flags.
+        self.plan_mode_active: bool = False
+        self.workflow_prompt_sent: bool = False
+        self.plan_file_path: Optional[str] = None
+        # One-shot flag: set by ``confirm_plan`` so the next user prompt
+        # carries an "execute the confirmed plan" reminder. Cleared by
+        # ``_build_enhanced_message`` after the reminder is injected.
+        self._plan_just_confirmed: bool = False
+
+        # Finalize session_id: caller-supplied id wins; otherwise generate
+        # eagerly so ``session_id`` is non-empty and stable from here on. We
+        # then re-hydrate any persisted plan-mode state — for fresh sessions
+        # the state file does not exist and ``restore_plan_mode_state`` is a
+        # no-op, preserving the defaults set above.
+        if not self.session_id:
+            self.session_id = self._generate_session_id()
+        try:
+            self.restore_plan_mode_state()
+        except Exception as exc:  # noqa: BLE001 — restore must never crash construction
+            logger.warning("Failed to restore plan-mode state for %s: %s", self.session_id, exc)
+
     @property
     def model(self) -> Optional[LLMBaseModel]:
         """Return the currently active :class:`LLMBaseModel` for this node.
@@ -305,6 +344,344 @@ class AgenticNode(Node):
             return current.context_length()
         except Exception:
             return None
+
+    # ── Plan mode lifecycle ─────────────────────────────────────────────
+
+    def activate_plan_mode(self) -> str:
+        """Turn plan mode on.
+
+        Reuses an existing ``plan_file_path`` when present (e.g. left over
+        after ``confirm_plan`` exited plan mode without a full reset) so the
+        next plan session continues on the same markdown file. Allocates a
+        fresh ``./.datus/plans/{short_uuid}.md`` only when no path is set.
+
+        Always resets ``workflow_prompt_sent=False`` so the next user prompt
+        carries the full workflow description.
+
+        Returns:
+            The plan file path (absolute or project-relative).
+        """
+        if self.plan_mode_active and self.plan_file_path:
+            return self.plan_file_path
+
+        self.plan_mode_active = True
+        self.workflow_prompt_sent = False
+
+        # Reuse a previously-allocated path (e.g. confirm_plan exit) when
+        # available — this lets the user re-enter the same plan session.
+        if self.plan_file_path:
+            logger.info(f"Plan mode reactivated: plan_file_path={self.plan_file_path}")
+            self._persist_plan_mode_state()
+            return self.plan_file_path
+
+        plan_dir = os.path.join(self._resolve_workspace_root(), ".datus", "plans")
+        os.makedirs(plan_dir, exist_ok=True)
+        # Short id keeps the path human-friendly; uuid4 has 122 bits of
+        # entropy, so 8 hex chars (32 bits) is still ample for collision
+        # avoidance within a project's plans directory.
+        self.plan_file_path = os.path.join(plan_dir, f"{uuid.uuid4().hex[:8]}.md")
+        # Pre-create an empty plan file so the LLM can read/edit it on the
+        # first turn (it commonly probes with ``read_file`` before writing).
+        try:
+            with open(self.plan_file_path, "w", encoding="utf-8") as _f:
+                pass
+        except OSError as exc:
+            logger.warning(f"Failed to pre-create plan file {self.plan_file_path}: {exc}")
+        logger.info(f"Plan mode activated: plan_file_path={self.plan_file_path}")
+        self._persist_plan_mode_state()
+        return self.plan_file_path
+
+    def deactivate_plan_mode(self) -> None:
+        """Turn plan mode off for this turn while preserving the plan file.
+
+        ``plan_file_path`` is allocated exactly once per session (per node
+        lifetime) and **never** cleared — toggling plan mode off and back on
+        always returns to the same markdown file. This keeps the user's
+        narrative continuous across Shift+Tab toggles and ``confirm_plan``
+        exits within a single session.
+
+        Only ``plan_mode_active`` and ``workflow_prompt_sent`` flip back; the
+        on-disk file and its in-memory path remain.
+        """
+        if self.plan_mode_active:
+            logger.info(f"Plan mode paused: plan_file_path={self.plan_file_path}")
+        self.plan_mode_active = False
+        self.workflow_prompt_sent = False
+        self._persist_plan_mode_state()
+
+    def is_in_plan_mode(self) -> bool:
+        """Return True when plan mode is currently active for this node."""
+        return self.plan_mode_active
+
+    def build_plan_mode_enhanced_prompt(self) -> str:
+        """Render the plan_mode_system template based on current plan-mode state.
+
+        The template branches on ``workflow_prompt_sent``: when False, the full
+        workflow description is rendered; otherwise a short reminder. After the
+        full version is rendered, ``workflow_prompt_sent`` is flipped to True
+        so subsequent prompts only carry the reminder.
+        """
+        if not self.plan_mode_active or not self.plan_file_path:
+            return ""
+
+        try:
+            rendered = get_prompt_manager(agent_config=self.agent_config).render_template(
+                template_name="plan_mode_system",
+                version=None,
+                plan_file_path=self.plan_file_path,
+                workflow_prompt_sent=self.workflow_prompt_sent,
+            )
+        except FileNotFoundError:
+            logger.warning("plan_mode_system template not found, using inline fallback")
+            if self.workflow_prompt_sent:
+                rendered = (
+                    f"Plan mode is active. Refer to the workflow already described. "
+                    f"Plan file: {self.plan_file_path}. Continue iterating or call confirm_plan."
+                )
+            else:
+                rendered = (
+                    f"Plan mode is active. Plan file path: {self.plan_file_path}. "
+                    "Use read-only tools and only edit the plan file; call confirm_plan when ready."
+                )
+        # Flip the flag so future prompts only carry the short reminder.
+        self.workflow_prompt_sent = True
+        self._persist_plan_mode_state()
+        return rendered
+
+    def _agent_state_file(self) -> Optional[Path]:
+        """Return the session-bound state file path, or ``None`` when unavailable.
+
+        Returns ``None`` when ``session_id`` has not been allocated yet, or
+        when the path manager fails (e.g. empty ``project_name``). Callers
+        treat ``None`` as "skip persistence this turn".
+        """
+        if not self.session_id:
+            return None
+        try:
+            from datus.utils.path_manager import get_path_manager
+
+            return get_path_manager(agent_config=self.agent_config).agent_state_path(self.session_id)
+        except Exception as exc:  # noqa: BLE001 — persistence must never crash node logic
+            logger.debug("agent_state_path unavailable: %s", exc)
+            return None
+
+    def _persist_plan_mode_state(self) -> None:
+        """Flush current plan-mode fields to disk. No-op without session_id."""
+        state_path = self._agent_state_file()
+        if state_path is None:
+            return
+        from datus.storage.session_state import PlanModeState
+
+        PlanModeState(
+            plan_mode_active=self.plan_mode_active,
+            plan_file_path=self.plan_file_path,
+            workflow_prompt_sent=self.workflow_prompt_sent,
+        ).save(state_path)
+
+    def restore_plan_mode_state(self) -> None:
+        """Re-hydrate plan-mode fields from disk into this node.
+
+        Idempotent; safe to call multiple times. Invoked automatically by:
+          1. ``__init__`` when caller passes ``session_id``
+          2. The ``session_id`` setter when value transitions to non-empty
+
+        When no on-disk state file exists yet (fresh session), this is a
+        no-op — the in-memory defaults / values already on the node are
+        preserved. This matters because ``_get_or_create_session`` may
+        allocate a new ``session_id`` *after* the user already activated
+        plan mode, and we must not wipe their in-flight plan_file_path.
+
+        ``_plan_just_confirmed`` is intentionally NOT restored — it is a
+        turn-local one-shot flag and should always start False on resume.
+        """
+        state_path = self._agent_state_file()
+        if state_path is None or not state_path.exists():
+            return
+        from datus.storage.session_state import PlanModeState
+
+        loaded = PlanModeState.load(state_path)
+        self.plan_mode_active = loaded.plan_mode_active
+        self.plan_file_path = loaded.plan_file_path
+        self.workflow_prompt_sent = loaded.workflow_prompt_sent
+        self._plan_just_confirmed = False
+        logger.info(
+            "Plan mode state restored for session %s: active=%s path=%s prompt_sent=%s",
+            self.session_id,
+            self.plan_mode_active,
+            self.plan_file_path,
+            self.workflow_prompt_sent,
+        )
+
+    def _get_plan_mode_tools(self) -> List[Tool]:
+        """Build the plan-mode func tools (``confirm_plan`` + ``todo_*``).
+
+        - **Sub-agent** (``self._is_subagent is True``): returns ``[]``.
+          Sub-agents are invoked by a parent agent that already owns planning,
+          so they must not expose their own planning surface.
+        - **Main agent**: always returns the tools, regardless of
+          ``plan_mode_active``. The user can pre-activate plan mode to *force*
+          the LLM through the file-backed workflow, but the tools themselves
+          are visible from the start so the LLM can judge whether to use them.
+        """
+        if getattr(self, "_is_subagent", False):
+            return []
+
+        from datus.tools.func_tool.plan_tools import ConfirmPlanTool, PlanTool
+
+        # PlanTool keeps a reference to the agents-SDK session for backward-
+        # compat but does not actually read it, so passing the current value
+        # (which may still be None at setup time) is safe.
+        # Lambda resolves session_id lazily — at setup time it's still None,
+        # ``_get_or_create_session`` allocates it on the first turn. Snapshot
+        # would leave the storage permanently unbound and never persist.
+        tools: List[Tool] = list(PlanTool(self._session, session_id=lambda: self.session_id).available_tools())
+        tools.extend(ConfirmPlanTool(self).available_tools())
+        return tools
+
+    def _register_plan_mode_tools(self) -> None:
+        """Append plan-mode tools to ``self.tools`` at node setup time.
+
+        Subclasses call this at the end of any code path that (re)builds
+        ``self.tools`` from scratch — e.g. inside ``_rebuild_tools()`` /
+        ``setup_tools()`` and after datasource swaps. The call is a no-op
+        for sub-agents (``_is_subagent=True``).
+        """
+        if getattr(self, "_is_subagent", False):
+            return
+        plan_tools = self._get_plan_mode_tools()
+        if not plan_tools:
+            return
+        if self.tools is None:
+            self.tools = []
+        self.tools.extend(plan_tools)
+
+    def _sync_plan_mode_state(self, user_input: Any) -> None:
+        """Reconcile ``self.plan_mode_active`` with the input's ``plan_mode`` flag.
+
+        - ``user_input.plan_mode == True`` → idempotently activate (reuse the
+          existing plan file across turns).
+        - Flag absent / False but currently active → deactivate (user toggled
+          plan mode off mid-session).
+        - Sub-agent invocations never carry the flag, so this is a no-op.
+        """
+        if getattr(user_input, "plan_mode", False):
+            self.activate_plan_mode()
+        elif self.is_in_plan_mode():
+            self.deactivate_plan_mode()
+
+    def _build_enhanced_message(
+        self,
+        user_input: Any,
+        extra_enhanced_parts: Optional[List[str]] = None,
+    ) -> str:
+        """Assemble the per-turn user prompt for the LLM.
+
+        Composes (in order):
+        1. Plan-mode state transition (activate / deactivate) based on
+           ``user_input.plan_mode``.
+        2. Shared context parts read from *user_input* via ``getattr``
+           (so subclasses with sparser inputs still work):
+           - ``external_knowledge`` → "MUST use these business logic" block
+           - DB-context block (dialect + catalog/database/db_schema)
+           - ``schemas`` (list of :class:`TableSchema`) → "Available tables"
+           - ``metrics`` → "Metrics:" block
+           - ``reference_sql`` → "Reference SQL:" block
+        3. Subclass-supplied ``extra_enhanced_parts`` (already formatted).
+        4. Plan-mode workflow prompt when plan mode is active.
+
+        Args:
+            user_input: The node's input model. Attributes are read via
+                ``getattr`` so unrelated fields are simply skipped. The raw
+                user text comes from ``user_input.user_message``.
+            extra_enhanced_parts: Already-formatted strings to splice into
+                the enhanced section (after the standard parts, before the
+                plan-mode workflow prompt). Use this for subclass-specific
+                context (e.g. compare's pair-of-SQL block) so the user-side
+                of the structured envelope remains the raw user message.
+
+        Returns the final user-facing string. When no enhanced parts apply,
+        returns the raw user message unchanged; otherwise wraps both in a
+        structured JSON ``[enhanced, user]`` envelope.
+        """
+        self._sync_plan_mode_state(user_input)
+
+        enhanced_parts: List[str] = []
+
+        ext_know = getattr(user_input, "external_knowledge", "") or ""
+        if ext_know:
+            enhanced_parts.append(f"MUST use these business logic:\n{ext_know}")
+
+        db_type = getattr(self.agent_config, "db_type", "") if self.agent_config else ""
+        if db_type:
+            # Always resolve empty database via the connector default — the
+            # helper is a no-op when no connector is wired or value is set.
+            from datus.utils.node_utils import resolve_database_name_for_prompt
+
+            connector = None
+            db_func_tool = getattr(self, "db_func_tool", None)
+            if db_func_tool is not None:
+                connector = getattr(db_func_tool, "connector", None)
+            effective_database = resolve_database_name_for_prompt(
+                connector,
+                getattr(user_input, "database", "") or "",
+            )
+            ctx = build_database_context(
+                db_type,
+                catalog=getattr(user_input, "catalog", "") or "",
+                database=effective_database or "",
+                schema=getattr(user_input, "db_schema", "") or "",
+            )
+            if ctx:
+                enhanced_parts.append(ctx)
+
+        schemas = getattr(user_input, "schemas", None)
+        if schemas:
+            from datus.schemas.node_models import TableSchema
+
+            table_names_str = TableSchema.table_names_to_prompt(schemas)
+            enhanced_parts.append(
+                "Available tables (MUST use these tables and ONLY use these "
+                f"table names in FROM/JOIN clauses): \n{table_names_str}"
+            )
+
+        metrics = getattr(user_input, "metrics", None)
+        if metrics:
+            enhanced_parts.append(f"Metrics: \n{to_str([item.model_dump() for item in metrics])}")
+
+        reference_sql = getattr(user_input, "reference_sql", None)
+        if reference_sql:
+            enhanced_parts.append(f"Reference SQL: \n{to_str([item.model_dump() for item in reference_sql])}")
+
+        if extra_enhanced_parts:
+            enhanced_parts.extend(p for p in extra_enhanced_parts if p)
+
+        if self.is_in_plan_mode():
+            plan_prompt = self.build_plan_mode_enhanced_prompt()
+            if plan_prompt:
+                enhanced_parts.append(plan_prompt)
+        elif getattr(self, "_plan_just_confirmed", False) and self.plan_file_path:
+            # One-shot reminder on the turn immediately following a successful
+            # ``confirm_plan``. Tells the LLM the plan is approved and it
+            # should execute the steps instead of asking for further input.
+            enhanced_parts.append(
+                "## Post-Plan Execution\n"
+                f"You just confirmed the plan at {self.plan_file_path}. Plan mode is "
+                "exited. The user's next message is a continuation cue — do NOT ask "
+                "what to do next; instead read the plan file, materialise its actionable "
+                "steps via todo_write (one item per step, each with a `title` ≤ 8 words "
+                "and full `content`), then call todo_update(id, 'in_progress') before "
+                "starting each step and todo_update(id, 'completed') when done. Use "
+                "ask_user only when a step genuinely requires user input that cannot "
+                "be inferred."
+            )
+            self._plan_just_confirmed = False
+
+        user_message = getattr(user_input, "user_message", "") or ""
+        if not enhanced_parts:
+            return user_message
+
+        enhanced_context = "\n\n".join(enhanced_parts)
+        return build_structured_content(enhanced_context, user_message)
 
     def get_node_name(self) -> str:
         """
@@ -581,10 +958,6 @@ class AgenticNode(Node):
             with existing call sites that unpack two values.
         """
         if self._session is None:
-            if self.session_id is None:
-                self.session_id = self._generate_session_id()
-                logger.info(f"Generated new session ID: {self.session_id}")
-
             self._session = self.session_manager.create_session(self.session_id)
             logger.debug(f"Created session: {self.session_id}")
 
@@ -1513,12 +1886,17 @@ class AgenticNode(Node):
             logger.info(f"Cleared session: {self.session_id}")
 
     def delete_session(self) -> None:
-        """Delete the current session completely."""
+        """Delete the current session completely.
+
+        The node becomes unusable after this call — callers (REPL ``/delete``,
+        API ``DELETE /sessions/{id}``) discard it and either build a fresh node
+        or end the conversation. ``session_id`` stays set (it is immutable) so
+        log lines and tracebacks can still reference which session was deleted.
+        """
         if self.session_id:
             self.session_manager.delete_session(self.session_id)
             self._session = None
-            self.session_id = None
-            logger.info("Deleted session")
+            logger.info("Deleted session: %s", self.session_id)
 
     async def get_session_info(self) -> Dict[str, Any]:
         """

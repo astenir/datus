@@ -65,6 +65,7 @@ from datus.cli.model_commands import ModelCommands
 from datus.cli.service_commands import ServiceCommands
 from datus.cli.slash_registry import GROUP_ORDER, GROUP_TITLES, iter_visible, lookup
 from datus.cli.status_bar import StatusBarProvider
+from datus.cli.todo_sidebar import TodoSidebarProvider
 from datus.cli.tui import DatusApp, tui_enabled
 from datus.cli.tui.app import EXIT_SENTINEL
 from datus.cli.tui.live_display_state import LiveDisplayState
@@ -274,6 +275,7 @@ class DatusCLI:
 
         self.bg_sync = BackgroundSchemaSyncManager(self)
         self._status_bar_provider = StatusBarProvider(self)
+        self._todo_sidebar_provider = TodoSidebarProvider(self)
 
         # Dictionary of available commands - created after handlers are initialized
         self.commands: Dict[str, Any] = {
@@ -499,6 +501,40 @@ class DatusCLI:
             logger.debug(f"status bar render failed: {e}")
             return []
 
+    def _todo_tokens_for_tui(self) -> List[Tuple[str, str]]:
+        """Build todo-sidebar tokens for the persistent TUI layout.
+
+        Bound method wrapper so :meth:`_init_tui_app` can pass this as a
+        callback *before* ``_todo_sidebar_provider`` is assigned in
+        ``__init__`` — the actual provider lookup happens on each paint,
+        by which point ``__init__`` has completed.
+        """
+        try:
+            return self._todo_sidebar_provider.tokens()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"todo sidebar tokens failed: {e}")
+            return []
+
+    def _todo_has_items_for_tui(self) -> bool:
+        """Filter callback for the todo-sidebar ``ConditionalContainer``.
+
+        See :meth:`_todo_tokens_for_tui` for the deferred-binding
+        rationale.
+        """
+        try:
+            return self._todo_sidebar_provider.has_items()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"todo sidebar has_items failed: {e}")
+            return False
+
+    def _todo_line_count_for_tui(self) -> int:
+        """Rendered row count for sizing the pinned todo sidebar."""
+        try:
+            return self._todo_sidebar_provider.line_count()
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"todo sidebar line_count failed: {e}")
+            return 0
+
     def _interrupt_agent(self) -> None:
         chat_commands = getattr(self, "chat_commands", None)
         current_node = getattr(chat_commands, "current_node", None) if chat_commands else None
@@ -509,6 +545,72 @@ class DatusCLI:
             except Exception as exc:  # pragma: no cover - defensive
                 logger.debug(f"interrupt_controller.interrupt failed: {exc}")
 
+    def _compute_pane_width(self, sidebar_visible: bool) -> int:
+        """Width in cells available to the left output pane.
+
+        Mirrors ``DatusApp._sidebar_target_width`` so Rich's wrap width
+        matches the column prompt_toolkit will paint into:
+
+        * Sidebar visible: ``cols - max(14, cols // 5) - 1`` (the trailing
+          ``- 1`` is the ``│`` separator), floored at 20 so Rich can still
+          format something on absurdly narrow terminals.
+        * Sidebar hidden: ``cols`` (full screen), floored at 20.
+        """
+        import shutil
+
+        cols = shutil.get_terminal_size(fallback=(120, 30)).columns
+        if sidebar_visible:
+            sidebar_width = max(14, cols // 5)
+            return max(20, cols - sidebar_width - 1)
+        return max(20, cols)
+
+    def _reflow_for_sidebar(self, sidebar_visible: bool) -> None:
+        """Reflow the output pane when the sidebar appears/disappears.
+
+        Rich's ``Console.width`` is locked at construction, but the
+        underlying ``_width`` attribute is what ``size``/``width`` read on
+        every access. We **mutate** it in place rather than rebuild the
+        Console so every consumer that captured the instance earlier
+        (``chat_commands.console`` bound in ``ChatCommands.__init__``, any
+        ``ActionHistoryDisplay`` constructed during a turn) immediately sees
+        the new pane width on its next ``print``. Replacing the instance
+        leaves those captures pointing at the old width and the freshly
+        streamed tokens render past the new pane edge — exactly the
+        "covered by the sidebar" symptom users see.
+
+        Existing scrollback was wrapped at the old width. Clearing the
+        buffer and replaying ``_full_screen_reprint`` lets banner + completed
+        turns redraw cleanly at the new width; ``in_progress_actions``
+        forwards the running turn's incremental actions so they survive
+        the wipe.
+        """
+        new_width = self._compute_pane_width(sidebar_visible=sidebar_visible)
+        current_console = getattr(self, "console", None)
+        if current_console is None:
+            return
+        if getattr(current_console, "width", None) == new_width:
+            return
+        buffer = getattr(self, "_tui_output_buffer", None)
+        if buffer is None:
+            return
+        # In-place width swap — see docstring for why we don't rebuild.
+        current_console._width = new_width
+        chat_commands = getattr(self, "chat_commands", None)
+        if chat_commands is not None:
+            try:
+                verbose = bool(getattr(chat_commands, "_trace_verbose", False))
+                in_progress = getattr(chat_commands, "_current_incremental_actions", None)
+                chat_commands._full_screen_reprint(verbose=verbose, in_progress_actions=in_progress)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug(f"sidebar reflow reprint failed: {exc}")
+        else:
+            # Early boot: no history yet, just drop whatever banner was
+            # already written so the next paint starts clean at the new width.
+            buffer.clear()
+        tui_app = getattr(self, "tui_app", None)
+        if tui_app is not None:
+            tui_app.invalidate()
+
     def _init_tui_app(self) -> None:
         """Create the persistent ``DatusApp`` and register REPL bindings."""
         # The Tab handler matches the legacy PromptSession behavior
@@ -516,6 +618,8 @@ class DatusCLI:
         # Shift+Tab plan-mode toggle, Ctrl+O trace details, ESC interrupt —
         # are wired in later phases.
         from prompt_toolkit.lexers import PygmentsLexer
+
+        from datus.cli.tui.output_buffer import TUIOutputBuffer
 
         # The TUI path still relies on the same AtReferenceCompleter handle
         # that downstream code queries for subagent state, so attach it
@@ -527,6 +631,42 @@ class DatusCLI:
         # docstring for the deferred-callback rationale).
         self.live_state = LiveDisplayState()
 
+        # Build the in-memory output buffer and **swap self.console to write
+        # into it** before any further banner / warning print. In
+        # ``full_screen=True`` mode prompt_toolkit owns the entire terminal,
+        # so anything printed via the original stdout-bound Console would be
+        # erased the instant ``tui_app.run()`` starts. By rerouting now,
+        # ``_print_welcome`` and friends land in the buffer and appear in the
+        # scroll pane as the first paint renders. Rich's ``Console`` locks
+        # ``file=`` and ``width=`` at construction so we replace the whole
+        # instance.
+        self._tui_output_buffer = TUIOutputBuffer(
+            live_state_snapshot_fn=self.live_state.snapshot,
+        )
+        # Rich must be told the WIDTH OF THE OUTPUT PANE — *not* the full
+        # terminal — otherwise Markdown borders, table grids, and Pygments
+        # alignment break visibly the moment the sidebar takes its 20%
+        # column. ``_compute_pane_width`` mirrors ``DatusApp._sidebar_target_width``.
+        # Boot with ``sidebar_visible=False`` because no todo items exist at
+        # startup; ``_reflow_for_sidebar`` will rebuild the Console at the
+        # narrower width on the first transition.
+        pane_width = self._compute_pane_width(sidebar_visible=False)
+        self.console = Console(
+            file=self._tui_output_buffer,
+            force_terminal=True,
+            color_system="256",
+            width=pane_width,
+            log_path=False,
+        )
+        # Propagate the new Console to subsystems that captured the old one
+        # via bound method: setup_exception_handler kept a closure over
+        # ``self.console.print``; reinstall it so global exceptions land in
+        # the buffer too.
+        setup_exception_handler(
+            console_logger=lambda *a, **kw: self.console.print(*a, **kw),
+            prefix_wrap_func=lambda x: f"[red]{x}[/red]",
+        )
+
         self.tui_app = DatusApp(
             status_tokens_fn=self._status_tokens_for_tui,
             dispatch_fn=self._dispatch_command_text,
@@ -536,7 +676,32 @@ class DatusCLI:
             style=self._build_app_style(),
             input_prompt_fn=self._get_prompt_text,
             live_display_state=self.live_state,
+            todo_tokens_fn=self._todo_tokens_for_tui,
+            todo_has_items_fn=self._todo_has_items_for_tui,
+            todo_line_count_fn=self._todo_line_count_for_tui,
+            output_tokens_fn=self._tui_output_buffer.tokens,
+            # Cursor positioning *must* read the count tied to the most
+            # recent ``tokens()`` call — see ``render_line_count`` for the
+            # IndexError race it avoids.
+            output_line_count_fn=self._tui_output_buffer.render_line_count,
+            # When passed, ``DatusApp`` swaps in :class:`BufferedOutputControl`
+            # so prompt_toolkit's paint loop only materialises rows that fall
+            # inside the viewport. This keeps type-latency flat even when the
+            # verbose-mode scrollback grows into thousands of lines.
+            output_buffer=self._tui_output_buffer,
         )
+
+        # Now that the Application exists, wire the buffer's ``on_change``
+        # callback to its ``invalidate`` so every Rich write triggers a
+        # repaint (via ``loop.call_soon_threadsafe`` — thread-safe by
+        # construction, see DatusApp.invalidate).
+        self._tui_output_buffer.set_on_change(self.tui_app.invalidate)
+
+        # Sidebar visibility transitions (Ctrl+T toggle, first task appearing,
+        # all tasks cleared, terminal resize crossing the min-cols threshold)
+        # require rebuilding the Console at the new pane width — see
+        # ``_reflow_for_sidebar``.
+        self.tui_app.set_sidebar_visibility_listener(self._reflow_for_sidebar)
 
         @self.tui_app.key_bindings.add("tab")
         def _tab(event):  # noqa: ANN001 - prompt_toolkit signature
@@ -612,6 +777,19 @@ class DatusCLI:
                 chat_commands.display_inline_trace_details(last_actions)
 
             run_in_terminal_sync(_show)
+
+        @self.tui_app.key_bindings.add("c-t")
+        def _c_t(event):  # noqa: ANN001
+            """Ctrl+T: toggle the todo sidebar between visible and hidden.
+
+            Flips ``DatusApp._sidebar_force_hidden``; the next render runs
+            ``_sidebar_visible``, observes the transition against
+            ``_last_sidebar_visible``, and schedules ``_reflow_for_sidebar``
+            on the event loop. ``invalidate`` forces that render to happen
+            on the very next tick instead of waiting for the next input.
+            """
+            self.tui_app.toggle_sidebar_hidden()
+            event.app.invalidate()
 
         @self.tui_app.key_bindings.add("escape")
         def _esc(event):  # noqa: ANN001
@@ -1163,9 +1341,8 @@ class DatusCLI:
                 seed_tab=current_seed,
             )
             tui_app = getattr(self, "tui_app", None)
-            if tui_app is not None:
-                with tui_app.suspend_input():
-                    sel = app.run()
+            if tui_app is not None and getattr(tui_app, "_loop", None) is not None:
+                sel = tui_app.run_wizard(app.build_embedded_panel)
             else:
                 sel = app.run()
             if sel is None:
@@ -1303,26 +1480,27 @@ class DatusCLI:
             logger.warning("Failed to refresh in-memory agent config: %s", exc)
 
     def _run_profile_picker(self, current: str) -> Optional[str]:
-        """Run the standalone ProfilePickerApp; return selection or None."""
+        """Run ProfilePickerApp embedded in TUI when available."""
         from datus.cli.profile_picker_app import ProfilePickerApp
 
         app = ProfilePickerApp(console=self.console, current=current)
         tui_app = getattr(self, "tui_app", None)
-        if tui_app is not None:
-            with tui_app.suspend_input():
-                return app.run()
+        if tui_app is not None and getattr(tui_app, "_loop", None) is not None:
+            return tui_app.run_wizard(app.build_embedded_panel)
         return app.run()
 
     def _run_dangerous_confirm(self) -> bool:
-        """Run the standalone DangerousConfirmApp; return True only if
-        the user explicitly enabled Dangerous."""
+        """Run DangerousConfirmApp embedded in TUI when available.
+
+        Returns True only if the user explicitly enabled Dangerous.
+        """
         from datus.cli.profile_picker_app import DangerousConfirmApp
 
         app = DangerousConfirmApp(console=self.console)
         tui_app = getattr(self, "tui_app", None)
-        if tui_app is not None:
-            with tui_app.suspend_input():
-                return app.run()
+        if tui_app is not None and getattr(tui_app, "_loop", None) is not None:
+            result = tui_app.run_wizard(app.build_embedded_panel)
+            return result == "enable"
         return app.run()
 
     def _parse_command(self, text: str) -> Tuple[CommandType, str, str]:
@@ -1586,6 +1764,14 @@ class DatusCLI:
     def _execute_chat_command(self, message: str, subagent_name: str = None):
         """Route free-form chat text to the configured default agent."""
         self.chat_commands.execute_chat_command(message, plan_mode=self.plan_mode_active, subagent_name=subagent_name)
+        # Sync the REPL plan-mode toggle from node state — ``confirm_plan``
+        # flips the node's ``plan_mode_active`` off when the user accepts
+        # the plan, but the REPL switch otherwise stays on and would force
+        # re-activation on the next prompt.
+        node = getattr(self.chat_commands, "current_node", None)
+        if node is not None and self.plan_mode_active and not getattr(node, "plan_mode_active", False):
+            self.plan_mode_active = False
+            logger.debug("REPL plan-mode toggle synced off after confirm_plan")
 
     def _execute_slash_command(self, cmd: str, args: str):
         """Execute a slash command resolved via ``SLASH_COMMANDS`` registry.

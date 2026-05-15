@@ -133,7 +133,7 @@ class TestAddNewFlow:
     def test_enter_on_add_row_opens_type_picker(self):
         app = _build_app()
         app._list_cursor = 0  # only Add row when no entries
-        with patch.object(app._app, "exit"):
+        with patch.object(app, "_finish"):
             app._on_list_enter()
         assert app._view == _View.TYPE_PICKER
         assert "superset" in app._type_choices
@@ -142,7 +142,7 @@ class TestAddNewFlow:
         app = _build_app()
         app._enter_type_picker()
         app._type_cursor = 0  # superset
-        with patch.object(app._app.layout, "focus"):
+        with patch.object(app, "_focus"):
             app._on_type_picker_enter()
         assert app._view == _View.FORM
         assert app._form_type == "superset"
@@ -152,16 +152,16 @@ class TestAddNewFlow:
         app = _build_app()
         app._enter_type_picker()
         app._type_cursor = 0
-        with patch.object(app._app.layout, "focus"):
+        with patch.object(app, "_focus"):
             app._on_type_picker_enter()
         app._fld_name.text = "my_superset"
         app._fld_api_base_url.text = "http://localhost:8088"
         app._fld_username.text = "admin"
         app._fld_password.text = "secret"
         app._fld_datasource_ref.text = "serving_db"
-        with patch.object(app._app, "exit") as mock_exit:
+        with patch.object(app, "_finish") as mock_exit:
             app._submit_form()
-        result = mock_exit.call_args.kwargs["result"]
+        result = mock_exit.call_args.args[0]
         assert isinstance(result, ServiceConfigSelection)
         assert result.action == "save"
         assert result.section == "bi_platforms"
@@ -174,11 +174,11 @@ class TestAddNewFlow:
     def test_form_rejects_blank_api_base_url_for_bi(self):
         app = _build_app()
         app._enter_type_picker()
-        with patch.object(app._app.layout, "focus"):
+        with patch.object(app, "_focus"):
             app._on_type_picker_enter()
         app._fld_name.text = "x"
         app._fld_api_base_url.text = ""  # missing
-        with patch.object(app._app, "exit") as mock_exit:
+        with patch.object(app, "_finish") as mock_exit:
             app._submit_form()
         mock_exit.assert_not_called()
         assert "api_base_url" in (app._error_message or "")
@@ -186,11 +186,11 @@ class TestAddNewFlow:
     def test_duplicate_name_rejected_on_add(self):
         app = _build_app(dashboards={"superset": _dash_cfg()})
         app._enter_type_picker()
-        with patch.object(app._app.layout, "focus"):
+        with patch.object(app, "_focus"):
             app._on_type_picker_enter()
         app._fld_name.text = "superset"  # collides
         app._fld_api_base_url.text = "http://x"
-        with patch.object(app._app, "exit") as mock_exit:
+        with patch.object(app, "_finish") as mock_exit:
             app._submit_form()
         mock_exit.assert_not_called()
         assert "already exists" in (app._error_message or "")
@@ -205,7 +205,7 @@ class TestEditExisting:
     def test_e_loads_existing_and_masks_password(self):
         app = _build_app(dashboards={"superset": _dash_cfg(password="real-secret")})
         app._list_cursor = 0
-        with patch.object(app._app.layout, "focus"):
+        with patch.object(app, "_focus"):
             app._on_edit()
         assert app._view == _View.FORM
         assert app._form_is_edit is True
@@ -217,13 +217,13 @@ class TestEditExisting:
 
         app = _build_app(dashboards={"superset": _dash_cfg(password="real-secret")})
         app._list_cursor = 0
-        with patch.object(app._app.layout, "focus"):
+        with patch.object(app, "_focus"):
             app._on_edit()
         # User did not touch the password field.
         assert app._fld_password.text == _MASKED_PLACEHOLDER
-        with patch.object(app._app, "exit") as mock_exit:
+        with patch.object(app, "_finish") as mock_exit:
             app._submit_form()
-        result = mock_exit.call_args.kwargs["result"]
+        result = mock_exit.call_args.args[0]
         # ``password`` is omitted from payload because the user kept the existing value.
         assert "password" not in result.payload
 
@@ -232,25 +232,25 @@ class TestDeleteAndTest:
     def test_x_emits_delete(self):
         app = _build_app(dashboards={"superset": _dash_cfg()})
         app._list_cursor = 0
-        with patch.object(app._app, "exit") as mock_exit:
+        with patch.object(app, "_finish") as mock_exit:
             app._on_delete()
-        result = mock_exit.call_args.kwargs["result"]
+        result = mock_exit.call_args.args[0]
         assert result.action == "delete"
         assert result.name == "superset"
 
     def test_delete_ignored_on_add_row(self):
         app = _build_app()
         app._list_cursor = 0  # only Add row
-        with patch.object(app._app, "exit") as mock_exit:
+        with patch.object(app, "_finish") as mock_exit:
             app._on_delete()
         mock_exit.assert_not_called()
 
     def test_t_emits_test(self):
         app = _build_app(dashboards={"superset": _dash_cfg()})
         app._list_cursor = 0
-        with patch.object(app._app, "exit") as mock_exit:
+        with patch.object(app, "_finish") as mock_exit:
             app._on_test()
-        result = mock_exit.call_args.kwargs["result"]
+        result = mock_exit.call_args.args[0]
         assert result.action == "test"
 
 
@@ -260,9 +260,9 @@ class TestSetGlobalDefault:
         app = _build_app(dashboards={"superset": _dash_cfg(), "grafana": _dash_cfg("grafana")})
         app._tab = _Tab.DASHBOARD
         app._list_cursor = 0  # grafana sorts before superset alphabetically
-        with patch.object(app._app, "exit") as mock_exit:
+        with patch.object(app, "_finish") as mock_exit:
             app._on_set_default()
-        result = mock_exit.call_args.kwargs["result"]
+        result = mock_exit.call_args.args[0]
         assert result.action == "set_default"
         assert result.section == "bi_platforms"
         assert result.name == "grafana"
@@ -271,9 +271,9 @@ class TestSetGlobalDefault:
         app = _build_app(schedulers={"airflow_prod": {"type": "airflow"}, "airflow_dev": {"type": "airflow"}})
         app._tab = _Tab.SCHEDULER
         app._list_cursor = 0  # airflow_dev sorts before airflow_prod alphabetically
-        with patch.object(app._app, "exit") as mock_exit:
+        with patch.object(app, "_finish") as mock_exit:
             app._on_set_default()
-        result = mock_exit.call_args.kwargs["result"]
+        result = mock_exit.call_args.args[0]
         assert result.action == "set_default"
         assert result.section == "schedulers"
 
@@ -286,9 +286,9 @@ class TestSetGlobalDefault:
         )
         app._tab = _Tab.SEMANTIC
         app._list_cursor = 0  # dbt sorts before metricflow
-        with patch.object(app._app, "exit") as mock_exit:
+        with patch.object(app, "_finish") as mock_exit:
             app._on_set_default()
-        result = mock_exit.call_args.kwargs["result"]
+        result = mock_exit.call_args.args[0]
         assert result.action == "set_default"
         assert result.section == "semantic_layer"
         assert result.name == "dbt"
@@ -301,9 +301,9 @@ class TestSetProjectDefault:
             active_dash=None,
         )
         app._list_cursor = 0  # grafana sorts first
-        with patch.object(app._app, "exit") as mock_exit:
+        with patch.object(app, "_finish") as mock_exit:
             app._on_set_project_default()
-        result = mock_exit.call_args.kwargs["result"]
+        result = mock_exit.call_args.args[0]
         assert result.action == "set_project_default"
         assert result.section == "bi_platforms"
         assert result.name == "grafana"
@@ -311,9 +311,9 @@ class TestSetProjectDefault:
     def test_p_clears_when_already_pinned(self):
         app = _build_app(dashboards={"superset": _dash_cfg()}, active_dash="superset")
         app._list_cursor = 0
-        with patch.object(app._app, "exit") as mock_exit:
+        with patch.object(app, "_finish") as mock_exit:
             app._on_set_project_default()
-        result = mock_exit.call_args.kwargs["result"]
+        result = mock_exit.call_args.args[0]
         assert result.action == "set_project_default"
         assert result.name == ""  # clear sentinel
 
@@ -435,11 +435,11 @@ class TestSemanticTab:
         app._tab = _Tab.SEMANTIC
         app._enter_type_picker()
         app._type_cursor = 0  # metricflow
-        with patch.object(app._app, "exit") as mock_exit:
+        with patch.object(app, "_finish") as mock_exit:
             app._on_type_picker_enter()
         # FORM view is skipped — selection is emitted straight from the picker.
         assert app._view != _View.FORM
-        result = mock_exit.call_args.kwargs["result"]
+        result = mock_exit.call_args.args[0]
         assert isinstance(result, ServiceConfigSelection)
         assert result.action == "save"
         assert result.section == "semantic_layer"
@@ -450,7 +450,7 @@ class TestSemanticTab:
         app = _build_app(semantic={"metricflow": {"type": "metricflow"}})
         app._tab = _Tab.SEMANTIC
         app._list_cursor = 0  # existing metricflow row
-        with patch.object(app._app, "exit") as mock_exit:
+        with patch.object(app, "_finish") as mock_exit:
             app._on_list_enter()
         # No FORM, no exit — semantic entries have nothing editable yet.
         assert app._view == _View.LIST
@@ -460,7 +460,7 @@ class TestSemanticTab:
         app = _build_app(semantic={"metricflow": {"type": "metricflow"}})
         app._tab = _Tab.SEMANTIC
         app._list_cursor = 0
-        with patch.object(app._app, "exit") as mock_exit:
+        with patch.object(app, "_finish") as mock_exit:
             app._on_edit()
         assert app._view == _View.LIST
         mock_exit.assert_not_called()
@@ -471,9 +471,9 @@ class TestSemanticTab:
         app = _build_app(semantic={"metricflow": {"type": "metricflow"}})
         app._tab = _Tab.SEMANTIC
         app._list_cursor = 0
-        with patch.object(app._app, "exit") as mock_exit:
+        with patch.object(app, "_finish") as mock_exit:
             app._on_set_project_default()
-        result = mock_exit.call_args.kwargs["result"]
+        result = mock_exit.call_args.args[0]
         assert result.action == "set_project_default"
         assert result.section == "semantic_layer"
         assert result.name == "metricflow"
@@ -482,9 +482,9 @@ class TestSemanticTab:
         app = _build_app(semantic={"metricflow": {"type": "metricflow"}})
         app._tab = _Tab.SEMANTIC
         app._list_cursor = 0
-        with patch.object(app._app, "exit") as mock_exit:
+        with patch.object(app, "_finish") as mock_exit:
             app._on_delete()
-        result = mock_exit.call_args.kwargs["result"]
+        result = mock_exit.call_args.args[0]
         assert result.action == "delete"
         assert result.section == "semantic_layer"
         assert result.name == "metricflow"
@@ -493,9 +493,9 @@ class TestSemanticTab:
         app = _build_app(semantic={"metricflow": {"type": "metricflow"}})
         app._tab = _Tab.SEMANTIC
         app._list_cursor = 0
-        with patch.object(app._app, "exit") as mock_exit:
+        with patch.object(app, "_finish") as mock_exit:
             app._on_test()
-        result = mock_exit.call_args.kwargs["result"]
+        result = mock_exit.call_args.args[0]
         assert result.action == "test"
         assert result.section == "semantic_layer"
 
@@ -512,3 +512,112 @@ class TestSemanticTab:
         assert "project default" in flat
         assert "delete" in flat
         assert "test" in flat
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Dual-mode finish hook + embedded panel + standalone run() with mocked
+# Application.
+# ─────────────────────────────────────────────────────────────────────
+
+
+import asyncio  # noqa: E402
+
+from datus.cli.tui.wizard_host import EmbeddedWizard  # noqa: E402
+
+
+def _make_future():
+    loop = asyncio.new_event_loop()
+    return loop, loop.create_future()
+
+
+class TestEmbeddedPanel:
+    def test_build_embedded_panel_returns_wizard(self):
+        app = _build_app()
+        loop, fut = _make_future()
+        try:
+            panel = app.build_embedded_panel(fut)
+            assert isinstance(panel, EmbeddedWizard)
+            assert panel.done_future is fut
+            assert app._on_done is not None
+        finally:
+            loop.close()
+
+    def test_finish_resolves_future_with_result(self):
+        app = _build_app()
+        loop, fut = _make_future()
+        try:
+            app.build_embedded_panel(fut)
+            sel = ServiceConfigSelection(action="delete", section="bi_platforms", name="x")
+            app._finish(sel)
+            assert fut.done() and fut.result() is sel
+        finally:
+            loop.close()
+
+    def test_finish_with_none_cancels(self):
+        app = _build_app()
+        loop, fut = _make_future()
+        try:
+            app.build_embedded_panel(fut)
+            app._finish(None)
+            assert fut.done() and fut.result() is None
+        finally:
+            loop.close()
+
+
+class TestFinishAndLayout:
+    def test_finish_without_on_done_is_noop(self):
+        app = _build_app()
+        assert app._on_done is None
+        app._finish(None)
+
+    def test_layout_returns_app_layout(self):
+        app = _build_app()
+        fake_layout = MagicMock()
+        app._app = MagicMock(layout=fake_layout)
+        assert app._layout() is fake_layout
+
+    def test_layout_returns_none_when_get_app_raises(self):
+        app = _build_app()
+        app._app = None
+        with patch("prompt_toolkit.application.get_app", side_effect=RuntimeError("no app")):
+            assert app._layout() is None
+
+    def test_focus_no_target_noop(self):
+        """``_focus(None)`` returns ``None`` via the early-out guard."""
+        app = _build_app()
+        app._app = None
+        assert app._focus(None) is None
+
+    def test_focus_dispatches_to_layout(self):
+        app = _build_app()
+        fake_layout = MagicMock()
+        app._app = MagicMock(layout=fake_layout)
+        target = object()
+        app._focus(target)
+        fake_layout.focus.assert_called_once_with(target)
+
+
+class TestRunStandalone:
+    def test_run_returns_selection(self):
+        app = _build_app()
+        sel = ServiceConfigSelection(action="delete", section="bi_platforms", name="x")
+        fake_app = MagicMock()
+        fake_app.run.return_value = sel
+        with patch("datus.cli.service_config_app.Application", return_value=fake_app):
+            assert app.run() is sel
+        assert app._on_done is None
+        assert app._app is None
+
+    def test_run_keyboard_interrupt_returns_none(self):
+        app = _build_app()
+        fake_app = MagicMock()
+        fake_app.run.side_effect = KeyboardInterrupt
+        with patch("datus.cli.service_config_app.Application", return_value=fake_app):
+            assert app.run() is None
+
+    def test_run_unexpected_exception_returns_none(self):
+        app = _build_app()
+        fake_app = MagicMock()
+        fake_app.run.side_effect = RuntimeError("boom")
+        with patch("datus.cli.service_config_app.Application", return_value=fake_app):
+            assert app.run() is None

@@ -30,6 +30,7 @@ class CompareAgenticNode(AgenticNode):
         node_name: str = "compare",
         agent_config: Optional[AgentConfig] = None,
         is_subagent: bool = False,
+        session_id: Optional[str] = None,
     ):
         """
         Initialize CompareAgenticNode.
@@ -56,6 +57,7 @@ class CompareAgenticNode(AgenticNode):
             tools=[],
             mcp_servers={},
             is_subagent=is_subagent,
+            session_id=session_id,
         )
 
         # Get max_turns from agentic_nodes configuration, default to 30
@@ -219,6 +221,17 @@ class CompareAgenticNode(AgenticNode):
 
             response_content: Any = ""
             last_successful_output: Optional[Dict[str, Any]] = None
+
+            # The Jinja-rendered ``user_prompt`` already inlines the full
+            # comparison context (two SQLs + expectation). Stash it as the
+            # input's user-side text only for the helper call, then restore
+            # so downstream ``action.input_data`` keeps the original request.
+            original_user_message = user_input.user_message
+            user_input.user_message = user_prompt
+            try:
+                user_prompt = self._build_enhanced_message(user_input)
+            finally:
+                user_input.user_message = original_user_message
 
             async for stream_action in self.model.generate_with_tools_stream(
                 prompt=user_prompt,

@@ -17,7 +17,7 @@ from rich.markdown import Markdown
 from rich.text import Text
 
 from datus.cli.action_display.markdown_stream import MarkdownStreamBuffer
-from datus.cli.action_display.renderers import _truncate_middle
+from datus.cli.action_display.renderers import _truncate_middle, is_task_anchor_input, parse_task_tool_input
 from datus.schemas.action_history import SUBAGENT_COMPLETE_ACTION_TYPE, ActionHistory, ActionRole, ActionStatus
 from datus.utils.loggings import get_logger
 
@@ -133,6 +133,7 @@ class InlineStreamingContext:
         self._input_collector: Optional[Callable[[ActionHistory, Console], Optional[List[List[str]]]]] = None
         self._event_loop: Optional[asyncio.AbstractEventLoop] = None
         self._clear_header_callback: Optional[Callable[[], None]] = None
+        self._clear_screen_callback: Optional[Callable[[], None]] = None
         # TUI path: when provided, all subagent/processing rolling-window
         # rendering is pushed into this shared state (painted by DatusApp's
         # own layout) instead of Rich ``Live``, eliminating cursor-fights
@@ -215,6 +216,16 @@ class InlineStreamingContext:
         """
         self._clear_header_callback = callback
 
+    def set_clear_screen_callback(self, callback: Optional[Callable[[], None]]) -> None:
+        """Inject the screen-clear primitive used during Ctrl+O verbose toggle.
+
+        TUI mode binds Rich to ``TUIOutputBuffer``; ``Console.clear()`` plus
+        ``ESC[3J`` only injects unrecognised ANSI bytes into that buffer and
+        corrupts the real terminal. Callers should pass ``TUIOutputBuffer.clear``
+        in TUI mode. When unset, falls back to the legacy escape-code path.
+        """
+        self._clear_screen_callback = callback
+
     # -- sync mode entry point ---------------------------------------------
 
     def run_sync(self) -> None:
@@ -223,6 +234,27 @@ class InlineStreamingContext:
         Used by render_action_history, resume, Ctrl+O reprint, display_action_list.
         """
         self._process_actions_sync()
+
+    def _log_orphan_subagent_action(self, action: ActionHistory) -> None:
+        """Warn-and-drop a depth>0 action whose group never got anchored.
+
+        The cleaned-up subagent-grouping contract says: every depth>0 action's
+        ``parent_action_id`` must point to a group seeded by a preceding task
+        PROCESSING action. An orphan here means upstream code produced a
+        depth>0 action without first emitting the outer task action — a real
+        protocol violation that we log loudly rather than paper over with an
+        on-the-fly group whose header would mis-derive from the orphan's
+        ``action_type`` / ``messages``.
+        """
+        logger.warning(
+            "orphan depth>0 action: no task PROCESSING anchor "
+            "(action_id=%s parent_action_id=%s depth=%s role=%s action_type=%s)",
+            action.action_id,
+            action.parent_action_id,
+            action.depth,
+            action.role,
+            action.action_type,
+        )
 
     def _process_actions_sync(self) -> None:
         """Synchronous version of _process_actions.
@@ -255,8 +287,7 @@ class InlineStreamingContext:
                 action.role == ActionRole.TOOL
                 and action.status == ActionStatus.PROCESSING
                 and action.action_type == "task"
-                and isinstance(action.input, dict)
-                and action.input.get("type")
+                and is_task_anchor_input(action.input)
             ):
                 group_key = action.action_id
                 if group_key not in self._subagent_groups:
@@ -276,11 +307,17 @@ class InlineStreamingContext:
                 self._end_subagent_group_sync(group_key, action)
                 continue
 
-            # Sub-agent action (depth > 0)
+            # Sub-agent action (depth > 0). Group must already exist —
+            # anchored by the matching task PROCESSING earlier in the
+            # action list. An orphan here is a protocol violation; warn
+            # and drop rather than synthesise a misleading group whose
+            # header derives from this action's ``action_type``.
             if action.depth > 0:
                 group_key = action.parent_action_id
                 if group_key not in self._subagent_groups:
-                    self._start_subagent_group_sync(action, group_key)
+                    self._log_orphan_subagent_action(action)
+                    self._processed_index += 1
+                    continue
                 self._update_subagent_display_sync(action, group_key)
                 self._processed_index += 1
                 continue
@@ -297,7 +334,7 @@ class InlineStreamingContext:
 
     def _start_subagent_group_sync(self, first_action: ActionHistory, group_key: Optional[str] = None) -> None:
         """Create sub-agent group state (sync mode — no Live display)."""
-        subagent_type = first_action.action_type or "subagent"
+        subagent_type, _prompt, _description = parse_task_tool_input(first_action.input)
         self._subagent_groups[group_key] = {
             "start_time": first_action.start_time,
             "tool_count": 0,
@@ -422,9 +459,19 @@ class InlineStreamingContext:
                     self._stop_processing_live()
                     self._stop_subagent_live()
                     with self._print_lock:
-                        self.display.console.clear()
-                        sys.stdout.write("\033[3J")
-                        sys.stdout.flush()
+                        if self._clear_screen_callback is not None:
+                            try:
+                                self._clear_screen_callback()
+                            except Exception as exc:
+                                logger.debug(
+                                    "clear_screen_callback raised in verbose toggle: %s",
+                                    exc,
+                                    exc_info=True,
+                                )
+                        else:
+                            self.display.console.clear()
+                            sys.stdout.write("\033[3J")
+                            sys.stdout.flush()
                         if self._clear_header_callback is not None:
                             try:
                                 self._clear_header_callback()
@@ -445,9 +492,19 @@ class InlineStreamingContext:
                     self._stop_processing_live()
                     self._stop_subagent_live()
                     with self._print_lock:
-                        self.display.console.clear()
-                        sys.stdout.write("\033[3J")
-                        sys.stdout.flush()
+                        if self._clear_screen_callback is not None:
+                            try:
+                                self._clear_screen_callback()
+                            except Exception as exc:
+                                logger.debug(
+                                    "clear_screen_callback raised in verbose toggle: %s",
+                                    exc,
+                                    exc_info=True,
+                                )
+                        else:
+                            self.display.console.clear()
+                            sys.stdout.write("\033[3J")
+                            sys.stdout.flush()
                         if self._clear_header_callback is not None:
                             try:
                                 self._clear_header_callback()
@@ -658,16 +715,22 @@ class InlineStreamingContext:
                 continue
 
             # -- Sub-agent action (depth > 0) --
+            # The group must already exist — anchored by the matching task
+            # PROCESSING action earlier in the stream (see Path A above).
+            # An orphan here is a protocol violation; warn and drop rather
+            # than synthesise a group whose header would mis-derive from
+            # this action's ``action_type`` / ``messages``.
             if action.depth > 0:
                 group_key = action.parent_action_id
+                if group_key not in self._subagent_groups:
+                    self._log_orphan_subagent_action(action)
+                    self._processed_index += 1
+                    continue
                 # PROCESSING tool inside subagent: record as the group's
                 # current blinking row without adding it to the completed
                 # tool list (the paired SUCCESS/FAILED follows with the
                 # same action_id and clears the slot).
                 if action.role == ActionRole.TOOL and action.status == ActionStatus.PROCESSING:
-                    if group_key not in self._subagent_groups:
-                        self._stop_processing_live()
-                        self._start_subagent_group(action, group_key)
                     group = self._subagent_groups.get(group_key)
                     if group is not None:
                         group["processing_action"] = action
@@ -675,10 +738,6 @@ class InlineStreamingContext:
                             self._update_subagent_groups_live()
                     self._processed_index += 1
                     continue
-                if group_key not in self._subagent_groups:
-                    # New sub-agent group: stop current Live, print header
-                    self._stop_processing_live()
-                    self._start_subagent_group(action, group_key)
                 # Update current action display
                 self._update_subagent_display(action, group_key)
                 self._processed_index += 1
@@ -705,8 +764,7 @@ class InlineStreamingContext:
                 action.role == ActionRole.TOOL
                 and action.status == ActionStatus.PROCESSING
                 and action.action_type == "task"
-                and isinstance(action.input, dict)
-                and action.input.get("type")
+                and is_task_anchor_input(action.input)
             ):
                 group_key = action.action_id
                 if group_key not in self._subagent_groups:
@@ -747,8 +805,7 @@ class InlineStreamingContext:
                 action.role == ActionRole.TOOL
                 and action.status == ActionStatus.PROCESSING
                 and action.action_type == "task"
-                and isinstance(action.input, dict)
-                and action.input.get("type")
+                and is_task_anchor_input(action.input)
             ):
                 group_key = action.action_id
                 if group_key not in self._subagent_groups:
@@ -768,11 +825,15 @@ class InlineStreamingContext:
                 self._end_subagent_group_by_key(group_key, action)
                 continue
 
-            # depth>0: render inside the sub-agent group
+            # depth>0: render inside the sub-agent group. Group must
+            # already exist (anchored by task PROCESSING). Orphans are
+            # warned and dropped.
             if action.depth > 0:
                 group_key = action.parent_action_id
                 if group_key not in self._subagent_groups:
-                    self._start_subagent_group(action, group_key)
+                    self._log_orphan_subagent_action(action)
+                    self._processed_index += 1
+                    continue
                 self._update_subagent_display(action, group_key)
                 self._processed_index += 1
                 continue
@@ -855,7 +916,7 @@ class InlineStreamingContext:
         :meth:`_end_subagent_group_by_key` appends a ``header + Done``
         summary to the scrollback so a permanent trace remains.
         """
-        subagent_type = first_action.action_type or "subagent"
+        subagent_type, _prompt, _description = parse_task_tool_input(first_action.input)
 
         with self._print_lock:
             self._subagent_groups[group_key] = {
@@ -887,6 +948,13 @@ class InlineStreamingContext:
 
     def _end_subagent_group_by_key(self, group_key: Optional[str], end_action: ActionHistory) -> None:
         """End sub-agent group: stop Live, permanently print completed group, restart Live for remaining.
+
+        ``group_key`` is the task action's ``action_id`` by construction —
+        Path A (task PROCESSING anchor) seeds the group with that key, and
+        :func:`datus.cli.bootstrap_subagent` / ``sub_agent_task_tool`` both
+        propagate that same id as the ``parent_action_id`` on every
+        depth>0 child action and on the closing ``subagent_complete``
+        action. No fallback group-keying scheme exists.
 
         In compact mode, triggers a full reprint with completed groups collapsed.
         In verbose mode, permanently prints the completed group (header + actions + Done).
@@ -1071,19 +1139,26 @@ class InlineStreamingContext:
         Mirrors the field layout of
         :meth:`ActionRenderer.render_subagent_header` so the pinned-region
         header stays in lock-step with the scrollback header without
-        re-parsing Rich markup back into prompt_toolkit styles.
+        re-parsing Rich markup back into prompt_toolkit styles. Both routes
+        go through :func:`parse_task_tool_input` so wrapped and direct task
+        input layouts resolve identically — the previous inline branch only
+        handled the direct case and let wrapped tasks fall back to the
+        literal ``"task"`` label plus the model adapter's
+        ``"Tool call: task(...)"`` messages string as the goal.
         """
-        subagent_type = first_action.action_type or "subagent"
-        # Outer task tool gets its label from ``input["type"]``; see
-        # ``ActionRenderer.render_subagent_header`` for rationale.
-        if subagent_type == "task" and isinstance(first_action.input, dict):
-            subagent_type = first_action.input.get("type") or "task"
-        prompt = first_action.messages or ""
-        if prompt.startswith("User: "):
-            prompt = prompt[6:]
-        description = ""
-        if first_action.input and isinstance(first_action.input, dict):
-            description = first_action.input.get("_task_description", "")
+        input_data = first_action.input if isinstance(first_action.input, dict) else {}
+        if first_action.action_type == "task":
+            subagent_type, parsed_prompt, parsed_description = parse_task_tool_input(input_data)
+        else:
+            # Reprint fallback for replay slices without a task anchor.
+            subagent_type = first_action.action_type or "subagent"
+            parsed_prompt, parsed_description = "", ""
+        description = input_data.get("_task_description", "") or parsed_description
+        prompt = parsed_prompt
+        if not prompt:
+            prompt = first_action.messages or ""
+            if prompt.startswith("User: "):
+                prompt = prompt[6:]
         goal = description or (_truncate_middle(prompt, max_len=200) if prompt else "")
 
         segments: List[Tuple[str, str]] = [("class:subagent-header-live", f"\u23fa {subagent_type}")]
@@ -1387,11 +1462,17 @@ class InlineStreamingContext:
         # dropped. Without this latch the wrapper's body hits
         # ``render_main_action`` and appears in the scrollback a second
         # time right below the streamed version.
+        # ``plan_preview`` is pushed by ``InteractionBroker.send`` as a
+        # standalone content card (the plan markdown shown before a
+        # confirm_plan prompt) — not as the LLM's main response. Excluding
+        # it from the dedupe condition prevents the same-turn latch from
+        # swallowing it whenever the LLM streamed any preamble first.
         is_main_assistant_success = (
             self._tui_mode
             and action.role == ActionRole.ASSISTANT
             and action.status == ActionStatus.SUCCESS
             and action.depth == 0
+            and action.action_type != "plan_preview"
         )
         # Drain any trailing deltas in this message's bucket before the
         # terminal-response branches below run. Covers the race where the

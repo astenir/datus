@@ -659,10 +659,10 @@ class TestChatAgenticNodeSystemPrompt:
 
 
 class TestChatAgenticNodeExecutionConfig:
-    """Verify _get_execution_config for different execution modes."""
+    """Verify _get_execution_config now that plan-mode lives on AgenticNode."""
 
     def test_normal_mode_config(self, real_agent_config, mock_llm_create):
-        """Normal mode returns tools, instruction, and None hooks."""
+        """Returns tools + system instruction; no hooks when permission hooks absent."""
         from datus.agent.node.chat_agentic_node import ChatAgenticNode
 
         node = ChatAgenticNode(
@@ -673,27 +673,47 @@ class TestChatAgenticNodeExecutionConfig:
         )
         node.input = ChatNodeInput(user_message="test", database="california_schools")
 
-        config = node._get_execution_config("normal", node.input)
+        config = node._get_execution_config(node.input)
 
         assert "tools" in config
         assert "instruction" in config
         assert isinstance(config["instruction"], str)
         assert "list_tables" in {tool.name for tool in config["tools"]}
 
-    def test_unknown_mode_raises_value_error(self, real_agent_config, mock_llm_create):
-        """Unknown execution mode raises ValueError with the mode name."""
+    def test_main_agent_always_exposes_plan_tools(self, real_agent_config, mock_llm_create):
+        """Main agent gets ``confirm_plan`` / ``todo_*`` regardless of plan_mode state."""
         from datus.agent.node.chat_agentic_node import ChatAgenticNode
 
         node = ChatAgenticNode(
-            node_id="test_exec_unknown",
-            description="Test unknown exec mode",
+            node_id="test_exec_plan_tools",
+            description="Test plan-tool availability",
             node_type=NodeType.TYPE_CHAT,
             agent_config=real_agent_config,
         )
         node.input = ChatNodeInput(user_message="test", database="california_schools")
+        node._is_subagent = False
+        assert node.plan_mode_active is False
 
-        with pytest.raises(ValueError, match="Unknown execution mode: invalid_mode"):
-            node._get_execution_config("invalid_mode", node.input)
+        tool_names = {t.name for t in node._get_execution_config(node.input)["tools"]}
+        assert "confirm_plan" in tool_names
+        assert "todo_write" in tool_names
+
+    def test_subagent_does_not_get_plan_tools(self, real_agent_config, mock_llm_create):
+        """Sub-agent invocation suppresses plan tools entirely."""
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+
+        node = ChatAgenticNode(
+            node_id="test_exec_subagent",
+            description="Test sub-agent plan tools off",
+            node_type=NodeType.TYPE_CHAT,
+            agent_config=real_agent_config,
+            is_subagent=True,
+        )
+        node.input = ChatNodeInput(user_message="test", database="california_schools")
+
+        tool_names = {t.name for t in node._get_execution_config(node.input)["tools"]}
+        assert "confirm_plan" not in tool_names
+        assert "todo_write" not in tool_names
 
     def test_permission_hooks_are_applied(self, real_agent_config, mock_llm_create):
         """Permission hooks are attached to the execution config when available."""
@@ -707,58 +727,10 @@ class TestChatAgenticNodeExecutionConfig:
         )
         node.input = ChatNodeInput(user_message="test", database="california_schools")
 
-        config = node._get_execution_config("normal", node.input)
+        config = node._get_execution_config(node.input)
 
         # Permission hooks should always be set up for chat node
         assert config["hooks"] is node.permission_hooks
-
-
-# ===========================================================================
-# _build_plan_prompt Tests
-# ===========================================================================
-
-
-class TestChatAgenticNodeBuildPlanPrompt:
-    """Verify _build_plan_prompt handles structured and non-structured content."""
-
-    def test_build_plan_prompt_non_structured_appends_plan_instructions(self, real_agent_config, mock_llm_create):
-        """Non-structured content gets plan instructions appended."""
-        from datus.agent.node.chat_agentic_node import ChatAgenticNode
-
-        node = ChatAgenticNode(
-            node_id="test_plan_prompt",
-            description="Test plan prompt",
-            node_type=NodeType.TYPE_CHAT,
-            agent_config=real_agent_config,
-        )
-
-        result = node._build_plan_prompt("Help me analyze the data")
-
-        assert isinstance(result, str)
-        # Should contain the original prompt
-        assert "Help me analyze the data" in result
-        # Should contain plan mode instructions (either from template or inline fallback)
-        assert len(result) > len("Help me analyze the data")
-
-    def test_build_plan_prompt_template_not_found_uses_inline_fallback(self, real_agent_config, mock_llm_create):
-        """When plan_mode_system template is missing, falls back to inline prompt."""
-        from unittest.mock import patch
-
-        from datus.agent.node.chat_agentic_node import ChatAgenticNode
-
-        node = ChatAgenticNode(
-            node_id="test_plan_fallback",
-            description="Test plan fallback",
-            node_type=NodeType.TYPE_CHAT,
-            agent_config=real_agent_config,
-        )
-
-        with patch("datus.prompts.prompt_manager.get_prompt_manager") as mock_gpm:
-            mock_gpm.return_value.render_template.side_effect = FileNotFoundError("not found")
-            result = node._build_plan_prompt("Analyze this")
-
-        assert "PLAN MODE" in result
-        assert "todo_read" in result
 
 
 # ===========================================================================
@@ -1462,38 +1434,117 @@ class TestChatAgenticNodeExecuteStreamWithTools:
 
 
 class TestChatAgenticNodePlanMode:
-    """Verify plan mode resets after execution completes."""
+    """Verify plan-mode lifecycle on ChatAgenticNode (state lives on AgenticNode)."""
 
     @pytest.mark.asyncio
-    async def test_plan_mode_resets_after_execution(self, real_agent_config, mock_llm_create):
-        """Plan mode attributes (plan_mode_active, plan_hooks) are reset in finally block."""
+    async def test_plan_mode_persists_across_turns_until_toggled_off(
+        self, real_agent_config, mock_llm_create, tmp_path
+    ):
+        """plan_mode stays active across execute_stream runs; toggling off clears it."""
+        import os
+
         from datus.agent.node.chat_agentic_node import ChatAgenticNode
 
-        node = ChatAgenticNode(
-            node_id="test_plan_reset",
-            description="Test plan reset",
-            node_type=NodeType.TYPE_CHAT,
-            agent_config=real_agent_config,
-        )
+        cwd = os.getcwd()
+        os.chdir(tmp_path)
+        try:
+            node = ChatAgenticNode(
+                node_id="test_plan_persist",
+                description="Test plan persistence",
+                node_type=NodeType.TYPE_CHAT,
+                agent_config=real_agent_config,
+            )
 
-        # Plan mode input - even though it may fail, plan_mode_active should reset
-        mock_llm_create.reset(responses=[build_simple_response("Plan response.")])
+            mock_llm_create.reset(
+                responses=[
+                    build_simple_response("Drafting the plan."),
+                    build_simple_response("Continuing on the same plan."),
+                ]
+            )
 
-        node.input = ChatNodeInput(
-            user_message="Create a plan",
-            database="california_schools",
-            plan_mode=True,
-            auto_execute_plan=False,
-        )
+            node.input = ChatNodeInput(
+                user_message="Create a plan",
+                database="california_schools",
+                plan_mode=True,
+            )
+            ahm = ActionHistoryManager()
+            async for _action in node.execute_stream(ahm):
+                pass
 
-        ahm = ActionHistoryManager()
-        actions = []
-        async for action in node.execute_stream(ahm):
-            actions.append(action)
+            assert node.plan_mode_active is True
+            first_plan_path = node.plan_file_path
+            assert isinstance(first_plan_path, str) and first_plan_path
+            assert os.path.exists(first_plan_path)
 
-        # After execution, plan_mode_active should be False regardless of outcome
-        assert node.plan_mode_active is False
-        assert node.plan_hooks is None
+            # Second turn with plan_mode=True must reuse the same file path.
+            node.input = ChatNodeInput(
+                user_message="Refine the plan",
+                database="california_schools",
+                plan_mode=True,
+            )
+            ahm = ActionHistoryManager()
+            async for _action in node.execute_stream(ahm):
+                pass
+
+            assert node.plan_mode_active is True
+            assert node.plan_file_path == first_plan_path
+
+            saved_plan_path = node.plan_file_path
+
+            # User toggles plan mode off — only the active flag flips; the
+            # plan_file_path is preserved for the lifetime of the session.
+            node.input = ChatNodeInput(
+                user_message="Just answer me",
+                database="california_schools",
+                plan_mode=False,
+            )
+            mock_llm_create.reset(responses=[build_simple_response("Normal answer.")])
+            ahm = ActionHistoryManager()
+            async for _action in node.execute_stream(ahm):
+                pass
+
+            assert node.plan_mode_active is False
+            assert node.plan_file_path == saved_plan_path
+            assert node.workflow_prompt_sent is False
+        finally:
+            os.chdir(cwd)
+
+    def test_plan_file_path_is_never_reset_within_session(self, real_agent_config, mock_llm_create, tmp_path):
+        """plan_file_path is allocated once per session and survives toggle/confirm cycles."""
+        import os
+
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+
+        cwd = os.getcwd()
+        os.chdir(tmp_path)
+        try:
+            node = ChatAgenticNode(
+                node_id="test_plan_reuse",
+                description="Reuse plan path",
+                node_type=NodeType.TYPE_CHAT,
+                agent_config=real_agent_config,
+            )
+
+            first_path = node.activate_plan_mode()
+            assert os.path.exists(first_path)
+
+            # confirm_plan exit shape: flip active flag, keep path.
+            node.plan_mode_active = False
+            node.workflow_prompt_sent = False
+
+            # Re-activation reuses the same file.
+            assert node.activate_plan_mode() == first_path
+            assert node.plan_mode_active is True
+
+            # Explicit Shift+Tab off also keeps the path (session-scoped).
+            node.deactivate_plan_mode()
+            assert node.plan_file_path == first_path
+            assert node.plan_mode_active is False
+
+            # Re-activation after toggle off still reuses the same file.
+            assert node.activate_plan_mode() == first_path
+        finally:
+            os.chdir(cwd)
 
 
 # ===========================================================================
