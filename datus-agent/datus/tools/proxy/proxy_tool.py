@@ -27,7 +27,18 @@ logger = get_logger(__name__)
 
 # Node types whose GenerationHooks depend on local filesystem tools (write_file, etc.)
 # Their filesystem_tools must NOT be proxied; other tools are still proxied.
-_FS_DEPENDENT_NODES: Set[str] = {"gen_semantic_model", "gen_metrics", "gen_sql_summary", "gen_ext_knowledge"}
+# gen_visual_report / gen_visual_dashboard author their render/*.jsx tree
+# server-side and surface it via ``/api/v1/(report|dashboard)/detail``; proxying
+# write_file / edit_file to the browser would round-trip every chunk for no
+# benefit, so the same exclusion applies to them.
+_FS_DEPENDENT_NODES: Set[str] = {
+    "gen_semantic_model",
+    "gen_metrics",
+    "gen_sql_summary",
+    "gen_ext_knowledge",
+    "gen_visual_report",
+    "gen_visual_dashboard",
+}
 
 
 def create_proxy_tool(original: FunctionTool, channel: ToolResultChannel) -> FunctionTool:
@@ -65,6 +76,15 @@ def apply_proxy_tools(
     """
     node.proxy_tool_patterns = proxy_patterns
     target_channel = channel or node.tool_channel
+    # ``_FS_DEPENDENT_NODES`` exclusion below relies on ``tool_registry`` being
+    # populated. In production that population is normally driven by
+    # ``_ensure_permission_hooks``, which runs lazily on the first LLM turn —
+    # but ``apply_proxy_tools`` is called during node setup, well before any
+    # LLM call. Trigger registry population eagerly so the exclusion can fire.
+    # Guarded with ``hasattr`` so the SimpleNamespace-style mocks in tests
+    # still work without growing a no-op stub.
+    if hasattr(node, "_populate_tool_registry"):
+        node._populate_tool_registry()
     parsed = _parse_patterns(proxy_patterns)
     registry = node.tool_registry.to_dict()
 

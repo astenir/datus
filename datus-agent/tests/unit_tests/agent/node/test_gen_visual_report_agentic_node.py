@@ -121,6 +121,47 @@ class TestGenVisualReportInit:
         assert "save_query" not in tool_names
         assert "validate_render" not in tool_names
 
+    def test_tool_category_map_registers_filesystem_tools(self, real_agent_config, mock_llm_create):
+        """Filesystem tools must be declared in the ``filesystem_tools``
+        category so ``PermissionHooks._handle_filesystem_zone`` engages and
+        ``apply_proxy_tools`` recognises them as excluded via
+        ``_FS_DEPENDENT_NODES``.
+        """
+        node = _make_node(real_agent_config)
+        mapping = node._tool_category_map()
+        assert "filesystem_tools" in mapping
+        fs_tool_names = {t.name for t in mapping["filesystem_tools"]}
+        assert {"read_file", "write_file", "edit_file", "delete_file"}.issubset(fs_tool_names)
+        # db_tools and semantic_tools also surface under their own categories.
+        assert "db_tools" in mapping
+        assert "semantic_tools" in mapping
+
+    def test_apply_proxy_tools_keeps_filesystem_tools_unwrapped(self, real_agent_config, mock_llm_create):
+        """End-to-end check on a real node: ``apply_proxy_tools`` invoked
+        with the web-source pattern ``["write_file", "edit_file"]`` must
+        leave both filesystem tools un-proxied because
+        ``gen_visual_report`` is in ``_FS_DEPENDENT_NODES``.
+
+        Guards against a time-of-check regression: the exclusion only
+        fires when ``tool_registry`` is already populated, so this test
+        does NOT pre-fill the registry — it relies on
+        ``apply_proxy_tools`` triggering ``_populate_tool_registry``
+        eagerly.
+        """
+        from datus.tools.proxy.proxy_tool import apply_proxy_tools
+
+        node = _make_node(real_agent_config)
+        # Snapshot the original ``on_invoke_tool`` callable for each fs
+        # tool before applying the proxy wrapper.
+        before = {t.name: t.on_invoke_tool for t in node.tools if t.name in {"write_file", "edit_file"}}
+        assert before, "test setup: expected write_file/edit_file in node.tools"
+
+        apply_proxy_tools(node, ["write_file", "edit_file"])
+
+        after = {t.name: t.on_invoke_tool for t in node.tools if t.name in {"write_file", "edit_file"}}
+        for name, original in before.items():
+            assert after[name] is original, f"{name} was proxied despite gen_visual_report fs-dependent exclusion"
+
 
 # --------------------------------------------------------------------------- #
 # Pre-execution artifact wiring                                               #
