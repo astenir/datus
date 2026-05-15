@@ -744,6 +744,10 @@ class TestSkillIntegrationEdgeCases:
     def test_finalize_prompt_with_existing_tools(self, mock_agent_config, skill_manager):
         """Test that finalize_system_prompt preserves existing tools."""
         mock_agent_config.agentic_nodes = {"test_node": {"skills": "sql-*"}}
+        # BashTool is fail-closed when no permission manager exists; wire a
+        # permissive config so the lazy injector includes ``execute_command``.
+        mock_agent_config.permissions_config = PermissionConfig(default_permission=PermissionLevel.ALLOW)
+        mock_agent_config.active_profile_name = "normal"
 
         node = MinimalAgenticNode(
             node_id="test24",
@@ -764,13 +768,15 @@ class TestSkillIntegrationEdgeCases:
         base_prompt = "Base prompt"
         node._finalize_system_prompt(base_prompt)
 
-        # Should have all tools
-        assert len(node.tools) == 4  # 2 existing + 2 skill tools
+        # Should have all tools: 2 existing + 2 skill tools + 1 bash tool
+        # (BashTool is created by AgenticNode.__init__ and lazy-injected here).
+        assert len(node.tools) == 5
         tool_names = [t.name for t in node.tools]
         assert "tool1" in tool_names
         assert "tool2" in tool_names
         assert "load_skill" in tool_names
         assert "skill_execute_command" in tool_names
+        assert "execute_command" in tool_names
 
     def test_setup_exception_handling(self, mock_agent_config):
         """Test that setup exceptions are handled gracefully."""
@@ -976,3 +982,81 @@ class TestSkillAllowedAgentsConsistency:
         dashboard_names = {skill.name for skill in manager.get_available_skills("gen_dashboard")}
         assert "superset-dashboard" in dashboard_names
         assert "grafana-dashboard" in dashboard_names
+
+
+class TestBashToolToggle:
+    """``agent.bash.enabled`` controls whether ``BashTool`` is instantiated."""
+
+    def _wire_permissions(self, config):
+        """Give ``mock_agent_config`` a permissions section so that
+        ``_setup_permission_manager`` actually builds a ``PermissionManager``.
+
+        Required because BashTool now refuses to instantiate when no
+        permission enforcement is available (fail-closed).
+        """
+        config.permissions_config = PermissionConfig(default_permission=PermissionLevel.ALLOW)
+        config.active_profile_name = "normal"
+        return config
+
+    def test_bash_tool_created_by_default(self, mock_agent_config):
+        """Default behaviour (no explicit toggle) creates the BashTool."""
+        # Mock(spec=AgentConfig) makes ``bash_tool_enabled`` resolve to a
+        # truthy Mock — equivalent to the production default of ``True``.
+        self._wire_permissions(mock_agent_config)
+        node = MinimalAgenticNode(
+            node_id="bash_toggle_default",
+            description="Test node",
+            node_type="chat",
+            agent_config=mock_agent_config,
+        )
+
+        assert node.bash_tool is not None
+        bash_names = {t.name for t in node.bash_tool.available_tools()}
+        assert "execute_command" in bash_names
+
+    def test_bash_tool_disabled_via_config(self, mock_agent_config):
+        """``bash_tool_enabled=False`` keeps ``BashTool`` out of the node."""
+        self._wire_permissions(mock_agent_config)
+        mock_agent_config.bash_tool_enabled = False
+
+        node = MinimalAgenticNode(
+            node_id="bash_toggle_off",
+            description="Test node",
+            node_type="chat",
+            agent_config=mock_agent_config,
+        )
+
+        assert node.bash_tool is None
+        # ``_ensure_bash_tool_in_tools`` must also short-circuit so the
+        # tool never sneaks into ``self.tools`` via the lazy injector.
+        node.tools = []
+        node._ensure_bash_tool_in_tools()
+        assert node.tools == []
+        # Category map must drop the ``bash_tools`` bucket so profile
+        # rules don't inherit a phantom entry.
+        assert "bash_tools" not in node._tool_category_map()
+
+    def test_bash_tool_skipped_without_permission_manager(self, mock_agent_config):
+        """Without permission enforcement, BashTool must NOT be created.
+
+        ``_ensure_permission_hooks`` is a no-op when ``permission_manager``
+        is ``None``, so creating an ``execute_command`` tool would expose
+        unrestricted shell execution to the model. Fail closed instead.
+        """
+        # ``permissions_config = None`` short-circuits ``_setup_permission_manager``,
+        # so ``node.permission_manager`` stays ``None``.
+        mock_agent_config.permissions_config = None
+
+        node = MinimalAgenticNode(
+            node_id="bash_toggle_no_perm",
+            description="Test node",
+            node_type="chat",
+            agent_config=mock_agent_config,
+        )
+
+        assert node.permission_manager is None
+        assert node.bash_tool is None
+        # The lazy injector must also stay a no-op.
+        node.tools = []
+        node._ensure_bash_tool_in_tools()
+        assert node.tools == []

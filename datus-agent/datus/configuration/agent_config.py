@@ -99,6 +99,27 @@ def _validate_project_name(value: str) -> str:
     return value
 
 
+def _coerce_bool(value: Any, default: bool) -> bool:
+    """Coerce a config value to ``bool`` accepting YAML's string booleans.
+
+    ``bool("false")`` is ``True`` in Python, so a naive ``bool(...)`` cast on
+    a YAML value like ``enabled: "false"`` silently flips the toggle on. This
+    helper normalizes booleans and the common string spellings users actually
+    write in agent.yml.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off", ""}:
+            return False
+    return bool(value)
+
+
 @dataclass
 class DbConfig:
     path_pattern: str = field(default="", init=True)
@@ -651,6 +672,16 @@ class AgentConfig:
         # CLI, or direct assignment from API/gateway bootstraps.
         filesystem_raw = kwargs.get("filesystem") or {}
         self._filesystem_strict = bool(filesystem_raw.get("strict", False))
+        # ``bash.enabled`` toggles whether agentic nodes instantiate the
+        # general-purpose ``BashTool``. Default ``True`` preserves the
+        # current behaviour where every node exposes ``execute_command``
+        # (gated by the ``bash_tools`` ASK rule in the permission profile).
+        # Set to ``False`` for hardened environments where shell execution
+        # must be unavailable regardless of profile.
+        bash_raw = kwargs.get("bash")
+        if not isinstance(bash_raw, dict):
+            bash_raw = {}
+        self._bash_tool_enabled = _coerce_bool(bash_raw.get("enabled"), True)
         self._current_datasource = ""
         self.nodes = nodes
         self.export_config: Dict[str, Any] = kwargs.get("export", {})
@@ -772,12 +803,22 @@ class AgentConfig:
 
         # Platform documentation fetch configs (datasource-independent)
         document_raw = kwargs.get("document", {}) or {}
-        # Extract tavily_api_key from document config (top-level, not a platform)
-        tavily_key_raw = document_raw.pop("tavily_api_key", None)
-        if tavily_key_raw:
-            self.tavily_api_key = resolve_env(str(tavily_key_raw))
-        else:
+        # Extract tavily_api_key from document config (top-level, not a platform).
+        # Only fall back to TAVILY_API_KEY env var when the YAML key is *absent*;
+        # an explicit empty / unresolved-placeholder value disables the key
+        # rather than silently falling through to the environment.
+        _missing = object()
+        tavily_key_raw = document_raw.pop("tavily_api_key", _missing)
+        if tavily_key_raw is _missing:
+            self.tavily_api_key = os.environ.get("TAVILY_API_KEY") or None
+        elif tavily_key_raw is None:
             self.tavily_api_key = None
+        else:
+            resolved = resolve_env(str(tavily_key_raw))
+            if not resolved or resolved.startswith("<MISSING:"):
+                self.tavily_api_key = None
+            else:
+                self.tavily_api_key = resolved
 
         self.document_configs: Dict[str, DocumentConfig] = {}
         for name, cfg in document_raw.items():
@@ -815,6 +856,24 @@ class AgentConfig:
     @filesystem_strict.setter
     def filesystem_strict(self, value: bool) -> None:
         self._filesystem_strict = bool(value)
+
+    @property
+    def bash_tool_enabled(self) -> bool:
+        """Whether agentic nodes should instantiate the general-purpose ``BashTool``.
+
+        ``True`` (default): every :class:`AgenticNode` exposes
+        ``execute_command``; per-call gating is handled by the
+        ``bash_tools`` ASK rule in the permission profile.
+
+        ``False``: ``BashTool`` is not created and ``execute_command`` is
+        not advertised to the model. Use this for hardened deployments
+        where shell execution must be unavailable regardless of profile.
+        """
+        return self._bash_tool_enabled
+
+    @bash_tool_enabled.setter
+    def bash_tool_enabled(self, value: bool) -> None:
+        self._bash_tool_enabled = _coerce_bool(value, True)
 
     @property
     def current_datasource(self):
