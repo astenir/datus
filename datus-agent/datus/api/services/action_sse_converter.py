@@ -279,6 +279,43 @@ def _build_interaction_content(action: ActionHistory) -> List[IMessageContent]:
     return [IMessageContent(type="user-interaction", payload=payload_data)]
 
 
+_ARTIFACT_PREVIEW_LIMIT = 200
+
+
+def _build_artifact_content(action: ActionHistory) -> Optional[List[IMessageContent]]:
+    """Build an artifact-card content block from a finished gen_visual_* run.
+
+    Returns ``None`` when the action does not actually carry an artifact
+    payload (missing slug or kind) so the caller can fall back to the
+    regular ``_response`` markdown rendering.
+
+    The payload mirrors :class:`IArtifactPayload`. ``mode`` reuses the
+    backend artifact-tools vocabulary (``'new'`` / ``'edit'``) so there
+    is no translation layer between the NodeResult and the wire payload.
+    """
+    output = action.output if isinstance(action.output, dict) else {}
+    slug = output.get("report_slug") or output.get("dashboard_slug")
+    kind = output.get("artifact_kind")
+    if not slug or kind not in ("report", "dashboard"):
+        return None
+
+    response_text = output.get("response") or ""
+    preview = response_text.strip() if isinstance(response_text, str) else ""
+    if len(preview) > _ARTIFACT_PREVIEW_LIMIT:
+        preview = preview[:_ARTIFACT_PREVIEW_LIMIT].rstrip() + "…"
+
+    payload: dict[str, Any] = {
+        "slug": slug,
+        "kind": kind,
+        "mode": output.get("artifact_mode"),
+        "name": output.get("name"),
+        "description": output.get("description"),
+        "created_at": output.get("created_at"),
+        "preview_summary": preview or None,
+    }
+    return [IMessageContent(type="artifact", payload=payload)]
+
+
 def _build_subagent_complete_content(action: ActionHistory) -> List[IMessageContent]:
     """Build content for sub-agent completion summary event.
 
@@ -393,11 +430,27 @@ def action_to_sse_event(
         elif (
             role == ActionRole.ASSISTANT and status == ActionStatus.SUCCESS and action.action_type.endswith("_response")
         ):
-            if not include_final_response:
-                return None  # ignore parsed final response
-            contents = _build_response_content(action)
-            if not contents:
-                return None
+            # gen_visual_report / gen_visual_dashboard completions ship an
+            # ``artifact_kind`` on the output — try to render an artifact
+            # card the frontend can open directly. The card fires
+            # regardless of ``include_final_response`` because it is not a
+            # substitute for the LLM's prose (already streamed earlier as
+            # a separate response action); it is purely additive.
+            contents = None
+            if isinstance(action.output, dict) and action.output.get("artifact_kind") in ("report", "dashboard"):
+                contents = _build_artifact_content(action)
+
+            # Either this is a plain wrapper response (no artifact) or the
+            # artifact payload was malformed (e.g. missing slug). Don't
+            # drop the event silently — fall back to the standard
+            # ``_response`` handling so the assistant's parsed output can
+            # still be surfaced to history tooling when requested.
+            if contents is None:
+                if not include_final_response:
+                    return None  # ignore parsed final response
+                contents = _build_response_content(action)
+                if not contents:
+                    return None
         elif _is_plain_assistant_response(action):
             contents = _build_response_content(action)
             if not contents:
