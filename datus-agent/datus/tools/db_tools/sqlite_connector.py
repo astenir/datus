@@ -3,7 +3,9 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import sqlite3
+from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, override
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from datus_db_core import BaseSqlConnector
 from pandas import DataFrame
@@ -20,6 +22,25 @@ from datus.utils.loggings import get_logger
 logger = get_logger(__name__)
 
 
+def _read_only_sqlite_uri(db_path: str) -> str:
+    if not db_path.startswith("file:"):
+        return f"{Path(db_path).resolve().as_uri()}?mode=ro"
+
+    parts = urlsplit(db_path)
+    query: list[tuple[str, str]] = []
+    mode_seen = False
+    for key, value in parse_qsl(parts.query, keep_blank_values=True):
+        if key.lower() == "mode":
+            if not mode_seen:
+                query.append((key, "ro"))
+                mode_seen = True
+            continue
+        query.append((key, value))
+    if not mode_seen:
+        query.append(("mode", "ro"))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
 class SQLiteConnector(BaseSqlConnector, MigrationTargetMixin):
     """
     Connector for SQLite databases using native sqlite3 SDK.
@@ -28,6 +49,7 @@ class SQLiteConnector(BaseSqlConnector, MigrationTargetMixin):
     def __init__(self, config: SQLiteConfig):
         super().__init__(config, dialect=DBType.SQLITE)
         self.db_path = config.db_path.replace("sqlite:///", "")
+        self.read_only = config.read_only
         self.check_same_thread = config.check_same_thread
         self.connection: Optional[sqlite3.Connection] = None
 
@@ -45,10 +67,17 @@ class SQLiteConnector(BaseSqlConnector, MigrationTargetMixin):
             return
 
         try:
+            connect_path = self.db_path
+            connect_kwargs: Dict[str, Any] = {
+                "timeout": self.timeout_seconds,
+                "check_same_thread": self.check_same_thread,
+            }
+            if self.read_only and self.db_path != ":memory:":
+                connect_path = _read_only_sqlite_uri(self.db_path)
+                connect_kwargs["uri"] = True
             self.connection = sqlite3.connect(
-                self.db_path,
-                timeout=self.timeout_seconds,
-                check_same_thread=self.check_same_thread,
+                connect_path,
+                **connect_kwargs,
             )
             self.connection.row_factory = sqlite3.Row
         except Exception as e:
