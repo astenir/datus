@@ -65,13 +65,26 @@ PR_ACCEPTANCE_TARGETS = [
     "tests/unit_tests/agent/node/test_sql_summary_agentic_node.py",
     "tests/unit_tests/agent/node/test_skill_creator_agentic_node.py",
     "tests/unit_tests/agent/node/test_gen_job_agentic_node.py",
+    "tests/unit_tests/api/routes/test_chat_routes.py",
+    "tests/unit_tests/api/services/test_kb_service.py",
+    "tests/unit_tests/api/test_service.py",
+    "tests/unit_tests/cli/test_interactive_init.py",
     "tests/integration/api/test_api.py",
     "tests/integration/cli/test_cli_commands.py",
     "tests/integration/cli/test_cli_textual.py",
     "tests/integration/storage/test_storage_layout.py",
     "tests/integration/storage/test_doc_search.py",
+    "tests/integration/storage/test_platform_doc.py",
     "tests/integration/tools/test_func_tools_db.py",
+    "tests/integration/tools/test_mcp_server.py",
     "tests/integration/tools/db_tools/test_connector_duckdb.py",
+    "tests/unit_tests/storage/test_feedback_store.py",
+    "tests/unit_tests/tools/func_tool/test_bi_tools.py",
+    "tests/unit_tests/tools/func_tool/test_reference_template_tools.py",
+    "tests/unit_tests/tools/func_tool/test_scheduler_tools.py",
+    "tests/unit_tests/tools/func_tool/test_sub_agent_task_tool.py",
+    "tests/unit_tests/tools/skill_tools/test_skill.py",
+    "tests/unit_tests/utils/test_memory_loader.py",
 ]
 IMPACTED_TEST_MAPPING = [
     ("datus/agent/", "tests/unit_tests/agent/"),
@@ -215,8 +228,12 @@ def _suite_pytest_basetemp(suite_name: str) -> str:
     return os.path.join(DEFAULT_PYTEST_BASETEMP, _slugify(suite_name))
 
 
+def _nested_runner_pytest_basetemp(basetemp: str) -> str:
+    return os.path.join(basetemp, "_nested-runners")
+
+
 def _prepare_suite_pytest_basetemp(basetemp: str) -> None:
-    os.makedirs(os.path.dirname(basetemp), exist_ok=True)
+    os.makedirs(basetemp, exist_ok=True)
 
 
 def _reset_report_outputs() -> None:
@@ -310,6 +327,7 @@ def _run_pytest_suite(
 
     env = os.environ.copy()
     env["COVERAGE_FILE"] = DEFAULT_COVERAGE_DB
+    env[PYTEST_BASETEMP_ENV] = _nested_runner_pytest_basetemp(basetemp)
 
     banner = f"\n=== {suite_name.upper()} ===\n"
     sys.stdout.write(banner)
