@@ -1073,3 +1073,77 @@ class AgentService:
         _save_agentic_nodes(agent_config, agentic_nodes)
 
         return Result(success=True, data={"name": request.id, "id": request.id})
+
+    async def delete_agent(
+        self,
+        agent_id: str,
+        agent_config: AgentConfig,
+    ) -> Result[dict]:
+        """Delete a custom sub-agent from ``agent.yml``.
+
+        Builtin sub-agents are immutable and cannot be removed. The matching
+        entry is popped from ``agentic_nodes`` and the yaml is rewritten;
+        any prompt-template files this agent owns under
+        ``{datus_home}/template/<name>_system_*.j2`` are removed on a
+        best-effort basis (failures are logged, not raised — the yaml write
+        is the source of truth for whether the agent exists).
+        """
+
+        if agent_id in BUILTIN_SUBAGENTS:
+            return Result(
+                success=False,
+                errorCode="BUILTIN_AGENT_IMMUTABLE",
+                errorMessage=f"Builtin agent '{agent_id}' cannot be deleted",
+            )
+
+        agentic_nodes = agent_config.agentic_nodes or {}
+        if agent_id not in agentic_nodes:
+            return Result(
+                success=False,
+                errorCode="AGENT_NOT_FOUND",
+                errorMessage=f"Agent '{agent_id}' not found",
+            )
+
+        del agentic_nodes[agent_id]
+        _save_agentic_nodes(agent_config, agentic_nodes)
+
+        try:
+            self._delete_prompt_templates(agent_id, agent_config)
+        except Exception:
+            logger.warning(f"Failed to clean prompt templates for agent '{agent_id}' (non-fatal)", exc_info=True)
+
+        return Result(success=True, data={"id": agent_id, "name": agent_id})
+
+    def _delete_prompt_templates(self, agent_name: str, agent_config: AgentConfig) -> None:
+        """Best-effort cleanup of ``{datus_home}/template/<name>_system_*.j2``.
+
+        Mirrors the create path's template-copy behavior: ``create_agent``
+        seeds one template per agent under the project's ``template`` dir,
+        so delete sweeps every version that shares the sanitized agent name
+        prefix. ``_sanitize_path_component`` only strips path separators —
+        glob metacharacters (``*``, ``?``, ``[]``) survive — so we iterate
+        ``iterdir()`` and match literally with ``startswith`` / ``endswith``
+        instead of feeding ``safe_name`` into ``Path.glob``. Each match is
+        re-checked to be relative to the resolved template dir, so a
+        maliciously crafted ``agent_name`` cannot reach files outside it.
+        """
+        safe_name = self._sanitize_path_component(agent_name)
+        template_dir = (agent_config.path_manager.datus_home / "template").resolve()
+        if not template_dir.is_dir():
+            return
+        prefix = f"{safe_name}_system_"
+        for path in template_dir.iterdir():
+            if not path.is_file():
+                continue
+            if not (path.name.startswith(prefix) and path.name.endswith(".j2")):
+                continue
+            try:
+                if not path.resolve().is_relative_to(template_dir):
+                    continue
+            except (OSError, ValueError):
+                continue
+            try:
+                path.unlink()
+                logger.info(f"Removed prompt template: {path}")
+            except OSError:
+                logger.warning(f"Failed to remove prompt template: {path}", exc_info=True)

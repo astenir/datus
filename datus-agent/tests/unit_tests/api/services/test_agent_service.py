@@ -2,6 +2,7 @@
 
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -1685,3 +1686,278 @@ class TestSubagentScopedContextRoundTrip:
         assert scoped["metrics"] == "Sales.unknown"
         # Saved datasource binding survives the edit.
         assert scoped["datasource"] == "finance"
+
+
+@pytest.mark.asyncio
+class TestDeleteAgent:
+    """Tests for delete_agent — agent removal from agent.yml."""
+
+    async def test_delete_agent_removes_entry_and_persists(self, real_agent_config, agent_yml_with_singleton):
+        """delete_agent removes the agentic_nodes entry and writes the yaml back."""
+        import yaml
+
+        from datus.api.models.agent_models import CreateAgentInput
+
+        svc = AgentService()
+        await svc.create_agent(
+            CreateAgentInput(name="to_delete", type="gen_sql", description="goodbye"),
+            real_agent_config,
+        )
+
+        # Sanity: entry is present before delete.
+        with open(agent_yml_with_singleton) as f:
+            before = yaml.safe_load(f)
+        assert "to_delete" in before["agent"]["agentic_nodes"]
+
+        result = await svc.delete_agent("to_delete", real_agent_config)
+        assert result.success is True
+        assert result.data == {"id": "to_delete", "name": "to_delete"}
+
+        # In-memory map is updated and the rewritten yaml no longer has the entry.
+        assert "to_delete" not in (real_agent_config.agentic_nodes or {})
+        with open(agent_yml_with_singleton) as f:
+            after = yaml.safe_load(f)
+        assert "to_delete" not in (after["agent"].get("agentic_nodes") or {})
+
+        # Subsequent get returns AGENT_NOT_FOUND.
+        get_result = await svc.get_agent("to_delete", real_agent_config)
+        assert get_result.success is False
+        assert get_result.errorCode == "AGENT_NOT_FOUND"
+
+    async def test_delete_agent_not_found(self, real_agent_config, agent_yml_with_singleton):
+        """delete_agent returns AGENT_NOT_FOUND for unknown ids."""
+        svc = AgentService()
+        result = await svc.delete_agent("never_existed", real_agent_config)
+        assert result.success is False
+        assert result.errorCode == "AGENT_NOT_FOUND"
+
+    async def test_delete_agent_rejects_builtin(self, real_agent_config, agent_yml_with_singleton):
+        """Builtin sub-agents cannot be deleted via this API."""
+        svc = AgentService()
+        builtin_name = next(iter(BUILTIN_SUBAGENTS))
+        result = await svc.delete_agent(builtin_name, real_agent_config)
+        assert result.success is False
+        assert result.errorCode == "BUILTIN_AGENT_IMMUTABLE"
+
+    async def test_delete_agent_cleans_prompt_templates(self, real_agent_config, agent_yml_with_singleton):
+        """delete_agent best-effort removes ``<name>_system_*.j2`` files."""
+        from datus.api.models.agent_models import CreateAgentInput
+
+        svc = AgentService()
+        await svc.create_agent(
+            CreateAgentInput(name="template_owner", type="gen_sql", prompt_version="1.0"),
+            real_agent_config,
+        )
+
+        template_dir = real_agent_config.path_manager.datus_home / "template"
+        seeded = template_dir / "template_owner_system_1.0.j2"
+        assert seeded.exists(), "create_agent should have seeded a template file"
+
+        # Drop in a second version to prove the glob clears all versions.
+        extra = template_dir / "template_owner_system_2.0.j2"
+        extra.write_text("v2 content", encoding="utf-8")
+
+        # And a template owned by a different agent must NOT be touched.
+        unrelated = template_dir / "other_owner_system_1.0.j2"
+        unrelated.write_text("unrelated", encoding="utf-8")
+
+        result = await svc.delete_agent("template_owner", real_agent_config)
+        assert result.success is True
+        assert not seeded.exists()
+        assert not extra.exists()
+        assert unrelated.exists()
+
+    async def test_delete_agent_template_cleanup_does_not_expand_globs(
+        self, real_agent_config, agent_yml_with_singleton
+    ):
+        """Regression: agent names with glob metacharacters must not be
+        passed through to ``Path.glob`` during template cleanup.
+
+        ``_sanitize_path_component`` only strips path separators, so a name
+        like ``victim*`` would survive sanitization and — if cleanup used
+        ``glob(f"{safe_name}_system_*.j2")`` — sweep every file whose stem
+        starts with ``victim``. The literal-match cleanup must compare
+        ``startswith(f"{safe_name}_system_")`` so only files that literally
+        contain the asterisk in their name are removed.
+        """
+        agentic_nodes = real_agent_config.agentic_nodes or {}
+        agentic_nodes["victim*"] = {"type": "gen_sql"}
+        real_agent_config.agentic_nodes = agentic_nodes
+
+        template_dir = real_agent_config.path_manager.datus_home / "template"
+        template_dir.mkdir(parents=True, exist_ok=True)
+
+        # Sibling owned by a different agent — its name happens to start with
+        # the literal prefix the attacker's glob would have expanded to.
+        innocent = template_dir / "victim_system_1.0.j2"
+        innocent.write_text("innocent", encoding="utf-8")
+
+        # File whose literal on-disk name matches the attacker's sanitized
+        # agent name — the only file that should ever be removed.
+        owned = template_dir / "victim*_system_1.0.j2"
+        owned.write_text("owned", encoding="utf-8")
+
+        svc = AgentService()
+        result = await svc.delete_agent("victim*", real_agent_config)
+
+        assert result.success is True
+        assert not owned.exists()
+        assert innocent.exists()
+
+    async def test_delete_agent_succeeds_when_template_dir_missing(self, real_agent_config, agent_yml_with_singleton):
+        """delete_agent succeeds when the project never created any template
+        files — ``_delete_prompt_templates`` hits the ``not is_dir()`` early
+        return instead of iterating a missing directory.
+        """
+        agentic_nodes = real_agent_config.agentic_nodes or {}
+        agentic_nodes["no_templates"] = {"type": "gen_sql"}
+        real_agent_config.agentic_nodes = agentic_nodes
+
+        # Ensure the template dir genuinely doesn't exist on disk.
+        template_dir = real_agent_config.path_manager.datus_home / "template"
+        if template_dir.exists():
+            for path in template_dir.iterdir():
+                if path.is_file():
+                    path.unlink()
+            template_dir.rmdir()
+        assert not template_dir.exists()
+
+        svc = AgentService()
+        result = await svc.delete_agent("no_templates", real_agent_config)
+        assert result.success is True
+        assert "no_templates" not in (real_agent_config.agentic_nodes or {})
+
+    async def test_delete_agent_template_cleanup_skips_directories(self, real_agent_config, agent_yml_with_singleton):
+        """Subdirectories under ``template/`` are ignored by the cleanup scan.
+
+        A user can manually drop a directory whose name happens to match the
+        ``<safe_name>_system_*`` prefix (e.g., a checkpoint dir). The scan
+        must skip non-files so it never tries to ``unlink`` a directory and
+        crash the delete.
+        """
+        agentic_nodes = real_agent_config.agentic_nodes or {}
+        agentic_nodes["dir_owner"] = {"type": "gen_sql"}
+        real_agent_config.agentic_nodes = agentic_nodes
+
+        template_dir = real_agent_config.path_manager.datus_home / "template"
+        template_dir.mkdir(parents=True, exist_ok=True)
+
+        # Real owned template that must be removed.
+        owned = template_dir / "dir_owner_system_1.0.j2"
+        owned.write_text("owned", encoding="utf-8")
+
+        # Subdirectory whose name matches the prefix — must NOT be unlinked.
+        nested = template_dir / "dir_owner_system_extras.j2"
+        nested.mkdir()
+        (nested / "inside.txt").write_text("keep me", encoding="utf-8")
+
+        svc = AgentService()
+        result = await svc.delete_agent("dir_owner", real_agent_config)
+        assert result.success is True
+        assert not owned.exists()
+        # The subdirectory and its contents survived.
+        assert nested.is_dir()
+        assert (nested / "inside.txt").exists()
+
+    async def test_delete_agent_template_unlink_failure_is_non_fatal(
+        self, real_agent_config, agent_yml_with_singleton, monkeypatch
+    ):
+        """``Path.unlink`` raising ``OSError`` (e.g. read-only fs, permission
+        denied) must not block the delete — the warning is logged but the
+        agent still leaves the yaml.
+        """
+        from datus.api.models.agent_models import CreateAgentInput
+
+        svc = AgentService()
+        await svc.create_agent(
+            CreateAgentInput(name="unlink_fails", type="gen_sql", prompt_version="1.0"),
+            real_agent_config,
+        )
+
+        template_dir = real_agent_config.path_manager.datus_home / "template"
+        seeded = template_dir / "unlink_fails_system_1.0.j2"
+        assert seeded.exists()
+
+        original_unlink = Path.unlink
+
+        def _raise_for_owned(self, *args, **kwargs):
+            # Only fail for the file we expect cleanup to touch — leave
+            # unrelated unlinks (test teardown, other fixtures) alone.
+            if self.name.startswith("unlink_fails_system_"):
+                raise OSError("simulated permission denied")
+            return original_unlink(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", _raise_for_owned)
+
+        result = await svc.delete_agent("unlink_fails", real_agent_config)
+        # The agent is gone from yaml even though template cleanup failed.
+        assert result.success is True
+        assert "unlink_fails" not in (real_agent_config.agentic_nodes or {})
+        # The template file is still on disk because unlink was patched to fail.
+        assert seeded.exists()
+
+    async def test_delete_agent_swallows_template_cleanup_exception(
+        self, real_agent_config, agent_yml_with_singleton, monkeypatch
+    ):
+        """If ``_delete_prompt_templates`` itself raises an unexpected
+        exception (e.g. ``OSError`` on ``iterdir`` for a corrupted dir),
+        ``delete_agent`` logs a warning and still returns success — the
+        yaml write is the source of truth for whether the agent exists.
+        """
+        agentic_nodes = real_agent_config.agentic_nodes or {}
+        agentic_nodes["cleanup_explodes"] = {"type": "gen_sql"}
+        real_agent_config.agentic_nodes = agentic_nodes
+
+        svc = AgentService()
+
+        def _boom(self_inner, agent_name, agent_config):
+            raise RuntimeError("simulated cleanup failure")
+
+        monkeypatch.setattr(AgentService, "_delete_prompt_templates", _boom)
+
+        result = await svc.delete_agent("cleanup_explodes", real_agent_config)
+        assert result.success is True
+        assert "cleanup_explodes" not in (real_agent_config.agentic_nodes or {})
+
+
+@pytest.mark.asyncio
+class TestDeleteAgentRoute:
+    """Tests for the ``DELETE /api/v1/agent/delete`` route wrapper."""
+
+    async def test_route_delegates_to_service(self, real_agent_config, agent_yml_with_singleton):
+        """The route function instantiates AgentService and forwards the
+        ``agent_id`` query parameter and the service's ``agent_config`` from
+        the injected ``svc`` dependency.
+        """
+        from types import SimpleNamespace
+
+        from datus.api.models.agent_models import CreateAgentInput
+        from datus.api.routes.agent_routes import delete_agent as delete_agent_route
+
+        svc = AgentService()
+        await svc.create_agent(
+            CreateAgentInput(name="route_target", type="gen_sql"),
+            real_agent_config,
+        )
+        assert "route_target" in (real_agent_config.agentic_nodes or {})
+
+        result = await delete_agent_route(
+            svc=SimpleNamespace(agent_config=real_agent_config),
+            agent_id="route_target",
+        )
+        assert result.success is True
+        assert result.data == {"id": "route_target", "name": "route_target"}
+        assert "route_target" not in (real_agent_config.agentic_nodes or {})
+
+    async def test_route_returns_not_found_result(self, real_agent_config, agent_yml_with_singleton):
+        """Route surfaces the service's AGENT_NOT_FOUND result verbatim."""
+        from types import SimpleNamespace
+
+        from datus.api.routes.agent_routes import delete_agent as delete_agent_route
+
+        result = await delete_agent_route(
+            svc=SimpleNamespace(agent_config=real_agent_config),
+            agent_id="never_existed",
+        )
+        assert result.success is False
+        assert result.errorCode == "AGENT_NOT_FOUND"
