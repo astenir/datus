@@ -80,7 +80,9 @@ def test_deep_adapter_contract(connector: ClickHouseConnector, config: ClickHous
             "amount",
             "bool_flag",
         ),
-        dialect_select_sqls=(f"SELECT toTypeName({q('amount')}) AS amount_type FROM {table_ref} LIMIT 1",),
+        dialect_select_sqls=(
+            f"SELECT 1 AS amount_type_ok FROM {table_ref} WHERE toTypeName({q('amount')}) = 'Decimal(10, 2)' LIMIT 1",
+        ),
     )
 
     contract.assert_table_contract(connector, case)

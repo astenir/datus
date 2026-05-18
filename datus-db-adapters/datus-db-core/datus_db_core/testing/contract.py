@@ -70,7 +70,9 @@ def assert_default_contract_row(row: Mapping[str, Any]) -> None:
     assert row["special_value"] == "S-1"
     assert row["nullable_value"] is None
     assert str(row["event_date_value"]).startswith("2024-02-03")
-    assert "2024-02-03" in str(row["event_ts_value"])
+    event_ts_text = str(row["event_ts_value"])
+    assert "2024-02-03" in event_ts_text
+    assert ":" in event_ts_text, f"Expected timestamp-like value, got {event_ts_text!r}"
     assert Decimal(str(row["amount_value"])) == Decimal("123.45")
     assert str(row["bool_value"]).lower() in {"true", "1"}
 

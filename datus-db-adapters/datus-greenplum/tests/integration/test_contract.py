@@ -79,7 +79,7 @@ def test_deep_adapter_contract(connector: GreenplumConnector, config: GreenplumC
             "amount",
             "bool_flag",
         ),
-        dialect_select_sqls=(f"SELECT COUNT(*) AS rows_seen FROM {table_ref} WHERE {q('bool_flag')} IS TRUE",),
+        dialect_select_sqls=(f"SELECT 1 AS rows_seen FROM {table_ref} WHERE {q('bool_flag')} IS TRUE LIMIT 1",),
     )
 
     contract.assert_table_contract(connector, case)

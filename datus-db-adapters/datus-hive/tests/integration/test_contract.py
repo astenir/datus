@@ -86,7 +86,7 @@ def test_deep_adapter_contract(connector: HiveConnector, config: HiveConfig):
             "amount",
             "bool_flag",
         ),
-        dialect_select_sqls=(f"SELECT COUNT(*) AS rows_seen FROM {table_ref} WHERE {q('bool_flag')} = TRUE",),
+        dialect_select_sqls=(f"SELECT 1 AS rows_seen FROM {table_ref} WHERE {q('bool_flag')} = TRUE LIMIT 1",),
     )
 
     contract.assert_table_contract(connector, case)
