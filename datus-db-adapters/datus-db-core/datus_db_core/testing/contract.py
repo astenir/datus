@@ -32,6 +32,7 @@ class TableContractCase:
     expected_columns: Sequence[str]
     limit_count: int = 1
     row_assert: RowAssert | None = None
+    dialect_select_sqls: Sequence[str] = field(default_factory=tuple)
     cleanup_sqls: Sequence[str] = field(default_factory=tuple)
 
 
@@ -45,6 +46,7 @@ class SelectContractCase:
     qualified_sql: str
     limit_count: int = 1
     row_assert: RowAssert | None = None
+    dialect_select_sqls: Sequence[str] = field(default_factory=tuple)
 
 
 def assert_success(result: Any, operation: str) -> None:
@@ -65,9 +67,12 @@ def assert_default_contract_row(row: Mapping[str, Any]) -> None:
 
     assert row["id_value"] == 1
     assert row["mixed_value"] == "Alpha"
+    assert row["special_value"] == "S-1"
     assert row["nullable_value"] is None
     assert str(row["event_date_value"]).startswith("2024-02-03")
+    assert "2024-02-03" in str(row["event_ts_value"])
     assert Decimal(str(row["amount_value"])) == Decimal("123.45")
+    assert str(row["bool_value"]).lower() in {"true", "1"}
 
 
 def assert_schema_columns(schema: Iterable[Mapping[str, Any]], expected_columns: Sequence[str]) -> None:
@@ -132,6 +137,15 @@ def assert_table_contract(connector: Any, case: TableContractCase) -> None:
         assert_success(limited, f"{case.adapter_name} LIMIT contract SELECT")
         limited_rows = _assert_payload(limited, f"{case.adapter_name} LIMIT contract SELECT")
         assert len(limited_rows) == case.limit_count
+
+        for index, dialect_sql in enumerate(case.dialect_select_sqls, start=1):
+            dialect_result = connector.execute({"sql_query": dialect_sql}, result_format="list")
+            assert_success(dialect_result, f"{case.adapter_name} dialect-specific contract SELECT {index}")
+            dialect_rows = _assert_payload(
+                dialect_result,
+                f"{case.adapter_name} dialect-specific contract SELECT {index}",
+            )
+            assert dialect_rows, f"{case.adapter_name} dialect-specific contract SELECT {index} returned no rows"
     except BaseException as error:
         contract_error = error
         raise
@@ -157,3 +171,12 @@ def assert_select_contract(connector: Any, case: SelectContractCase) -> None:
     assert_success(qualified, f"{case.adapter_name} qualified identifier SELECT")
     qualified_rows = _assert_payload(qualified, f"{case.adapter_name} qualified identifier SELECT")
     assert qualified_rows, f"{case.adapter_name} qualified identifier SELECT returned no rows"
+
+    for index, dialect_sql in enumerate(case.dialect_select_sqls, start=1):
+        dialect_result = connector.execute({"sql_query": dialect_sql}, result_format="list")
+        assert_success(dialect_result, f"{case.adapter_name} dialect-specific contract SELECT {index}")
+        dialect_rows = _assert_payload(
+            dialect_result,
+            f"{case.adapter_name} dialect-specific contract SELECT {index}",
+        )
+        assert dialect_rows, f"{case.adapter_name} dialect-specific contract SELECT {index} returned no rows"

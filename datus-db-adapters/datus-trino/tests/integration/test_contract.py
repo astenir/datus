@@ -18,14 +18,44 @@ def test_deep_adapter_contract(tpch_connector: TrinoConnector):
             SELECT
                 id_value,
                 "Mixed Case" AS mixed_value,
+                "special-name" AS special_value,
                 nullable_value,
                 event_date_value,
-                amount_value
+                event_ts_value,
+                amount_value,
+                bool_value
             FROM (
                 VALUES
-                    (1, 'Alpha', CAST(NULL AS VARCHAR), DATE '2024-02-03', DECIMAL '123.45'),
-                    (2, 'Beta', 'present', DATE '2024-02-04', DECIMAL '67.89')
-            ) AS t(id_value, "Mixed Case", nullable_value, event_date_value, amount_value)
+                    (
+                        1,
+                        'Alpha',
+                        'S-1',
+                        CAST(NULL AS VARCHAR),
+                        DATE '2024-02-03',
+                        TIMESTAMP '2024-02-03 04:05:06',
+                        DECIMAL '123.45',
+                        TRUE
+                    ),
+                    (
+                        2,
+                        'Beta',
+                        'S-2',
+                        'present',
+                        DATE '2024-02-04',
+                        TIMESTAMP '2024-02-04 05:06:07',
+                        DECIMAL '67.89',
+                        FALSE
+                    )
+            ) AS t(
+                id_value,
+                "Mixed Case",
+                "special-name",
+                nullable_value,
+                event_date_value,
+                event_ts_value,
+                amount_value,
+                bool_value
+            )
             ORDER BY id_value
         """,
         limit_sql="""
@@ -35,6 +65,9 @@ def test_deep_adapter_contract(tpch_connector: TrinoConnector):
             LIMIT 1
         """,
         qualified_sql='SELECT COUNT(*) AS row_count FROM "tpch"."tiny"."orders"',
+        dialect_select_sqls=(
+            'SELECT date_format(current_timestamp, \'%Y-%m-%d\') AS today_text FROM "tpch"."tiny"."nation" LIMIT 1',
+        ),
     )
 
     contract.assert_select_contract(tpch_connector, case)
