@@ -174,6 +174,30 @@ class TestValidateToolsForAgentType:
         assert "edit_file" not in fs_methods
         assert {"read_file", "glob", "grep"}.issubset(fs_methods)
 
+    @pytest.mark.parametrize("agent_type", ["ask_report", "ask_dashboard"])
+    def test_ask_default_tools_all_resolve(self, agent_type):
+        """Every entry in ``default_tools`` for ask_* must be recognised by
+        ``_validate_tools``.
+
+        Anchors the regression where ``db_tools.execute_sql`` was kept in
+        the curated preselect list after the underlying method had been
+        renamed to ``read_query``. ``_validate_tools`` rejected it, which
+        in turn broke saas-side ``create_agent`` calls that fed the
+        preselect through unchanged.
+        """
+        defaults = SUBAGENT_TOOL_REFERENCE[agent_type]["default_tools"]
+        invalid = _validate_tools(defaults)
+        assert invalid == [], f"{agent_type} default_tools has unrecognised entries: {invalid}"
+
+    @pytest.mark.parametrize("agent_type", ["ask_report", "ask_dashboard"])
+    def test_ask_default_tools_pass_agent_type_gate(self, agent_type):
+        """``default_tools`` must also satisfy the per-agent-type allowlist
+        — preselected tools should never include anything the saas editor
+        would later reject (e.g. ``filesystem_tools.write_file``)."""
+        defaults = SUBAGENT_TOOL_REFERENCE[agent_type]["default_tools"]
+        rejected = _validate_tools_for_agent_type(defaults, agent_type)
+        assert rejected == [], f"{agent_type} default_tools rejected by ask gate: {rejected}"
+
 
 class TestConstants:
     """Tests for module-level constants."""
@@ -209,6 +233,41 @@ class TestConstants:
         """platform_doc_tools is a valid tool but is intentionally hidden from the editor."""
         assert "platform_doc_tools" in VALID_TOOL_METHODS
         assert "platform_doc_tools" not in _USER_FACING_TOOL_CATEGORIES
+
+    def test_filesystem_tools_valid_methods_match_runtime_surface(self):
+        """``VALID_TOOL_METHODS["filesystem_tools"]`` is derived from
+        ``FilesystemFuncTool.all_tools_name()`` so it auto-tracks the
+        runtime instead of drifting (``delete_file`` was previously
+        missing from the hand-curated set).
+
+        Pin both directions: every name the runtime advertises ends up
+        in the saas catalog, and every name in the catalog is a real
+        public method on the class.
+        """
+        from datus.tools.func_tool.filesystem_tools import FilesystemFuncTool
+
+        catalog = VALID_TOOL_METHODS["filesystem_tools"]
+        introspected = set(FilesystemFuncTool.all_tools_name())
+        assert catalog == introspected
+
+        # The runtime advertises its tool surface in ``available_tools``;
+        # the read/write/edit/delete + glob/grep set is the load-bearing
+        # contract — make sure introspection captures all of them and
+        # filters out BaseTool framework methods.
+        expected_runtime_methods = {
+            "read_file",
+            "write_file",
+            "edit_file",
+            "delete_file",
+            "glob",
+            "grep",
+        }
+        assert introspected == expected_runtime_methods
+        for name in expected_runtime_methods:
+            assert hasattr(FilesystemFuncTool, name), f"FilesystemFuncTool dropped method {name!r}"
+        # BaseTool framework methods must NOT show up in the catalog.
+        for framework_method in ("set_tool_context", "get_actions", "call_action"):
+            assert framework_method not in catalog
 
     def test_tool_reference_gen_report_has_saas_defaults(self):
         """gen_report defaults to semantic.* + context_search.list_subject_tree."""
