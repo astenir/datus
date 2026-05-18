@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from sqlalchemy import exc as sa_exc
 
-from datus_db_core import ErrorCode
+from datus_db_core import DatusDbException, ErrorCode
 from datus_sqlalchemy import SQLAlchemyConnector
 
 
@@ -262,6 +262,18 @@ def test_handle_exception_classifies_common_failures(exception, expected_code):
     classified = connector._handle_exception(exception, "SELECT 1", "query")
 
     assert classified.code == expected_code
+
+
+def test_ensure_engine_classifies_connection_creation_failure():
+    """Connection setup failures should surface as stable Datus connection errors."""
+    connector = DummySQLAlchemyConnector("postgresql://user:pass@127.0.0.1:1/test", dialect="postgresql")
+    error = sa_exc.OperationalError("SELECT 1", {}, Exception("connection refused by server"))
+
+    with patch("datus_sqlalchemy.connector.create_engine", side_effect=error):
+        with pytest.raises(DatusDbException) as exc_info:
+            connector._ensure_engine()
+
+    assert exc_info.value.code == ErrorCode.DB_CONNECTION_FAILED
 
 
 # ==================== _conn() Rollback on Exception ====================
