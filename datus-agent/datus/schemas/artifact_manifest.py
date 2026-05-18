@@ -21,7 +21,7 @@ just says ``Untitled report``.
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -55,8 +55,12 @@ class ArtifactManifest(BaseModel):
       the field self-describing means a single backend route can serve
       both shapes by inspecting one file.
     * ``created_at`` is the UTC timestamp at which the manifest was
-      first written. We deliberately do NOT track an ``updated_at``
-      here — the file is write-once for now (no update-manifest tool).
+      first written.
+    * ``updated_at`` is a persisted ISO-8601 UTC timestamp refreshed on
+      every ``save_query`` / ``save_query_template`` / ``bind_existing_*``
+      call so list pages can order by recency. ``None`` until the first
+      mutation after creation; older manifests written before this field
+      was introduced deserialize cleanly with ``None``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -75,3 +79,38 @@ class ArtifactManifest(BaseModel):
     )
     kind: ArtifactKind = Field(..., description="report | dashboard")
     created_at: str = Field(..., description="ISO-8601 UTC timestamp at second precision.")
+    updated_at: Optional[str] = Field(
+        default=None,
+        description=(
+            "ISO-8601 UTC timestamp refreshed on every save_query / save_query_template / "
+            "bind_existing_* call so list pages can order by recency. ``None`` until the "
+            "first mutation after creation. Older manifests written before this field was "
+            "introduced deserialize cleanly with ``None``."
+        ),
+    )
+    datasources: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Distinct datasource labels referenced by this artifact's queries, populated "
+            "incrementally as ``save_query`` / ``save_query_template`` is called. Used by "
+            "the subagent that gets spawned for follow-up questions to know which "
+            "connectors to bind. Stable order = first-seen order so diffs stay readable."
+        ),
+    )
+    key_tables: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Distinct table references across this artifact's queries, preserving the "
+            "qualification each SQL used (``finbench.main.Account`` stays as is; bare "
+            "``Account`` stays bare). Code-generated at finalize time by parsing every "
+            "``queries/*.sql`` and ``queries/*.sql.j2`` with sqlglot, stripping CTE "
+            "aliases, and collapsing same-table-different-qualification entries to the "
+            "more informative form — the LLM never writes this field. The follow-up "
+            "ask agent reads it both to skip ``list_tables`` / ``describe_table`` "
+            "round-trips AND to copy the exact qualified reference when planning new "
+            "SQL on related tables (so the query runs on strict-schema dialects without "
+            "guessing the prefix). Empty when finalize hasn't run yet or when SQL "
+            "parsing failed across the board (rare). Sorted alphabetically for diff "
+            "stability."
+        ),
+    )

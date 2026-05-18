@@ -15,6 +15,7 @@ from datus.api.models.agent_models import CreateAgentInput, EditAgentInput
 from datus.api.models.base_models import Result
 from datus.configuration.agent_config import AgentConfig
 from datus.prompts.prompt_manager import PromptManager
+from datus.schemas.artifact_manifest import ARTIFACT_SLUG_RE
 from datus.tools.func_tool.context_search import ContextSearchTools
 from datus.tools.func_tool.database import DBFuncTool
 from datus.tools.func_tool.platform_doc_search import PlatformDocSearchTool
@@ -66,6 +67,24 @@ _ALL_TOOL_TYPES: dict[str, dict[str, list[str]]] = {
     category: {"tools": sorted(VALID_TOOL_METHODS[category])} for category in _USER_FACING_TOOL_CATEGORIES
 }
 
+# Filesystem methods an ``ask_*`` agent may use. Mirrors the read-only intent
+# documented in the ``ask_report`` / ``ask_dashboard`` entries of
+# :data:`SUBAGENT_TOOL_REFERENCE`: the consultant reads ``analysis/`` and
+# ``queries/`` to answer follow-ups but must never mutate the artifact.
+_ASK_AGENT_FILESYSTEM_READ_ONLY: tuple[str, ...] = ("glob", "grep", "read_file")
+
+# Read-only catalog returned by ``GET /agent/use_tools`` for ``ask_*`` agents.
+# Replaces the full ``_ALL_TOOL_TYPES`` so the editor never surfaces
+# ``filesystem_tools.write_file`` / ``edit_file`` as available options.
+_ASK_AGENT_TOOL_TYPES: dict[str, dict[str, list[str]]] = {
+    **{
+        category: _ALL_TOOL_TYPES[category]
+        for category in _USER_FACING_TOOL_CATEGORIES
+        if category != "filesystem_tools"
+    },
+    "filesystem_tools": {"tools": list(_ASK_AGENT_FILESYSTEM_READ_ONLY)},
+}
+
 # Per-agent-type tool reference. Mirrors the saas Datus-backend contract:
 # ``default_tools`` are wildcard / specific patterns preselected for the type,
 # ``tool_types`` is the full catalog of allowed categories with their methods.
@@ -95,6 +114,44 @@ SUBAGENT_TOOL_REFERENCE: dict[str, dict[str, Any]] = {
             "context_search_tools.list_subject_tree",
         ],
         "tool_types": _ALL_TOOL_TYPES,
+    },
+    # ask_report / ask_dashboard: read-only follow-up consultant for a single
+    # visual artifact. Default tools cover data exploration (db_tools read
+    # methods, semantic / context_search / reference_template) plus the
+    # read-side of filesystem so the LLM can ``glob`` / ``grep`` / ``read_file``
+    # the artifact's ``analysis/`` and ``queries/`` directories. Writes are
+    # excluded by omission — these agents must never mutate the artifact.
+    "ask_report": {
+        "default_tools": [
+            "db_tools.execute_sql",
+            "db_tools.list_tables",
+            "db_tools.describe_table",
+            "db_tools.read_query",
+            "db_tools.get_table_ddl",
+            "semantic_tools.*",
+            "context_search_tools.*",
+            "reference_template_tools.*",
+            "filesystem_tools.read_file",
+            "filesystem_tools.glob",
+            "filesystem_tools.grep",
+        ],
+        "tool_types": _ASK_AGENT_TOOL_TYPES,
+    },
+    "ask_dashboard": {
+        "default_tools": [
+            "db_tools.execute_sql",
+            "db_tools.list_tables",
+            "db_tools.describe_table",
+            "db_tools.read_query",
+            "db_tools.get_table_ddl",
+            "semantic_tools.*",
+            "context_search_tools.*",
+            "reference_template_tools.*",
+            "filesystem_tools.read_file",
+            "filesystem_tools.glob",
+            "filesystem_tools.grep",
+        ],
+        "tool_types": _ASK_AGENT_TOOL_TYPES,
     },
 }
 
@@ -431,6 +488,124 @@ def _validate_tools(tools: list[str]) -> list[str]:
     return invalid
 
 
+def _validate_tools_for_agent_type(tools: list[str], agent_type: str) -> list[str]:
+    """For ``ask_*`` agents, reject any tool pattern outside the read-only
+    catalog. Returns the offending patterns; an empty list means OK.
+
+    The general :func:`_validate_tools` only confirms patterns are
+    syntactically valid (category / method exists). ``ask_*`` agents have
+    an additional contract — they must never mutate the artifact they're
+    bound to — so we enforce a per-type allowlist matching the
+    ``tool_types`` catalog returned by ``GET /agent/use_tools``. This
+    blocks ``filesystem_tools.write_file`` / ``edit_file`` and any wildcard
+    that would expand reach beyond the documented read-only set.
+    """
+    if agent_type not in {"ask_report", "ask_dashboard"}:
+        return []
+    catalog = SUBAGENT_TOOL_REFERENCE[agent_type]["tool_types"]
+    rejected: list[str] = []
+    for raw in tools:
+        pattern = raw.strip()
+        if not pattern:
+            continue
+        # ``"db_tools"`` and ``"db_tools.*"`` both mean "everything in
+        # this category" — only OK if the agent's allowlist already
+        # contains every method in that category (i.e. read-only by
+        # construction).
+        if "." not in pattern:
+            category, method = pattern, "*"
+        else:
+            category, method = pattern.split(".", 1)
+        if category not in catalog:
+            rejected.append(pattern)
+            continue
+        allowed_methods = set(catalog[category]["tools"])
+        if method == "*":
+            if allowed_methods != VALID_TOOL_METHODS.get(category, set()):
+                rejected.append(pattern)
+            continue
+        if method not in allowed_methods:
+            rejected.append(pattern)
+    return rejected
+
+
+def _validate_ask_artifact_binding(
+    request: CreateAgentInput,
+    agent_config: AgentConfig,
+    agentic_nodes: dict,
+) -> Optional[Result]:
+    """Validate an ``ask_report`` / ``ask_dashboard`` create request.
+
+    Returns a failure :class:`Result` when the binding is invalid, ``None``
+    when it's good to proceed. Checks, in order:
+
+    1. ``artifact_slug`` is set and matches the slug pattern.
+    2. Computed ``reports/<slug>`` / ``dashboards/<slug>`` directory exists
+       under ``agent_config.project_root``.
+    3. No other ``ask_*`` agent already binds the same (type, slug) — same-
+       artifact uniqueness is enforced here (not at the DB layer) so the
+       CLI path has the same guarantee the SaaS DB will have via partial
+       unique index.
+    """
+    slug = (request.artifact_slug or "").strip()
+    if not slug:
+        return Result(
+            success=False,
+            errorCode="ARTIFACT_SLUG_REQUIRED",
+            errorMessage=(
+                f"artifact_slug is required when type is {request.type!r} "
+                f"(the agent is bound to a specific visual artifact)."
+            ),
+        )
+    if not ARTIFACT_SLUG_RE.fullmatch(slug):
+        return Result(
+            success=False,
+            errorCode="INVALID_ARTIFACT_SLUG",
+            errorMessage=f"artifact_slug must match {ARTIFACT_SLUG_RE.pattern}; got {slug!r}",
+        )
+
+    project_root = Path(getattr(agent_config, "project_root", "") or ".").resolve()
+    kind_dir = "reports" if request.type == "ask_report" else "dashboards"
+    expected_dir = project_root / kind_dir / slug
+    artifact_dir = expected_dir.resolve()
+    # Path-traversal defence: even though ARTIFACT_SLUG_RE blocks ``..``,
+    # a symlink at ``<kind_dir>/<slug>`` could still redirect us elsewhere
+    # (outside project_root, or to a sibling directory inside it the ask
+    # agent should not be reading — including project_root itself).
+    # Require the resolved path to match the unresolved expected location
+    # verbatim — any symlink redirection produces a mismatch.
+    if artifact_dir != expected_dir:
+        return Result(
+            success=False,
+            errorCode="INVALID_ARTIFACT_SLUG",
+            errorMessage=f"artifact path resolved outside expected location: {artifact_dir}",
+        )
+    if not artifact_dir.is_dir():
+        return Result(
+            success=False,
+            errorCode="ARTIFACT_NOT_FOUND",
+            errorMessage=f"{kind_dir}/{slug} does not exist under project root",
+        )
+
+    # Same-artifact uniqueness — only one ask_* agent per (type, slug).
+    for existing_name, existing_entry in (agentic_nodes or {}).items():
+        if not isinstance(existing_entry, dict):
+            continue
+        if existing_entry.get("type") != request.type:
+            continue
+        if existing_entry.get("artifact_slug") == slug:
+            return Result(
+                success=False,
+                errorCode="ARTIFACT_ALREADY_BOUND",
+                errorMessage=(
+                    f"An {request.type} agent for artifact {slug!r} already exists "
+                    f"(name: {existing_name!r}). Delete the existing one before "
+                    "creating a new binding."
+                ),
+            )
+    return None
+
+
 def _save_agentic_nodes(agent_config: AgentConfig, nodes: dict) -> None:
     """Persist agentic_nodes back to the loaded ``agent.yml``.
 
@@ -573,6 +748,8 @@ class AgentService:
     _TYPE_TO_TEMPLATE = {
         "gen_sql": "gen_sql_system",
         "gen_report": "gen_report_system",
+        "ask_report": "ask_report_system",
+        "ask_dashboard": "ask_dashboard_system",
         "chat": "chat_system",
     }
 
@@ -594,6 +771,18 @@ class AgentService:
                     errorCode="INVALID_TOOLS",
                     errorMessage=f"Invalid tool(s): {', '.join(invalid)}. Valid categories: {', '.join(sorted(VALID_TOOL_CATEGORIES))}",
                 )
+            forbidden = _validate_tools_for_agent_type(request.tools, request.type or "")
+            if forbidden:
+                return Result(
+                    success=False,
+                    errorCode="TOOL_NOT_ALLOWED_FOR_AGENT_TYPE",
+                    errorMessage=(
+                        f"Tool(s) not allowed for agent type {request.type!r}: "
+                        f"{', '.join(forbidden)}. ask_* agents are read-only consultants and "
+                        "must not include filesystem write tools or wildcards that expand "
+                        "beyond the read-only allowlist."
+                    ),
+                )
 
         # Check name not taken
         agentic_nodes = agent_config.agentic_nodes or {}
@@ -603,6 +792,17 @@ class AgentService:
                 errorCode="AGENT_ALREADY_EXISTS",
                 errorMessage=f"Agent '{request.name}' already exists",
             )
+
+        # ask_report / ask_dashboard agents are bound to exactly one visual
+        # artifact (a report or dashboard) — validate the binding before any
+        # filesystem writes. The matching ``reports/<slug>`` or
+        # ``dashboards/<slug>`` directory MUST already exist; absent slug or
+        # missing artifact is a hard error so we never end up with a subagent
+        # entry pointing at nothing.
+        if request.type in {"ask_report", "ask_dashboard"}:
+            ask_check = _validate_ask_artifact_binding(request, agent_config, agentic_nodes)
+            if ask_check is not None:
+                return ask_check
 
         # Create new agent entry (dict keyed by name, which acts as the id).
         # API field ``description`` is persisted as ``agent_description`` to
@@ -645,6 +845,14 @@ class AgentService:
             agent_entry["prompt_template"] = request.prompt_template
         if request.prompt_version:
             agent_entry["prompt_version"] = request.prompt_version
+        # ask_* agents carry their bound artifact's slug directly on the
+        # agentic_nodes entry — the node reads it via ``self.node_config``
+        # without any wrapper. The SaaS backend stores the same value under
+        # ``subagents.extra.artifact.slug`` and flattens it back to this
+        # key in ``config_loader._build_agentic_nodes_dict`` so the two
+        # backends are fully interchangeable from the runtime's view.
+        if request.type in {"ask_report", "ask_dashboard"} and request.artifact_slug:
+            agent_entry["artifact_slug"] = request.artifact_slug
 
         # Save to agent.yml
         agentic_nodes[request.name] = agent_entry
@@ -727,7 +935,7 @@ class AgentService:
     ) -> Result[dict]:
         """Edit an existing custom sub-agent."""
 
-        # Validate tools
+        # Validate tool syntax up-front (doesn't need the agent record).
         if request.tools:
             invalid = _validate_tools(request.tools)
             if invalid:
@@ -747,6 +955,23 @@ class AgentService:
             )
 
         agent = agentic_nodes[request.id]
+
+        # Per-agent-type allowlist runs after the lookup so we know the
+        # bound type. ask_* must stay read-only — reject any tool that
+        # would expand reach beyond the documented read-only set.
+        if request.tools:
+            forbidden = _validate_tools_for_agent_type(request.tools, agent.get("type") or "")
+            if forbidden:
+                return Result(
+                    success=False,
+                    errorCode="TOOL_NOT_ALLOWED_FOR_AGENT_TYPE",
+                    errorMessage=(
+                        f"Tool(s) not allowed for agent type {agent.get('type')!r}: "
+                        f"{', '.join(forbidden)}. ask_* agents are read-only consultants and "
+                        "must not include filesystem write tools or wildcards that expand "
+                        "beyond the read-only allowlist."
+                    ),
+                )
 
         # If prompt_template content is provided, save to template file
         prompt_content = request.prompt_template

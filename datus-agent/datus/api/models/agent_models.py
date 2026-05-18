@@ -2,7 +2,7 @@
 
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # ========== Agent List ==========
 
@@ -31,7 +31,18 @@ class CreateAgentInput(BaseModel):
 
     name: str = Field(..., min_length=1, description="Agent name (unique within workspace)")
     datasource_id: str = Field(default="", description="Datasource ID this agent is bound to")
-    type: str = Field(default="gen_sql", description="Node class: gen_sql or gen_report")
+    type: str = Field(
+        default="gen_sql", description="Node class: gen_sql / gen_report / ask_report / ask_dashboard / ..."
+    )
+    artifact_slug: Optional[str] = Field(
+        default=None,
+        description=(
+            "Slug of the visual report / dashboard this agent is bound to. "
+            "Required when ``type`` is ``ask_report`` or ``ask_dashboard``; ignored "
+            "for other types. Must match ``^[a-z0-9_]{1,80}$``. The matching "
+            "``reports/<slug>`` or ``dashboards/<slug>`` directory must already exist."
+        ),
+    )
     description: Optional[str] = Field(default=None, description="Agent description")
     prompt_template: Optional[str] = Field(default=None, description="System prompt content")
     prompt_version: Optional[str] = Field(default="1.0", description="Prompt version (None = latest)")
@@ -54,6 +65,20 @@ class CreateAgentInput(BaseModel):
     adapter_type: Optional[str] = Field(default=None, description="Adapter type")
     sql_file_threshold: Optional[int] = Field(default=None, description="SQL file threshold")
     sql_preview_lines: Optional[int] = Field(default=None, description="SQL preview lines")
+
+    @field_validator("artifact_slug", mode="before")
+    @classmethod
+    def _strip_artifact_slug(cls, value):
+        """Trim incidental whitespace before validation / persistence.
+
+        Done at the model layer so every downstream reader (the ask-binding
+        validator, the agentic_nodes persistence write, the SaaS-side
+        uniqueness check) sees the same normalised value — avoids
+        whitespace-in-stored-slug mismatches with the regex-validated form.
+        """
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
 
 
 class CreateAgentData(BaseModel):
@@ -124,3 +149,12 @@ class EditAgentInput(BaseModel):
     adapter_type: Optional[str] = None
     sql_file_threshold: Optional[int] = None
     sql_preview_lines: Optional[int] = None
+    artifact_slug: Optional[str] = Field(
+        default=None,
+        description=(
+            "Echoed by the SaaS UI when re-saving an ask_report / ask_dashboard "
+            "agent. The backend treats this field as IMMUTABLE — if it differs "
+            "from the persisted binding the request is rejected with "
+            "``IMMUTABLE_FIELD``. Identical / omitted values are silently dropped."
+        ),
+    )

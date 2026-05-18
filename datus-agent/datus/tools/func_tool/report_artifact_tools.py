@@ -44,7 +44,13 @@ from datus.schemas.gen_visual_report_models import (
     extract_query_slug,
 )
 from datus.tools.func_tool._artifact_filesystem_base import ArtifactFilesystemFuncTool
-from datus.tools.func_tool._visual_artifact_helpers import utc_now_iso
+from datus.tools.func_tool._visual_artifact_helpers import (
+    append_intent_section,
+    coerce_uses_arg,
+    upsert_manifest_after_save,
+    utc_now_iso,
+    write_query_brief,
+)
 from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
 from datus.utils.loggings import get_logger
 
@@ -294,9 +300,19 @@ class ReportArtifactTools:
         *,
         agent_config,
         db_func_tool,
+        user_message: str = "",
     ) -> None:
         self.agent_config = agent_config
         self._db_func_tool = db_func_tool
+        # Raw user prompt that drove this node invocation — appended to
+        # analysis/intent.md verbatim when the artifact is created / bound,
+        # so the file becomes the authoritative log of what the user asked
+        # for. Empty string is a tolerated edge case (programmatic
+        # invocations / test harnesses); ``append_intent_section``
+        # silently drops whitespace-only messages, renderer error
+        # reports, and "continue / proceed" placeholders so the file
+        # stays focused on real intent.
+        self._user_message = user_message or ""
 
         project_root = Path(getattr(agent_config, "project_root", "")).resolve()
         if not project_root or str(project_root) == ".":
@@ -308,6 +324,7 @@ class ReportArtifactTools:
         self.report_dir: Optional[Path] = None
         self.queries_dir: Optional[Path] = None
         self.render_dir: Optional[Path] = None
+        self.analysis_dir: Optional[Path] = None
         # "new" | "edit" — surfaced to callers that want to differentiate
         # "fresh artifact" from "edit in-place" in their final response.
         self.mode: Optional[str] = None
@@ -319,7 +336,11 @@ class ReportArtifactTools:
         return [
             trans_to_function_tool(self.start_new_report),
             trans_to_function_tool(self.bind_existing_report),
-            trans_to_function_tool(self.save_query),
+            # ``save_query.uses`` is a free-form ``Dict[str, List[str]]`` —
+            # strict-mode JSON schema rejects ``additionalProperties: true``
+            # which ``Dict[str, Any]`` emits. We validate the shape
+            # ourselves via :func:`coerce_uses_arg` once the call lands.
+            trans_to_function_tool(self.save_query, strict_mode=False),
             trans_to_function_tool(self.validate_render),
         ]
 
@@ -357,9 +378,14 @@ class ReportArtifactTools:
                     "report_dir": "reports/<slug>",
                     "render_dir": "reports/<slug>/render",
                     "queries_dir": "reports/<slug>/queries",
+                    "analysis_dir": "reports/<slug>/analysis",
                     "manifest_path": "reports/<slug>/manifest.json",
                     "mode": "new",
                 }
+
+            The activation also seeds ``analysis/intent.md`` with the
+            user's original prompt (append-only blockquote section) so
+            the follow-up subagent has the raw question to anchor on.
         """
         if not slug or not REPORT_SLUG_RE.fullmatch(slug):
             return FuncToolResult(
@@ -428,8 +454,13 @@ class ReportArtifactTools:
                     "report_dir": "reports/<slug>",
                     "render_dir": "reports/<slug>/render",
                     "queries_dir": "reports/<slug>/queries",
+                    "analysis_dir": "reports/<slug>/analysis",
                     "mode": "edit",
                 }
+
+            ``analysis/intent.md`` gets a new ``### [timestamp] mode: edit``
+            section appended with the user's prompt so the running log of
+            "what the user has asked over time" stays complete.
         """
         if not report_slug or not REPORT_SLUG_RE.fullmatch(report_slug):
             return FuncToolResult(
@@ -466,10 +497,12 @@ class ReportArtifactTools:
         report_dir = self._project_root / "reports" / report_slug
         queries_dir = report_dir / "queries"
         render_dir = report_dir / "render"
+        analysis_dir = report_dir / "analysis"
         manifest_path = report_dir / "manifest.json"
         if create_dirs:
             queries_dir.mkdir(parents=True, exist_ok=True)
             render_dir.mkdir(parents=True, exist_ok=True)
+            analysis_dir.mkdir(parents=True, exist_ok=True)
         manifest_rel: Optional[str] = None
         if manifest is not None:
             try:
@@ -484,16 +517,33 @@ class ReportArtifactTools:
         self.report_dir = report_dir
         self.queries_dir = queries_dir
         self.render_dir = render_dir
+        self.analysis_dir = analysis_dir
         self.mode = mode
+
+        # Append the raw user prompt to analysis/intent.md before returning.
+        # Failure here is non-fatal — the SQL/render pipeline is the load-
+        # bearing artifact; the intent log is bonus context for the
+        # follow-up subagent. We surface the warning in the tool result so
+        # the LLM (and integration tests) can notice the regression.
+        intent_warning = append_intent_section(
+            analysis_dir,
+            user_message=self._user_message,
+            mode=mode,
+            timestamp=utc_now_iso(),
+        )
+
         result: Dict[str, Any] = {
             "report_slug": report_slug,
             "report_dir": f"reports/{report_slug}",
             "render_dir": f"reports/{report_slug}/render",
             "queries_dir": f"reports/{report_slug}/queries",
+            "analysis_dir": f"reports/{report_slug}/analysis",
             "mode": mode,
         }
         if manifest_rel:
             result["manifest_path"] = manifest_rel
+        if intent_warning:
+            result["intent_warning"] = intent_warning
         return FuncToolResult(result=result)
 
     def _require_active(self, tool_name: str) -> Optional[FuncToolResult]:
@@ -513,19 +563,50 @@ class ReportArtifactTools:
         self,
         name: str,
         sql: str,
-        description: str = "",
+        goal: str,
+        hypothesis: str,
+        uses: Optional[Dict[str, Any]] = None,
+        caveats: str = "",
         datasource: str = "",
     ) -> FuncToolResult:
         """
-        Run a read-only SQL, persist the SQL text and the result, return column meta.
+        Run a read-only SQL, persist the SQL text, the result, AND the per-query brief sidecar.
 
         Args:
             name: Semantic slug for the query (e.g. "sales_by_store"). Matches
-                ``^[a-z0-9_]{1,64}$``. Reused names overwrite the previous files.
+                ``^[a-z0-9_]{1,64}$``. Reused names overwrite the previous files
+                (all three sidecars: ``.sql`` / ``.json`` / ``.brief.json``).
             sql: SELECT / WITH / SHOW / DESCRIBE / EXPLAIN. Multi-statement
                 input is rejected. Comments inside the SQL are kept.
-            description: Optional one-line semantic note. Becomes the first SQL
-                comment line so future LLM turns can recover the intent.
+            goal: One-line research question this query answers, e.g.
+                "distribution of high-risk signups across months". Becomes the
+                first SQL comment line so a human reading ``.sql`` can recover
+                intent. Required. Not persisted separately — the SQL header
+                comment is the canonical store; the brief file holds only
+                the fields a follow-up consultant would otherwise have to
+                infer (hypothesis / uses / caveats).
+            hypothesis: One-sentence concrete prediction the LLM expects this
+                query to validate or refute (e.g. "high-risk signups cluster
+                around promotional campaigns"). Required and non-empty. If
+                you don't have a hypothesis, skip the query — placeholder
+                hypotheses pollute the analysis layer.
+            uses: Optional ``{"metrics": [...], "reference_sql": [...],
+                "ext_knowledge": [...]}``. Each bucket lists subject-library
+                asset ids this query draws on; empty / omitted is fine for
+                pure ad-hoc queries. Surfaced in
+                ``analysis/subject_refs.json`` for the follow-up subagent.
+            caveats: Before deciding this field is empty, check the SQL
+                against these five gotchas a follow-up reader would otherwise
+                miss: (1) JOIN type changing the denominator (LEFT vs INNER);
+                (2) hardcoded value lists that won't auto-include new source
+                values; (3) implicit time-window / scope filters not obvious
+                from the query name; (4) NULL handling (COUNT(col) vs *, SUM
+                over nullables, dimensions dropping NULL groups); (5)
+                sampling, dedup, or non-standard aggregation (DISTINCT,
+                weighted vs simple avg, top-K cutoffs). Write one concise
+                sentence per applicable point. Truly routine aggregates with
+                no implicit assumptions get an empty string — filler like
+                "no caveats" is NOT acceptable.
             datasource: Logical datasource name. Empty string uses the default.
 
         Returns:
@@ -535,6 +616,7 @@ class ReportArtifactTools:
                     "name": "sales_by_store",
                     "sql_path": "reports/<id>/queries/sales_by_store.sql",
                     "json_path": "reports/<id>/queries/sales_by_store.json",
+                    "brief_path": "reports/<id>/queries/sales_by_store.brief.json",
                     "data_ref": "queries/sales_by_store",
                     "row_count": 42,
                     "columns": [{"name": "...", "type": "..."}, ...],
@@ -558,6 +640,23 @@ class ReportArtifactTools:
                 success=0,
                 error="save_query only accepts read-only SQL (SELECT / WITH / SHOW / DESCRIBE / EXPLAIN).",
             )
+        if not goal or not goal.strip():
+            return FuncToolResult(
+                success=0,
+                error="goal must be a non-empty one-line research question (the question this query answers).",
+            )
+        if not hypothesis or not hypothesis.strip():
+            return FuncToolResult(
+                success=0,
+                error=(
+                    "hypothesis must be a non-empty one-sentence concrete prediction this query validates. "
+                    "If you don't have a hypothesis, skip the query."
+                ),
+            )
+        try:
+            uses_obj = coerce_uses_arg(uses)
+        except ValueError as exc:
+            return FuncToolResult(success=0, error=f"uses argument invalid: {exc}")
 
         connector = None
         try:
@@ -638,10 +737,9 @@ class ReportArtifactTools:
 
         sql_path = self.queries_dir / f"{name}.sql"
         json_path = self.queries_dir / f"{name}.json"
+        brief_path = self.queries_dir / f"{name}.brief.json"
 
-        header_parts: List[str] = []
-        if description:
-            header_parts.append(f"-- {description.strip()}")
+        header_parts: List[str] = [f"-- {goal.strip()}"]
         header_parts.append(f"-- generated at {payload['executed_at']} for report {self.report_slug}")
         sql_text = "\n".join(header_parts) + "\n" + sql.rstrip() + "\n"
 
@@ -651,20 +749,47 @@ class ReportArtifactTools:
         except OSError as exc:
             return FuncToolResult(success=0, error=f"Failed to persist query files: {exc}")
 
+        # Brief sidecar — write next, so the three-file bundle stays
+        # in sync. If this fails, the SQL+JSON pair already exists on
+        # disk; we surface the error so the LLM can retry without losing
+        # the query result.
+        brief_err = write_query_brief(
+            self.queries_dir,
+            name=name,
+            hypothesis=hypothesis.strip(),
+            uses=uses_obj,
+            caveats=caveats.strip() if caveats else "",
+        )
+        if brief_err:
+            return FuncToolResult(success=0, error=brief_err)
+
+        # Manifest upsert (datasources union-add + updated_at bump). Soft
+        # failure — log warning, expose in result, but don't fail the
+        # whole tool call: the artifact's primary contract (SQL+data+
+        # brief) is already on disk.
+        manifest_warning = upsert_manifest_after_save(
+            self.report_dir / "manifest.json",
+            datasource=ds_label,
+            timestamp=payload["executed_at"],
+        )
+
         rel_sql = sql_path.relative_to(self._project_root).as_posix()
         rel_json = json_path.relative_to(self._project_root).as_posix()
+        rel_brief = brief_path.relative_to(self._project_root).as_posix()
 
-        return FuncToolResult(
-            result={
-                "name": name,
-                "sql_path": rel_sql,
-                "json_path": rel_json,
-                "data_ref": f"queries/{name}",
-                "row_count": len(rows),
-                "columns": columns_meta,
-                "preview_rows": rows[:3],
-            }
-        )
+        result: Dict[str, Any] = {
+            "name": name,
+            "sql_path": rel_sql,
+            "json_path": rel_json,
+            "brief_path": rel_brief,
+            "data_ref": f"queries/{name}",
+            "row_count": len(rows),
+            "columns": columns_meta,
+            "preview_rows": rows[:3],
+        }
+        if manifest_warning:
+            result["manifest_warning"] = manifest_warning
+        return FuncToolResult(result=result)
 
     def validate_render(self) -> FuncToolResult:
         """
