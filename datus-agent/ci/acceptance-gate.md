@@ -37,3 +37,7 @@ Do not promote these to merge queue acceptance:
 - Full real-LLM product E2E tests.
 - Slow adapter smoke tests that depend on live services.
 - Broad parameter matrices that duplicate lower-level coverage.
+
+Cross-repository harness ownership is tracked separately in
+`ci/cross-repo-harness.md`. Datus-agent merge queue acceptance should not replace
+adapter-owned Docker or package/build gates.
