@@ -127,6 +127,122 @@ class TestChatTaskManagerCreateNodeInteractive:
         assert manager.get_task("nonexistent") is None
 
 
+class TestApplyPermissionModeOverride:
+    """Verify per-request permission profile override semantics.
+
+    These tests intentionally use lightweight stubs instead of a real
+    AgentConfig/ChatAgenticNode pair: the override path is a pure
+    delegation to ``PermissionManager.switch_profile`` and the
+    interesting branches (no-op vs. real switch vs. graceful failure)
+    are easier to assert directly.
+    """
+
+    def _make_agent_config(self, raw_permissions=None):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            active_profile_name="normal",
+            _raw_permissions=raw_permissions or {},
+        )
+
+    def _make_node(self, current_profile="normal", switch_side_effect=None):
+        node = MagicMock()
+        node.session_id = "sess-x"
+        if current_profile is None:
+            node.permission_manager = None
+            return node
+        pm = MagicMock()
+        pm.active_profile = current_profile
+        if switch_side_effect is not None:
+            pm.switch_profile.side_effect = switch_side_effect
+        node.permission_manager = pm
+        return node
+
+    def test_noop_when_permission_mode_is_none(self):
+        """Falsy permission_mode must leave permission_manager alone."""
+        manager = ChatTaskManager()
+        node = self._make_node()
+        manager._apply_permission_mode_override(node, self._make_agent_config(), None)
+        node.permission_manager.switch_profile.assert_not_called()
+
+    def test_noop_when_node_has_no_permission_manager(self):
+        """Nodes without a permission_manager (e.g. workflow) are tolerated."""
+        manager = ChatTaskManager()
+        node = self._make_node(current_profile=None)
+        assert node.permission_manager is None
+        manager._apply_permission_mode_override(node, self._make_agent_config(), "dangerous")
+        # Permission manager must remain untouched — the override path is
+        # silently skipped when the node never had one to begin with.
+        assert node.permission_manager is None
+
+    def test_noop_when_already_on_target_profile(self):
+        """Requested profile == active profile must skip the switch."""
+        manager = ChatTaskManager()
+        node = self._make_node(current_profile="dangerous")
+        manager._apply_permission_mode_override(node, self._make_agent_config(), "dangerous")
+        node.permission_manager.switch_profile.assert_not_called()
+
+    def test_switches_profile_without_user_overrides(self):
+        """When _raw_permissions is empty, switch_profile receives user_overrides=None."""
+        manager = ChatTaskManager()
+        node = self._make_node(current_profile="normal")
+        manager._apply_permission_mode_override(node, self._make_agent_config(), "auto")
+        node.permission_manager.switch_profile.assert_called_once_with("auto", user_overrides=None)
+
+    def test_switches_profile_with_user_overrides(self):
+        """Non-empty _raw_permissions yields a built user_overrides config."""
+        from datus.tools.permission.permission_config import PermissionConfig
+
+        manager = ChatTaskManager()
+        node = self._make_node(current_profile="normal")
+        raw = {"rules": [{"tool": "db_tools", "pattern": "*", "permission": "ask"}]}
+        manager._apply_permission_mode_override(node, self._make_agent_config(raw), "dangerous")
+
+        node.permission_manager.switch_profile.assert_called_once()
+        args, kwargs = node.permission_manager.switch_profile.call_args
+        assert args == ("dangerous",)
+        assert isinstance(kwargs["user_overrides"], PermissionConfig)
+
+    def test_raises_when_user_overrides_build_fails(self, monkeypatch):
+        """Fail closed if agent.yml permissions.rules can't be parsed.
+
+        Silently dropping malformed user rules and applying the bare
+        profile base would broaden permissions beyond the operator's
+        intent, so the override path must surface the error instead.
+        """
+        manager = ChatTaskManager()
+        node = self._make_node(current_profile="normal")
+
+        def _explode(*_args, **_kwargs):
+            raise ValueError("malformed rule")
+
+        monkeypatch.setattr(
+            "datus.tools.permission.profiles.build_user_overrides",
+            _explode,
+        )
+
+        with pytest.raises(RuntimeError, match="permission_mode='auto'"):
+            manager._apply_permission_mode_override(
+                node,
+                self._make_agent_config({"rules": [{"bad": "shape"}]}),
+                "auto",
+            )
+        node.permission_manager.switch_profile.assert_not_called()
+
+    def test_swallows_switch_profile_failure(self):
+        """A malformed override must not abort the chat turn."""
+        from datus.utils.exceptions import DatusException, ErrorCode
+
+        manager = ChatTaskManager()
+        node = self._make_node(
+            current_profile="normal",
+            switch_side_effect=DatusException(code=ErrorCode.COMMON_CONFIG_ERROR),
+        )
+        # Should not raise.
+        manager._apply_permission_mode_override(node, self._make_agent_config(), "auto")
+        node.permission_manager.switch_profile.assert_called_once()
+
+
 class TestChatTaskManagerBehavior:
     """Tests for ChatTaskManager task tracking."""
 
