@@ -1817,6 +1817,12 @@ class AgenticNode(Node):
         ctx = StreamRunContext(user_input=self.input, action_history_manager=ahm)
 
         node_name = self.get_node_name()
+        logger.info(
+            "%s execute_stream start: session=%s msg=%r",
+            node_name,
+            getattr(self, "session_id", None),
+            (getattr(self.input, "user_message", "") or "")[:120],
+        )
         initial_action = ActionHistory.create_action(
             role=ActionRole.USER,
             action_type=f"{node_name}_request",
