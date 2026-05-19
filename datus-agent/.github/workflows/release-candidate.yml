@@ -1,0 +1,82 @@
+name: "Release Candidate Validation"
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_version:
+        description: "Expected datus-agent version on this branch, for example 0.3.1 or 0.3.1rc1"
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      expected_version:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-candidate-${{ github.ref }}-${{ inputs.expected_version }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_CANDIDATE_WHEEL_ARTIFACT: datus-agent-release-candidate-wheel-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  package-smoke:
+    name: Package smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade pip build packaging
+
+      - name: Check source release metadata
+        run: |
+          python ci/check_release_readiness.py \
+            --expected-version "${{ inputs.expected_version }}" \
+            --check-tag-available \
+            --check-adapter-latest
+
+      - name: Build release candidate wheel
+        run: python -m build --wheel --outdir dist-release-candidate
+
+      - name: Install wheel in a clean environment
+        shell: bash
+        run: |
+          python -m venv .release-smoke-venv
+          source .release-smoke-venv/bin/activate
+          python -m pip install --upgrade pip packaging
+          python -m pip install dist-release-candidate/*.whl
+
+          python ci/check_release_readiness.py \
+            --expected-version "${{ inputs.expected_version }}" \
+            --check-installed-metadata \
+            --check-console-versions
+
+          smoke_dir="$(mktemp -d)"
+          cd "$smoke_dir"
+          python - <<'PY'
+          import datus
+          from datus.cli.main import ArgumentParser
+
+          print(f"datus import smoke passed: {datus.__version__}")
+          ArgumentParser()
+          PY
+
+      - name: Upload release candidate wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.RELEASE_CANDIDATE_WHEEL_ARTIFACT }}
+          path: dist-release-candidate/*.whl
+          retention-days: 7
