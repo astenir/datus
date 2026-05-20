@@ -100,6 +100,20 @@ INLINE_SQL_LINE_LIMIT = 40
 # knows what data exists; a follow-up ``read_file`` can fetch detail.
 INLINE_CATALOG_BYTES_CAP = 64 * 1024
 
+# Per-table column cap for the Table Schemas section. A wide fact table
+# (200+ columns) inlined whole would dominate the prompt without payoff —
+# the LLM only references a handful per follow-up. We truncate to the
+# first N and tell the LLM to call ``describe_table()`` for the full list
+# when it needs more.
+INLINE_SCHEMA_COLS_PER_TABLE = 50
+
+# Soft cap on the Table Schemas section as a whole. Sized so a typical
+# report (2–5 tables × ~10–30 columns each) fits comfortably; a report
+# referencing 20+ tables hits the cap and the renderer drops trailing
+# tables with a "remaining omitted" marker so the LLM knows to fall back
+# to ``describe_table``.
+INLINE_SCHEMA_BYTES_CAP = 8 * 1024
+
 
 def _compact_row(row: Any) -> str:
     """Render a single result row as one deterministic line.
@@ -557,9 +571,30 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
         # base class untouched.
         base_prompt = super()._get_system_prompt(conversation_summary, prompt_version)
         artifact_header = self._render_artifact_context_block()
-        if artifact_header:
-            return artifact_header + "\n\n" + base_prompt
-        return base_prompt
+        final_prompt = (artifact_header + "\n\n" + base_prompt) if artifact_header else base_prompt
+        # Observability hook: real-world prompt growth after the
+        # inline-rendering rework is hard to predict per artifact (varies
+        # with insight count, query catalog size, table schema width).
+        # Single grep-friendly line per turn so operators can spot
+        # outliers without dragging through trace logs. Key=value form
+        # makes ad-hoc parsing trivial.
+        header_bytes = len(artifact_header.encode("utf-8")) if artifact_header else 0
+        base_bytes = len(base_prompt.encode("utf-8"))
+        final_bytes = len(final_prompt.encode("utf-8"))
+        # ``count('\n') + 1`` matches what an LLM would see as "the
+        # number of lines"; cheaper than splitting and we don't need
+        # accuracy on trailing newlines.
+        logger.info(
+            "ask_artifact prompt assembled: node=%s kind=%s slug=%s lines=%d bytes=%d header_bytes=%d base_bytes=%d",
+            self._configured_subagent_name,
+            self.ARTIFACT_KIND,
+            self._artifact_slug,
+            final_prompt.count("\n") + 1,
+            final_bytes,
+            header_bytes,
+            base_bytes,
+        )
+        return final_prompt
 
     def _render_artifact_context_block(self) -> str:
         """Build the artifact-context preamble prepended to the chat prompt.
@@ -588,6 +623,7 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
         for render in (
             self._render_intent_section,
             self._render_subject_scope_section,
+            self._render_table_schemas_section,
             self._render_insights_section,
             self._render_query_catalog_section,
         ):
@@ -769,8 +805,15 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
         if not isinstance(refs, dict):
             return ""
 
-        # Reverse index: (kind, name) -> sorted list of query slugs.
-        usage_by_asset: Dict[Tuple[str, str], List[str]] = {}
+        # Reverse index: (kind, tuple(path), name) -> sorted list of
+        # referencing query slugs. The path is part of the key because
+        # ``get_metrics(path, name)`` / ``get_reference_sql(path, name)``
+        # both take (path, name) and two different assets can legitimately
+        # share a leaf ``name`` under different folders (e.g.
+        # ``Commerce/Orders/aov`` vs ``Finance/Reporting/aov``). Keying
+        # on name alone would conflate them and the "used by" list would
+        # falsely show queries from the wrong asset.
+        usage_by_asset: Dict[Tuple[str, Tuple[str, ...], str], List[str]] = {}
         for slug in self._query_slugs():
             brief_raw = self._read_artifact_file(f"queries/{slug}.brief.json")
             if not brief_raw:
@@ -784,10 +827,20 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
                 continue
             for kind_key in ("metrics", "reference_sql", "ext_knowledge"):
                 for entry in uses.get(kind_key) or []:
-                    if isinstance(entry, dict):
-                        name = entry.get("name")
-                        if isinstance(name, str) and name:
-                            usage_by_asset.setdefault((kind_key, name), []).append(slug)
+                    if not isinstance(entry, dict):
+                        continue
+                    name = entry.get("name")
+                    raw_path = entry.get("path")
+                    if not isinstance(name, str) or not name:
+                        continue
+                    if not isinstance(raw_path, list) or not all(isinstance(p, str) for p in raw_path):
+                        # Drop malformed brief entries entirely rather
+                        # than fall back to a path-less key — letting
+                        # one bad entry coalesce with valid ones would
+                        # silently re-introduce the conflation we're
+                        # fixing.
+                        continue
+                    usage_by_asset.setdefault((kind_key, tuple(raw_path), name), []).append(slug)
 
         body_lines: List[str] = []
         for kind_key, label in (
@@ -804,12 +857,14 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
                 name = entry.get("name") or ""
                 if not isinstance(name, str) or not name:
                     continue
-                path = entry.get("path") or []
-                if isinstance(path, list) and all(isinstance(p, str) for p in path):
-                    path_str = " > ".join(path) if path else "(no path)"
+                raw_path = entry.get("path") or []
+                if isinstance(raw_path, list) and all(isinstance(p, str) for p in raw_path):
+                    path_tuple = tuple(raw_path)
+                    path_str = " > ".join(raw_path) if raw_path else "(no path)"
                 else:
+                    path_tuple = ()
                     path_str = "(no path)"
-                used_by = sorted(set(usage_by_asset.get((kind_key, name), [])))
+                used_by = sorted(set(usage_by_asset.get((kind_key, path_tuple, name), [])))
                 line = f"- **{label}** `{path_str} > {name}`"
                 if used_by:
                     line += f"\n  · used by: {', '.join(used_by)}"
@@ -830,6 +885,124 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
             "",
         ]
         return "\n".join(header + body_lines)
+
+    def _render_table_schemas_section(self) -> str:
+        """Inline ``analysis/key_tables_schema.json`` — snapshot of
+        ``describe_table`` output for every ``manifest.key_tables`` entry.
+
+        The snapshot lets the LLM plan follow-up SQL on the listed
+        tables without paying ``describe_table`` round-trips. Critical
+        prompt design choice: the intro **explicitly carves out** the
+        cases where the LLM MUST still call ``describe_table`` — live
+        schema drift (user asking about "current" / "latest" state),
+        column names not in this list (typos / post-finalize
+        additions), and tables outside ``manifest.key_tables``. Without
+        the carve-out the LLM would treat the snapshot as authoritative
+        forever and answer stale-schema questions confidently.
+
+        Returns "" when the file is missing or empty so reports
+        without a baked schema (older artifacts, dry runs) skip the
+        section silently.
+        """
+        raw = self._read_artifact_file("analysis/key_tables_schema.json")
+        if not raw:
+            return ""
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            logger.warning("Table schemas render: key_tables_schema.json unreadable: %s", exc)
+            return ""
+        if not isinstance(data, dict):
+            return ""
+        tables = data.get("tables")
+        if not isinstance(tables, list) or not tables:
+            return ""
+
+        intro = (
+            "Columns of every table in `manifest.key_tables` at the time "
+            "the artifact was finalized. **This is a SNAPSHOT — call "
+            "`describe_table('<table>')` instead when the user explicitly "
+            "asks about the LATEST / CURRENT schema, when they reference "
+            "a column NOT in this list (could be a typo or a post-"
+            "finalize addition), or when they ask about tables NOT in "
+            "`manifest.key_tables`.** For everything else (writing "
+            "follow-up SQL on the listed tables, explaining a column, "
+            "planning a join between listed tables), use this snapshot "
+            "directly — no `describe_table` round-trip needed."
+        )
+
+        lines: List[str] = ["### Table Schemas (`analysis/key_tables_schema.json`)", "", intro, ""]
+        # Measure in UTF-8 bytes (not code points) since the cap is
+        # phrased in bytes; a Chinese-heavy description (each CJK
+        # codepoint ≈ 3 UTF-8 bytes) would otherwise silently fit
+        # ~3× more content than INLINE_SCHEMA_BYTES_CAP intends. The
+        # ``+1`` per line accounts for the joining newline appended at
+        # render time by ``"\n".join(...)``.
+        running_bytes = sum(len(line.encode("utf-8")) + 1 for line in lines)
+        cap_reached = False
+        for tbl in tables:
+            if not isinstance(tbl, dict):
+                continue
+            entry_lines = self._render_table_schema_entry(tbl)
+            entry_bytes = sum(len(line.encode("utf-8")) + 1 for line in entry_lines)
+            if running_bytes + entry_bytes > INLINE_SCHEMA_BYTES_CAP:
+                cap_reached = True
+                break
+            lines.extend(entry_lines)
+            lines.append("")
+            running_bytes += entry_bytes
+        if cap_reached:
+            lines.append(
+                "_(schema section cap reached — remaining tables omitted; "
+                "call `describe_table('<table>')` for any name in "
+                "`manifest.key_tables` not shown above.)_"
+            )
+        return "\n".join(lines).rstrip()
+
+    def _render_table_schema_entry(self, tbl: Dict[str, Any]) -> List[str]:
+        """Render one table block: header + optional description + columns.
+
+        Per-table ``error`` (populated when ``describe_table`` failed
+        at finalize) surfaces as a "schema unavailable" hint with the
+        exact remediation (call ``describe_table('<name>')``) so the
+        LLM has a clear next step rather than guessing.
+        """
+        name = tbl.get("name") or "?"
+        if not isinstance(name, str):
+            name = str(name)
+        description = tbl.get("description") or ""
+        columns = tbl.get("columns") or []
+        error = tbl.get("error")
+
+        lines: List[str] = [f"#### `{name}`"]
+        if description:
+            lines.append(f"_(description: {description})_")
+        if error:
+            lines.append(f"_(schema unavailable: {error}; call `describe_table('{name}')` to fetch live schema.)_")
+            return lines
+        if not isinstance(columns, list):
+            return lines
+
+        # Truncate wide tables: keep the first N columns + a marker
+        # pointing the LLM at ``describe_table`` for the rest.
+        truncated = len(columns) > INLINE_SCHEMA_COLS_PER_TABLE
+        cols_to_render = columns[:INLINE_SCHEMA_COLS_PER_TABLE] if truncated else columns
+        for c in cols_to_render:
+            if not isinstance(c, dict):
+                continue
+            cname = c.get("name")
+            if not isinstance(cname, str) or not cname:
+                continue
+            ctype = c.get("type") or "?"
+            comment = c.get("comment") or ""
+            line = f"- `{cname}`: {ctype}"
+            if comment:
+                line += f"  -- {comment}"
+            lines.append(line)
+        if truncated:
+            remaining = len(columns) - INLINE_SCHEMA_COLS_PER_TABLE
+            lines.append(f"- _(... {remaining} more columns; call `describe_table('{name}')` for the full list.)_")
+        return lines
 
     def _render_insights_section(self) -> str:
         """Inline ``analysis/insights.json`` (report-only).
@@ -917,16 +1090,22 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
         header: List[str] = ["### Query Catalog", "", intro, ""]
 
         body: List[str] = []
-        running_bytes = 0
+        # Cap is phrased in bytes (UTF-8) and the cap covers the whole
+        # section, not just the body — count the header upfront so a
+        # large intro doesn't silently leak past the cap, and use
+        # ``.encode("utf-8")`` length on every line so non-ASCII content
+        # (Chinese caveats, emoji in SQL comments, etc.) is sized
+        # honestly.
+        running_bytes = sum(len(line.encode("utf-8")) + 1 for line in header)
         degraded = False
         for slug in slugs:
             brief, data, sql = self._load_query_bundle(slug)
             entry_lines = self._render_query_catalog_entry(slug, brief, data, sql, degraded=degraded)
-            entry_bytes = sum(len(line) + 1 for line in entry_lines)
+            entry_bytes = sum(len(line.encode("utf-8")) + 1 for line in entry_lines)
             if not degraded and running_bytes + entry_bytes > INLINE_CATALOG_BYTES_CAP:
                 degraded = True
                 entry_lines = self._render_query_catalog_entry(slug, brief, data, sql, degraded=True)
-                entry_bytes = sum(len(line) + 1 for line in entry_lines)
+                entry_bytes = sum(len(line.encode("utf-8")) + 1 for line in entry_lines)
             body.extend(entry_lines)
             body.append("")
             running_bytes += entry_bytes
@@ -1051,6 +1230,28 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
 
         return lines
 
+    def _artifact_has_insights(self) -> bool:
+        """Same emptiness check ``_render_insights_section`` uses.
+
+        The layout-tree and ``loaded_list`` are claims to the LLM that
+        a file is already in the prompt. If we unconditionally said so
+        for every report — even those whose finalize LLM failed and
+        never wrote ``insights.json`` — the LLM would believe the file
+        is loaded and skip a legitimate ``read_file``. Mirror the
+        renderer's exact gate so the tree only advertises insights
+        when the section actually rendered them.
+        """
+        if self.ARTIFACT_KIND != "report":
+            return False
+        raw = self._read_artifact_file("analysis/insights.json")
+        if not raw:
+            return False
+        try:
+            insights = json.loads(raw)
+        except json.JSONDecodeError:
+            return False
+        return isinstance(insights, list) and bool(insights)
+
     def _render_filesystem_layout_section(self) -> str:
         """Tell the LLM what's already inlined vs what still needs read_file.
 
@@ -1060,10 +1261,12 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
         files immediately sees that defensive reads are not useful.
         """
         layout_root_label = self._artifact_root.name if self._artifact_root is not None else self.ARTIFACT_ROOT_DIR_NAME
+        has_insights = self._artifact_has_insights()
         loaded_list = (
             "manifest.json, analysis/intent.md, "
-            + ("analysis/insights.json, " if self.ARTIFACT_KIND == "report" else "")
-            + "analysis/subject_refs.json (when present), and every "
+            + ("analysis/insights.json, " if has_insights else "")
+            + "analysis/subject_refs.json (when present), "
+            "analysis/key_tables_schema.json (when present), and every "
             "`queries/*.brief.json` plus the inlined slice of "
             "`queries/*` data + SQL above"
         )
@@ -1085,11 +1288,16 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
             "├── analysis/",
             "│   ├── intent.md                # inlined above",
         ]
-        if self.ARTIFACT_KIND == "report":
+        # Only advertise insights when there's actually a populated
+        # insights.json on disk / in the blob — see
+        # :meth:`_artifact_has_insights`. Dashboards skip the line
+        # unconditionally (no insights file by design).
+        if has_insights:
             lines.append("│   ├── insights.json            # inlined above")
         lines.extend(
             [
                 "│   ├── subject_refs.json        # inlined above (if present)",
+                "│   ├── key_tables_schema.json   # inlined above (if present); snapshot only — describe_table() for live",
                 "│   └── suggested_questions.json # UI chips — DO NOT read",
                 "├── queries/                     # briefs always inlined; data + SQL inlined or sampled per catalog above",
                 "└── render/                     # presentation tier — DO NOT READ",
@@ -1107,20 +1315,32 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
         sidecar at turn start out of habit, paying many serial tool
         round-trips for content the prompt already carries.
         """
+        # Same presence check the layout-tree uses (see
+        # ``_artifact_has_insights``). Drives both rule 1's preamble
+        # (which lists what was actually inlined) and rule 6's
+        # report-only branch — without this, a report whose finalize
+        # produced no insights would still have rule 6 claim
+        # "insights.json is the authoritative findings record" and
+        # rule 1 claim "confirmed insights" are inlined, both of
+        # which would mislead the LLM.
+        has_insights = self._artifact_has_insights()
         lines: List[str] = ["### Behavioral Rules (load-bearing)", ""]
         lines.append(
             "1. **Answer from the inlined context first**. The header above "
             "already contains the manifest, the original intent, the "
-            "subject library scope, "
-            + ("confirmed insights, " if self.ARTIFACT_KIND == "report" else "")
+            "subject library scope, the table schemas snapshot, "
+            + ("confirmed insights, " if has_insights else "")
             + "and a query catalog with hypothesis / caveats / columns / "
             "sample rows / SQL for every saved query. **Do NOT issue "
             "`glob` or `read_file` to pre-fetch anything already inlined "
-            "above.** Only re-read a file when the catalog explicitly "
-            "flagged its data as sampled or its SQL as truncated, OR "
-            "when the inlined summary genuinely doesn't address the "
-            "question — and when you do, briefly say which file and "
-            "why."
+            "above.** Re-read or re-fetch only when (a) the catalog "
+            "explicitly flagged a query's data as sampled or its SQL as "
+            "truncated, (b) the user asks about LIVE / CURRENT state "
+            "the snapshot can't answer — fresh schema after a DDL "
+            "change, live row counts, today's data (call "
+            "`describe_table` / `execute_sql` for those), or (c) the "
+            "inlined summary genuinely doesn't address the question. "
+            "When you do, briefly say which file or tool and why."
         )
         lines.append(
             "2. **Do NOT regenerate the artifact**. You are read-only. If "
@@ -1154,11 +1374,26 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
                 "declaration to explain what user-controllable filters "
                 "exist."
             )
-        else:
+        elif has_insights:
             lines.append(
                 "6. **`insights.json` is the authoritative findings "
                 "record**. Already inlined above; each insight has "
                 "`evidence_queries[]` you can cross-reference."
+            )
+        else:
+            # Report whose finalize LLM crashed (or whose insights list
+            # was empty). Emit rule 6 in its insights-absent form so
+            # the numbering stays 1–7 across kinds AND the LLM knows
+            # not to claim non-existent findings as if it had read
+            # them. Without this branch the rule is silently dropped
+            # and the LLM sees rules 1..5,7 (jumping over 6) — a small
+            # but persistent prompt-quality regression.
+            lines.append(
+                "6. **No confirmed-findings record for this report**. "
+                "Finalize did not produce a populated `insights.json`. "
+                "Ground answers in the query catalog above and cite "
+                "individual queries by slug; do NOT claim insights "
+                "that aren't in the prompt."
             )
         lines.append(
             "7. **No artifact mutations**. Filesystem write/edit/delete "
