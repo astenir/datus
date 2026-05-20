@@ -236,6 +236,119 @@ class TestResolveNodeType:
         assert NODE_CLASS_MAP["gen_visual_report"] == NodeType.TYPE_GEN_VISUAL_REPORT
         assert "gen_visual_report" in BUILTIN_SUBAGENT_DESCRIPTIONS
 
+    def test_gen_visual_report_constructs_and_builds_input(self, task_tool, tmp_path):
+        """Mirror of ``test_gen_visual_dashboard_constructs_and_builds_input``
+        for the report subagent — ``_create_builtin_node`` + the
+        matching ``_build_node_input`` branch must produce the right
+        node class and input dataclass. The mapping-level
+        ``test_gen_visual_report_resolves`` check above won't catch
+        constructor signature drift or an input-builder branch
+        returning the wrong type.
+        """
+        from datus.agent.node.gen_visual_report_agentic_node import GenVisualReportAgenticNode
+        from datus.schemas.gen_visual_report_models import GenVisualReportNodeInput
+
+        task_tool.agent_config.workspace_root = str(tmp_path)
+
+        node = task_tool._create_builtin_node("gen_visual_report")
+        assert isinstance(node, GenVisualReportAgenticNode), f"factory returned wrong type: {type(node).__name__}"
+        assert node.configured_node_name == "gen_visual_report"
+        assert node.NODE_NAME == "gen_visual_report"
+        assert node.ARTIFACT_KIND == "report"
+        assert node.execution_mode == "interactive"
+
+        prompt = "produce a quarterly revenue report"
+        node_input = task_tool._build_node_input(node, prompt)
+        assert isinstance(node_input, GenVisualReportNodeInput), (
+            f"input builder returned wrong type: {type(node_input).__name__}"
+        )
+        assert node_input.user_message == prompt
+        assert node_input.database == "test_db"
+
+    def test_gen_visual_report_rejects_session_id(self, task_tool):
+        """gen_visual_report has the same no-resume contract as
+        gen_visual_dashboard — both inherit from
+        ``BaseVisualArtifactAgenticNode`` which doesn't accept
+        ``session_id``. Pin ValueError + the load-bearing substring
+        so a regression to silent-drop trips here."""
+        with pytest.raises(ValueError, match="gen_visual_report.*session resume"):
+            task_tool._create_builtin_node("gen_visual_report", session_id="some-prior-session")
+
+    def test_gen_visual_dashboard_resolves(self, task_tool):
+        """gen_visual_dashboard must be registered alongside the other visual subagent.
+
+        Mirrors :meth:`test_gen_visual_report_resolves` — the dashboard subagent
+        is enumerated in ``SYS_SUB_AGENTS`` and exposed via the chat agent's
+        task tool, so missing entries in NODE_CLASS_MAP / descriptions /
+        factory cause the LLM to report it as 'unavailable'.
+        """
+        node_type, node_name = task_tool._resolve_node_type("gen_visual_dashboard")
+        assert node_type == NodeType.TYPE_GEN_VISUAL_DASHBOARD
+        assert node_name == "gen_visual_dashboard"
+        assert NODE_CLASS_MAP["gen_visual_dashboard"] == NodeType.TYPE_GEN_VISUAL_DASHBOARD
+        assert "gen_visual_dashboard" in BUILTIN_SUBAGENT_DESCRIPTIONS
+
+    def test_gen_visual_dashboard_constructs_and_builds_input(self, task_tool, tmp_path):
+        """``_create_builtin_node`` and ``_build_node_input`` must wire
+        together for gen_visual_dashboard the same way they do for
+        every other builtin subagent. The mapping-level assertions in
+        :meth:`test_gen_visual_dashboard_resolves` cover registration
+        but won't catch a constructor signature drift or an input-
+        builder branch that returns the wrong dataclass — both would
+        only surface at runtime when the LLM actually invokes the
+        subagent.
+        """
+        from datus.agent.node.gen_visual_dashboard_agentic_node import GenVisualDashboardAgenticNode
+        from datus.schemas.gen_visual_dashboard_models import GenVisualDashboardNodeInput
+
+        # ``_setup_filesystem_tools`` reaches for the workspace root;
+        # the fixture's bare Mock would otherwise emit a TypeError-noise
+        # log line during construction. Setting it to a real path keeps
+        # the captured-log output clean for future log-based tests.
+        task_tool.agent_config.workspace_root = str(tmp_path)
+
+        node = task_tool._create_builtin_node("gen_visual_dashboard")
+        assert isinstance(node, GenVisualDashboardAgenticNode), f"factory returned wrong type: {type(node).__name__}"
+        # Both the configured name (used for node_config lookup) and
+        # the class-level NODE_NAME / ARTIFACT_KIND constants are
+        # load-bearing for the prompt template / artifact dir routing.
+        assert node.configured_node_name == "gen_visual_dashboard"
+        assert node.NODE_NAME == "gen_visual_dashboard"
+        assert node.ARTIFACT_KIND == "dashboard"
+        assert node.execution_mode == "interactive"
+
+        # Cross-component contract: feeding the same prompt into
+        # ``_build_node_input`` must yield the dashboard-specific
+        # input dataclass with the user_message + scoped datasource
+        # populated. Hits the ``isinstance(node, GenVisualDashboardAgenticNode)``
+        # branch on the input builder side — without this assertion a
+        # branch that's only registered but not wired to build input
+        # would slip through.
+        prompt = "build a dashboard for daily AOV by store"
+        node_input = task_tool._build_node_input(node, prompt)
+        assert isinstance(node_input, GenVisualDashboardNodeInput), (
+            f"input builder returned wrong type: {type(node_input).__name__}"
+        )
+        assert node_input.user_message == prompt
+        # ``database`` is sourced from ``agent_config.current_datasource``
+        # which the fixture pins to "test_db".
+        assert node_input.database == "test_db"
+
+    def test_gen_visual_dashboard_rejects_session_id(self, task_tool):
+        """``_create_builtin_node`` for gen_visual_dashboard MUST fail
+        loud when a session_id is passed — the underlying
+        ``BaseVisualArtifactAgenticNode`` constructor has no
+        ``session_id`` parameter so silently dropping it (the prior
+        behaviour) would let resume loops spawn a fresh session per
+        turn while the LLM thinks it picked up an existing one. Pin
+        on ValueError + a substring that names both the subagent type
+        and the load-bearing reason ("does not support session
+        resume") so a regression to silent-drop or to a different
+        error class trips here.
+        """
+        with pytest.raises(ValueError, match="gen_visual_dashboard.*session resume"):
+            task_tool._create_builtin_node("gen_visual_dashboard", session_id="some-prior-session")
+
     def test_resolve_effective_inherits_parent_when_child_empty(self, task_tool):
         parent = MagicMock()
         parent.node_config = {"scoped_context": {"tables": "public.users"}}
@@ -329,6 +442,7 @@ class TestResolveNodeType:
             "chat": NodeType.TYPE_CHAT,
             "gen_report": NodeType.TYPE_GEN_REPORT,
             "gen_visual_report": NodeType.TYPE_GEN_VISUAL_REPORT,
+            "gen_visual_dashboard": NodeType.TYPE_GEN_VISUAL_DASHBOARD,
             "ext_knowledge": NodeType.TYPE_EXT_KNOWLEDGE,
             "semantic": NodeType.TYPE_SEMANTIC,
             "sql_summary": NodeType.TYPE_SQL_SUMMARY,
@@ -489,6 +603,74 @@ class TestConvertToFuncResult:
         result = task_tool._convert_to_func_result(output)
         assert result.success == 1
         assert result.result["response"] == "Some content"
+
+    def test_visual_dashboard_result_preserves_documented_fields(self, task_tool):
+        """``GenVisualDashboardNodeResult.model_dump()`` carries
+        ``dashboard_slug``, ``app_jsx_path``, ``render_file_count``,
+        ``template_count`` flat at the top level (no
+        ``dashboard_result`` envelope — that key belongs to the legacy
+        ``gen_dashboard`` node). The conversion must preserve every
+        field the parent LLM is told to expect via
+        ``BUILTIN_SUBAGENT_DESCRIPTIONS["gen_visual_dashboard"]``.
+        """
+        # Shape mirrors ``GenVisualDashboardNodeResult(...).model_dump()``
+        # — only the documented + load-bearing fields are inlined here
+        # so a regression that adds a new field to the model doesn't
+        # spuriously fail this test.
+        output = {
+            "success": True,
+            "response": "Dashboard built.",
+            "dashboard_slug": "aov_weekly",
+            "app_jsx_path": "dashboards/aov_weekly/render/app.jsx",
+            "render_file_count": 4,
+            "template_count": 3,
+            "tokens_used": 12345,
+            "artifact_kind": "dashboard",
+            "artifact_mode": "new",
+            "name": "AOV Weekly Trend",
+        }
+        result = task_tool._convert_to_func_result(output)
+        assert result.success == 1
+        # Every documented field present + non-discarded.
+        assert result.result["response"] == "Dashboard built."
+        assert result.result["dashboard_slug"] == "aov_weekly"
+        assert result.result["app_jsx_path"] == "dashboards/aov_weekly/render/app.jsx"
+        assert result.result["render_file_count"] == 4
+        assert result.result["template_count"] == 3
+        assert result.result["tokens_used"] == 12345
+
+    def test_visual_dashboard_result_preserves_none_slug_on_partial_run(self, task_tool):
+        """When the dashboard run failed before binding, the model
+        emits ``dashboard_slug=None`` (still a populated key). The
+        conversion must keep that explicit None rather than fall
+        through to the generic envelope — otherwise the parent LLM
+        can't tell "the subagent kind ran but didn't bind" apart from
+        "the subagent kind wasn't even invoked"."""
+        output = {
+            "success": False,
+            "response": "Failed before binding an artifact.",
+            "dashboard_slug": None,
+            "app_jsx_path": None,
+            "render_file_count": 0,
+            "template_count": 0,
+            "tokens_used": 42,
+        }
+        # The branch fires regardless of the ``success`` flag because
+        # the early ``output.get("success") is False`` check intercepts
+        # explicit failures. For partial-runs where the result model
+        # was constructed with ``success=True`` but bindings still
+        # None, the same branch handles it.
+        # We simulate the partial-success case by removing the
+        # explicit-failure signal.
+        partial = dict(output, success=True)
+        result = task_tool._convert_to_func_result(partial)
+        assert result.success == 1
+        # ``dashboard_slug`` key present with None — operators / parent
+        # LLM can disambiguate "ran but no artifact" from missing-key.
+        assert "dashboard_slug" in result.result
+        assert result.result["dashboard_slug"] is None
+        assert result.result["render_file_count"] == 0
+        assert result.result["template_count"] == 0
 
 
 @pytest.mark.acceptance

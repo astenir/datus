@@ -51,6 +51,7 @@ NODE_CLASS_MAP = {
     "chat": NodeType.TYPE_CHAT,
     "gen_report": NodeType.TYPE_GEN_REPORT,
     "gen_visual_report": NodeType.TYPE_GEN_VISUAL_REPORT,
+    "gen_visual_dashboard": NodeType.TYPE_GEN_VISUAL_DASHBOARD,
     "ext_knowledge": NodeType.TYPE_EXT_KNOWLEDGE,
     "semantic": NodeType.TYPE_SEMANTIC,
     "sql_summary": NodeType.TYPE_SQL_SUMMARY,
@@ -110,6 +111,24 @@ BUILTIN_SUBAGENT_DESCRIPTIONS = {
         "write_file the render/*.jsx components, then finalize with validate_render. "
         "Returns JSON with {response, report_id, app_jsx_path, render_file_count, "
         "html_path, query_count, tokens_used}."
+    ),
+    "gen_visual_dashboard": (
+        "Produce a parameterized visual dashboard artifact under "
+        "<project_root>/dashboards/<slug>/ (render/*.jsx + queries/<slug>.sql.j2 + "
+        "queries/<slug>.params.json + manifest.json). Unlike gen_visual_report, "
+        "queries are persisted as Jinja2 SQL templates with declared parameter "
+        "metadata; at view time the backend renders the template with user-selected "
+        "filter values and executes it live against the bound datasource. "
+        "Use this whenever the user asks for an interactive dashboard with filters "
+        "(date range, region, segment, etc.) that should re-query data on demand, "
+        "instead of a one-shot pre-baked report. The subagent picks a fresh slug "
+        "via start_new_dashboard (or reuses one via bind_existing_dashboard), "
+        "persists each query via save_query_template, write_file's the render/*.jsx "
+        "components, then finalizes with validate_render. "
+        "Prompt: provide the dashboard question/topic plus the filter dimensions "
+        "the user wants exposed; the agent will discover data, build templates, and "
+        "wire them to the JSX filter state. Returns JSON with {response, "
+        "dashboard_slug, app_jsx_path, render_file_count, template_count, tokens_used}."
     ),
     "gen_semantic_model": (
         "Generate MetricFlow semantic model YAML files from database table structures. "
@@ -431,6 +450,18 @@ class SubAgentTaskTool:
                 session_id=session_id,
             )
         elif subagent_type == "gen_visual_report":
+            # Same session_id contract as gen_visual_dashboard below —
+            # ``BaseVisualArtifactAgenticNode.__init__`` doesn't accept
+            # ``session_id``, so silently dropping it would let resume
+            # loops spawn a fresh session per turn while the LLM
+            # thinks it picked up an existing one. Fail loud.
+            if session_id is not None:
+                raise ValueError(
+                    "gen_visual_report does not support session resume "
+                    "(BaseVisualArtifactAgenticNode constructor has no "
+                    "session_id parameter). Drop the session_id kwarg, "
+                    "or use a resumable subagent type."
+                )
             from datus.agent.node.gen_visual_report_agentic_node import GenVisualReportAgenticNode
 
             return GenVisualReportAgenticNode(
@@ -441,6 +472,37 @@ class SubAgentTaskTool:
                 agent_config=self.agent_config,
                 tools=None,
                 node_name="gen_visual_report",
+                execution_mode=self._resolve_execution_mode(),
+                is_subagent=True,
+            )
+        elif subagent_type == "gen_visual_dashboard":
+            # ``GenVisualDashboardAgenticNode`` inherits from
+            # ``BaseVisualArtifactAgenticNode`` whose ``__init__`` does
+            # NOT accept ``session_id`` (no resume flow yet — the
+            # artifact directory + manifest itself is the persistence
+            # boundary). Silently dropping a caller-supplied session_id
+            # the way other visual subagents do would let resume loops
+            # spawn a fresh session every turn while the LLM thinks it
+            # picked up an existing one. Fail loud instead so the
+            # caller can either drop the kwarg or wait for a
+            # constructor-level resume API.
+            if session_id is not None:
+                raise ValueError(
+                    "gen_visual_dashboard does not support session resume "
+                    "(BaseVisualArtifactAgenticNode constructor has no "
+                    "session_id parameter). Drop the session_id kwarg, "
+                    "or use a resumable subagent type."
+                )
+            from datus.agent.node.gen_visual_dashboard_agentic_node import GenVisualDashboardAgenticNode
+
+            return GenVisualDashboardAgenticNode(
+                node_id=f"task_gen_visual_dashboard_{uuid.uuid4().hex[:8]}",
+                description="Visual dashboard generation node for gen_visual_dashboard",
+                node_type="gen_visual_dashboard",
+                input_data=None,
+                agent_config=self.agent_config,
+                tools=None,
+                node_name="gen_visual_dashboard",
                 execution_mode=self._resolve_execution_mode(),
                 is_subagent=True,
             )
@@ -528,6 +590,10 @@ class SubAgentTaskTool:
         # Built-in gen_visual_report type
         if subagent_type == "gen_visual_report":
             return NodeType.TYPE_GEN_VISUAL_REPORT, "gen_visual_report"
+
+        # Built-in gen_visual_dashboard type
+        if subagent_type == "gen_visual_dashboard":
+            return NodeType.TYPE_GEN_VISUAL_DASHBOARD, "gen_visual_dashboard"
 
         # Built-in system subagents (SYS_SUB_AGENTS)
         builtin_type_map = {
@@ -951,6 +1017,16 @@ class SubAgentTaskTool:
                 database=self.agent_config.current_datasource,
             )
 
+        from datus.agent.node.gen_visual_dashboard_agentic_node import GenVisualDashboardAgenticNode
+
+        if isinstance(node, GenVisualDashboardAgenticNode):
+            from datus.schemas.gen_visual_dashboard_models import GenVisualDashboardNodeInput
+
+            return GenVisualDashboardNodeInput(
+                user_message=prompt,
+                database=self.agent_config.current_datasource,
+            )
+
         from datus.agent.node.gen_skill_agentic_node import SkillCreatorAgenticNode
 
         if isinstance(node, SkillCreatorAgenticNode):
@@ -1095,6 +1171,32 @@ class SubAgentTaskTool:
                 {
                     "response": response,
                     "dashboard_result": dashboard_result,
+                    "tokens_used": tokens,
+                }
+            )
+
+        # Visual dashboard result (new artifact-based subagent). The
+        # legacy ``dashboard_result`` envelope above is from
+        # ``gen_dashboard_agentic_node.py``; the new
+        # ``GenVisualDashboardNodeResult`` carries the documented fields
+        # (``dashboard_slug``, ``app_jsx_path``, ``render_file_count``,
+        # ``template_count``) flat at the top level. Without this branch
+        # the conversion falls through to the generic envelope and drops
+        # everything the parent LLM was told (via
+        # ``BUILTIN_SUBAGENT_DESCRIPTIONS["gen_visual_dashboard"]``) to
+        # expect. Match on the slug key's presence rather than tool name
+        # so the branch also fires for legitimate model_dump output
+        # where ``dashboard_slug`` is None (run failed before binding) —
+        # preserving the explicit None is more honest than silently
+        # collapsing into the generic envelope.
+        if "dashboard_slug" in output:
+            return _wrap(
+                {
+                    "response": response,
+                    "dashboard_slug": output.get("dashboard_slug"),
+                    "app_jsx_path": output.get("app_jsx_path"),
+                    "render_file_count": output.get("render_file_count", 0),
+                    "template_count": output.get("template_count", 0),
                     "tokens_used": tokens,
                 }
             )
