@@ -72,6 +72,12 @@ def _make_claude_model(model_config=None):
         model = ClaudeModel(model_config)
         model.litellm_adapter = mock_litellm_adapter
         model.anthropic_client = mock_anthropic_client
+        # Existing tests mock the sync ``anthropic_client.messages.create`` API.
+        # Disabling the async streaming client routes those tests through the
+        # non-streaming fallback in ``_generate_with_mcp_stream`` so they keep
+        # working without rewriting every mock; the streaming code path has
+        # dedicated tests in ``TestGenerateWithMcpStreamTextDeltas``.
+        model.async_anthropic_client = None
         return model
 
 
@@ -1463,3 +1469,487 @@ class TestGenerateWithMcpToolRouting:
         passed_args = call_args[1]["arguments"]
         assert passed_args == {"query": "SELECT 1"}
         assert passed_args is not original_input  # must be a different object
+
+
+# ---------------------------------------------------------------------------
+# Streaming text deltas (native Anthropic ``messages.stream`` path)
+# ---------------------------------------------------------------------------
+
+
+class _FakeStreamEvent:
+    """Lightweight stand-in for the SDK's stream event objects."""
+
+    def __init__(self, type_, delta=None, content_block=None):
+        self.type = type_
+        if delta is not None:
+            self.delta = delta
+        if content_block is not None:
+            self.content_block = content_block
+
+
+class _FakeAsyncStreamManager:
+    """Async context manager that replays a fixed sequence of stream events.
+
+    Mirrors the shape of ``anthropic.lib.streaming._messages.AsyncMessageStreamManager``
+    just enough for ``_generate_with_mcp_stream``: ``async with`` enters, the
+    body iterates via ``async for event in stream``, then awaits
+    ``stream.get_final_message()`` to retrieve the assembled ``Message``.
+    """
+
+    def __init__(self, events, final_message):
+        self._events = events
+        self._final_message = final_message
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+    def __aiter__(self):
+        events = list(self._events)
+
+        async def gen():
+            for ev in events:
+                yield ev
+
+        return gen()
+
+    async def get_final_message(self):
+        return self._final_message
+
+
+class TestGenerateWithMcpStreamTextDeltas:
+    @pytest.mark.asyncio
+    async def test_streams_text_deltas_as_thinking_delta_actions(self):
+        """When async_anthropic_client is set, yield thinking_delta per text_delta event."""
+        from datus.schemas.action_history import ActionHistoryManager, ActionRole, ActionStatus
+
+        cfg = _make_model_config(use_native_api=True)
+        model = _make_claude_model(cfg)
+
+        # Build a fake stream: start text block, two text deltas, stop text block.
+        text_block_start = MagicMock()
+        text_block_start.type = "text"
+        delta1 = MagicMock()
+        delta1.type = "text_delta"
+        delta1.text = "Hello, "
+        delta2 = MagicMock()
+        delta2.type = "text_delta"
+        delta2.text = "world!"
+        events = [
+            _FakeStreamEvent("content_block_start", content_block=text_block_start),
+            _FakeStreamEvent("content_block_delta", delta=delta1),
+            _FakeStreamEvent("content_block_delta", delta=delta2),
+            _FakeStreamEvent("content_block_stop"),
+        ]
+        final_msg = _make_response([_make_text_block("Hello, world!")])
+
+        stream_manager = _FakeAsyncStreamManager(events, final_msg)
+
+        async_client = MagicMock()
+        async_client.messages.stream = MagicMock(return_value=stream_manager)
+        model.async_anthropic_client = async_client
+
+        ahm = ActionHistoryManager()
+        actions = []
+        with patch("datus.models.claude_model.multiple_mcp_servers") as mock_mcp:
+            mock_mcp.return_value.__aenter__ = AsyncMock(return_value={})
+            mock_mcp.return_value.__aexit__ = AsyncMock(return_value=False)
+            async for action in model._generate_with_mcp_stream(
+                prompt="test",
+                mcp_servers={},
+                instruction="sys",
+                output_type={},
+                action_history_manager=ahm,
+            ):
+                actions.append(action)
+
+        # Stream invoked once
+        async_client.messages.stream.assert_called_once()
+
+        # Exactly two thinking_delta events with incremental accumulation, both transient.
+        delta_actions = [a for a in actions if a.action_type == "thinking_delta"]
+        assert len(delta_actions) == 2
+        assert all(a.role == ActionRole.ASSISTANT for a in delta_actions)
+        assert all(a.status == ActionStatus.PROCESSING for a in delta_actions)
+        assert delta_actions[0].output == {"delta": "Hello, ", "accumulated": "Hello, "}
+        assert delta_actions[1].output == {"delta": "world!", "accumulated": "Hello, world!"}
+        # Delta actions share one stream id (incremental display in CLI groups them).
+        assert delta_actions[0].action_id == delta_actions[1].action_id
+
+        # Paired terminal ``response`` SUCCESS emitted at content_block_stop —
+        # CLI ``_print_completed_action`` consumes this to finalize the
+        # markdown stream and clear the pinned live region. Without it the
+        # tail paragraph stays visible AND gets reflushed via ``__exit__``,
+        # producing a visible duplicate.
+        responses = [a for a in actions if a.action_type == "response"]
+        assert len(responses) == 1
+        assert responses[0].role == ActionRole.ASSISTANT
+        assert responses[0].status == ActionStatus.SUCCESS
+        assert responses[0].output["raw_output"] == "Hello, world!"
+        # Shares stream id with deltas so CLI dedup matches the paired turn.
+        assert responses[0].action_id == delta_actions[0].action_id
+        assert responses[0].output["is_thinking"] is False
+
+        # Final assistant action carries the assembled text.
+        finals = [a for a in actions if a.action_type == "final_response"]
+        assert len(finals) == 1
+        assert finals[0].output["raw_output"] == "Hello, world!"
+        assert finals[0].status == ActionStatus.SUCCESS
+
+        # Transient deltas are NOT persisted into the action history manager;
+        # only the final_response should land there. The paired ``response``
+        # action is also transient (yield-only, like delta) so it should not
+        # land in the manager either.
+        persisted_types = {a.action_type for a in ahm.actions}
+        assert "thinking_delta" not in persisted_types
+        assert "response" not in persisted_types
+        assert "final_response" in persisted_types
+
+    @pytest.mark.asyncio
+    async def test_interrupt_during_stream_raises_execution_interrupted(self):
+        """When ``interrupt_controller.is_interrupted`` is True during the stream
+        loop, the generator must raise ``ExecutionInterrupted`` so the caller can
+        unwind cleanly instead of yielding more delta events.
+        """
+        from datus.cli.execution_state import ExecutionInterrupted
+        from datus.schemas.action_history import ActionHistoryManager
+
+        cfg = _make_model_config(use_native_api=True)
+        model = _make_claude_model(cfg)
+
+        delta = MagicMock()
+        delta.type = "text_delta"
+        delta.text = "ignored"
+        events = [_FakeStreamEvent("content_block_delta", delta=delta)]
+        final_msg = _make_response([_make_text_block("ignored")])
+        stream_manager = _FakeAsyncStreamManager(events, final_msg)
+
+        async_client = MagicMock()
+        async_client.messages.stream = MagicMock(return_value=stream_manager)
+        model.async_anthropic_client = async_client
+
+        interrupt_ctrl = MagicMock()
+        interrupt_ctrl.is_interrupted = True
+
+        ahm = ActionHistoryManager()
+        with patch("datus.models.claude_model.multiple_mcp_servers") as mock_mcp:
+            mock_mcp.return_value.__aenter__ = AsyncMock(return_value={})
+            mock_mcp.return_value.__aexit__ = AsyncMock(return_value=False)
+            with pytest.raises(ExecutionInterrupted):
+                async for _ in model._generate_with_mcp_stream(
+                    prompt="test",
+                    mcp_servers={},
+                    instruction="sys",
+                    output_type={},
+                    action_history_manager=ahm,
+                    interrupt_controller=interrupt_ctrl,
+                ):
+                    pass
+
+    @pytest.mark.asyncio
+    async def test_non_text_delta_event_is_skipped(self):
+        """A ``content_block_delta`` whose ``delta.type`` is not ``text_delta``
+        (e.g. ``input_json_delta`` from tool argument streaming) must be ignored
+        — no ``thinking_delta`` should be emitted for it.
+        """
+        from datus.schemas.action_history import ActionHistoryManager
+
+        cfg = _make_model_config(use_native_api=True)
+        model = _make_claude_model(cfg)
+
+        text_block_start = MagicMock()
+        text_block_start.type = "text"
+        json_delta = MagicMock()
+        json_delta.type = "input_json_delta"
+        json_delta.text = "{should-be-ignored}"
+        real_delta = MagicMock()
+        real_delta.type = "text_delta"
+        real_delta.text = "kept"
+        events = [
+            _FakeStreamEvent("content_block_start", content_block=text_block_start),
+            _FakeStreamEvent("content_block_delta", delta=json_delta),
+            _FakeStreamEvent("content_block_delta", delta=real_delta),
+            _FakeStreamEvent("content_block_stop"),
+        ]
+        final_msg = _make_response([_make_text_block("kept")])
+        stream_manager = _FakeAsyncStreamManager(events, final_msg)
+
+        async_client = MagicMock()
+        async_client.messages.stream = MagicMock(return_value=stream_manager)
+        model.async_anthropic_client = async_client
+
+        ahm = ActionHistoryManager()
+        actions = []
+        with patch("datus.models.claude_model.multiple_mcp_servers") as mock_mcp:
+            mock_mcp.return_value.__aenter__ = AsyncMock(return_value={})
+            mock_mcp.return_value.__aexit__ = AsyncMock(return_value=False)
+            async for action in model._generate_with_mcp_stream(
+                prompt="test",
+                mcp_servers={},
+                instruction="sys",
+                output_type={},
+                action_history_manager=ahm,
+            ):
+                actions.append(action)
+
+        delta_actions = [a for a in actions if a.action_type == "thinking_delta"]
+        assert len(delta_actions) == 1
+        assert delta_actions[0].output["delta"] == "kept"
+
+    @pytest.mark.asyncio
+    async def test_empty_text_delta_is_skipped(self):
+        """A ``text_delta`` event with an empty ``text`` field carries no payload
+        and must be silently skipped so the CLI never receives a no-op delta.
+        """
+        from datus.schemas.action_history import ActionHistoryManager
+
+        cfg = _make_model_config(use_native_api=True)
+        model = _make_claude_model(cfg)
+
+        text_block_start = MagicMock()
+        text_block_start.type = "text"
+        empty_delta = MagicMock()
+        empty_delta.type = "text_delta"
+        empty_delta.text = ""
+        real_delta = MagicMock()
+        real_delta.type = "text_delta"
+        real_delta.text = "real"
+        events = [
+            _FakeStreamEvent("content_block_start", content_block=text_block_start),
+            _FakeStreamEvent("content_block_delta", delta=empty_delta),
+            _FakeStreamEvent("content_block_delta", delta=real_delta),
+            _FakeStreamEvent("content_block_stop"),
+        ]
+        final_msg = _make_response([_make_text_block("real")])
+        stream_manager = _FakeAsyncStreamManager(events, final_msg)
+
+        async_client = MagicMock()
+        async_client.messages.stream = MagicMock(return_value=stream_manager)
+        model.async_anthropic_client = async_client
+
+        ahm = ActionHistoryManager()
+        actions = []
+        with patch("datus.models.claude_model.multiple_mcp_servers") as mock_mcp:
+            mock_mcp.return_value.__aenter__ = AsyncMock(return_value={})
+            mock_mcp.return_value.__aexit__ = AsyncMock(return_value=False)
+            async for action in model._generate_with_mcp_stream(
+                prompt="test",
+                mcp_servers={},
+                instruction="sys",
+                output_type={},
+                action_history_manager=ahm,
+            ):
+                actions.append(action)
+
+        delta_actions = [a for a in actions if a.action_type == "thinking_delta"]
+        assert len(delta_actions) == 1
+        assert delta_actions[0].output["delta"] == "real"
+
+    @pytest.mark.asyncio
+    async def test_text_delta_without_prior_block_start_gets_fresh_stream_id(self):
+        """If a ``text_delta`` arrives before any ``content_block_start`` is seen,
+        a stream id must be created inline so the CLI can still pair the deltas.
+        """
+        from datus.schemas.action_history import ActionHistoryManager
+
+        cfg = _make_model_config(use_native_api=True)
+        model = _make_claude_model(cfg)
+
+        delta = MagicMock()
+        delta.type = "text_delta"
+        delta.text = "orphan"
+        events = [_FakeStreamEvent("content_block_delta", delta=delta)]
+        final_msg = _make_response([_make_text_block("orphan")])
+        stream_manager = _FakeAsyncStreamManager(events, final_msg)
+
+        async_client = MagicMock()
+        async_client.messages.stream = MagicMock(return_value=stream_manager)
+        model.async_anthropic_client = async_client
+
+        ahm = ActionHistoryManager()
+        actions = []
+        with patch("datus.models.claude_model.multiple_mcp_servers") as mock_mcp:
+            mock_mcp.return_value.__aenter__ = AsyncMock(return_value={})
+            mock_mcp.return_value.__aexit__ = AsyncMock(return_value=False)
+            async for action in model._generate_with_mcp_stream(
+                prompt="test",
+                mcp_servers={},
+                instruction="sys",
+                output_type={},
+                action_history_manager=ahm,
+            ):
+                actions.append(action)
+
+        delta_actions = [a for a in actions if a.action_type == "thinking_delta"]
+        assert len(delta_actions) == 1
+        # The stream id was minted on the delta path (no prior content_block_start
+        # set one), proving the fallback at line 549 fired.
+        assert delta_actions[0].action_id.startswith("thinking_stream_")
+
+
+# ---------------------------------------------------------------------------
+# Proxy client init via HTTP_PROXY / HTTPS_PROXY env vars
+# ---------------------------------------------------------------------------
+
+
+class TestProxyClientInit:
+    def test_async_proxy_client_created_when_http_proxy_env_set(self):
+        """When ``HTTP_PROXY`` is set, both sync and async proxy clients must be
+        wired up — the async client backs the streaming code path, which would
+        otherwise bypass the proxy and leak traffic.
+        """
+        cfg = _make_model_config(api_key="sk-ant-test")
+        with (
+            patch("datus.models.openai_compatible.setup_tracing"),
+            patch("datus.models.openai_compatible.LiteLLMAdapter") as mock_adapter_cls,
+            patch("anthropic.Anthropic"),
+            patch("anthropic.AsyncAnthropic"),
+            patch("langsmith.wrappers.wrap_anthropic", side_effect=lambda c: c),
+            patch.dict(
+                "os.environ",
+                {"HTTP_PROXY": "http://proxy.example.com:8080", "ANTHROPIC_API_KEY": "sk-ant-test"},
+                clear=True,
+            ),
+        ):
+            mock_adapter = MagicMock()
+            mock_adapter.litellm_model_name = "anthropic/claude-sonnet-4-5"
+            mock_adapter.provider = "anthropic"
+            mock_adapter.is_thinking_model = False
+            mock_adapter.get_agents_sdk_model.return_value = MagicMock()
+            mock_adapter_cls.return_value = mock_adapter
+
+            model = ClaudeModel(cfg)
+
+        import httpx
+
+        # Both sides of the client pair must be the matching httpx flavour —
+        # an async-only or sync-only setup would still pass ``is not None`` but
+        # would break the streaming path the test is meant to protect.
+        assert isinstance(model.proxy_client, httpx.Client)
+        assert isinstance(model.async_proxy_client, httpx.AsyncClient)
+
+
+# ---------------------------------------------------------------------------
+# _anthropic_messages_stream routing
+# ---------------------------------------------------------------------------
+
+
+class TestAnthropicMessagesStream:
+    def test_raises_when_async_client_is_none(self):
+        """Streaming without an initialised async client must raise
+        ``MODEL_AUTHENTICATION_ERROR`` so callers can fall back to the
+        non-streaming path instead of silently hanging.
+        """
+        from datus.utils.exceptions import DatusException, ErrorCode
+
+        model = _make_claude_model()
+        model.async_anthropic_client = None
+
+        with pytest.raises(DatusException) as exc_info:
+            model._anthropic_messages_stream(model="test", messages=[])
+        assert exc_info.value.code == ErrorCode.MODEL_AUTHENTICATION_ERROR
+
+    def test_routes_to_beta_stream_for_oauth_token(self):
+        """OAuth subscription tokens require the OAuth beta endpoint —
+        ``beta.messages.stream`` — because the standard endpoint rejects Bearer auth.
+        """
+        cfg = _make_model_config(api_key="sk-ant-oat01-token", auth_type="subscription")
+        model = _make_claude_model(cfg)
+
+        async_client = MagicMock()
+        async_client.beta.messages.stream.return_value = "beta-stream-ctx"
+        async_client.messages.stream.return_value = "standard-stream-ctx"
+        model.async_anthropic_client = async_client
+
+        result = model._anthropic_messages_stream(model="m", messages=[])
+
+        assert result == "beta-stream-ctx"
+        async_client.beta.messages.stream.assert_called_once()
+        async_client.messages.stream.assert_not_called()
+
+    def test_routes_to_standard_stream_for_api_key(self):
+        """Standard ``x-api-key`` auth must route to ``messages.stream`` —
+        the beta endpoint is reserved for OAuth and would reject the request.
+        """
+        cfg = _make_model_config(api_key="sk-ant-regular", auth_type="api_key")
+        model = _make_claude_model(cfg)
+
+        async_client = MagicMock()
+        async_client.beta.messages.stream.return_value = "beta-stream-ctx"
+        async_client.messages.stream.return_value = "standard-stream-ctx"
+        model.async_anthropic_client = async_client
+
+        result = model._anthropic_messages_stream(model="m", messages=[])
+
+        assert result == "standard-stream-ctx"
+        async_client.messages.stream.assert_called_once()
+        async_client.beta.messages.stream.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# aclose: async proxy + async anthropic client cleanup
+# ---------------------------------------------------------------------------
+
+
+class TestAcloseAsyncClients:
+    @pytest.mark.asyncio
+    async def test_aclose_closes_async_proxy_client(self):
+        """A configured ``async_proxy_client`` must be awaited-closed on aclose."""
+        model = _make_claude_model()
+        async_proxy = MagicMock()
+        async_proxy.aclose = AsyncMock()
+        model.async_proxy_client = async_proxy
+
+        await model.aclose()
+
+        async_proxy.aclose.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_aclose_logs_warning_on_async_proxy_close_failure(self):
+        """Exceptions from ``async_proxy_client.aclose()`` must be swallowed and
+        logged as a warning — cleanup failures must not propagate and abort shutdown.
+        """
+        model = _make_claude_model()
+        async_proxy = MagicMock()
+        async_proxy.aclose = AsyncMock(side_effect=RuntimeError("net error"))
+        model.async_proxy_client = async_proxy
+
+        with patch("datus.models.claude_model.logger") as mock_logger:
+            await model.aclose()
+
+        warned = [str(c.args[0]) for c in mock_logger.warning.call_args_list]
+        assert any("async proxy client" in w.lower() and "net error" in w for w in warned), (
+            f"Expected warning naming 'async proxy client' with the underlying error, got: {warned}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_aclose_closes_async_anthropic_client(self):
+        """A configured ``async_anthropic_client`` must be awaited-closed on aclose."""
+        model = _make_claude_model()
+        async_client = MagicMock()
+        async_client.close = AsyncMock()
+        model.async_anthropic_client = async_client
+
+        await model.aclose()
+
+        async_client.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_aclose_logs_warning_on_async_anthropic_close_failure(self):
+        """Exceptions from ``async_anthropic_client.close()`` must be swallowed
+        and logged as a warning — keeping shutdown best-effort.
+        """
+        model = _make_claude_model()
+        async_client = MagicMock()
+        async_client.close = AsyncMock(side_effect=RuntimeError("already closed"))
+        model.async_anthropic_client = async_client
+
+        with patch("datus.models.claude_model.logger") as mock_logger:
+            await model.aclose()
+
+        warned = [str(c.args[0]) for c in mock_logger.warning.call_args_list]
+        assert any("async anthropic client" in w.lower() and "already closed" in w for w in warned), (
+            f"Expected warning naming 'async anthropic client' with the underlying error, got: {warned}"
+        )
