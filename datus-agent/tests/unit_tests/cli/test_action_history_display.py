@@ -31,6 +31,7 @@ from unittest.mock import patch
 import pytest
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
@@ -823,6 +824,13 @@ class TestRenderActionHistory:
             display.render_action_history(actions, verbose=verbose)
         return printed
 
+    def _collect_print_args(self, display, actions, verbose=False):
+        """Helper: capture raw first positional arg passed to console.print."""
+        printed = []
+        with patch.object(display.console, "print", side_effect=lambda *a, **kw: printed.append(a[0])):
+            display.render_action_history(actions, verbose=verbose)
+        return printed
+
     # -- empty / skip tests --
 
     def test_empty_actions(self):
@@ -859,7 +867,7 @@ class TestRenderActionHistory:
     # -- user prompt rendering --
 
     def test_user_action_rendered(self):
-        """USER action at depth=0 renders user prompt with Datus> prefix."""
+        """USER action at depth=0 renders user prompt as a bordered Panel with > prefix."""
         display = ActionHistoryDisplay()
         actions = [
             _make_action(
@@ -869,13 +877,17 @@ class TestRenderActionHistory:
                 action_type="chat_interaction",
             ),
         ]
-        printed = self._collect_prints(display, actions)
-        assert len(printed) == 1
-        assert "Datus>" in printed[0]
-        assert "how many tables are there?" in printed[0]
+        printed = self._collect_print_args(display, actions)
+        assert len(printed) == 2
+        assert isinstance(printed[0], Panel)
+        inner = printed[0].renderable
+        assert isinstance(inner, Text)
+        assert inner.plain.startswith("> ")
+        assert "how many tables are there?" in inner.plain
+        assert isinstance(printed[1], Text) and printed[1].plain == ""
 
     def test_user_action_rendered_without_prefix(self):
-        """USER action without 'User: ' prefix still renders correctly."""
+        """USER action without 'User: ' prefix still renders correctly inside the Panel."""
         display = ActionHistoryDisplay()
         actions = [
             _make_action(
@@ -885,10 +897,14 @@ class TestRenderActionHistory:
                 action_type="chat_interaction",
             ),
         ]
-        printed = self._collect_prints(display, actions)
-        assert len(printed) == 1
-        assert "Datus>" in printed[0]
-        assert "some direct message" in printed[0]
+        printed = self._collect_print_args(display, actions)
+        assert len(printed) == 2
+        assert isinstance(printed[0], Panel)
+        inner = printed[0].renderable
+        assert isinstance(inner, Text)
+        assert inner.plain.startswith("> ")
+        assert "some direct message" in inner.plain
+        assert isinstance(printed[1], Text) and printed[1].plain == ""
 
     # -- main agent rendering --
 
@@ -2071,7 +2087,7 @@ class TestRenderMultiTurnHistory:
         ]
         display.render_multi_turn_history([("Hello world", actions)], verbose=False)
         output = buf.getvalue()
-        assert "Datus>" in output
+        assert "> Hello world" in output
         assert "Hello world" in output
 
     def test_multi_turns(self):
@@ -3250,7 +3266,7 @@ class TestRenderMainAction:
         action = _make_action(ActionRole.USER, ActionStatus.SUCCESS, messages="User: What is revenue?")
         display._render_main_action(action, verbose=False)
         output = buf.getvalue()
-        assert "Datus>" in output
+        assert "> What is revenue?" in output
         assert "What is revenue?" in output
 
     def test_user_action_without_prefix(self):
@@ -3843,8 +3859,8 @@ class TestInlineStreamingContextProcess:
 
         assert ctx._processed_index == 1
 
-    def test_print_completed_action_skips_task_tool(self):
-        """_print_completed_action skips 'task' function tool calls."""
+    def test_print_completed_action_skips_grouped_task_tool(self):
+        """task tool actions already represented by a subagent group are skipped."""
         buf = StringIO()
         console = Console(file=buf, no_color=True)
         display = ActionHistoryDisplay(console)
@@ -3853,10 +3869,31 @@ class TestInlineStreamingContextProcess:
         action = _make_action(
             ActionRole.TOOL,
             ActionStatus.SUCCESS,
+            action_id="call1",
+            input_data={"function_name": "task", "type": "gen_sql", "prompt": "x"},
+        )
+        # Anchor input (resolvable subagent_type) whose id matches an
+        # already-completed subagent group is the only case the guard skips.
+        ctx._completed_group_ids.add("call1")
+        ctx._print_completed_action(action)
+        assert buf.getvalue() == ""
+
+    def test_print_completed_action_renders_standalone_task_tool(self):
+        """Standalone (non-anchor, non-grouped) task tool output still renders."""
+        buf = StringIO()
+        console = Console(file=buf, no_color=True)
+        display = ActionHistoryDisplay(console)
+        ctx = InlineStreamingContext([], display)
+
+        action = _make_action(
+            ActionRole.TOOL,
+            ActionStatus.SUCCESS,
+            messages="__no_task_anchor__",
             input_data={"function_name": "task"},
         )
         ctx._print_completed_action(action)
-        assert buf.getvalue() == ""
+        # Not skipped — falls through to normal tool rendering.
+        assert buf.getvalue() != ""
 
     def test_print_completed_action_assistant(self):
         """_print_completed_action renders ASSISTANT with Markdown."""

@@ -10,7 +10,7 @@ from io import StringIO
 
 import pytest
 from rich.console import Console
-from rich.markdown import Markdown
+from rich.panel import Panel
 from rich.text import Text
 
 from datus.cli.action_display.renderers import (
@@ -61,12 +61,10 @@ def _plain(renderables):
     for r in renderables:
         if isinstance(r, Text):
             parts.append(r.plain)
-        elif isinstance(r, Markdown):
+        else:
             buf = StringIO()
             Console(file=buf, no_color=True, width=120).print(r)
             parts.append(buf.getvalue().strip())
-        else:
-            parts.append(str(r))
     return "\n".join(parts)
 
 
@@ -446,7 +444,7 @@ class TestRenderMainAction:
         assert "gen_sql" in text
 
     def test_assistant_action_markdown(self):
-        """ASSISTANT action renders as Markdown."""
+        """ASSISTANT action renders as Markdown without a prefix."""
         action = _make_action(
             ActionRole.ASSISTANT,
             ActionStatus.SUCCESS,
@@ -454,19 +452,43 @@ class TestRenderMainAction:
         )
         result = _renderer().render_main_action(action, verbose=False)
         assert len(result) == 1
-        assert isinstance(result[0], Markdown)
+        text = _plain(result)
+        assert "Here is the answer" in text
+        assert "⏺" not in text
+        assert "💬" not in text
+
+    def test_assistant_markdown_fence_not_broken_by_prefix(self):
+        """Assistant rendering preserves fenced Markdown source."""
+        action = _make_action(
+            ActionRole.ASSISTANT,
+            ActionStatus.SUCCESS,
+            messages="```markdown\n# Title\n```",
+        )
+        result = _renderer().render_main_action(action, verbose=False)
+        text = _plain(result)
+        assert "Title" in text
+        assert "⏺" not in text
+        assert "⏺ ```markdown" not in text
+        assert "```markdown" not in text
 
     def test_user_action(self):
-        """USER action renders with Datus> prefix."""
+        """USER action renders as a bordered Panel with > prefix inside."""
         action = _make_action(
             ActionRole.USER,
             ActionStatus.SUCCESS,
             messages="User: my question",
         )
         result = _renderer().render_main_action(action, verbose=False)
-        text = _plain(result)
-        assert "Datus>" in text
-        assert "my question" in text
+        panel = result[0]
+        assert isinstance(panel, Panel)
+        assert str(panel.border_style) == "green"
+        assert str(panel.style) == "on #eeeeee"
+        inner = panel.renderable
+        assert isinstance(inner, Text)
+        assert inner.plain.startswith("> ")
+        assert "my question" in inner.plain
+        assert str(inner.spans[0].style) == "green bold on #eeeeee"
+        assert str(inner.spans[1].style) == "on #eeeeee"
 
 
 # ── render_task_tool_as_subagent ──────────────────────────────────
@@ -649,9 +671,16 @@ class TestUtilityRenderables:
     """Test utility renderables."""
 
     def test_user_header(self):
-        text = _renderer().render_user_header("What is revenue?")
-        assert "Datus>" in text.plain
-        assert "What is revenue?" in text.plain
+        panel = _renderer().render_user_header("What is revenue?")
+        assert isinstance(panel, Panel)
+        assert str(panel.border_style) == "green"
+        assert str(panel.style) == "on #eeeeee"
+        inner = panel.renderable
+        assert isinstance(inner, Text)
+        assert inner.plain.startswith("> ")
+        assert "What is revenue?" in inner.plain
+        assert str(inner.spans[0].style) == "green bold on #eeeeee"
+        assert str(inner.spans[1].style) == "on #eeeeee"
 
     def test_separator(self):
         text = _renderer().render_separator()

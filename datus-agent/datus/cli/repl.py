@@ -51,10 +51,12 @@ from datus.cli.chat_commands import ChatCommands
 from datus.cli.cli_styles import (
     PASTE_COLLAPSE_THRESHOLD,
     STATUS_BAR_STYLE,
+    USER_SCROLLBACK_PROMPT,
     print_error,
     print_info,
     print_success,
     print_warning,
+    render_user_scrollback_text,
 )
 from datus.cli.context_commands import ContextCommands
 from datus.cli.effort_commands import EffortCommands
@@ -436,25 +438,16 @@ class DatusCLI:
         return kb
 
     def _echo_user_input(self, prompt_text: str, user_input: str):
-        """Re-echo user input with Pygments syntax highlighting matching prompt_toolkit style."""
-        from pygments import highlight
-        from pygments.formatters import TerminalTrueColorFormatter
-        from rich.text import Text
-
-        highlighted = highlight(user_input, CustomSqlLexer(), TerminalTrueColorFormatter(style=CustomPygmentsStyle))
-        echoed = Text(prompt_text, style="green bold")
-        echoed.append_text(Text.from_ansi(highlighted.rstrip("\n")))
-        self.console.print(echoed)
+        """Re-echo user input in the scrollback with the unified user-row style."""
+        self.console.print(render_user_scrollback_text(user_input, prompt_text))
 
     def _get_prompt_text(self):
         """Input-line prompt text.
 
-        The Datus brand, plan mode, and current agent are now rendered by the
-        status bar on the line above, so the input line keeps a single minimal
-        indicator. Legacy call sites that expect a textual prompt still receive
-        a non-empty string here.
+        The Datus brand, plan mode, and current agent are rendered by the
+        status bar on the line above, so the input line uses a minimal prompt.
         """
-        return "> "
+        return USER_SCROLLBACK_PROMPT
 
     def _update_prompt(self):
         """Update the prompt display (called when mode changes)"""
@@ -563,20 +556,27 @@ class DatusCLI:
         """Width in cells available to the left output pane.
 
         Mirrors ``DatusApp._sidebar_target_width`` so Rich's wrap width
-        matches the column prompt_toolkit will paint into:
+        matches the column prompt_toolkit will paint into. The scrollbar
+        gutter (``_scrollbar_window`` in ``DatusApp``) is always present
+        — its ``visible_filter`` is ``lambda: True`` — so 1 column is
+        deducted regardless of sidebar visibility. Renderables that draw
+        a right edge (e.g. ``Panel`` borders) would otherwise overlap or
+        be clipped by the gutter.
 
-        * Sidebar visible: ``cols - max(14, cols // 5) - 1`` (the trailing
-          ``- 1`` is the ``│`` separator), floored at 20 so Rich can still
-          format something on absurdly narrow terminals.
-        * Sidebar hidden: ``cols`` (full screen), floored at 20.
+        * Sidebar visible: ``cols - max(14, cols // 5) - 1`` (scrollbar)
+        * Sidebar hidden: ``cols - 1`` (scrollbar)
+
+        Floored at 20 so Rich can still format something on absurdly
+        narrow terminals.
         """
         import shutil
 
         cols = shutil.get_terminal_size(fallback=(120, 30)).columns
+        scrollbar_width = 1
         if sidebar_visible:
             sidebar_width = max(14, cols // 5)
-            return max(20, cols - sidebar_width - 1)
-        return max(20, cols)
+            return max(20, cols - sidebar_width - scrollbar_width)
+        return max(20, cols - scrollbar_width)
 
     def _reflow_for_sidebar(self, sidebar_visible: bool) -> None:
         """Reflow the output pane when the sidebar appears/disappears.
@@ -905,26 +905,25 @@ class DatusCLI:
         if not user_input:
             return None
 
-        # Re-echo user input with syntax highlighting. In TUI mode the input
-        # TextArea clears on Enter, so echoing via the patched stdout keeps a
-        # transcript of what was submitted. In PromptSession mode
-        # ``erase_when_done=True`` removes the prompt line, so the echo is
-        # still useful.
-        prompt_text = self._get_prompt_text()
-        try:
-            lines = user_input.split("\n")
-            if len(lines) > PASTE_COLLAPSE_THRESHOLD:
-                summary_line = f"[Pasted content: {len(lines)} lines]"
-                self._echo_user_input(prompt_text, summary_line)
-                preview = "\n".join(lines[:3]) + "\n..."
-                self.console.print(f"[dim]{preview}[/]")
-            else:
-                self._echo_user_input(prompt_text, user_input)
-        except Exception as e:  # pragma: no cover - defensive
-            logger.debug(f"echo_user_input failed: {e}")
-
         try:
             cmd_type, cmd, args = self._parse_command(user_input)
+            # CHAT commands render the user message via the action stream
+            # (the node yields a depth-0 USER ActionHistory that the renderer
+            # turns into the scrollback header). Non-CHAT commands have no
+            # action stream, so echo the input here to keep a transcript.
+            if cmd_type != CommandType.CHAT:
+                prompt_text = self._get_prompt_text()
+                try:
+                    lines = user_input.split("\n")
+                    if len(lines) > PASTE_COLLAPSE_THRESHOLD:
+                        summary_line = f"[Pasted content: {len(lines)} lines]"
+                        self._echo_user_input(prompt_text, summary_line)
+                        preview = "\n".join(lines[:3]) + "\n..."
+                        self.console.print(f"[dim]{preview}[/]")
+                    else:
+                        self._echo_user_input(prompt_text, user_input)
+                except Exception as e:  # pragma: no cover - defensive
+                    logger.debug(f"echo_user_input failed: {e}")
             if cmd_type == CommandType.EXIT:
                 return EXIT_SENTINEL
             if cmd_type == CommandType.SQL:

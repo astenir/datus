@@ -13,13 +13,14 @@ import re
 from datetime import datetime
 from typing import List, Optional, Sequence, Union
 
-from rich.console import Console
+from rich.console import Console, RenderableType
 from rich.markdown import Markdown
 from rich.markup import escape as rich_escape
+from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
 
-from datus.cli.cli_styles import ACTION_ROLE_COLOR_NAMES, CODE_THEME
+from datus.cli.cli_styles import ACTION_ROLE_COLOR_NAMES, CODE_THEME, render_user_scrollback_text
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.utils.loggings import get_logger
 
@@ -55,6 +56,11 @@ def _get_assistant_content(action: ActionHistory) -> str:
         if raw:
             return raw
     return strip_litellm_placeholder(action.messages or "")
+
+
+def render_assistant_response_markdown(content: str) -> Markdown:
+    """Render top-level assistant response content consistently."""
+    return Markdown(content)
 
 
 # ── Icon/color mappings ─────────────────────────────────────────────────────
@@ -729,7 +735,7 @@ class ActionRenderer:
 
     # -- main agent primitives ----------------------------------------------
 
-    def render_main_action(self, action: ActionHistory, verbose: bool) -> List[Union[Text, Markdown, Syntax]]:
+    def render_main_action(self, action: ActionHistory, verbose: bool) -> List[RenderableType]:
         """Render a depth=0 completed action directly as Rich objects."""
         # Task tool -> render as subagent
         if action.role == ActionRole.TOOL:
@@ -745,15 +751,15 @@ class ActionRenderer:
         if action.role == ActionRole.ASSISTANT:
             content = _get_assistant_content(action)
             if content:
-                return [Markdown(f"\u23fa \U0001f4ac {content}")]
+                return [render_assistant_response_markdown(content)]
             return []
 
         # USER -> styled Text
         if action.role == ActionRole.USER:
-            msg = action.messages
+            msg = action.messages or ""
             if msg.startswith("User: "):
                 msg = msg[6:]
-            return [Text.from_markup(f"[green bold]Datus> [/green bold]{msg}")]
+            return [render_user_scrollback_text(msg)]
 
         # TOOL / WORKFLOW / SYSTEM -> generate Rich Text directly
         if action.role == ActionRole.TOOL:
@@ -878,9 +884,9 @@ class ActionRenderer:
 
     # -- utility renderables ------------------------------------------------
 
-    def render_user_header(self, message: str) -> Text:
-        """Render 'Datus> ...' user message header."""
-        return Text.from_markup(f"[green bold]Datus> [/green bold]{message}")
+    def render_user_header(self, message: str) -> Panel:
+        """Render a restored/reprinted user message header."""
+        return render_user_scrollback_text(message)
 
     def render_separator(self) -> Text:
         """Render horizontal separator."""
@@ -889,7 +895,7 @@ class ActionRenderer:
     # -- convenience --------------------------------------------------------
 
     @staticmethod
-    def print_renderables(console: Console, renderables: Sequence[Union[Text, Markdown, Syntax]]) -> None:
+    def print_renderables(console: Console, renderables: Sequence[RenderableType]) -> None:
         """Print a list of renderables to a console."""
         for r in renderables:
             console.print(r)
