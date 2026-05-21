@@ -17,11 +17,13 @@ Guide the user through metric generation using natural language business descrip
 
 ## Phase 0: Discovery — Scan Existing Assets
 
-Before anything else, call `list_metrics()` to get all metrics already in the knowledge base. Note their names, types, and associated measures. Use this throughout the remaining phases to:
+Before anything else, call `list_metrics()` to get all metrics already in the knowledge base. Build an existing metric catalog JSON array with each metric's exact `name`, `type`, `description` when available, and `subject_path` when available. Use this throughout the remaining phases to:
 - **Skip redundant work** — don't recreate metrics that already exist
 - **Reuse existing measures** — reference measures from existing models instead of creating duplicates
 - **Detect conflicts** — warn the user if a proposed metric name collides with an existing one
 - **Enable derived/ratio metrics** — know which metrics can serve as building blocks for more complex definitions
+
+Only inspect and edit semantic model YAML files under the current datasource directory shown in the system prompt, such as `subject/semantic_models/<current_datasource>/...`. Do not reuse or sync YAML files from sibling datasource directories; those files are outside the active MetricFlow adapter scope.
 
 ## Phase 1: Understand Intent
 
@@ -42,11 +44,12 @@ Analyze the user's request and confirm the generation scope before proceeding. W
 When `ask_user` is not available, skip this question and infer SQL/aggregation context from the user's request, attached files, or discovered query/table evidence. If that is not enough, stop and explain the missing information instead of calling `ask_user`.
 
 If the user provides SQL, parse it to extract:
-- Aggregation functions + columns (e.g., `SUM(amount)` → candidate measure `total_amount`, `COUNT(*)` → candidate measure `record_count`)
+- Final business output expressions (e.g., `SUM(amount) / COUNT(DISTINCT user_id) AS arppu` → candidate metric `arppu`)
+- Aggregation functions + columns that the final metric depends on (e.g., `SUM(amount)` → candidate measure `total_amount`, `COUNT(*)` → candidate measure `record_count`)
 - GROUP BY columns → recommended dimensions
 - WHERE conditions → potential metric constraints
 
-If the provided SQL contains no aggregation patterns (no SUM, COUNT, AVG, MAX, MIN, etc.), inform the user and proceed as if no SQL was provided.
+If the provided SQL contains no metric-producing output, keep filter-only or detail-query evidence as filters, dimensions, segments, or view evidence instead of generating fake metrics.
 
 If the user skips, proceed to Step 1c using only table structure and the user's description.
 
@@ -66,56 +69,63 @@ If the user skips, proceed to Step 1c using only table structure and the user's 
 - Parse all SQL queries from the input
 - Call `describe_table` for each unique table found in the SQL queries
 
-**Step 1-batch-b: Extract and deduplicate aggregation patterns**
+**Step 1-batch-b: Mine metric candidates from SQL ASTs**
 
-Scan ALL SQL queries and extract every aggregation pattern (`SUM(col)`, `COUNT(*)`, `AVG(col)`, etc.). Then **strictly deduplicate** to identify only **core base metrics**:
+Call `analyze_metric_candidates_from_history` with all parsed SQL queries and `existing_metric_catalog_json` from Phase 0. Use its output to preserve final business metric expressions and their dependencies:
 
-1. **Group by (aggregation_function, column)** — e.g., all `SUM(amount)` across different queries map to ONE candidate metric `total_amount`
-2. **Discard detail queries** — SQL without any aggregation (pure SELECT/JOIN) is not a metric source; skip silently
-3. **Discard filtered variants** — `SUM(amount) WHERE status='paid'` and `SUM(amount) WHERE region='US'` are NOT separate metrics; they are filters on the same core metric `total_amount`. Only propose the unfiltered base metric.
-4. **Do NOT generate derived metrics** — ratio, expression, or cumulative metrics should NOT be auto-proposed from batch SQL. Only propose them if the user explicitly describes them (e.g., "conversion rate", "average order value"). The goal is the minimal set of reusable base measures.
-5. **Cross-reference with Phase 0** — remove any candidate that already exists in the knowledge base
+1. **Preserve final output metrics** — SQL aliases and final SELECT expressions are the primary metric candidates.
+2. **Keep base measures as dependencies** — base measures support the final metric but do not replace it.
+3. **Deduplicate by business metric** — merge repeated aliases/normalized expressions across SQL files while preserving source evidence.
+4. **Separate non-metrics** — filter-only/detail SQL belongs in `non_metric_evidence`, not metric YAML.
+5. **Respect modeling classifications** — if `query_classification` is `metric_plus_derived_datasource` or `derived_datasource_recommendations` is non-empty, do not generate a direct metric from `blocked_direct_metric_candidates`; first model the recommended `sql_query` data source or materialized view, then define metrics on that data source.
+6. **Choose business-safe names** — if a candidate has `requires_name_translation: true`, treat `name` as a technical fallback only. Also inspect every `source_alias`: when the alias appears generated or lacks business meaning, do not use it as the final MetricFlow name. In interactive mode, ask the user to confirm if the business meaning is unclear; in batch/bootstrap mode, infer a clear English snake_case name from the SQL expression, question, table/column context, and external knowledge without stopping.
+7. **Preserve SQL literal values** — if `literal_mappings` is present, keep the literal `value` exactly as it appears in SQL predicates/CASE/sql_query output. Only MetricFlow object names may be translated or normalized.
+8. **Preserve SQL time grain** — if `time_grain_evidence` is present, expose an equivalent time dimension in any derived data source. Do not replace a projected date such as `CURDATE() AS part_dt` or `DATE(create_time) AS part_dt` with raw `create_time` as the primary time dimension.
+9. **Preserve post-aggregation constraints** — if `post_aggregation_constraints` is present, keep each HAVING/post-aggregation condition as a query constraint, metric usage note, or later derived data source. Do not silently drop it or push it into a base measure.
+10. **Cross-reference with Phase 0** — remove any candidate that already exists in the knowledge base.
+11. **Separate derived metrics** — treat `derived_metric_candidates` as second-stage metrics over existing metrics. Do not mix them into base semantic model or measure generation.
+12. **Ignore passthrough references** — entries in `identity_metric_references` show existing metrics selected without new business formula; do not generate new metrics for them.
 
-**Step 1-batch-c: Core metric principle**
+**Step 1-batch-c: Business metric principle**
 
-From N SQL queries, propose at most a **small set of core metrics** (typically fewer than N). Ask yourself for each candidate:
-- Is this a **unique aggregation** not covered by another candidate? If not, skip.
-- Is this a **base metric** (simple aggregation on a column) or a **derivative** (ratio, expression combining other metrics)? Only propose base metrics by default.
-- Would a business user recognize this as a **standalone KPI**? If it's just an intermediate calculation, skip.
+From N SQL queries, propose a focused set of business metrics. Ask yourself for each candidate:
+- Is this a final output a business user would recognize as a KPI?
+- Are its base measures complete enough to validate and dry-run?
+- Should the evidence be a metric, or only a filter/dimension/segment/view definition?
+- Does the tool say the metric depends on a ranked/windowed CTE or other derived data source? If yes, generate the derived data source first instead of forcing a direct metric.
+- Are SQL literals, output time grain, and HAVING/post-aggregation constraints preserved from the tool evidence?
 
 **Step 1-batch-d: Confirm with the user when possible**
-- When `ask_user` is available, present the deduplicated core metrics as **options** with `multi_select: true`
+- When `ask_user` is available, present the mined business metric candidates as **options** with `multi_select: true`
 - Pass `questions` as an actual array argument, not a JSON string. Example tool arguments:
   ```json
   {
     "questions": [
       {
         "title": "Metrics",
-        "question": "I analyzed N SQL queries and identified the following core metrics. Select which ones to generate:",
-        "options": ["total_revenue - SUM(amount) on orders", "order_count - COUNT on orders"],
+        "question": "I analyzed N SQL queries and identified the following metric candidates. Select which ones to generate:",
+        "options": ["paid_arppu - SUM(paid_amount) / COUNT(DISTINCT user_id)", "gross_margin_rate - (SUM(revenue) - SUM(cost)) / SUM(revenue)"],
         "multi_select": true
       }
     ]
   }
   ```
-- Clearly show how many SQL queries were analyzed and how many core metrics were extracted
-- If the user wants additional derived/ratio metrics beyond the core set, they can request them after the base metrics are created
-- When `ask_user` is not available, proceed with the deduplicated metrics only if the input makes the scope unambiguous; otherwise stop and explain what needs to be provided.
+- Clearly show how many SQL queries were analyzed, how many metric candidates were extracted, and which candidates were skipped as non-metric evidence.
+- When `ask_user` is not available, proceed with the mined metrics only if the input makes the scope unambiguous; otherwise stop and explain what needs to be provided.
 
 ### Metric type detection rules
 
 1. **Simple counting + filter**: "How many completed orders" → conditional measure in the semantic model + `measure_proxy` metric referencing that measure by string
 2. **Aggregation + filter**: "Total revenue from premium customers" → conditional measure in the semantic model + `measure_proxy` metric referencing that measure by string
-3. **Ratio**: "Order completion rate", "Conversion rate" → `ratio` type
-4. **Derived/Expression**: "Average order value", "Revenue per user" → `expr` type combining metrics
-5. **Cumulative**: "Running total of revenue", "MTD sales", "Year-to-date signups" → `cumulative` type
-6. **Conversion**: "Signup-to-purchase conversion", "Trial-to-paid funnel" → `conversion` type
+3. **Ratio**: "Order completion rate", "Refund rate", "Revenue share", "Revenue per user" → `ratio` type
+4. **Expression**: "Gross profit", "Gross margin rate" → `expr` type combining measures
+5. **Derived**: "ROAS over existing revenue and ad_spend metrics" → `derived` type combining metrics
+6. **Cumulative**: "Running total of revenue", "MTD sales", "Year-to-date signups" → `cumulative` type
 
 Detection keywords:
 - "running total", "MTD", "YTD", "cumulative", "to-date" → cumulative
-- "conversion", "funnel", "from X to Y" → conversion
 - "rate", "ratio", "percentage of", "share of" → ratio
-- "per", "divided by", "average ... per" → derived/expr
+- "per", "divided by", "average ... per" → ratio or expr depending on expression shape
 - "list all...", "show me the..." → not a metric, better suited for `gen_sql`
 
 **IMPORTANT**: Do NOT proceed to Phase 2 with materially ambiguous scope. Use `ask_user` when available; otherwise stop and explain what information is needed.
@@ -189,12 +199,14 @@ Use when: non-equi JOINs, > 2 hop joins, subqueries, LATERAL/CROSS joins, comple
 - Metric file: `subject/semantic_models/<current_datasource>/metrics/{table_name}_metrics.yml`
 
 Bare filenames are silently normalized by the host, but the prefixed form is preferred for clarity. Absolute paths are also tolerated.
+Do not read, edit, or pass `metric_file` / `semantic_model_file` paths from another datasource directory such as `subject/semantic_models/other_datasource/...`.
 
 1. **Check existing**: Call `check_semantic_object_exists(name="{metric_name}", kind="metric")` for each metric confirmed in Phase 1. If it already exists, inform the user and skip it.
 
 2. **Write metric YAML**: Use `write_file` to save each metric definition to `subject/semantic_models/<current_datasource>/metrics/{table_name}_metrics.yml`.
    - For `measure_proxy`, keep `type_params.measure` as a string measure name.
    - For filtered metrics, add a dedicated conditional measure to the semantic model first, then reference that measure from the metric YAML.
+   - Each generated metric must be an explicit named top-level `metric:` YAML document. Do not emit unnamed `metric:` blocks or wrap metrics inside another object.
 
 3. **Validate (MUST PASS)**: Call `validate_semantic` to check the metric YAML.
    - If validation fails, fix errors with `edit_file` and retry until it **passes**.
@@ -207,8 +219,8 @@ Bare filenames are silently normalized by the host, but the prefixed form is pre
 
 After all generated metrics have passed validation and dry-run:
 - Collect all generated metrics and their dry-run SQLs into `metric_sqls_json`
-- Prefer calling `end_metric_generation(metric_file, semantic_model_file, metric_sqls_json)` **ONCE** to sync them to Knowledge Base while you can still fix publish errors
-- If you miss this tool call, the host will use the final JSON `metric_file` to validate, dry-run, and publish before reporting success
+- You MUST call `end_metric_generation(metric_file, semantic_model_file, metric_sqls_json)` **ONCE** to sync them to Knowledge Base while you can still fix publish errors
+- Do not rely on the final JSON host fallback. The host fallback is only a last-resort guard when the tool call was accidentally missed.
 - If no metrics were generated, do NOT call `end_metric_generation`
 
 Phase 1 confirms the generation scope; validation plus dry-run are the acceptance gate before syncing.
@@ -225,20 +237,22 @@ Phase 1 confirms the generation scope; validation plus dry-run are the acceptanc
 
 5. **Verify names after validation**: After `validate_semantic` succeeds and the adapter reloads, call `list_metrics` to see the exact metric names available. Use these exact names when calling `query_metrics`.
 
-6. **Every metric needs explicit YAML**: Whether it's a simple aggregation, filtered variant, ratio, derived, cumulative, or conversion — write a `metric:` entry in the metrics YAML file so it can be persisted and discovered later.
+6. **Every metric needs explicit YAML**: Whether it's a simple aggregation, filtered variant, ratio, expr, derived, or cumulative — write a `metric:` entry in the metrics YAML file so it can be persisted and discovered later.
+
+7. **Derived metrics are second-stage**: Generate non-derived metrics first, validate them, refresh the metric catalog with `list_metrics`, then generate `derived_metric_candidates` only when every referenced metric exists in the refreshed catalog or was generated earlier in the same batch.
 
 ## Important Rules
 
 - **Phase 1**: Confirm which metrics to generate before proceeding. Use `ask_user` when it is available.
 - **Validation MUST pass** — always call `validate_semantic` and ensure it passes before proceeding to the next phase. If it fails, fix and retry until it passes.
-- **Sync automatically after validation** — once validation and dry-run pass, prefer calling `end_metric_generation` without another user confirmation. The final JSON `metric_file` is the host fallback.
+- **Sync automatically after validation** — once validation and dry-run pass, call `end_metric_generation` without another user confirmation. The final JSON `metric_file` is only a last-resort fallback.
 - **COUNT agg must use `expr: "1"`** — never use `expr: {column}` with COUNT (use COUNT_DISTINCT for that).
 - For ratio metrics, both numerator and denominator measures must exist in the semantic model.
-- For derived metrics, all referenced metrics must already be defined.
+- For expr metrics, all referenced measures must exist in the semantic model.
+- For derived metrics, all referenced metrics must already be defined, the expression must not be a single metric passthrough, and the dependency graph must not contain cycles.
 - For cumulative metrics, the measure must exist and a primary time dimension must be defined.
-- For conversion metrics, both base and conversion measures must reference the same entity.
 - Use consistent naming: metric names in snake_case, measure names matching the semantic model.
 - Every data_source MUST have a primary time dimension (`type: TIME` with `is_primary: true`).
 - Measure names must be globally unique across all data sources.
 - For snapshot/balance data, always add `non_additive_dimension` to prevent incorrect time aggregation.
-- **Keep files scoped** — only write semantic model YAML and metric YAML files. Prefer syncing metrics through `end_metric_generation`; the final JSON `metric_file` is the host fallback.
+- **Keep files scoped** — only write semantic model YAML and metric YAML files. Sync metrics through `end_metric_generation`; the final JSON `metric_file` is only a last-resort fallback.
