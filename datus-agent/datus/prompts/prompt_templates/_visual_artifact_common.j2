@@ -198,6 +198,63 @@ function YoYSummary() {
 }
 ```
 
+### Aggregation correctness — fan-out is the bug; MAX/MIN are safe
+
+Whenever a query both **JOINs a "header" table to a "detail" / "line-item" child table** (1:N relationship — one row in the parent can match many rows in the child) **and** aggregates a column from the header side, you have a high probability of a silent fan-out bug. This rule is schema-agnostic: it applies whether the tables are `orders`/`order_items`, `sessions`/`events`, `accounts`/`transactions`, `posts`/`comments`, or any other parent-detail pair.
+
+| Aggregate over header column under 1:N JOIN | Behavior | Verdict |
+|---|---|---|
+| `SUM(parent.col)` | Inflated by child cardinality — each parent row counted once per child | **Wrong** |
+| `COUNT(parent.col)` (non-null) | Same inflation | **Wrong** |
+| `COUNT(*)` | Counts joined rows, not parents | **Wrong** |
+| `AVG(parent.col)` | Numerator and denominator both inflate; for **uniform** fan-out the mean is unchanged, but for **non-uniform** fan-out (parents have differing child counts) it silently becomes a child-weighted mean rather than a parent-equal-weight mean | **Silently biased — treat as wrong** |
+| `STDDEV` / `VAR` / `PERCENTILE` over `parent.col` | Distribution re-weighted by child counts | **Wrong** |
+| `MAX(parent.col)` / `MIN(parent.col)` | Idempotent under row duplication — value unchanged | **Safe** |
+| `COUNT(DISTINCT parent.pk)` | DISTINCT collapses duplicates | **Safe** |
+
+Detection signals — applicable regardless of domain or table names:
+
+1. The SELECT/HAVING aggregates a column from the "1" side of a 1:N relationship that the FROM clause also reaches into via JOIN.
+2. Two-level chains: `JOIN A → B → C` where the metric is on A and B is the detail of A — fan-out multiplies through every intermediate detail table, so each A.row gets attributed to every C-grouping it transitively touches.
+3. The same query both produces a header aggregate (e.g. `SUM(parent.amount)`) and reads a detail column (e.g. `child.sku`, `child.qty`) — the JOIN serves the detail-side need but breaks the aggregate.
+
+Mandatory fix paths — pick the one that matches your intent:
+
+- **(a) Drop the child JOIN** if you don't need any column from it. This is the right fix for KPI-style aggregates that should run against the header table alone.
+- **(b) Pre-aggregate the child in a CTE** so the post-CTE JOIN is 1:1. Right when you genuinely need per-parent rollups of child data.
+- **(c) `SUM(DISTINCT parent.col)`** is rarely correct — only valid when `parent.pk` is in the SELECT/GROUP BY and the SUM target is unique per parent. Do not reach for it as a shortcut.
+
+When uncertain about cardinality, verify with `read_query` before saving:
+
+```sql
+-- compare these two — if joined_rows >> parent_rows, every header aggregate is wrong by that ratio
+SELECT COUNT(*) FROM <parent_table>   /* with the same WHERE the final query uses */;
+SELECT COUNT(*) FROM <parent_table> JOIN <child_table> ON <fk> /* same WHERE */;
+```
+
+Fan-out is a **bug to be fixed**, not a caveat to disclose. Do NOT save a query that has the bug and then declare it in `caveats` — the caveats field is for legitimate semantic choices the reader needs to know about (LEFT JOIN keeping zero-child parents, NULL-handling, time-window assumptions, etc.), not for known wrong arithmetic.
+
+### Unit conventions — probe; don't guess; ask when ambiguous
+
+Schemas almost never label the **unit** of a numeric column. The same `revenue` column can hold dollars, cents, basis points, or thousands; `latency` can be ms or s; `rate` can be 0.05 or 5.0. Guessing wrong silently propagates a 10× / 100× / 1000× error through every downstream KPI and chart, and no validator catches it because the SQL is syntactically perfect.
+
+**Mandatory probe** for any money / ratio / duration / count column whose name does **not** explicitly declare its unit (no `_cents` / `_usd` / `_pct` / `_bps` / `_ms` suffix, no schema comment, no enclosing semantic-model definition): run `read_query` to inspect the value range before authoring any aggregate over it.
+
+```sql
+SELECT MIN(<col>) AS lo, MAX(<col>) AS hi, AVG(<col>) AS mid FROM <table>;
+-- optionally sample a few rows for full context:
+SELECT <col> FROM <table> ORDER BY RANDOM() LIMIT 10;
+```
+
+Cross-check the result against **business plausibility** for the domain:
+- An AOV at a sandwich shop of `1250` is almost certainly cents-stored. An AOV of `12.50` is plausibly dollars-stored.
+- A `latency` median of `420` is almost certainly milliseconds. `0.42` is plausibly seconds.
+- A `tax_rate` of `0.06` is a fraction. `6.0` is a percent-as-integer. `600` is basis points.
+
+When the probe range disambiguates the unit, commit to that interpretation and **state it inline** as a SQL comment near the cast / arithmetic (`-- order_total is cents; divide by 100 for USD`) so a reader doesn't have to re-derive your reasoning.
+
+When the probe range does **not** disambiguate (e.g. all values are integers between 100 and 10000 — could be cents-USD or dollars-thousands), do not silently pick the convention your training data is most familiar with. Two coexisting LLMs on the same prompt + same dataset have been observed to pick opposite units (one cents, one dollars), producing dashboards whose grand totals differ by 100×. This is **exactly the case** the `ask_user` tool exists for — surface the ambiguity to the human, even though the prompt's general guidance leans against asking when you can infer.
+
 ### Visual design
 
 Treat each output as a polished deliverable — a small **branded analytics product** for dashboards, a **research-style document** for reports. Quality bar:
@@ -205,7 +262,7 @@ Treat each output as a polished deliverable — a small **branded analytics prod
 - **Cohesive palette** at the top of a shared module (`render/shared/colors.js` or inline in `app.jsx`) as a `COLORS` const (primary, secondary, accent, navy/heading, background, text, muted, positive, negative). Pick a palette that fits the domain.
 - **Map categorical dimensions to consistent colors** via dedicated constants (`REGION_COLORS`, `SEGMENT_COLORS`, `STATUS_COLORS`, …). Reuse the same color for the same category across every chart.
 - **Inline styles only** for layout and chrome — no Tailwind utility classes for layout, no external stylesheets. Use `style={{ ... }}` objects for everything visual.
-- **Card primitive** as a reusable component (`render/shared/card.jsx`): white background, 12px border-radius, 20px padding, subtle shadow `0 1px 3px rgba(0,0,0,0.08)`. Wrap every chart panel in it. The wrapper element MUST be a flex column with full height — `display: 'flex', flexDirection: 'column', height: '100%'` — so each card stretches to its grid cell (see "Responsive grid" below). The chart body slot keeps its fixed `height={N}` from the canonical shape; any extra vertical space lands as bottom padding inside the card, which is the intended look.
+- **Card primitive** as a reusable component (`render/shared/card.jsx`): white background, 12px border-radius, **asymmetric padding `padding: '20px 20px 16px'`** (20px top, 20px horizontal, 16px bottom — note this is NOT a uniform 20px on all sides; the trimmed bottom keeps the chart axis closer to the card edge), subtle shadow `0 1px 3px rgba(0,0,0,0.08)`. Wrap every chart panel in it. The wrapper element MUST be a flex column with full height AND border-box sizing — `display: 'flex', flexDirection: 'column', height: '100%', boxSizing: 'border-box'` — so each card stretches to its grid cell (see "Responsive grid" below) **without overflowing it**. `boxSizing: 'border-box'` is mandatory: with the default `content-box`, `height: 100%` resolves to the content area only, then the 20+16px vertical padding adds on top, so the card's outer box ends up ~36px taller than its grid row. Cards overflow downward into the next section's header (visible as a few pixels of the previous card cutting into the next "Section N" badge). The chart body slot keeps its fixed `height={N}` from the canonical shape; any extra vertical space lands as bottom padding inside the card, which is the intended look.
 - **Responsive grid**: `display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gridAutoRows: '1fr', gap: 16`. `gridAutoRows: '1fr'` is mandatory: without it, each row's height tracks every card's own content, so a row that mixes a chart with `<Legend>` (or with an extra footer / pagination row) against one without will visibly misalign at the bottom. Combined with the flex-column `Card` primitive above, every card in a row stretches to the tallest card's height and bottoms line up across the row.
 - **Typography**: 22px/700 H1, 14px/600 card titles, 24px/700 KPI numbers, 11–13px secondary text.
 - **KPI sparklines** (dashboard mode): small `<Sparkline>` component using `AreaChart` with vertical gradient fill (5%–95% opacity stops) and 2-px stroke in the primary color.
