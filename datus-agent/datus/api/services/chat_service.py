@@ -192,7 +192,12 @@ class ChatService:
             node._get_or_create_session()
 
             old_tokens = await node._count_session_tokens()
-            result = await node._manual_compact()
+            # The public ``compact`` API replaces the legacy ``_manual_compact``
+            # entrypoint. Pass ``mode="major"`` because the API surface is the
+            # equivalent of an explicit ``/compact`` invocation — it always
+            # wants the LLM summarization path, never the rule-based minor
+            # archive pass (which runs autonomously inside the agent loop).
+            result = await node.compact(mode="major", reason="api_request")
 
             if not result.get("success", False):
                 return Result[CompactSessionData](
@@ -200,7 +205,15 @@ class ChatService:
                     data=CompactSessionData(session_id=session_id, success=False, error="Compact failed"),
                 )
 
-            summary_token = result.get("summary_token", 0)
+            summary_token = result.get("summary_token") or 0
+            if not summary_token:
+                # major-compact payload now reports ``summary`` / ``history_jsonl``
+                # and may omit ``summary_token`` when the upstream LLM does not
+                # surface ``output_tokens``. Fall back to a 4-char-per-token
+                # estimate over the summary text so the metrics remain
+                # directionally correct instead of silently zeroing out.
+                summary_text = result.get("summary") or ""
+                summary_token = max(len(summary_text) // 4, 0)
             return Result[CompactSessionData](
                 success=True,
                 data=CompactSessionData(
