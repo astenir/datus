@@ -4,9 +4,23 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: "Workspace package to release, for example one tool.uv.workspace member"
+        description: "Workspace adapter package to release"
         required: true
-        type: string
+        type: choice
+        options:
+          - datus-db-core
+          - datus-sqlalchemy
+          - datus-mysql
+          - datus-postgresql
+          - datus-starrocks
+          - datus-snowflake
+          - datus-clickzetta
+          - datus-clickhouse
+          - datus-hive
+          - datus-redshift
+          - datus-spark
+          - datus-trino
+          - datus-greenplum
       version:
         description: "New canonical package version, for example 0.1.5"
         required: true
@@ -107,7 +121,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git checkout -B "${branch}"
-          git add */pyproject.toml
+          git add -- ./*/pyproject.toml
           git commit -m "chore: prepare ${PACKAGE} ${VERSION} release"
           git push --force-with-lease origin "${branch}"
 
