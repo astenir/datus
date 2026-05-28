@@ -19,6 +19,7 @@ from datus.tools.db_tools.db_manager import (
     gen_uri,
     get_connection,
 )
+from datus.tools.db_tools.restricted_connector import RestrictedSqlConnector
 from datus.utils.constants import DBType
 from datus.utils.exceptions import DatusException
 
@@ -245,6 +246,13 @@ class TestGetConnection:
         result = get_connection(mock_conn)
         assert result is mock_conn
 
+    def test_returns_restricted_single_connector(self):
+        mock_conn = MagicMock(spec=BaseSqlConnector)
+        mock_conn.dialect = "postgresql"
+        restricted = RestrictedSqlConnector(mock_conn, ["public.orders"])
+        result = get_connection(restricted)
+        assert result is restricted
+
     def test_returns_from_dict_single(self):
         mock_conn = MagicMock()
         result = get_connection({"db1": mock_conn})
@@ -259,6 +267,96 @@ class TestGetConnection:
         c1, c2 = MagicMock(), MagicMock()
         result = get_connection({"a": c1, "b": c2}, "b")
         assert result is c2
+
+
+class TestRestrictedSqlConnector:
+    def _connector(self):
+        connector = MagicMock()
+        connector.dialect = "postgresql"
+        connector.schema_name = "public"
+        connector.database_name = "ccks_fund"
+        connector.catalog_name = ""
+        connector.get_databases.return_value = ["ccks_fund", "other_db"]
+        connector.get_schemas.return_value = ["public", "private"]
+        connector.get_tables.return_value = ["mf_fundarchives", "mf_netvalue", "mf_awards"]
+        connector.get_views.return_value = ["mf_visible_view", "mf_hidden_view"]
+        connector.execute_query.return_value = SimpleNamespace(success=True, sql_return=[{"ok": 1}])
+        connector.execute.return_value = SimpleNamespace(success=True, sql_return=[{"ok": 1}])
+        return connector
+
+    def test_filters_table_listing(self):
+        connector = self._connector()
+        restricted = RestrictedSqlConnector(connector, ["public.mf_fundarchives", "public.mf_netvalue"])
+
+        assert restricted.get_tables(schema_name="public") == ["mf_fundarchives", "mf_netvalue"]
+
+    def test_filters_database_listing(self):
+        connector = self._connector()
+        restricted = RestrictedSqlConnector(connector, allowed_databases=["ccks_fund"])
+
+        assert restricted.get_databases() == ["ccks_fund"]
+
+    def test_filters_schema_listing(self):
+        connector = self._connector()
+        restricted = RestrictedSqlConnector(connector, allowed_schemas=["public"])
+
+        assert restricted.get_schemas(database_name="ccks_fund") == ["public"]
+
+    def test_schema_restriction_filters_tables(self):
+        connector = self._connector()
+        restricted = RestrictedSqlConnector(connector, allowed_schemas=["public"])
+
+        assert restricted.get_tables(schema_name="private") == []
+        connector.get_tables.assert_not_called()
+
+    def test_allows_query_for_allowed_table(self):
+        connector = self._connector()
+        restricted = RestrictedSqlConnector(connector, ["public.mf_fundarchives"])
+
+        result = restricted.execute_query("select * from mf_fundarchives", result_format="list")
+
+        assert result.success is True
+        connector.execute_query.assert_called_once_with("select * from mf_fundarchives", result_format="list")
+
+    def test_rejects_query_for_out_of_scope_table(self):
+        connector = self._connector()
+        restricted = RestrictedSqlConnector(connector, ["public.mf_fundarchives"])
+
+        result = restricted.execute_query("select * from mf_awards", result_format="list")
+
+        assert result.success is False
+        assert "outside datasource allowlist" in result.error
+        connector.execute_query.assert_not_called()
+
+    def test_rejects_query_for_out_of_scope_schema(self):
+        connector = self._connector()
+        restricted = RestrictedSqlConnector(connector, allowed_schemas=["private"])
+
+        result = restricted.execute_query("select * from public.mf_fundarchives", result_format="list")
+
+        assert result.success is False
+        assert "outside datasource allowlist" in result.error
+        connector.execute_query.assert_not_called()
+
+    def test_rejects_metadata_schema_query(self):
+        connector = self._connector()
+        restricted = RestrictedSqlConnector(connector, ["public.mf_fundarchives"])
+
+        result = restricted.execute(
+            {"sql_query": "select table_name from information_schema.tables"},
+            result_format="list",
+        )
+
+        assert result.success is False
+        assert "metadata schemas" in result.error
+        connector.execute.assert_not_called()
+
+    def test_blocks_schema_for_out_of_scope_table(self):
+        connector = self._connector()
+        restricted = RestrictedSqlConnector(connector, ["public.mf_fundarchives"])
+
+        with pytest.raises(PermissionError):
+            restricted.get_schema(schema_name="public", table_name="mf_awards")
 
     def test_raises_for_missing_name(self):
         c1 = MagicMock()
@@ -425,6 +523,23 @@ class TestDbConfigToConnectionConfigAdapterBranch:
         result = mgr._db_config_to_connection_config(cfg)
         assert result.get("warehouse") == "COMPUTE_WH"
         assert result.get("role") == "ANALYST"
+
+    def test_adapter_datus_internal_extra_fields_not_expanded(self):
+        """Datus-only datasource options must not be passed into adapter configs."""
+        mgr = self._make_manager()
+        cfg = _cfg(
+            type="postgresql",
+            host="localhost",
+            extra={
+                "allowed_databases": ["ccks_fund"],
+                "allowed_schemas": ["public"],
+                "allowed_tables": ["public.orders"],
+            },
+        )
+        result = mgr._db_config_to_connection_config(cfg)
+        assert "allowed_databases" not in result
+        assert "allowed_schemas" not in result
+        assert "allowed_tables" not in result
 
     def test_adapter_none_values_removed(self):
         """None-valued fields are excluded from the result dict."""

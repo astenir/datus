@@ -160,6 +160,38 @@ Supported patterns: `*.sqlite`, `**/*.sqlite`, `data/2024/*.db`
 - **SQLite/DuckDB**: `path_pattern` for glob-based discovery
 - **MySQL/PostgreSQL**: `host`, `port`, `username`, `password`, `database`
 
+### Restrict Visible Databases, Schemas, and Tables
+
+Add `allowed_databases`, `allowed_schemas`, and/or `allowed_tables` to a
+datasource to restrict what Datus can list, describe, and query through that
+datasource. Allowlist values accept `*`/`%` wildcards. Configured levels are
+combined, so a table must satisfy every configured allowlist.
+
+```yaml
+services:
+  datasources:
+    ccks_pg:
+      type: postgresql
+      host: 127.0.0.1
+      port: 5433
+      username: datus
+      password: datus
+      database: ccks_fund
+      schema: public
+      allowed_databases:
+        - ccks_fund
+      allowed_schemas:
+        - public
+      allowed_tables:
+        - public.mf_fundarchives
+        - public.mf_netvalue
+        - public.mf_fundmanagernew
+```
+
+When configured, direct SQL execution is rejected if it references tables
+outside the allowlist. Direct queries against metadata schemas such as
+`information_schema` and `pg_catalog` are also blocked for that datasource.
+
 ## Managing Databases
 
 ### Interactive Configuration
