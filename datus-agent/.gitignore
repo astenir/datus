@@ -71,3 +71,4 @@ conf/agent.yml.bak
 build/
 .datus/
 /build_scripts/cache/
+.tmp/
