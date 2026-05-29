@@ -29,6 +29,39 @@ Pytest discovers `tests/test_*.py` and runs with verbose output from `pytest.ini
 
 Recent commits and PR checks use prefixes such as `[BugFix]`, `[Feature]`, `[Enhancement]`, `[Refactor]`, `[UT]`, `[Doc]`, `[Tool]`, or `[Others]`; keep titles in that style. PRs should include `Why`, `Solution`, and `Test Cases`, link related issues when applicable, and explain omitted tests. Include screenshots or terminal output for CLI, TUI, docs, or visual changes.
 
+## Local Git Layout
+
+This repository is the fund-industry downstream version of upstream Datus.
+Use `Datus-agent-fund worktree` as the fund development
+worktree on `main`, and `Datus-agent worktree` as the clean
+upstream-reference worktree on `upstream-main`.
+
+`origin/main` belongs to `your-fork/Datus-agent-fund` and carries fund-specific
+changes. Do not treat it as a clean upstream mirror, and do not use GitHub's
+"Sync fork" button for routine updates. The fund branch should follow stable
+upstream release tags or release branches, not raw `upstream/main`. Upgrade by
+testing the release first on a branch, then merge it into fund `main`:
+
+```bash
+cd Datus-agent-fund worktree
+git fetch upstream
+git switch -c upgrade/upstream-0.3.x
+git merge v0.3.x
+# run focused tests and resolve conflicts
+git switch main
+git merge --no-ff upgrade/upstream-0.3.x
+git push origin main
+```
+
+Use `Datus-agent worktree` only to inspect or refresh the clean
+upstream baseline:
+
+```bash
+cd Datus-agent worktree
+git fetch upstream
+git merge --ff-only upstream/main
+```
+
 ## Security & Configuration Tips
 
 Do not commit secrets. Copy `conf/agent.yml.example` to `conf/agent.yml` for local work and reference credentials through environment variables such as `${OPENAI_API_KEY}`. Keep generated local state in `.datus/` or `~/.datus/` out of commits.
