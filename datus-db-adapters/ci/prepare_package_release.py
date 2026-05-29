@@ -31,6 +31,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=True,
         help="Update lower bounds in workspace packages that depend on the released package",
     )
+    parser.add_argument(
+        "--allow-current-version",
+        action="store_true",
+        help="Allow release preparation when the target package already declares the requested version",
+    )
+    parser.add_argument(
+        "--allow-no-changes",
+        action="store_true",
+        help="Treat already-prepared release metadata as success",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Validate and print planned changes without writing")
     return parser
 
@@ -42,7 +52,7 @@ def main(argv: list[str] | None = None) -> int:
         version = parse_canonical_version(args.version)
         packages = load_workspace_packages(repo_root)
         target = require_package(packages, args.package)
-        if version <= target.version:
+        if version < target.version or (version == target.version and not args.allow_current_version):
             raise ValueError(
                 f"Release version must advance current {target.name} version {target.version}; got {version}"
             )
@@ -69,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Release preparation failed: {exc}", file=sys.stderr)
         return 1
 
-    if not changed:
+    if not changed and not args.allow_no_changes:
         print(f"Release preparation produced no changes for {args.package} {args.version}", file=sys.stderr)
         return 1
 

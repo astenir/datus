@@ -4,9 +4,23 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: "Workspace package to validate, for example one tool.uv.workspace member"
+        description: "Workspace adapter package to validate"
         required: true
-        type: string
+        type: choice
+        options:
+          - datus-db-core
+          - datus-sqlalchemy
+          - datus-mysql
+          - datus-postgresql
+          - datus-starrocks
+          - datus-snowflake
+          - datus-clickzetta
+          - datus-clickhouse
+          - datus-hive
+          - datus-redshift
+          - datus-spark
+          - datus-trino
+          - datus-greenplum
       expected_version:
         description: "Expected package version, for example 0.1.5"
         required: true
