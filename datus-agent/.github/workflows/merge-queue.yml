@@ -61,6 +61,21 @@ jobs:
         if: ${{ github.event_name != 'pull_request_target' }}
         run: python3 ci/check_release_readiness.py
 
+      - name: Validate harness coverage map
+        if: ${{ github.event_name != 'pull_request_target' }}
+        run: |
+          set +e
+          python3 ci/harness/validate_coverage_map.py \
+            --strict \
+            --report-json ci/harness/coverage-map-report.json \
+            --report-md ci/harness/coverage-map-report.md
+          validation_exit=$?
+          set -e
+          if [ -f ci/harness/coverage-map-report.md ]; then
+            cat ci/harness/coverage-map-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$validation_exit"
+
       - name: Setup config file
         if: ${{ github.event_name != 'pull_request_target' }}
         run: |
