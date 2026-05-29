@@ -30,18 +30,48 @@ from datus_snowflake import SnowflakeConnector
 
 # Create connector
 connector = SnowflakeConnector(
-    account="myaccount",
-    user="myuser",
-    password="mypassword",
-    warehouse="my_warehouse",
-    database="my_database",
-    schema="my_schema"
+    {
+        "account": "myaccount",
+        "username": "myuser",
+        "password": "mypassword",
+        "warehouse": "my_warehouse",
+        "database": "my_database",
+        "schema": "my_schema",
+    }
 )
 
 # Test connection
 result = connector.test_connection()
 print(result)  # {'success': True, 'message': 'Connection successful', 'databases': ''}
 ```
+
+### Key Pair Authentication (recommended for MFA accounts and CI)
+
+Snowflake accounts with MFA enabled reject plain password logins from non-interactive
+clients. Use RSA key pair authentication (`SNOWFLAKE_JWT`) instead — it bypasses MFA
+and is Snowflake's recommended path for programmatic access. Register the public key
+on your Snowflake user once (`ALTER USER <u> SET RSA_PUBLIC_KEY = '<base64>'`), then
+point the connector at the matching private key file:
+
+```python
+from datus_snowflake import SnowflakeConnector
+
+connector = SnowflakeConnector(
+    {
+        "account": "myaccount",
+        "username": "myuser",
+        "private_key_file": "/path/to/rsa_key.p8",
+        # Only needed if the key file is encrypted:
+        "private_key_file_pwd": "key-passphrase",
+        "warehouse": "my_warehouse",
+        "database": "my_database",
+        "schema": "my_schema",
+    }
+)
+```
+
+Exactly one of `password` or `private_key_file` must be provided; passing both (or
+neither) raises a `ValueError`.
 
 ### Execute Queries
 
@@ -187,12 +217,25 @@ connector.do_switch_context(
 When using with Datus Agent, the adapter is automatically discovered via entry points:
 
 ```yaml
-# config.yaml
+# config.yaml — password authentication
 database:
   type: snowflake
   account: myaccount
   username: myuser
   password: mypassword
+  warehouse: my_warehouse
+  database: my_database
+  schema: my_schema
+```
+
+```yaml
+# config.yaml — key pair authentication (MFA-friendly)
+database:
+  type: snowflake
+  account: myaccount
+  username: myuser
+  private_key_file: /path/to/rsa_key.p8
+  # private_key_file_pwd: key-passphrase   # only for encrypted keys
   warehouse: my_warehouse
   database: my_database
   schema: my_schema

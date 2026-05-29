@@ -119,17 +119,26 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
 
         conn_config = ConnectionConfig(timeout_seconds=config.timeout_seconds)
         super().__init__(config=conn_config, dialect="snowflake")
-        self.connection: SnowflakeConnection = Connect(
-            account=config.account,
-            user=config.username,
-            password=config.password,
-            warehouse=config.warehouse,
-            database=config.database if config.database else None,
-            schema=config.schema_name if config.schema_name else None,
-            login_timeout=config.timeout_seconds,
-            network_timeout=config.timeout_seconds,
-            socket_timeout=config.timeout_seconds,
-        )
+
+        connect_kwargs: Dict[str, Any] = {
+            "account": config.account,
+            "user": config.username,
+            "warehouse": config.warehouse,
+            "database": config.database if config.database else None,
+            "schema": config.schema_name if config.schema_name else None,
+            "login_timeout": config.timeout_seconds,
+            "network_timeout": config.timeout_seconds,
+            "socket_timeout": config.timeout_seconds,
+        }
+        if config.private_key_file:
+            connect_kwargs["authenticator"] = "SNOWFLAKE_JWT"
+            connect_kwargs["private_key_file"] = config.private_key_file
+            if config.private_key_file_pwd:
+                connect_kwargs["private_key_file_pwd"] = config.private_key_file_pwd
+        else:
+            connect_kwargs["password"] = config.password
+
+        self.connection: SnowflakeConnection = Connect(**connect_kwargs)
         self.database_name = config.database or ""
         self.schema_name = config.schema_name or ""
 
