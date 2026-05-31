@@ -134,9 +134,9 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
             connect_kwargs["authenticator"] = "SNOWFLAKE_JWT"
             connect_kwargs["private_key_file"] = config.private_key_file
             if config.private_key_file_pwd:
-                connect_kwargs["private_key_file_pwd"] = config.private_key_file_pwd
+                connect_kwargs["private_key_file_pwd"] = config.private_key_file_pwd.get_secret_value()
         else:
-            connect_kwargs["password"] = config.password
+            connect_kwargs["password"] = config.password.get_secret_value()
 
         self.connection: SnowflakeConnection = Connect(**connect_kwargs)
         self.database_name = config.database or ""

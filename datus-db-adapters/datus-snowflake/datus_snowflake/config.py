@@ -4,7 +4,7 @@
 
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
 
 
 class SnowflakeConfig(BaseModel):
@@ -14,7 +14,7 @@ class SnowflakeConfig(BaseModel):
 
     account: str = Field(..., description="Snowflake account identifier")
     username: str = Field(..., description="Snowflake username")
-    password: Optional[str] = Field(
+    password: Optional[SecretStr] = Field(
         default=None,
         description="Snowflake password (omit when using key pair authentication)",
         json_schema_extra={"input_type": "password"},
@@ -23,7 +23,7 @@ class SnowflakeConfig(BaseModel):
         default=None,
         description="Path to PEM-encoded RSA private key for key pair authentication (SNOWFLAKE_JWT)",
     )
-    private_key_file_pwd: Optional[str] = Field(
+    private_key_file_pwd: Optional[SecretStr] = Field(
         default=None,
         description="Passphrase for the encrypted private key file (omit for unencrypted keys)",
         json_schema_extra={"input_type": "password"},
