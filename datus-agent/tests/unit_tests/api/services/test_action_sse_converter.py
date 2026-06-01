@@ -1449,3 +1449,124 @@ class TestActionToSSEEvent:
         assert content.payload["subagentType"] == "explore"
         assert content.payload["toolCount"] == 3
         assert content.payload["error"] == "sub-agent timed out"
+
+
+class TestTokenUsageEvent:
+    """``token_usage`` actions become dedicated ``event: "usage"`` SSE events."""
+
+    def test_emits_usage_event_with_cumulative_and_delta(self):
+        from datus.api.models.cli_models import SSEUsageData
+
+        action = _make_action(
+            action_type="token_usage",
+            role=ActionRole.ASSISTANT,
+            status=ActionStatus.SUCCESS,
+            messages="",
+            output={
+                "cumulative": {
+                    "requests": 2,
+                    "input_tokens": 1200,
+                    "output_tokens": 300,
+                    "total_tokens": 1500,
+                    "cached_tokens": 100,
+                    "reasoning_tokens": 50,
+                },
+                "delta": {
+                    "requests": 1,
+                    "input_tokens": 700,
+                    "output_tokens": 200,
+                    "total_tokens": 900,
+                    "cached_tokens": 0,
+                    "reasoning_tokens": 0,
+                },
+                "context_length": 200_000,
+                "last_call_input_tokens": 700,
+            },
+        )
+        event = action_to_sse_event(action, event_id=99, message_id="msg-99")
+        event = _assert_sse_event(event)
+        # Dedicated SSE channel; not a message payload.
+        assert event.event == "usage"
+        assert isinstance(event.data, SSEUsageData)
+        assert event.data.total_tokens == 1500
+        assert event.data.cached_tokens == 100
+        assert event.data.reasoning_tokens == 50
+        assert event.data.last_call_input_tokens == 700
+        assert event.data.context_length == 200_000
+        # Delta carries only the most recent LLM call's contribution.
+        assert event.data.delta.total_tokens == 900
+        assert event.data.delta.input_tokens == 700
+        assert event.data.delta.output_tokens == 200
+
+    def test_missing_output_fields_zero_fill_instead_of_crashing(self):
+        """Defensive: a malformed ``token_usage`` action should still emit a
+        valid usage event with zero counts so downstream consumers don't
+        choke on a missing key."""
+        from datus.api.models.cli_models import SSEUsageData
+
+        action = _make_action(action_type="token_usage", output={"cumulative": {}, "delta": None})
+        event = action_to_sse_event(action, event_id=1, message_id="msg-1")
+        event = _assert_sse_event(event)
+        assert event.event == "usage"
+        assert isinstance(event.data, SSEUsageData)
+        assert event.data.total_tokens == 0
+        assert event.data.delta.total_tokens == 0
+        assert event.data.context_length == 0
+
+    def test_non_numeric_fields_coerce_to_zero(self):
+        """Non-numeric ``context_length`` / ``last_call_input_tokens`` and a
+        non-numeric cumulative count must coerce to 0 instead of crashing the
+        converter."""
+        action = _make_action(
+            action_type="token_usage",
+            role=ActionRole.ASSISTANT,
+            status=ActionStatus.SUCCESS,
+            output={
+                "cumulative": {"input_tokens": "abc", "total_tokens": 1500},
+                "delta": {},
+                "context_length": "n/a",
+                "last_call_input_tokens": "oops",
+            },
+        )
+        event = _assert_sse_event(action_to_sse_event(action, event_id=7, message_id="m"))
+        assert event.data.context_length == 0
+        assert event.data.last_call_input_tokens == 0
+        assert event.data.input_tokens == 0  # "abc" coerced via _i
+        assert event.data.total_tokens == 1500
+
+    def test_main_agent_usage_is_depth_zero(self):
+        """Main-agent usage carries depth=0 and no parent — the marker the API
+        consumer uses to treat it as the top-level usage meter."""
+        action = _make_action(
+            action_type="token_usage",
+            role=ActionRole.ASSISTANT,
+            status=ActionStatus.SUCCESS,
+            output={"cumulative": {"total_tokens": 100}, "delta": {}, "agent_session_id": "chat_session_main"},
+        )
+        event = _assert_sse_event(action_to_sse_event(action, event_id=1, message_id="m"))
+        assert event.data.depth == 0
+        assert event.data.parent_action_id is None
+        # Producing session surfaced so the consumer can attribute it.
+        assert event.data.llm_session_id == "chat_session_main"
+
+    def test_subagent_usage_carries_depth_and_parent_and_own_session(self):
+        """Sub-agent usage (depth>0) is distinguishable via depth + parent task
+        id, and keeps the sub-agent's own session id (not the parent's)."""
+        action = _make_action(
+            action_type="token_usage",
+            role=ActionRole.ASSISTANT,
+            status=ActionStatus.SUCCESS,
+            depth=1,
+            parent_action_id="task-call-77",
+            output={
+                "cumulative": {"input_tokens": 9000, "output_tokens": 800, "total_tokens": 9800},
+                "delta": {},
+                "agent_session_id": "gen_sql_session_abc",
+            },
+        )
+        event = _assert_sse_event(action_to_sse_event(action, event_id=2, message_id="m"))
+        assert event.data.depth == 1
+        assert event.data.parent_action_id == "task-call-77"
+        assert event.data.llm_session_id == "gen_sql_session_abc"
+        assert event.data.input_tokens == 9000
+        assert event.data.output_tokens == 800

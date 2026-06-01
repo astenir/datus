@@ -50,7 +50,8 @@ class TestStatusBarState:
         state = StatusBarState(
             agent="chat",
             model="claude-sonnet-4-6",
-            cumulative_tokens=12_288,  # 12K exactly
+            input_tokens=12_288,  # 12K exactly
+            output_tokens=2_048,  # 2K exactly
             context_used=55_296,  # 54K exactly
             context_total=1_048_576,  # 1024K exactly
         )
@@ -58,7 +59,7 @@ class TestStatusBarState:
         assert "Datus" in text
         assert "chat" in text
         assert "claude-sonnet-4-6" in text
-        assert "12K" in text
+        assert "↑12K ↓2.0K" in text
         assert "54K/1024K 5%" in text
         assert " │ " in text
         # Labels must be gone — only values remain
@@ -75,15 +76,15 @@ class TestStatusBarState:
         assert "0K" in text
         assert "0K/0K 0%" in text
 
-    def test_tokens_display_includes_cached_suffix(self):
-        state = StatusBarState(cumulative_tokens=28_672, cached_tokens=20_480)
-        assert state.tokens_display() == "28K(20K cached)"
-        assert "28K(20K cached)" in state.format_plain()
+    def test_tokens_display_splits_input_output_with_cached(self):
+        state = StatusBarState(input_tokens=28_672, output_tokens=2_048, cached_tokens=20_480)
+        assert state.tokens_display() == "↑28K(20K) ↓2.0K"
+        assert "↑28K(20K) ↓2.0K" in state.format_plain()
 
-    def test_tokens_display_without_cache(self):
-        state = StatusBarState(cumulative_tokens=28_672, cached_tokens=0)
-        assert state.tokens_display() == "28K"
-        assert "cached" not in state.format_plain()
+    def test_tokens_display_omits_cached_parens_when_zero(self):
+        state = StatusBarState(input_tokens=28_672, output_tokens=2_048, cached_tokens=0)
+        assert state.tokens_display() == "↑28K ↓2.0K"
+        assert "(" not in state.tokens_display()
 
     def test_format_plain_includes_plan_marker_when_active(self):
         state = StatusBarState(plan_mode=True, agent="chat")
@@ -388,7 +389,9 @@ class TestStatusBarProviderTokens:
 
     def test_cumulative_and_cached_tokens_read_from_session_manager(self):
         session_manager = MagicMock()
-        session_manager.get_detailed_usage.return_value = {"total": {"total_tokens": 98_765, "cached_tokens": 20_480}}
+        session_manager.get_detailed_usage.return_value = {
+            "total": {"total_tokens": 98_765, "cached_tokens": 20_480, "input_tokens": 90_000, "output_tokens": 8_765}
+        }
         # session_manager is now owned by AgenticNode (not the model). The
         # status bar reads it directly off the node.
         node = SimpleNamespace(
@@ -401,6 +404,10 @@ class TestStatusBarProviderTokens:
         state = StatusBarProvider(self._make_cli(node)).current_state()
         assert state.cumulative_tokens == 98_765
         assert state.cached_tokens == 20_480
+        assert state.input_tokens == 90_000
+        assert state.output_tokens == 8_765
+        # Rendered split: input (with cached) ↑, output ↓.
+        assert state.tokens_display() == "↑88K(20K) ↓8.6K"
         session_manager.get_detailed_usage.assert_called_once_with("sess-1")
 
     def test_cached_tokens_zero_when_missing_from_totals(self):
@@ -415,6 +422,20 @@ class TestStatusBarProviderTokens:
         )
         state = StatusBarProvider(self._make_cli(node)).current_state()
         assert state.cumulative_tokens == 4096
+        assert state.cached_tokens == 0
+
+    def test_session_totals_zero_when_session_manager_is_none(self):
+        node = SimpleNamespace(
+            session_manager=None,
+            model=SimpleNamespace(model_config=SimpleNamespace(model="m")),
+            session_id="sess-x",
+            actions=[],
+            context_length=0,
+        )
+        state = StatusBarProvider(self._make_cli(node)).current_state()
+        assert state.input_tokens == 0
+        assert state.output_tokens == 0
+        assert state.cumulative_tokens == 0
         assert state.cached_tokens == 0
 
     def test_cumulative_tokens_zero_without_session_id(self):
@@ -460,6 +481,115 @@ class TestStatusBarProviderTokens:
         state = provider.current_state()
         assert state.context_used == 0
         assert state.context_total == 0
+
+    def test_context_used_swallows_non_numeric_values(self):
+        """Non-numeric running snapshot / action usage must fall through the
+        ``except`` guards to 0 instead of crashing the status bar."""
+        running = SimpleNamespace(session_total_tokens=object(), context_length=object())
+        actions = [SimpleNamespace(output={"usage": {"last_call_input_tokens": object()}})]
+        node = SimpleNamespace(
+            model=None,
+            session_id=None,
+            actions=actions,
+            context_length=0,
+            running_turn_usage=running,
+            _restored_context_used=object(),
+            _restored_context_length=object(),
+        )
+        state = StatusBarProvider(self._make_cli(node)).current_state()
+        assert state.context_used == 0
+        assert state.context_total == 0
+
+    def test_context_used_prefers_running_turn_usage_snapshot(self):
+        """Mid-turn the status bar must reflect the running ``TokenUsageHook``
+        snapshot (updated after every LLM call) rather than the action list,
+        which only sees ``last_call_input_tokens`` after ``store_run_usage``
+        commits the turn."""
+        running = SimpleNamespace(session_total_tokens=12_345, context_length=200_000)
+        actions = [SimpleNamespace(output={"usage": {"last_call_input_tokens": 100}})]
+        node = SimpleNamespace(
+            model=None,
+            session_id=None,
+            actions=actions,
+            context_length=128_000,
+            running_turn_usage=running,
+        )
+        provider = StatusBarProvider(self._make_cli(node))
+        state = provider.current_state()
+        assert state.context_used == 12_345  # running snapshot wins
+        assert state.context_total == 128_000  # node.context_length still preferred when set
+
+    def test_context_total_falls_back_to_running_snapshot_context_length(self):
+        """Before the node populates ``context_length`` on first call (e.g.
+        the very first ``on_llm_end``), the snapshot already carries the
+        model's max context so the ratio stays meaningful."""
+        running = SimpleNamespace(session_total_tokens=2_000, context_length=200_000)
+        node = SimpleNamespace(
+            model=None,
+            session_id=None,
+            actions=[],
+            context_length=0,  # node hasn't filled this yet
+            running_turn_usage=running,
+        )
+        provider = StatusBarProvider(self._make_cli(node))
+        state = provider.current_state()
+        assert state.context_total == 200_000
+
+    def test_context_used_falls_back_to_restored_state_on_resume(self):
+        """A freshly resumed process has no running snapshot and no live
+        actions, so the bar must surface the occupancy re-hydrated from the
+        on-disk ``context_state`` section (``_restored_context_used``)."""
+        node = SimpleNamespace(
+            model=None,
+            session_id="sess-resume",
+            actions=[],
+            context_length=0,
+            running_turn_usage=None,
+            _restored_context_used=52_499,
+            _restored_context_length=1_000_000,
+        )
+        state = StatusBarProvider(self._make_cli(node)).current_state()
+        assert state.context_used == 52_499
+        assert state.context_total == 1_000_000
+
+    def test_restored_state_yields_to_live_snapshot(self):
+        """Once the resumed turn issues its first LLM call the live running
+        snapshot must win over the stale restored occupancy."""
+        running = SimpleNamespace(session_total_tokens=60_000, context_length=1_000_000)
+        node = SimpleNamespace(
+            model=None,
+            session_id="sess-resume",
+            actions=[],
+            context_length=1_000_000,
+            running_turn_usage=running,
+            _restored_context_used=52_499,
+            _restored_context_length=1_000_000,
+        )
+        state = StatusBarProvider(self._make_cli(node)).current_state()
+        assert state.context_used == 60_000  # live snapshot, not restored 52_499
+
+    def test_running_snapshot_total_tokens_already_reflected_via_session_manager(self):
+        """The status bar reads cumulative totals from
+        ``SessionManager.get_detailed_usage`` which now folds the running
+        row into ``total`` itself, so the provider does not double-add."""
+        session_manager = MagicMock()
+        # Pretend get_detailed_usage already merged the running snapshot.
+        session_manager.get_detailed_usage.return_value = {
+            "total": {"total_tokens": 5_000, "cached_tokens": 0},
+            "running": {"cumulative": {"total_tokens": 3_000}},
+        }
+        running = SimpleNamespace(session_total_tokens=400, context_length=200_000)
+        node = SimpleNamespace(
+            session_manager=session_manager,
+            model=SimpleNamespace(model_config=SimpleNamespace(model="m")),
+            session_id="sess-running",
+            actions=[],
+            context_length=200_000,
+            running_turn_usage=running,
+        )
+        state = StatusBarProvider(self._make_cli(node)).current_state()
+        # 5_000 (already includes running) — NOT 5_000 + 3_000.
+        assert state.cumulative_tokens == 5_000
 
 
 class TestStatusBarProviderPlanMode:

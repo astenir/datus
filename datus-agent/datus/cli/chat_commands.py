@@ -45,6 +45,7 @@ def _noop_escape_guard():
 
 
 if TYPE_CHECKING:
+    from datus.agent.node.agentic_node import AgenticNode
     from datus.cli.repl import DatusCLI
 
 logger = get_logger(__name__)
@@ -180,7 +181,7 @@ class ChatCommands:
             logger.warning(f"Failed to copy session on agent switch, starting fresh: {e}")
             return None
 
-    def _create_new_node(self, subagent_name: str = None, session_id: Optional[str] = None):
+    def _create_new_node(self, subagent_name: Optional[str] = None, session_id: Optional[str] = None) -> "AgenticNode":
         """Create new node based on subagent_name and configuration.
 
         Delegates to the shared node factory for actual node creation.
@@ -191,13 +192,42 @@ class ChatCommands:
         """
         from datus.agent.node.node_factory import create_interactive_node
 
-        return create_interactive_node(
+        node = create_interactive_node(
             subagent_name,
             self.cli.agent_config,
             node_id_suffix="_cli",
             scope=self.cli.scope,
             session_id=session_id,
         )
+        self._attach_status_dirty_callback(node)
+        return node
+
+    def _attach_status_dirty_callback(self, node: "AgenticNode") -> None:
+        """Wire ``TokenUsageHook`` mid-turn refreshes to ``DatusApp.invalidate``.
+
+        The hook fires after every LLM call; without an explicit invalidate
+        the status bar would only repaint on the periodic timer tick, which
+        defeats the purpose of streaming the usage updates. Looked up
+        lazily so the callback works regardless of whether ``tui_app`` is
+        already built when the node is created.
+        """
+        if node is None:
+            return
+        cli = self.cli
+
+        def _on_status_dirty() -> None:
+            app = getattr(cli, "tui_app", None)
+            if app is None:
+                return
+            try:
+                app.invalidate()
+            except Exception:  # noqa: BLE001 — never crash the run loop
+                pass
+
+        try:
+            node._status_dirty_callback = _on_status_dirty
+        except Exception:  # noqa: BLE001
+            pass
 
     def create_node_input(
         self,
@@ -444,6 +474,17 @@ class ChatCommands:
                             action_history_manager=self.cli.actions
                         )
                         async for action in action_stream:
+                            # Token-usage updates drive the status bar / API
+                            # ``usage`` events only; they carry no chat content
+                            # and must never render as a transcript line. Sub-agent
+                            # usage (depth>0) is the exception: route it to the
+                            # display so the pinned subagent header shows a live
+                            # token counter (the display consumes it into group
+                            # state, still without drawing a transcript line).
+                            if action.action_type == "token_usage":
+                                if action.depth > 0:
+                                    incremental_actions.append(action)
+                                continue
                             # Streaming text deltas go to their own queue. Sub-agent
                             # deltas (depth > 0) are ignored here — they'd pollute
                             # the main-agent accumulator; sub-agents have their own
@@ -572,6 +613,15 @@ class ChatCommands:
                             action_history_manager=self.cli.actions
                         )
                         async for action in action_stream:
+                            # Token-usage updates feed the status bar / API
+                            # ``usage`` events only — skip before any rendering.
+                            # Sub-agent usage (depth>0) is routed to the display
+                            # so the pinned subagent header's live token counter
+                            # updates; it is still never drawn as a transcript line.
+                            if action.action_type == "token_usage":
+                                if action.depth > 0:
+                                    incremental_actions.append(action)
+                                continue
                             if action.role == ActionRole.INTERACTION:
                                 # In non-interactive mode, auto-submit default choice for
                                 # PROCESSING interactions so the node is not left hanging.

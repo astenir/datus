@@ -172,3 +172,83 @@ class TestCompactStateNotPersisted:
         # Plan-mode side restored; compact stays at the in-memory default.
         assert rebuilt.plan_mode_active is True
         assert rebuilt._compacted_until == 0
+
+
+class TestContextStatePersistence:
+    """``persist_context_state`` flushes occupancy; a rebuilt node restores it."""
+
+    def test_persist_writes_context_state_section(self, chdir_tmp, real_agent_config):
+        node = _make_chat_node(real_agent_config, session_id="chat_session_ctx1")
+
+        node.persist_context_state(last_call_input_tokens=52_499, context_length=1_000_000)
+
+        state_path = _state_path(node, "chat_session_ctx1")
+        assert state_path.exists()
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+        assert data["context_state"] == {
+            "last_call_input_tokens": 52_499,
+            "context_length": 1_000_000,
+        }
+        # In-memory mirror updated so a same-process status-bar read is correct.
+        assert node._restored_context_used == 52_499
+        assert node._restored_context_length == 1_000_000
+
+    def test_rebuilt_node_restores_context_state(self, chdir_tmp, real_agent_config):
+        node = _make_chat_node(real_agent_config, session_id="chat_session_ctx2")
+        node.persist_context_state(last_call_input_tokens=12_004, context_length=200_000)
+
+        rebuilt = _make_chat_node(real_agent_config, session_id="chat_session_ctx2")
+        assert rebuilt._restored_context_used == 12_004
+        assert rebuilt._restored_context_length == 200_000
+
+    def test_fresh_session_restores_zero(self, chdir_tmp, real_agent_config):
+        node = _make_chat_node(real_agent_config, session_id="chat_session_ctx_fresh")
+        assert node._restored_context_used == 0
+        assert node._restored_context_length == 0
+
+    def test_persist_preserves_plan_mode_section(self, chdir_tmp, real_agent_config):
+        """The two sections share one file — persisting context state must not
+        wipe a previously-written plan-mode section."""
+        node = _make_chat_node(real_agent_config, session_id="chat_session_ctx3")
+        node.activate_plan_mode()
+        node.persist_context_state(last_call_input_tokens=7, context_length=99)
+
+        rebuilt = _make_chat_node(real_agent_config, session_id="chat_session_ctx3")
+        assert rebuilt.plan_mode_active is True  # survived the context-state write
+        assert rebuilt._restored_context_used == 7
+        assert rebuilt._restored_context_length == 99
+
+
+class TestResetUsageCaches:
+    """``_reset_usage_caches`` (invoked by clear/delete session) must zero the
+    in-memory usage mirrors and drop the persisted ContextState so a status bar
+    read after a reset no longer shows the previous turn's usage."""
+
+    def test_reset_zeros_in_memory_and_removes_context_state(self, chdir_tmp, real_agent_config):
+        node = _make_chat_node(real_agent_config, session_id="chat_session_reset1")
+        node.persist_context_state(last_call_input_tokens=52_499, context_length=1_000_000)
+        node.running_turn_usage = object()  # stand-in for a TokenUsage snapshot
+
+        node._reset_usage_caches()
+
+        # In-memory mirrors zeroed.
+        assert node.running_turn_usage is None
+        assert node._restored_context_used == 0
+        assert node._restored_context_length == 0
+        # Persisted ContextState mirror removed — a rebuilt node restores zero.
+        rebuilt = _make_chat_node(real_agent_config, session_id="chat_session_reset1")
+        assert rebuilt._restored_context_used == 0
+        assert rebuilt._restored_context_length == 0
+
+    def test_reset_preserves_plan_mode_section(self, chdir_tmp, real_agent_config):
+        """Only the usage mirror is dropped — a sibling plan-mode section in the
+        same state file must survive the reset."""
+        node = _make_chat_node(real_agent_config, session_id="chat_session_reset2")
+        node.activate_plan_mode()
+        node.persist_context_state(last_call_input_tokens=7, context_length=99)
+
+        node._reset_usage_caches()
+
+        rebuilt = _make_chat_node(real_agent_config, session_id="chat_session_reset2")
+        assert rebuilt.plan_mode_active is True
+        assert rebuilt._restored_context_used == 0
