@@ -36,6 +36,7 @@ def test_connection_with_key_pair():
         private_key_file_pwd=os.getenv("SNOWFLAKE_PRIVATE_KEY_FILE_PWD"),
         database=os.getenv("SNOWFLAKE_DATABASE"),
         schema=os.getenv("SNOWFLAKE_SCHEMA"),
+        role=os.getenv("SNOWFLAKE_ROLE"),
     )
     conn = SnowflakeConnector(cfg)
     try:

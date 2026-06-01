@@ -4,9 +4,11 @@
 
 """Pure-Pydantic SnowflakeConfig tests — no live Snowflake required."""
 
+from unittest.mock import patch
+
 import pytest
 
-from datus_snowflake import SnowflakeConfig
+from datus_snowflake import SnowflakeConfig, SnowflakeConnector
 
 
 def test_config_requires_password_or_key():
@@ -59,3 +61,18 @@ def test_config_coerces_numeric_credentials(tmp_path):
         account="a", username="u", warehouse="w", private_key_file=str(key_file), private_key_file_pwd=5678
     )
     assert cfg_key.private_key_file_pwd.get_secret_value() == "5678"
+
+
+def test_connector_passes_role_to_snowflake_connect():
+    cfg = SnowflakeConfig(
+        account="a",
+        username="u",
+        warehouse="w",
+        password="p",
+        role="ANALYST",
+    )
+
+    with patch("datus_snowflake.connector.Connect") as connect:
+        SnowflakeConnector(cfg)
+
+    assert connect.call_args.kwargs["role"] == "ANALYST"
