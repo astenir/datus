@@ -130,6 +130,8 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
             "network_timeout": config.timeout_seconds,
             "socket_timeout": config.timeout_seconds,
         }
+        if config.role:
+            connect_kwargs["role"] = config.role
         if config.private_key_file:
             connect_kwargs["authenticator"] = "SNOWFLAKE_JWT"
             connect_kwargs["private_key_file"] = config.private_key_file
