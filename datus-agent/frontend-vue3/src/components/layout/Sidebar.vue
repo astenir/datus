@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {
+  Bot,
   CheckCircle2,
   Database,
   Loader2,
@@ -48,6 +49,7 @@ const emit = defineEmits<{
   "select-session": [sessionId: string];
   "new-session": [];
   "open-settings": [];
+  "open-agent-manager": [];
   "update:active-view": [view: ViewType];
   "delete-session": [sessionId: string];
   "compact-session": [sessionId: string];
@@ -243,6 +245,14 @@ function handleCompact() {
             </Button>
           </TooltipTrigger>
           <TooltipContent>切换主题</TooltipContent>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger as-child>
+            <Button class="iconButton" variant="ghost" size="icon" aria-label="Agent 管理" @click="emit('open-agent-manager')">
+              <Bot :size="17" />
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>Agent 管理</TooltipContent>
         </Tooltip>
         <Tooltip>
           <TooltipTrigger as-child>

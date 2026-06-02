@@ -1973,6 +1973,88 @@ textarea:focus {
   font-size: 11px;
 }
 
+/* ─── Agent Manager ────────────────────────────────────────────────────────── */
+
+.agentManager {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: 100%;
+}
+
+.agentManagerHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agentManagerHeader h2 {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.agentList {
+  flex: 1;
+  min-height: 0;
+}
+
+.agentEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 40px 0;
+  color: var(--text-muted);
+}
+
+.agentCard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+}
+
+.agentCardInfo {
+  min-width: 0;
+}
+
+.agentCardName {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.agentCardMeta {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.agentCardActions {
+  display: flex;
+  gap: 2px;
+}
+
+.agentForm {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.agentFormError {
+  color: #be123c;
+  font-size: 13px;
+}
+
 .spin {
   animation: spin 0.9s linear infinite;
 }

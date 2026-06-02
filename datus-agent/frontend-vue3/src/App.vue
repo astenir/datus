@@ -9,6 +9,9 @@ import ChatComposer from "@/components/chat/ChatComposer.vue";
 import ConversationToolbar from "@/components/chat/ConversationToolbar.vue";
 import MessageList from "@/components/chat/MessageList.vue";
 import SettingsDrawer from "@/components/settings/SettingsDrawer.vue";
+import AgentManager from "@/components/agent/AgentManager.vue";
+import Sheet from "@/components/ui/Sheet.vue";
+import SheetContent from "@/components/ui/SheetContent.vue";
 
 import { useTheme } from "@/composables/useTheme";
 import { useChatSettings } from "@/composables/useChatSettings";
@@ -37,9 +40,14 @@ const activeView = ref<ViewType>("chat");
 // ─── Settings drawer ─────────────────────────────────────────────────────────
 
 const settingsOpen = ref(false);
+const agentManagerOpen = ref(false);
 
 function openSettings() {
   settingsOpen.value = true;
+}
+
+function openAgentManager() {
+  agentManagerOpen.value = true;
 }
 
 // ─── Agent options for ChatComposer ──────────────────────────────────────────
@@ -121,6 +129,7 @@ watch(database, (db) => {
                 @select-session="selectSession"
                 @new-session="clearMessages"
                 @open-settings="openSettings"
+                @open-agent-manager="openAgentManager"
                 @update:active-view="activeView = $event"
                 @delete-session="deleteSession"
                 @compact-session="compactSession"
@@ -206,6 +215,12 @@ watch(database, (db) => {
         @update:plan-mode="planMode = $event"
         @refresh-connection="handleRefreshConnection"
       />
+
+      <Sheet :open="agentManagerOpen" @update:open="agentManagerOpen = $event">
+        <SheetContent class="settingsDrawer" side="right" aria-label="Agent 管理">
+          <AgentManager />
+        </SheetContent>
+      </Sheet>
     </div>
   </TooltipProvider>
 </template>
