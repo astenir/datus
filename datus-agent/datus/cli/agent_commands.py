@@ -33,6 +33,7 @@ from datus.schemas.compare_node_models import CompareInput
 from datus.schemas.node_models import ExecuteSQLInput, GenerateSQLInput, OutputInput, SqlTask
 from datus.schemas.reason_sql_node_models import ReasoningInput
 from datus.schemas.schema_linking_node_models import SchemaLinkingInput
+from datus.storage.embedding_diagnostics import format_context_degraded_warning, is_embedding_unavailable_error
 from datus.tools.db_tools import connector_registry
 from datus.tools.func_tool.context_search import ContextSearchTools
 from datus.tools.output_tools import OutputTool
@@ -58,17 +59,28 @@ class AgentCommands:
         self.darun_is_running = False
         self.agent_thread = None
         self._context_search_tools: ContextSearchTools | None = None
+        self._context_search_warning: str = ""
         self.output_tool: OutputTool | None = None
 
     @property
-    def context_search_tools(self):
-        if not self._context_search_tools:
-            self._context_search_tools = ContextSearchTools(self.cli.agent_config)
+    def context_search_tools(self) -> ContextSearchTools | None:
+        if self._context_search_tools is None and not self._context_search_warning:
+            try:
+                self._context_search_tools = ContextSearchTools(self.cli.agent_config)
+            except Exception as exc:
+                self._context_search_warning = format_context_degraded_warning(exc)
+                logger.warning("Context search tools disabled: %s", self._context_search_warning)
         return self._context_search_tools
 
     def update_agent_reference(self):
         """Update the agent reference if it has changed in the CLI."""
         self.agent = self.cli.agent
+
+    def _print_embedding_aware_error(self, action: str, error: BaseException | str | None) -> None:
+        if is_embedding_unavailable_error(error):
+            print_warning(self.console, format_context_degraded_warning(error))
+        else:
+            print_error(self.console, f"{action}: {error}")
 
     def create_node_input(self, node_type: str, task_text: str = None) -> BaseInput:
         """Create input for a specific node type with console prompts."""
@@ -387,17 +399,22 @@ class AgentCommands:
         # The PDF mentions table_type, but the tool implementation has it fixed to "full".
         # I will omit prompting for it as it won't be used.
 
-        with self.console.status("[green]Searching for relevant tables...[/]"):
-            from datus.storage.schema_metadata import SchemaWithValueRAG
+        from datus.storage.schema_metadata import SchemaWithValueRAG
 
-            schema_rag = SchemaWithValueRAG(self.cli.agent_config)
-            metadata, sample_data = schema_rag.search_similar(
-                query_text=input_text,
-                catalog_name=catalog_name,
-                database_name=database_name,
-                schema_name=schema_name,
-                top_n=int(top_n.strip()),
-            )
+        schema_rag = SchemaWithValueRAG(self.cli.agent_config)
+
+        try:
+            with self.console.status("[green]Searching for relevant tables...[/]"):
+                metadata, sample_data = schema_rag.search_similar(
+                    query_text=input_text,
+                    catalog_name=catalog_name,
+                    database_name=database_name,
+                    schema_name=schema_name,
+                    top_n=int(top_n.strip()),
+                )
+        except Exception as exc:
+            self._print_embedding_aware_error("schema linking", exc)
+            return
 
         if metadata.num_rows > 0 or sample_data.num_rows > 0:
             self.console.print(
@@ -469,6 +486,9 @@ class AgentCommands:
         if not input_text:
             print_error(self.console, "Input text cannot be empty.")
             return
+        if self.context_search_tools is None:
+            print_warning(self.console, self._context_search_warning)
+            return
         subject_path = self._prompt_subject_path()
         top_n = self.cli.prompt_input("Enter top_n to match", default="5")
 
@@ -498,7 +518,7 @@ class AgentCommands:
                 )
             self.console.print(table)
         elif not result.success:
-            print_error(self.console, f"searching metrics: {result.error}")
+            self._print_embedding_aware_error("searching metrics", result.error)
         else:
             print_warning(self.console, "No metrics found.")
 
@@ -524,9 +544,13 @@ class AgentCommands:
         if not input_text:
             print_error(self.console, "Input text cannot be empty.")
             return
+        if self.context_search_tools is None:
+            print_warning(self.console, self._context_search_warning)
+            return
 
         subject_path = self._prompt_subject_path()
         top_n = self.cli.prompt_input("Enter top_n to match", default="5")
+
         with self.console.status("[green]Searching reference SQL...[/]"):
             result = self.context_search_tools.search_reference_sql(
                 query_text=input_text, subject_path=subject_path, top_n=int(top_n.strip())
@@ -566,7 +590,7 @@ class AgentCommands:
                 )
             self.console.print(table)
         elif not result.success:
-            print_error(self.console, f"searching reference SQL: {result.error}")
+            self._print_embedding_aware_error("searching reference SQL", result.error)
         else:
             print_warning(self.console, "No reference SQL queries found.")
 
@@ -598,10 +622,11 @@ class AgentCommands:
             print_error(self.console, "top_n must be an integer.")
             return
 
-        with self.console.status("[green]Searching documentation...[/]"):
-            from datus.tools.search_tools.search_tool import SearchTool
+        from datus.tools.search_tools.search_tool import SearchTool
 
-            search_tool = SearchTool(agent_config=self.cli.agent_config)
+        search_tool = SearchTool(agent_config=self.cli.agent_config)
+
+        with self.console.status("[green]Searching documentation...[/]"):
             result = search_tool.search_document(
                 platform=platform,
                 keywords=keywords,
@@ -646,7 +671,7 @@ class AgentCommands:
                     )
                 self.console.print(table)
         elif not result.success:
-            print_error(self.console, f"searching documents: {result.error}")
+            self._print_embedding_aware_error("searching documents", result.error)
         else:
             print_warning(self.console, "No documents found.")
 

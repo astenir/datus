@@ -87,6 +87,7 @@ class ChatAgenticNode(AgenticNode):
         # Initialize tool attributes BEFORE calling parent constructor
         self.db_func_tool: Optional[DBFuncTool] = None
         self.context_search_tools: Optional[ContextSearchTools] = None
+        self.degraded_capabilities: Dict[str, str] = {}
         self.date_parsing_tools: Optional[DateParsingTools] = None
         self.filesystem_func_tool: Optional[FilesystemFuncTool] = None
         self._platform_doc_tool: Optional[PlatformDocSearchTool] = None
@@ -128,8 +129,8 @@ class ChatAgenticNode(AgenticNode):
         """Initialize all tools with default database connection."""
         node_name = self.get_node_name()
         self.db_func_tool = DBFuncTool(agent_config=self.agent_config, sub_agent_name=node_name)
-        self.context_search_tools = ContextSearchTools(self.agent_config, sub_agent_name=node_name)
-        self.reference_template_tools = ReferenceTemplateTools(self.agent_config, db_func_tool=self.db_func_tool)
+        self._setup_context_search_tools()
+        self._setup_reference_template_tools()
         self._setup_date_parsing_tools()
         self._setup_filesystem_tools()
         # self.bash_tool was created in AgenticNode.__init__; just surface its
@@ -150,6 +151,32 @@ class ChatAgenticNode(AgenticNode):
         # ``PermissionHooks`` is still built lazily by
         # ``_ensure_permission_hooks`` via ``_compose_hooks``.
         self._populate_tool_registry()
+
+    def _setup_context_search_tools(self):
+        """Setup context search tools without blocking DB/chat capabilities."""
+        try:
+            self.context_search_tools = ContextSearchTools(self.agent_config, sub_agent_name=self.get_node_name())
+        except Exception as exc:
+            self.context_search_tools = None
+            warning = self._record_context_search_degraded(exc)
+            logger.warning("Failed to setup context search tools, continuing without: %s", warning)
+
+    def _setup_reference_template_tools(self):
+        """Setup reference-template tools without blocking DB/chat capabilities."""
+        try:
+            self.reference_template_tools = ReferenceTemplateTools(
+                self.agent_config,
+                sub_agent_name=self.get_node_name(),
+                db_func_tool=self.db_func_tool,
+            )
+        except Exception as exc:
+            self.reference_template_tools = None
+            message = (
+                "Reference template tools are disabled because the embedding-backed "
+                f"template store is unavailable. Details: {exc}"
+            )
+            self._record_degraded_capability("reference_template_tools", message)
+            logger.warning("Failed to setup reference template tools, continuing without: %s", message)
 
     def _setup_date_parsing_tools(self):
         """Setup date parsing tools."""
