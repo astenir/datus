@@ -165,14 +165,19 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
 
     def _sys_databases(self) -> Set[str]:
         """Return set of system databases to filter out."""
-        return {"SNOWFLAKE", "SNOWFLAKE_SAMPLE_DATA"}
+        return {"SNOWFLAKE"}
 
     def _sys_schemas(self) -> Set[str]:
         """Return set of system schemas to filter out."""
         return {"INFORMATION_SCHEMA"}
 
+    def _reject_catalog(self, catalog_name: str = "") -> None:
+        if catalog_name:
+            raise ValueError("Snowflake does not support a catalog namespace; use database_name instead.")
+
     def do_switch_context(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
         """Switch database or schema context."""
+        self._reject_catalog(catalog_name)
         try:
             with self.connection.cursor() as cursor:
                 if not schema_name:
@@ -316,12 +321,13 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
     def execute_content_set(self, sql_query: str) -> ExecuteSQLResult:
         """Execute context switch statement (USE DATABASE/SCHEMA)."""
         try:
-            with self.connection.cursor() as cursor:
-                cursor.execute(sql_query)
             switch_context = parse_context_switch(sql=sql_query, dialect=self.dialect)
             if switch_context:
                 if catalog_name := switch_context.get("catalog_name"):
-                    self.catalog_name = catalog_name
+                    self._reject_catalog(catalog_name)
+            with self.connection.cursor() as cursor:
+                cursor.execute(sql_query)
+            if switch_context:
                 if database_name := switch_context.get("database_name"):
                     self.database_name = database_name
                 if schema_name := switch_context.get("schema_name"):
@@ -457,6 +463,7 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
     @override
     def get_databases(self, catalog_name: str = "", include_sys: bool = False) -> List[str]:
         """Get list of databases."""
+        self._reject_catalog(catalog_name)
         res = self._execute_show(sql="SHOW DATABASES", result_format="arrow").sql_return
         databases = res["name"]
 
@@ -472,6 +479,7 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
     @override
     def get_schemas(self, catalog_name: str = "", database_name: str = "", include_sys: bool = False) -> List[str]:
         """Get list of schemas using SHOW SCHEMAS command."""
+        self._reject_catalog(catalog_name)
         database_name = database_name or self.database_name
 
         if database_name:
@@ -518,6 +526,7 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
     @override
     def get_tables(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """Get list of table names."""
+        self._reject_catalog(catalog_name)
         tables = self._get_tables_per_db(
             catalog_name=catalog_name,
             database_name=database_name,
@@ -528,6 +537,7 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
 
     def get_views(self, catalog_name: str = "", database_name: str = "", schema_name: str = "") -> List[str]:
         """Get list of view names."""
+        self._reject_catalog(catalog_name)
         views = self._get_tables_per_db(
             catalog_name=catalog_name,
             database_name=database_name,
@@ -540,6 +550,7 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
         self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
     ) -> List[str]:
         """Get list of materialized view names."""
+        self._reject_catalog(catalog_name)
         mvs = self._get_tables_per_db(
             catalog_name=catalog_name,
             database_name=database_name,
@@ -557,7 +568,8 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
         table_type: TABLE_TYPE = "",
     ) -> List[Dict[str, str]]:
         """Get table metadata (excluding DDL)."""
-        catalog_name = catalog_name or self.catalog_name
+        self._reject_catalog(catalog_name)
+        catalog_name = ""
         database_name = database_name or self.database_name
         result = []
 
@@ -719,7 +731,8 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
         if not table_name:
             return []
 
-        catalog_name = catalog_name or self.catalog_name
+        self._reject_catalog(catalog_name)
+        catalog_name = ""
         database_name = database_name or self.database_name
         schema_name = schema_name or self.schema_name
 
@@ -818,6 +831,7 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
         tables: Optional[List[str]] = None,
     ) -> List[Dict[str, str]]:
         """Get table metadata with DDL definitions."""
+        self._reject_catalog(catalog_name)
         table_entries = self._get_tables_per_db(
             catalog_name=catalog_name,
             database_name=database_name,
@@ -843,6 +857,7 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
         self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
     ) -> List[Dict[str, str]]:
         """Get view metadata with DDL definitions."""
+        self._reject_catalog(catalog_name)
         view_entries = self._get_tables_per_db(
             catalog_name=catalog_name,
             database_name=database_name,
@@ -867,6 +882,7 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
         self, catalog_name: str = "", database_name: str = "", schema_name: str = ""
     ) -> List[Dict[str, str]]:
         """Get materialized view metadata with DDL definitions."""
+        self._reject_catalog(catalog_name)
         mv_entries = self._get_tables_per_db(
             catalog_name=catalog_name,
             database_name=database_name,
@@ -899,7 +915,8 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
     ) -> List[Dict[str, Any]]:
         """Get sample rows from tables."""
         result = []
-        catalog_name = catalog_name or self.catalog_name
+        self._reject_catalog(catalog_name)
+        catalog_name = ""
         database_name = database_name or self.database_name
         schema_name = schema_name or self.schema_name
 
@@ -969,6 +986,7 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
         table_name: str = "",
     ) -> str:
         """Build fully qualified table name."""
+        self._reject_catalog(catalog_name)
         if schema_name:
             full_name = f'"{schema_name}"."{table_name}"'
         else:

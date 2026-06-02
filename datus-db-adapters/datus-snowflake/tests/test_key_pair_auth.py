@@ -14,17 +14,20 @@ import pytest
 
 from datus_snowflake import SnowflakeConfig, SnowflakeConnector
 
-pytestmark = pytest.mark.skipif(
-    not all(
-        [
-            os.getenv("SNOWFLAKE_ACCOUNT"),
-            os.getenv("SNOWFLAKE_USER"),
-            os.getenv("SNOWFLAKE_PRIVATE_KEY_FILE"),
-            os.getenv("SNOWFLAKE_WAREHOUSE"),
-        ]
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not all(
+            [
+                os.getenv("SNOWFLAKE_ACCOUNT"),
+                os.getenv("SNOWFLAKE_USER"),
+                os.getenv("SNOWFLAKE_PRIVATE_KEY_FILE"),
+                os.getenv("SNOWFLAKE_WAREHOUSE"),
+            ]
+        ),
+        reason="Snowflake key pair credentials (SNOWFLAKE_PRIVATE_KEY_FILE) not provided",
     ),
-    reason="Snowflake key pair credentials (SNOWFLAKE_PRIVATE_KEY_FILE) not provided",
-)
+]
 
 
 def test_connection_with_key_pair():
@@ -41,7 +44,7 @@ def test_connection_with_key_pair():
     conn = SnowflakeConnector(cfg)
     try:
         assert conn.test_connection()["success"] is True
-        result = conn.execute_query("SELECT 1 as num", result_format="list")
+        result = conn.execute_query('SELECT 1 AS "num"', result_format="list")
         assert result.success
         assert result.sql_return == [{"num": 1}]
     finally:
