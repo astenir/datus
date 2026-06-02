@@ -10,6 +10,7 @@ import ConversationToolbar from "@/components/chat/ConversationToolbar.vue";
 import MessageList from "@/components/chat/MessageList.vue";
 import SettingsDrawer from "@/components/settings/SettingsDrawer.vue";
 import AgentManager from "@/components/agent/AgentManager.vue";
+import KnowledgeExplorer from "@/components/knowledge/KnowledgeExplorer.vue";
 import Sheet from "@/components/ui/Sheet.vue";
 import SheetContent from "@/components/ui/SheetContent.vue";
 
@@ -174,11 +175,8 @@ watch(database, (db) => {
             </div>
 
             <!-- Knowledge Explorer view -->
-            <div v-else-if="activeView === 'knowledge'" class="moduleView">
-              <div class="modulePlaceholder">
-                <h2>知识库 Explorer</h2>
-                <p>Subject 树浏览和知识管理 — 即将实现</p>
-              </div>
+            <div v-else-if="activeView === 'knowledge'" class="knowledgeView">
+              <KnowledgeExplorer />
             </div>
 
             <!-- MCP Manager view -->
