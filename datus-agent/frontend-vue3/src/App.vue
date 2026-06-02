@@ -12,6 +12,7 @@ import SettingsDrawer from "@/components/settings/SettingsDrawer.vue";
 import AgentManager from "@/components/agent/AgentManager.vue";
 import KnowledgeExplorer from "@/components/knowledge/KnowledgeExplorer.vue";
 import SqlConsole from "@/components/sql/SqlConsole.vue";
+import McpManager from "@/components/mcp/McpManager.vue";
 import Sheet from "@/components/ui/Sheet.vue";
 import SheetContent from "@/components/ui/SheetContent.vue";
 
@@ -181,11 +182,8 @@ watch(database, (db) => {
             </div>
 
             <!-- MCP Manager view -->
-            <div v-else-if="activeView === 'mcp'" class="moduleView">
-              <div class="modulePlaceholder">
-                <h2>MCP 服务器管理</h2>
-                <p>MCP 服务器 CRUD 和工具调用 — 即将实现</p>
-              </div>
+            <div v-else-if="activeView === 'mcp'" class="mcpView">
+              <McpManager />
             </div>
 
             <!-- SQL Console view -->
