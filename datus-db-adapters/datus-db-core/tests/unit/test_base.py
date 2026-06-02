@@ -150,6 +150,16 @@ class TestBaseSqlConnectorInit:
         assert connector.database_name == ""
         assert connector.schema_name == ""
 
+    def test_get_current_context_returns_sql_coordinates(self):
+        connector = ConcreteConnector()
+        connector.switch_context(catalog_name="cat", database_name="db", schema_name="sch")
+
+        assert connector.get_current_context() == {
+            "catalog_name": "cat",
+            "database_name": "db",
+            "schema_name": "sch",
+        }
+
     def test_init_with_config(self):
         config = ConnectionConfig(timeout_seconds=60)
         connector = ConcreteConnector(config=config, dialect="mysql")

@@ -67,6 +67,19 @@ class BaseSqlConnector(ABC):
     def schema_name(self, value: str):
         self._schema_var.set(value)
 
+    def get_current_context(self) -> Dict[str, str]:
+        """Return the connector's effective SQL context.
+
+        The returned names are SQL-addressing coordinates, not Datus datasource
+        routing keys. Dialect-specific connectors may override this method to
+        normalize aliases or fill dialect defaults.
+        """
+        return {
+            "catalog_name": self.catalog_name or "",
+            "database_name": self.database_name or "",
+            "schema_name": self.schema_name or "",
+        }
+
     def close(self):
         pass
 

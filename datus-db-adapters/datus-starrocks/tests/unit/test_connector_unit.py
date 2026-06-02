@@ -126,6 +126,45 @@ def test_resolve_catalog_with_def():
         assert result == "default_catalog"
 
 
+def test_get_current_context_resolves_default_catalog():
+    """Test current context exposes effective SQL coordinates."""
+    config = StarRocksConfig(username="test_user", database="ac_manage")
+
+    with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
+        connector = StarRocksConnector(config)
+
+        assert connector.get_current_context() == {
+            "catalog_name": "default_catalog",
+            "database_name": "ac_manage",
+            "schema_name": "",
+        }
+
+
+def test_get_current_context_normalizes_def_catalog():
+    """Test current context normalizes StarRocks catalog aliases."""
+    config = StarRocksConfig(username="test_user", catalog="def", database="ac_manage")
+
+    with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
+        connector = StarRocksConnector(config)
+        connector.catalog_name = "def"
+
+        assert connector.get_current_context()["catalog_name"] == "default_catalog"
+
+
+def test_get_current_context_keeps_custom_catalog():
+    """Test current context keeps configured non-default catalogs."""
+    config = StarRocksConfig(username="test_user", catalog="external_catalog", database="analytics")
+
+    with patch("datus_mysql.MySQLConnector.__init__", return_value=None):
+        connector = StarRocksConnector(config)
+
+        assert connector.get_current_context() == {
+            "catalog_name": "external_catalog",
+            "database_name": "analytics",
+            "schema_name": "",
+        }
+
+
 def test_resolve_catalog_preserves_custom():
     """Test _resolve_catalog preserves custom catalog."""
     config = StarRocksConfig(username="test_user")
