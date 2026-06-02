@@ -1285,6 +1285,20 @@ button:disabled {
 
 /* ─── Feedback Buttons ─────────────────────────────────────────────────────── */
 
+.messageActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  opacity: 0;
+  transition: opacity 0.16s ease;
+}
+
+.message:hover .messageActions,
+.messageActions:focus-within {
+  opacity: 1;
+}
+
 .feedbackButtons {
   display: flex;
   align-items: center;

@@ -6,6 +6,7 @@ import { useConnection } from "@/composables/useConnection";
 import type { ChatMessage } from "@/types";
 import ToolCard from "./ToolCard.vue";
 import FeedbackButtons from "./FeedbackButtons.vue";
+import SuccessStoryButton from "./SuccessStoryButton.vue";
 
 const md = new MarkdownIt({
   html: false,
@@ -76,11 +77,16 @@ async function handleFeedback(emoji: string) {
       />
       <div v-else class="markdownBody" v-html="renderMarkdown(block.content)" />
     </template>
-    <FeedbackButtons
-      v-if="message.role === 'assistant' && sessionId"
-      :session-id="sessionId"
-      :message-content="message.content"
-      @feedback="handleFeedback"
-    />
+    <div v-if="message.role === 'assistant' && sessionId" class="messageActions">
+      <FeedbackButtons
+        :session-id="sessionId"
+        :message-content="message.content"
+        @feedback="handleFeedback"
+      />
+      <SuccessStoryButton
+        :session-id="sessionId"
+        :message-content="message.content"
+      />
+    </div>
   </div>
 </template>
