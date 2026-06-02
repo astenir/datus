@@ -80,6 +80,20 @@ export const chatApi = {
     return apiResult(baseUrl, `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/compact`, { method: "POST" });
   },
 
+  async feedback(baseUrl: string, input: { source_session_id: string; reaction_emoji: string; reference_msg: string; reaction_msg?: string }): Promise<void> {
+    const response = await fetch(`${baseUrl}/api/v1/chat/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify(input),
+    });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    // Feedback runs as background SSE — consume and discard
+    const reader = response.body?.getReader();
+    if (reader) {
+      try { while (!(await reader.read()).done) { /* drain */ } } catch { /* ignore */ }
+    }
+  },
+
   userInteraction(baseUrl: string, input: UserInteractionInput): Promise<unknown> {
     return apiResult(baseUrl, "/api/v1/chat/user_interaction", jsonBody(input));
   },

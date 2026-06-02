@@ -1,26 +1,28 @@
 <script setup lang="ts">
 import MarkdownIt from "markdown-it";
+import { chatApi } from "@/lib/api";
+import { useConnection } from "@/composables/useConnection";
 
 import type { ChatMessage } from "@/types";
-
 import ToolCard from "./ToolCard.vue";
+import FeedbackButtons from "./FeedbackButtons.vue";
 
 const md = new MarkdownIt({
   html: false,
   linkify: true,
   typographer: true,
-  breaks: true
+  breaks: true,
 });
 
-// Enable tables and strikethrough (GFM-like)
 md.enable("table");
 md.enable("strikethrough");
 
-// Open links in new tab
-const defaultRender = md.renderer.rules.link_open || function(tokens, idx, options, _env, self) {
-  return self.renderToken(tokens, idx, options);
-};
-md.renderer.rules.link_open = function(tokens, idx, options, env, self) {
+const defaultRender =
+  md.renderer.rules.link_open ||
+  function (tokens, idx, options, _env, self) {
+    return self.renderToken(tokens, idx, options);
+  };
+md.renderer.rules.link_open = function (tokens, idx, options, env, self) {
   tokens[idx].attrSet("target", "_blank");
   tokens[idx].attrSet("rel", "noreferrer");
   return defaultRender(tokens, idx, options, env, self);
@@ -28,6 +30,7 @@ md.renderer.rules.link_open = function(tokens, idx, options, env, self) {
 
 const props = defineProps<{
   message: ChatMessage;
+  sessionId?: string;
 }>();
 
 const blocks = props.message.blocks?.length
@@ -36,6 +39,21 @@ const blocks = props.message.blocks?.length
 
 function renderMarkdown(content: string): string {
   return md.render(content);
+}
+
+async function handleFeedback(emoji: string) {
+  if (!props.sessionId) return;
+  const { effectiveBase } = useConnection();
+  const base = effectiveBase();
+  try {
+    await chatApi.feedback(base, {
+      source_session_id: props.sessionId,
+      reaction_emoji: emoji,
+      reference_msg: props.message.content.slice(0, 2000),
+    });
+  } catch (error) {
+    console.error("Feedback failed:", error);
+  }
 }
 </script>
 
@@ -56,11 +74,13 @@ function renderMarkdown(content: string): string {
         :duration="block.duration"
         :short-desc="block.shortDesc"
       />
-      <div
-        v-else
-        class="markdownBody"
-        v-html="renderMarkdown(block.content)"
-      />
+      <div v-else class="markdownBody" v-html="renderMarkdown(block.content)" />
     </template>
+    <FeedbackButtons
+      v-if="message.role === 'assistant' && sessionId"
+      :session-id="sessionId"
+      :message-content="message.content"
+      @feedback="handleFeedback"
+    />
   </div>
 </template>

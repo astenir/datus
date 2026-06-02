@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Activity, CircleStop, Loader2, MessageSquare, PanelLeft, RefreshCw, Trash2 } from "@lucide/vue";
+import { Activity, CircleStop, Loader2, MessageSquare, Play, RefreshCw, Trash2 } from "@lucide/vue";
 
 import Button from "@/components/ui/Button.vue";
 import Tooltip from "@/components/ui/Tooltip.vue";
@@ -17,6 +17,7 @@ const emit = defineEmits<{
   "clear-messages": [];
   "refresh-connection": [];
   "stop-session": [];
+  "resume-session": [];
 }>();
 </script>
 
@@ -39,6 +40,14 @@ const emit = defineEmits<{
           </Button>
         </TooltipTrigger>
         <TooltipContent>刷新连接</TooltipContent>
+      </Tooltip>
+      <Tooltip v-if="selectedSession && !isStreaming">
+        <TooltipTrigger as-child>
+          <Button class="iconButton" variant="ghost" size="icon" aria-label="恢复会话" @click="emit('resume-session')">
+            <Play :size="16" />
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent>恢复会话</TooltipContent>
       </Tooltip>
       <Tooltip>
         <TooltipTrigger as-child>

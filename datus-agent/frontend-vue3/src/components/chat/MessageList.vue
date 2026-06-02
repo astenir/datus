@@ -18,6 +18,10 @@ defineProps({
     type: Boolean,
     required: true
   },
+  sessionId: {
+    type: String as PropType<string | null>,
+    default: null
+  },
   scrollRef: {
     type: Object as PropType<HTMLDivElement | null>,
     default: null
@@ -50,7 +54,7 @@ defineProps({
           <ErrorBoundary :fallback-text="item.content">
             <Suspense>
               <template #default>
-                <MessageContent :message="item" />
+                <MessageContent :message="item" :session-id="sessionId ?? undefined" />
               </template>
               <template #fallback>
                 <div class="markdownBody">{{ item.content }}</div>

@@ -222,6 +222,43 @@ async function compactSession(sessionId: string) {
   }
 }
 
+async function resumeSession(sessionId?: string) {
+  const targetSession = sessionId ?? selectedSession.value;
+  if (!targetSession) return;
+  const { effectiveBase } = useConnection();
+  const base = effectiveBase();
+  isStreaming.value = true;
+  try {
+    const url = `${normalizeBaseUrl(base)}/api/v1/chat/resume`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify({ session_id: targetSession }),
+    });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+    const reader = response.body?.getReader();
+    if (!reader) return;
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const { events, rest } = parseSseBuffer(buffer);
+      buffer = rest;
+      for (const event of events) {
+        const incoming = messageFromEvent(event);
+        if (incoming) messages.value = mergeMessage(messages.value, incoming);
+      }
+    }
+  } catch (error) {
+    console.error("Failed to resume session:", error);
+  } finally {
+    isStreaming.value = false;
+    loadSessions();
+  }
+}
+
 function clearMessages() {
   messages.value = [];
   selectedSession.value = null;
@@ -240,6 +277,7 @@ export function useChatState() {
     stopSession,
     deleteSession,
     compactSession,
+    resumeSession,
     clearMessages,
   };
 }
