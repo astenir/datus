@@ -4,6 +4,7 @@ import { CollapsibleRoot, CollapsibleTrigger, CollapsibleContent } from "reka-ui
 import { ref } from "vue";
 
 import { stringifyContent } from "@/lib/chat";
+import DataVisualization from "@/components/visualization/DataVisualization.vue";
 import { displayValueForTool, sqlFromToolValue, sqlKeys, summarizeValue, tableFromToolValue, toolResultStatus } from "@/lib/tool-display";
 
 const props = defineProps<{
@@ -76,6 +77,11 @@ const valueKind = table?.sourceLabel ?? summarizeValue(displayValue);
               </tbody>
             </table>
           </div>
+          <DataVisualization
+            v-if="table && table.columns.length > 0 && table.rows.length > 0"
+            :columns="table?.columns ?? []"
+            :data="(table?.rows ?? []).map((row: string[]) => { const obj: Record<string, unknown> = {}; (table?.columns ?? []).forEach((c: string, i: number) => { obj[c] = row[i] }); return obj; })"
+          />
           <details class="toolRawBlock" :open="!table">
             <summary>
               <span>{{ table ? `查看原始${payloadLabel}` : payloadLabel }}</span>

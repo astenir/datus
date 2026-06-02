@@ -2324,6 +2324,55 @@ textarea:focus {
   font-weight: 600;
 }
 
+/* ─── Data Visualization ───────────────────────────────────────────────────── */
+
+.dataViz {
+  margin-top: 6px;
+}
+
+.dataVizResult {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  padding: 10px;
+  margin-top: 6px;
+}
+
+.dataVizChart {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  color: var(--text);
+}
+
+.dataVizChart strong {
+  font-size: 13px;
+}
+
+.dataVizResult p {
+  margin: 2px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.dataVizInsight {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.dataVizInsight p {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.dataVizError {
+  color: #be123c;
+  font-size: 12px;
+  margin-top: 4px;
+}
+
 /* ─── SQL Console ──────────────────────────────────────────────────────────── */
 
 .sqlConsole {
