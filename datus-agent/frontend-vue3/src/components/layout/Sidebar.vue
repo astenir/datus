@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   CheckCircle2,
+  Database,
   Loader2,
   MessageSquare,
   Moon,
@@ -11,7 +12,9 @@ import {
   Settings2,
   Sparkles,
   Sun,
-  WifiOff
+  Terminal,
+  WifiOff,
+  Wrench,
 } from "@lucide/vue";
 
 import Badge from "@/components/ui/Badge.vue";
@@ -27,27 +30,71 @@ import SidebarGroupContent from "@/components/ui/SidebarGroupContent.vue";
 import SidebarGroupHeader from "@/components/ui/SidebarGroupHeader.vue";
 import SidebarHeader from "@/components/ui/SidebarHeader.vue";
 import { formatSessionTime, sessionTitle, sessionUserQueryText } from "@/lib/chat";
-import type { ChatSessionOption, ConnectionState } from "@/types";
+import { ref } from "vue";
+import { useTheme } from "@/composables/useTheme";
+import type { ChatSessionOption, ConnectionState, ViewType } from "@/types";
 
-defineProps<{
+const props = defineProps<{
   connection: ConnectionState;
-  connectionLabel: string;
   sessions: ChatSessionOption[];
-  sessionId: string;
-  isLoadingSessions: boolean;
-  isStreaming: boolean;
+  selectedSession: string | null;
+  activeView: ViewType;
   collapsed: boolean;
-  theme: "light" | "dark";
 }>();
 
 const emit = defineEmits<{
-  "toggle-collapse": [];
-  "toggle-theme": [];
-  "open-settings": [];
-  "new-session": [];
-  "refresh-sessions": [];
+  toggle: [];
+  "refresh-connection": [];
   "select-session": [sessionId: string];
+  "new-session": [];
+  "open-settings": [];
+  "update:active-view": [view: ViewType];
+  "delete-session": [sessionId: string];
+  "compact-session": [sessionId: string];
 }>();
+
+const { theme, toggleTheme } = useTheme();
+
+const connectionLabelMap: Record<ConnectionState, string> = {
+  idle: "未检测",
+  checking: "检测中…",
+  online: "已连接",
+  offline: "未连接",
+};
+
+const navItems: Array<{ view: ViewType; label: string; icon: typeof MessageSquare }> = [
+  { view: "chat", label: "对话", icon: MessageSquare },
+  { view: "knowledge", label: "知识库", icon: Database },
+  { view: "mcp", label: "MCP", icon: Wrench },
+  { view: "sql", label: "SQL", icon: Terminal },
+];
+
+const contextMenuSession = ref<string | null>(null);
+const contextMenuPos = ref({ x: 0, y: 0 });
+
+function onSessionContext(e: MouseEvent, sessionId: string) {
+  e.preventDefault();
+  contextMenuSession.value = sessionId;
+  contextMenuPos.value = { x: e.clientX, y: e.clientY };
+}
+
+function closeContextMenu() {
+  contextMenuSession.value = null;
+}
+
+function handleDelete() {
+  if (contextMenuSession.value) {
+    emit("delete-session", contextMenuSession.value);
+    closeContextMenu();
+  }
+}
+
+function handleCompact() {
+  if (contextMenuSession.value) {
+    emit("compact-session", contextMenuSession.value);
+    closeContextMenu();
+  }
+}
 </script>
 
 <template>
@@ -71,7 +118,7 @@ const emit = defineEmits<{
                 variant="ghost"
                 size="icon"
                 :aria-label="collapsed ? '展开侧栏' : '收起侧栏'"
-                @click="emit('toggle-collapse')"
+                @click="emit('toggle')"
               >
                 <PanelLeftOpen v-if="collapsed" :size="17" />
                 <PanelLeftClose v-else :size="17" />
@@ -83,7 +130,23 @@ const emit = defineEmits<{
       </SidebarHeader>
     </div>
 
-    <SidebarGroup>
+    <!-- Navigation tabs -->
+    <div class="navTabs">
+      <button
+        v-for="item in navItems"
+        :key="item.view"
+        :class="`navTab ${activeView === item.view ? 'active' : ''}`"
+        type="button"
+        :title="item.label"
+        @click="emit('update:active-view', item.view)"
+      >
+        <component :is="item.icon" :size="16" />
+        <span v-if="!collapsed">{{ item.label }}</span>
+      </button>
+    </div>
+
+    <!-- Session list (only shown in chat view) -->
+    <SidebarGroup v-if="activeView === 'chat'">
       <SidebarGroupHeader>
         <div>
           <h2>会话</h2>
@@ -92,7 +155,7 @@ const emit = defineEmits<{
         <div class="sessionActions">
           <Tooltip>
             <TooltipTrigger as-child>
-              <Button class="iconButton" variant="ghost" size="icon" aria-label="新会话" :disabled="isStreaming" @click="emit('new-session')">
+              <Button class="iconButton" variant="ghost" size="icon" aria-label="新会话" @click="emit('new-session')">
                 <Plus :size="17" />
               </Button>
             </TooltipTrigger>
@@ -100,9 +163,8 @@ const emit = defineEmits<{
           </Tooltip>
           <Tooltip>
             <TooltipTrigger as-child>
-              <Button class="iconButton" variant="ghost" size="icon" aria-label="刷新会话" :disabled="isLoadingSessions" @click="emit('refresh-sessions')">
-                <Loader2 v-if="isLoadingSessions" class="spin" :size="16" />
-                <RefreshCw v-else :size="16" />
+              <Button class="iconButton" variant="ghost" size="icon" aria-label="刷新会话" @click="emit('refresh-connection')">
+                <RefreshCw :size="16" />
               </Button>
             </TooltipTrigger>
             <TooltipContent>刷新会话</TooltipContent>
@@ -110,7 +172,7 @@ const emit = defineEmits<{
         </div>
       </SidebarGroupHeader>
 
-      <button :class="`sessionItem ${!sessionId ? 'active' : ''}`" type="button" :disabled="isStreaming" @click="emit('new-session')">
+      <button :class="`sessionItem ${!selectedSession ? 'active' : ''}`" type="button" @click="emit('new-session')">
         <span class="sessionIcon">
           <Plus :size="16" />
         </span>
@@ -123,41 +185,44 @@ const emit = defineEmits<{
       <SidebarGroupContent class="sessionListFrame">
         <ScrollArea class="sessionList">
           <div class="sessionListInner">
-            <template v-if="isLoadingSessions">
-              <div v-for="i in 5" :key="`skeleton-${i}`" class="skeletonSessionItem">
-                <Skeleton class="skeletonSessionIcon" />
-                <div class="skeletonSessionLine">
-                  <Skeleton class="skeletonSessionLineShort" />
-                  <Skeleton class="skeletonSessionLineLong" />
-                </div>
-              </div>
-            </template>
-            <template v-else>
-              <button
-                v-for="session in sessions"
-                :key="session.session_id"
-                :class="`sessionItem ${session.session_id === sessionId ? 'active' : ''}`"
-                type="button"
-                :title="sessionTitle(session)"
-                :disabled="isStreaming"
-                @click="emit('select-session', session.session_id)"
-              >
-                <span class="sessionIcon">
-                  <MessageSquare :size="16" />
-                </span>
-                <span class="sessionText">
-                  <strong>{{ sessionUserQueryText(session) || session.session_id }}</strong>
-                  <small>
-                    {{ formatSessionTime(session.last_updated || session.created_at) || session.session_id }}
-                    <template v-if="typeof session.total_turns === 'number' && session.total_turns > 0"> · {{ session.total_turns }} turns</template>
-                  </small>
-                </span>
-              </button>
-            </template>
+            <button
+              v-for="session in sessions"
+              :key="session.session_id"
+              :class="`sessionItem ${session.session_id === selectedSession ? 'active' : ''}`"
+              type="button"
+              :title="sessionTitle(session)"
+              @click="emit('select-session', session.session_id)"
+              @contextmenu="onSessionContext($event, session.session_id)"
+            >
+              <span class="sessionIcon">
+                <MessageSquare :size="16" />
+              </span>
+              <span class="sessionText">
+                <strong>{{ sessionUserQueryText(session) || session.session_id }}</strong>
+                <small>
+                  {{ formatSessionTime(session.last_updated || session.created_at) || session.session_id }}
+                  <template v-if="typeof session.total_turns === 'number' && session.total_turns > 0"> · {{ session.total_turns }} turns</template>
+                </small>
+              </span>
+            </button>
           </div>
         </ScrollArea>
       </SidebarGroupContent>
     </SidebarGroup>
+
+    <!-- Context menu -->
+    <Teleport to="body">
+      <div
+        v-if="contextMenuSession"
+        class="sessionContextMenu"
+        :style="{ left: contextMenuPos.x + 'px', top: contextMenuPos.y + 'px' }"
+        @click="closeContextMenu"
+        @contextmenu.prevent="closeContextMenu"
+      >
+        <button type="button" @click="handleCompact">压缩历史</button>
+        <button type="button" class="destructive" @click="handleDelete">删除会话</button>
+      </div>
+    </Teleport>
 
     <div class="sidebarFooter">
       <Badge
@@ -167,12 +232,12 @@ const emit = defineEmits<{
         <CheckCircle2 v-if="connection === 'online'" :size="14" />
         <Loader2 v-else-if="connection === 'checking'" class="spin" :size="14" />
         <WifiOff v-else :size="14" />
-        {{ connectionLabel }}
+        {{ connectionLabelMap[connection] }}
       </Badge>
       <div class="sidebarFooterActions">
         <Tooltip>
           <TooltipTrigger as-child>
-            <Button class="sidebarThemeBtn" variant="ghost" size="icon" aria-label="切换主题" @click="emit('toggle-theme')">
+            <Button class="sidebarThemeBtn" variant="ghost" size="icon" aria-label="切换主题" @click="toggleTheme">
               <Sun v-if="theme === 'dark'" :size="17" />
               <Moon v-else :size="17" />
             </Button>
@@ -193,7 +258,7 @@ const emit = defineEmits<{
     <div class="sidebarActionsStack">
       <Tooltip>
         <TooltipTrigger as-child>
-          <Button class="sidebarThemeBtn" variant="ghost" size="icon" aria-label="切换主题" @click="emit('toggle-theme')">
+          <Button class="sidebarThemeBtn" variant="ghost" size="icon" aria-label="切换主题" @click="toggleTheme">
             <Sun v-if="theme === 'dark'" :size="17" />
             <Moon v-else :size="17" />
           </Button>
@@ -210,7 +275,7 @@ const emit = defineEmits<{
       </Tooltip>
       <Tooltip>
         <TooltipTrigger as-child>
-          <Button class="iconButton" variant="ghost" size="icon" aria-label="新会话" :disabled="isStreaming" @click="emit('new-session')">
+          <Button class="iconButton" variant="ghost" size="icon" aria-label="新会话" @click="emit('new-session')">
             <Plus :size="17" />
           </Button>
         </TooltipTrigger>
