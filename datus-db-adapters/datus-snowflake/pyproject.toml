@@ -32,5 +32,10 @@ snowflake = "datus_snowflake:register"
 [tool.uv.sources]
 datus-db-core = { workspace = true }
 
+[tool.pytest.ini_options]
+markers = [
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["datus_snowflake"]

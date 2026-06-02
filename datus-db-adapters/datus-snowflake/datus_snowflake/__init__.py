@@ -15,5 +15,5 @@ def register():
         "snowflake",
         SnowflakeConnector,
         config_class=SnowflakeConfig,
-        capabilities={"catalog", "database", "schema"},
+        capabilities={"database", "schema"},
     )
