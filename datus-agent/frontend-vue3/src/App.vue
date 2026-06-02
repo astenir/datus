@@ -11,6 +11,7 @@ import MessageList from "@/components/chat/MessageList.vue";
 import SettingsDrawer from "@/components/settings/SettingsDrawer.vue";
 import AgentManager from "@/components/agent/AgentManager.vue";
 import KnowledgeExplorer from "@/components/knowledge/KnowledgeExplorer.vue";
+import SqlConsole from "@/components/sql/SqlConsole.vue";
 import Sheet from "@/components/ui/Sheet.vue";
 import SheetContent from "@/components/ui/SheetContent.vue";
 
@@ -188,11 +189,8 @@ watch(database, (db) => {
             </div>
 
             <!-- SQL Console view -->
-            <div v-else-if="activeView === 'sql'" class="moduleView">
-              <div class="modulePlaceholder">
-                <h2>SQL 控制台</h2>
-                <p>直接 SQL 查询执行 — 即将实现</p>
-              </div>
+            <div v-else-if="activeView === 'sql'" class="sqlView">
+              <SqlConsole />
             </div>
           </Pane>
         </Splitpanes>
