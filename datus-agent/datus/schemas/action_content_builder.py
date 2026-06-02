@@ -206,6 +206,30 @@ def build_user_content(action: ActionHistory) -> List[MessageContent]:
     return [MessageContent(type="markdown", payload=payload_data)]
 
 
+def build_compact_summary_content(action: ActionHistory) -> Optional[List[MessageContent]]:
+    """Build a markdown content from a ``compact_summary`` action.
+
+    Carries a ``kind`` marker so a print/API frontend can recognise the
+    compacted-context summary (and e.g. collapse the prior transcript) instead
+    of treating it as a normal assistant message. The backend never clears the
+    screen or mutates anything here — it only emits data.
+    """
+    out = action.output if isinstance(action.output, dict) else {}
+    summary = str(out.get("summary", "") or "")
+    if not summary:
+        return None
+    # ``history_jsonl`` is a server-local filesystem path; it is intentionally
+    # excluded here so API/print consumers never receive backend filesystem
+    # details (the local CLI panel reads the path from the action output
+    # directly, not from this externally visible payload).
+    payload = {
+        "content": summary,
+        "kind": "compact_summary",
+        "summary_token": int(out.get("summary_token", 0) or 0),
+    }
+    return [MessageContent(type="markdown", payload=payload)]
+
+
 def action_to_content(action: ActionHistory) -> Optional[List[MessageContent]]:
     """Convert an ActionHistory object to a list of MessageContent.
 
@@ -217,6 +241,10 @@ def action_to_content(action: ActionHistory) -> Optional[List[MessageContent]]:
 
     if action.action_type == "token_usage":
         return build_token_usage_content(action)
+    if action.action_type == "compact_progress":
+        return None  # in-progress hint is REPL-only; print/API frontends skip it
+    if action.action_type == "compact_summary":
+        return build_compact_summary_content(action)
     if role == ActionRole.TOOL and status == ActionStatus.PROCESSING:
         return build_tool_call_content(action)
     elif role == ActionRole.TOOL:
