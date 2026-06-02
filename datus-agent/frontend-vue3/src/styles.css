@@ -2248,6 +2248,82 @@ textarea:focus {
   justify-content: flex-end;
 }
 
+/* ─── Bootstrap Dialog ─────────────────────────────────────────────────────── */
+
+.bootstrapForm {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.bootstrapComponents {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.bootstrapActions {
+  display: flex;
+  gap: 8px;
+}
+
+.bootstrapLog {
+  max-height: 300px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  padding: 8px;
+}
+
+.bootstrapLogEntry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.bootstrapLogEntry:last-child {
+  border-bottom: 0;
+}
+
+.bootstrapLogEntry.error {
+  color: #be123c;
+}
+
+.bootstrapLogComponent {
+  color: var(--text-muted);
+  font-weight: 600;
+  min-width: 60px;
+}
+
+.bootstrapLogStage {
+  color: var(--text-soft);
+  font-size: 11px;
+  min-width: 50px;
+}
+
+.bootstrapLogMessage {
+  color: var(--text);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bootstrapLogError {
+  color: #be123c;
+  flex: 1;
+}
+
+.bootstrapLogProgress {
+  color: #047857;
+  font-weight: 600;
+}
+
 /* ─── SQL Console ──────────────────────────────────────────────────────────── */
 
 .sqlConsole {

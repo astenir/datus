@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
-import { BookOpen, ChevronRight, Folder, FolderPlus, Loader2, Pencil, Trash2 } from "@lucide/vue";
+import { BookOpen, ChevronRight, Database, Folder, FolderPlus, Loader2, Pencil, Trash2 } from "@lucide/vue";
 
 import Button from "@/components/ui/Button.vue";
 import ScrollArea from "@/components/ui/ScrollArea.vue";
@@ -12,6 +12,7 @@ import SheetContent from "@/components/ui/SheetContent.vue";
 import SheetHeader from "@/components/ui/SheetHeader.vue";
 import SheetTitle from "@/components/ui/SheetTitle.vue";
 import { subjectApi } from "@/lib/api";
+import BootstrapDialog from "./BootstrapDialog.vue";
 import { useConnection } from "@/composables/useConnection";
 import type { SubjectNode, MetricInfo, ReferenceSQLInfo, KnowledgeInfo, SubjectNodeType } from "@/types";
 
@@ -21,6 +22,9 @@ const subjects = ref<SubjectNode[]>([]);
 const loading = ref(false);
 const selectedNode = ref<SubjectNode | null>(null);
 const detailLoading = ref(false);
+
+// Bootstrap
+const showBootstrap = ref(false);
 
 // Detail data
 const metricDetail = ref<MetricInfo | null>(null);
@@ -208,6 +212,9 @@ onMounted(loadSubjects);
       <div class="knowledgeTreeHeader">
         <h3>Subject 树</h3>
         <div class="knowledgeTreeActions">
+          <Button variant="ghost" size="icon" aria-label="Bootstrap" title="知识库构建" @click="showBootstrap = true">
+            <Database :size="16" />
+          </Button>
           <Button variant="ghost" size="icon" aria-label="新建目录" @click="openCreate([], 'directory')">
             <FolderPlus :size="16" />
           </Button>
@@ -366,5 +373,7 @@ onMounted(loadSubjects);
         </form>
       </SheetContent>
     </Sheet>
+
+    <BootstrapDialog :open="showBootstrap" @update:open="showBootstrap = $event" />
   </div>
 </template>
