@@ -37,7 +37,9 @@ export type ChatSessionOption = {
 
 export type ConfigSummary = {
   target?: string;
+  models?: Record<string, Record<string, unknown>>;
   current_datasource?: string;
+  datasources?: Record<string, Record<string, unknown>>;
   home?: string;
 };
 

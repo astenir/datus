@@ -1925,6 +1925,54 @@ textarea:focus {
   white-space: nowrap;
 }
 
+.configTestRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.testBtn {
+  width: 24px;
+  height: 24px;
+  color: var(--text-muted);
+}
+
+.testBtn:hover:not(:disabled) {
+  color: #047857;
+}
+
+.testResult {
+  margin-top: 8px;
+}
+
+.configList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.configItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.configItemName {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.configItemType {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 .spin {
   animation: spin 0.9s linear infinite;
 }
