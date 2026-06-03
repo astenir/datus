@@ -908,10 +908,12 @@ button:disabled {
 
 .markdownBody h1 {
   font-size: 1.375rem;
+  text-align: center;
 }
 
 .markdownBody h2 {
   font-size: 1.125rem;
+  text-align: center;
 }
 
 .markdownBody h3 {
