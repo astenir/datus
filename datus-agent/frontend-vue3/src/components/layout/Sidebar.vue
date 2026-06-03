@@ -21,7 +21,6 @@ import {
 import Badge from "@/components/ui/Badge.vue";
 import Button from "@/components/ui/Button.vue";
 import ScrollArea from "@/components/ui/ScrollArea.vue";
-import Skeleton from "@/components/ui/Skeleton.vue";
 import Tooltip from "@/components/ui/Tooltip.vue";
 import TooltipTrigger from "@/components/ui/TooltipTrigger.vue";
 import TooltipContent from "@/components/ui/TooltipContent.vue";

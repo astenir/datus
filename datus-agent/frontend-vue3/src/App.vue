@@ -30,7 +30,7 @@ import type { ViewType } from "@/types";
 
 useTheme();
 const { language, permissionMode, planMode } = useChatSettings();
-const { apiBase, connection, config, effectiveBase, checkConnection, setApiBase } = useConnection();
+const { apiBase, connection, config, checkConnection, setApiBase } = useConnection();
 const { messages, sessions, selectedSession, isStreaming, loadSessions, selectSession, sendMessage, stopSession, deleteSession, compactSession, resumeSession, clearMessages } = useChatState();
 const { agents, loadAgents } = useAgents();
 const { modelOptions, loadModels } = useModels();

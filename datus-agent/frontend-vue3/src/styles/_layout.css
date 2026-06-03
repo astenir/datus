@@ -70,11 +70,6 @@
 }
 
 
-.dark .settingsOverlay {
-  background: rgba(0, 0, 0, 0.6);
-}
-
-
 /* ─── Shell & Layout ──────────────────────────────────────────────────────── */
 .shell {
   display: flex;

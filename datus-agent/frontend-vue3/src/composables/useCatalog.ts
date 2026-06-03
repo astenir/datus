@@ -35,11 +35,6 @@ watch([database, catalogEntries], ([db]) => {
   schemaOptions.value = schemaOptionsForDatabase(catalogEntries.value, db);
 });
 
-function resetCatalog() {
-  database.value = "";
-  schema.value = "";
-}
-
 export function useCatalog() {
   return {
     catalogEntries,

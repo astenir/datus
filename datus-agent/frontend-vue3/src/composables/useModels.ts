@@ -4,7 +4,6 @@ import { useConnection } from "./useConnection";
 import type { ModelInfo, SelectOption } from "@/types";
 
 const models = ref<ModelInfo[]>([]);
-const currentModel = ref("");
 const modelOptions = ref<SelectOption[]>([]);
 
 async function loadModels() {
@@ -14,7 +13,6 @@ async function loadModels() {
     const result = await modelsApi.list(base);
     if (result) {
       models.value = result.models ?? [];
-      currentModel.value = result.current_model ?? "";
       modelOptions.value = models.value.map((m) => {
         const id = m.model ?? m.id;
         const value = m.provider ? `${m.provider}/${id}` : id;
