@@ -7,8 +7,30 @@
 from unittest.mock import patch
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 from datus_snowflake import SnowflakeConfig, SnowflakeConnector
+
+
+def _private_key_material(encryption_password: bytes | None = None) -> tuple[str, bytes]:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    encryption_algorithm = (
+        serialization.NoEncryption()
+        if encryption_password is None
+        else serialization.BestAvailableEncryption(encryption_password)
+    )
+    pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=encryption_algorithm,
+    ).decode()
+    der = private_key.private_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
+    return pem, der
 
 
 def test_config_requires_password_or_key():
@@ -43,11 +65,40 @@ def test_config_accepts_key_pair_only(tmp_path):
     assert cfg.password is None
 
 
+def test_config_accepts_private_key_only():
+    cfg = SnowflakeConfig(account="a", username="u", warehouse="w", private_key="pem")
+    assert cfg.private_key.get_secret_value() == "pem"
+    assert cfg.private_key_file is None
+    assert cfg.password is None
+
+
+def test_config_private_key_can_override_other_credentials(tmp_path):
+    key_file = tmp_path / "key.p8"
+    key_file.write_text("dummy")
+
+    cfg = SnowflakeConfig(
+        account="a",
+        username="u",
+        warehouse="w",
+        password="p",
+        private_key_file=str(key_file),
+        private_key="pem",
+    )
+
+    assert cfg.private_key.get_secret_value() == "pem"
+    assert cfg.private_key_file == str(key_file)
+    assert cfg.password.get_secret_value() == "p"
+
+
 def test_config_masks_secret_repr():
     """Secrets must not leak through repr/str of the config object."""
     cfg = SnowflakeConfig(account="a", username="u", warehouse="w", password="topsecret")
     assert "topsecret" not in repr(cfg)
     assert "topsecret" not in str(cfg)
+
+    cfg_pem = SnowflakeConfig(account="a", username="u", warehouse="w", private_key="pemsecret")
+    assert "pemsecret" not in repr(cfg_pem)
+    assert "pemsecret" not in str(cfg_pem)
 
 
 def test_config_coerces_numeric_credentials(tmp_path):
@@ -111,3 +162,51 @@ def test_connector_uses_key_pair_auth_kwargs(tmp_path):
     assert kwargs["private_key_file_pwd"] == "secret"
     assert kwargs["role"] == "ANALYST"
     assert "password" not in kwargs
+
+
+def test_connector_uses_private_key_auth_kwargs(tmp_path):
+    key_file = tmp_path / "key.p8"
+    key_file.write_text("dummy")
+    pem, der = _private_key_material()
+
+    cfg = SnowflakeConfig(
+        account="a",
+        username="u",
+        warehouse="w",
+        password="ignored-password",
+        private_key_file=str(key_file),
+        private_key=pem.replace("\n", "\\n"),
+        private_key_file_pwd="unused-file-passphrase",
+        role="ANALYST",
+    )
+
+    with patch("datus_snowflake.connector.Connect") as connect:
+        SnowflakeConnector(cfg)
+
+    kwargs = connect.call_args.kwargs
+    assert kwargs["authenticator"] == "SNOWFLAKE_JWT"
+    assert kwargs["private_key"] == der
+    assert kwargs["role"] == "ANALYST"
+    assert "password" not in kwargs
+    assert "private_key_file" not in kwargs
+    assert "private_key_file_pwd" not in kwargs
+
+
+def test_connector_uses_encrypted_private_key_auth_kwargs():
+    pem, der = _private_key_material(b"secret")
+    cfg = SnowflakeConfig(
+        account="a",
+        username="u",
+        warehouse="w",
+        private_key=pem,
+        private_key_file_pwd="secret",
+    )
+
+    with patch("datus_snowflake.connector.Connect") as connect:
+        SnowflakeConnector(cfg)
+
+    kwargs = connect.call_args.kwargs
+    assert kwargs["authenticator"] == "SNOWFLAKE_JWT"
+    assert kwargs["private_key"] == der
+    assert "password" not in kwargs
+    assert "private_key_file" not in kwargs
