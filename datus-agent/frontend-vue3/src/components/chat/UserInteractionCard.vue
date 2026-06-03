@@ -16,8 +16,10 @@ const loading = ref(false);
 const selectedKey = ref<string | null>(null);
 const error = ref<string | null>(null);
 
+const { sendInteraction, isInteracting } = useChatState();
+
 async function handleSelect(key: string) {
-  if (loading.value || selectedKey.value || props.isStreaming) return;
+  if (loading.value || selectedKey.value || props.isStreaming || isInteracting.value) return;
   if (!props.sessionId) {
     error.value = "会话未就绪，请稍后重试";
     return;
@@ -29,7 +31,6 @@ async function handleSelect(key: string) {
   emit("responded");
 
   try {
-    const { sendInteraction } = useChatState();
     await sendInteraction(key);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -64,7 +65,7 @@ function retry() {
           :key="opt.key"
           class="userInteractionBtn"
           :class="{ selected: selectedKey === opt.key }"
-          :disabled="loading || !!selectedKey || isStreaming"
+          :disabled="loading || !!selectedKey || isStreaming || isInteracting || !sessionId"
           @click="handleSelect(opt.key)"
         >
           <span v-if="selectedKey === opt.key" class="checkIcon">✓</span>
@@ -73,7 +74,8 @@ function retry() {
       </div>
     </div>
 
-    <p v-if="isStreaming && !selectedKey" class="userInteractionStatus">等待生成完成...</p>
+    <p v-if="!sessionId" class="userInteractionStatus">会话初始化中...</p>
+    <p v-else-if="isStreaming && !selectedKey" class="userInteractionStatus">等待生成完成...</p>
     <p v-else-if="loading" class="userInteractionStatus">提交中...</p>
     <p v-else-if="selectedKey && !error" class="userInteractionStatus done">已提交</p>
 

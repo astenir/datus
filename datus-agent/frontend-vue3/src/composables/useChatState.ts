@@ -18,6 +18,7 @@ const messages = ref<ChatMessage[]>([]);
 const sessions = ref<ChatSessionOption[]>([]);
 const selectedSession = ref<string | null>(null);
 const isStreaming = ref(false);
+const isInteracting = ref(false);
 const abortRef = { current: null as AbortController | null };
 const messageCache = new Map<string, ChatMessage[]>();
 
@@ -69,6 +70,7 @@ function selectSession(sessionId: string | null) {
     abortRef.current = null;
   }
   isStreaming.value = false;
+  isInteracting.value = false;
 
   // Cache current messages for the outgoing session
   if (selectedSession.value && messages.value.length > 0) {
@@ -246,6 +248,9 @@ async function compactSession(sessionId: string) {
 }
 
 async function resumeSession(sessionId?: string) {
+  // Skip if an interaction is in progress
+  if (isInteracting.value) return;
+
   const targetSession = sessionId ?? selectedSession.value;
   if (!targetSession) return;
   const { effectiveBase } = useConnection();
@@ -274,7 +279,9 @@ async function resumeSession(sessionId?: string) {
       }
     }
   } catch (error) {
-    console.error("Failed to resume session:", error);
+    if ((error as Error).name !== "AbortError") {
+      console.error("Failed to resume session:", error);
+    }
   } finally {
     isStreaming.value = false;
     abortRef.current = null;
@@ -292,80 +299,86 @@ async function sendInteraction(interactionKey: string) {
   const sessionId = selectedSession.value;
   if (!sessionId) return;
 
-  // Stop current task to release backend lock
-  await stopSession();
-
-  // Wait for backend to release the lock
-  await new Promise((r) => setTimeout(r, 1500));
-
-  const controller = new AbortController();
-  abortRef.current = controller;
-  isStreaming.value = true;
+  isInteracting.value = true;
 
   try {
-    const url = `${normalizeBaseUrl(base)}/api/v1/chat/user_interaction`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-      body: JSON.stringify({
-        session_id: sessionId,
-        interaction_key: interactionKey,
-        input: [[interactionKey]],
-      }),
-      signal: controller.signal,
-    });
+    // Stop current task to release backend lock
+    await stopSession();
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(text || `${response.status} ${response.statusText}`);
-    }
+    // Wait for backend to release the lock
+    await new Promise((r) => setTimeout(r, 1500));
 
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error("No response body");
+    const controller = new AbortController();
+    abortRef.current = controller;
+    isStreaming.value = true;
 
-    const decoder = new TextDecoder();
-    let buffer = "";
+    try {
+      const url = `${normalizeBaseUrl(base)}/api/v1/chat/user_interaction`;
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        body: JSON.stringify({
+          session_id: sessionId,
+          interaction_key: interactionKey,
+          input: [[interactionKey]],
+        }),
+        signal: controller.signal,
+      });
 
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const parsed = parseSseBuffer(buffer);
-      buffer = parsed.rest;
-
-      for (const event of parsed.events) {
-        const incoming = messageFromEvent(event);
-        if (incoming) messages.value = mergeMessage(messages.value, incoming);
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `${response.status} ${response.statusText}`);
       }
-    }
 
-    if (buffer) {
-      const parsed = parseSseBuffer(buffer, { flush: true });
-      for (const event of parsed.events) {
-        const incoming = messageFromEvent(event);
-        if (incoming) messages.value = mergeMessage(messages.value, incoming);
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("No response body");
+
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const parsed = parseSseBuffer(buffer);
+        buffer = parsed.rest;
+
+        for (const event of parsed.events) {
+          const incoming = messageFromEvent(event);
+          if (incoming) messages.value = mergeMessage(messages.value, incoming);
+        }
       }
-    }
-  } catch (error) {
-    if ((error as Error).name !== "AbortError") {
-      console.error("Failed to send interaction:", error);
-      messages.value = [
-        ...messages.value,
-        {
-          id: `error-${Date.now()}`,
-          role: "system",
-          content: `**交互失败** ${error instanceof Error ? error.message : String(error)}`,
-        },
-      ];
+
+      if (buffer) {
+        const parsed = parseSseBuffer(buffer, { flush: true });
+        for (const event of parsed.events) {
+          const incoming = messageFromEvent(event);
+          if (incoming) messages.value = mergeMessage(messages.value, incoming);
+        }
+      }
+    } catch (error) {
+      if ((error as Error).name !== "AbortError") {
+        console.error("Failed to send interaction:", error);
+        messages.value = [
+          ...messages.value,
+          {
+            id: `error-${Date.now()}`,
+            role: "system",
+            content: `**交互失败** ${error instanceof Error ? error.message : String(error)}`,
+          },
+        ];
+      }
+    } finally {
+      isStreaming.value = false;
+      abortRef.current = null;
+      if (selectedSession.value) {
+        messageCache.set(selectedSession.value, messages.value);
+      }
+      loadSessions();
     }
   } finally {
-    isStreaming.value = false;
-    abortRef.current = null;
-    if (selectedSession.value) {
-      messageCache.set(selectedSession.value, messages.value);
-    }
-    loadSessions();
+    isInteracting.value = false;
   }
 }
 
@@ -381,6 +394,7 @@ export function useChatState() {
     sessions,
     selectedSession,
     isStreaming,
+    isInteracting,
     loadSessions,
     selectSession,
     sendMessage,
