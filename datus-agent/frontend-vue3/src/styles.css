@@ -1399,70 +1399,59 @@ button:disabled {
 .messageActions {
   display: flex;
   align-items: center;
-  gap: 4px;
-  margin-top: 8px;
-  opacity: 0;
-  transition: opacity 0.16s ease;
-}
-
-.message:hover .messageActions,
-.messageActions:focus-within {
-  opacity: 1;
+  justify-content: flex-end;
+  gap: 2px;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line);
 }
 
 .feedbackButtons {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
 }
 
-.feedbackButtons .feedbackThanks {
-  opacity: 1;
+.feedbackThanks {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 560;
+  padding: 0 4px;
 }
 
 .feedbackBtn {
   display: grid;
-  width: 28px;
-  height: 28px;
+  width: 26px;
+  height: 26px;
   place-items: center;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  background: var(--surface);
+  border: none;
+  border-radius: 6px;
+  background: transparent;
   color: var(--text-muted);
   cursor: pointer;
   transition:
-    background 0.16s ease,
-    color 0.16s ease,
-    border-color 0.16s ease;
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
 .feedbackBtn:hover:not(:disabled) {
   background: var(--surface-soft);
   color: var(--text);
-  border-color: var(--line-strong);
 }
 
 .feedbackBtn.active {
   background: #ecfdf5;
-  border-color: #a7f3d0;
   color: #047857;
 }
 
 .feedbackBtn.active.destructive {
   background: #fff1f2;
-  border-color: #fecdd3;
   color: #be123c;
 }
 
 .feedbackBtn:disabled {
   cursor: default;
   opacity: 0.6;
-}
-
-.feedbackThanks {
-  color: var(--text-soft);
-  font-size: 11px;
-  font-weight: 560;
 }
 
 .streaming {
