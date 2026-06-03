@@ -303,7 +303,9 @@ class DatusAPIService:
         if self.agent_config and self.agent_config.current_datasource:
             database_status[self.agent_config.current_datasource] = "not_checked"
 
-        return HealthResponse(status="healthy", version="1.0.0", database_status=database_status, llm_status="not_checked")
+        return HealthResponse(
+            status="healthy", version="1.0.0", database_status=database_status, llm_status="not_checked"
+        )
 
 
 # Global service instance - will be initialized with command line args
