@@ -21,6 +21,10 @@ const error = ref("");
 
 async function handleSelect(key: string) {
   if (loading.value || responded.value) return;
+  if (!props.sessionId) {
+    error.value = "会话未就绪，请稍后重试";
+    return;
+  }
   loading.value = true;
   error.value = "";
   try {

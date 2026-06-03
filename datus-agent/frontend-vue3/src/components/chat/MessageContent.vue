@@ -84,20 +84,11 @@ async function handleFeedback(emoji: string) {
         :short-desc="block.shortDesc"
       />
       <UserInteractionCard
-        v-else-if="block.type === 'user-interaction' && sessionId"
-        :session-id="sessionId"
+        v-else-if="block.type === 'user-interaction'"
+        :session-id="sessionId ?? ''"
         :action-type="block.actionType"
         :requests="block.requests"
       />
-      <div v-else-if="block.type === 'user-interaction'" class="userInteractionCard">
-        <div class="userInteractionHeader">需要用户确认 ({{ block.actionType }})</div>
-        <div v-for="(req, ri) in block.requests" :key="ri">
-          <p v-if="req.content" class="userInteractionContent">{{ req.content }}</p>
-          <div class="userInteractionOptions">
-            <span v-for="opt in req.options" :key="opt.key" class="userInteractionBtn" style="cursor:default;opacity:0.7">{{ opt.title || opt.key }}</span>
-          </div>
-        </div>
-      </div>
       <div v-else class="markdownBody" v-html="renderMarkdown(block.content)" />
     </template>
     <div v-if="message.role === 'assistant' && sessionId" class="messageActions">

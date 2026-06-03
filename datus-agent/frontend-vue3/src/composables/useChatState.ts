@@ -62,6 +62,12 @@ async function loadSessionHistory(sessionId: string) {
 }
 
 function selectSession(sessionId: string | null) {
+  // Abort any active stream before switching
+  if (abortRef.current) {
+    abortRef.current.abort();
+    abortRef.current = null;
+  }
+  isStreaming.value = false;
   selectedSession.value = sessionId;
   if (sessionId) {
     loadSessionHistory(sessionId);
