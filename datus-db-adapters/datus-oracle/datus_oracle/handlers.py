@@ -48,13 +48,10 @@ def build_oracle_uri(db_config) -> str:
     if service_name is None and not hasattr(db_config, "service_name"):
         service_name = _value_or_none(getattr(db_config, "database", None))
     sid = _value_or_none(getattr(db_config, "sid", None))
-    schema = _upper_or_none(getattr(db_config, "schema_name", None) or getattr(db_config, "schema", None))
     if service_name:
         query["service_name"] = service_name
     elif sid:
         query["sid"] = sid
-    if schema:
-        query["schema"] = schema
     username = quote(_clean_str(db_config.username), safe="")
     password = quote(_clean_str(db_config.password), safe="")
     auth = f"{username}:{password}@" if password else f"{username}@"

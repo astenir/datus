@@ -19,6 +19,7 @@ def test_build_oracle_uri_with_service_name():
 
     assert uri.startswith("oracle+oracledb://app:p%40ss%20word@db.example.com:1522/")
     assert "service_name=SALES" in uri
+    assert "schema=" not in uri
 
 
 def test_build_oracle_uri_with_sid():

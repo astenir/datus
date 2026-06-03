@@ -113,6 +113,13 @@ def test_get_schemas_filters_system_schemas():
     assert connector.get_schemas() == ["APP", "REPORTING"]
 
 
+def test_get_schemas_handles_lowercase_result_columns():
+    connector = make_connector()
+    connector._execute_pandas = MagicMock(return_value=pd.DataFrame({"username": ["SYS", "APP", "REPORTING"]}))
+
+    assert connector.get_schemas() == ["APP", "REPORTING"]
+
+
 def test_get_databases_returns_configured_service_name():
     connector = make_connector()
 

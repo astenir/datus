@@ -77,12 +77,15 @@ class OracleConnector(SQLAlchemyConnector, MigrationTargetMixin):
         if hasattr(query_result, "empty"):
             if query_result.empty:
                 return rows
+            column_lookup = {str(column).upper(): column for column in query_result.columns}
             for _, row in query_result.iterrows():
-                rows.append({column: row[column] for column in columns})
+                rows.append({column: row[column_lookup[column.upper()]] for column in columns})
             return rows
-        count = len(query_result[columns[0]]) if columns and columns[0] in query_result else 0
+        dict_lookup = {str(column).upper(): column for column in query_result}
+        first_column = dict_lookup.get(columns[0].upper()) if columns else None
+        count = len(query_result[first_column]) if first_column else 0
         for i in range(count):
-            rows.append({column: query_result[column][i] for column in columns})
+            rows.append({column: query_result[dict_lookup[column.upper()]][i] for column in columns})
         return rows
 
     def _get_metadata(
