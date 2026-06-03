@@ -10,17 +10,15 @@ const props = defineProps<{
   isStreaming?: boolean;
 }>();
 
-const emit = defineEmits<{ responded: [] }>();
-
 const loading = ref(false);
 const selectedKey = ref<string | null>(null);
 const error = ref<string | null>(null);
+const succeeded = ref(false);
 
 const { sendInteraction, isInteracting } = useChatState();
 
-// Button is disabled when: loading, already selected, still streaming, interacting, or no sessionId
 const buttonsDisabled = computed(
-  () => loading.value || !!selectedKey.value || props.isStreaming || isInteracting.value || !props.sessionId
+  () => loading.value || succeeded.value || props.isStreaming || isInteracting.value || !props.sessionId
 );
 
 async function handleSelect(key: string) {
@@ -30,10 +28,10 @@ async function handleSelect(key: string) {
   loading.value = true;
   error.value = null;
   selectedKey.value = key;
-  emit("responded");
 
   try {
     await sendInteraction(key);
+    succeeded.value = true;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     error.value = msg.includes("task is already running")
@@ -48,6 +46,7 @@ async function handleSelect(key: string) {
 function retry() {
   error.value = null;
   selectedKey.value = null;
+  succeeded.value = false;
 }
 </script>
 
@@ -67,16 +66,16 @@ function retry() {
           :disabled="buttonsDisabled"
           @click="handleSelect(opt.key)"
         >
-          <span v-if="selectedKey === opt.key" class="checkIcon">✓</span>
+          <span v-if="selectedKey === opt.key && succeeded" class="checkIcon">✓</span>
           {{ opt.title }}
         </button>
       </div>
     </div>
 
-    <p v-if="isStreaming" class="userInteractionStatus">等待生成完成...</p>
+    <p v-if="isStreaming && !selectedKey" class="userInteractionStatus">等待生成完成...</p>
     <p v-else-if="!sessionId" class="userInteractionStatus">等待会话信息...</p>
     <p v-else-if="loading" class="userInteractionStatus">提交中...</p>
-    <p v-else-if="selectedKey && !error" class="userInteractionStatus done">已提交</p>
+    <p v-else-if="succeeded" class="userInteractionStatus done">已提交，等待回复...</p>
 
     <div v-if="error" class="userInteractionError">
       <p>{{ error }}</p>

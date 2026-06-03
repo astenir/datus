@@ -303,7 +303,7 @@ async function sendInteraction(interactionKey: string) {
   const { effectiveBase } = useConnection();
   const base = effectiveBase();
   const sessionId = selectedSession.value;
-  if (!sessionId) return;
+  if (!sessionId) throw new Error("会话未就绪");
 
   isInteracting.value = true;
 
@@ -323,18 +323,6 @@ async function sendInteraction(interactionKey: string) {
 
     // After interaction is submitted, resume to receive continued content via SSE
     await resumeSession(sessionId);
-  } catch (error) {
-    if ((error as Error).name !== "AbortError") {
-      console.error("Failed to send interaction:", error);
-      messages.value = [
-        ...messages.value,
-        {
-          id: `error-${Date.now()}`,
-          role: "system",
-          content: `**交互失败** ${error instanceof Error ? error.message : String(error)}`,
-        },
-      ];
-    }
   } finally {
     isInteracting.value = false;
   }
