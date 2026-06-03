@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, watch } from "vue";
 import { CircleStop, Clock, Loader2, Play, Rows3, Terminal } from "@lucide/vue";
 
 import Button from "@/components/ui/Button.vue";
@@ -83,7 +83,6 @@ function parseResult() {
 }
 
 // Watch for result changes
-import { watch } from "vue";
 watch(result, parseResult);
 </script>
 

@@ -25,7 +25,7 @@ import Skeleton from "@/components/ui/Skeleton.vue";
 import Tooltip from "@/components/ui/Tooltip.vue";
 import TooltipTrigger from "@/components/ui/TooltipTrigger.vue";
 import TooltipContent from "@/components/ui/TooltipContent.vue";
-import SidebarRoot from "@/components/ui/Sidebar.vue";
+import SidebarRoot from "@/components/ui/SidebarRoot.vue";
 import SidebarGroup from "@/components/ui/SidebarGroup.vue";
 import SidebarGroupContent from "@/components/ui/SidebarGroupContent.vue";
 import SidebarGroupHeader from "@/components/ui/SidebarGroupHeader.vue";
