@@ -115,3 +115,66 @@ def test_get_databases_returns_configured_service_name():
     connector = make_connector()
 
     assert connector.get_databases() == ["FREEPDB1"]
+
+
+def test_get_schema_returns_columns_with_pk_and_comments():
+    connector = make_connector()
+    connector._execute_pandas = MagicMock(
+        return_value=pd.DataFrame(
+            {
+                "COLUMN_ID": [1],
+                "COLUMN_NAME": ["ID"],
+                "DATA_TYPE": ["NUMBER"],
+                "DATA_PRECISION": [10],
+                "DATA_SCALE": [0],
+                "NULLABLE": ["N"],
+                "DATA_DEFAULT": [None],
+                "IS_PK": [1],
+                "COMMENTS": ["primary id"],
+            }
+        )
+    )
+
+    assert connector.get_schema(schema_name="APP", table_name="CUSTOMERS") == [
+        {
+            "cid": 0,
+            "name": "ID",
+            "type": "NUMBER(10,0)",
+            "nullable": False,
+            "default_value": None,
+            "pk": True,
+            "comment": "primary id",
+        }
+    ]
+
+
+def test_do_switch_context_sets_current_schema():
+    connector = make_connector()
+    conn = MagicMock()
+
+    connector.do_switch_context(conn, schema_name="REPORTING")
+
+    sql = str(conn.execute.call_args.args[0])
+    assert 'ALTER SESSION SET CURRENT_SCHEMA = "REPORTING"' in sql
+    conn.commit.assert_called_once()
+
+
+def test_get_ddl_calls_dbms_metadata():
+    connector = make_connector()
+    connector._execute_pandas = MagicMock(
+        return_value=pd.DataFrame({"DDL": ['CREATE TABLE "APP"."CUSTOMERS" ("ID" NUMBER)']})
+    )
+
+    assert connector._get_ddl("APP", "CUSTOMERS", "TABLE").startswith("CREATE TABLE")
+    assert "DBMS_METADATA.GET_DDL" in connector._execute_pandas.call_args.args[0]
+
+
+def test_sample_rows_uses_fetch_first():
+    connector = make_connector()
+    connector._execute_pandas = MagicMock(return_value=pd.DataFrame({"ID": [1]}))
+
+    rows = connector.get_sample_rows(tables=["CUSTOMERS"], top_n=3, schema_name="APP")
+
+    assert rows[0]["table_name"] == "CUSTOMERS"
+    assert "ID" in rows[0]["sample_rows"]
+    assert "FETCH FIRST 3 ROWS ONLY" in connector._execute_pandas.call_args.args[0]
