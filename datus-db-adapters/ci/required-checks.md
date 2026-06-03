@@ -15,8 +15,9 @@ and job names stable, or update the ruleset and this document in the same change
 - `Adapter CI / unit-tests`
 
 PR checks must stay deterministic and avoid Docker service startup. They protect
-formatting, title hygiene, unit correctness, package import paths, and cheap
-adapter contracts.
+formatting, title hygiene, impacted unit correctness, package import paths, and
+cheap adapter contracts. Shared repository changes, such as workflow, CI, core,
+or SQLAlchemy changes, expand to all unit targets.
 
 ## Merge Queue Required Checks
 
@@ -24,8 +25,9 @@ adapter contracts.
 - `Adapter CI / integration-tests`
 
 `Adapter CI / integration-tests` is intentionally limited to `merge_group` and
-manual dispatch. It starts Docker-backed database services and validates real
-adapter behavior before code reaches `main`.
+manual dispatch. In merge queue runs it starts only impacted Docker-backed
+database services; shared workflow, CI, core, or SQLAlchemy changes expand to
+all integration targets. Manual dispatch keeps the full integration sweep.
 
 ## Bypass Policy
 
