@@ -168,8 +168,9 @@ export function contentFromPayloadBlocks(
     const payload = item && typeof item.payload === "object" && item.payload ? item.payload : {};
     const type = item?.type ?? "markdown";
 
-    if (type === "markdown") blocks.push({ type: "markdown", content: stringifyContent(payload.content) });
-    if (type === "thinking") {
+    if (type === "markdown") {
+      blocks.push({ type: "markdown", content: stringifyContent(payload.content) });
+    } else if (type === "thinking") {
       const text = stringifyContent(payload.content);
       // Only wrap in "Thinking" blockquote when mixed with non-thinking blocks
       if (hasNonThinking && operation !== "appendMessage") {
@@ -177,54 +178,48 @@ export function contentFromPayloadBlocks(
       } else {
         blocks.push({ type: "markdown", content: text });
       }
-    }
-    if (type === "code") {
+    } else if (type === "code") {
       const language = stringifyContent(payload.codeType ?? payload.code_type ?? "text") || "text";
       blocks.push({ type: "markdown", content: `\`\`\`${language}\n${stringifyContent(payload.content ?? payload.code)}\n\`\`\`` });
-    }
-    if (type === "call-tool") {
+    } else if (type === "call-tool") {
       const toolName = stringifyContent(payload.toolName ?? payload.tool_name ?? "tool");
       const toolParams = payload.toolParams ?? payload.tool_params ?? {};
       blocks.push({ type: "tool-call", toolName, params: toolParams });
-    }
-    if (type === "call-tool-result") {
+    } else if (type === "call-tool-result") {
       const toolName = stringifyContent(payload.toolName ?? payload.tool_name ?? "tool");
       const duration = typeof payload.duration === "number" ? payload.duration : undefined;
       const shortDesc = stringifyContent(payload.shortDesc ?? payload.short_desc);
       blocks.push({ type: "tool-result", toolName, duration, shortDesc, result: payload.result });
-    }
-    if (type === "error") blocks.push({ type: "markdown", content: `**错误**\n\n${stringifyContent(payload.content)}` });
-    if (type === "user-interaction") {
+    } else if (type === "error") {
+      blocks.push({ type: "markdown", content: `**错误**\n\n${stringifyContent(payload.content)}` });
+    } else if (type === "user-interaction") {
       const requests = Array.isArray(payload.requests) ? payload.requests : [];
       const title = `**需要用户确认** \`${stringifyContent(payload.actionType ?? payload.action_type ?? "interaction")}\``;
       const body = requests
         .map((request, index) => {
-          const item = request as Record<string, unknown>;
-          const options = Array.isArray(item.options)
-            ? item.options
+          const req = request as Record<string, unknown>;
+          const options = Array.isArray(req.options)
+            ? req.options
                 .map((option) => {
                   const optionItem = option as Record<string, unknown>;
                   return `- \`${stringifyContent(optionItem.key)}\` ${stringifyContent(optionItem.title)}`;
                 })
                 .join("\n")
             : "";
-          return `${index + 1}. ${stringifyContent(item.content)}${options ? `\n${options}` : ""}`;
+          return `${index + 1}. ${stringifyContent(req.content)}${options ? `\n${options}` : ""}`;
         })
         .join("\n\n");
       blocks.push({ type: "markdown", content: `${title}\n\n${body}` });
-    }
-    if (type === "subagent-complete") {
+    } else if (type === "subagent-complete") {
       const subagent = stringifyContent(payload.subagentType ?? payload.subagent_type ?? "subagent");
       const toolCount = payload.toolCount ?? payload.tool_count;
       const duration = typeof payload.duration === "number" ? ` · ${payload.duration.toFixed(2)}s` : "";
       blocks.push({ type: "markdown", content: `**子 Agent 完成** \`${subagent}\`${toolCount == null ? "" : ` · ${toolCount} tools`}${duration}` });
-    }
-    if (item.type === "artifact") {
+    } else if (type === "artifact") {
       const title = stringifyContent(payload.name ?? payload.slug ?? "artifact");
       const summary = stringifyContent(payload.preview_summary ?? payload.description);
       blocks.push({ type: "markdown", content: `**Artifact** ${title}${summary ? `\n\n${summary}` : ""}` });
-    }
-    if (!["markdown", "thinking", "code", "call-tool", "call-tool-result", "error", "user-interaction", "subagent-complete", "artifact"].includes(type)) {
+    } else {
       if (typeof payload.content === "string") blocks.push({ type: "markdown", content: payload.content });
       else if (typeof payload.code === "string") blocks.push({ type: "markdown", content: payload.code });
       else blocks.push({ type: "markdown", content: stringifyContent(payload) });
@@ -361,7 +356,7 @@ export function mergeMessage(messages: ChatMessage[], incoming: ParsedMessage) {
   const content =
     operation === "appendMessage"
       ? `${previous.content}${incomingMessage.content}`
-      : incomingMessage.content || previous.content;
+      : incomingMessage.content ?? previous.content;
 
   next[index] = {
     ...previous,

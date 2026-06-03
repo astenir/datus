@@ -223,6 +223,8 @@ async function resumeSession(sessionId?: string) {
   if (!targetSession) return;
   const { effectiveBase } = useConnection();
   const base = effectiveBase();
+  const controller = new AbortController();
+  abortRef.current = controller;
   isStreaming.value = true;
   try {
     const url = `${normalizeBaseUrl(base)}/api/v1/chat/resume`;
@@ -230,6 +232,7 @@ async function resumeSession(sessionId?: string) {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
       body: JSON.stringify({ session_id: targetSession }),
+      signal: controller.signal,
     });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
     const tail = await consumeSseStream(response, (event) => {
@@ -247,6 +250,7 @@ async function resumeSession(sessionId?: string) {
     console.error("Failed to resume session:", error);
   } finally {
     isStreaming.value = false;
+    abortRef.current = null;
     loadSessions();
   }
 }

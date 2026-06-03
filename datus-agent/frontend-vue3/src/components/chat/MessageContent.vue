@@ -16,6 +16,10 @@ const md = new MarkdownIt({
   breaks: true,
 });
 
+// Block dangerous URI schemes (XSS prevention)
+const SAFE_SCHEMES = /^(https?|mailto|tel):/i;
+md.validateLink = (url: string) => SAFE_SCHEMES.test(url) || /^(?:[a-z][a-z0-9+\-.]*:)?\/\//i.test(url);
+
 md.enable("table");
 md.enable("strikethrough");
 
