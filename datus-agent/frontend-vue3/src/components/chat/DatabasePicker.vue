@@ -7,16 +7,20 @@ import PopoverContent from "@/components/ui/PopoverContent.vue";
 import { schemaOptionsForDatabase } from "@/lib/chat";
 import type { CatalogRecord, SelectOption } from "@/types";
 
-const props = defineProps<{
-  open: boolean;
-  disabled?: boolean;
-  selectedLabel: string;
-  database: string;
-  schema: string;
-  databaseOptions: SelectOption[];
-  catalogEntries: CatalogRecord[];
-  expandedDatabases: Set<string>;
-}>();
+const props = withDefaults(
+  defineProps<{
+    open: boolean;
+    disabled?: boolean;
+    selectedLabel: string;
+    placeholder?: string;
+    database: string;
+    schema: string;
+    databaseOptions: SelectOption[];
+    catalogEntries: CatalogRecord[];
+    expandedDatabases: Set<string>;
+  }>(),
+  { placeholder: "不指定" },
+);
 
 const emit = defineEmits<{
   "update:open": [open: boolean];
@@ -36,10 +40,10 @@ const emit = defineEmits<{
           :class="`dbPickerButton ${open ? 'open' : ''}`"
           type="button"
           :disabled="disabled"
-          :title="selectedLabel"
-          :aria-label="`选择数据库和 Schema，当前为 ${selectedLabel}`"
+          :title="selectedLabel || placeholder"
+          :aria-label="`选择数据库和 Schema，当前为 ${selectedLabel || placeholder}`"
         >
-          <span>{{ selectedLabel }}</span>
+          <span :class="{ placeholder: !selectedLabel }">{{ selectedLabel || placeholder }}</span>
           <ChevronDown :size="14" />
         </button>
       </PopoverTrigger>

@@ -79,16 +79,17 @@
   background: var(--surface);
 }
 
-#sidebar {
-  height: 100%;
-  overflow: hidden;
+.splitpanes__pane {
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
 }
 
-#sidebar.collapsed,
-#sidebar:has(> .collapsed) {
-  width: 64px !important;
-  min-width: 64px !important;
-  max-width: 64px !important;
+#sidebar {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* Splitpanes splitter styling */
@@ -126,31 +127,8 @@
   overflow: hidden;
 }
 
-.sidebar.collapsed .brand h1,
-.sidebar.collapsed .brand p,
-.sidebar.collapsed .brandMark,
-.sidebar.collapsed .sessionPane,
-.sidebar.collapsed .sidebarFooter,
-.sidebar.collapsed .connectionPill span:not(.sr-only) {
+.sidebar.collapsed .sessionPane {
   display: none;
-}
-
-.sidebar.collapsed .brand {
-  justify-content: center;
-}
-
-.sidebar.collapsed .sidebarHeader {
-  justify-content: center;
-}
-
-.sidebar.collapsed .sidebarActions {
-  justify-content: center;
-  width: 100%;
-}
-
-.sidebar.collapsed .connectionPill {
-  min-width: 0;
-  padding: 5px;
 }
 
 .sidebarCollapseBtn {
@@ -201,6 +179,11 @@
   align-items: center;
   gap: 8px;
   margin-top: auto;
+}
+
+.sidebar.collapsed .sidebarActionsStack .iconButton {
+  width: 36px;
+  height: 36px;
 }
 
 .sidebar:not(.collapsed) .sidebarActionsStack {

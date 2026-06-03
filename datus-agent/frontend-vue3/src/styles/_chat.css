@@ -756,6 +756,11 @@ textarea:focus {
   line-height: 1.25;
 }
 
+.quickControls .dbPickerButton .placeholder {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
 .quickControls .planModeSwitch {
   display: inline-grid;
   grid-template-columns: 18px auto 32px;

@@ -94,7 +94,8 @@ function handleCompact() {
 
 <template>
   <SidebarRoot :class="`sidebar ${collapsed ? 'collapsed' : ''}`">
-    <div>
+    <!-- Header: only visible when expanded -->
+    <div v-if="!collapsed" class="sidebarHeaderWrap">
       <SidebarHeader>
         <div class="brand">
           <div class="brandMark">
@@ -112,14 +113,13 @@ function handleCompact() {
                 class="iconButton sidebarCollapseBtn"
                 variant="ghost"
                 size="icon"
-                :aria-label="collapsed ? '展开侧栏' : '收起侧栏'"
+                aria-label="收起侧栏"
                 @click="emit('toggle')"
               >
-                <PanelLeftOpen v-if="collapsed" :size="17" />
-                <PanelLeftClose v-else :size="17" />
+                <PanelLeftClose :size="17" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent :side="collapsed ? 'right' : 'bottom'">{{ collapsed ? '展开侧栏' : '收起侧栏' }}</TooltipContent>
+            <TooltipContent side="bottom">收起侧栏</TooltipContent>
           </Tooltip>
         </div>
       </SidebarHeader>
@@ -127,6 +127,16 @@ function handleCompact() {
 
     <!-- Navigation tabs -->
     <div class="navTabs">
+      <!-- Collapse/expand button: same navTab style when collapsed -->
+      <button
+        v-if="collapsed"
+        class="navTab"
+        type="button"
+        title="展开侧栏"
+        @click="emit('toggle')"
+      >
+        <PanelLeftOpen :size="16" />
+      </button>
       <button
         v-for="item in navItems"
         :key="item.view"

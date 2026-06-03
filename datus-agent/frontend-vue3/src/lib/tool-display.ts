@@ -180,8 +180,22 @@ function tableFromCompressedValue(value: unknown, fallbackColumns: string[] = []
 
   const parsed = parseCsv(value.compressed_data);
   const originalColumns = Array.isArray(value.original_columns) ? normalizeColumns(value.original_columns) : [];
-  const columns = originalColumns.length > 0 ? originalColumns : fallbackColumns.length > 0 ? fallbackColumns : parsed[0] ?? [];
-  if (columns.length === 0) return null;
+  const csvHeaders = parsed.length > 0 ? parsed[0] : [];
+
+  // Prefer CSV headers when original_columns is narrower than the actual data,
+  // because original_columns may omit columns that still exist in compressed_data
+  // (e.g. an "index" column). Fall back to original_columns / fallbackColumns only
+  // when the CSV has no header row or is empty.
+  let columns: string[];
+  if (csvHeaders.length > 0 && (originalColumns.length === 0 || sameColumns(csvHeaders, originalColumns) || csvHeaders.length > originalColumns.length)) {
+    columns = csvHeaders;
+  } else if (originalColumns.length > 0) {
+    columns = originalColumns;
+  } else if (fallbackColumns.length > 0) {
+    columns = fallbackColumns;
+  } else {
+    return null;
+  }
 
   const dataRows = parsed.length > 0 && sameColumns(parsed[0], columns) ? parsed.slice(1) : parsed;
   const originalRows = typeof value.original_rows === "number" ? value.original_rows : dataRows.length;

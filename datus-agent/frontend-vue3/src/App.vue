@@ -64,10 +64,25 @@ const selectedModel = ref("");
 // ─── Sidebar collapse ────────────────────────────────────────────────────────
 
 const sidebarCollapsed = ref(false);
+const splitpanesRef = ref<InstanceType<typeof Splitpanes> | null>(null);
+
+/** Minimum pane % so the collapsed sidebar (64px) is never clipped. */
+const collapsedMinPanePercent = computed(() => Math.ceil((64 / window.innerWidth) * 100));
 
 function onSidebarToggle() {
   sidebarCollapsed.value = !sidebarCollapsed.value;
 }
+
+/** Disable the sidebar splitter when collapsed. */
+watch(sidebarCollapsed, (collapsed) => {
+  const el = splitpanesRef.value?.$el as HTMLElement | null;
+  if (!el) return;
+  const splitter = el.querySelector(".splitpanes__splitter") as HTMLElement | null;
+  if (splitter) {
+    splitter.style.pointerEvents = collapsed ? "none" : "";
+    splitter.style.cursor = collapsed ? "default" : "";
+  }
+});
 
 function onPaneResized(payload: { panes: Array<{ size: number }> }) {
   if (payload.panes.length > 0) {
@@ -117,26 +132,24 @@ watch(database, (db) => {
   <TooltipProvider :delay-duration="300">
     <div class="shell">
       <div class="workspace">
-        <Splitpanes vertical :style="{ height: '100%' }" @resized="onPaneResized">
-          <Pane :size="sidebarCollapsed ? 4 : 20" :min-size="sidebarCollapsed ? 4 : 14" max-size="34">
-            <div id="sidebar">
-              <Sidebar
-                :connection="connection"
-                :sessions="sessions"
-                :selected-session="selectedSession"
-                :active-view="activeView"
-                :collapsed="sidebarCollapsed"
-                @toggle="onSidebarToggle"
-                @refresh-connection="handleRefreshConnection"
-                @select-session="selectSession"
-                @new-session="clearMessages"
-                @open-settings="openSettings"
-                @open-agent-manager="openAgentManager"
-                @update:active-view="activeView = $event"
-                @delete-session="deleteSession"
-                @compact-session="compactSession"
-              />
-            </div>
+        <Splitpanes vertical ref="splitpanesRef" :style="{ height: '100%' }" @resized="onPaneResized">
+          <Pane :size="sidebarCollapsed ? collapsedMinPanePercent : 20" :min-size="sidebarCollapsed ? collapsedMinPanePercent : 14" max-size="34">
+            <Sidebar
+              :connection="connection"
+              :sessions="sessions"
+              :selected-session="selectedSession"
+              :active-view="activeView"
+              :collapsed="sidebarCollapsed"
+              @toggle="onSidebarToggle"
+              @refresh-connection="handleRefreshConnection"
+              @select-session="selectSession"
+              @new-session="clearMessages"
+              @open-settings="openSettings"
+              @open-agent-manager="openAgentManager"
+              @update:active-view="activeView = $event"
+              @delete-session="deleteSession"
+              @compact-session="compactSession"
+            />
           </Pane>
 
           <Pane :size="sidebarCollapsed ? 96 : 80" :min-size="42">

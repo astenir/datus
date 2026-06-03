@@ -8,7 +8,7 @@ const props = defineProps<{
 </script>
 
 <template>
-  <aside :class="cn(props.class)">
+  <aside id="sidebar" :class="cn(props.class)">
     <slot />
   </aside>
 </template>

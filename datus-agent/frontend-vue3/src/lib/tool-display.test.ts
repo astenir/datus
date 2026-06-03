@@ -97,6 +97,32 @@ describe("tableFromToolValue", () => {
     });
   });
 
+  it("prefers CSV headers when original_columns is narrower than the data", () => {
+    // Regression: backend may omit columns from original_columns (e.g. dropped "index")
+    // but the CSV in compressed_data still contains them. The table must use CSV headers
+    // so columns align correctly with data cells.
+    expect(
+      tableFromToolValue({
+        original_rows: 5,
+        original_columns: ["fundtypename"],
+        is_compressed: false,
+        compressed_data: "index,fundtypename\n0,QDII\n1,债券型\n2,混合型\n3,股票型\n4,货币型",
+        removed_columns: [],
+        compression_type: "none"
+      })
+    ).toEqual({
+      columns: ["index", "fundtypename"],
+      rows: [
+        ["0", "QDII"],
+        ["1", "债券型"],
+        ["2", "混合型"],
+        ["3", "股票型"],
+        ["4", "货币型"]
+      ],
+      sourceLabel: "5 rows"
+    });
+  });
+
   it("uses compressed data inside semantic query result wrappers", () => {
     expect(
       tableFromToolValue({
