@@ -14,7 +14,7 @@ defineProps<{
 }>();
 
 const emit = defineEmits<{
-  "clear-messages": [];
+  "delete-session": [];
   "refresh-connection": [];
   "stop-session": [];
   "resume-session": [];
@@ -49,13 +49,13 @@ const emit = defineEmits<{
         </TooltipTrigger>
         <TooltipContent>恢复会话</TooltipContent>
       </Tooltip>
-      <Tooltip>
+      <Tooltip v-if="selectedSession">
         <TooltipTrigger as-child>
-          <Button class="iconButton" variant="ghost" size="icon" aria-label="清空消息" @click="emit('clear-messages')">
+          <Button class="iconButton" variant="ghost" size="icon" aria-label="删除会话" @click="emit('delete-session')">
             <Trash2 :size="17" />
           </Button>
         </TooltipTrigger>
-        <TooltipContent>清空消息</TooltipContent>
+        <TooltipContent>删除会话</TooltipContent>
       </Tooltip>
       <Button class="stopButton" variant="outline" :disabled="!isStreaming" @click="emit('stop-session')">
         <CircleStop :size="16" />

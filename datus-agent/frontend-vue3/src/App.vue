@@ -148,7 +148,7 @@ watch(database, (db) => {
                   :connection="connection"
                   :is-streaming="isStreaming"
                   @refresh-connection="handleRefreshConnection"
-                  @clear-messages="clearMessages"
+                  @delete-session="selectedSession && deleteSession(selectedSession)"
                   @stop-session="stopSession"
                   @resume-session="resumeSession()"
                 />
