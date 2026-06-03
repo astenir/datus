@@ -1259,3 +1259,47 @@ textarea:focus {
 .userInteractionRetry:hover {
   background: #fecdd3;
 }
+
+.userInteractionLabel {
+  margin: 0 0 8px;
+  color: #92400e;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dark .userInteractionLabel {
+  color: #fbbf24;
+}
+
+.userInteractionBtn.selected {
+  background: #fef3c7;
+  border-color: #d97706;
+  color: #92400e;
+}
+
+.dark .userInteractionBtn.selected {
+  background: oklch(0.3 0.08 80);
+  border-color: oklch(0.6 0.15 80);
+  color: #fbbf24;
+}
+
+.checkIcon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.userInteractionError {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #fff1f2;
+  border: 1px solid #fecdd3;
+  color: #be123c;
+  font-size: 12px;
+}
+
+.dark .userInteractionError {
+  background: oklch(0.2 0.06 20);
+  border-color: oklch(0.35 0.1 20);
+  color: #fda4af;
+}

@@ -24,6 +24,8 @@ const props = defineProps({
   }
 });
 
+const emit = defineEmits<{ continue: [] }>();
+
 const scrollContainer = useTemplateRef<HTMLDivElement>("scrollContainer");
 
 function scrollToBottom() {
@@ -79,7 +81,7 @@ watch(
           <ErrorBoundary :fallback-text="item.content">
             <Suspense>
               <template #default>
-                <MessageContent :message="item" :session-id="sessionId ?? undefined" />
+                <MessageContent :message="item" :session-id="sessionId ?? undefined" @continue="emit('continue')" />
               </template>
               <template #fallback>
                 <div class="markdownBody">{{ item.content }}</div>

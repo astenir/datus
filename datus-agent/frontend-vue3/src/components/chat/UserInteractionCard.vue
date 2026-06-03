@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from "vue";
-import { HelpCircle, Loader2, CheckCircle2 } from "@lucide/vue";
+import Button from "@/components/ui/Button.vue";
 import { chatApi } from "@/lib/api";
 import { useConnection } from "@/composables/useConnection";
 import { useChatState } from "@/composables/useChatState";
@@ -12,87 +12,87 @@ const props = defineProps<{
   requests: UserInteractionRequest[];
 }>();
 
-const emit = defineEmits<{
-  responded: [];
-}>();
+const emit = defineEmits<{ responded: []; continue: [] }>();
 
 const loading = ref(false);
-const responded = ref(false);
-const error = ref("");
-
-const RETRY_DELAY = 1500;
+const selectedKey = ref<string | null>(null);
+const error = ref<string | null>(null);
 
 async function handleSelect(key: string) {
-  if (loading.value || responded.value) return;
+  if (loading.value || selectedKey.value) return;
   if (!props.sessionId) {
     error.value = "会话未就绪，请稍后重试";
     return;
   }
+
   loading.value = true;
-  error.value = "";
+  error.value = null;
+
   try {
     const { effectiveBase } = useConnection();
     const base = effectiveBase();
     const { stopSession } = useChatState();
-    // Stop the running task, then wait for backend to release the lock
+
+    // Stop current task first to release backend lock
     await stopSession();
-    await new Promise((r) => setTimeout(r, RETRY_DELAY));
-    const result = await chatApi.userInteraction(base, {
+
+    // Wait for backend to release the lock
+    await new Promise((r) => setTimeout(r, 1500));
+
+    await chatApi.userInteraction(base, {
       session_id: props.sessionId,
       interaction_key: key,
       input: [[key]],
     });
-    console.log("User interaction response:", result);
-    responded.value = true;
+
+    selectedKey.value = key;
     emit("responded");
+    emit("continue");
   } catch (e) {
-    console.error("User interaction failed:", e);
-    const msg = (e as Error).message || "提交失败";
-    if (msg.includes("task") || msg.includes("running")) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("task is already running")) {
       error.value = "任务仍在运行，请点击停止按钮后重试，或新建会话";
     } else {
-      error.value = msg;
+      error.value = `提交失败: ${msg}`;
     }
   } finally {
     loading.value = false;
   }
 }
+
+function retry() {
+  error.value = null;
+}
 </script>
 
 <template>
   <div class="userInteractionCard">
-    <div class="userInteractionHeader">
-      <HelpCircle :size="16" />
-      <span>需要用户确认</span>
-      <span class="userInteractionType">{{ actionType }}</span>
-    </div>
-    <div v-for="(request, idx) in requests" :key="idx" class="userInteractionRequest">
-      <p v-if="request.content" class="userInteractionContent">{{ request.content }}</p>
+    <p v-if="actionType === 'confirm'" class="userInteractionLabel">需要确认</p>
+    <p v-else class="userInteractionLabel">请选择</p>
+
+    <div v-for="req in requests" :key="req.content" class="userInteractionRequest">
+      <p v-if="req.content" class="userInteractionContent">{{ req.content }}</p>
       <div class="userInteractionOptions">
         <button
-          v-for="option in request.options"
-          :key="option.key"
+          v-for="opt in req.options"
+          :key="opt.key"
           class="userInteractionBtn"
-          type="button"
-          :disabled="loading || responded"
-          @click="handleSelect(option.key)"
+          :class="{ selected: selectedKey === opt.key }"
+          :disabled="loading || !!selectedKey"
+          @click="handleSelect(opt.key)"
         >
-          <CheckCircle2 v-if="responded" :size="14" />
-          {{ option.title || option.key }}
+          <span v-if="selectedKey === opt.key" class="checkIcon">✓</span>
+          {{ opt.title }}
         </button>
       </div>
     </div>
-    <div v-if="loading" class="userInteractionStatus">
-      <Loader2 class="spin" :size="14" />
-      提交中…
-    </div>
-    <div v-else-if="responded" class="userInteractionStatus success">
-      <CheckCircle2 :size="14" />
-      已响应
-    </div>
-    <div v-else-if="error" class="userInteractionStatus error">
-      {{ error }}
-      <button class="userInteractionRetry" type="button" @click="error = ''">重试</button>
+
+    <p v-if="loading" class="userInteractionStatus">提交中...</p>
+    <p v-else-if="selectedKey" class="userInteractionStatus done">已提交</p>
+
+    <div v-if="error" class="userInteractionError">
+      <p>{{ error }}</p>
+      <Button variant="outline" size="sm" @click="retry">重试</Button>
     </div>
   </div>
 </template>

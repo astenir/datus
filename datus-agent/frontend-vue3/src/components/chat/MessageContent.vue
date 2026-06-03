@@ -42,6 +42,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   stop: [];
+  continue: [];
 }>();
 
 const blocks = computed(() =>
@@ -92,6 +93,7 @@ async function handleFeedback(emoji: string) {
         :session-id="sessionId ?? ''"
         :action-type="block.actionType"
         :requests="block.requests"
+        @continue="emit('continue')"
       />
       <div v-else class="markdownBody" v-html="renderMarkdown(block.content)" />
     </template>

@@ -152,7 +152,7 @@ watch(database, (db) => {
                   @stop-session="stopSession"
                   @resume-session="resumeSession()"
                 />
-                <MessageList :messages="messages" :is-streaming="isStreaming" :session-id="selectedSession" />
+                <MessageList :messages="messages" :is-streaming="isStreaming" :session-id="selectedSession" @continue="resumeSession()" />
               </div>
               <ChatComposer
                 :connection="connection"
