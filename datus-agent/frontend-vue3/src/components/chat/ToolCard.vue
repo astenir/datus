@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { CheckCircle2, ChevronDown, TerminalSquare, XCircle } from "@lucide/vue";
 import { CollapsibleRoot, CollapsibleTrigger, CollapsibleContent } from "reka-ui";
-import { computed, ref } from "vue";
+import { computed, ref, defineAsyncComponent } from "vue";
 
 import { stringifyContent } from "@/lib/chat";
-import DataVisualization from "@/components/visualization/DataVisualization.vue";
+const DataVisualization = defineAsyncComponent(() => import("@/components/visualization/DataVisualization.vue"));
 import { displayValueForTool, sqlFromToolValue, sqlKeys, summarizeValue, tableFromToolValue, toolResultStatus } from "@/lib/tool-display";
 
 const props = defineProps<{

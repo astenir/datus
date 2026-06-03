@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from "vue";
+import { ref, onMounted, watch, defineAsyncComponent } from "vue";
 import { Splitpanes, Pane } from "splitpanes";
 import { TooltipProvider } from "reka-ui";
 import "splitpanes/dist/splitpanes.css";
@@ -8,13 +8,14 @@ import Sidebar from "@/components/layout/Sidebar.vue";
 import ChatComposer from "@/components/chat/ChatComposer.vue";
 import ConversationToolbar from "@/components/chat/ConversationToolbar.vue";
 import MessageList from "@/components/chat/MessageList.vue";
-import SettingsDrawer from "@/components/settings/SettingsDrawer.vue";
-import AgentManager from "@/components/agent/AgentManager.vue";
-import KnowledgeExplorer from "@/components/knowledge/KnowledgeExplorer.vue";
-import SqlConsole from "@/components/sql/SqlConsole.vue";
-import McpManager from "@/components/mcp/McpManager.vue";
 import Sheet from "@/components/ui/Sheet.vue";
 import SheetContent from "@/components/ui/SheetContent.vue";
+
+const SettingsDrawer = defineAsyncComponent(() => import("@/components/settings/SettingsDrawer.vue"));
+const AgentManager = defineAsyncComponent(() => import("@/components/agent/AgentManager.vue"));
+const KnowledgeExplorer = defineAsyncComponent(() => import("@/components/knowledge/KnowledgeExplorer.vue"));
+const SqlConsole = defineAsyncComponent(() => import("@/components/sql/SqlConsole.vue"));
+const McpManager = defineAsyncComponent(() => import("@/components/mcp/McpManager.vue"));
 
 import { useTheme } from "@/composables/useTheme";
 import { useChatSettings } from "@/composables/useChatSettings";
