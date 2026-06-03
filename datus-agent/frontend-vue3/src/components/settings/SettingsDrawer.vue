@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { CheckCircle2, Database, Loader2, RefreshCw, Server, Settings2, XCircle, Zap } from "@lucide/vue";
+import { CheckCircle2, Database, Loader2, RefreshCw, Server, Settings2, ToggleRight, XCircle, Zap } from "@lucide/vue";
 
 import AppPopoverSelect from "@/components/AppPopoverSelect.vue";
 import Badge from "@/components/ui/Badge.vue";
@@ -77,6 +77,24 @@ async function testDatasource() {
     datasourceTestResult.value = { ok: false, message: (e as Error).message };
   } finally {
     testingDatasource.value = false;
+  }
+}
+
+// ─── Datasource switching ─────────────────────────────────────────────────
+
+const switchingTo = ref<string | null>(null);
+
+async function switchDatasource(name: string) {
+  if (!props.config?.datasources || name === props.config.current_datasource) return;
+  switchingTo.value = name;
+  try {
+    const { effectiveBase, checkConnection } = useConnection();
+    await configApi.switchDatasource(effectiveBase(), name);
+    await checkConnection();
+  } catch (e) {
+    console.error("Failed to switch datasource:", e);
+  } finally {
+    switchingTo.value = null;
   }
 }
 </script>
@@ -209,8 +227,25 @@ async function testDatasource() {
         </div>
         <div class="configList">
           <div v-for="(ds, name) in config.datasources" :key="name" class="configItem">
-            <span class="configItemName">{{ name }}</span>
-            <span class="configItemType">{{ (ds as Record<string, unknown>).type || '-' }}</span>
+            <span class="configItemName">
+              <span>{{ name }}</span>
+              <Badge v-if="name === config.current_datasource" variant="success" class="activeBadge">当前</Badge>
+            </span>
+            <span class="configItemActions">
+              <span class="configItemType">{{ (ds as Record<string, unknown>).type || '-' }}</span>
+              <Button
+                v-if="name !== config.current_datasource"
+                class="iconButton"
+                variant="ghost"
+                size="icon"
+                :disabled="switchingTo !== null"
+                :aria-label="`切换到数据源 ${name}`"
+                @click="switchDatasource(name as string)"
+              >
+                <Loader2 v-if="switchingTo === name" class="spin" :size="14" />
+                <ToggleRight v-else :size="14" />
+              </Button>
+            </span>
           </div>
         </div>
       </section>

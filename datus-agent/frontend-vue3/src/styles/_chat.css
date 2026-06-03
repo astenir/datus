@@ -1118,13 +1118,28 @@ textarea:focus {
 }
 
 .configItemName {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   color: var(--text);
   font-weight: 600;
+}
+
+.configItemActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .configItemType {
   color: var(--text-muted);
   font-size: 11px;
+}
+
+.activeBadge {
+  font-size: 10px;
+  padding: 1px 5px;
+  line-height: 1.4;
 }
 
 

@@ -163,6 +163,11 @@ export const configApi = {
   testDatasource(baseUrl: string, probe: { type: string; [key: string]: unknown }): Promise<ProbeResult | null> {
     return apiResult(baseUrl, "/api/v1/config/datasources/test", jsonBody(probe));
   },
+
+  /** Switch the active datasource. Requires backend endpoint POST /api/v1/config/datasources/switch. */
+  switchDatasource(baseUrl: string, name: string): Promise<{ current_datasource: string } | null> {
+    return apiResult(baseUrl, "/api/v1/config/datasources/switch", jsonBody({ name }));
+  },
 };
 
 // ─── Models API ──────────────────────────────────────────────────────────────
