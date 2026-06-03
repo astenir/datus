@@ -25,14 +25,16 @@ async function handleSelect(key: string) {
   error.value = "";
   try {
     const { effectiveBase } = useConnection();
-    await chatApi.userInteraction(effectiveBase(), {
+    const result = await chatApi.userInteraction(effectiveBase(), {
       session_id: props.sessionId,
       interaction_key: key,
-      input: props.requests.map((r) => [r.content]),
+      input: [[key]],
     });
+    console.log("User interaction response:", result);
     responded.value = true;
     emit("responded");
   } catch (e) {
+    console.error("User interaction failed:", e);
     error.value = (e as Error).message || "提交失败";
   } finally {
     loading.value = false;
