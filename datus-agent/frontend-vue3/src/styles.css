@@ -358,7 +358,8 @@ button:disabled {
   overflow: hidden;
 }
 
-#sidebar.collapsed {
+#sidebar.collapsed,
+#sidebar:has(> .collapsed) {
   width: 64px !important;
   min-width: 64px !important;
   max-width: 64px !important;
@@ -2799,7 +2800,8 @@ textarea:focus {
   }
 
   #sidebar,
-  #sidebar.collapsed {
+  #sidebar.collapsed,
+  #sidebar:has(> .collapsed) {
     width: 0 !important;
     min-width: 0 !important;
     max-width: 0 !important;

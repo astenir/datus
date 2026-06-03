@@ -18,6 +18,7 @@ const props = defineProps<{
   schemaOptions: SelectOption[];
   catalogEntries: CatalogRecord[];
   selectedAgent: string;
+  model: string;
   database: string;
   schema: string;
   planMode: boolean;
@@ -25,6 +26,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   "update:selected-agent": [value: string];
+  "update:model": [value: string];
   "update:database": [value: string];
   "update:schema": [value: string];
   "update:plan-mode": [value: boolean];
@@ -33,7 +35,6 @@ const emit = defineEmits<{
 }>();
 
 const message = ref("");
-const selectedModel = ref("");
 const expandedDatabases = ref(new Set<string>());
 const isDatabasePickerOpen = ref(false);
 
@@ -127,12 +128,12 @@ function toggleDatabaseExpansion(databaseName: string) {
             <Cpu :size="13" />
           </span>
           <AppPopoverSelect
-            :value="selectedModel"
+            :value="props.model"
             :options="modelOptions"
             :disabled="connection !== 'online'"
             placeholder="默认模型"
             narrow
-            @update:value="selectedModel = $event"
+            @update:value="emit('update:model', $event)"
           />
         </label>
         <Button

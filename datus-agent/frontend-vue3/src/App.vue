@@ -61,6 +61,7 @@ watch(agents, (list) => {
 });
 
 const selectedAgent = ref("");
+const selectedModel = ref("");
 
 // ─── Sidebar collapse ────────────────────────────────────────────────────────
 
@@ -82,7 +83,7 @@ function handleSend(message: string) {
   sendMessage({
     message,
     selectedAgent: selectedAgent.value,
-    model: "",
+    model: selectedModel.value,
     database: database.value,
     schema: schema.value,
   });
@@ -119,7 +120,7 @@ watch(database, (db) => {
     <div class="shell">
       <div class="workspace">
         <Splitpanes vertical :style="{ height: '100%' }" @resized="onPaneResized">
-          <Pane :size="sidebarCollapsed ? 0 : 20" :min-size="sidebarCollapsed ? 0 : 14" max-size="34">
+          <Pane :size="sidebarCollapsed ? 4 : 20" :min-size="sidebarCollapsed ? 4 : 14" max-size="34">
             <div id="sidebar">
               <Sidebar
                 :connection="connection"
@@ -140,7 +141,7 @@ watch(database, (db) => {
             </div>
           </Pane>
 
-          <Pane :size="sidebarCollapsed ? 100 : 80" :min-size="42">
+          <Pane :size="sidebarCollapsed ? 96 : 80" :min-size="42">
             <!-- Chat view -->
             <div v-if="activeView === 'chat'" class="chatView">
               <div class="chatShell">
@@ -164,10 +165,12 @@ watch(database, (db) => {
                 :schema-options="schemaOptions"
                 :catalog-entries="catalogEntries"
                 :selected-agent="selectedAgent"
+                :model="selectedModel"
                 :database="database"
                 :schema="schema"
                 :plan-mode="planMode"
                 @update:selected-agent="selectedAgent = $event"
+                @update:model="selectedModel = $event"
                 @update:database="database = $event"
                 @update:schema="schema = $event"
                 @update:plan-mode="planMode = $event"
