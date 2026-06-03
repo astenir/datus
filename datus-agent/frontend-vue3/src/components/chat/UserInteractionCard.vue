@@ -10,16 +10,17 @@ const props = defineProps<{
   sessionId: string;
   actionType: string;
   requests: UserInteractionRequest[];
+  isStreaming?: boolean;
 }>();
 
-const emit = defineEmits<{ responded: []; continue: [] }>();
+const emit = defineEmits<{ responded: [] }>();
 
 const loading = ref(false);
 const selectedKey = ref<string | null>(null);
 const error = ref<string | null>(null);
 
 async function handleSelect(key: string) {
-  if (loading.value || selectedKey.value) return;
+  if (loading.value || selectedKey.value || props.isStreaming) return;
   if (!props.sessionId) {
     error.value = "会话未就绪，请稍后重试";
     return;
@@ -47,7 +48,6 @@ async function handleSelect(key: string) {
 
     selectedKey.value = key;
     emit("responded");
-    emit("continue");
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.includes("task is already running")) {
@@ -78,7 +78,7 @@ function retry() {
           :key="opt.key"
           class="userInteractionBtn"
           :class="{ selected: selectedKey === opt.key }"
-          :disabled="loading || !!selectedKey"
+          :disabled="loading || !!selectedKey || isStreaming"
           @click="handleSelect(opt.key)"
         >
           <span v-if="selectedKey === opt.key" class="checkIcon">✓</span>
@@ -87,7 +87,8 @@ function retry() {
       </div>
     </div>
 
-    <p v-if="loading" class="userInteractionStatus">提交中...</p>
+    <p v-if="isStreaming && !selectedKey" class="userInteractionStatus">等待生成完成...</p>
+    <p v-else-if="loading" class="userInteractionStatus">提交中...</p>
     <p v-else-if="selectedKey" class="userInteractionStatus done">已提交</p>
 
     <div v-if="error" class="userInteractionError">

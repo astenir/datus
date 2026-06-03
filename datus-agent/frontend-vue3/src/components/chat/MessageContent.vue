@@ -38,11 +38,11 @@ md.renderer.rules.link_open = function (tokens, idx, options, env, self) {
 const props = defineProps<{
   message: ChatMessage;
   sessionId?: string;
+  isStreaming?: boolean;
 }>();
 
 const emit = defineEmits<{
   stop: [];
-  continue: [];
 }>();
 
 const blocks = computed(() =>
@@ -93,7 +93,7 @@ async function handleFeedback(emoji: string) {
         :session-id="sessionId ?? ''"
         :action-type="block.actionType"
         :requests="block.requests"
-        @continue="emit('continue')"
+        :is-streaming="isStreaming"
       />
       <div v-else class="markdownBody" v-html="renderMarkdown(block.content)" />
     </template>
