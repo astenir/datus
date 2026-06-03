@@ -376,7 +376,10 @@ class BenchmarkConfig:
     question_file: str = ""  # The corresponding task file can be csv/json/json
     question_key: str = ""  # The key corresponding to question
     question_id_key: str = ""  # If empty, use the line number
-    db_key: str | None = None  # The key corresponding to database name
+    datasource_key: str | None = None  # The key corresponding to Datus datasource routing name
+    catalog_key: str | None = None  # The key corresponding to SQL catalog name
+    database_key: str | None = None  # The key corresponding to SQL database name
+    schema_key: str | None = None  # The key corresponding to SQL schema name
     ext_knowledge_key: str | None = None  # The key corresponding to external knowledge
     use_tables_key: str | None = None  # The key corresponding to the table to be used
 
@@ -392,6 +395,13 @@ class BenchmarkConfig:
     @staticmethod
     def filter_kwargs(cls, kwargs: dict) -> "BenchmarkConfig":
         valid_fields = {f.name for f in fields(cls)}
+        unknown = set(kwargs) - valid_fields
+        if unknown:
+            logger.warning(
+                "Ignoring unknown benchmark config key(s): %s. Note: 'db_key' was split into "
+                "'datasource_key'/'database_key'/'catalog_key'/'schema_key'; update your config accordingly.",
+                ", ".join(sorted(unknown)),
+            )
         return cls(**{k: v for k, v in kwargs.items() if k in valid_fields})
 
     def validate(self):
@@ -1545,7 +1555,7 @@ class AgentConfig:
                 question_file="spider2-snow.jsonl",
                 question_id_key="instance_id",
                 question_key="instruction",
-                db_key="db_id",
+                database_key="db_id",
                 ext_knowledge_key="",
                 gold_sql_path="evaluation_suite/gold/sql",
                 gold_result_path="evaluation_suite/gold/exec_result",
@@ -1555,7 +1565,7 @@ class AgentConfig:
                 question_file="dev.json",
                 question_id_key="question_id",
                 question_key="question",
-                db_key="db_id",
+                database_key="db_id",
                 ext_knowledge_key="evidence",
                 gold_sql_path="dev.json",
                 gold_sql_key="SQL",

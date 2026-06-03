@@ -140,6 +140,22 @@ class TestWorkflowNode:
 class TestWorkflow:
     """Test suite for the Workflow class."""
 
+    def test_init_tools_uses_task_datasource_not_database_name(self, monkeypatch, real_agent_config):
+        captured = {}
+
+        def fake_db_function_tools(agent_config, database_name="", sub_agent_name=None):
+            captured["datasource"] = database_name
+            return []
+
+        monkeypatch.setattr("datus.tools.func_tool.db_function_tools", fake_db_function_tools)
+        Workflow(
+            name="test_workflow",
+            task=SqlTask(task="query", datasource="starrocks", database_name="ac_manage"),
+            agent_config=real_agent_config,
+        )
+
+        assert captured["datasource"] == "starrocks"
+
     def test_create_default_workflow(self, real_agent_config):
         """Test the default workflow creation with core nodes using plan._create_default_workflow."""
 
@@ -601,3 +617,29 @@ class TestWorkflowDisplay:
             wf.display()
         assert mock_log.call_count == 3
         assert wf.node_order == ["n0"]
+
+
+# ---------------------------------------------------------------------------
+# _task_datasource resolution
+# ---------------------------------------------------------------------------
+
+
+class TestWorkflowTaskDatasource:
+    @staticmethod
+    def _workflow_with_task(task):
+        with patch.object(Workflow, "_init_tools", lambda self: setattr(self, "tools", [])):
+            return Workflow(name="wf", task=task, agent_config=None)
+
+    def test_returns_task_datasource_when_set(self):
+        wf = self._workflow_with_task(SqlTask(task="t", datasource="starrocks"))
+        assert wf._task_datasource() == "starrocks"
+
+    def test_falls_back_to_global_config_current_datasource(self):
+        wf = self._workflow_with_task(SqlTask(task="t", datasource=""))
+        wf._global_config = MagicMock(current_datasource="duckdb")
+        assert wf._task_datasource() == "duckdb"
+
+    def test_returns_empty_when_no_datasource_anywhere(self):
+        wf = self._workflow_with_task(SqlTask(task="t", datasource=""))
+        wf._global_config = None
+        assert wf._task_datasource() == ""
