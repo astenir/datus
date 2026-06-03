@@ -40,6 +40,10 @@ const props = defineProps<{
   sessionId?: string;
 }>();
 
+const emit = defineEmits<{
+  stop: [];
+}>();
+
 const blocks = computed(() =>
   props.message.blocks?.length
     ? props.message.blocks

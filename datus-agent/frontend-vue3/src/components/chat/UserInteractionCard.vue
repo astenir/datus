@@ -3,6 +3,7 @@ import { ref } from "vue";
 import { HelpCircle, Loader2, CheckCircle2 } from "@lucide/vue";
 import { chatApi } from "@/lib/api";
 import { useConnection } from "@/composables/useConnection";
+import { useChatState } from "@/composables/useChatState";
 import type { UserInteractionRequest } from "@/types";
 
 const props = defineProps<{
@@ -30,8 +31,9 @@ async function handleSelect(key: string) {
   try {
     const { effectiveBase } = useConnection();
     const base = effectiveBase();
-    // Stop any running task first to avoid "task already running" error
-    try { await chatApi.stop(base, props.sessionId); } catch { /* ignore */ }
+    // Stop the running task (both frontend SSE stream and backend task)
+    const { stopSession } = useChatState();
+    await stopSession();
     const result = await chatApi.userInteraction(base, {
       session_id: props.sessionId,
       interaction_key: key,
