@@ -118,25 +118,42 @@ async function sendMessage(opts: {
       throw new Error(text || `${response.status} ${response.statusText}`);
     }
 
-    const tail = await consumeSseStream(response, (event) => {
-      const incoming = messageFromEvent(event);
-      if (!incoming) return;
-      messages.value = mergeMessage(messages.value, incoming);
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("No response body");
 
-      if (!selectedSession.value && event.event === "message") {
-        const data = event.data as { session_id?: string } | undefined;
-        if (data?.session_id) {
-          selectedSession.value = data.session_id;
-        }
-      }
-    }, controller.signal);
+    const decoder = new TextDecoder();
+    let buffer = "";
 
-    // Flush any remaining buffer
-    if (tail) {
-      const parsed = parseSseBuffer(tail, { flush: true });
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const parsed = parseSseBuffer(buffer);
+      buffer = parsed.rest;
+
       for (const event of parsed.events) {
         const incoming = messageFromEvent(event);
-        if (incoming) messages.value = mergeMessage(messages.value, incoming);
+        if (!incoming) continue;
+
+        messages.value = mergeMessage(messages.value, incoming);
+
+        if (!selectedSession.value && event.event === "message") {
+          const data = event.data as { session_id?: string } | undefined;
+          if (data?.session_id) {
+            selectedSession.value = data.session_id;
+          }
+        }
+      }
+    }
+
+    if (buffer) {
+      const parsed = parseSseBuffer(buffer, { flush: true });
+      for (const event of parsed.events) {
+        const incoming = messageFromEvent(event);
+        if (incoming) {
+          messages.value = mergeMessage(messages.value, incoming);
+        }
       }
     }
   } catch (error) {
@@ -215,10 +232,17 @@ async function resumeSession(sessionId?: string) {
       body: JSON.stringify({ session_id: targetSession }),
     });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-    await consumeSseStream(response, (event) => {
+    const tail = await consumeSseStream(response, (event) => {
       const incoming = messageFromEvent(event);
       if (incoming) messages.value = mergeMessage(messages.value, incoming);
     });
+    if (tail) {
+      const parsed = parseSseBuffer(tail, { flush: true });
+      for (const event of parsed.events) {
+        const incoming = messageFromEvent(event);
+        if (incoming) messages.value = mergeMessage(messages.value, incoming);
+      }
+    }
   } catch (error) {
     console.error("Failed to resume session:", error);
   } finally {

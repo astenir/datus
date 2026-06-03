@@ -386,7 +386,6 @@ function mergeBlocks(previous: MessageBlock[] = [], incoming: MessageBlock[] = [
 export async function consumeSseStream(
   response: Response,
   onEvent: (event: SseEvent) => void,
-  signal?: AbortSignal,
 ): Promise<string> {
   const reader = response.body?.getReader();
   if (!reader) throw new Error("No response body");
@@ -394,22 +393,17 @@ export async function consumeSseStream(
   const decoder = new TextDecoder();
   let buffer = "";
 
-  try {
-    for (;;) {
-      if (signal?.aborted) break;
-      const { done, value } = await reader.read();
-      if (done) break;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
 
-      buffer += decoder.decode(value, { stream: true });
-      const { events, rest } = parseSseBuffer(buffer);
-      buffer = rest;
+    buffer += decoder.decode(value, { stream: true });
+    const { events, rest } = parseSseBuffer(buffer);
+    buffer = rest;
 
-      for (const event of events) {
-        onEvent(event);
-      }
+    for (const event of events) {
+      onEvent(event);
     }
-  } finally {
-    reader.releaseLock();
   }
 
   return buffer;
