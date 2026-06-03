@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from "vue";
 import MarkdownIt from "markdown-it";
 import { chatApi } from "@/lib/api";
 import { useConnection } from "@/composables/useConnection";
@@ -34,9 +35,11 @@ const props = defineProps<{
   sessionId?: string;
 }>();
 
-const blocks = props.message.blocks?.length
-  ? props.message.blocks
-  : [{ type: "markdown" as const, content: props.message.content }];
+const blocks = computed(() =>
+  props.message.blocks?.length
+    ? props.message.blocks
+    : [{ type: "markdown" as const, content: props.message.content }]
+);
 
 function renderMarkdown(content: string): string {
   return md.render(content);

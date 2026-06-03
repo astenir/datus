@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { defineAsyncComponent, type PropType } from "vue";
+import { defineAsyncComponent, nextTick, watch, useTemplateRef, type PropType } from "vue";
 import { Activity, Bot, Loader2, Send, TerminalSquare } from "@lucide/vue";
 
 import ErrorBoundary from "@/components/ErrorBoundary.vue";
@@ -9,7 +9,7 @@ import type { ChatMessage } from "@/types";
 
 const MessageContent = defineAsyncComponent(() => import("@/components/chat/MessageContent.vue"));
 
-defineProps({
+const props = defineProps({
   messages: {
     type: Array as PropType<ChatMessage[]>,
     required: true
@@ -23,6 +23,35 @@ defineProps({
     default: null
   }
 });
+
+const scrollContainer = useTemplateRef<HTMLDivElement>("scrollContainer");
+
+function scrollToBottom() {
+  const el = scrollContainer.value;
+  if (el) {
+    el.scrollTop = el.scrollHeight;
+  }
+}
+
+watch(
+  () => props.messages.length,
+  () => {
+    nextTick(scrollToBottom);
+  }
+);
+
+watch(
+  () => {
+    if (!props.isStreaming || props.messages.length === 0) return null;
+    const last = props.messages[props.messages.length - 1];
+    return last?.content;
+  },
+  (content) => {
+    if (content !== null) {
+      nextTick(scrollToBottom);
+    }
+  }
+);
 </script>
 
 <template>
