@@ -1,0 +1,269 @@
+/* ─── Knowledge Explorer ───────────────────────────────────────────────────── */
+
+.knowledgeExplorer {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  height: 100%;
+  min-height: 0;
+}
+
+.knowledgeTree {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--line);
+  background: var(--sidebar);
+}
+
+.knowledgeTreeHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.knowledgeTreeHeader h3 {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.knowledgeTreeActions {
+  display: flex;
+  gap: 2px;
+}
+
+.knowledgeTreeContent {
+  flex: 1;
+  min-height: 0;
+}
+
+.knowledgeTreeLoading,
+.knowledgeTreeEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 30px 0;
+  color: var(--text-muted);
+}
+
+.knowledgeTreeNode {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 14px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.knowledgeTreeNode:hover {
+  background: var(--surface-soft);
+}
+
+.knowledgeTreeNode.selected {
+  background: var(--surface);
+  border-right: 2px solid var(--accent-green);
+}
+
+.knowledgeTreeNodeActions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.knowledgeTreeNode:hover .knowledgeTreeNodeActions {
+  opacity: 1;
+}
+
+.knowledgeTreeNodeActions button {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.knowledgeTreeNodeActions button:hover {
+  background: var(--line);
+  color: var(--text);
+}
+
+.knowledgeDetail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+}
+
+.knowledgeDetailEmpty,
+.knowledgeDetailLoading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  color: var(--text-muted);
+}
+
+.knowledgeDetailContent {
+  padding: 20px;
+}
+
+.knowledgeDetailHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.knowledgeDetailHeader h3 {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.knowledgeDetailType {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.knowledgeDetailBody {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.knowledgeField {
+  margin-bottom: 8px;
+}
+
+.knowledgeField strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.knowledgeField p {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.knowledgeYaml {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  padding: 12px;
+  color: var(--text);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre;
+}
+
+.knowledgeEditForm {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.knowledgeEditActions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+/* ─── Bootstrap Dialog ─────────────────────────────────────────────────────── */
+
+.bootstrapForm {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.bootstrapComponents {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.bootstrapActions {
+  display: flex;
+  gap: 8px;
+}
+
+.bootstrapLog {
+  max-height: 300px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  padding: 8px;
+}
+
+.bootstrapLogEntry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.bootstrapLogEntry:last-child {
+  border-bottom: 0;
+}
+
+.bootstrapLogEntry.error {
+  color: #be123c;
+}
+
+.bootstrapLogComponent {
+  color: var(--text-muted);
+  font-weight: 600;
+  min-width: 60px;
+}
+
+.bootstrapLogStage {
+  color: var(--text-soft);
+  font-size: 11px;
+  min-width: 50px;
+}
+
+.bootstrapLogMessage {
+  color: var(--text);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bootstrapLogError {
+  color: #be123c;
+  flex: 1;
+}
+
+.bootstrapLogProgress {
+  color: #047857;
+  font-weight: 600;
+}
+

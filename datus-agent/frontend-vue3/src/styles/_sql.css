@@ -1,0 +1,113 @@
+/* ─── SQL Console ──────────────────────────────────────────────────────────── */
+
+.sqlConsole {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--surface);
+}
+
+.sqlEditor {
+  border-bottom: 1px solid var(--line);
+}
+
+.sqlEditorHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.sqlEditorActions {
+  margin-left: auto;
+}
+
+.sqlTextarea {
+  border: 0;
+  border-radius: 0;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  resize: none;
+}
+
+.sqlTextarea:focus {
+  box-shadow: none;
+}
+
+.sqlStatus {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
+  font-size: 12px;
+}
+
+.sqlStat {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.sqlError {
+  color: #be123c;
+  font-weight: 600;
+}
+
+.sqlResults {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.sqlTableWrap {
+  overflow: auto;
+}
+
+.sqlTable {
+  width: 100%;
+  min-width: 400px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.sqlTable th,
+.sqlTable td {
+  border-bottom: 1px solid var(--line);
+  padding: 7px 12px;
+  text-align: left;
+}
+
+.sqlTable th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-soft);
+  color: var(--text-muted);
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.sqlTable td {
+  max-width: 300px;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sqlRawOutput {
+  margin: 0;
+  padding: 16px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+

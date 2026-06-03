@@ -1,0 +1,154 @@
+/* ─── MCP Manager ──────────────────────────────────────────────────────────── */
+
+.mcpManager {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--surface);
+}
+
+.mcpHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.mcpHeader h2 {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.mcpHeaderActions {
+  display: flex;
+  gap: 6px;
+}
+
+.mcpServerList {
+  flex: 1;
+  min-height: 0;
+  padding: 12px 20px;
+}
+
+.mcpEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 40px 0;
+  color: var(--text-muted);
+}
+
+.mcpServerCard {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.mcpServerInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px;
+  cursor: pointer;
+}
+
+.mcpServerName {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.mcpServerMeta {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.mcpServerActions {
+  display: flex;
+  gap: 2px;
+  padding: 0 10px 8px;
+}
+
+.mcpToolsList {
+  border-top: 1px solid var(--line);
+  padding: 8px 14px;
+}
+
+.mcpToolsLoading,
+.mcpToolsEmpty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.mcpToolItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.mcpToolItem:last-child {
+  border-bottom: 0;
+}
+
+.mcpToolInfo {
+  min-width: 0;
+}
+
+.mcpToolInfo strong {
+  color: var(--text);
+  font-size: 12px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+.mcpToolInfo p {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcpToolResult {
+  margin-top: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  padding: 8px;
+  overflow-x: auto;
+}
+
+.mcpToolResult pre {
+  margin: 0;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
