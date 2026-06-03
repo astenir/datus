@@ -1399,7 +1399,7 @@ button:disabled {
 .messageActions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   margin-top: 8px;
   opacity: 0;
   transition: opacity 0.16s ease;
