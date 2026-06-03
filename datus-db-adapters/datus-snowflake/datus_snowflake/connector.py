@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Literal, Optional, Sequence, Set, Union, ove
 
 import pyarrow as pa
 import pyarrow.compute as pc
+from cryptography.hazmat.primitives import serialization
 from pandas import DataFrame
 from snowflake.connector import Connect, SnowflakeConnection
 from snowflake.connector.errors import (
@@ -41,6 +42,26 @@ from datus_db_core import (
 from .config import SnowflakeConfig
 
 logger = get_logger(__name__)
+
+
+def _private_key_to_der(private_key: str, private_key_file_pwd: Optional[str] = None) -> bytes:
+    """Convert a PEM private key string into DER bytes accepted by Snowflake."""
+    normalized_pem = private_key.strip()
+    if "\\n" in normalized_pem and "\n" not in normalized_pem:
+        normalized_pem = normalized_pem.replace("\\n", "\n")
+
+    passphrase = private_key_file_pwd.encode() if private_key_file_pwd else None
+    try:
+        private_key = serialization.load_pem_private_key(normalized_pem.encode(), password=passphrase)
+    except TypeError:
+        if passphrase is None:
+            raise
+        private_key = serialization.load_pem_private_key(normalized_pem.encode(), password=None)
+    return private_key.private_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    )
 
 
 def _handle_snowflake_exception(e: Exception, sql: str = "") -> DatusDbException:
@@ -132,7 +153,16 @@ class SnowflakeConnector(BaseSqlConnector, SchemaNamespaceMixin, MaterializedVie
         }
         if config.role:
             connect_kwargs["role"] = config.role
-        if config.private_key_file:
+        if config.private_key and config.private_key.get_secret_value():
+            connect_kwargs["authenticator"] = "SNOWFLAKE_JWT"
+            private_key_file_pwd = (
+                config.private_key_file_pwd.get_secret_value() if config.private_key_file_pwd else None
+            )
+            connect_kwargs["private_key"] = _private_key_to_der(
+                config.private_key.get_secret_value(),
+                private_key_file_pwd,
+            )
+        elif config.private_key_file:
             connect_kwargs["authenticator"] = "SNOWFLAKE_JWT"
             connect_kwargs["private_key_file"] = config.private_key_file
             if config.private_key_file_pwd:

@@ -23,6 +23,14 @@ class SnowflakeConfig(BaseModel):
         default=None,
         description="Path to PEM-encoded RSA private key for key pair authentication (SNOWFLAKE_JWT)",
     )
+    private_key: Optional[SecretStr] = Field(
+        default=None,
+        description=(
+            "PEM-encoded RSA private key for key pair authentication (SNOWFLAKE_JWT); "
+            "takes precedence over private_key_file and password"
+        ),
+        json_schema_extra={"input_type": "password"},
+    )
     private_key_file_pwd: Optional[SecretStr] = Field(
         default=None,
         description="Passphrase for the encrypted private key file (omit for unencrypted keys)",
@@ -34,13 +42,21 @@ class SnowflakeConfig(BaseModel):
     role: Optional[str] = Field(default=None, description="Snowflake role to use")
     timeout_seconds: int = Field(default=30, description="Connection timeout in seconds")
 
+    @staticmethod
+    def _has_secret(value: Optional[SecretStr]) -> bool:
+        return value is not None and bool(value.get_secret_value())
+
     @model_validator(mode="after")
-    def _require_exactly_one_credential(self) -> "SnowflakeConfig":
-        has_password = bool(self.password)
+    def _require_supported_credential(self) -> "SnowflakeConfig":
+        has_private_key = self._has_secret(self.private_key)
+        if has_private_key:
+            return self
+
+        has_password = self._has_secret(self.password)
         has_key = bool(self.private_key_file)
         if has_password == has_key:
             raise ValueError(
-                "SnowflakeConfig requires exactly one of `password` or `private_key_file` "
-                "(use key pair authentication for MFA-enforced accounts)"
+                "SnowflakeConfig requires `private_key`, or exactly one of `password` "
+                "or `private_key_file` (private_key takes precedence when provided)"
             )
         return self
