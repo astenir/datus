@@ -13,6 +13,7 @@ import SheetContent from "@/components/ui/SheetContent.vue";
 import SheetHeader from "@/components/ui/SheetHeader.vue";
 import SheetTitle from "@/components/ui/SheetTitle.vue";
 import { configApi } from "@/lib/api";
+import { CONNECTION_LABELS } from "@/lib/constants";
 import { useConnection } from "@/composables/useConnection";
 import type { ConfigSummary, ConnectionState, ProbeResult } from "@/types";
 
@@ -35,15 +36,7 @@ const emit = defineEmits<{
   "refresh-connection": [];
 }>();
 
-const connectionLabel = computed(() => {
-  const map: Record<ConnectionState, string> = {
-    idle: "未检测",
-    checking: "检测中…",
-    online: "已连接",
-    offline: "未连接",
-  };
-  return map[props.connection];
-});
+const connectionLabel = computed(() => CONNECTION_LABELS[props.connection]);
 
 // ─── Connectivity testing ────────────────────────────────────────────────────
 

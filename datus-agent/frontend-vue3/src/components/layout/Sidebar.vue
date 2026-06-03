@@ -31,6 +31,7 @@ import SidebarGroupContent from "@/components/ui/SidebarGroupContent.vue";
 import SidebarGroupHeader from "@/components/ui/SidebarGroupHeader.vue";
 import SidebarHeader from "@/components/ui/SidebarHeader.vue";
 import { formatSessionTime, sessionTitle, sessionUserQueryText } from "@/lib/chat";
+import { CONNECTION_LABELS } from "@/lib/constants";
 import { ref } from "vue";
 import { useTheme } from "@/composables/useTheme";
 import type { ChatSessionOption, ConnectionState, ViewType } from "@/types";
@@ -56,13 +57,6 @@ const emit = defineEmits<{
 }>();
 
 const { theme, toggleTheme } = useTheme();
-
-const connectionLabelMap: Record<ConnectionState, string> = {
-  idle: "未检测",
-  checking: "检测中…",
-  online: "已连接",
-  offline: "未连接",
-};
 
 const navItems: Array<{ view: ViewType; label: string; icon: typeof MessageSquare }> = [
   { view: "chat", label: "对话", icon: MessageSquare },
@@ -226,7 +220,7 @@ function handleCompact() {
       </div>
     </Teleport>
 
-    <div class="sidebarFooter">
+    <div v-if="!collapsed" class="sidebarFooter">
       <Badge
         :variant="connection === 'online' ? 'success' : connection === 'offline' ? 'destructive' : connection === 'checking' ? 'secondary' : 'outline'"
         class="connectionPill"
@@ -234,7 +228,7 @@ function handleCompact() {
         <CheckCircle2 v-if="connection === 'online'" :size="14" />
         <Loader2 v-else-if="connection === 'checking'" class="spin" :size="14" />
         <WifiOff v-else :size="14" />
-        {{ connectionLabelMap[connection] }}
+        {{ CONNECTION_LABELS[connection] }}
       </Badge>
       <div class="sidebarFooterActions">
         <Tooltip>
@@ -265,7 +259,7 @@ function handleCompact() {
       </div>
     </div>
 
-    <div class="sidebarActionsStack">
+    <div v-if="collapsed" class="sidebarActionsStack">
       <Tooltip>
         <TooltipTrigger as-child>
           <Button class="sidebarThemeBtn" variant="ghost" size="icon" aria-label="切换主题" @click="toggleTheme">
