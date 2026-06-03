@@ -2,11 +2,6 @@
 import { ref } from "vue";
 import { ThumbsDown, ThumbsUp } from "@lucide/vue";
 
-const props = defineProps<{
-  sessionId: string;
-  messageContent: string;
-}>();
-
 const emit = defineEmits<{
   feedback: [emoji: string];
 }>();

@@ -82,8 +82,6 @@ async function handleFeedback(emoji: string) {
     </template>
     <div v-if="message.role === 'assistant' && sessionId" class="messageActions">
       <FeedbackButtons
-        :session-id="sessionId"
-        :message-content="message.content"
         @feedback="handleFeedback"
       />
       <SuccessStoryButton

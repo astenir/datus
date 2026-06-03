@@ -27,6 +27,15 @@ const statusLabel = computed(() => props.mode === "call" ? "Tool call" : resultS
 const sqlText = computed(() => sqlFromToolValue(displayValue.value));
 const table = computed(() => tableFromToolValue(displayValue.value, { omitKeys: sqlText.value ? sqlKeys : undefined }));
 const valueKind = computed(() => table.value?.sourceLabel ?? summarizeValue(displayValue.value));
+
+const vizData = computed(() => {
+  if (!table.value) return [];
+  return table.value.rows.map((row: string[]) => {
+    const obj: Record<string, unknown> = {};
+    table.value!.columns.forEach((c: string, i: number) => { obj[c] = row[i]; });
+    return obj;
+  });
+});
 </script>
 
 <template>
@@ -79,8 +88,8 @@ const valueKind = computed(() => table.value?.sourceLabel ?? summarizeValue(disp
           </div>
           <DataVisualization
             v-if="table && table.columns.length > 0 && table.rows.length > 0"
-            :columns="table?.columns ?? []"
-            :data="(table?.rows ?? []).map((row: string[]) => { const obj: Record<string, unknown> = {}; (table?.columns ?? []).forEach((c: string, i: number) => { obj[c] = row[i] }); return obj; })"
+            :columns="table.columns"
+            :data="vizData"
           />
           <details class="toolRawBlock" :open="!table">
             <summary>
