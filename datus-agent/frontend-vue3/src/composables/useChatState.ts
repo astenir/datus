@@ -253,8 +253,8 @@ async function compactSession(sessionId: string) {
 }
 
 async function resumeSession(sessionId?: string) {
-  // Skip if an interaction is in progress
-  if (isInteracting.value) return;
+  // Skip if already streaming (another operation is in progress)
+  if (isStreaming.value) return;
 
   const targetSession = sessionId ?? selectedSession.value;
   if (!targetSession) return;
@@ -314,76 +314,26 @@ async function sendInteraction(interactionKey: string) {
     // Wait for backend to release the lock
     await new Promise((r) => setTimeout(r, 1500));
 
-    const controller = new AbortController();
-    abortRef.current = controller;
-    isStreaming.value = true;
+    // Send interaction as JSON (not SSE)
+    await chatApi.userInteraction(base, {
+      session_id: sessionId,
+      interaction_key: interactionKey,
+      input: [[interactionKey]],
+    });
 
-    try {
-      const url = `${normalizeBaseUrl(base)}/api/v1/chat/user_interaction`;
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-        body: JSON.stringify({
-          session_id: sessionId,
-          interaction_key: interactionKey,
-          input: [[interactionKey]],
-        }),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || `${response.status} ${response.statusText}`);
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error("No response body");
-
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const parsed = parseSseBuffer(buffer);
-        buffer = parsed.rest;
-
-        for (const event of parsed.events) {
-          captureSessionId(event);
-          const incoming = messageFromEvent(event);
-          if (incoming) messages.value = mergeMessage(messages.value, incoming);
-        }
-      }
-
-      if (buffer) {
-        const parsed = parseSseBuffer(buffer, { flush: true });
-        for (const event of parsed.events) {
-          captureSessionId(event);
-          const incoming = messageFromEvent(event);
-          if (incoming) messages.value = mergeMessage(messages.value, incoming);
-        }
-      }
-    } catch (error) {
-      if ((error as Error).name !== "AbortError") {
-        console.error("Failed to send interaction:", error);
-        messages.value = [
-          ...messages.value,
-          {
-            id: `error-${Date.now()}`,
-            role: "system",
-            content: `**交互失败** ${error instanceof Error ? error.message : String(error)}`,
-          },
-        ];
-      }
-    } finally {
-      isStreaming.value = false;
-      abortRef.current = null;
-      if (selectedSession.value) {
-        messageCache.set(selectedSession.value, messages.value);
-      }
-      loadSessions();
+    // After interaction is submitted, resume to receive continued content via SSE
+    await resumeSession(sessionId);
+  } catch (error) {
+    if ((error as Error).name !== "AbortError") {
+      console.error("Failed to send interaction:", error);
+      messages.value = [
+        ...messages.value,
+        {
+          id: `error-${Date.now()}`,
+          role: "system",
+          content: `**交互失败** ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ];
     }
   } finally {
     isInteracting.value = false;
