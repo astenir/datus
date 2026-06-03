@@ -19,6 +19,7 @@ const sessions = ref<ChatSessionOption[]>([]);
 const selectedSession = ref<string | null>(null);
 const isStreaming = ref(false);
 const abortRef = { current: null as AbortController | null };
+const messageCache = new Map<string, ChatMessage[]>();
 
 async function loadSessions(subagentId?: string) {
   const { effectiveBase } = useConnection();
@@ -68,9 +69,21 @@ function selectSession(sessionId: string | null) {
     abortRef.current = null;
   }
   isStreaming.value = false;
+
+  // Cache current messages for the outgoing session
+  if (selectedSession.value && messages.value.length > 0) {
+    messageCache.set(selectedSession.value, messages.value);
+  }
+
   selectedSession.value = sessionId;
   if (sessionId) {
-    loadSessionHistory(sessionId);
+    // Restore from cache if available, otherwise load from backend
+    const cached = messageCache.get(sessionId);
+    if (cached) {
+      messages.value = cached;
+    } else {
+      loadSessionHistory(sessionId);
+    }
   } else {
     messages.value = [];
   }
@@ -179,6 +192,10 @@ async function sendMessage(opts: {
   } finally {
     isStreaming.value = false;
     abortRef.current = null;
+    // Update cache with latest messages
+    if (selectedSession.value) {
+      messageCache.set(selectedSession.value, messages.value);
+    }
     loadSessions();
   }
 }
@@ -205,6 +222,7 @@ async function deleteSession(sessionId: string) {
   const base = effectiveBase();
   try {
     await chatApi.deleteSession(base, sessionId);
+    messageCache.delete(sessionId);
     if (selectedSession.value === sessionId) {
       selectSession(null);
     }
@@ -260,6 +278,10 @@ async function resumeSession(sessionId?: string) {
   } finally {
     isStreaming.value = false;
     abortRef.current = null;
+    // Update cache with latest messages
+    if (selectedSession.value) {
+      messageCache.set(selectedSession.value, messages.value);
+    }
     loadSessions();
   }
 }
@@ -267,6 +289,7 @@ async function resumeSession(sessionId?: string) {
 function clearMessages() {
   messages.value = [];
   selectedSession.value = null;
+  messageCache.clear();
 }
 
 export function useChatState() {
