@@ -22,6 +22,20 @@ const isInteracting = ref(false);
 const abortRef = { current: null as AbortController | null };
 const messageCache = new Map<string, ChatMessage[]>();
 
+/** Try to extract session_id from an SSE event, checking all known locations. */
+function captureSessionId(event: { data?: unknown }): boolean {
+  if (selectedSession.value) return true;
+  const d = event.data as Record<string, unknown> | undefined;
+  if (!d) return false;
+  const p = (typeof d.payload === "object" && d.payload ? d.payload : undefined) as Record<string, unknown> | undefined;
+  const sid = (d.session_id ?? d.sessionId ?? p?.session_id ?? p?.sessionId) as string | undefined;
+  if (sid && typeof sid === "string" && sid.length > 0) {
+    selectedSession.value = sid;
+    return true;
+  }
+  return false;
+}
+
 async function loadSessions(subagentId?: string) {
   const { effectiveBase } = useConnection();
   const base = effectiveBase();
@@ -154,30 +168,21 @@ async function sendMessage(opts: {
       buffer = parsed.rest;
 
       for (const event of parsed.events) {
+        // Capture session ID from ALL events, before type filtering
+        captureSessionId(event);
+
         const incoming = messageFromEvent(event);
         if (!incoming) continue;
-
         messages.value = mergeMessage(messages.value, incoming);
-
-        // Capture session ID from any event type, checking multiple locations
-        if (!selectedSession.value) {
-          const data = event.data as Record<string, unknown> | undefined;
-          const payload = data?.payload as Record<string, unknown> | undefined;
-          const sid =
-            (data?.session_id ?? data?.sessionId ??
-              payload?.session_id ?? payload?.sessionId) as string | undefined;
-          if (sid) selectedSession.value = sid;
-        }
       }
     }
 
     if (buffer) {
       const parsed = parseSseBuffer(buffer, { flush: true });
       for (const event of parsed.events) {
+        captureSessionId(event);
         const incoming = messageFromEvent(event);
-        if (incoming) {
-          messages.value = mergeMessage(messages.value, incoming);
-        }
+        if (incoming) messages.value = mergeMessage(messages.value, incoming);
       }
     }
   } catch (error) {
@@ -268,12 +273,14 @@ async function resumeSession(sessionId?: string) {
     });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
     const tail = await consumeSseStream(response, (event) => {
+      captureSessionId(event);
       const incoming = messageFromEvent(event);
       if (incoming) messages.value = mergeMessage(messages.value, incoming);
     });
     if (tail) {
       const parsed = parseSseBuffer(tail, { flush: true });
       for (const event of parsed.events) {
+        captureSessionId(event);
         const incoming = messageFromEvent(event);
         if (incoming) messages.value = mergeMessage(messages.value, incoming);
       }
@@ -285,7 +292,6 @@ async function resumeSession(sessionId?: string) {
   } finally {
     isStreaming.value = false;
     abortRef.current = null;
-    // Update cache with latest messages
     if (selectedSession.value) {
       messageCache.set(selectedSession.value, messages.value);
     }
@@ -345,6 +351,7 @@ async function sendInteraction(interactionKey: string) {
         buffer = parsed.rest;
 
         for (const event of parsed.events) {
+          captureSessionId(event);
           const incoming = messageFromEvent(event);
           if (incoming) messages.value = mergeMessage(messages.value, incoming);
         }
@@ -353,6 +360,7 @@ async function sendInteraction(interactionKey: string) {
       if (buffer) {
         const parsed = parseSseBuffer(buffer, { flush: true });
         for (const event of parsed.events) {
+          captureSessionId(event);
           const incoming = messageFromEvent(event);
           if (incoming) messages.value = mergeMessage(messages.value, incoming);
         }

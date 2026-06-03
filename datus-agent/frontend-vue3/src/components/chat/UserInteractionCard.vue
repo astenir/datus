@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import Button from "@/components/ui/Button.vue";
 import { useChatState } from "@/composables/useChatState";
 
@@ -18,12 +18,14 @@ const error = ref<string | null>(null);
 
 const { sendInteraction, isInteracting } = useChatState();
 
+// Button is disabled when: loading, already selected, still streaming, interacting, or no sessionId
+const buttonsDisabled = computed(
+  () => loading.value || !!selectedKey.value || props.isStreaming || isInteracting.value || !props.sessionId
+);
+
 async function handleSelect(key: string) {
-  if (loading.value || selectedKey.value || props.isStreaming || isInteracting.value) return;
-  if (!props.sessionId) {
-    error.value = "会话未就绪，请稍后重试";
-    return;
-  }
+  if (buttonsDisabled.value) return;
+  if (!props.sessionId) return;
 
   loading.value = true;
   error.value = null;
@@ -34,13 +36,10 @@ async function handleSelect(key: string) {
     await sendInteraction(key);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (msg.includes("task is already running")) {
-      error.value = "任务仍在运行，请点击停止按钮后重试，或新建会话";
-      selectedKey.value = null;
-    } else {
-      error.value = `提交失败: ${msg}`;
-      selectedKey.value = null;
-    }
+    error.value = msg.includes("task is already running")
+      ? "任务仍在运行，请点击停止按钮后重试，或新建会话"
+      : `提交失败: ${msg}`;
+    selectedKey.value = null;
   } finally {
     loading.value = false;
   }
@@ -65,7 +64,7 @@ function retry() {
           :key="opt.key"
           class="userInteractionBtn"
           :class="{ selected: selectedKey === opt.key }"
-          :disabled="loading || !!selectedKey || isStreaming || isInteracting || !sessionId"
+          :disabled="buttonsDisabled"
           @click="handleSelect(opt.key)"
         >
           <span v-if="selectedKey === opt.key" class="checkIcon">✓</span>
@@ -74,8 +73,8 @@ function retry() {
       </div>
     </div>
 
-    <p v-if="!sessionId" class="userInteractionStatus">会话初始化中...</p>
-    <p v-else-if="isStreaming && !selectedKey" class="userInteractionStatus">等待生成完成...</p>
+    <p v-if="isStreaming" class="userInteractionStatus">等待生成完成...</p>
+    <p v-else-if="!sessionId" class="userInteractionStatus">等待会话信息...</p>
     <p v-else-if="loading" class="userInteractionStatus">提交中...</p>
     <p v-else-if="selectedKey && !error" class="userInteractionStatus done">已提交</p>
 
