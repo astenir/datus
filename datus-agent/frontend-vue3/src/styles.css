@@ -795,6 +795,16 @@ button:disabled {
   padding: 10px 14px;
 }
 
+.message.assistant .bubble {
+  border-radius: 18px;
+  background: #f9fafb;
+  padding: 10px 14px;
+}
+
+.dark .message.assistant .bubble {
+  background: oklch(0.2 0 0);
+}
+
 .message.system .avatar {
   border-color: #cbd5e1;
   background: #f8fafc;

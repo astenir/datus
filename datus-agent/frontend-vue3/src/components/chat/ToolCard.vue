@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { CheckCircle2, ChevronDown, TerminalSquare, XCircle } from "@lucide/vue";
 import { CollapsibleRoot, CollapsibleTrigger, CollapsibleContent } from "reka-ui";
-import { ref } from "vue";
+import { computed, ref } from "vue";
 
 import { stringifyContent } from "@/lib/chat";
 import DataVisualization from "@/components/visualization/DataVisualization.vue";
@@ -17,16 +17,16 @@ const props = defineProps<{
 
 const isOpen = ref(props.mode === "result");
 
-const payload = stringifyContent(props.value);
-const displayValue = displayValueForTool(props.mode, props.value);
-const displayPayload = stringifyContent(displayValue);
-const hasValue = displayValue !== undefined && displayValue !== null && displayPayload !== "";
-const payloadLabel = props.mode === "call" ? "参数" : "返回";
-const resultStatus = props.mode === "result" ? toolResultStatus(props.value) : "unknown";
-const statusLabel = props.mode === "call" ? "Tool call" : resultStatus === "error" ? "Tool result failed" : "Tool result";
-const sqlText = sqlFromToolValue(displayValue);
-const table = tableFromToolValue(displayValue, { omitKeys: sqlText ? sqlKeys : undefined });
-const valueKind = table?.sourceLabel ?? summarizeValue(displayValue);
+const payload = computed(() => stringifyContent(props.value));
+const displayValue = computed(() => displayValueForTool(props.mode, props.value));
+const displayPayload = computed(() => stringifyContent(displayValue.value));
+const hasValue = computed(() => displayValue.value !== undefined && displayValue.value !== null && displayPayload.value !== "");
+const payloadLabel = computed(() => props.mode === "call" ? "参数" : "返回");
+const resultStatus = computed(() => props.mode === "result" ? toolResultStatus(props.value) : "unknown");
+const statusLabel = computed(() => props.mode === "call" ? "Tool call" : resultStatus.value === "error" ? "Tool result failed" : "Tool result");
+const sqlText = computed(() => sqlFromToolValue(displayValue.value));
+const table = computed(() => tableFromToolValue(displayValue.value, { omitKeys: sqlText.value ? sqlKeys : undefined }));
+const valueKind = computed(() => table.value?.sourceLabel ?? summarizeValue(displayValue.value));
 </script>
 
 <template>
