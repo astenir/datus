@@ -34,7 +34,7 @@ const { apiBase, connection, config, effectiveBase, checkConnection, setApiBase 
 const { messages, sessions, selectedSession, isStreaming, loadSessions, selectSession, sendMessage, stopSession, deleteSession, compactSession, resumeSession, clearMessages } = useChatState();
 const { agents, loadAgents } = useAgents();
 const { modelOptions, loadModels } = useModels();
-const { catalogEntries, databaseOptions, database, schema, schemaOptions, loadCatalog } = useCatalog();
+const { catalogEntries, databaseOptions, database, schema, loadCatalog } = useCatalog();
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
@@ -162,7 +162,6 @@ watch(database, (db) => {
                 :agent-options="agentOptions"
                 :model-options="modelOptions"
                 :database-options="databaseOptions"
-                :schema-options="schemaOptions"
                 :catalog-entries="catalogEntries"
                 :selected-agent="selectedAgent"
                 :model="selectedModel"

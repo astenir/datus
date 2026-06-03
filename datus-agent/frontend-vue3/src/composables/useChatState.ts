@@ -239,7 +239,6 @@ export function useChatState() {
     selectedSession,
     isStreaming,
     loadSessions,
-    loadSessionHistory,
     selectSession,
     sendMessage,
     stopSession,

@@ -140,9 +140,19 @@
   background: oklch(0.17 0.02 170);
 }
 
+.dark .toolCard.result.success {
+  border-color: oklch(0.3 0.08 170);
+  background: oklch(0.17 0.02 170);
+}
+
 .dark .toolCard.result.error {
   border-color: oklch(0.3 0.08 10);
   background: oklch(0.17 0.02 10);
+}
+
+.dark .toolCard.result.unknown {
+  border-color: oklch(0.3 0 0);
+  background: oklch(0.17 0 0);
 }
 
 .dark .toolCard.result .toolBody {
@@ -222,30 +232,18 @@
   background: oklch(0.23 0.05 10);
 }
 
-.dark .appSelectTrigger,
 .dark .dbPickerButton {
   background: oklch(0.21 0 0);
 }
 
-.dark .quickControls .appSelectTrigger:hover:not(:disabled),
-.dark .quickControls .appSelectTrigger[data-state="open"],
 .dark .quickControls .dbPickerButton:hover:not(:disabled),
 .dark .quickControls .dbPickerButton.open {
   background: oklch(0.27 0 0);
 }
 
-.dark .appSelectContent,
 .dark .dbPickerMenu {
   border-color: var(--line);
   box-shadow: 0 20px 45px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
-}
-
-.dark .appSelectItem[data-highlighted] {
-  background: oklch(0.25 0 0);
-}
-
-.dark .appSelectItem[data-state="checked"] {
-  background: oklch(0.25 0 0);
 }
 
 .dark .sessionList::-webkit-scrollbar-thumb,
@@ -266,7 +264,6 @@
   box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.1);
 }
 
-.dark .appSelectTrigger:focus-visible,
 .dark .dbPickerButton:focus-visible {
   box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.12);
 }
@@ -343,14 +340,6 @@ button:disabled {
   height: 100dvh;
   overflow: hidden;
   background: var(--surface);
-}
-
-.mobileSidebarBackdrop {
-  display: none;
-}
-
-.mobileSessionButton {
-  display: none;
 }
 
 #sidebar {
@@ -479,40 +468,6 @@ button:disabled {
 
 .sidebar:not(.collapsed) .sidebarActionsStack {
   display: none;
-}
-
-/* Skeleton loading */
-.skeletonSessionItem {
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
-  gap: 9px;
-  width: 100%;
-  min-height: 48px;
-  border-radius: 10px;
-  padding: 9px;
-}
-
-.skeletonSessionIcon {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-}
-
-.skeletonSessionLine {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding-top: 4px;
-}
-
-.skeletonSessionLineShort {
-  width: 60%;
-  height: 12px;
-}
-
-.skeletonSessionLineLong {
-  width: 85%;
-  height: 10px;
 }
 
 .sidebarHeader,
@@ -979,9 +934,19 @@ button:disabled {
   background: #fafffd;
 }
 
+.toolCard.result.success {
+  border-color: #ccfbf1;
+  background: #fafffd;
+}
+
 .toolCard.result.error {
   border-color: #fecdd3;
   background: #fffafa;
+}
+
+.toolCard.result.unknown {
+  border-color: var(--line);
+  background: var(--surface);
 }
 
 .toolHeader {
@@ -1122,13 +1087,6 @@ button:disabled {
   line-height: 1.5;
 }
 
-.toolPayloadBlock {
-  overflow: hidden;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface);
-}
-
 .toolSqlBlock {
   overflow: hidden;
   border: 1px solid #bfdbfe;
@@ -1231,19 +1189,6 @@ button:disabled {
 
 .toolRawBlock summary::-webkit-details-marker {
   display: none;
-}
-
-.toolPayloadHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  border-bottom: 1px solid var(--line);
-  background: var(--surface-soft);
-  padding: 7px 10px;
-  color: var(--text-muted);
-  font-size: 12px;
-  font-weight: 650;
 }
 
 .toolPayload {
@@ -1515,7 +1460,14 @@ textarea:focus {
   box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.08);
 }
 
-.appSelectTrigger,
+.dbPickerGroup {
+  margin-bottom: 4px;
+}
+
+.dbPickerGroup:last-child {
+  margin-bottom: 0;
+}
+
 .dbPickerButton {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -1538,7 +1490,6 @@ textarea:focus {
     box-shadow 0.16s ease;
 }
 
-.quickControls .appSelectTrigger,
 .quickControls .dbPickerButton {
   min-width: 0;
   height: 24px;
@@ -1581,33 +1532,26 @@ textarea:focus {
   color: #047857;
 }
 
-.quickControls .appSelectTrigger:hover:not(:disabled),
-.quickControls .appSelectTrigger[data-state="open"],
 .quickControls .dbPickerButton:hover:not(:disabled),
 .quickControls .dbPickerButton.open {
   background: #ffffff;
 }
 
-.quickControls .appSelectTrigger:focus-visible,
 .quickControls .dbPickerButton:focus-visible {
   box-shadow: none;
 }
 
-.appSelectTrigger:hover:not(:disabled),
-.appSelectTrigger[data-state="open"],
 .dbPickerButton:hover:not(:disabled),
 .dbPickerButton.open {
   border-color: var(--line-strong);
   background: var(--surface);
 }
 
-.appSelectTrigger:focus-visible,
 .dbPickerButton:focus-visible {
   border-color: var(--ring);
   box-shadow: 0 0 0 3px rgba(0, 0, 0, 0.08);
 }
 
-.appSelectTrigger span,
 .dbPickerButton span,
 .dbPickerDatabase span {
   min-width: 0;
@@ -1616,7 +1560,6 @@ textarea:focus {
   white-space: nowrap;
 }
 
-.appSelectTrigger svg,
 .dbPickerButton svg,
 .dbPickerDatabase svg {
   color: var(--text-muted);
@@ -1628,7 +1571,6 @@ textarea:focus {
   transform: rotate(180deg);
 }
 
-.appSelectContent,
 .dbPickerMenu {
   z-index: 80;
   border: 1px solid var(--line);
@@ -1637,14 +1579,6 @@ textarea:focus {
   box-shadow:
     0 20px 45px rgba(0, 0, 0, 0.14),
     0 2px 8px rgba(0, 0, 0, 0.08);
-}
-
-.appSelectContent {
-  min-width: 8rem;
-  max-width: min(440px, 92vw);
-  max-height: 320px;
-  overflow: hidden;
-  padding: 6px;
 }
 
 /* Select dropdown animation - target the [role="listbox"] which is the actual content element */
@@ -1661,25 +1595,6 @@ textarea:focus {
 @keyframes select-hide {
   from { opacity: 1; transform: scale(1) translateY(0); }
   to { opacity: 0; transform: scale(0.95) translateY(-4px); }
-}
-
-.appSelectItem {
-  position: relative;
-  min-height: 34px;
-  border-radius: 9px;
-  padding: 7px 32px 7px 10px;
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 520;
-}
-
-.appSelectItem[data-highlighted] {
-  background: var(--surface-soft);
-}
-
-.appSelectItem[data-state="checked"] {
-  background: #f4f4f5;
-  color: var(--text);
 }
 
 .dbPickerMenu {
@@ -1819,21 +1734,6 @@ textarea:focus {
 .iconButton:hover:not(:disabled) {
   background: #eeeeef;
   color: var(--text);
-}
-
-.errorBanner {
-  width: var(--chat-content-width);
-  margin: 12px auto 0;
-}
-
-.settingsOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: flex;
-  justify-content: flex-end;
-  background: rgba(24, 24, 27, 0.38);
-  backdrop-filter: blur(2px);
 }
 
 .settingsDrawer {
@@ -2732,33 +2632,7 @@ textarea:focus {
   background: #fff1f2;
 }
 
-/* ─── Module View (placeholder) ────────────────────────────────────────────── */
-
-.moduleView {
-  display: grid;
-  min-height: 100%;
-  place-content: center;
-  background: var(--surface);
-}
-
-.modulePlaceholder {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  text-align: center;
-  color: var(--text-muted);
-}
-
-.modulePlaceholder h2 {
-  color: var(--text);
-  font-size: 20px;
-  font-weight: 650;
-}
-
-.modulePlaceholder p {
-  font-size: 14px;
-}
+/* ─── Chat View ───────────────────────────────────────────────────────────── */
 
 .chatView {
   --chat-content-width: min(920px, calc(100% - 56px));
@@ -2864,28 +2738,6 @@ textarea:focus {
   .workspace {
     height: 100dvh;
     min-height: 0;
-  }
-
-  .mobileSidebarBackdrop {
-    position: fixed;
-    inset: 0;
-    z-index: 50;
-    display: block;
-    border: 0;
-    background: rgba(0, 0, 0, 0.26);
-    padding: 0;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.18s ease;
-  }
-
-  .shell.mobileSidebarOpen .mobileSidebarBackdrop {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  .mobileSessionButton {
-    display: inline-flex;
   }
 }
 

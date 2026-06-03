@@ -48,6 +48,5 @@ export function useCatalog() {
     schema,
     schemaOptions,
     loadCatalog,
-    resetCatalog,
   };
 }

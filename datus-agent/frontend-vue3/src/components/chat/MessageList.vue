@@ -21,16 +21,12 @@ defineProps({
   sessionId: {
     type: String as PropType<string | null>,
     default: null
-  },
-  scrollRef: {
-    type: Object as PropType<HTMLDivElement | null>,
-    default: null
   }
 });
 </script>
 
 <template>
-  <div ref="scrollRef" class="messages">
+  <div ref="scrollContainer" class="messages">
     <div v-if="messages.length === 0" class="emptyState">
       <TerminalSquare :size="34" />
       <h3>开始新的分析</h3>

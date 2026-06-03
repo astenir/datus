@@ -36,9 +36,5 @@ export function useTheme() {
     theme.value = theme.value === "dark" ? "light" : "dark";
   };
 
-  const setTheme = (next: Theme) => {
-    theme.value = next;
-  };
-
-  return { theme, toggleTheme, setTheme };
+  return { theme, toggleTheme };
 }

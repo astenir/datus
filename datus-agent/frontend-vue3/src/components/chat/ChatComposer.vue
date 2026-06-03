@@ -15,7 +15,6 @@ const props = defineProps<{
   agentOptions: SelectOption[];
   modelOptions: SelectOption[];
   databaseOptions: SelectOption[];
-  schemaOptions: SelectOption[];
   catalogEntries: CatalogRecord[];
   selectedAgent: string;
   model: string;

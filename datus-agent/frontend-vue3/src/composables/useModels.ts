@@ -28,8 +28,6 @@ async function loadModels() {
 
 export function useModels() {
   return {
-    models,
-    currentModel,
     modelOptions,
     loadModels,
   };

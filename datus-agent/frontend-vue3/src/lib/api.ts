@@ -7,7 +7,6 @@ import type {
   AgentDetail,
   AgentInfo,
   BootstrapDocInput,
-  BootstrapKbEvent,
   BootstrapKbInput,
   ChatSessionOption,
   CompactSessionData,
