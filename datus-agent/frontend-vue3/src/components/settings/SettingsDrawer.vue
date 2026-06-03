@@ -70,9 +70,17 @@ async function testDatasource() {
   datasourceTestResult.value = null;
   try {
     const { effectiveBase } = useConnection();
-    const result = await configApi.testDatasource(effectiveBase(), {
-      type: props.config.current_datasource,
-    });
+    const dsConfig = props.config.datasources?.[props.config.current_datasource];
+    if (!dsConfig) {
+      datasourceTestResult.value = { ok: false, message: `Datasource '${props.config.current_datasource}' not found in config` };
+      return;
+    }
+    // Flatten `extra` dict into top-level keys so the backend's filter_kwargs
+    // treats them as unknown fields (handled by _resolve_nested_value) rather
+    // than stringifying the dict via str(v).
+    const { extra, ...rest } = dsConfig as Record<string, unknown>;
+    const probePayload = { ...rest, ...(typeof extra === 'object' && extra !== null ? extra : {}) } as { type: string; [key: string]: unknown };
+    const result = await configApi.testDatasource(effectiveBase(), probePayload);
     datasourceTestResult.value = result;
   } catch (e) {
     datasourceTestResult.value = { ok: false, message: (e as Error).message };
