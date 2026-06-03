@@ -1,4 +1,4 @@
-import { ref, watch } from "vue";
+import { ref, computed } from "vue";
 import { catalogApi } from "@/lib/api";
 import { databaseNameFromCatalog, schemaOptionsForDatabase, uniqueOptions } from "@/lib/chat";
 import { useConnection } from "./useConnection";
@@ -30,10 +30,7 @@ async function loadCatalog(databaseName?: string) {
   }
 }
 
-const schemaOptions = ref<SelectOption[]>([]);
-watch([database, catalogEntries], ([db]) => {
-  schemaOptions.value = schemaOptionsForDatabase(catalogEntries.value, db);
-});
+const schemaOptions = computed(() => schemaOptionsForDatabase(catalogEntries.value, database.value));
 
 export function useCatalog() {
   return {

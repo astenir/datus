@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, watch, defineAsyncComponent } from "vue";
+import { ref, computed, onMounted, watch, defineAsyncComponent } from "vue";
 import { Splitpanes, Pane } from "splitpanes";
 import { TooltipProvider } from "reka-ui";
 import "splitpanes/dist/splitpanes.css";
@@ -56,10 +56,7 @@ function openAgentManager() {
 
 // ─── Agent options for ChatComposer ──────────────────────────────────────────
 
-const agentOptions = ref<Array<{ value: string; label: string }>>([]);
-watch(agents, (list) => {
-  agentOptions.value = list.map((a) => ({ value: a.name, label: a.name }));
-});
+const agentOptions = computed(() => agents.value.map((a) => ({ value: a.name, label: a.name })));
 
 const selectedAgent = ref("");
 const selectedModel = ref("");

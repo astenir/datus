@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { ref, computed } from "vue";
 import { CircleStop, Clock, Loader2, Play, Rows3, Terminal } from "@lucide/vue";
 
 import Button from "@/components/ui/Button.vue";
@@ -58,32 +58,20 @@ function handleKeyDown(e: KeyboardEvent) {
 }
 
 // Parse sql_return as JSON table if possible
-const tableData = ref<Array<Record<string, unknown>>>([]);
-const tableColumns = ref<string[]>([]);
-
-function parseResult() {
-  if (!result.value?.sql_return) {
-    tableData.value = [];
-    tableColumns.value = result.value?.columns || [];
-    return;
-  }
+const tableData = computed<Array<Record<string, unknown>>>(() => {
+  if (!result.value?.sql_return) return [];
   try {
     const parsed = JSON.parse(result.value.sql_return);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      tableData.value = parsed;
-      tableColumns.value = Object.keys(parsed[0]);
-    } else {
-      tableData.value = [];
-      tableColumns.value = result.value.columns || [];
-    }
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : [];
   } catch {
-    tableData.value = [];
-    tableColumns.value = result.value.columns || [];
+    return [];
   }
-}
+});
 
-// Watch for result changes
-watch(result, parseResult);
+const tableColumns = computed<string[]>(() => {
+  if (tableData.value.length > 0) return Object.keys(tableData.value[0]);
+  return result.value?.columns || [];
+});
 </script>
 
 <template>
