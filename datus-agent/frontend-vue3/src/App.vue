@@ -34,7 +34,7 @@ const { apiBase, connection, config, effectiveBase, checkConnection, setApiBase 
 const { messages, sessions, selectedSession, isStreaming, loadSessions, selectSession, sendMessage, stopSession, deleteSession, compactSession, resumeSession, clearMessages } = useChatState();
 const { agents, loadAgents } = useAgents();
 const { modelOptions, loadModels } = useModels();
-const { catalogEntries, databaseOptions, database, schema, schemaOptions, loadCatalog, resetCatalog } = useCatalog();
+const { catalogEntries, databaseOptions, database, schema, schemaOptions, loadCatalog } = useCatalog();
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 

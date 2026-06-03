@@ -353,30 +353,15 @@ button:disabled {
   display: none;
 }
 
-.shellPanels,
-.sidebarPanel,
-.workspacePanel {
-  min-width: 0;
-  min-height: 0;
-}
-
 #sidebar {
   height: 100%;
   overflow: hidden;
 }
 
 #sidebar.collapsed {
-  flex: 0 0 64px !important;
-  flex-basis: 64px !important;
   width: 64px !important;
   min-width: 64px !important;
   max-width: 64px !important;
-}
-
-#sidebar.collapsed + .splitpanes__splitter {
-  width: 0;
-  overflow: hidden;
-  pointer-events: none;
 }
 
 /* Splitpanes splitter styling */
@@ -759,6 +744,7 @@ button:disabled {
 }
 
 .topbar {
+  flex-shrink: 0;
   min-height: 64px;
   border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.92);
@@ -1379,7 +1365,8 @@ button:disabled {
   grid-template-columns: minmax(0, 1fr);
   gap: 5px;
   width: var(--chat-content-width);
-  justify-self: center;
+  align-self: center;
+  flex-shrink: 0;
   border: 1px solid var(--line);
   border-radius: 18px;
   background: var(--surface);
@@ -2811,44 +2798,12 @@ textarea:focus {
     position: relative;
   }
 
-  .shellPanels {
-    width: 100vw !important;
-  }
-
-  .sidebarPanel {
-    position: fixed !important;
-    inset: 0 auto 0 0;
-    z-index: 60;
-    width: min(86vw, 340px) !important;
-    max-width: min(86vw, 340px) !important;
-    height: 100dvh !important;
-    transform: translateX(-102%);
-    transition: transform 0.22s ease;
-    overflow: hidden;
-    box-shadow: 18px 0 40px rgba(0, 0, 0, 0.16);
-  }
-
   #sidebar,
   #sidebar.collapsed {
-    flex: 0 0 0px !important;
-    flex-basis: 0px !important;
     width: 0 !important;
     min-width: 0 !important;
     max-width: 0 !important;
-  }
-
-  #sidebar + .splitpanes__splitter {
-    display: none;
-  }
-
-  .shell.mobileSidebarOpen .sidebarPanel {
-    transform: translateX(0);
-  }
-
-  .workspacePanel {
-    flex: 1 1 100% !important;
-    min-width: 0 !important;
-    max-width: none !important;
+    overflow: hidden;
   }
 
   .splitpanes__splitter {
@@ -2902,13 +2857,6 @@ textarea:focus {
 
   .sidebarCollapseBtn {
     display: none;
-  }
-
-  .workspacePanel {
-    flex: 1 1 100vw !important;
-    width: 100vw !important;
-    min-width: 0 !important;
-    max-width: 100vw !important;
   }
 
   .workspace {
