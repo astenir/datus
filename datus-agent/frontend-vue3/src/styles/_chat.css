@@ -1122,3 +1122,125 @@ textarea:focus {
   font-size: 11px;
 }
 
+
+/* ─── User Interaction Card ────────────────────────────────────────────────── */
+
+.userInteractionCard {
+  border: 1px solid #fbbf24;
+  border-radius: 14px;
+  background: #fffbeb;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+
+.dark .userInteractionCard {
+  border-color: oklch(0.45 0.12 80);
+  background: oklch(0.2 0.04 80);
+}
+
+.userInteractionHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  color: #92400e;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dark .userInteractionHeader {
+  color: #fbbf24;
+}
+
+.userInteractionType {
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 11px;
+  font-weight: 560;
+}
+
+.dark .userInteractionType {
+  background: oklch(0.3 0.06 80);
+  color: #fbbf24;
+}
+
+.userInteractionRequest {
+  margin-bottom: 8px;
+}
+
+.userInteractionRequest:last-of-type {
+  margin-bottom: 0;
+}
+
+.userInteractionContent {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.userInteractionOptions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.userInteractionBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 14px;
+  border: 1px solid #d97706;
+  border-radius: 8px;
+  background: #fff;
+  color: #92400e;
+  font-size: 13px;
+  font-weight: 560;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.userInteractionBtn:hover:not(:disabled) {
+  background: #fef3c7;
+}
+
+.userInteractionBtn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.dark .userInteractionBtn {
+  border-color: oklch(0.5 0.12 80);
+  background: oklch(0.22 0.04 80);
+  color: #fbbf24;
+}
+
+.dark .userInteractionBtn:hover:not(:disabled) {
+  background: oklch(0.28 0.06 80);
+}
+
+.userInteractionStatus {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #fde68a;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.dark .userInteractionStatus {
+  border-top-color: oklch(0.35 0.08 80);
+}
+
+.userInteractionStatus.success {
+  color: #047857;
+}
+
+.userInteractionStatus.error {
+  color: #be123c;
+}

@@ -13,7 +13,13 @@ export type MessageOperation = "createMessage" | "appendMessage" | "updateMessag
 export type MessageBlock =
   | { type: "markdown"; content: string }
   | { type: "tool-call"; toolName: string; params: unknown }
-  | { type: "tool-result"; toolName: string; duration?: number; shortDesc?: string; result?: unknown };
+  | { type: "tool-result"; toolName: string; duration?: number; shortDesc?: string; result?: unknown }
+  | { type: "user-interaction"; actionType: string; requests: UserInteractionRequest[] };
+
+export type UserInteractionRequest = {
+  content: string;
+  options: Array<{ key: string; title: string }>;
+};
 
 export type ParsedMessage = {
   message: ChatMessage;

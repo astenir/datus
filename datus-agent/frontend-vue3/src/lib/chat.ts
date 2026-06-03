@@ -193,23 +193,18 @@ export function contentFromPayloadBlocks(
     } else if (type === "error") {
       blocks.push({ type: "markdown", content: `**错误**\n\n${stringifyContent(payload.content)}` });
     } else if (type === "user-interaction") {
-      const requests = Array.isArray(payload.requests) ? payload.requests : [];
-      const title = `**需要用户确认** \`${stringifyContent(payload.actionType ?? payload.action_type ?? "interaction")}\``;
-      const body = requests
-        .map((request, index) => {
-          const req = request as Record<string, unknown>;
-          const options = Array.isArray(req.options)
-            ? req.options
-                .map((option) => {
-                  const optionItem = option as Record<string, unknown>;
-                  return `- \`${stringifyContent(optionItem.key)}\` ${stringifyContent(optionItem.title)}`;
-                })
-                .join("\n")
-            : "";
-          return `${index + 1}. ${stringifyContent(req.content)}${options ? `\n${options}` : ""}`;
-        })
-        .join("\n\n");
-      blocks.push({ type: "markdown", content: `${title}\n\n${body}` });
+      const actionType = stringifyContent(payload.actionType ?? payload.action_type ?? "interaction");
+      const rawRequests = Array.isArray(payload.requests) ? payload.requests : [];
+      const requests = rawRequests.map((request) => {
+        const req = request as Record<string, unknown>;
+        const rawOptions = Array.isArray(req.options) ? req.options : [];
+        const options = rawOptions.map((option) => {
+          const opt = option as Record<string, unknown>;
+          return { key: stringifyContent(opt.key), title: stringifyContent(opt.title) };
+        });
+        return { content: stringifyContent(req.content), options };
+      });
+      blocks.push({ type: "user-interaction", actionType, requests });
     } else if (type === "subagent-complete") {
       const subagent = stringifyContent(payload.subagentType ?? payload.subagent_type ?? "subagent");
       const toolCount = payload.toolCount ?? payload.tool_count;
@@ -230,7 +225,9 @@ export function contentFromPayloadBlocks(
     .map((block) => {
       if (block.type === "markdown") return block.content;
       if (block.type === "tool-call") return `调用工具 ${block.toolName}`;
-      return `工具结果 ${block.toolName}${block.shortDesc ? `\n${block.shortDesc}` : ""}`;
+      if (block.type === "tool-result") return `工具结果 ${block.toolName}${block.shortDesc ? `\n${block.shortDesc}` : ""}`;
+      if (block.type === "user-interaction") return `需要用户确认 (${block.actionType})`;
+      return "";
     })
     .filter(Boolean)
     .join("\n\n");
