@@ -20,6 +20,8 @@ const loading = ref(false);
 const responded = ref(false);
 const error = ref("");
 
+const RETRY_DELAY = 1500;
+
 async function handleSelect(key: string) {
   if (loading.value || responded.value) return;
   if (!props.sessionId) {
@@ -31,9 +33,10 @@ async function handleSelect(key: string) {
   try {
     const { effectiveBase } = useConnection();
     const base = effectiveBase();
-    // Stop the running task (both frontend SSE stream and backend task)
     const { stopSession } = useChatState();
+    // Stop the running task, then wait for backend to release the lock
     await stopSession();
+    await new Promise((r) => setTimeout(r, RETRY_DELAY));
     const result = await chatApi.userInteraction(base, {
       session_id: props.sessionId,
       interaction_key: key,
@@ -44,7 +47,12 @@ async function handleSelect(key: string) {
     emit("responded");
   } catch (e) {
     console.error("User interaction failed:", e);
-    error.value = (e as Error).message || "提交失败";
+    const msg = (e as Error).message || "提交失败";
+    if (msg.includes("task") || msg.includes("running")) {
+      error.value = "任务仍在运行，请点击停止按钮后重试，或新建会话";
+    } else {
+      error.value = msg;
+    }
   } finally {
     loading.value = false;
   }
@@ -82,6 +90,9 @@ async function handleSelect(key: string) {
       <CheckCircle2 :size="14" />
       已响应
     </div>
-    <div v-else-if="error" class="userInteractionStatus error">{{ error }}</div>
+    <div v-else-if="error" class="userInteractionStatus error">
+      {{ error }}
+      <button class="userInteractionRetry" type="button" @click="error = ''">重试</button>
+    </div>
   </div>
 </template>

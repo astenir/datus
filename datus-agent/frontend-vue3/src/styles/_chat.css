@@ -1244,3 +1244,18 @@ textarea:focus {
 .userInteractionStatus.error {
   color: #be123c;
 }
+
+.userInteractionRetry {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border: 1px solid #fecdd3;
+  border-radius: 4px;
+  background: #fff1f2;
+  color: #be123c;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.userInteractionRetry:hover {
+  background: #fecdd3;
+}
