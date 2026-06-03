@@ -1414,13 +1414,8 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 4px;
-  margin-top: 8px;
-  opacity: 0;
-  transition: opacity 0.16s ease;
 }
 
-.message:hover .feedbackButtons,
-.feedbackButtons:focus-within,
 .feedbackButtons .feedbackThanks {
   opacity: 1;
 }
