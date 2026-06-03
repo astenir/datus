@@ -1,15 +1,12 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import Button from "@/components/ui/Button.vue";
-import { chatApi } from "@/lib/api";
-import { useConnection } from "@/composables/useConnection";
 import { useChatState } from "@/composables/useChatState";
-import type { UserInteractionRequest } from "@/types";
 
 const props = defineProps<{
   sessionId: string;
   actionType: string;
-  requests: UserInteractionRequest[];
+  requests: Array<{ content: string; options: Array<{ key: string; title: string }> }>;
   isStreaming?: boolean;
 }>();
 
@@ -28,32 +25,20 @@ async function handleSelect(key: string) {
 
   loading.value = true;
   error.value = null;
+  selectedKey.value = key;
+  emit("responded");
 
   try {
-    const { effectiveBase } = useConnection();
-    const base = effectiveBase();
-    const { stopSession } = useChatState();
-
-    // Stop current task first to release backend lock
-    await stopSession();
-
-    // Wait for backend to release the lock
-    await new Promise((r) => setTimeout(r, 1500));
-
-    await chatApi.userInteraction(base, {
-      session_id: props.sessionId,
-      interaction_key: key,
-      input: [[key]],
-    });
-
-    selectedKey.value = key;
-    emit("responded");
+    const { sendInteraction } = useChatState();
+    await sendInteraction(key);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     if (msg.includes("task is already running")) {
       error.value = "任务仍在运行，请点击停止按钮后重试，或新建会话";
+      selectedKey.value = null;
     } else {
       error.value = `提交失败: ${msg}`;
+      selectedKey.value = null;
     }
   } finally {
     loading.value = false;
@@ -62,6 +47,7 @@ async function handleSelect(key: string) {
 
 function retry() {
   error.value = null;
+  selectedKey.value = null;
 }
 </script>
 
@@ -89,7 +75,7 @@ function retry() {
 
     <p v-if="isStreaming && !selectedKey" class="userInteractionStatus">等待生成完成...</p>
     <p v-else-if="loading" class="userInteractionStatus">提交中...</p>
-    <p v-else-if="selectedKey" class="userInteractionStatus done">已提交</p>
+    <p v-else-if="selectedKey && !error" class="userInteractionStatus done">已提交</p>
 
     <div v-if="error" class="userInteractionError">
       <p>{{ error }}</p>
