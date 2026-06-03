@@ -106,6 +106,12 @@ function handleRefreshConnection() {
   checkConnection();
 }
 
+function handleDatasourceSwitched() {
+  database.value = "";
+  schema.value = "";
+  loadCatalog();
+}
+
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
 async function initialize() {
@@ -221,6 +227,7 @@ watch(database, (db) => {
         @update:permission-mode="permissionMode = $event"
         @update:plan-mode="planMode = $event"
         @refresh-connection="handleRefreshConnection"
+        @datasource-switched="handleDatasourceSwitched"
       />
 
       <Sheet :open="agentManagerOpen" @update:open="agentManagerOpen = $event">

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
-import { CheckCircle2, Database, Loader2, RefreshCw, Server, Settings2, ToggleRight, XCircle, Zap } from "@lucide/vue";
+import { CheckCircle2, Database, Loader2, RefreshCw, Server, Settings2, XCircle, Zap } from "@lucide/vue";
 
 import AppPopoverSelect from "@/components/AppPopoverSelect.vue";
 import Badge from "@/components/ui/Badge.vue";
@@ -34,6 +34,7 @@ const emit = defineEmits<{
   "update:permission-mode": [value: string];
   "update:plan-mode": [value: boolean];
   "refresh-connection": [];
+  "datasource-switched": [];
 }>();
 
 const connectionLabel = computed(() => CONNECTION_LABELS[props.connection]);
@@ -91,6 +92,7 @@ async function switchDatasource(name: string) {
     const { effectiveBase, checkConnection } = useConnection();
     await configApi.switchDatasource(effectiveBase(), name);
     await checkConnection();
+    emit("datasource-switched");
   } catch (e) {
     console.error("Failed to switch datasource:", e);
   } finally {
@@ -226,27 +228,24 @@ async function switchDatasource(name: string) {
           <span>数据源列表</span>
         </div>
         <div class="configList">
-          <div v-for="(ds, name) in config.datasources" :key="name" class="configItem">
+          <button
+            v-for="(ds, name) in config.datasources"
+            :key="name"
+            type="button"
+            :class="['configItem', 'configItemButton', { active: name === config.current_datasource }]"
+            :disabled="switchingTo !== null || name === config.current_datasource"
+            :aria-label="name === config.current_datasource ? `${name}（当前数据源）` : `切换到数据源 ${name}`"
+            @click="switchDatasource(name as string)"
+          >
             <span class="configItemName">
               <span>{{ name }}</span>
               <Badge v-if="name === config.current_datasource" variant="success" class="activeBadge">当前</Badge>
             </span>
             <span class="configItemActions">
               <span class="configItemType">{{ (ds as Record<string, unknown>).type || '-' }}</span>
-              <Button
-                v-if="name !== config.current_datasource"
-                class="iconButton"
-                variant="ghost"
-                size="icon"
-                :disabled="switchingTo !== null"
-                :aria-label="`切换到数据源 ${name}`"
-                @click="switchDatasource(name as string)"
-              >
-                <Loader2 v-if="switchingTo === name" class="spin" :size="14" />
-                <ToggleRight v-else :size="14" />
-              </Button>
+              <Loader2 v-if="switchingTo === name" class="spin" :size="14" />
             </span>
-          </div>
+          </button>
         </div>
       </section>
 

@@ -1117,6 +1117,36 @@ textarea:focus {
   font-size: 12px;
 }
 
+.configItemButton {
+  width: 100%;
+  cursor: pointer;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.configItemButton:hover:not(:disabled):not(.active) {
+  background: color-mix(in srgb, var(--accent-green) 8%, transparent);
+  border-color: color-mix(in srgb, var(--accent-green) 30%, transparent);
+}
+
+.configItemButton:active:not(:disabled):not(.active) {
+  background: color-mix(in srgb, var(--accent-green) 14%, transparent);
+}
+
+.configItemButton.active {
+  background: color-mix(in srgb, var(--accent-green) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent-green) 45%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-green) 20%, transparent);
+  cursor: default;
+}
+
+.configItemButton:disabled:not(.active) {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .configItemName {
   display: flex;
   align-items: center;
