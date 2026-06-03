@@ -88,7 +88,9 @@ def test_get_tables_queries_all_tables_for_owner():
 
 def test_get_views_queries_all_views_for_owner():
     connector = make_connector()
-    connector._execute_pandas = MagicMock(return_value=pd.DataFrame({"OWNER": ["APP"], "VIEW_NAME": ["ACTIVE_CUSTOMERS"]}))
+    connector._execute_pandas = MagicMock(
+        return_value=pd.DataFrame({"OWNER": ["APP"], "VIEW_NAME": ["ACTIVE_CUSTOMERS"]})
+    )
 
     assert connector.get_views(schema_name="APP") == ["ACTIVE_CUSTOMERS"]
     assert "FROM ALL_VIEWS" in connector._execute_pandas.call_args.args[0]
