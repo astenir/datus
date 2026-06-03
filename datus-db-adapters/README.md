@@ -15,6 +15,8 @@ Plugin Adapters (Independent packages, install as needed)
 ├── datus-sqlalchemy (SQLAlchemy base layer)
 │   ├── datus-mysql
 │   ├── datus-starrocks
+│   ├── datus-postgresql
+│   ├── datus-oracle
 │
 └── Native SDK Adapters
     ├── datus-snowflake
@@ -104,6 +106,24 @@ pip install datus-clickzetta
 - Volume/Stage file operations
 - Metadata discovery
 - Connection pooling and session management
+
+---
+
+### 6. datus-oracle
+Oracle database adapter.
+
+**Installation**:
+```bash
+pip install datus-oracle
+```
+
+**Features**:
+- SQLAlchemy and python-oracledb support
+- Service name and SID connection modes
+- Schema/user metadata discovery
+- Tables, views, and materialized views
+- DBMS_METADATA DDL retrieval
+- Oracle FETCH FIRST sample rows
 
 ---
 
