@@ -4,6 +4,7 @@
 
 from unittest.mock import MagicMock, patch
 
+import pandas as pd
 import pytest
 
 from datus_oracle import OracleConfig, OracleConnector
@@ -63,3 +64,54 @@ def test_full_name_uses_schema_and_table_only():
         connector = OracleConnector(OracleConfig(username="app", schema="sales"))
 
     assert connector.full_name(schema_name="HR", table_name="EMP") == '"HR"."EMP"'
+
+
+def make_connector():
+    with patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None):
+        connector = OracleConnector(OracleConfig(username="app", service_name="FREEPDB1", schema="APP"))
+    connector.connect = MagicMock()
+    connector.database_name = "FREEPDB1"
+    connector.schema_name = "APP"
+    return connector
+
+
+def test_get_tables_queries_all_tables_for_owner():
+    connector = make_connector()
+    connector._execute_pandas = MagicMock(return_value=pd.DataFrame({"OWNER": ["APP"], "TABLE_NAME": ["CUSTOMERS"]}))
+
+    assert connector.get_tables(schema_name="APP") == ["CUSTOMERS"]
+    sql = connector._execute_pandas.call_args.args[0]
+    assert "FROM ALL_TABLES" in sql
+    assert "OWNER = 'APP'" in sql
+    assert "DROPPED = 'NO'" in sql
+
+
+def test_get_views_queries_all_views_for_owner():
+    connector = make_connector()
+    connector._execute_pandas = MagicMock(return_value=pd.DataFrame({"OWNER": ["APP"], "VIEW_NAME": ["ACTIVE_CUSTOMERS"]}))
+
+    assert connector.get_views(schema_name="APP") == ["ACTIVE_CUSTOMERS"]
+    assert "FROM ALL_VIEWS" in connector._execute_pandas.call_args.args[0]
+
+
+def test_get_materialized_views_queries_all_mviews_for_owner():
+    connector = make_connector()
+    connector._execute_pandas = MagicMock(
+        return_value=pd.DataFrame({"OWNER": ["APP"], "MVIEW_NAME": ["CUSTOMER_SUMMARY"]})
+    )
+
+    assert connector.get_materialized_views(schema_name="APP") == ["CUSTOMER_SUMMARY"]
+    assert "FROM ALL_MVIEWS" in connector._execute_pandas.call_args.args[0]
+
+
+def test_get_schemas_filters_system_schemas():
+    connector = make_connector()
+    connector._execute_pandas = MagicMock(return_value=pd.DataFrame({"USERNAME": ["SYS", "APP", "REPORTING"]}))
+
+    assert connector.get_schemas() == ["APP", "REPORTING"]
+
+
+def test_get_databases_returns_configured_service_name():
+    connector = make_connector()
+
+    assert connector.get_databases() == ["FREEPDB1"]
