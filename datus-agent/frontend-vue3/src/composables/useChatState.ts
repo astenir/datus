@@ -138,11 +138,11 @@ async function sendMessage(opts: {
 
         messages.value = mergeMessage(messages.value, incoming);
 
-        if (!selectedSession.value && event.event === "message") {
-          const data = event.data as { session_id?: string } | undefined;
-          if (data?.session_id) {
-            selectedSession.value = data.session_id;
-          }
+        // Capture session ID from any event type
+        if (!selectedSession.value) {
+          const data = event.data as Record<string, unknown> | undefined;
+          const sid = (data?.session_id ?? data?.sessionId) as string | undefined;
+          if (sid) selectedSession.value = sid;
         }
       }
     }
