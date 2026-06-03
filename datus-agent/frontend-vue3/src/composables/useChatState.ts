@@ -144,10 +144,13 @@ async function sendMessage(opts: {
 
         messages.value = mergeMessage(messages.value, incoming);
 
-        // Capture session ID from any event type
+        // Capture session ID from any event type, checking multiple locations
         if (!selectedSession.value) {
           const data = event.data as Record<string, unknown> | undefined;
-          const sid = (data?.session_id ?? data?.sessionId) as string | undefined;
+          const payload = data?.payload as Record<string, unknown> | undefined;
+          const sid =
+            (data?.session_id ?? data?.sessionId ??
+              payload?.session_id ?? payload?.sessionId) as string | undefined;
           if (sid) selectedSession.value = sid;
         }
       }

@@ -29,7 +29,10 @@ async function handleSelect(key: string) {
   error.value = "";
   try {
     const { effectiveBase } = useConnection();
-    const result = await chatApi.userInteraction(effectiveBase(), {
+    const base = effectiveBase();
+    // Stop any running task first to avoid "task already running" error
+    try { await chatApi.stop(base, props.sessionId); } catch { /* ignore */ }
+    const result = await chatApi.userInteraction(base, {
       session_id: props.sessionId,
       interaction_key: key,
       input: [[key]],
