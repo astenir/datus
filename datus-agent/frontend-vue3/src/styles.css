@@ -360,6 +360,11 @@ button:disabled {
   min-height: 0;
 }
 
+#sidebar {
+  height: 100%;
+  overflow: hidden;
+}
+
 #sidebar.collapsed {
   flex: 0 0 64px !important;
   flex-basis: 64px !important;
@@ -597,6 +602,7 @@ button:disabled {
   gap: 8px;
   border-top: 1px solid var(--line);
   padding-top: 10px;
+  margin-top: auto;
 }
 
 .sidebarFooterActions {
@@ -745,24 +751,14 @@ button:disabled {
 }
 
 .workspace {
-  --chat-content-width: min(920px, calc(100% - 56px));
-
-  display: grid;
-  grid-template-areas:
-    "topbar"
-    "error"
-    "messages"
-    "composer";
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  flex: 1;
   min-width: 0;
-  height: 100dvh;
   min-height: 0;
+  height: 100%;
   overflow: hidden;
-  background: var(--surface);
 }
 
 .topbar {
-  grid-area: topbar;
   min-height: 64px;
   border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.92);
@@ -788,10 +784,10 @@ button:disabled {
 }
 
 .messages {
-  grid-area: messages;
   display: flex;
   align-items: center;
   flex-direction: column;
+  flex: 1;
   gap: 0;
   min-height: 0;
   overflow: auto;
@@ -1376,7 +1372,6 @@ button:disabled {
 }
 
 .composer {
-  grid-area: composer;
   display: grid;
   grid-template-areas:
     "input"
@@ -1839,7 +1834,6 @@ textarea:focus {
 }
 
 .errorBanner {
-  grid-area: error;
   width: var(--chat-content-width);
   margin: 12px auto 0;
 }
@@ -2779,9 +2773,14 @@ textarea:focus {
 }
 
 .chatView {
+  --chat-content-width: min(920px, calc(100% - 56px));
+
   display: flex;
   flex-direction: column;
+  min-width: 0;
   height: 100%;
+  min-height: 0;
+  overflow: hidden;
   background: var(--surface);
 }
 
