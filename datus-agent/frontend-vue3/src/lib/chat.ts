@@ -376,3 +376,41 @@ function mergeBlocks(previous: MessageBlock[] = [], incoming: MessageBlock[] = [
   }
   return next;
 }
+
+// ─── SSE stream consumer ────────────────────────────────────────────────────
+
+/**
+ * Read an SSE stream from a Response body, parse events, and invoke a callback for each.
+ * Returns the trailing buffer (for optional flush after the loop).
+ */
+export async function consumeSseStream(
+  response: Response,
+  onEvent: (event: SseEvent) => void,
+  signal?: AbortSignal,
+): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("No response body");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  try {
+    for (;;) {
+      if (signal?.aborted) break;
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const { events, rest } = parseSseBuffer(buffer);
+      buffer = rest;
+
+      for (const event of events) {
+        onEvent(event);
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return buffer;
+}

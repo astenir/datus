@@ -2,7 +2,7 @@ import { ref, watch } from "vue";
 import { chatApi } from "@/lib/api";
 import {
   buildChatStreamRequest,
-  chatSessionsPath,
+  consumeSseStream,
   mergeMessage,
   messageFromEvent,
   parseSseBuffer,
@@ -118,46 +118,25 @@ async function sendMessage(opts: {
       throw new Error(text || `${response.status} ${response.statusText}`);
     }
 
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error("No response body");
+    const tail = await consumeSseStream(response, (event) => {
+      const incoming = messageFromEvent(event);
+      if (!incoming) return;
+      messages.value = mergeMessage(messages.value, incoming);
 
-    const decoder = new TextDecoder();
-    let buffer = "";
-
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const parsed = parseSseBuffer(buffer);
-      buffer = parsed.rest;
-
-      for (const event of parsed.events) {
-        const incoming = messageFromEvent(event);
-        if (!incoming) continue;
-
-        if (incoming.message.role === "system" && incoming.message.id.startsWith("end-")) {
-          messages.value = mergeMessage(messages.value, incoming);
-        } else {
-          messages.value = mergeMessage(messages.value, incoming);
-        }
-
-        if (!selectedSession.value && event.event === "message") {
-          const data = event.data as { session_id?: string } | undefined;
-          if (data?.session_id) {
-            selectedSession.value = data.session_id;
-          }
+      if (!selectedSession.value && event.event === "message") {
+        const data = event.data as { session_id?: string } | undefined;
+        if (data?.session_id) {
+          selectedSession.value = data.session_id;
         }
       }
-    }
+    }, controller.signal);
 
-    if (buffer) {
-      const parsed = parseSseBuffer(buffer, { flush: true });
+    // Flush any remaining buffer
+    if (tail) {
+      const parsed = parseSseBuffer(tail, { flush: true });
       for (const event of parsed.events) {
         const incoming = messageFromEvent(event);
-        if (incoming) {
-          messages.value = mergeMessage(messages.value, incoming);
-        }
+        if (incoming) messages.value = mergeMessage(messages.value, incoming);
       }
     }
   } catch (error) {
@@ -236,21 +215,10 @@ async function resumeSession(sessionId?: string) {
       body: JSON.stringify({ session_id: targetSession }),
     });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-    const reader = response.body?.getReader();
-    if (!reader) return;
-    const decoder = new TextDecoder();
-    let buffer = "";
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const { events, rest } = parseSseBuffer(buffer);
-      buffer = rest;
-      for (const event of events) {
-        const incoming = messageFromEvent(event);
-        if (incoming) messages.value = mergeMessage(messages.value, incoming);
-      }
-    }
+    await consumeSseStream(response, (event) => {
+      const incoming = messageFromEvent(event);
+      if (incoming) messages.value = mergeMessage(messages.value, incoming);
+    });
   } catch (error) {
     console.error("Failed to resume session:", error);
   } finally {
