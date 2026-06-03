@@ -193,9 +193,9 @@ function handleCompact() {
                 <MessageSquare :size="16" />
               </span>
               <span class="sessionText">
-                <strong>{{ sessionUserQueryText(session) || session.session_id }}</strong>
+                <strong>{{ sessionUserQueryText(session) || '新会话' }}</strong>
                 <small>
-                  {{ formatSessionTime(session.last_updated || session.created_at) || session.session_id }}
+                  {{ formatSessionTime(session.last_updated || session.created_at) }}
                   <template v-if="typeof session.total_turns === 'number' && session.total_turns > 0"> · {{ session.total_turns }} turns</template>
                 </small>
               </span>

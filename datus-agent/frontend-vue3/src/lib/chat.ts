@@ -130,8 +130,11 @@ export function sessionTitle(session: ChatSessionOption) {
   return [session.session_id, sessionUserQueryText(session), updatedAt].filter(Boolean).join("\n");
 }
 
-export function sessionUserQueryText(session: ChatSessionOption) {
-  return stringifyContent(session.user_query).trim();
+export function sessionUserQueryText(session: ChatSessionOption): string {
+  const text = stringifyContent(session.user_query).trim();
+  if (text) return text.length > 60 ? `${text.slice(0, 60)}…` : text;
+  if (session.total_turns && session.total_turns > 0) return `${session.total_turns} 轮对话`;
+  return "";
 }
 
 export function formatSessionTime(value?: string) {
