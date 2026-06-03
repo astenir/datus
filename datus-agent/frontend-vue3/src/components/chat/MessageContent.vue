@@ -51,6 +51,12 @@ const blocks = computed(() =>
     : [{ type: "markdown" as const, content: props.message.content }]
 );
 
+// When the last block is a user-interaction, the backend is waiting for input — not streaming
+const awaitingInteraction = computed(() => {
+  const last = blocks.value[blocks.value.length - 1];
+  return last?.type === "user-interaction";
+});
+
 function renderMarkdown(content: string): string {
   return md.render(content);
 }
@@ -93,7 +99,7 @@ async function handleFeedback(emoji: string) {
         :session-id="sessionId ?? ''"
         :action-type="block.actionType"
         :requests="block.requests"
-        :is-streaming="isStreaming"
+        :is-streaming="isStreaming && !awaitingInteraction"
       />
       <div v-else class="markdownBody" v-html="renderMarkdown(block.content)" />
     </template>

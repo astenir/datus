@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { defineAsyncComponent, nextTick, watch, useTemplateRef, type PropType } from "vue";
+import { computed, defineAsyncComponent, nextTick, watch, useTemplateRef, type PropType } from "vue";
 import { Activity, Bot, Loader2, Send, TerminalSquare } from "@lucide/vue";
 
 import ErrorBoundary from "@/components/ErrorBoundary.vue";
@@ -25,6 +25,15 @@ const props = defineProps({
 });
 
 const scrollContainer = useTemplateRef<HTMLDivElement>("scrollContainer");
+
+// Hide streaming indicator when the last block is a user-interaction (backend is waiting for input)
+const showStreaming = computed(() => {
+  if (!props.isStreaming) return false;
+  const last = props.messages[props.messages.length - 1];
+  if (!last?.blocks?.length) return true;
+  const lastBlock = last.blocks[last.blocks.length - 1];
+  return lastBlock?.type !== "user-interaction";
+});
 
 function scrollToBottom() {
   const el = scrollContainer.value;
@@ -89,7 +98,7 @@ watch(
         </div>
       </article>
     </template>
-    <div v-if="isStreaming" class="streaming">
+    <div v-if="showStreaming" class="streaming">
       <Loader2 class="spin" :size="16" />
       正在生成响应
     </div>
