@@ -1023,11 +1023,11 @@ button:disabled {
 /* ── Tables ── */
 
 .markdownBody table {
-  display: block;
+  display: table;
   max-width: 100%;
-  overflow-x: auto;
+  margin: 0 auto 10px;
   border-collapse: collapse;
-  width: 100%;
+  width: fit-content;
   line-height: 1.65;
 }
 
