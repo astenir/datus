@@ -157,8 +157,9 @@ export function contentFromPayloadBlocks(
   content: Array<{ type?: string; payload?: Record<string, unknown> }> | null | undefined = [],
   operation: MessageOperation = "createMessage"
 ) {
-  const blocks: MessageBlock[] = [];
   const items = Array.isArray(content) ? content : [];
+  const hasNonThinking = items.some((item) => (item?.type ?? "markdown") !== "thinking");
+  const blocks: MessageBlock[] = [];
 
   for (const item of items) {
     const payload = item && typeof item.payload === "object" && item.payload ? item.payload : {};
@@ -167,7 +168,12 @@ export function contentFromPayloadBlocks(
     if (type === "markdown") blocks.push({ type: "markdown", content: stringifyContent(payload.content) });
     if (type === "thinking") {
       const text = stringifyContent(payload.content);
-      blocks.push({ type: "markdown", content: operation === "appendMessage" ? text : `**Thinking**\n\n${blockquote(text)}` });
+      // Only wrap in "Thinking" blockquote when mixed with non-thinking blocks
+      if (hasNonThinking && operation !== "appendMessage") {
+        blocks.push({ type: "markdown", content: `**Thinking**\n\n${blockquote(text)}` });
+      } else {
+        blocks.push({ type: "markdown", content: text });
+      }
     }
     if (type === "code") {
       const language = stringifyContent(payload.codeType ?? payload.code_type ?? "text") || "text";
