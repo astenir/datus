@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildChatStreamRequest,
+  buildUserInteractionInput,
   chatSessionsPath,
+  contentFromPayloadBlocks,
   messageFromPayload,
   mergeMessage,
   parseSseBuffer,
@@ -86,6 +88,83 @@ describe("messageFromPayload", () => {
     );
 
     expect(message).toBeNull();
+  });
+});
+
+describe("contentFromPayloadBlocks", () => {
+  it("keeps the interaction action id separate from option answers", () => {
+    const parsed = contentFromPayloadBlocks([
+      {
+        type: "user-interaction",
+        payload: {
+          interactionKey: "action-123",
+          actionType: "confirm",
+          requests: [
+            {
+              content: "Allow query?",
+              options: [
+                { key: "y", title: "Allow" },
+                { key: "n", title: "Deny" },
+              ],
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(parsed.blocks).toEqual([
+      {
+        type: "user-interaction",
+        interactionKey: "action-123",
+        actionType: "confirm",
+        requests: [
+          {
+            content: "Allow query?",
+            options: [
+              { key: "y", title: "Allow" },
+              { key: "n", title: "Deny" },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("normalizes legacy user interaction payloads into requests", () => {
+    const parsed = contentFromPayloadBlocks([
+      {
+        type: "user-interaction",
+        payload: {
+          interactionKey: "legacy-action",
+          content: "Choose county",
+          options: [{ key: "Los Angeles", title: "Los Angeles" }],
+        },
+      },
+    ]);
+
+    expect(parsed.blocks).toEqual([
+      {
+        type: "user-interaction",
+        interactionKey: "legacy-action",
+        actionType: "interaction",
+        requests: [
+          {
+            content: "Choose county",
+            options: [{ key: "Los Angeles", title: "Los Angeles" }],
+          },
+        ],
+      },
+    ]);
+  });
+});
+
+describe("buildUserInteractionInput", () => {
+  it("submits the backend interaction key with the selected answer as input", () => {
+    expect(buildUserInteractionInput("s1", "action-123", "y")).toEqual({
+      session_id: "s1",
+      interaction_key: "action-123",
+      input: [["y"]],
+    });
   });
 });
 

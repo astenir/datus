@@ -97,6 +97,7 @@ async function handleFeedback(emoji: string) {
       <UserInteractionCard
         v-else-if="block.type === 'user-interaction'"
         :session-id="sessionId ?? ''"
+        :interaction-key="block.interactionKey"
         :action-type="block.actionType"
         :requests="block.requests"
         :is-streaming="isStreaming && !awaitingInteraction"

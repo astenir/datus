@@ -48,6 +48,14 @@ export function buildChatStreamRequest({
   };
 }
 
+export function buildUserInteractionInput(sessionId: string, interactionKey: string, answerKey: string) {
+  return {
+    session_id: sessionId,
+    interaction_key: interactionKey,
+    input: [[answerKey]]
+  };
+}
+
 export function normalizeBaseUrl(value: string) {
   return value.trim().replace(/\/+$/, "");
 }
@@ -193,8 +201,13 @@ export function contentFromPayloadBlocks(
     } else if (type === "error") {
       blocks.push({ type: "markdown", content: `**错误**\n\n${stringifyContent(payload.content)}` });
     } else if (type === "user-interaction") {
+      const interactionKey = stringifyContent(payload.interactionKey ?? payload.interaction_key);
       const actionType = stringifyContent(payload.actionType ?? payload.action_type ?? "interaction");
-      const rawRequests = Array.isArray(payload.requests) ? payload.requests : [];
+      const legacyRequest =
+        payload.content || payload.options
+          ? [{ content: payload.content, options: payload.options }]
+          : [];
+      const rawRequests = Array.isArray(payload.requests) ? payload.requests : legacyRequest;
       const requests = rawRequests.map((request) => {
         const req = request as Record<string, unknown>;
         const rawOptions = Array.isArray(req.options) ? req.options : [];
@@ -204,7 +217,7 @@ export function contentFromPayloadBlocks(
         });
         return { content: stringifyContent(req.content), options };
       });
-      blocks.push({ type: "user-interaction", actionType, requests });
+      blocks.push({ type: "user-interaction", interactionKey, actionType, requests });
     } else if (type === "subagent-complete") {
       const subagent = stringifyContent(payload.subagentType ?? payload.subagent_type ?? "subagent");
       const toolCount = payload.toolCount ?? payload.tool_count;

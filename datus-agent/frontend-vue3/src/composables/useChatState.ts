@@ -2,6 +2,7 @@ import { ref } from "vue";
 import { chatApi } from "@/lib/api";
 import {
   buildChatStreamRequest,
+  buildUserInteractionInput,
   consumeSseStream,
   mergeMessage,
   messageFromEvent,
@@ -18,7 +19,6 @@ const messages = ref<ChatMessage[]>([]);
 const sessions = ref<ChatSessionOption[]>([]);
 const selectedSession = ref<string | null>(null);
 const isStreaming = ref(false);
-const isInteracting = ref(false);
 const abortRef = { current: null as AbortController | null };
 const messageCache = new Map<string, ChatMessage[]>();
 
@@ -84,7 +84,6 @@ function selectSession(sessionId: string | null) {
     abortRef.current = null;
   }
   isStreaming.value = false;
-  isInteracting.value = false;
 
   // Cache current messages for the outgoing session
   if (selectedSession.value && messages.value.length > 0) {
@@ -299,33 +298,20 @@ async function resumeSession(sessionId?: string) {
   }
 }
 
-async function sendInteraction(interactionKey: string) {
+async function sendInteraction(interactionKey: string, answerKey: string) {
   const { effectiveBase } = useConnection();
   const base = effectiveBase();
   const sessionId = selectedSession.value;
   if (!sessionId) throw new Error("会话未就绪");
+  if (!interactionKey) throw new Error("交互请求未就绪");
 
-  isInteracting.value = true;
+  // Do NOT stopSession — the task is alive and waiting for interaction.
+  // The SSE stream from sendMessage is still open; broker.submit() will
+  // unblock the task and new events flow through the same stream.
 
-  try {
-    // Stop current task to release backend lock
-    await stopSession();
-
-    // Wait for backend to release the lock
-    await new Promise((r) => setTimeout(r, 1500));
-
-    // Send interaction as JSON (not SSE)
-    await chatApi.userInteraction(base, {
-      session_id: sessionId,
-      interaction_key: interactionKey,
-      input: [[interactionKey]],
-    });
-
-    // After interaction is submitted, resume to receive continued content via SSE
-    await resumeSession(sessionId);
-  } finally {
-    isInteracting.value = false;
-  }
+  const result = await chatApi.userInteraction(base, buildUserInteractionInput(sessionId, interactionKey, answerKey));
+  if (!result) throw new Error("后端未接受本次交互提交");
+  // No resumeSession needed — sendMessage's SSE reader is still running.
 }
 
 function clearMessages() {
@@ -340,7 +326,6 @@ export function useChatState() {
     sessions,
     selectedSession,
     isStreaming,
-    isInteracting,
     loadSessions,
     selectSession,
     sendMessage,

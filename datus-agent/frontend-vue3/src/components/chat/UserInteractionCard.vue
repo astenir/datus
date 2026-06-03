@@ -5,6 +5,7 @@ import { useChatState } from "@/composables/useChatState";
 
 const props = defineProps<{
   sessionId: string;
+  interactionKey: string;
   actionType: string;
   requests: Array<{ content: string; options: Array<{ key: string; title: string }> }>;
   isStreaming?: boolean;
@@ -15,22 +16,23 @@ const selectedKey = ref<string | null>(null);
 const error = ref<string | null>(null);
 const succeeded = ref(false);
 
-const { sendInteraction, isInteracting } = useChatState();
+const { sendInteraction } = useChatState();
 
+// Disabled when: already loading, already succeeded, or no sessionId
+// isStreaming is NOT a blocker — the stream stays open while backend waits for interaction
 const buttonsDisabled = computed(
-  () => loading.value || succeeded.value || props.isStreaming || isInteracting.value || !props.sessionId
+  () => loading.value || succeeded.value || !props.sessionId || !props.interactionKey
 );
 
 async function handleSelect(key: string) {
   if (buttonsDisabled.value) return;
-  if (!props.sessionId) return;
 
   loading.value = true;
   error.value = null;
   selectedKey.value = key;
 
   try {
-    await sendInteraction(key);
+    await sendInteraction(props.interactionKey, key);
     succeeded.value = true;
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -72,8 +74,7 @@ function retry() {
       </div>
     </div>
 
-    <p v-if="isStreaming && !selectedKey" class="userInteractionStatus">等待生成完成...</p>
-    <p v-else-if="!sessionId" class="userInteractionStatus">等待会话信息...</p>
+    <p v-if="!sessionId || !interactionKey" class="userInteractionStatus">等待会话信息...</p>
     <p v-else-if="loading" class="userInteractionStatus">提交中...</p>
     <p v-else-if="succeeded" class="userInteractionStatus done">已提交，等待回复...</p>
 

@@ -14,7 +14,7 @@ export type MessageBlock =
   | { type: "markdown"; content: string }
   | { type: "tool-call"; toolName: string; params: unknown }
   | { type: "tool-result"; toolName: string; duration?: number; shortDesc?: string; result?: unknown }
-  | { type: "user-interaction"; actionType: string; requests: UserInteractionRequest[] };
+  | { type: "user-interaction"; interactionKey: string; actionType: string; requests: UserInteractionRequest[] };
 
 export type UserInteractionRequest = {
   content: string;
