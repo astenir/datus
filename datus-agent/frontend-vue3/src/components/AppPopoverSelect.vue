@@ -27,6 +27,11 @@ const selectOption = (option: SelectOption) => {
   emit("update:value", option.value);
   open.value = false;
 };
+
+const clearSelection = () => {
+  emit("update:value", "");
+  open.value = false;
+};
 </script>
 
 <template>
@@ -44,6 +49,14 @@ const selectOption = (option: SelectOption) => {
       </button>
     </PopoverTrigger>
     <PopoverContent :class="`dbPickerMenu ${narrow ? 'narrow' : ''}`" align="start" side="top" :side-offset="8">
+      <button
+        v-if="value"
+        class="dbPickerDatabase"
+        type="button"
+        @click="clearSelection"
+      >
+        <span>{{ placeholder }}</span>
+      </button>
       <button
         v-for="option in options"
         :key="option.value"

@@ -121,11 +121,6 @@ async function initialize() {
 
 onMounted(initialize);
 
-// Reload sessions when subagent changes
-watch(selectedAgent, () => {
-  loadSessions(selectedAgent.value || undefined);
-});
-
 // Reload schemas when database changes
 watch(database, (db) => {
   if (db) {
