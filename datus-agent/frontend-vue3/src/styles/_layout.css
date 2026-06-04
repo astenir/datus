@@ -1,0 +1,447 @@
+/* ─── Dark Mode: Layout ───────────────────────────────────────────────────── */
+.dark .sessionItem:hover:not(:disabled) {
+  background: oklch(0.23 0 0);
+}
+
+.dark .sessionItem.active {
+  background: oklch(0.23 0 0);
+}
+
+.dark .sessionItem.active .sessionIcon {
+  background: oklch(0.27 0 0);
+}
+
+.dark .sessionIcon {
+  color: oklch(0.65 0 0);
+}
+
+.dark .message.user .bubble {
+  background: oklch(0.23 0 0);
+}
+
+.dark .sessionList::-webkit-scrollbar-thumb,
+.dark .messages::-webkit-scrollbar-thumb,
+.dark .settingsDrawer::-webkit-scrollbar-thumb,
+.dark .dbPickerMenu::-webkit-scrollbar-thumb {
+  background: oklch(0.4 0 0);
+}
+
+
+.dark .dbPickerButton {
+  background: oklch(0.21 0 0);
+}
+
+.dark .quickControls .dbPickerButton:hover:not(:disabled),
+.dark .quickControls .dbPickerButton.open {
+  background: oklch(0.27 0 0);
+}
+
+.dark .dbPickerMenu {
+  border-color: var(--line);
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+}
+
+
+.dark .dbPickerButton:focus-visible {
+}
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.12);
+
+.dark .planModeSwitch:has([data-state="checked"]) {
+  border-color: oklch(0.35 0.08 160);
+  background: oklch(0.22 0.04 160);
+  color: #6ee7b7;
+}
+
+.dark .quickField:focus-within,
+.dark .quickControls label:focus-within {
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.1);
+}
+
+.dark .dbPickerNone.selected,
+.dark .dbPickerDatabase.selected,
+.dark .dbPickerSchemas button.selected {
+  background: oklch(0.25 0 0);
+}
+
+.dark .dbPickerNone:hover,
+.dark .dbPickerDatabase:hover,
+.dark .dbPickerSchemas button:hover {
+  background: oklch(0.23 0 0);
+}
+
+
+/* ─── Shell & Layout ──────────────────────────────────────────────────────── */
+.shell {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.splitpanes__pane {
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#sidebar {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Splitpanes splitter styling */
+.splitpanes__splitter {
+  background: var(--line);
+  transition:
+    background 0.16s ease,
+    box-shadow 0.16s ease;
+  position: relative;
+  flex: 0 0 1px;
+}
+
+.splitpanes__splitter:hover,
+.splitpanes__splitter:active {
+  background: var(--line-strong);
+  box-shadow: 0 0 0 1px var(--line-strong);
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--line);
+  background: var(--sidebar);
+  padding: 10px;
+  transition: width 0.24s ease;
+}
+
+.sidebar.collapsed {
+  gap: 10px;
+  padding: 10px 8px;
+  overflow: hidden;
+}
+
+.sidebar.collapsed .sessionPane {
+  display: none;
+}
+
+.sidebarCollapseBtn {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  color: var(--text-muted);
+}
+
+.sidebarCollapseBtn:hover {
+  background: #eeeeef;
+  color: var(--text);
+}
+
+.dark .sidebarCollapseBtn:hover {
+  background: oklch(0.25 0 0);
+}
+
+.sidebarThemeBtn {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  color: #52525b;
+}
+
+.sidebarThemeBtn:hover:not(:disabled) {
+  background: #eeeeef;
+  color: var(--text);
+}
+
+.dark .sidebarThemeBtn {
+  color: oklch(0.65 0 0);
+}
+
+.dark .sidebarThemeBtn:hover:not(:disabled) {
+  background: oklch(0.25 0 0);
+}
+
+.sidebarActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sidebar.collapsed .sidebarActionsStack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.sidebar.collapsed .sidebarActionsStack .iconButton {
+  width: 36px;
+  height: 36px;
+}
+
+.sidebar:not(.collapsed) .sidebarActionsStack {
+  display: none;
+}
+
+.sidebarHeader,
+.settingsHeader,
+.sessionPaneHeader,
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.brandMark {
+  display: grid;
+  flex: 0 0 auto;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.brand h1,
+.brand p,
+.topbar h2,
+.topbar p,
+.emptyState h3,
+.emptyState p,
+.settingsHeader h2,
+.sessionPaneHeader h2,
+.sessionPaneHeader p {
+  margin: 0;
+}
+
+.brand h1 {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brand p {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.connectionPill {
+  gap: 7px;
+  width: fit-content;
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.sidebarFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  margin-top: auto;
+}
+
+.sidebarFooterActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sessionPane {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+
+.sessionPaneHeader {
+  padding: 4px 2px;
+}
+
+.sessionPaneHeader h2 {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.sessionPaneHeader p {
+  margin-top: 2px;
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.sessionActions,
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sessionListFrame {
+  flex: 1;
+  min-height: 0;
+}
+
+.sessionList {
+  height: 100%;
+  min-height: 0;
+  padding-right: 2px;
+}
+
+.sessionListInner {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-right: 1px;
+}
+
+.sessionList::-webkit-scrollbar,
+.messages::-webkit-scrollbar,
+.settingsDrawer::-webkit-scrollbar,
+.dbPickerMenu::-webkit-scrollbar {
+  width: 8px;
+}
+
+.sessionList::-webkit-scrollbar-thumb,
+.messages::-webkit-scrollbar-thumb,
+.settingsDrawer::-webkit-scrollbar-thumb,
+.dbPickerMenu::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #d4d4d8;
+  background-clip: padding-box;
+}
+
+.sessionItem {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 9px;
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  padding: 9px;
+  color: var(--text);
+  text-align: left;
+  transition:
+    border-color 0.16s ease,
+    background 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.sessionItem:hover:not(:disabled) {
+  background: #eeeeef;
+}
+
+.sessionItem.active {
+  border-color: var(--line);
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+.sessionIcon {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 8px;
+  color: #52525b;
+}
+
+.sessionItem.active .sessionIcon {
+  background: #f4f4f5;
+  color: var(--text);
+}
+
+.sessionText {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.sessionText strong,
+.conversationTitle h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionText strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 560;
+  line-height: 1.3;
+}
+
+.sessionText small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.topbar {
+  flex-shrink: 0;
+  min-height: 64px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.92);
+  padding: 12px 24px;
+  backdrop-filter: blur(10px);
+}
+
+.topbar h2 {
+  max-width: min(720px, 62vw);
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 2px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 560;
+}
+
