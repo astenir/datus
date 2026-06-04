@@ -5,6 +5,7 @@ import { CircleStop, Clock, Loader2, Play, Rows3, Terminal } from "@lucide/vue";
 import Button from "@/components/ui/Button.vue";
 import Textarea from "@/components/ui/Textarea.vue";
 import { sqlApi } from "@/lib/api";
+import { createClientId } from "@/lib/chat";
 import { useConnection } from "@/composables/useConnection";
 import { useCatalog } from "@/composables/useCatalog";
 import type { SqlExecuteResult } from "@/types";
@@ -25,7 +26,7 @@ async function handleExecute() {
   executing.value = true;
   error.value = "";
   result.value = null;
-  executeTaskId.value = crypto.randomUUID();
+  executeTaskId.value = createClientId();
 
   try {
     const res = await sqlApi.execute(effectiveBase(), query, {

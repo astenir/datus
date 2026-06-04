@@ -108,6 +108,23 @@ export function stringifyContent(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
+export function createClientId(prefix = "msg") {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.randomUUID === "function") {
+    return cryptoApi.randomUUID();
+  }
+
+  if (typeof cryptoApi?.getRandomValues === "function") {
+    const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"));
+    return `${hex.slice(0, 4).join("")}-${hex.slice(4, 6).join("")}-${hex.slice(6, 8).join("")}-${hex.slice(8, 10).join("")}-${hex.slice(10).join("")}`;
+  }
+
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export function databaseNameFromCatalog(item: CatalogRecord) {
   const name = stringifyContent(item.name);
   const schemaName = stringifyContent(item.schema_name);
@@ -291,7 +308,7 @@ export function parseSseBuffer(
 export function messageFromPayload(
   payload: SseMessagePayload,
   operation: MessageOperation = "createMessage",
-  fallbackId: string = crypto.randomUUID()
+  fallbackId: string = createClientId()
 ): ChatMessage | null {
   if (!payload.role) return null;
 
@@ -350,7 +367,7 @@ export function messageFromEvent(event: SseEvent): ParsedMessage | null {
   const operation = data.type ?? "createMessage";
   if (!payload) return null;
 
-  const message = messageFromPayload(payload, operation, event.id ?? crypto.randomUUID());
+  const message = messageFromPayload(payload, operation, event.id ?? createClientId());
   return message ? { operation, message } : null;
 }
 

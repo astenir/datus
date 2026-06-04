@@ -5,6 +5,7 @@ import {
   buildUserInteractionInput,
   chatSessionsPath,
   contentFromPayloadBlocks,
+  messageFromEvent,
   messageFromPayload,
   mergeMessage,
   parseSseBuffer,
@@ -88,6 +89,34 @@ describe("messageFromPayload", () => {
     );
 
     expect(message).toBeNull();
+  });
+
+  it("uses a fallback id when crypto.randomUUID is unavailable", () => {
+    const originalCrypto = globalThis.crypto;
+    Object.defineProperty(globalThis, "crypto", {
+      configurable: true,
+      value: {}
+    });
+
+    try {
+      const message = messageFromEvent({
+        event: "message",
+        data: {
+          type: "createMessage",
+          payload: {
+            role: "assistant",
+            content: [{ type: "markdown", payload: { content: "hello" } }]
+          }
+        }
+      });
+
+      expect(message?.message.id).toMatch(/^msg-/);
+    } finally {
+      Object.defineProperty(globalThis, "crypto", {
+        configurable: true,
+        value: originalCrypto
+      });
+    }
   });
 });
 

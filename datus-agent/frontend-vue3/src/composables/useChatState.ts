@@ -4,6 +4,7 @@ import {
   buildChatStreamRequest,
   buildUserInteractionInput,
   consumeSseStream,
+  createClientId,
   mergeMessage,
   messageFromEvent,
   parseSseBuffer,
@@ -116,7 +117,7 @@ async function sendMessage(opts: {
   const base = effectiveBase();
 
   const userMessage: ChatMessage = {
-    id: crypto.randomUUID(),
+    id: createClientId(),
     role: "user",
     content: opts.message,
   };
