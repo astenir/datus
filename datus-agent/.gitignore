@@ -40,6 +40,7 @@ before_reflection_*.yaml
 /node_modules
 /frontend/dist
 /frontend/node_modules
+/frontend/
 *.tsbuildinfo
 *.egg-info
 .claude
