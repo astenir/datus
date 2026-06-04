@@ -1,0 +1,455 @@
+/* ─── Agent Manager ────────────────────────────────────────────────────────── */
+/* ─── Agent Manager ────────────────────────────────────────────────────────── */
+
+.agentManager {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: 100%;
+}
+
+.agentManagerHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agentManagerHeader h2 {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.agentList {
+  flex: 1;
+  min-height: 0;
+}
+
+.agentEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 40px 0;
+  color: var(--text-muted);
+}
+
+.agentCard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+}
+
+.agentCardInfo {
+  min-width: 0;
+}
+
+.agentCardName {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.agentCardMeta {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.agentCardActions {
+  display: flex;
+  gap: 2px;
+}
+
+.agentForm {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.agentFormError {
+  color: #be123c;
+  font-size: 13px;
+}
+
+
+
+/* ─── Data Visualization ───────────────────────────────────────────────────── */
+/* ─── Data Visualization ───────────────────────────────────────────────────── */
+
+.dataViz {
+  margin-top: 6px;
+}
+
+.dataVizResult {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  padding: 10px;
+  margin-top: 6px;
+}
+
+.dataVizChart {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  color: var(--text);
+}
+
+.dataVizChart strong {
+  font-size: 13px;
+}
+
+.dataVizResult p {
+  margin: 2px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.dataVizChartRender {
+  margin-top: 8px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+
+.dataVizInsight {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
+.dataVizInsight p {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.dataVizError {
+  color: #be123c;
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+
+
+/* ─── Navigation Tabs ──────────────────────────────────────────────────────── */
+/* ─── Navigation Tabs ──────────────────────────────────────────────────────── */
+
+.navTabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+  padding: 4px 8px 8px;
+}
+
+.navTab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  justify-content: center;
+  height: 36px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: #52525b;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease;
+}
+
+.navTab:hover {
+  background: #eeeeef;
+  color: var(--text);
+}
+
+.navTab.active {
+  background: var(--surface-soft);
+  color: var(--text);
+}
+
+.dark .navTab {
+  color: oklch(0.65 0 0);
+}
+
+.dark .navTab:hover {
+  background: oklch(0.25 0 0);
+  color: var(--text);
+}
+
+.sidebar.collapsed .navTabs {
+  flex-direction: column;
+  align-items: center;
+  padding: 4px;
+}
+
+.sidebar.collapsed .navTab {
+  flex: none;
+  width: 36px;
+  height: 36px;
+}
+
+.sidebar.collapsed .navTab span {
+  display: none;
+}
+
+
+
+/* ─── Session Context Menu ─────────────────────────────────────────────────── */
+/* ─── Session Context Menu ─────────────────────────────────────────────────── */
+
+.sessionContextMenu {
+  position: fixed;
+  z-index: 200;
+  min-width: 140px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  padding: 4px;
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.14),
+    0 2px 6px rgba(0, 0, 0, 0.06);
+}
+
+.sessionContextMenu button {
+  display: block;
+  width: 100%;
+  min-height: 32px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding: 6px 12px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 520;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sessionContextMenu button:hover {
+  background: var(--surface-soft);
+}
+
+.sessionContextMenu button.destructive {
+  color: #be123c;
+}
+
+.sessionContextMenu button.destructive:hover {
+  background: #fff1f2;
+}
+
+
+
+/* ─── Chat View ───────────────────────────────────────────────────────────── */
+/* ─── Chat View ───────────────────────────────────────────────────────────── */
+
+.chatView {
+  --chat-content-width: min(920px, calc(100% - 56px));
+
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.knowledgeView {
+  height: 100%;
+  background: var(--surface);
+}
+
+.sqlView {
+  height: 100%;
+  background: var(--surface);
+}
+
+.mcpView {
+  height: 100%;
+  background: var(--surface);
+}
+
+.chatShell {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+@media (max-width: 920px) {
+  .shell {
+    position: relative;
+  }
+
+  #sidebar,
+  #sidebar.collapsed,
+  #sidebar:has(> .collapsed) {
+    width: 0 !important;
+    min-width: 0 !important;
+    max-width: 0 !important;
+    overflow: hidden;
+  }
+
+  .splitpanes__splitter {
+    display: none;
+  }
+
+  .sidebar {
+    height: 100dvh;
+    max-height: 100dvh;
+    border-right: 1px solid var(--line);
+    border-bottom: 0;
+  }
+
+  .sidebar.collapsed {
+    gap: 10px;
+    padding: 10px;
+  }
+
+  .sidebar.collapsed .brand h1,
+  .sidebar.collapsed .brand p {
+    display: block;
+  }
+
+  .sidebar.collapsed .brandMark {
+    display: grid;
+  }
+
+  .sidebar.collapsed .sessionPane {
+    display: flex;
+  }
+
+  .sidebar.collapsed .sidebarFooter {
+    display: flex;
+  }
+
+  .sidebar.collapsed .brand {
+    justify-content: flex-start;
+  }
+
+  .sidebar.collapsed .sidebarHeader {
+    justify-content: space-between;
+  }
+
+  .sidebar.collapsed .sidebarActions {
+    width: auto;
+  }
+
+  .sidebar.collapsed .sidebarActionsStack {
+    display: none;
+  }
+
+  .sidebarCollapseBtn {
+    display: none;
+  }
+
+  .workspace {
+    height: 100dvh;
+    min-height: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .workspace {
+    --chat-content-width: calc(100% - 32px);
+  }
+
+  .topbar {
+    align-items: center;
+    flex-direction: row;
+    padding: 12px 16px;
+  }
+
+  .topbar h2 {
+    max-width: calc(100vw - 188px);
+  }
+
+  .toolbar {
+    flex: 0 0 auto;
+    gap: 4px;
+  }
+
+  .toolbar .iconButton,
+  .toolbar .stopButton {
+    min-width: 40px;
+    height: 40px;
+  }
+
+  .stopButton {
+    flex: 0 0 auto;
+    padding-inline: 10px;
+  }
+
+  .twoCols,
+  .quickControls,
+  .composer {
+    grid-template-columns: 1fr;
+  }
+
+  .composer {
+    grid-template-areas:
+      "input"
+      "quick";
+    width: calc(100% - 32px);
+    border-radius: 18px;
+  }
+
+  .quickControls {
+    gap: 8px;
+  }
+
+  .quickControlsLeft,
+  .quickControlsRight {
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .quickControls label,
+  .quickField {
+    width: auto;
+    max-width: 100%;
+  }
+
+  .quickControlsLeft .dbPickerField {
+    width: auto;
+    max-width: 100%;
+  }
+
+  .quickControlsRight label {
+    flex: 1;
+    width: auto;
+  }
+
+  .message.user .bubble {
+    max-width: 90%;
+  }
+
+  .settingsDrawer {
+    padding: 18px 16px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

@@ -1,0 +1,582 @@
+/* ─── Knowledge Explorer ───────────────────────────────────────────────────── */
+
+.knowledgeExplorer {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  height: 100%;
+  min-height: 0;
+}
+
+.knowledgeTree {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--line);
+  background: var(--sidebar);
+}
+
+.knowledgeTreeHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.knowledgeTreeHeader h3 {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.knowledgeTreeActions {
+  display: flex;
+  gap: 2px;
+}
+
+.knowledgeTreeActions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.knowledgeTreeContent {
+  flex: 1;
+  min-height: 0;
+}
+
+.knowledgeTreeLoading,
+.knowledgeTreeEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 30px 0;
+  color: var(--text-muted);
+}
+
+.knowledgeTreeNode {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 6px 14px;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.knowledgeTreeNode:hover {
+  background: var(--surface-soft);
+}
+
+.knowledgeTreeNode.selected {
+  background: var(--surface);
+  border-right: 2px solid var(--accent-green);
+}
+
+.knowledgeTreeNodeActions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+
+.knowledgeTreeNode:hover .knowledgeTreeNodeActions {
+  opacity: 1;
+}
+
+.knowledgeTreeNodeActions button {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.knowledgeTreeNodeActions button:hover {
+  background: var(--line);
+  color: var(--text);
+}
+
+.knowledgeDetail {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+}
+
+.knowledgeDetailEmpty,
+.knowledgeDetailLoading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
+  color: var(--text-muted);
+}
+
+.knowledgeDetailContent {
+  padding: 20px;
+}
+
+.knowledgeDetailHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.knowledgeDetailHeader h3 {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.knowledgeDetailType {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.knowledgeDetailBody {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.knowledgeField {
+  margin-bottom: 8px;
+}
+
+.knowledgeField strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.knowledgeField p {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.knowledgeYaml {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  padding: 12px;
+  color: var(--text);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre;
+}
+
+.knowledgeEditForm {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* ─── Edit section (unified card for form fields) ──────────────────────────── */
+
+.editSection {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  padding: 12px 14px;
+}
+
+.editSectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.editSectionTitle {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.editSectionMeta {
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+/* Monospace textarea for code/YAML/SQL */
+.editCodearea {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  tab-size: 2;
+}
+
+/* Collapsible edit section (search_text) */
+.editCollapsible {
+  padding: 0;
+  overflow: hidden;
+}
+
+.editCollapsibleSummary {
+  cursor: pointer;
+  user-select: none;
+  margin-bottom: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  transition: background 0.12s ease;
+}
+
+.editCollapsibleSummary:hover {
+  background: var(--surface-soft);
+}
+
+.editCollapsible[open] .editCollapsibleSummary {
+  border-bottom: 1px solid var(--line);
+  border-radius: 12px 12px 0 0;
+  margin-bottom: 0;
+}
+
+.editCollapsible[open] {
+  padding: 0;
+}
+
+.editCollapsibleInput {
+  margin: 12px 14px;
+  width: calc(100% - 28px);
+}
+
+/* ─── Edit footer (sticky save/cancel bar) ─────────────────────────────────── */
+
+.editFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  padding: 8px 14px;
+}
+
+.editHint {
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.editFooterActions {
+  display: flex;
+  gap: 8px;
+}
+
+.knowledgeDetailActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* ─── Unified detail card ──────────────────────────────────────────────────── */
+
+.detailCard {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card);
+  padding: 14px 16px;
+}
+
+.detailCardTitle {
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.detailCard + .detailCard,
+.detailCard + .detailCollapsible,
+.detailCard + .sqlBlock,
+.detailCard + .knowledgeDetailActions,
+.sqlBlock + .detailCollapsible,
+.sqlBlock + .knowledgeDetailActions,
+.detailCollapsible + .knowledgeDetailActions {
+  margin-top: 14px;
+}
+
+.detailCardText {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.searchTextSegments {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.searchTextSegment {
+  margin: 0;
+  border-left: 3px solid var(--line);
+  border-radius: 0 6px 6px 0;
+  background: var(--surface-soft);
+  padding: 8px 12px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ─── Metric specifics ────────────────────────────────────────────────────── */
+
+.metricCardHeader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.metricCardName {
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.metricDescription {
+  margin: 0 0 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.metricTags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.metricTag {
+  display: inline-block;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 6px;
+  color: var(--text-soft);
+  font-size: 11px;
+}
+
+.metricParamsGrid {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.metricParamItem {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.metricParamKey {
+  min-width: 100px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.metricParamVal {
+  color: var(--text);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+/* ─── SQL block (mirrors chat ToolCard pattern) ────────────────────────────── */
+
+.sqlBlock {
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+:root.dark .sqlBlock {
+  border-color: oklch(0.3 0 0);
+}
+
+.sqlBlockHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #dbeafe;
+  background: #eff6ff;
+  padding: 6px 12px;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+:root.dark .sqlBlockHeader {
+  border-bottom-color: oklch(0.3 0 0);
+  background: oklch(0.19 0 0);
+  color: oklch(0.7 0.08 250);
+}
+
+.sqlCopyBtn {
+  width: 24px;
+  height: 24px;
+}
+
+.copySuccess {
+  color: #16a34a;
+}
+
+.sqlBlockCode {
+  margin: 0;
+  padding: 12px;
+  color: var(--text);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre;
+  overflow-x: auto;
+}
+
+/* ─── Collapsible section (unified for raw YAML / search text) ─────────────── */
+
+.detailCollapsible {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.detailCollapsible summary {
+  padding: 8px 12px;
+  background: var(--surface-soft);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+
+.detailCollapsible summary:hover {
+  color: var(--text);
+}
+
+.detailCollapsibleBody {
+  margin: 0;
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.detailCollapsible .knowledgeYaml {
+  border: 0;
+  border-radius: 0;
+  margin: 0;
+}
+
+/* ─── Markdown content ─────────────────────────────────────────────────────── */
+
+.knowledgeMarkdown {
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.knowledgeMarkdown p:first-child {
+  margin-top: 0;
+}
+
+.knowledgeMarkdown p:last-child {
+  margin-bottom: 0;
+}
+
+/* ─── Bootstrap Dialog ─────────────────────────────────────────────────────── */
+
+.bootstrapForm {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.bootstrapComponents {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.bootstrapActions {
+  display: flex;
+  gap: 8px;
+}
+
+.bootstrapLog {
+  max-height: 300px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  padding: 8px;
+}
+
+.bootstrapLogEntry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  font-size: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.bootstrapLogEntry:last-child {
+  border-bottom: 0;
+}
+
+.bootstrapLogEntry.error {
+  color: #be123c;
+}
+
+.bootstrapLogComponent {
+  color: var(--text-muted);
+  font-weight: 600;
+  min-width: 60px;
+}
+
+.bootstrapLogStage {
+  color: var(--text-soft);
+  font-size: 11px;
+  min-width: 50px;
+}
+
+.bootstrapLogMessage {
+  color: var(--text);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bootstrapLogError {
+  color: #be123c;
+  flex: 1;
+}
+
+.bootstrapLogProgress {
+  color: #047857;
+  font-weight: 600;
+}
+

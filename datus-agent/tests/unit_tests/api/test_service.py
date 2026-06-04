@@ -533,29 +533,18 @@ class TestRecordFeedback:
 
 class TestHealthCheck:
     @pytest.mark.asyncio
-    async def test_healthy_when_agent_config_available(self):
+    async def test_healthy_when_agent_config_available_without_external_probes(self):
         service = _make_service()
         service.agent_config = MagicMock()
         service.agent_config.current_datasource = "ns"
 
-        mock_agent = MagicMock()
-        mock_agent.check_db.return_value = {"status": "success"}
-        mock_agent.probe_llm.return_value = {"status": "ok"}
-
-        with patch("datus.api.service.Agent", return_value=mock_agent):
+        with patch("datus.api.service.Agent") as agent_cls:
             response = await service.health_check()
 
         assert response.status == "healthy"
-
-    @pytest.mark.asyncio
-    async def test_unhealthy_on_exception(self):
-        service = _make_service()
-        service.agent_config = MagicMock()
-
-        with patch("datus.api.service.Agent", side_effect=RuntimeError("config error")):
-            response = await service.health_check()
-
-        assert response.status == "unhealthy"
+        assert response.database_status == {"ns": "not_checked"}
+        assert response.llm_status == "not_checked"
+        agent_cls.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_healthy_when_no_config(self):
@@ -564,4 +553,5 @@ class TestHealthCheck:
 
         response = await service.health_check()
         assert response.status == "healthy"
-        assert response.llm_status == "unknown"
+        assert response.database_status == {}
+        assert response.llm_status == "not_checked"
