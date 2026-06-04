@@ -33,6 +33,11 @@
   gap: 2px;
 }
 
+.knowledgeTreeActions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 .knowledgeTreeContent {
   flex: 1;
   min-height: 0;

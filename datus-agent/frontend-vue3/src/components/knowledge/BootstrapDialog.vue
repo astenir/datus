@@ -139,7 +139,7 @@ async function handleCancel() {
         </Label>
 
         <div class="bootstrapActions">
-          <Button v-if="!running" :disabled="selectedComponents.size === 0" @click="handleStart">
+          <Button v-if="!running" disabled title="功能开发中，暂不可用" @click="handleStart">
             <Play :size="14" />
             开始构建
           </Button>
