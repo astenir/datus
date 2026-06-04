@@ -32,6 +32,11 @@ class OracleConnector(SQLAlchemyConnector, MigrationTargetMixin):
         database = config.database
         schema = config.schema_name or config.username.upper()
 
+        if config.thick_mode:
+            import oracledb
+
+            oracledb.init_oracle_client()
+
         super().__init__(
             build_oracle_uri(config),
             dialect="oracle",
@@ -67,6 +72,20 @@ class OracleConnector(SQLAlchemyConnector, MigrationTargetMixin):
     @override
     def get_databases(self, catalog_name: str = "", include_sys: bool = False) -> List[str]:
         return [self.database_name] if self.database_name else []
+
+    def test_connection(self) -> bool:
+        """Test Oracle connection with a dialect-valid probe query."""
+        try:
+            with self._conn() as conn:
+                conn.execute(text("SELECT 1 FROM DUAL"))
+            return True
+        except Exception as e:
+            if isinstance(e, DatusDbException):
+                raise
+            raise DatusDbException(
+                ErrorCode.DB_CONNECTION_FAILED,
+                message_args={"error_message": "Connection test failed"},
+            ) from e
 
     def _owner_filter(self, schema_name: str = "") -> str:
         owner = (schema_name or self.schema_name or self.username).upper().replace("'", "''")

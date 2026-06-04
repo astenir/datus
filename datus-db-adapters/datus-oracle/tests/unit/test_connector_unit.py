@@ -75,6 +75,19 @@ def make_connector():
     return connector
 
 
+def test_connection_uses_oracle_dual_probe():
+    connector = make_connector()
+    conn = MagicMock()
+    conn.__enter__.return_value = conn
+    conn.__exit__.return_value = None
+    connector._conn = MagicMock(return_value=conn)
+
+    assert connector.test_connection() is True
+
+    sql = str(conn.execute.call_args.args[0])
+    assert "SELECT 1 FROM DUAL" in sql
+
+
 def test_get_tables_queries_all_tables_for_owner():
     connector = make_connector()
     connector._execute_pandas = MagicMock(return_value=pd.DataFrame({"OWNER": ["APP"], "TABLE_NAME": ["CUSTOMERS"]}))

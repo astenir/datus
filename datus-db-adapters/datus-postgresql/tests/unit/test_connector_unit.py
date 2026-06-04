@@ -544,6 +544,15 @@ def _df(rows, columns):
     return pd.DataFrame(rows, columns=columns)
 
 
+def test_get_schemas_handles_uppercase_result_column():
+    """get_schemas accepts driver-returned column labels with different casing."""
+    connector = _make_pg_connector_for_metadata()
+    df = _df([("pg_catalog",), ("app",)], ["SCHEMA_NAME"])
+    connector._execute_pandas = MagicMock(return_value=df)
+
+    assert connector.get_schemas() == ["app"]
+
+
 def test_get_schema_strict_match_hits_no_fallback():
     """Exact case match returns rows from first query and never executes the lower() fallback."""
     connector = _make_pg_connector_for_metadata()

@@ -520,7 +520,8 @@ class PostgreSQLConnector(SQLAlchemyConnector, MigrationTargetMixin):
         safe_db = database_name.replace("'", "''") if database_name else ""
         sql = f"SELECT schema_name FROM information_schema.schemata WHERE catalog_name = '{safe_db}'"
         result = self._execute_pandas(sql)
-        schemas = result["schema_name"].tolist()
+        column_lookup = {str(column).lower(): column for column in result.columns}
+        schemas = result[column_lookup["schema_name"]].tolist()
 
         if not include_sys:
             sys_schemas = self._sys_schemas()
