@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
-import { BookOpen, ChevronRight, Database, Folder, FolderPlus, Loader2, Pencil, Trash2 } from "@lucide/vue";
+import { ref, computed, onMounted } from "vue";
+import { BookOpen, ChevronRight, Copy, Database, Folder, FolderPlus, Loader2, Pencil, Check } from "@lucide/vue";
+import yaml from "js-yaml";
+import MarkdownIt from "markdown-it";
 
+import Badge from "@/components/ui/Badge.vue";
 import Button from "@/components/ui/Button.vue";
 import ScrollArea from "@/components/ui/ScrollArea.vue";
 import Input from "@/components/ui/Input.vue";
@@ -13,8 +16,78 @@ import SheetHeader from "@/components/ui/SheetHeader.vue";
 import SheetTitle from "@/components/ui/SheetTitle.vue";
 import { subjectApi } from "@/lib/api";
 import BootstrapDialog from "./BootstrapDialog.vue";
+import TreeNode from "./TreeNode.vue";
 import { useConnection } from "@/composables/useConnection";
 import type { SubjectNode, MetricInfo, ReferenceSQLInfo, KnowledgeInfo, SubjectNodeType } from "@/types";
+
+const md = new MarkdownIt({ html: false, linkify: true });
+
+interface ParsedMetric {
+  name: string;
+  description: string;
+  type: string;
+  typeParams: Record<string, unknown>;
+  tags: string[];
+}
+
+const parsedMetric = computed<ParsedMetric | null>(() => {
+  if (!metricDetail.value?.yaml) return null;
+  try {
+    const doc = yaml.load(metricDetail.value.yaml) as Record<string, unknown>;
+    const m = doc?.metric as Record<string, unknown> | undefined;
+    if (!m) return null;
+    const locked = m.locked_metadata as Record<string, unknown> | undefined;
+    const tags = (locked?.tags as string[]) ?? [];
+    return {
+      name: String(m.name ?? ""),
+      description: String(m.description ?? ""),
+      type: String(m.type ?? ""),
+      typeParams: (m.type_params as Record<string, unknown>) ?? {},
+      tags,
+    };
+  } catch {
+    return null;
+  }
+});
+
+const knowledgeHtml = computed(() => {
+  if (!knowledgeDetail.value?.explanation) return "";
+  return md.render(knowledgeDetail.value.explanation);
+});
+
+const metricTypeColors: Record<string, "default" | "secondary" | "destructive" | "outline" | "success"> = {
+  simple: "success",
+  measure_proxy: "secondary",
+  ratio: "default",
+  derived: "outline",
+  expr: "destructive",
+  cumulative: "secondary",
+};
+
+function formatParamValue(val: unknown): string {
+  if (Array.isArray(val)) return val.join(", ");
+  if (typeof val === "object" && val !== null) return JSON.stringify(val);
+  return String(val ?? "");
+}
+
+function splitSearchText(text: string): string[] {
+  return text
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+}
+
+const copiedField = ref<string | null>(null);
+
+async function copyToClipboard(text: string, fieldId: string) {
+  try {
+    await navigator.clipboard.writeText(text);
+    copiedField.value = fieldId;
+    setTimeout(() => { copiedField.value = null; }, 1500);
+  } catch {
+    // fallback
+  }
+}
 
 // ─── State ───────────────────────────────────────────────────────────────────
 
@@ -145,6 +218,13 @@ async function saveMetric() {
   }
 }
 
+function handleEditKeydown(e: KeyboardEvent, saveFn: () => void) {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+    e.preventDefault();
+    saveFn();
+  }
+}
+
 const editingSql = ref(false);
 const editingSqlData = ref({ sql: "", summary: "", search_text: "" });
 
@@ -191,15 +271,6 @@ async function saveKnowledge() {
   }
 }
 
-// ─── Icons ───────────────────────────────────────────────────────────────────
-
-const typeIconMap: Record<string, typeof Folder> = {
-  directory: Folder,
-  metric: BookOpen,
-  reference_sql: BookOpen,
-  knowledge: BookOpen,
-};
-
 // ─── Init ────────────────────────────────────────────────────────────────────
 
 onMounted(loadSubjects);
@@ -234,23 +305,16 @@ onMounted(loadSubjects);
           <p>暂无 Subject</p>
         </div>
         <template v-else>
-          <div
+          <TreeNode
             v-for="node in subjects"
             :key="node.subject_path.join('/')"
-            :class="`knowledgeTreeNode ${selectedNode?.subject_path.join('/') === node.subject_path.join('/') ? 'selected' : ''}`"
-            @click="selectNode(node)"
-          >
-            <component :is="typeIconMap[node.type || 'directory'] || Folder" :size="14" />
-            <span>{{ node.name }}</span>
-            <div class="knowledgeTreeNodeActions">
-              <button v-if="node.type === 'directory'" type="button" title="新建" @click.stop="openCreate(node.subject_path, 'metric')">
-                <FolderPlus :size="12" />
-              </button>
-              <button type="button" title="删除" @click.stop="handleDelete(node)">
-                <Trash2 :size="12" />
-              </button>
-            </div>
-          </div>
+            :node="node"
+            :selected-path="selectedNode?.subject_path.join('/') ?? ''"
+            :depth="0"
+            @select="selectNode"
+            @create="openCreate"
+            @delete="handleDelete"
+          />
         </template>
       </ScrollArea>
     </div>
@@ -273,20 +337,61 @@ onMounted(loadSubjects);
         <!-- Metric detail -->
         <div v-if="selectedNode.type === 'metric' && metricDetail" class="knowledgeDetailBody">
           <div v-if="!editingMetric">
-            <pre class="knowledgeYaml">{{ metricDetail.yaml }}</pre>
-            <Button variant="outline" size="sm" @click="startEditMetric">
-              <Pencil :size="14" />
-              编辑
-            </Button>
+            <!-- Structured view -->
+            <template v-if="parsedMetric">
+              <div class="detailCard">
+                <div class="metricCardHeader">
+                  <span class="metricCardName">{{ parsedMetric.name }}</span>
+                  <Badge :variant="metricTypeColors[parsedMetric.type] ?? 'secondary'">
+                    {{ parsedMetric.type }}
+                  </Badge>
+                </div>
+                <p v-if="parsedMetric.description" class="metricDescription">{{ parsedMetric.description }}</p>
+                <div v-if="parsedMetric.tags.length" class="metricTags">
+                  <span v-for="tag in parsedMetric.tags" :key="tag" class="metricTag">{{ tag }}</span>
+                </div>
+              </div>
+              <div v-if="Object.keys(parsedMetric.typeParams).length" class="detailCard">
+                <h4 class="detailCardTitle">Type Parameters</h4>
+                <div class="metricParamsGrid">
+                  <template v-for="(val, key) in parsedMetric.typeParams" :key="key">
+                    <div class="metricParamItem">
+                      <span class="metricParamKey">{{ key }}</span>
+                      <span class="metricParamVal">{{ formatParamValue(val) }}</span>
+                    </div>
+                  </template>
+                </div>
+              </div>
+              <details class="detailCollapsible">
+                <summary>Raw YAML</summary>
+                <pre class="knowledgeYaml">{{ metricDetail.yaml }}</pre>
+              </details>
+            </template>
+            <!-- Fallback: raw YAML if parse fails -->
+            <template v-else>
+              <pre class="knowledgeYaml">{{ metricDetail.yaml }}</pre>
+            </template>
+            <div class="knowledgeDetailActions">
+              <Button variant="outline" size="sm" @click="startEditMetric">
+                <Pencil :size="14" />
+                编辑
+              </Button>
+            </div>
           </div>
-          <div v-else class="knowledgeEditForm">
-            <Label>
-              YAML
-              <Textarea v-model="editingMetricYaml" :rows="12" />
-            </Label>
-            <div class="knowledgeEditActions">
-              <Button variant="outline" size="sm" @click="editingMetric = false">取消</Button>
-              <Button size="sm" @click="saveMetric">保存</Button>
+          <div v-else class="knowledgeEditForm" @keydown="handleEditKeydown($event, saveMetric)">
+            <div class="editSection">
+              <div class="editSectionHeader">
+                <span class="editSectionTitle">YAML</span>
+                <span class="editSectionMeta">{{ editingMetricYaml.split('\n').length }} lines</span>
+              </div>
+              <Textarea v-model="editingMetricYaml" class="editCodearea" :rows="14" placeholder="metric:\n  name: ...\n  description: ..." />
+            </div>
+            <div class="editFooter">
+              <span class="editHint">Ctrl + Enter 保存</span>
+              <div class="editFooterActions">
+                <Button variant="outline" size="sm" @click="editingMetric = false">取消</Button>
+                <Button size="sm" @click="saveMetric">保存</Button>
+              </div>
             </div>
           </div>
         </div>
@@ -294,32 +399,74 @@ onMounted(loadSubjects);
         <!-- Reference SQL detail -->
         <div v-if="selectedNode.type === 'reference_sql' && sqlDetail" class="knowledgeDetailBody">
           <div v-if="!editingSql">
-            <div class="knowledgeField">
-              <strong>Summary:</strong>
-              <p>{{ sqlDetail.summary }}</p>
+            <!-- Summary card -->
+            <div class="detailCard">
+              <h4 class="detailCardTitle">Summary</h4>
+              <p class="detailCardText">{{ sqlDetail.summary }}</p>
             </div>
-            <pre class="knowledgeYaml">{{ sqlDetail.sql }}</pre>
-            <Button variant="outline" size="sm" @click="startEditSql">
-              <Pencil :size="14" />
-              编辑
-            </Button>
+            <!-- SQL block with header -->
+            <div class="sqlBlock">
+              <div class="sqlBlockHeader">
+                <span>SQL</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  class="sqlCopyBtn"
+                  @click="copyToClipboard(sqlDetail.sql, 'sql')"
+                >
+                  <Check v-if="copiedField === 'sql'" :size="14" class="copySuccess" />
+                  <Copy v-else :size="14" />
+                </Button>
+              </div>
+              <pre class="sqlBlockCode">{{ sqlDetail.sql }}</pre>
+            </div>
+            <!-- Search text card -->
+            <div v-if="sqlDetail.search_text" class="detailCard">
+              <h4 class="detailCardTitle">Search Text（向量检索文本）</h4>
+              <div class="searchTextSegments">
+                <p
+                  v-for="(seg, i) in splitSearchText(sqlDetail.search_text)"
+                  :key="i"
+                  class="searchTextSegment"
+                >
+                  {{ seg }}
+                </p>
+              </div>
+            </div>
+            <div class="knowledgeDetailActions">
+              <Button variant="outline" size="sm" @click="startEditSql">
+                <Pencil :size="14" />
+                编辑
+              </Button>
+            </div>
           </div>
-          <div v-else class="knowledgeEditForm">
-            <Label>
-              Summary
-              <Input v-model="editingSqlData.summary" />
-            </Label>
-            <Label>
-              SQL
-              <Textarea v-model="editingSqlData.sql" :rows="10" />
-            </Label>
-            <Label>
-              Search Text
-              <Input v-model="editingSqlData.search_text" />
-            </Label>
-            <div class="knowledgeEditActions">
-              <Button variant="outline" size="sm" @click="editingSql = false">取消</Button>
-              <Button size="sm" @click="saveSql">保存</Button>
+          <div v-else class="knowledgeEditForm" @keydown="handleEditKeydown($event, saveSql)">
+            <div class="editSection">
+              <div class="editSectionHeader">
+                <span class="editSectionTitle">Summary</span>
+              </div>
+              <Input v-model="editingSqlData.summary" placeholder="SQL 摘要描述" />
+            </div>
+            <div class="editSection">
+              <div class="editSectionHeader">
+                <span class="editSectionTitle">SQL</span>
+                <span class="editSectionMeta">{{ editingSqlData.sql.split('\n').length }} lines</span>
+              </div>
+              <Textarea v-model="editingSqlData.sql" class="editCodearea" :rows="10" placeholder="SELECT ..." />
+            </div>
+            <details class="editSection editCollapsible">
+              <summary class="editSectionHeader editCollapsibleSummary">
+                <span class="editSectionTitle">Search Text</span>
+                <span class="editSectionMeta">向量检索文本</span>
+              </summary>
+              <Input v-model="editingSqlData.search_text" class="editCollapsibleInput" placeholder="用于向量检索的文本" />
+            </details>
+            <div class="editFooter">
+              <span class="editHint">Ctrl + Enter 保存</span>
+              <div class="editFooterActions">
+                <Button variant="outline" size="sm" @click="editingSql = false">取消</Button>
+                <Button size="sm" @click="saveSql">保存</Button>
+              </div>
             </div>
           </div>
         </div>
@@ -327,31 +474,52 @@ onMounted(loadSubjects);
         <!-- Knowledge detail -->
         <div v-if="selectedNode.type === 'knowledge' && knowledgeDetail" class="knowledgeDetailBody">
           <div v-if="!editingKnowledge">
-            <div class="knowledgeField">
-              <strong>Search Text:</strong>
-              <p>{{ knowledgeDetail.search_text }}</p>
+            <!-- Explanation rendered as markdown -->
+            <div class="detailCard">
+              <h4 class="detailCardTitle">Explanation</h4>
+              <div class="knowledgeMarkdown markdownBody" v-html="knowledgeHtml" />
             </div>
-            <div class="knowledgeField">
-              <strong>Explanation:</strong>
-              <p>{{ knowledgeDetail.explanation }}</p>
+            <!-- Search text card -->
+            <div class="detailCard">
+              <h4 class="detailCardTitle">Search Text（向量检索文本）</h4>
+              <div class="searchTextSegments">
+                <p
+                  v-for="(seg, i) in splitSearchText(knowledgeDetail.search_text)"
+                  :key="i"
+                  class="searchTextSegment"
+                >
+                  {{ seg }}
+                </p>
+              </div>
             </div>
-            <Button variant="outline" size="sm" @click="startEditKnowledge">
-              <Pencil :size="14" />
-              编辑
-            </Button>
+            <div class="knowledgeDetailActions">
+              <Button variant="outline" size="sm" @click="startEditKnowledge">
+                <Pencil :size="14" />
+                编辑
+              </Button>
+            </div>
           </div>
-          <div v-else class="knowledgeEditForm">
-            <Label>
-              Search Text
-              <Input v-model="editingKnowledgeData.search_text" />
-            </Label>
-            <Label>
-              Explanation
-              <Textarea v-model="editingKnowledgeData.explanation" :rows="6" />
-            </Label>
-            <div class="knowledgeEditActions">
-              <Button variant="outline" size="sm" @click="editingKnowledge = false">取消</Button>
-              <Button size="sm" @click="saveKnowledge">保存</Button>
+          <div v-else class="knowledgeEditForm" @keydown="handleEditKeydown($event, saveKnowledge)">
+            <div class="editSection">
+              <div class="editSectionHeader">
+                <span class="editSectionTitle">Explanation</span>
+                <span class="editSectionMeta">支持 Markdown</span>
+              </div>
+              <Textarea v-model="editingKnowledgeData.explanation" class="editCodearea" :rows="8" placeholder="知识条目的详细解释..." />
+            </div>
+            <details class="editSection editCollapsible">
+              <summary class="editSectionHeader editCollapsibleSummary">
+                <span class="editSectionTitle">Search Text</span>
+                <span class="editSectionMeta">向量检索文本</span>
+              </summary>
+              <Input v-model="editingKnowledgeData.search_text" class="editCollapsibleInput" placeholder="用于向量检索的文本" />
+            </details>
+            <div class="editFooter">
+              <span class="editHint">Ctrl + Enter 保存</span>
+              <div class="editFooterActions">
+                <Button variant="outline" size="sm" @click="editingKnowledge = false">取消</Button>
+                <Button size="sm" @click="saveKnowledge">保存</Button>
+              </div>
             </div>
           </div>
         </div>

@@ -57,14 +57,62 @@ function handleKeyDown(e: KeyboardEvent) {
   }
 }
 
+// Try to parse a Python repr string (single quotes, None/True/False) into valid JSON
+function sanitizePythonRepr(raw: string): string {
+  let s = raw.trim();
+  // Replace Python single-quoted strings with double-quoted strings.
+  // This handles keys and values like 'foo': 'bar' → "foo": "bar".
+  // We do a simple state-machine replacement to handle embedded quotes correctly.
+  const chars = [...s];
+  const out: string[] = [];
+  let i = 0;
+  while (i < chars.length) {
+    const ch = chars[i];
+    if (ch === "'") {
+      // Read until closing single quote (handle escaped quotes)
+      out.push('"');
+      i++;
+      while (i < chars.length) {
+        if (chars[i] === '\\' && i + 1 < chars.length) {
+          out.push(chars[i], chars[i + 1]);
+          i += 2;
+        } else if (chars[i] === "'") {
+          out.push('"');
+          i++;
+          break;
+        } else {
+          if (chars[i] === '"') out.push('\\"');
+          else out.push(chars[i]);
+          i++;
+        }
+      }
+    } else {
+      out.push(ch);
+      i++;
+    }
+  }
+  s = out.join('');
+  // Replace Python literals with JSON equivalents
+  s = s.replace(/\bNone\b/g, 'null').replace(/\bTrue\b/g, 'true').replace(/\bFalse\b/g, 'false');
+  return s;
+}
+
 // Parse sql_return as JSON table if possible
 const tableData = computed<Array<Record<string, unknown>>>(() => {
   if (!result.value?.sql_return) return [];
+  const raw = result.value.sql_return;
+  // Fast path: valid JSON
   try {
-    const parsed = JSON.parse(result.value.sql_return);
+    const parsed = JSON.parse(raw);
     return Array.isArray(parsed) && parsed.length > 0 ? parsed : [];
   } catch {
-    return [];
+    // Slow path: Python repr format (single quotes, None/True/False)
+    try {
+      const parsed = JSON.parse(sanitizePythonRepr(raw));
+      return Array.isArray(parsed) && parsed.length > 0 ? parsed : [];
+    } catch {
+      return [];
+    }
   }
 });
 

@@ -150,8 +150,8 @@ function handleCompact() {
       </button>
     </div>
 
-    <!-- Session list (only shown in chat view) -->
-    <SidebarGroup v-if="activeView === 'chat'">
+    <!-- Session list (always visible) -->
+    <SidebarGroup>
       <SidebarGroupHeader>
         <div>
           <h2>会话</h2>
