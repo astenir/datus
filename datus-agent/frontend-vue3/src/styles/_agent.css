@@ -116,6 +116,13 @@
   font-size: 12px;
 }
 
+.dataVizChartRender {
+  margin-top: 8px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+
 .dataVizInsight {
   margin-top: 6px;
   padding-top: 6px;
