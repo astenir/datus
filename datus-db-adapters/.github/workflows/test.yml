@@ -34,8 +34,29 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Resolve changed test base
+        id: changed-base
+        shell: bash
+        run: |
+          case "${{ github.event_name }}" in
+            pull_request)
+              echo "ref=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
+              ;;
+            merge_group)
+              echo "ref=${{ github.event.merge_group.base_sha }}" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "ref=" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
       - name: Run unit tests
-        run: ci/run-unit-tests.sh
+        run: |
+          if [ -n "${{ steps.changed-base.outputs.ref }}" ]; then
+            ci/run-unit-tests.sh --changed "${{ steps.changed-base.outputs.ref }}"
+          else
+            ci/run-unit-tests.sh
+          fi
 
   integration-tests:
     if: github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch'
@@ -59,8 +80,26 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Run full integration tests
-        run: ci/run-integration-tests.sh
+      - name: Resolve changed test base
+        id: changed-base
+        shell: bash
+        run: |
+          case "${{ github.event_name }}" in
+            merge_group)
+              echo "ref=${{ github.event.merge_group.base_sha }}" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "ref=" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Run impacted integration tests
+        run: |
+          if [ -n "${{ steps.changed-base.outputs.ref }}" ]; then
+            ci/run-integration-tests.sh --changed "${{ steps.changed-base.outputs.ref }}"
+          else
+            ci/run-integration-tests.sh
+          fi
 
       - name: Stop integration services
         if: always()

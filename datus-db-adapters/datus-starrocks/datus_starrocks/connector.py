@@ -125,6 +125,15 @@ class StarRocksConnector(MySQLConnector, CatalogSupportMixin, MaterializedViewSu
         return catalog
 
     @override
+    def get_current_context(self) -> Dict[str, str]:
+        """Return StarRocks SQL coordinates with the effective catalog resolved."""
+        return {
+            "catalog_name": self._resolve_catalog(),
+            "database_name": self.database_name or "",
+            "schema_name": "",
+        }
+
+    @override
     def do_switch_context(self, conn, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
         """Apply catalog and/or database context to a connection."""
         if catalog_name:

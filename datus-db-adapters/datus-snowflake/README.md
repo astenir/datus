@@ -50,8 +50,30 @@ print(result)  # {'success': True, 'message': 'Connection successful', 'database
 Snowflake accounts with MFA enabled reject plain password logins from non-interactive
 clients. Use RSA key pair authentication (`SNOWFLAKE_JWT`) instead — it bypasses MFA
 and is Snowflake's recommended path for programmatic access. Register the public key
-on your Snowflake user once (`ALTER USER <u> SET RSA_PUBLIC_KEY = '<base64>'`), then
-point the connector at the matching private key file:
+on your Snowflake user once (`ALTER USER <u> SET RSA_PUBLIC_KEY = '<base64>'`).
+
+For hosted/SaaS deployments, store the private key as an encrypted secret field and
+pass it as `private_key`; this avoids writing private keys to local files:
+
+```python
+from datus_snowflake import SnowflakeConnector
+
+connector = SnowflakeConnector(
+    {
+        "account": "myaccount",
+        "username": "myuser",
+        "private_key": "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----",
+        # Only needed if the private key is encrypted:
+        "private_key_file_pwd": "key-passphrase",
+        "warehouse": "my_warehouse",
+        "database": "my_database",
+        "schema": "my_schema",
+    }
+)
+```
+
+For local or CI setups where a key file is already available, point the connector at
+the matching private key file:
 
 ```python
 from datus_snowflake import SnowflakeConnector
@@ -70,8 +92,9 @@ connector = SnowflakeConnector(
 )
 ```
 
-Exactly one of `password` or `private_key_file` must be provided; passing both (or
-neither) raises a `ValueError`.
+`private_key` takes precedence over `private_key_file` and `password` when
+provided. Without `private_key`, exactly one of `password` or `private_key_file`
+must be provided; passing both (or neither) raises a `ValueError`.
 
 ### Execute Queries
 
@@ -229,7 +252,23 @@ database:
 ```
 
 ```yaml
-# config.yaml — key pair authentication (MFA-friendly)
+# config.yaml — key pair authentication with an in-memory/DB-backed PEM secret
+database:
+  type: snowflake
+  account: myaccount
+  username: myuser
+  private_key: |
+    -----BEGIN PRIVATE KEY-----
+    ...
+    -----END PRIVATE KEY-----
+  # private_key_file_pwd: key-passphrase   # only for encrypted keys
+  warehouse: my_warehouse
+  database: my_database
+  schema: my_schema
+```
+
+```yaml
+# config.yaml — key pair authentication with a local file
 database:
   type: snowflake
   account: myaccount
