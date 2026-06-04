@@ -620,6 +620,7 @@ class TestExplorerServiceCreateMetric:
     async def test_create_metric_with_valid_yaml(self, real_agent_config):
         """create_metric with valid YAML exercises the full creation path."""
         import os
+        from unittest.mock import patch
 
         from datus.api.models.explorer_models import EditMetricInput
 
@@ -635,12 +636,14 @@ class TestExplorerServiceCreateMetric:
             subject_path=["metric_create_test"],
             yaml="metric:\n  name: test_revenue\n  type: measure_proxy\n  type_params:\n    measure: count_orders\n",
         )
-        result = await svc.create_metric(request)
-        # May fail on deep validation (no data_source in model) — that's expected.
-        # The important thing is it exercises the full path: parse → check existence → validate
+        with (
+            patch.object(svc, "_validate_metric_yaml", return_value=(True, [])),
+            patch("datus.cli.generation_hooks.GenerationHooks._sync_semantic_to_db", return_value={"success": True}),
+        ):
+            result = await svc.create_metric(request)
         assert isinstance(result, Result)
-        assert result.success is False
-        assert "validation" in result.errorMessage.lower()
+        assert result.success is True
+        assert (metrics_dir / "test_revenue.yml").exists()
 
     async def test_create_metric_duplicate_file_fails(self, real_agent_config):
         """create_metric rejects when file already exists on disk."""
