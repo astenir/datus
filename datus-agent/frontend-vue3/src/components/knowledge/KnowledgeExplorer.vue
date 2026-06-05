@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
-import { BookOpen, ChevronRight, Copy, Database, Folder, FolderPlus, Loader2, Pencil, Check } from "@lucide/vue";
+import { BookOpen, ChevronRight, Copy, Database, Folder, FolderPlus, Loader2, Pencil, Check, Table2, RotateCw } from "@lucide/vue";
 import yaml from "js-yaml";
 import MarkdownIt from "markdown-it";
 
@@ -14,11 +14,12 @@ import Sheet from "@/components/ui/Sheet.vue";
 import SheetContent from "@/components/ui/SheetContent.vue";
 import SheetHeader from "@/components/ui/SheetHeader.vue";
 import SheetTitle from "@/components/ui/SheetTitle.vue";
-import { subjectApi } from "@/lib/api";
+import { subjectApi, catalogApi, tableApi } from "@/lib/api";
 import BootstrapDialog from "./BootstrapDialog.vue";
 import TreeNode from "./TreeNode.vue";
+import CatalogTree from "./CatalogTree.vue";
 import { useConnection } from "@/composables/useConnection";
-import type { SubjectNode, MetricInfo, ReferenceSQLInfo, KnowledgeInfo, SubjectNodeType } from "@/types";
+import type { SubjectNode, MetricInfo, ReferenceSQLInfo, KnowledgeInfo, SubjectNodeType, DatabaseInfo, TableDetail } from "@/types";
 
 const md = new MarkdownIt({ html: false, linkify: true });
 
@@ -96,6 +97,13 @@ const loading = ref(false);
 const selectedNode = ref<SubjectNode | null>(null);
 const detailLoading = ref(false);
 
+// Catalog tree state
+const activeTree = ref<"subject" | "catalog">("subject");
+const catalogEntries = ref<DatabaseInfo[]>([]);
+const catalogLoading = ref(false);
+const selectedTable = ref<string>("");
+const tableDetail = ref<TableDetail | null>(null);
+
 // Bootstrap
 const showBootstrap = ref(false);
 
@@ -125,10 +133,25 @@ async function loadSubjects() {
   }
 }
 
+async function loadCatalog() {
+  catalogLoading.value = true;
+  try {
+    const { effectiveBase } = useConnection();
+    const result = await catalogApi.list(effectiveBase());
+    if (result) catalogEntries.value = result.databases ?? [];
+  } catch (e) {
+    console.error("Failed to load catalog:", e);
+  } finally {
+    catalogLoading.value = false;
+  }
+}
+
 // ─── Select node ─────────────────────────────────────────────────────────────
 
 async function selectNode(node: SubjectNode) {
   selectedNode.value = node;
+  selectedTable.value = "";
+  tableDetail.value = null;
   metricDetail.value = null;
   sqlDetail.value = null;
   knowledgeDetail.value = null;
@@ -149,6 +172,34 @@ async function selectNode(node: SubjectNode) {
     console.error("Failed to load detail:", e);
   } finally {
     detailLoading.value = false;
+  }
+}
+
+async function selectTable(tableName: string) {
+  selectedTable.value = tableName;
+  selectedNode.value = null;
+  metricDetail.value = null;
+  sqlDetail.value = null;
+  knowledgeDetail.value = null;
+  tableDetail.value = null;
+
+  detailLoading.value = true;
+  const { effectiveBase } = useConnection();
+  const base = effectiveBase();
+  try {
+    const result = await tableApi.detail(base, tableName);
+    if (result) tableDetail.value = result.table;
+  } catch (e) {
+    console.error("Failed to load table detail:", e);
+  } finally {
+    detailLoading.value = false;
+  }
+}
+
+function switchTree(tree: "subject" | "catalog") {
+  activeTree.value = tree;
+  if (tree === "catalog" && catalogEntries.value.length === 0) {
+    loadCatalog();
   }
 }
 
@@ -280,8 +331,26 @@ onMounted(loadSubjects);
   <div class="knowledgeExplorer">
     <!-- Left: tree -->
     <div class="knowledgeTree">
-      <div class="knowledgeTreeHeader">
-        <h3>Subject 树</h3>
+      <!-- Tab bar -->
+      <div class="treeTabBar">
+        <button
+          :class="['treeTab', { active: activeTree === 'subject' }]"
+          @click="switchTree('subject')"
+        >
+          <BookOpen :size="14" />
+          Subject
+        </button>
+        <button
+          :class="['treeTab', { active: activeTree === 'catalog' }]"
+          @click="switchTree('catalog')"
+        >
+          <Database :size="14" />
+          Catalog
+        </button>
+      </div>
+
+      <!-- Subject tree header -->
+      <div v-if="activeTree === 'subject'" class="knowledgeTreeHeader">
         <div class="knowledgeTreeActions">
           <Button variant="ghost" size="icon" aria-label="Bootstrap" title="知识库构建" @click="showBootstrap = true">
             <Database :size="16" />
@@ -291,12 +360,23 @@ onMounted(loadSubjects);
           </Button>
           <Button variant="ghost" size="icon" :disabled="loading" aria-label="刷新" @click="loadSubjects">
             <Loader2 v-if="loading" class="spin" :size="16" />
-            <ChevronRight v-else :size="16" />
+            <RotateCw v-else :size="16" />
           </Button>
         </div>
       </div>
 
-      <ScrollArea class="knowledgeTreeContent">
+      <!-- Catalog tree header -->
+      <div v-if="activeTree === 'catalog'" class="knowledgeTreeHeader">
+        <div class="knowledgeTreeActions">
+          <Button variant="ghost" size="icon" :disabled="catalogLoading" aria-label="刷新" @click="loadCatalog">
+            <Loader2 v-if="catalogLoading" class="spin" :size="16" />
+            <RotateCw v-else :size="16" />
+          </Button>
+        </div>
+      </div>
+
+      <!-- Subject tree content -->
+      <ScrollArea v-if="activeTree === 'subject'" class="knowledgeTreeContent">
         <div v-if="loading" class="knowledgeTreeLoading">
           <Loader2 class="spin" :size="20" />
         </div>
@@ -317,11 +397,24 @@ onMounted(loadSubjects);
           />
         </template>
       </ScrollArea>
+
+      <!-- Catalog tree content -->
+      <ScrollArea v-if="activeTree === 'catalog'" class="knowledgeTreeContent">
+        <div v-if="catalogLoading" class="knowledgeTreeLoading">
+          <Loader2 class="spin" :size="20" />
+        </div>
+        <CatalogTree
+          v-else
+          :entries="catalogEntries"
+          :selected-table="selectedTable"
+          @select="selectTable"
+        />
+      </ScrollArea>
     </div>
 
     <!-- Right: detail -->
     <div class="knowledgeDetail">
-      <div v-if="!selectedNode" class="knowledgeDetailEmpty">
+      <div v-if="!selectedNode && !selectedTable" class="knowledgeDetailEmpty">
         <BookOpen :size="32" />
         <p>选择左侧节点查看详情</p>
       </div>
@@ -329,13 +422,19 @@ onMounted(loadSubjects);
         <Loader2 class="spin" :size="24" />
       </div>
       <div v-else class="knowledgeDetailContent">
-        <div class="knowledgeDetailHeader">
+        <!-- Header for subject node -->
+        <div v-if="selectedNode" class="knowledgeDetailHeader">
           <h3>{{ selectedNode.name }}</h3>
           <span class="knowledgeDetailType">{{ selectedNode.type || 'directory' }}</span>
         </div>
+        <!-- Header for catalog table -->
+        <div v-else-if="selectedTable && tableDetail" class="knowledgeDetailHeader">
+          <h3>{{ tableDetail.name }}</h3>
+          <span class="knowledgeDetailType">table</span>
+        </div>
 
         <!-- Metric detail -->
-        <div v-if="selectedNode.type === 'metric' && metricDetail" class="knowledgeDetailBody">
+        <div v-if="selectedNode?.type === 'metric' && metricDetail" class="knowledgeDetailBody">
           <div v-if="!editingMetric">
             <!-- Structured view -->
             <template v-if="parsedMetric">
@@ -397,7 +496,7 @@ onMounted(loadSubjects);
         </div>
 
         <!-- Reference SQL detail -->
-        <div v-if="selectedNode.type === 'reference_sql' && sqlDetail" class="knowledgeDetailBody">
+        <div v-if="selectedNode?.type === 'reference_sql' && sqlDetail" class="knowledgeDetailBody">
           <div v-if="!editingSql">
             <!-- Summary card -->
             <div class="detailCard">
@@ -472,7 +571,7 @@ onMounted(loadSubjects);
         </div>
 
         <!-- Knowledge detail -->
-        <div v-if="selectedNode.type === 'knowledge' && knowledgeDetail" class="knowledgeDetailBody">
+        <div v-if="selectedNode?.type === 'knowledge' && knowledgeDetail" class="knowledgeDetailBody">
           <div v-if="!editingKnowledge">
             <!-- Explanation rendered as markdown -->
             <div class="detailCard">
@@ -519,6 +618,48 @@ onMounted(loadSubjects);
               <div class="editFooterActions">
                 <Button variant="outline" size="sm" @click="editingKnowledge = false">取消</Button>
                 <Button size="sm" @click="saveKnowledge">保存</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Table detail (Catalog) -->
+        <div v-if="selectedTable && tableDetail" class="knowledgeDetailBody">
+          <!-- Row count -->
+          <div v-if="tableDetail.rows != null" class="detailCard">
+            <h4 class="detailCardTitle">Rows</h4>
+            <p class="detailCardText">{{ tableDetail.rows.toLocaleString() }}</p>
+          </div>
+          <!-- Columns table -->
+          <div class="detailCard">
+            <h4 class="detailCardTitle">Columns ({{ tableDetail.columns.length }})</h4>
+            <table class="tableDetailTable">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Type</th>
+                  <th>Nullable</th>
+                  <th>PK</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="col in tableDetail.columns" :key="col.name">
+                  <td>{{ col.name }}</td>
+                  <td><code>{{ col.type }}</code></td>
+                  <td>{{ col.nullable ? '✓' : '' }}</td>
+                  <td>{{ col.pk ? '✓' : '' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <!-- Indexes -->
+          <div v-if="tableDetail.indexes.length" class="detailCard">
+            <h4 class="detailCardTitle">Indexes ({{ tableDetail.indexes.length }})</h4>
+            <div class="indexList">
+              <div v-for="idx in tableDetail.indexes" :key="idx.name" class="indexItem">
+                <span class="indexName">{{ idx.name }}</span>
+                <Badge variant="secondary">{{ idx.type }}</Badge>
+                <span class="indexColumns">{{ idx.columns.join(', ') }}</span>
               </div>
             </div>
           </div>
