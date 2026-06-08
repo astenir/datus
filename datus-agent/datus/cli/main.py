@@ -11,7 +11,6 @@ Main entry point for the CLI application.
 import argparse
 
 from datus import __version__
-from datus.cli.repl import DatusCLI
 from datus.utils.async_utils import setup_windows_policy
 from datus.utils.constants import DBType
 from datus.utils.exceptions import DatusException, ErrorCode
@@ -244,6 +243,10 @@ class Application:
         elif args.web:
             self._run_web_interface(args)
         else:
+            # Import lazily so the 'upgrade'/'update' interceptor in main() can run
+            # even when datus.cli.repl is broken (the whole point of self-upgrade).
+            from datus.cli.repl import DatusCLI
+
             cli = DatusCLI(args)
             cli.run()
 
@@ -505,6 +508,15 @@ def main():
     """Entry point for console scripts"""
     import signal
     import sys
+
+    # Intercept 'upgrade'/'update' subcommand: self-upgrade datus-agent and the
+    # installed datus-* adapter packages. Handled before the REPL is built so it
+    # works even when the installed CLI is otherwise broken.
+    if len(sys.argv) > 1 and sys.argv[1] in ("upgrade", "update"):
+        from datus.cli.upgrade_cli import run_upgrade_command
+
+        configure_logging(False, console_output=False)
+        sys.exit(run_upgrade_command(sys.argv[2:]))
 
     # Intercept 'skill' subcommand and delegate to datus.main's skill handler
     if len(sys.argv) > 1 and sys.argv[1] == "skill":
