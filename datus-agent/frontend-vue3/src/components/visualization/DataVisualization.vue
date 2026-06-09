@@ -7,7 +7,6 @@ import { BarChart, LineChart, PieChart as EchartsPie, ScatterChart } from "echar
 import { GridComponent, TooltipComponent, LegendComponent, DataZoomComponent } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 
-import Button from "@/components/ui/Button.vue";
 import Badge from "@/components/ui/Badge.vue";
 import { visualizationApi } from "@/lib/api";
 import { useConnection } from "@/composables/useConnection";
@@ -118,11 +117,6 @@ async function handleRecommend() {
 
 <template>
   <div class="dataViz">
-    <Button v-if="!result" variant="ghost" size="sm" :disabled="loading || data.length === 0" @click="handleRecommend">
-      <Loader2 v-if="loading" class="spin" :size="14" />
-      <BarChart3 v-else :size="14" />
-      推荐图表
-    </Button>
     <div v-if="result" class="dataVizResult">
       <div class="dataVizChart">
         <component :is="chartTypeIcons[result.chart.chart_type] || BarChart3" :size="16" />
@@ -137,6 +131,18 @@ async function handleRecommend() {
       <div v-if="result.data_insight" class="dataVizInsight">
         <p v-if="result.data_insight.insight">{{ result.data_insight.insight }}</p>
       </div>
+    </div>
+    <div v-if="!result" class="dataVizActions">
+      <button
+        class="dataVizRecommendBtn"
+        type="button"
+        :disabled="loading || data.length === 0"
+        @click="handleRecommend"
+      >
+        <Loader2 v-if="loading" class="spin" :size="14" />
+        <BarChart3 v-else :size="14" />
+        推荐图表
+      </button>
     </div>
     <p v-if="error" class="dataVizError">{{ error }}</p>
   </div>

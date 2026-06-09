@@ -30,6 +30,7 @@ const emit = defineEmits<{
   "update:schema": [value: string];
   "update:plan-mode": [value: boolean];
   send: [message: string];
+  insert: [message: string];
   stop: [];
 }>();
 
@@ -44,8 +45,12 @@ const selectedDatabaseLabel = computed(() => {
 
 function handleSubmit() {
   const trimmed = message.value.trim();
-  if (!trimmed || props.isStreaming) return;
-  emit("send", trimmed);
+  if (!trimmed) return;
+  if (props.isStreaming) {
+    emit("insert", trimmed);
+  } else {
+    emit("send", trimmed);
+  }
   message.value = "";
 }
 
@@ -79,7 +84,7 @@ function toggleDatabaseExpansion(databaseName: string) {
   <form class="composer" @submit.prevent="handleSubmit">
     <Textarea
       v-model="message"
-      placeholder="输入要交给 Datus Agent 处理的问题..."
+      :placeholder="isStreaming ? '流式进行中，输入消息将注入到当前会话...' : '输入要交给 Datus Agent 处理的问题...'"
       :rows="2"
       @keydown="handleKeyDown"
     />
@@ -138,15 +143,15 @@ function toggleDatabaseExpansion(databaseName: string) {
         <Button
           class="primaryButton"
           type="submit"
-          aria-label="发送消息"
-          :disabled="!message.trim() || isStreaming"
+          :aria-label="isStreaming ? '注入消息' : '发送消息'"
+          :disabled="!message.trim()"
         >
-          <Loader2 v-if="isStreaming" class="spin" :size="17" />
-          <svg v-else class="sendSolidIcon" viewBox="0 0 24 24" aria-hidden="true">
+          <Loader2 v-if="isStreaming && false" class="spin" :size="17" />
+          <svg class="sendSolidIcon" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z" />
             <path d="m21.854 2.147-10.94 10.939" />
           </svg>
-          发送
+          {{ isStreaming ? '注入' : '发送' }}
         </Button>
       </div>
     </div>

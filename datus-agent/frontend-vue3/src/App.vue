@@ -10,6 +10,7 @@ import ConversationToolbar from "@/components/chat/ConversationToolbar.vue";
 import MessageList from "@/components/chat/MessageList.vue";
 import Sheet from "@/components/ui/Sheet.vue";
 import SheetContent from "@/components/ui/SheetContent.vue";
+import ToastContainer from "@/components/ui/ToastContainer.vue";
 
 const SettingsDrawer = defineAsyncComponent(() => import("@/components/settings/SettingsDrawer.vue"));
 const AgentManager = defineAsyncComponent(() => import("@/components/agent/AgentManager.vue"));
@@ -32,7 +33,7 @@ import type { ViewType } from "@/types";
 useTheme();
 const { language, permissionMode, planMode } = useChatSettings();
 const { apiBase, connection, config, checkConnection, setApiBase } = useConnection();
-const { messages, sessions, selectedSession, isStreaming, loadSessions, selectSession, sendMessage, stopSession, deleteSession, compactSession, resumeSession, clearMessages } = useChatState();
+const { messages, sessions, selectedSession, isStreaming, loadSessions, selectSession, sendMessage, insertMessage, stopSession, deleteSession, compactSession, resumeSession, clearMessages } = useChatState();
 const { agents, loadAgents } = useAgents();
 const { modelOptions, loadModels } = useModels();
 const { catalogEntries, databaseOptions, database, schema, loadCatalog } = useCatalog();
@@ -102,6 +103,10 @@ function handleSend(message: string) {
   });
 }
 
+function handleInsert(message: string) {
+  insertMessage(message);
+}
+
 function handleRefreshConnection() {
   checkConnection();
 }
@@ -141,6 +146,7 @@ watch(database, (db) => {
               :selected-session="selectedSession"
               :active-view="activeView"
               :collapsed="sidebarCollapsed"
+              :compact-session="compactSession"
               @toggle="onSidebarToggle"
               @refresh-connection="handleRefreshConnection"
               @select-session="selectSession"
@@ -149,7 +155,6 @@ watch(database, (db) => {
               @open-agent-manager="openAgentManager"
               @update:active-view="activeView = $event"
               @delete-session="deleteSession"
-              @compact-session="compactSession"
             />
           </Pane>
 
@@ -186,6 +191,7 @@ watch(database, (db) => {
                 @update:schema="schema = $event"
                 @update:plan-mode="planMode = $event"
                 @send="handleSend"
+                @insert="handleInsert"
                 @stop="stopSession"
               />
             </div>
@@ -231,5 +237,6 @@ watch(database, (db) => {
         </SheetContent>
       </Sheet>
     </div>
+    <ToastContainer />
   </TooltipProvider>
 </template>

@@ -31,9 +31,10 @@ import SidebarGroupHeader from "@/components/ui/SidebarGroupHeader.vue";
 import SidebarHeader from "@/components/ui/SidebarHeader.vue";
 import { formatSessionTime, sessionTitle, sessionUserQueryText } from "@/lib/chat";
 import { CONNECTION_LABELS } from "@/lib/constants";
-import { ref } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
+import { toast } from "vue-sonner";
 import { useTheme } from "@/composables/useTheme";
-import type { ChatSessionOption, ConnectionState, ViewType } from "@/types";
+import type { ChatSessionOption, CompactSessionData, ConnectionState, ViewType } from "@/types";
 
 const props = defineProps<{
   connection: ConnectionState;
@@ -41,6 +42,7 @@ const props = defineProps<{
   selectedSession: string | null;
   activeView: ViewType;
   collapsed: boolean;
+  compactSession: (sessionId: string) => Promise<CompactSessionData | null>;
 }>();
 
 const emit = defineEmits<{
@@ -52,7 +54,6 @@ const emit = defineEmits<{
   "open-agent-manager": [];
   "update:active-view": [view: ViewType];
   "delete-session": [sessionId: string];
-  "compact-session": [sessionId: string];
 }>();
 
 const { theme, toggleTheme } = useTheme();
@@ -66,6 +67,7 @@ const navItems: Array<{ view: ViewType; label: string; icon: typeof MessageSquar
 
 const contextMenuSession = ref<string | null>(null);
 const contextMenuPos = ref({ x: 0, y: 0 });
+const compactingSession = ref<string | null>(null);
 
 function onSessionContext(e: MouseEvent, sessionId: string) {
   e.preventDefault();
@@ -77,6 +79,22 @@ function closeContextMenu() {
   contextMenuSession.value = null;
 }
 
+function onDocumentClick(e: MouseEvent) {
+  const target = e.target as HTMLElement;
+  if (!target.closest(".sessionContextMenu")) {
+    closeContextMenu();
+  }
+}
+
+onMounted(() => {
+  document.addEventListener("click", onDocumentClick);
+  document.addEventListener("scroll", closeContextMenu, true);
+});
+onUnmounted(() => {
+  document.removeEventListener("click", onDocumentClick);
+  document.removeEventListener("scroll", closeContextMenu, true);
+});
+
 function handleDelete() {
   if (contextMenuSession.value) {
     emit("delete-session", contextMenuSession.value);
@@ -84,10 +102,24 @@ function handleDelete() {
   }
 }
 
-function handleCompact() {
-  if (contextMenuSession.value) {
-    emit("compact-session", contextMenuSession.value);
-    closeContextMenu();
+async function handleCompact() {
+  const sessionId = contextMenuSession.value;
+  if (!sessionId) return;
+  closeContextMenu();
+  compactingSession.value = sessionId;
+  try {
+    const result = await props.compactSession(sessionId);
+    if (result?.success) {
+      const saved = result.tokens_saved ?? 0;
+      const ratio = result.compression_ratio ?? "";
+      toast.success(`压缩完成，节省 ${saved} tokens${ratio ? `（${ratio}）` : ""}`);
+    } else {
+      toast.error(`压缩失败：${result?.error ?? "未知错误"}`);
+    }
+  } catch {
+    toast.error("压缩请求失败，请检查网络连接");
+  } finally {
+    compactingSession.value = null;
   }
 }
 </script>
@@ -200,7 +232,8 @@ function handleCompact() {
               @contextmenu="onSessionContext($event, session.session_id)"
             >
               <span class="sessionIcon">
-                <MessageSquare :size="16" />
+                <Loader2 v-if="compactingSession === session.session_id" class="spin" :size="16" />
+                <MessageSquare v-else :size="16" />
               </span>
               <span class="sessionText">
                 <strong>{{ sessionUserQueryText(session) || '新会话' }}</strong>
@@ -221,7 +254,6 @@ function handleCompact() {
         v-if="contextMenuSession"
         class="sessionContextMenu"
         :style="{ left: contextMenuPos.x + 'px', top: contextMenuPos.y + 'px' }"
-        @click="closeContextMenu"
         @contextmenu.prevent="closeContextMenu"
       >
         <button type="button" @click="handleCompact">压缩历史</button>

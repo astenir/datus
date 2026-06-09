@@ -245,6 +245,13 @@ async function compactSession(sessionId: string) {
   const base = effectiveBase();
   try {
     const result = await chatApi.compact(base, sessionId);
+    if (result?.success) {
+      // Clear cached messages so the compacted summary is shown
+      messageCache.delete(sessionId);
+      if (selectedSession.value === sessionId) {
+        await loadSessionHistory(sessionId);
+      }
+    }
     return result;
   } catch (error) {
     console.error("Failed to compact session:", error);
@@ -299,6 +306,35 @@ async function resumeSession(sessionId?: string) {
   }
 }
 
+async function insertMessage(message: string) {
+  const sessionId = selectedSession.value;
+  if (!sessionId || !message.trim()) return;
+
+  // Optimistic insert: show the user message immediately
+  const userMessage: ChatMessage = {
+    id: createClientId(),
+    role: "user",
+    content: message,
+  };
+  messages.value = [...messages.value, userMessage];
+
+  try {
+    const { effectiveBase } = useConnection();
+    const base = effectiveBase();
+    await chatApi.insert(base, sessionId, message);
+  } catch (error) {
+    console.error("Failed to insert message:", error);
+    messages.value = [
+      ...messages.value,
+      {
+        id: `error-${Date.now()}`,
+        role: "system",
+        content: `**注入失败** ${error instanceof Error ? error.message : String(error)}`,
+      },
+    ];
+  }
+}
+
 async function sendInteraction(interactionKey: string, answerKey: string) {
   const { effectiveBase } = useConnection();
   const base = effectiveBase();
@@ -330,6 +366,7 @@ export function useChatState() {
     loadSessions,
     selectSession,
     sendMessage,
+    insertMessage,
     stopSession,
     deleteSession,
     compactSession,
