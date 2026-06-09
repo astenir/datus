@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import {
+  BarChart3,
   Bot,
   CheckCircle2,
   Database,
+  FileText,
   Loader2,
   MessageSquare,
   Moon,
@@ -63,6 +65,8 @@ const navItems: Array<{ view: ViewType; label: string; icon: typeof MessageSquar
   { view: "knowledge", label: "知识库", icon: Database },
   { view: "mcp", label: "MCP", icon: Wrench },
   { view: "sql", label: "SQL", icon: Terminal },
+  { view: "dashboard", label: "仪表盘", icon: BarChart3 },
+  { view: "report", label: "报告", icon: FileText },
 ];
 
 const contextMenuSession = ref<string | null>(null);

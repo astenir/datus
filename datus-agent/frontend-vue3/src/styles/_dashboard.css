@@ -1,0 +1,304 @@
+/* ─── Dashboard / Report View (shared layout) ──────────────────────────────── */
+
+.dashboardView,
+.reportView {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--surface);
+}
+
+.dashboardHeader,
+.reportHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--line);
+}
+
+.dashboardHeader h2,
+.reportHeader h2 {
+  flex: 1;
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.dashboardHeaderActions,
+.reportHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dashboardList,
+.reportList {
+  flex: 1;
+  min-height: 0;
+  padding: 12px 20px;
+}
+
+.dashboardEmpty,
+.reportEmpty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 40px 0;
+  color: var(--text-muted);
+}
+
+.dashboardEmptyHint,
+.reportEmptyHint {
+  font-size: 12px;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.dashboardGrid,
+.reportGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.dashboardCard,
+.reportCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.dashboardCard:hover,
+.reportCard:hover {
+  border-color: var(--accent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.dashboardCardHeader,
+.reportCardHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.dashboardCardHeader strong,
+.reportCardHeader strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.dashboardCardDesc,
+.reportCardDesc {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.dashboardCardMeta,
+.reportCardMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: auto;
+}
+
+.dashboardCardDate,
+.reportCardDate {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ─── Iframe Detail (shared) ──────────────────────────────────────────────── */
+
+.dashboardIframeWrap,
+.reportIframeWrap {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.dashboardIframe,
+.reportIframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  border-radius: 0;
+}
+
+.dashboardIframeLoading,
+.reportIframeLoading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-muted);
+  z-index: 1;
+  background: var(--surface);
+}
+
+/* ─── Artifact Card (chat-embedded) ───────────────────────────────────────── */
+
+.artifactCard {
+  border: 1px solid oklch(0.65 0.15 280);
+  border-radius: 8px;
+  margin: 8px 0;
+  overflow: hidden;
+  background: oklch(0.97 0.01 280);
+}
+
+.artifactHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.artifactChevron {
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+  transition: transform 0.15s;
+}
+
+[data-state="open"] > .artifactHeader .artifactChevron {
+  transform: rotate(180deg);
+}
+
+.artifactStatusIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  border: 1px solid oklch(0.65 0.15 280);
+  background: oklch(0.92 0.04 280);
+  color: oklch(0.45 0.15 280);
+}
+
+.artifactHeading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.artifactBadge {
+  font-size: 11px;
+  font-weight: 600;
+  color: oklch(0.45 0.15 280);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.artifactName {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifactBody {
+  padding: 8px 12px 12px;
+  border-top: 1px solid oklch(0.65 0.15 280);
+}
+
+.artifactDesc {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-bottom: 10px;
+}
+
+.artifactActions {
+  display: flex;
+  gap: 8px;
+}
+
+.artifactOpenBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border: 1px solid oklch(0.65 0.15 280);
+  border-radius: 6px;
+  background: oklch(0.92 0.04 280);
+  color: oklch(0.35 0.15 280);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.artifactOpenBtn:hover {
+  background: oklch(0.88 0.06 280);
+}
+
+/* ─── Dark Mode: Dashboard / Report ────────────────────────────────────────── */
+
+.dark .dashboardCard,
+.dark .reportCard {
+  border-color: oklch(0.27 0 0);
+  background: oklch(0.19 0 0);
+}
+
+.dark .dashboardCard:hover,
+.dark .reportCard:hover {
+  border-color: oklch(0.4 0.12 280);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.dark .artifactCard {
+  border-color: oklch(0.35 0.12 280);
+  background: oklch(0.18 0.02 280);
+}
+
+.dark .artifactStatusIcon {
+  border-color: oklch(0.35 0.12 280);
+  background: oklch(0.22 0.04 280);
+  color: oklch(0.7 0.12 280);
+}
+
+.dark .artifactBody {
+  border-top-color: oklch(0.35 0.12 280);
+}
+
+.dark .artifactBadge {
+  color: oklch(0.7 0.12 280);
+}
+
+.dark .artifactOpenBtn {
+  border-color: oklch(0.35 0.12 280);
+  background: oklch(0.22 0.04 280);
+  color: oklch(0.7 0.12 280);
+}
+
+.dark .artifactOpenBtn:hover {
+  background: oklch(0.27 0.06 280);
+}

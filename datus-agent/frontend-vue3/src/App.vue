@@ -17,6 +17,8 @@ const AgentManager = defineAsyncComponent(() => import("@/components/agent/Agent
 const KnowledgeExplorer = defineAsyncComponent(() => import("@/components/knowledge/KnowledgeExplorer.vue"));
 const SqlConsole = defineAsyncComponent(() => import("@/components/sql/SqlConsole.vue"));
 const McpManager = defineAsyncComponent(() => import("@/components/mcp/McpManager.vue"));
+const DashboardView = defineAsyncComponent(() => import("@/components/dashboard/DashboardView.vue"));
+const ReportView = defineAsyncComponent(() => import("@/components/report/ReportView.vue"));
 
 import { useTheme } from "@/composables/useTheme";
 import { useChatSettings } from "@/composables/useChatSettings";
@@ -171,7 +173,7 @@ watch(database, (db) => {
                   @stop-session="stopSession"
                   @resume-session="resumeSession()"
                 />
-                <MessageList :messages="messages" :is-streaming="isStreaming" :session-id="selectedSession" />
+                <MessageList :messages="messages" :is-streaming="isStreaming" :session-id="selectedSession" @open-artifact="(kind) => activeView = kind === 'report' ? 'report' : 'dashboard'" />
               </div>
               <ChatComposer
                 :connection="connection"
@@ -209,6 +211,16 @@ watch(database, (db) => {
             <!-- SQL Console view -->
             <div v-else-if="activeView === 'sql'" class="sqlView">
               <SqlConsole />
+            </div>
+
+            <!-- Dashboard view -->
+            <div v-else-if="activeView === 'dashboard'" class="dashboardView">
+              <DashboardView />
+            </div>
+
+            <!-- Report view -->
+            <div v-else-if="activeView === 'report'" class="reportView">
+              <ReportView />
             </div>
           </Pane>
         </Splitpanes>

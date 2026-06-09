@@ -241,9 +241,11 @@ export function contentFromPayloadBlocks(
       const duration = typeof payload.duration === "number" ? ` · ${payload.duration.toFixed(2)}s` : "";
       blocks.push({ type: "markdown", content: `**子 Agent 完成** \`${subagent}\`${toolCount == null ? "" : ` · ${toolCount} tools`}${duration}` });
     } else if (type === "artifact") {
-      const title = stringifyContent(payload.name ?? payload.slug ?? "artifact");
-      const summary = stringifyContent(payload.preview_summary ?? payload.description);
-      blocks.push({ type: "markdown", content: `**Artifact** ${title}${summary ? `\n\n${summary}` : ""}` });
+      const kind = stringifyContent(payload.kind ?? "dashboard");
+      const slug = stringifyContent(payload.slug ?? "");
+      const name = stringifyContent(payload.name ?? payload.slug ?? "artifact");
+      const description = stringifyContent(payload.preview_summary ?? payload.description ?? "");
+      blocks.push({ type: "artifact", kind, slug, name, description });
     } else {
       if (typeof payload.content === "string") blocks.push({ type: "markdown", content: payload.content });
       else if (typeof payload.code === "string") blocks.push({ type: "markdown", content: payload.code });
@@ -257,6 +259,7 @@ export function contentFromPayloadBlocks(
       if (block.type === "tool-call") return `调用工具 ${block.toolName}`;
       if (block.type === "tool-result") return `工具结果 ${block.toolName}${block.shortDesc ? `\n${block.shortDesc}` : ""}`;
       if (block.type === "user-interaction") return `需要用户确认 (${block.actionType})`;
+      if (block.type === "artifact") return block.name;
       return "";
     })
     .filter(Boolean)

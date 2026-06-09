@@ -7,6 +7,7 @@ import { useConnection } from "@/composables/useConnection";
 import type { ChatMessage } from "@/types";
 import ToolCard from "./ToolCard.vue";
 import UserInteractionCard from "./UserInteractionCard.vue";
+import ArtifactCard from "./ArtifactCard.vue";
 import FeedbackButtons from "./FeedbackButtons.vue";
 import SuccessStoryButton from "./SuccessStoryButton.vue";
 
@@ -43,6 +44,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   stop: [];
+  "open-artifact": [kind: string, slug: string];
 }>();
 
 const blocks = computed(() =>
@@ -101,6 +103,14 @@ async function handleFeedback(emoji: string) {
         :action-type="block.actionType"
         :requests="block.requests"
         :is-streaming="isStreaming && !awaitingInteraction"
+      />
+      <ArtifactCard
+        v-else-if="block.type === 'artifact'"
+        :kind="block.kind"
+        :slug="block.slug"
+        :name="block.name"
+        :description="block.description"
+        @open-artifact="(kind, slug) => emit('open-artifact', kind, slug)"
       />
       <div v-else class="markdownBody" v-html="renderMarkdown(block.content)" />
     </template>

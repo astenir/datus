@@ -6,6 +6,7 @@ import { requestJson, extractResultData } from "./chat";
 import type {
   AgentDetail,
   AgentInfo,
+  ArtifactManifest,
   BootstrapDocInput,
   BootstrapKbInput,
   ChatSessionOption,
@@ -372,8 +373,17 @@ export const mcpApi = {
 // ─── Dashboard API ───────────────────────────────────────────────────────────
 
 export const dashboardApi = {
+  list(baseUrl: string): Promise<ArtifactManifest[] | null> {
+    return apiResult(baseUrl, "/api/v1/dashboard/list");
+  },
+
   detail(baseUrl: string, slug: string): Promise<DashboardDetail | null> {
     return apiResult(baseUrl, `/api/v1/dashboard/detail?slug=${encodeURIComponent(slug)}`);
+  },
+
+  htmlUrl(baseUrl: string, slug: string): string {
+    const base = baseUrl.replace(/\/+$/, "");
+    return `${base}/api/v1/dashboard/html?slug=${encodeURIComponent(slug)}`;
   },
 
   query(baseUrl: string, dashboardSlug: string, querySlug: string, params?: Record<string, unknown>): Promise<unknown> {
@@ -384,8 +394,17 @@ export const dashboardApi = {
 // ─── Report API ──────────────────────────────────────────────────────────────
 
 export const reportApi = {
+  list(baseUrl: string): Promise<ArtifactManifest[] | null> {
+    return apiResult(baseUrl, "/api/v1/report/list");
+  },
+
   detail(baseUrl: string, slug: string): Promise<ReportDetail | null> {
     return apiResult(baseUrl, `/api/v1/report/detail?slug=${encodeURIComponent(slug)}`);
+  },
+
+  htmlUrl(baseUrl: string, slug: string): string {
+    const base = baseUrl.replace(/\/+$/, "");
+    return `${base}/api/v1/report/html?slug=${encodeURIComponent(slug)}`;
   },
 };
 

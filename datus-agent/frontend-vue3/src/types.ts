@@ -14,7 +14,8 @@ export type MessageBlock =
   | { type: "markdown"; content: string }
   | { type: "tool-call"; toolName: string; params: unknown }
   | { type: "tool-result"; toolName: string; duration?: number; shortDesc?: string; result?: unknown }
-  | { type: "user-interaction"; interactionKey: string; actionType: string; requests: UserInteractionRequest[] };
+  | { type: "user-interaction"; interactionKey: string; actionType: string; requests: UserInteractionRequest[] }
+  | { type: "artifact"; kind: string; slug: string; name: string; description?: string };
 
 export type UserInteractionRequest = {
   content: string;
@@ -73,7 +74,7 @@ export type CatalogRecord = Record<string, unknown>;
 
 // ─── Navigation ──────────────────────────────────────────────────────────────
 
-export type ViewType = "chat" | "knowledge" | "mcp" | "sql" | "settings";
+export type ViewType = "chat" | "knowledge" | "mcp" | "sql" | "dashboard" | "report" | "settings";
 
 // ─── Agent Management ────────────────────────────────────────────────────────
 
@@ -369,6 +370,9 @@ export type ArtifactManifest = {
   description: string;
   kind?: string;
   created_at?: string;
+  updated_at?: string;
+  datasources?: string[];
+  key_tables?: string[];
 };
 
 export type ArtifactFile = {

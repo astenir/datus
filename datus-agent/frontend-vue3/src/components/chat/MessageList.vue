@@ -24,6 +24,10 @@ const props = defineProps({
   }
 });
 
+const emit = defineEmits<{
+  "open-artifact": [kind: string, slug: string];
+}>();
+
 const scrollContainer = useTemplateRef<HTMLDivElement>("scrollContainer");
 
 // Hide streaming indicator when the last block is a user-interaction (backend is waiting for input)
@@ -88,7 +92,7 @@ watch(
           <ErrorBoundary :fallback-text="item.content">
             <Suspense>
               <template #default>
-                <MessageContent :message="item" :session-id="sessionId ?? undefined" :is-streaming="isStreaming" />
+                <MessageContent :message="item" :session-id="sessionId ?? undefined" :is-streaming="isStreaming" @open-artifact="(kind, slug) => emit('open-artifact', kind, slug)" />
               </template>
               <template #fallback>
                 <div class="markdownBody">{{ item.content }}</div>
