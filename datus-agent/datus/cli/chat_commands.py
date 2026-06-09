@@ -22,7 +22,13 @@ from rich.syntax import Syntax
 from datus.agent.node.chat_agentic_node import ChatAgenticNode
 from datus.cli.action_display.display import ActionHistoryDisplay
 from datus.cli.action_display.renderers import render_assistant_response_markdown
-from datus.cli.cli_styles import CODE_THEME, print_error, print_success
+from datus.cli.cli_styles import (
+    CODE_THEME,
+    print_error,
+    print_success,
+    render_compact_progress_line,
+    render_compact_summary_panel,
+)
 from datus.cli.execution_state import ExecutionInterrupted, PendingInputQueue, auto_submit_interaction
 from datus.cli.list_selector_app import ListItem, ListSelectorApp
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
@@ -45,6 +51,7 @@ def _noop_escape_guard():
 
 
 if TYPE_CHECKING:
+    from datus.agent.node.agentic_node import AgenticNode
     from datus.cli.repl import DatusCLI
 
 logger = get_logger(__name__)
@@ -180,7 +187,7 @@ class ChatCommands:
             logger.warning(f"Failed to copy session on agent switch, starting fresh: {e}")
             return None
 
-    def _create_new_node(self, subagent_name: str = None, session_id: Optional[str] = None):
+    def _create_new_node(self, subagent_name: Optional[str] = None, session_id: Optional[str] = None) -> "AgenticNode":
         """Create new node based on subagent_name and configuration.
 
         Delegates to the shared node factory for actual node creation.
@@ -191,13 +198,42 @@ class ChatCommands:
         """
         from datus.agent.node.node_factory import create_interactive_node
 
-        return create_interactive_node(
+        node = create_interactive_node(
             subagent_name,
             self.cli.agent_config,
             node_id_suffix="_cli",
             scope=self.cli.scope,
             session_id=session_id,
         )
+        self._attach_status_dirty_callback(node)
+        return node
+
+    def _attach_status_dirty_callback(self, node: "AgenticNode") -> None:
+        """Wire ``TokenUsageHook`` mid-turn refreshes to ``DatusApp.invalidate``.
+
+        The hook fires after every LLM call; without an explicit invalidate
+        the status bar would only repaint on the periodic timer tick, which
+        defeats the purpose of streaming the usage updates. Looked up
+        lazily so the callback works regardless of whether ``tui_app`` is
+        already built when the node is created.
+        """
+        if node is None:
+            return
+        cli = self.cli
+
+        def _on_status_dirty() -> None:
+            app = getattr(cli, "tui_app", None)
+            if app is None:
+                return
+            try:
+                app.invalidate()
+            except Exception:  # noqa: BLE001 — never crash the run loop
+                pass
+
+        try:
+            node._status_dirty_callback = _on_status_dirty
+        except Exception:  # noqa: BLE001
+            pass
 
     def create_node_input(
         self,
@@ -215,18 +251,61 @@ class ChatCommands:
         """
         from datus.agent.node.node_factory import create_node_input as _create_node_input
 
+        catalog, database, db_schema = self._resolve_database_context()
         node_input = _create_node_input(
             user_message=user_message,
             node=current_node,
-            catalog=self.cli.cli_context.current_catalog or None,
-            database=self.cli.cli_context.current_db_name or None,
-            db_schema=self.cli.cli_context.current_schema or None,
+            catalog=catalog,
+            database=database,
+            db_schema=db_schema,
             at_tables=at_tables,
             at_metrics=at_metrics,
             at_sqls=at_sqls,
             plan_mode=plan_mode,
         )
         return node_input, current_node.type
+
+    def _resolve_database_context(self):
+        """Resolve catalog/database/schema for chat node input.
+
+        The CLI context is the active interactive state, but it starts empty
+        before connection initialization. Fall back to the live connector and
+        then to the datasource configuration so configured database names still
+        reach the prompt when the context was not hydrated.
+        """
+        cli_context = self.cli.cli_context
+        connector = getattr(self.cli, "db_connector", None)
+        config = None
+        agent_config = getattr(self.cli, "agent_config", None)
+        if agent_config is not None:
+            try:
+                config = agent_config.current_db_config()
+            except Exception:
+                config = None
+
+        def first_string(*values):
+            for value in values:
+                if isinstance(value, str) and value:
+                    return value
+            return None
+
+        return (
+            first_string(
+                getattr(cli_context, "current_catalog", None),
+                getattr(connector, "catalog_name", None),
+                getattr(config, "catalog", None),
+            ),
+            first_string(
+                getattr(cli_context, "current_db_name", None),
+                getattr(connector, "database_name", None),
+                getattr(config, "database", None),
+            ),
+            first_string(
+                getattr(cli_context, "current_schema", None),
+                getattr(connector, "schema_name", None),
+                getattr(config, "schema", None),
+            ),
+        )
 
     @staticmethod
     def _render_agent_dispatch_hint(message: str, agent_name: str) -> str:
@@ -444,6 +523,17 @@ class ChatCommands:
                             action_history_manager=self.cli.actions
                         )
                         async for action in action_stream:
+                            # Token-usage updates drive the status bar / API
+                            # ``usage`` events only; they carry no chat content
+                            # and must never render as a transcript line. Sub-agent
+                            # usage (depth>0) is the exception: route it to the
+                            # display so the pinned subagent header shows a live
+                            # token counter (the display consumes it into group
+                            # state, still without drawing a transcript line).
+                            if action.action_type == "token_usage":
+                                if action.depth > 0:
+                                    incremental_actions.append(action)
+                                continue
                             # Streaming text deltas go to their own queue. Sub-agent
                             # deltas (depth > 0) are ignored here — they'd pollute
                             # the main-agent accumulator; sub-agents have their own
@@ -572,6 +662,15 @@ class ChatCommands:
                             action_history_manager=self.cli.actions
                         )
                         async for action in action_stream:
+                            # Token-usage updates feed the status bar / API
+                            # ``usage`` events only — skip before any rendering.
+                            # Sub-agent usage (depth>0) is routed to the display
+                            # so the pinned subagent header's live token counter
+                            # updates; it is still never drawn as a transcript line.
+                            if action.action_type == "token_usage":
+                                if action.depth > 0:
+                                    incremental_actions.append(action)
+                                continue
                             if action.role == ActionRole.INTERACTION:
                                 # In non-interactive mode, auto-submit default choice for
                                 # PROCESSING interactions so the node is not left hanging.
@@ -1422,7 +1521,14 @@ class ChatCommands:
         self.cli.console.print("[bold bright_black]Press Ctrl+O to toggle trace details.[/]")
 
     def cmd_compact(self, args: str):
-        """Manually compact the current session by summarizing conversation history."""
+        """Manually trigger a major compact on the current session.
+
+        ``/compact`` always runs the LLM-driven major summarization pass.
+        Minor compact is driven by the rolling-window trigger inside the
+        agent loop and has no useful manual variant — if its conditions
+        aren't met, the call would be a no-op; if they are, it has already
+        run automatically. So the CLI only exposes ``major``.
+        """
         if not self.current_node:
             self.console.print("[yellow]No active session to compact.[/]")
             return
@@ -1433,27 +1539,28 @@ class ChatCommands:
             return
 
         try:
-            # Determine node type for display
-            node_type = "Chat" if isinstance(self.current_node, ChatAgenticNode) else "Subagent"
+            # In-progress hint (reuses the same helper as the auto path).
+            self.console.print(render_compact_progress_line())
 
-            # Display session info before compacting
-            self.console.print(f"[bold blue]Compacting {node_type} Session...[/]")
-            self.console.print(f"  Current Session ID: {session_info['session_id']}")
-            self.console.print(f"  Current Token Count: {session_info['token_count']}")
-            self.console.print(f"  Current Action Count: {session_info['action_count']}")
-
-            # Call the manual compact method asynchronously
             async def run_compact():
-                return await self.current_node._manual_compact()
+                return await self.current_node.compact(mode="major", reason="cli_manual")
 
-            # Run the compact operation
             result = asyncio.run(run_compact())
 
             if result.get("success"):
-                self.console.print("[green]✓ Session compacted successfully![/]")
-                self.console.print(f"  New Token Count: {result.get('new_token_count', 'N/A')}")
-                self.console.print(f"  Tokens Saved: {result.get('tokens_saved', 'N/A')}")
-                self.console.print(f"  Compression Ratio: {result.get('compression_ratio', 'N/A')}")
+                # Clear the screen and surface the summary panel — identical to
+                # the auto (mid-turn) path's rendering, so both entry points
+                # present the compacted context the same way. Use the TUI-safe
+                # helper: ``console.clear()`` only injects escape bytes into the
+                # full-screen ``TUIOutputBuffer`` instead of wiping the viewport.
+                self._clear_scrollback()
+                self.console.print(
+                    render_compact_summary_panel(
+                        str(result.get("summary", "") or ""),
+                        int(result.get("summary_token", 0) or 0),
+                        str(result.get("history_jsonl", "") or ""),
+                    )
+                )
 
                 # Reload in-memory state from the compacted session
                 self._reload_state_from_session()

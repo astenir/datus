@@ -45,6 +45,14 @@ logger = get_logger(__name__)
 EMBEDDING_DEVICE_TYPE = ""
 
 
+def _clean_exception_message(error: BaseException | str) -> str:
+    message = str(error)
+    marker = "error_message="
+    if marker in message:
+        return message.split(marker, 1)[1]
+    return message
+
+
 @dataclass
 class EmbeddingModel:
     model_name: str
@@ -102,25 +110,13 @@ class EmbeddingModel:
         """Get the embedding model, with lazy loading and error handling."""
         # If model initialization failed before, raise exception
         if self.is_model_failed:
-            # If the stored error is already a formatted DatusException message, use it directly
-            if "error_code=" in self.model_error_message:
-                # Extract just the core error message without the DatusException wrapper
-                import re
-
-                match = re.search(r"error_message=(.+)$", self.model_error_message)
-                if match:
-                    core_message = match.group(1)
-                else:
-                    core_message = self.model_error_message
-                raise DatusException(
-                    ErrorCode.MODEL_EMBEDDING_ERROR,
-                    message=f"Embedding model '{self.model_name}' is not available: {core_message}",
-                )
-            else:
-                raise DatusException(
-                    ErrorCode.MODEL_EMBEDDING_ERROR,
-                    message=f"Embedding model '{self.model_name}' is not available: {self.model_error_message}",
-                )
+            raise DatusException(
+                ErrorCode.MODEL_EMBEDDING_ERROR,
+                message=(
+                    f"Embedding model '{self.model_name}' is not available: "
+                    f"{_clean_exception_message(self.model_error_message)}"
+                ),
+            )
 
         # Lazy load the model
         if self._model is None:
@@ -130,17 +126,50 @@ class EmbeddingModel:
                         self.model_initialization_attempted = True
                         logger.debug(f"Loading embedding model: {self.model_name} on {self.device}")
                         self.init_model()
-                    except Exception as e:
-                        # Save error state, don't immediately raise exception
+                        if self._model is None:
+                            raise DatusException(
+                                ErrorCode.MODEL_EMBEDDING_ERROR,
+                                message=f"Embedding model '{self.model_name}' initialization produced no model",
+                            )
+                    except DatusException as e:
                         self.is_model_failed = True
-                        self.model_error_message = str(e)
+                        self.model_error_message = _clean_exception_message(e)
                         logger.error(f"Failed to load embedding model '{self.model_name}': {e}")
+                        raise
+                    except Exception as e:
+                        self.is_model_failed = True
+                        self.model_error_message = _clean_exception_message(e)
+                        logger.error(f"Failed to load embedding model '{self.model_name}': {e}")
+                        raise DatusException(
+                            ErrorCode.MODEL_EMBEDDING_ERROR,
+                            message=(
+                                f"Embedding model '{self.model_name}' initialization failed: {self.model_error_message}"
+                            ),
+                        ) from e
 
         return self._model
 
     def is_model_available(self) -> bool:
         """Check if the model is available without triggering initialization."""
         return not self.is_model_failed and (self._model is not None or not self.model_initialization_attempted)
+
+    def has_local_fastembed_snapshot(self) -> bool:
+        """Return whether FastEmbed artifacts are locally cached without downloading."""
+        if self.registry_name not in (EmbeddingProvider.SENTENCE_TRANSFORMERS, EmbeddingProvider.FASTEMBED):
+            return True
+
+        from datus.storage.fastembed_embeddings import FastEmbedEmbeddings, has_local_snapshot
+
+        model_name = FastEmbedEmbeddings._normalize_model_name(self.model_name)
+        if self._model is not None and not isinstance(self._model, FastEmbedEmbeddings):
+            return True
+
+        cache_dir = self._model.cache_dir if self._model is not None else None
+        if cache_dir is None:
+            from datus.storage.embedding_diagnostics import resolve_fastembed_cache_dir
+
+            cache_dir = resolve_fastembed_cache_dir()
+        return has_local_snapshot(model_name, cache_dir)
 
     async def init_model_async(self):
         """Asynchronously initialize the embedding model."""
@@ -174,7 +203,7 @@ class EmbeddingModel:
             except Exception as e:
                 # Save error state silently
                 self.is_model_failed = True
-                self.model_error_message = str(e)
+                self.model_error_message = _clean_exception_message(e)
                 logger.warning(f"Silent initialization failed for embedding model '{self.model_name}': {e}")
                 return False
 
@@ -194,9 +223,12 @@ class EmbeddingModel:
                 )
                 # first download
                 logger.debug(f"Model {self.registry_name}/{self.model_name} initialized successfully")
+            except DatusException:
+                raise
             except Exception as e:
                 raise DatusException(
-                    ErrorCode.MODEL_EMBEDDING_ERROR, message=f"Embedding Model initialized failed because of {str(e)}"
+                    ErrorCode.MODEL_EMBEDDING_ERROR,
+                    message=f"Embedding model '{self.model_name}' initialization failed: {str(e)}",
                 ) from e
 
         elif self.registry_name == EmbeddingProvider.OPENAI:

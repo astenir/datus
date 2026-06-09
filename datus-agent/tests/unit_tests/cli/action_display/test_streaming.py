@@ -315,6 +315,94 @@ class TestSyncModeSubagentGroups:
 
 
 @pytest.mark.ci
+class TestSubagentTokenCounter:
+    """The pinned subagent header / collapsed Done line surface the subagent's
+    cumulative token total (+ cached) fed by depth>0 ``token_usage`` actions."""
+
+    def _ctx(self, actions=None):
+        buf = StringIO()
+        console = Console(file=buf, no_color=True)
+        display = ActionHistoryDisplay(console)
+        return InlineStreamingContext(actions or [], display, sync_mode=True)
+
+    def _usage_action(self, parent_id, input_tokens, output_tokens, cached):
+        return _make_action(
+            ActionRole.ASSISTANT,
+            ActionStatus.SUCCESS,
+            depth=1,
+            action_type="token_usage",
+            output_data={
+                "cumulative": {
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "cached_tokens": cached,
+                }
+            },
+            parent_action_id=parent_id,
+        )
+
+    def test_apply_subagent_usage_folds_totals(self):
+        group = {"token_input": 0, "token_output": 0, "token_cached": 0, "actions": []}
+        consumed = InlineStreamingContext._apply_subagent_usage(group, self._usage_action("g", 12603, 2048, 8192))
+        assert consumed is True
+        assert group["token_input"] == 12603
+        assert group["token_output"] == 2048
+        assert group["token_cached"] == 8192
+
+    def test_apply_subagent_usage_ignores_non_usage(self):
+        group = {"token_input": 5, "token_output": 3, "token_cached": 1}
+        action = _make_action(ActionRole.TOOL, ActionStatus.SUCCESS, depth=1, action_type="read_query")
+        assert InlineStreamingContext._apply_subagent_usage(group, action) is False
+        # Non-usage action must not perturb the counters.
+        assert group["token_input"] == 5
+        assert group["token_output"] == 3
+        assert group["token_cached"] == 1
+
+    def test_usage_action_updates_group_without_buffering_a_row(self):
+        """A token_usage action must update the group's counters but never be
+        buffered into ``actions`` (which would draw a bogus tool row), and must
+        not bump the tool count."""
+        ctx = self._ctx()
+        gid = "call-1"
+        first = _make_action(
+            ActionRole.TOOL, ActionStatus.PROCESSING, action_id=gid, action_type="task", input_data={"type": "gen_sql"}
+        )
+        ctx._start_subagent_group_sync(first, gid)
+        ctx._update_subagent_display_sync(self._usage_action(gid, 9000, 1500, 4000), gid)
+        group = ctx._subagent_groups[gid]
+        assert group["token_input"] == 9000
+        assert group["token_output"] == 1500
+        assert group["token_cached"] == 4000
+        assert group["actions"] == []  # usage never buffered as a render row
+        assert group["tool_count"] == 0  # usage is not a tool
+
+    def test_header_segments_include_token_counter(self):
+        first = _make_action(
+            ActionRole.TOOL, ActionStatus.PROCESSING, action_id="g", action_type="task", input_data={"type": "gen_sql"}
+        )
+        segments = InlineStreamingContext._build_subagent_header_segments(
+            first, token_input=12603, token_output=2048, token_cached=8192
+        )
+        joined = "".join(text for _style, text in segments)
+        assert "gen_sql" in joined
+        assert "↑12K(8.0K) ↓2.0K" in joined
+
+    def test_header_segments_omit_counter_when_no_tokens(self):
+        first = _make_action(
+            ActionRole.TOOL, ActionStatus.PROCESSING, action_id="g", action_type="task", input_data={"type": "gen_sql"}
+        )
+        segments = InlineStreamingContext._build_subagent_header_segments(first)
+        joined = "".join(text for _style, text in segments)
+        assert "↑" not in joined
+        assert "↓" not in joined
+
+    def test_token_suffix_formatting(self):
+        assert InlineStreamingContext._subagent_token_suffix(0, 0, 0) == ""
+        assert InlineStreamingContext._subagent_token_suffix(2048, 512, 0) == " · ↑2.0K ↓0.5K"
+        assert InlineStreamingContext._subagent_token_suffix(12603, 2048, 8192) == " · ↑12K(8.0K) ↓2.0K"
+
+
+@pytest.mark.ci
 class TestPathAGate:
     """Regression coverage for the task-PROCESSING anchor contract.
 
@@ -1743,3 +1831,162 @@ class TestStreamingMarkdown:
         # Finalize with an empty buffer must not set the latch either.
         ctx._finalize_markdown_stream()
         assert ctx.has_streamed_response is False
+
+
+@pytest.mark.ci
+class TestCompactRendering:
+    """compact_progress / compact_summary rendering: in-progress hint vs.
+    clear-screen + summary panel."""
+
+    def _ctx(self, buf):
+        console = Console(file=buf, no_color=True, width=100)
+        display = ActionHistoryDisplay(console)
+        return InlineStreamingContext([], display, sync_mode=True), console
+
+    def test_compact_summary_clears_then_renders_panel(self):
+        buf = StringIO()
+        ctx, console = self._ctx(buf)
+        cleared = []
+        console.clear = lambda *a, **k: cleared.append(True)
+        action = _make_action(
+            ActionRole.ASSISTANT,
+            ActionStatus.SUCCESS,
+            action_type="compact_summary",
+            output_data={"summary": "Recap body", "summary_token": 5, "history_jsonl": "/h.jsonl"},
+        )
+        ctx._render_compact_action(action)
+        assert cleared  # screen was cleared before printing the panel
+        out = buf.getvalue()
+        assert "Recap body" in out
+        assert "Context compacted" in out
+
+    def test_compact_summary_prefers_clear_screen_callback_in_tui(self):
+        buf = StringIO()
+        ctx, console, _live_state = self._ctx_tui(buf)
+        cb = MagicMock()
+        ctx._clear_screen_callback = cb
+        console.clear = MagicMock()  # must NOT be used when a TUI callback exists
+        action = _make_action(
+            ActionRole.ASSISTANT,
+            ActionStatus.SUCCESS,
+            action_type="compact_summary",
+            output_data={"summary": "X"},
+        )
+        ctx._render_compact_action(action)
+        cb.assert_called_once()
+        console.clear.assert_not_called()
+
+    def _ctx_tui(self, buf):
+        console = Console(file=buf, no_color=True, width=100)
+        display = ActionHistoryDisplay(console)
+        live_state = MagicMock()
+        ctx = InlineStreamingContext([], display, sync_mode=True, live_state=live_state)
+        return ctx, console, live_state
+
+    def test_compact_progress_uses_pinned_region_not_scrollback(self):
+        """compact_progress must NOT append to the committed scrollback; it sets
+        a pinned-region flag so repeated majors overwrite a single line instead
+        of stacking."""
+        buf = StringIO()
+        ctx, console, live_state = self._ctx_tui(buf)
+        console.clear = MagicMock()
+        action = _make_action(ActionRole.ASSISTANT, ActionStatus.PROCESSING, action_type="compact_progress")
+        ctx._render_compact_action(action)
+        assert ctx._compact_in_progress is True
+        console.clear.assert_not_called()
+        assert buf.getvalue() == ""  # nothing appended to scrollback
+        live_state.set_lines.assert_called()  # pinned hint drawn via _repaint_live
+
+    def test_repeated_compact_progress_does_not_stack_in_scrollback(self):
+        buf = StringIO()
+        ctx, _console, _live_state = self._ctx_tui(buf)
+        a = _make_action(ActionRole.ASSISTANT, ActionStatus.PROCESSING, action_type="compact_progress")
+        ctx._render_compact_action(a)
+        ctx._render_compact_action(a)
+        assert buf.getvalue() == ""  # two progress hints, still nothing stacked
+        assert ctx._compact_in_progress is True
+
+    def test_repaint_live_draws_single_compact_line_when_in_progress(self):
+        buf = StringIO()
+        ctx, _console, live_state = self._ctx_tui(buf)
+        ctx._compact_in_progress = True
+        ctx._repaint_live()
+        live_state.set_lines.assert_called_once()
+        lines = live_state.set_lines.call_args.args[0]
+        assert len(lines) == 1  # exactly one pinned line — never stacks
+
+    def test_compact_summary_clears_progress_flag(self):
+        buf = StringIO()
+        ctx, _console, _live_state = self._ctx_tui(buf)
+        ctx._compact_in_progress = True
+        action = _make_action(
+            ActionRole.ASSISTANT,
+            ActionStatus.SUCCESS,
+            action_type="compact_summary",
+            output_data={"summary": "Recap"},
+        )
+        ctx._render_compact_action(action)
+        assert ctx._compact_in_progress is False
+
+    def test_compact_summary_empty_clears_flag_without_clearing_screen(self):
+        """A failed/empty summary (no summary text) must drop the pinned hint
+        but NOT wipe the screen or draw a panel."""
+        buf = StringIO()
+        ctx, console, _live = self._ctx_tui(buf)
+        console.clear = MagicMock()
+        ctx._compact_in_progress = True
+        action = _make_action(
+            ActionRole.ASSISTANT,
+            ActionStatus.SUCCESS,
+            action_type="compact_summary",
+            output_data={"summary": ""},
+        )
+        ctx._render_compact_action(action)
+        assert ctx._compact_in_progress is False
+        console.clear.assert_not_called()
+        assert buf.getvalue() == ""  # no panel printed
+
+    def test_process_actions_dispatches_compact_summary_to_renderer(self):
+        buf = StringIO()
+        ctx, _console = self._ctx(buf)
+        ctx._render_compact_action = MagicMock()
+        ctx.actions = [
+            _make_action(
+                ActionRole.ASSISTANT,
+                ActionStatus.PROCESSING,
+                action_type="compact_progress",
+            ),
+            _make_action(
+                ActionRole.ASSISTANT,
+                ActionStatus.SUCCESS,
+                action_type="compact_summary",
+                output_data={"summary": "X"},
+            ),
+        ]
+        ctx._processed_index = 0
+        ctx._process_actions()
+        # Both the in-progress hint and the final summary route to the renderer.
+        assert ctx._render_compact_action.call_count == 2
+        assert ctx._processed_index == 2
+
+    def test_flush_remaining_dispatches_compact_summary_to_renderer(self):
+        buf = StringIO()
+        ctx, _console = self._ctx(buf)
+        ctx._render_compact_action = MagicMock()
+        ctx.actions = [
+            _make_action(
+                ActionRole.ASSISTANT,
+                ActionStatus.PROCESSING,
+                action_type="compact_progress",
+            ),
+            _make_action(
+                ActionRole.ASSISTANT,
+                ActionStatus.SUCCESS,
+                action_type="compact_summary",
+                output_data={"summary": "X"},
+            ),
+        ]
+        ctx._processed_index = 0
+        ctx._flush_remaining_actions()
+        # Both the in-progress hint and the final summary route to the renderer.
+        assert ctx._render_compact_action.call_count == 2

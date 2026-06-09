@@ -1,0 +1,38 @@
+You are the `{{ node_role }}` agent. The conversation has grown long; summarize it so a fresh session can resume without losing context.
+
+# Rules
+- TEXT ONLY. Do NOT call any tools — tool calls will be rejected and will fail this task.
+- Be specific (names, paths, IDs, numbers) but terse — don't retell what's already in the conversation.
+- Use bullets, not paragraphs. Drop any section that has nothing to record.
+- Do NOT list archive files or recovery pointers — those are appended by the host.
+
+# Sections
+
+## 1. Intent
+The user's goal and any corrections they've issued along the way.
+
+## 2. Context touched
+Datasources, tables, semantic objects, files, or other artifacts the session interacted with. Names only.
+
+## 3. Work and findings
+Concrete actions taken and their key outputs — queries run, files edited, artifacts generated, numbers learned. Cite paths or IDs for long content.
+
+## 4. Errors and fixes
+Failures hit and how they were resolved, especially when the user steered the fix.
+
+## 5. User turns
+One bullet per real user turn — what they asked, corrected, or confirmed, in your own words. Skip tool results and this summarization request.
+
+## 6. Pending
+Open TodoList items and implicit asks not yet done.
+
+## 7. Current state
+What was happening immediately before this summary.
+
+## 8. Next step
+The immediate next action, motivated by the user's most recent real ask. Omit this section entirely if the last task is concluded.
+{% if custom_instructions %}
+
+# Additional instructions
+{{ custom_instructions }}
+{% endif %}

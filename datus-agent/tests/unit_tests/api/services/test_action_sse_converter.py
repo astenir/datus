@@ -1,5 +1,6 @@
 """Tests for datus.api.services.action_sse_converter — ActionHistory to SSE conversion."""
 
+import json
 from datetime import datetime, timedelta
 
 from datus.api.models.cli_models import IMessageContent, SSEDataType, SSEEvent
@@ -97,6 +98,20 @@ class TestExtractFunction:
         assert name == "fn"
         assert args == {}
 
+    def test_archived_arguments_marker_no_longer_parsed(self):
+        """``function_call.arguments`` is never archived anymore, so a marker
+        string in ``arguments`` is just opaque, non-dict content. The SSE layer
+        unwraps the JSON string and falls back to ``{}`` — it must NOT emit the
+        old ``archived/preview`` payload.
+        """
+        marker = "[DATUS_ARCHIVED] path=/sessions/p/sid/data/000004_args_a1b2c3d4.json preview=SELECT * FROM orders"
+        action = _make_action(
+            input={"function_name": "execute_sql", "arguments": json.dumps(marker)},
+        )
+        name, args = _extract_function(action)
+        assert name == "execute_sql"
+        assert args == {}
+
 
 # ------------------------------------------------------------------
 # Content builders
@@ -118,6 +133,18 @@ class TestBuildToolCallContent:
         assert contents[0].payload["callToolId"] == "tool-123"
         assert contents[0].payload["toolName"] == "search_table_metadata"
         assert contents[0].payload["toolParams"] == {"query": "revenue"}
+
+    def test_archived_arguments_marker_falls_back_to_empty_params(self):
+        """A marker string in ``arguments`` (only possible in legacy sessions)
+        is no longer special-cased; it yields empty ``toolParams``.
+        """
+        marker = "[DATUS_ARCHIVED] path=/x/000004_args_dead.json preview=COPY orders FROM 's3://...'"
+        action = _make_action(
+            action_id="tool-arch-1",
+            input={"function_name": "execute_sql", "arguments": json.dumps(marker)},
+        )
+        contents = _build_tool_call_content(action)
+        assert contents[0].payload["toolParams"] == {}
 
 
 class TestBuildToolResultContent:
@@ -235,6 +262,51 @@ class TestBuildToolResultContent:
         contents = _build_tool_result_content(action)
 
         assert contents[0].payload["result"] == {"success": 1, "result": [{"name": "orders"}]}
+
+    def test_archived_output_in_session_manager_envelope_surfaces_preview(self):
+        """SessionManager stores archived outputs as ``{"result": "<marker>"}``.
+
+        That dict satisfies ``_is_tool_result_envelope`` (set of keys is
+        ``{"result"}``), so the unwrap returns the marker string. The
+        converter must then detect the marker and replace ``result`` with the
+        ``archived/preview`` payload instead of leaking the raw
+        ``[DATUS_ARCHIVED] path=...`` line to the web UI.
+        """
+        marker = "[DATUS_ARCHIVED] path=/sessions/p/sid/data/000007_output_cafef00d.txt preview={'success': 1, 'rows': [...]}"
+        action = _make_action(
+            action_id="complete_tool-arch-2",
+            status=ActionStatus.SUCCESS,
+            input={"function_name": "execute_sql"},
+            output={"result": marker},
+        )
+
+        contents = _build_tool_result_content(action)
+
+        assert contents[0].payload["result"] == {
+            "success": 1,
+            "result": {"archived": True, "preview": "{'success': 1, 'rows': [...]}"},
+        }
+        assert "error" not in contents[0].payload
+
+    def test_archived_output_as_bare_raw_output_surfaces_preview(self):
+        """Defensive path: when the marker arrives as a bare ``raw_output``
+        string (no enclosing envelope), the converter still surfaces the
+        preview rather than passing the raw marker through.
+        """
+        marker = "[DATUS_ARCHIVED] path=/x/000009_output_beefdeadbeef.txt preview=Traceback line 1, line 2"
+        action = _make_action(
+            action_id="complete_tool-arch-3",
+            status=ActionStatus.SUCCESS,
+            input={"function_name": "run_cmd"},
+            output={"raw_output": marker},
+        )
+
+        contents = _build_tool_result_content(action)
+
+        assert contents[0].payload["result"] == {
+            "success": 1,
+            "result": {"archived": True, "preview": "Traceback line 1, line 2"},
+        }
 
     def test_failed_func_tool_envelope_uses_nested_error(self):
         """Failed FuncToolResult-shaped output exposes the nested error to the card."""
@@ -1377,3 +1449,155 @@ class TestActionToSSEEvent:
         assert content.payload["subagentType"] == "explore"
         assert content.payload["toolCount"] == 3
         assert content.payload["error"] == "sub-agent timed out"
+
+
+class TestTokenUsageEvent:
+    """``token_usage`` actions become dedicated ``event: "usage"`` SSE events."""
+
+    def test_emits_usage_event_with_cumulative_and_delta(self):
+        from datus.api.models.cli_models import SSEUsageData
+
+        action = _make_action(
+            action_type="token_usage",
+            role=ActionRole.ASSISTANT,
+            status=ActionStatus.SUCCESS,
+            messages="",
+            output={
+                "cumulative": {
+                    "requests": 2,
+                    "input_tokens": 1200,
+                    "output_tokens": 300,
+                    "total_tokens": 1500,
+                    "cached_tokens": 100,
+                    "reasoning_tokens": 50,
+                },
+                "delta": {
+                    "requests": 1,
+                    "input_tokens": 700,
+                    "output_tokens": 200,
+                    "total_tokens": 900,
+                    "cached_tokens": 0,
+                    "reasoning_tokens": 0,
+                },
+                "context_length": 200_000,
+                "last_call_input_tokens": 700,
+            },
+        )
+        event = action_to_sse_event(action, event_id=99, message_id="msg-99")
+        event = _assert_sse_event(event)
+        # Dedicated SSE channel; not a message payload.
+        assert event.event == "usage"
+        assert isinstance(event.data, SSEUsageData)
+        assert event.data.total_tokens == 1500
+        assert event.data.cached_tokens == 100
+        assert event.data.reasoning_tokens == 50
+        assert event.data.last_call_input_tokens == 700
+        assert event.data.context_length == 200_000
+        # Delta carries only the most recent LLM call's contribution.
+        assert event.data.delta.total_tokens == 900
+        assert event.data.delta.input_tokens == 700
+        assert event.data.delta.output_tokens == 200
+
+    def test_missing_output_fields_zero_fill_instead_of_crashing(self):
+        """Defensive: a malformed ``token_usage`` action should still emit a
+        valid usage event with zero counts so downstream consumers don't
+        choke on a missing key."""
+        from datus.api.models.cli_models import SSEUsageData
+
+        action = _make_action(action_type="token_usage", output={"cumulative": {}, "delta": None})
+        event = action_to_sse_event(action, event_id=1, message_id="msg-1")
+        event = _assert_sse_event(event)
+        assert event.event == "usage"
+        assert isinstance(event.data, SSEUsageData)
+        assert event.data.total_tokens == 0
+        assert event.data.delta.total_tokens == 0
+        assert event.data.context_length == 0
+
+    def test_non_numeric_fields_coerce_to_zero(self):
+        """Non-numeric ``context_length`` / ``last_call_input_tokens`` and a
+        non-numeric cumulative count must coerce to 0 instead of crashing the
+        converter."""
+        action = _make_action(
+            action_type="token_usage",
+            role=ActionRole.ASSISTANT,
+            status=ActionStatus.SUCCESS,
+            output={
+                "cumulative": {"input_tokens": "abc", "total_tokens": 1500},
+                "delta": {},
+                "context_length": "n/a",
+                "last_call_input_tokens": "oops",
+            },
+        )
+        event = _assert_sse_event(action_to_sse_event(action, event_id=7, message_id="m"))
+        assert event.data.context_length == 0
+        assert event.data.last_call_input_tokens == 0
+        assert event.data.input_tokens == 0  # "abc" coerced via _i
+        assert event.data.total_tokens == 1500
+
+    def test_main_agent_usage_is_depth_zero(self):
+        """Main-agent usage carries depth=0 and no parent — the marker the API
+        consumer uses to treat it as the top-level usage meter."""
+        action = _make_action(
+            action_type="token_usage",
+            role=ActionRole.ASSISTANT,
+            status=ActionStatus.SUCCESS,
+            output={"cumulative": {"total_tokens": 100}, "delta": {}, "agent_session_id": "chat_session_main"},
+        )
+        event = _assert_sse_event(action_to_sse_event(action, event_id=1, message_id="m"))
+        assert event.data.depth == 0
+        assert event.data.parent_action_id is None
+        # Producing session surfaced so the consumer can attribute it.
+        assert event.data.llm_session_id == "chat_session_main"
+
+    def test_subagent_usage_carries_depth_and_parent_and_own_session(self):
+        """Sub-agent usage (depth>0) is distinguishable via depth + parent task
+        id, and keeps the sub-agent's own session id (not the parent's)."""
+        action = _make_action(
+            action_type="token_usage",
+            role=ActionRole.ASSISTANT,
+            status=ActionStatus.SUCCESS,
+            depth=1,
+            parent_action_id="task-call-77",
+            output={
+                "cumulative": {"input_tokens": 9000, "output_tokens": 800, "total_tokens": 9800},
+                "delta": {},
+                "agent_session_id": "gen_sql_session_abc",
+            },
+        )
+        event = _assert_sse_event(action_to_sse_event(action, event_id=2, message_id="m"))
+        assert event.data.depth == 1
+        assert event.data.parent_action_id == "task-call-77"
+        assert event.data.llm_session_id == "gen_sql_session_abc"
+        assert event.data.input_tokens == 9000
+        assert event.data.output_tokens == 800
+
+
+class TestCompactActions:
+    """compact_progress / compact_summary SSE conversion (display layer is REPL-only;
+    the API just forwards a markdown bubble with a ``kind`` marker, never clears)."""
+
+    def test_compact_summary_produces_markdown_message(self):
+        action = _make_action(
+            action_type="compact_summary",
+            output={"summary": "# Recap\nDid X.", "summary_token": 77, "history_jsonl": "/h.jsonl"},
+        )
+        event = action_to_sse_event(action, event_id=7, message_id="msg-7")
+        event = _assert_sse_event(event)
+        assert event.event == "message"
+        assert event.data.type == SSEDataType.CREATE_MESSAGE
+        content = event.data.payload.content[0]
+        assert content.type == "markdown"
+        assert content.payload["content"] == "# Recap\nDid X."
+        assert content.payload["kind"] == "compact_summary"
+        assert content.payload["summary_token"] == 77
+        # ``history_jsonl`` is a server-local path and must never be forwarded
+        # over SSE to remote clients.
+        assert "history_jsonl" not in content.payload
+
+    def test_compact_summary_empty_returns_none(self):
+        action = _make_action(action_type="compact_summary", output={"summary": ""})
+        assert action_to_sse_event(action, event_id=8, message_id="msg-8") is None
+
+    def test_compact_progress_returns_none(self):
+        action = _make_action(action_type="compact_progress", status=ActionStatus.PROCESSING, output={})
+        assert action_to_sse_event(action, event_id=9, message_id="msg-9") is None

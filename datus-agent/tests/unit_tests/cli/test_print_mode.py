@@ -61,6 +61,58 @@ def _make_runner(**overrides):
 
 
 # ---------------------------------------------------------------------------
+# Tests: database context resolution
+# ---------------------------------------------------------------------------
+
+
+class TestDatabaseContextResolution:
+    def test_init_uses_config_database_not_datasource(self):
+        """Print mode must not pass the datasource key as database context."""
+        cfg = MagicMock(datasource_configs={})
+        cfg.current_db_config.return_value = SimpleNamespace(
+            catalog="",
+            database="SNOWFLAKE_SAMPLE_DATA",
+            schema="TPCH_SF1",
+        )
+        with (
+            patch("datus.cli.print_mode.load_agent_config", return_value=cfg),
+            patch("datus.cli.print_mode.AtReferenceCompleter"),
+        ):
+            from datus.cli.print_mode import PrintModeRunner
+
+            runner = PrintModeRunner(_make_args(datasource="my_snowflake", database=""))
+
+        assert runner.database == "SNOWFLAKE_SAMPLE_DATA"
+        assert runner.database != "my_snowflake"
+        assert runner.db_schema == "TPCH_SF1"
+
+    def test_explicit_context_overrides_config(self):
+        cfg = MagicMock(datasource_configs={})
+        cfg.current_db_config.return_value = SimpleNamespace(
+            catalog="configured_catalog",
+            database="configured_database",
+            schema="configured_schema",
+        )
+        with (
+            patch("datus.cli.print_mode.load_agent_config", return_value=cfg),
+            patch("datus.cli.print_mode.AtReferenceCompleter"),
+        ):
+            from datus.cli.print_mode import PrintModeRunner
+
+            runner = PrintModeRunner(
+                _make_args(
+                    catalog="explicit_catalog",
+                    database="explicit_database",
+                    schema="explicit_schema",
+                )
+            )
+
+        assert runner.catalog == "explicit_catalog"
+        assert runner.database == "explicit_database"
+        assert runner.db_schema == "explicit_schema"
+
+
+# ---------------------------------------------------------------------------
 # Tests: PrintModeRunner._write_payload
 # ---------------------------------------------------------------------------
 
@@ -195,6 +247,61 @@ class TestPrintModeRun:
         assert data["content"][0]["type"] == "thinking"
         assert data["depth"] == 0
         assert data["parent_action_id"] is None
+
+    @pytest.mark.asyncio
+    async def test_stream_chat_emits_token_usage_as_usage_payload(self):
+        """A token_usage action must surface as a structured ``usage`` content
+        with real counts — not a "Token usage update" thinking line."""
+        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+
+        usage_action = ActionHistory(
+            action_id="token_usage_abc",
+            role=ActionRole.ASSISTANT,
+            messages="Token usage update",
+            action_type="token_usage",
+            input={},
+            output={
+                "cumulative": {"input_tokens": 800, "output_tokens": 200, "total_tokens": 1000, "cached_tokens": 50},
+                "delta": {"input_tokens": 800, "output_tokens": 200, "total_tokens": 1000, "cached_tokens": 50},
+                "context_length": 200_000,
+                "last_call_input_tokens": 800,
+            },
+            status=ActionStatus.SUCCESS,
+        )
+
+        mock_node = MagicMock()
+        mock_node.session_id = None
+
+        async def fake_stream(actions):
+            yield usage_action
+
+        mock_node.execute_stream_with_interactions = fake_stream
+
+        with (
+            patch("datus.cli.print_mode.load_agent_config") as mock_cfg,
+            patch("datus.cli.print_mode.AtReferenceCompleter"),
+        ):
+            mock_cfg.return_value = MagicMock(datasource_configs={})
+            from datus.cli.print_mode import PrintModeRunner
+
+            runner = PrintModeRunner(_make_args())
+
+        buf = io.StringIO()
+        with patch("sys.stdout", buf):
+            await runner._stream_chat(mock_node)
+
+        data = json.loads(buf.getvalue().strip())
+        assert data["content"][0]["type"] == "usage"
+        assert data["content"][0]["type"] != "thinking"
+        payload = data["content"][0]["payload"]
+        assert payload["total_tokens"] == 1000
+        assert payload["cached_tokens"] == 50
+        assert payload["context_length"] == 200_000
+        # Verify the per-call delta is populated from the action output.
+        assert payload["delta"]["input_tokens"] == 800
+        assert payload["delta"]["output_tokens"] == 200
+        assert payload["delta"]["total_tokens"] == 1000
+        assert payload["delta"]["cached_tokens"] == 50
 
     @pytest.mark.asyncio
     async def test_stream_chat_subagent_hierarchy(self):
@@ -356,6 +463,7 @@ class TestResumeSessionId:
             node_id_suffix="_print",
             scope=None,
             session_id="session_uuid123",
+            execution_mode="workflow",
         )
 
 
@@ -370,7 +478,13 @@ class TestRunUsesFactory:
             patch("datus.cli.print_mode.load_agent_config") as mock_cfg,
             patch("datus.cli.print_mode.AtReferenceCompleter") as mock_completer,
         ):
-            mock_cfg.return_value = MagicMock(datasource_configs={})
+            cfg = MagicMock(datasource_configs={})
+            cfg.current_db_config.return_value = SimpleNamespace(
+                catalog="configured_catalog",
+                database="configured_database",
+                schema="configured_schema",
+            )
+            mock_cfg.return_value = cfg
             mock_completer.return_value.parse_at_context.return_value = ([], [], [], None)
             from datus.cli.print_mode import PrintModeRunner
 
@@ -393,9 +507,17 @@ class TestRunUsesFactory:
             runner.run()
 
         mock_create_node.assert_called_once_with(
-            None, runner.agent_config, node_id_suffix="_print", scope=None, session_id=None
+            None,
+            runner.agent_config,
+            node_id_suffix="_print",
+            scope=None,
+            session_id=None,
+            execution_mode="workflow",
         )
         mock_create_input.assert_called_once()
+        assert mock_create_input.call_args.kwargs["catalog"] == "configured_catalog"
+        assert mock_create_input.call_args.kwargs["database"] == "configured_database"
+        assert mock_create_input.call_args.kwargs["db_schema"] == "configured_schema"
         assert mock_node.input == mock_input
 
 

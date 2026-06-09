@@ -1463,11 +1463,15 @@ class TestEdgeCases:
         assert "Sales Report" in result
 
     def test_create_node_input_cli_context_none_values(self, real_agent_config, mock_llm_create):
-        """create_node_input passes None for catalog/database/schema when cli_context has no values."""
+        """create_node_input passes None when no database context source has values."""
         from datus.schemas.chat_agentic_node_models import ChatNodeInput
 
+        db_config = real_agent_config.current_db_config()
+        db_config.catalog = ""
+        db_config.database = ""
+        db_config.schema = ""
         cmds = _make_chat_commands(real_agent_config)
-        # cli_context defaults have None for catalog/db_name/schema
+        # cli_context defaults have None for catalog/db_name/schema.
         assert cmds.cli.cli_context.current_catalog is None
         assert cmds.cli.cli_context.current_db_name is None
         assert cmds.cli.cli_context.current_schema is None
@@ -1479,6 +1483,64 @@ class TestEdgeCases:
         assert node_input.catalog is None
         assert node_input.database is None
         assert node_input.db_schema is None
+
+    def test_create_node_input_falls_back_to_active_connector_when_cli_context_empty(
+        self, real_agent_config, mock_llm_create
+    ):
+        """create_node_input should not lose db context after CLI connection init."""
+        from datus.schemas.chat_agentic_node_models import ChatNodeInput
+
+        cmds = _make_chat_commands(real_agent_config)
+        cmds.cli.cli_context.current_catalog = ""
+        cmds.cli.cli_context.current_db_name = ""
+        cmds.cli.cli_context.current_schema = ""
+        cmds.cli.db_connector = MagicMock()
+        cmds.cli.db_connector.catalog_name = "connector_catalog"
+        cmds.cli.db_connector.database_name = "connector_db"
+        cmds.cli.db_connector.schema_name = "connector_schema"
+
+        node = cmds._create_new_node()
+        node_input, _ = cmds.create_node_input("Test", node, [], [], [])
+
+        assert isinstance(node_input, ChatNodeInput)
+        assert node_input.catalog == "connector_catalog"
+        assert node_input.database == "connector_db"
+        assert node_input.db_schema == "connector_schema"
+
+    def test_create_node_input_falls_back_to_config_database_when_cli_context_empty(
+        self, real_agent_config, mock_llm_create
+    ):
+        """Configured database should still reach the chat prompt."""
+        from datus.schemas.chat_agentic_node_models import ChatNodeInput
+
+        real_agent_config.current_db_config().catalog = "configured_catalog"
+        real_agent_config.current_db_config().database = "configured_db"
+        real_agent_config.current_db_config().schema = "configured_schema"
+        cmds = _make_chat_commands(real_agent_config)
+        cmds.cli.cli_context.current_catalog = ""
+        cmds.cli.cli_context.current_db_name = ""
+        cmds.cli.cli_context.current_schema = ""
+
+        node = cmds._create_new_node()
+        node_input, _ = cmds.create_node_input("Test", node, [], [], [])
+
+        assert isinstance(node_input, ChatNodeInput)
+        assert node_input.catalog == "configured_catalog"
+        assert node_input.database == "configured_db"
+        assert node_input.db_schema == "configured_schema"
+
+    def test_prompt_builder_uses_connector_database_when_input_database_empty(self, real_agent_config, mock_llm_create):
+        """AgenticNode prompt fallback works if the node has an initialized connector."""
+        from datus.schemas.chat_agentic_node_models import ChatNodeInput
+
+        cmds = _make_chat_commands(real_agent_config)
+        node = cmds._create_new_node()
+        node.db_func_tool._primary_connector = MagicMock()
+        node.db_func_tool._primary_connector.database_name = "connector_db"
+
+        message = node._build_enhanced_message(ChatNodeInput(user_message="有哪些表"))
+
+        assert "**Database**: connector_db" in message
 
     def test_display_markdown_response_simple_text(self, real_agent_config, mock_llm_create):
         """Simple text with no markdown formatting is still displayed."""
@@ -2163,7 +2225,7 @@ class TestCmdCompactWithSession:
         cmds.cmd_compact("")
 
         output = _get_console_output(console)
-        assert "compacted successfully" in output.lower()
+        assert "context compacted" in output.lower()
 
     def test_compact_resets_in_memory_state(self, real_agent_config, mock_llm_create):
         """After successful compact, in-memory state is reset via _reload_state_from_session."""
@@ -2200,12 +2262,59 @@ class TestCmdCompactWithSession:
         # Compact must succeed; this is the precondition for the reload behavior
         # under test. A silent failure here would have previously made the
         # remaining assertions vacuous.
-        assert "compacted successfully" in output.lower(), f"compact did not succeed; output={output!r}"
+        assert "context compacted" in output.lower(), f"compact did not succeed; output={output!r}"  # noqa: E501
         # After successful compact, _reload_state_from_session rebuilds from
         # the compacted session (which contains only the summary pair), so
         # pre-compact accumulated turn actions must be cleared.
         assert cmds._trace_verbose is False
         assert cmds.current_node.actions == []
+
+    def test_compact_success_clears_screen_and_renders_panel(self, real_agent_config, mock_llm_create):
+        """A successful manual compact clears the screen and renders the shared
+        summary panel — matching the auto (mid-turn) path's presentation."""
+        from tests.unit_tests.mock_llm_model import build_simple_response
+
+        console = Console(file=io.StringIO(), no_color=True)
+        cmds = _make_chat_commands(real_agent_config, console=console)
+        mock_llm_create.reset(
+            responses=[
+                build_simple_response("Hello!"),
+                build_simple_response("Summary of conversation"),
+            ]
+        )
+        cmds.execute_chat_command("Hi there")
+
+        cleared = []
+        console.clear = lambda *a, **k: cleared.append(True)
+        console.file = io.StringIO()
+        cmds.cmd_compact("")
+
+        assert cleared, "screen must be cleared before the summary panel"
+        output = _get_console_output(console)
+        assert "context compacted" in output.lower()
+        # Lock the manual path to the shared compact-summary renderer: the panel
+        # must carry the mocked LLM summary body, not just the generic banner.
+        assert "Summary of conversation" in output
+
+    def test_compact_failure_does_not_clear(self, real_agent_config, mock_llm_create):
+        """A failed compact must NOT clear the screen — there is no valid
+        summary to anchor, and the failure message must stay visible."""
+        console = Console(file=io.StringIO(), no_color=True)
+        cmds = _make_chat_commands(real_agent_config, console=console)
+        cmds.current_node = cmds._create_new_node()
+
+        async def _fail(*, mode, reason):
+            return {"mode": mode, "success": False, "error": "boom"}
+
+        cmds.current_node.compact = _fail
+        cleared = []
+        console.clear = lambda *a, **k: cleared.append(True)
+        console.file = io.StringIO()
+        cmds.cmd_compact("")
+
+        assert not cleared
+        output = _get_console_output(console)
+        assert "failed to compact" in output.lower()
 
 
 # ===========================================================================

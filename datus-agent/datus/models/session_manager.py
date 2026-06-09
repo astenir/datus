@@ -10,7 +10,7 @@ import os
 import re
 import sqlite3
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -195,6 +195,22 @@ class SessionManager:
             logger.debug(f"Deleted session: {session_id}")
         else:
             logger.warning(f"Attempted to delete non-existent session: {session_id}")
+
+        # Compact archive directory lives alongside the db file as
+        # ``{session_dir}/{session_id}/`` (auto-created by
+        # ``path_manager.session_data_dir``). Drop it on session delete so
+        # JSONL history dumps and archived tool I/O don't outlive the
+        # session they belong to. Best-effort: a permission error or stale
+        # file lock should not block the db cleanup.
+        archive_root = os.path.join(self.session_dir, session_id)
+        if os.path.isdir(archive_root):
+            try:
+                import shutil
+
+                shutil.rmtree(archive_root)
+                logger.debug(f"Deleted session archive dir: {archive_root}")
+            except OSError as exc:
+                logger.warning("Failed to remove session archive dir %s: %s", archive_root, exc)
 
     def copy_session(self, source_session_id: str, target_node_name: str) -> str:
         """Copy a session to a new one with a different node-name prefix.
@@ -733,13 +749,22 @@ class SessionManager:
         }
 
     def get_detailed_usage(self, session_id: str) -> Dict[str, Any]:
-        """Query turn_usage table and return aggregated + per-turn token usage."""
+        """Query turn_usage table and return aggregated + per-turn token usage.
+
+        When a mid-turn ``running_turn_usage`` snapshot exists (populated by
+        :class:`TokenUsageHook` after each LLM call), its cumulative counters
+        are folded into ``total`` so consumers (CLI status bar, resume) see a
+        live view of the in-progress turn. The raw snapshot is also surfaced
+        as the ``"running"`` field for callers that need to distinguish
+        persisted turns from the in-flight delta.
+        """
         self._validate_session_id(session_id)
         db_path = os.path.join(self.session_dir, f"{session_id}.db")
         empty_result = {
             "total": {"requests": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cached_tokens": 0},
             "turns": [],
             "turn_count": 0,
+            "running": None,
         }
         if not os.path.exists(db_path):
             return empty_result
@@ -801,7 +826,121 @@ class SessionManager:
         except sqlite3.OperationalError:
             logger.debug(f"turn_usage table not found for session {session_id}")
 
-        return {"total": total, "turns": turns, "turn_count": len(turns)}
+        running = self._read_running_turn_usage(db_path)
+        if running is not None:
+            cumulative = running.get("cumulative") or {}
+            total["requests"] += int(cumulative.get("requests", 0) or 0)
+            total["input_tokens"] += int(cumulative.get("input_tokens", 0) or 0)
+            total["output_tokens"] += int(cumulative.get("output_tokens", 0) or 0)
+            total["total_tokens"] += int(cumulative.get("total_tokens", 0) or 0)
+            total["cached_tokens"] += int(cumulative.get("cached_tokens", 0) or 0)
+
+        return {"total": total, "turns": turns, "turn_count": len(turns), "running": running}
+
+    # ------------------------------------------------------------------
+    # Mid-turn (running) usage snapshot
+    # ------------------------------------------------------------------
+
+    _RUNNING_TURN_USAGE_DDL = (
+        "CREATE TABLE IF NOT EXISTS running_turn_usage ("
+        "session_id TEXT PRIMARY KEY, "
+        "user_turn_number INTEGER, "
+        "cumulative_json TEXT, "
+        "context_length INTEGER, "
+        "updated_at TIMESTAMP"
+        ")"
+    )
+
+    def upsert_running_turn_usage(
+        self,
+        session_id: str,
+        user_turn_number: int,
+        cumulative: Dict[str, Any],
+        context_length: int,
+    ) -> None:
+        """Persist the in-progress turn's cumulative usage to the session DB.
+
+        Called by :class:`TokenUsageHook` after each LLM call so that resume
+        and the CLI status bar can observe partial progress without waiting
+        for the turn to finish. Uses ``INSERT OR REPLACE`` keyed by
+        ``session_id`` — only the latest snapshot is retained.
+        """
+        self._validate_session_id(session_id)
+        db_path = os.path.join(self.session_dir, f"{session_id}.db")
+        # The session DB is created by AdvancedSQLiteSession on first use; if
+        # it does not exist yet (early hook fires before any SDK write), skip
+        # silently — the snapshot will be written on the next call.
+        if not os.path.exists(db_path):
+            return
+        payload = json.dumps(cumulative or {}, ensure_ascii=False)
+        try:
+            with sqlite3.connect(db_path, timeout=5.0) as conn:
+                conn.execute(self._RUNNING_TURN_USAGE_DDL)
+                conn.execute(
+                    "INSERT OR REPLACE INTO running_turn_usage "
+                    "(session_id, user_turn_number, cumulative_json, context_length, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (
+                        session_id,
+                        int(user_turn_number or 0),
+                        payload,
+                        int(context_length or 0),
+                        datetime.now(timezone.utc),
+                    ),
+                )
+                conn.commit()
+        except sqlite3.OperationalError as exc:
+            logger.debug(f"upsert_running_turn_usage failed for {session_id}: {exc}")
+
+    def get_running_turn_usage(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Return the in-progress turn snapshot, or ``None`` when absent."""
+        self._validate_session_id(session_id)
+        db_path = os.path.join(self.session_dir, f"{session_id}.db")
+        return self._read_running_turn_usage(db_path)
+
+    def clear_running_turn_usage(self, session_id: str) -> None:
+        """Drop the in-progress snapshot, typically right after the SDK's
+        ``store_run_usage`` commits the persisted ``turn_usage`` row so we
+        don't double-count the turn."""
+        self._validate_session_id(session_id)
+        db_path = os.path.join(self.session_dir, f"{session_id}.db")
+        if not os.path.exists(db_path):
+            return
+        try:
+            with sqlite3.connect(db_path, timeout=5.0) as conn:
+                conn.execute(self._RUNNING_TURN_USAGE_DDL)
+                conn.execute("DELETE FROM running_turn_usage WHERE session_id = ?", (session_id,))
+                conn.commit()
+        except sqlite3.OperationalError as exc:
+            logger.debug(f"clear_running_turn_usage failed for {session_id}: {exc}")
+
+    def _read_running_turn_usage(self, db_path: str) -> Optional[Dict[str, Any]]:
+        if not os.path.exists(db_path):
+            return None
+        try:
+            with sqlite3.connect(db_path, timeout=5.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT user_turn_number, cumulative_json, context_length, updated_at "
+                    "FROM running_turn_usage WHERE session_id = ?",
+                    (os.path.splitext(os.path.basename(db_path))[0],),
+                )
+                row = cursor.fetchone()
+        except sqlite3.OperationalError:
+            return None
+        if not row:
+            return None
+        turn_number, cumulative_json, context_length, updated_at = row
+        try:
+            cumulative = json.loads(cumulative_json) if cumulative_json else {}
+        except (json.JSONDecodeError, TypeError):
+            cumulative = {}
+        return {
+            "user_turn_number": int(turn_number or 0),
+            "cumulative": cumulative,
+            "context_length": int(context_length or 0),
+            "updated_at": to_utc_iso(updated_at) if updated_at else None,
+        }
 
     @staticmethod
     def _parse_final_output(actions: List[ActionHistory], current_assistant_group: Dict) -> Optional[ActionHistory]:

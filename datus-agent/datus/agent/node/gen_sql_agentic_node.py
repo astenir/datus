@@ -487,7 +487,10 @@ class GenSQLAgenticNode(AgenticNode):
                 method = getattr(tool_instance, method_name)
                 from datus.tools.func_tool import trans_to_function_tool
 
-                self.tools.append(trans_to_function_tool(method))
+                if isinstance(tool_instance, DBFuncTool):
+                    self.tools.append(tool_instance.to_function_tool(method))
+                else:
+                    self.tools.append(trans_to_function_tool(method))
                 logger.debug(f"Added specific tool method: {tool_type}.{method_name}")
             else:
                 logger.warning(f"Method '{method_name}' not found in {tool_type}")
@@ -596,14 +599,12 @@ class GenSQLAgenticNode(AgenticNode):
 
     def _get_system_prompt(
         self,
-        conversation_summary: Optional[str] = None,
         prompt_version: Optional[str] = None,
     ) -> str:
         """
         Get the system prompt for this SQL generation node using enhanced template context.
 
         Args:
-            conversation_summary: Optional summary from previous conversation compact
             prompt_version: Optional prompt version to use, overrides agent config version
 
         Returns:
@@ -623,7 +624,6 @@ class GenSQLAgenticNode(AgenticNode):
             agent_config=self.agent_config,
             workspace_root=self._resolve_workspace_root(),
         )
-        context["conversation_summary"] = conversation_summary
         context["has_task_tool"] = bool(self.sub_agent_task_tool)
         available_tool_names = self._get_available_tool_names()
         context["available_tool_names"] = available_tool_names

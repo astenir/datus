@@ -3,7 +3,8 @@
 import asyncio
 import re
 from datetime import datetime
-from unittest.mock import MagicMock
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -26,27 +27,42 @@ from datus.api.services.chat_task_manager import (
 
 
 class TestFillDatabaseContext:
-    """Tests for _fill_database_context — now a no-op (datasource resolved at bootstrap)."""
+    """Tests for _fill_database_context."""
 
-    def test_no_database_is_noop(self, real_agent_config):
+    def test_no_database_falls_back_to_config(self, real_agent_config):
         original = real_agent_config.current_datasource
-        _fill_database_context(real_agent_config, database=None)
+        catalog, database, schema = _fill_database_context(real_agent_config, database=None)
         assert real_agent_config.current_datasource == original
+        assert catalog is None
+        assert database == "california_schools"
+        assert schema is None
 
-    def test_empty_database_is_noop(self, real_agent_config):
+    def test_empty_database_falls_back_to_config(self, real_agent_config):
         original = real_agent_config.current_datasource
-        _fill_database_context(real_agent_config, database="")
+        catalog, database, schema = _fill_database_context(real_agent_config, database="")
         assert real_agent_config.current_datasource == original
+        assert catalog is None
+        assert database == "california_schools"
+        assert schema is None
 
-    def test_known_database_does_not_override_datasource(self, real_agent_config):
+    def test_explicit_database_does_not_override_datasource(self, real_agent_config):
         original = real_agent_config.current_datasource
-        _fill_database_context(real_agent_config, database="california_schools")
+        catalog, database, schema = _fill_database_context(real_agent_config, database="explicit_db")
         assert real_agent_config.current_datasource == original
+        assert catalog is None
+        assert database == "explicit_db"
+        assert schema is None
 
-    def test_unknown_database_leaves_unchanged(self, real_agent_config):
+    def test_context_falls_back_to_config_fields(self, real_agent_config):
+        real_agent_config.current_db_config().catalog = "configured_catalog"
+        real_agent_config.current_db_config().database = "configured_database"
+        real_agent_config.current_db_config().schema = "configured_schema"
         original = real_agent_config.current_datasource
-        _fill_database_context(real_agent_config, database="nonexistent_db")
+        catalog, database, schema = _fill_database_context(real_agent_config)
         assert real_agent_config.current_datasource == original
+        assert catalog == "configured_catalog"
+        assert database == "configured_database"
+        assert schema == "configured_schema"
 
 
 class TestChatTaskInit:
@@ -306,6 +322,30 @@ class TestChatTaskManagerBehavior:
         await manager._push_event(task, event)
         assert len(task.events) == 1
         assert task.events[0] is event
+
+    @pytest.mark.asyncio
+    async def test_degraded_context_warning_emits_nonfatal_message(self):
+        """Context degradation should be a normal assistant message, not an error event."""
+        manager = ChatTaskManager()
+        task = ChatTask(session_id="s-degraded", asyncio_task=MagicMock())
+        node = SimpleNamespace(
+            degraded_capabilities={
+                "context_search_tools": "Context search and @ references are disabled; DB tools remain available."
+            }
+        )
+
+        next_id = await manager._push_degraded_capability_warnings(task, node, 7)
+
+        assert next_id == 8
+        assert len(task.events) == 1
+        event = task.events[0]
+        assert event.id == 7
+        assert event.event == "message"
+        assert isinstance(event.data, SSEMessageData)
+        assert event.data.type == SSEDataType.CREATE_MESSAGE
+        assert event.data.payload.role == "assistant"
+        assert event.data.payload.content[0].type == "markdown"
+        assert "DB tools remain available" in event.data.payload.content[0].payload["content"]
 
     @pytest.mark.asyncio
     async def test_run_loop_emits_final_response_when_no_plain_assistant_response(self, real_agent_config):
@@ -603,6 +643,32 @@ class TestStartChat:
         # Clean up
         await manager.shutdown()
 
+    async def test_start_chat_fills_request_database_context(self, real_agent_config, monkeypatch):
+        """start_chat fills omitted request database context before the run loop."""
+        from datus.api.models.cli_models import StreamChatInput
+
+        real_agent_config.current_db_config().catalog = "configured_catalog"
+        real_agent_config.current_db_config().database = "configured_database"
+        real_agent_config.current_db_config().schema = "configured_schema"
+        captured = {}
+
+        async def fake_run_loop(self, task, agent_config, request, **kwargs):
+            captured["catalog"] = request.catalog
+            captured["database"] = request.database
+            captured["db_schema"] = request.db_schema
+
+        monkeypatch.setattr(ChatTaskManager, "_run_loop", fake_run_loop)
+        manager = ChatTaskManager()
+        request = StreamChatInput(message="hello", session_id="api-context")
+        task = await manager.start_chat(real_agent_config, request)
+        await task.asyncio_task
+
+        assert captured == {
+            "catalog": "configured_catalog",
+            "database": "configured_database",
+            "db_schema": "configured_schema",
+        }
+
     async def test_start_chat_duplicate_session_raises(self, real_agent_config, mock_llm_create):
         """start_chat raises ValueError for duplicate session_id."""
         from datus.api.models.cli_models import StreamChatInput
@@ -767,6 +833,21 @@ class TestResolveAtContext:
         assert isinstance(tables, list)
         assert isinstance(metrics, list)
         assert isinstance(sqls, list)
+
+    def test_resolve_at_context_returns_empty_when_completer_fails(self, real_agent_config):
+        manager = ChatTaskManager()
+
+        with patch("datus.api.services.chat_task_manager.AtReferenceCompleter", side_effect=RuntimeError("hf offline")):
+            tables, metrics, sqls = manager._resolve_at_context(
+                real_agent_config,
+                ["db.schema.table"],
+                ["Finance.revenue"],
+                ["Finance.sql"],
+            )
+
+        assert tables == []
+        assert metrics == []
+        assert sqls == []
 
 
 class TestCreateNode:
@@ -984,6 +1065,20 @@ class TestCreateNodeInput:
         assert result.catalog == "cat"
         assert result.database == "db"
         assert result.db_schema == "schema"
+
+    def test_node_input_falls_back_to_config_db_context(self, real_agent_config, mock_llm_create):
+        """_create_node_input fills missing database context from current config."""
+        real_agent_config.current_db_config().catalog = "configured_catalog"
+        real_agent_config.current_db_config().database = "configured_database"
+        real_agent_config.current_db_config().schema = "configured_schema"
+
+        manager = ChatTaskManager()
+        node = manager._create_node(real_agent_config, "gen_sql", "test")
+        result = manager._create_node_input("test", node, [], [], [])
+
+        assert result.catalog == "configured_catalog"
+        assert result.database == "configured_database"
+        assert result.db_schema == "configured_schema"
 
     def test_feedback_node_input_with_source_session(self, real_agent_config, mock_llm_create):
         """_create_node_input for FeedbackAgenticNode carries source_session_id through."""

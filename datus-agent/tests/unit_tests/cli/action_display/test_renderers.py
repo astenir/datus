@@ -380,6 +380,26 @@ class TestRenderSubagentDone:
         assert "Done" in text
         assert "2 tool uses" in text
 
+    def test_done_appends_token_suffix_when_totals_present(self):
+        """Sync-path Done line carries the accumulated ↑input(cached) ↓output
+        suffix so it stays consistent with the collapsed / async paths."""
+        now = datetime.now()
+        end_action = _make_action(ActionRole.TOOL, ActionStatus.SUCCESS, end_time=now + timedelta(seconds=2))
+        text = (
+            _renderer()
+            .render_subagent_done(3, now, end_action, token_input=12603, token_output=2048, token_cached=8192)
+            .plain
+        )
+        assert "Done" in text
+        assert "↑12K(8.0K) ↓2.0K" in text
+
+    def test_done_omits_token_suffix_when_zero(self):
+        """No token text when nothing was recorded (default kwargs)."""
+        end_action = _make_action(ActionRole.TOOL, ActionStatus.SUCCESS, end_time=datetime.now())
+        text = _renderer().render_subagent_done(1, None, end_action).plain
+        assert "Done" in text
+        assert "↑" not in text
+
 
 # ── render_subagent_collapsed ────────────────────────────────────
 
@@ -409,6 +429,44 @@ class TestRenderSubagentCollapsed:
         assert "Done" in text
         assert "3 tool uses" in text
         assert "\u2713" in text
+
+    def test_collapsed_appends_token_totals(self):
+        """When token totals are provided, the Done line carries the input/output
+        split, with the cached parenthetical only when caching happened."""
+        now = datetime.now()
+        first = _make_action(
+            ActionRole.TOOL,
+            ActionStatus.PROCESSING,
+            depth=0,
+            action_type="task",
+            messages="task(gen_sql, revenue query)",
+            input_data={"type": "gen_sql", "prompt": "revenue query"},
+        )
+        end = _make_action(ActionRole.TOOL, ActionStatus.SUCCESS, end_time=now + timedelta(seconds=5))
+        text = _plain(
+            _renderer().render_subagent_collapsed(
+                first, 3, now, end, token_input=12603, token_output=2048, token_cached=8192
+            )
+        )
+        assert "\u219112K(8.0K) \u21932.0K" in text
+
+    def test_collapsed_omits_cached_when_zero(self):
+        """No cached parens when cache_read is 0; no token text when nothing recorded."""
+        now = datetime.now()
+        first = _make_action(
+            ActionRole.TOOL, ActionStatus.PROCESSING, depth=0, action_type="task", input_data={"type": "gen_sql"}
+        )
+        end = _make_action(ActionRole.TOOL, ActionStatus.SUCCESS, end_time=now + timedelta(seconds=1))
+        with_tokens = _plain(
+            _renderer().render_subagent_collapsed(
+                first, 1, now, end, token_input=2048, token_output=512, token_cached=0
+            )
+        )
+        assert "\u21912.0K \u21930.5K" in with_tokens
+        assert "(" not in with_tokens.split("\u2191")[1]  # no cached parens on the input segment
+        no_tokens = _plain(_renderer().render_subagent_collapsed(first, 1, now, end))
+        assert "Done" in no_tokens
+        assert "\u2191" not in no_tokens
 
 
 # ── render_main_action ────────────────────────────────────────────

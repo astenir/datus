@@ -281,7 +281,15 @@ class GenerationHooks(AgentHooks):
             if not isinstance(tool_args, dict) or tool_args.get("dry_run") is not True:
                 return
             metrics = tool_args.get("metrics") or []
-            self.generation_evidence.record_metric_dry_run(metrics, result)
+            dimensions = tool_args.get("dimensions") or []
+            if isinstance(dimensions, str):
+                dimensions = [dimensions]
+            self.generation_evidence.record_metric_dry_run(
+                metrics,
+                result,
+                dimensions=dimensions,
+                time_granularity=tool_args.get("time_granularity"),
+            )
         except Exception as e:
             logger.debug(f"Error recording query_metrics evidence: {e}")
 
@@ -1302,7 +1310,7 @@ class GenerationHooks(AgentHooks):
                 if metric_objects:
                     metric_rag.upsert_batch(metric_objects)
                     metric_rag.create_indices()
-                return {
+                result = {
                     "success": True,
                     "message": (
                         f"Synced {len(all_objects)} objects "
@@ -1310,6 +1318,9 @@ class GenerationHooks(AgentHooks):
                         f"{', '.join(synced_items[:5])}..."
                     ),
                 }
+                if metric_objects:
+                    result["metric_artifact_ids"] = [obj["id"] for obj in metric_objects if obj.get("id")]
+                return result
             else:
                 if include_metrics and not include_semantic_objects and metrics_list:
                     return {

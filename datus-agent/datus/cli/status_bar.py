@@ -16,14 +16,14 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, List, Tuple
 
+from datus.cli._render_utils import format_io_tokens
+from datus.cli._render_utils import humanize_tokens as _humanize_tokens
 from datus.utils.loggings import get_logger
 
 if TYPE_CHECKING:
     from datus.cli.repl import DatusCLI
 
 logger = get_logger(__name__)
-
-_TOKEN_UNIT = 1024  # 1K == 1024 tokens
 
 # Half-period of the running-indicator blink in seconds. The DatusApp
 # periodic invalidate runs at the same cadence so one full cycle (on → off →
@@ -43,27 +43,6 @@ def _running_blink_symbol(now: float | None = None) -> str:
     return "●" if int(t / _RUNNING_BLINK_HALF_PERIOD) % 2 == 0 else "○"
 
 
-def _humanize_tokens(n: int) -> str:
-    """Format a token count using K (1024) as the sole unit.
-
-    - 0 tokens renders as ``0K``
-    - sub-kilo values keep one decimal (e.g. ``0.5K``) so they remain visible
-    - values >= 10K render as rounded integers (e.g. ``54K``, ``1024K``)
-    """
-    if n is None:
-        return "0K"
-    try:
-        n = int(n)
-    except (TypeError, ValueError):
-        return "0K"
-    if n <= 0:
-        return "0K"
-    k = n / _TOKEN_UNIT
-    if k < 10:
-        return f"{k:.1f}K"
-    return f"{round(k)}K"
-
-
 @dataclass
 class StatusBarState:
     """Snapshot of status bar data rendered before each prompt."""
@@ -73,6 +52,8 @@ class StatusBarState:
     connector: str = ""
     cumulative_tokens: int = 0
     cached_tokens: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
     context_used: int = 0
     context_total: int = 0
     plan_mode: bool = False
@@ -87,10 +68,8 @@ class StatusBarState:
         return "0K/0K 0%"
 
     def tokens_display(self) -> str:
-        base = _humanize_tokens(self.cumulative_tokens)
-        if self.cached_tokens > 0:
-            return f"{base}({_humanize_tokens(self.cached_tokens)} cached)"
-        return base
+        """Cumulative session tokens split as ``↑{input}({cached}) ↓{output}``."""
+        return format_io_tokens(self.input_tokens, self.output_tokens, self.cached_tokens)
 
     def format_plain(self) -> str:
         """Render the status bar as a plain string (used for tests and logs)."""
@@ -174,7 +153,7 @@ class StatusBarProvider:
         self._cli = cli
 
     def current_state(self) -> StatusBarState:
-        cumulative, cached = self._resolve_session_totals()
+        input_tokens, output_tokens, cached, total = self._resolve_session_totals()
         tui_app = getattr(self._cli, "tui_app", None)
         agent_running = False
         if tui_app is not None:
@@ -193,8 +172,10 @@ class StatusBarProvider:
             agent=self._resolve_agent(),
             model=self._resolve_model(),
             connector=self._resolve_connector(),
-            cumulative_tokens=cumulative,
+            cumulative_tokens=total,
             cached_tokens=cached,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             context_used=self._resolve_context_used(),
             context_total=self._resolve_context_total(),
             plan_mode=self._resolve_plan_mode(),
@@ -340,33 +321,53 @@ class StatusBarProvider:
             return f"{db_type}: {db_name}"
         return str(db_name)
 
-    def _resolve_session_totals(self) -> Tuple[int, int]:
-        """Return ``(cumulative_total_tokens, cumulative_cached_tokens)``."""
+    def _resolve_session_totals(self) -> Tuple[int, int, int, int]:
+        """Return ``(input_tokens, output_tokens, cached_tokens, total_tokens)``.
+
+        ``cached_tokens`` is the cached portion of the input; ``total_tokens``
+        is kept for the cumulative segment / API parity.
+        """
         node = self._current_node()
         if node is None:
-            return 0, 0
+            return 0, 0, 0, 0
         session_id = getattr(node, "session_id", None)
         if not session_id:
-            return 0, 0
+            return 0, 0, 0, 0
         try:
             session_manager = node.session_manager
         except Exception as e:
             logger.debug(f"status_bar: session_manager unavailable: {e}")
-            return 0, 0
+            return 0, 0, 0, 0
         if session_manager is None:
-            return 0, 0
+            return 0, 0, 0, 0
         try:
             usage = session_manager.get_detailed_usage(session_id)
             total = usage.get("total", {}) if isinstance(usage, dict) else {}
-            return int(total.get("total_tokens", 0) or 0), int(total.get("cached_tokens", 0) or 0)
+            return (
+                int(total.get("input_tokens", 0) or 0),
+                int(total.get("output_tokens", 0) or 0),
+                int(total.get("cached_tokens", 0) or 0),
+                int(total.get("total_tokens", 0) or 0),
+            )
         except Exception as e:
             logger.debug(f"status_bar: get_detailed_usage failed: {e}")
-            return 0, 0
+            return 0, 0, 0, 0
 
     def _resolve_context_used(self) -> int:
         node = self._current_node()
         if node is None:
             return 0
+        # Prefer the live ``running_turn_usage`` updated per-LLM-call so
+        # multi-step turns see the context-window bar tick up between tool
+        # calls instead of jumping only at turn end.
+        running = getattr(node, "running_turn_usage", None)
+        if running is not None:
+            try:
+                used = int(getattr(running, "session_total_tokens", 0) or 0)
+                if used > 0:
+                    return used
+            except (TypeError, ValueError):
+                pass
         for action in reversed(getattr(node, "actions", []) or []):
             output = getattr(action, "output", None)
             if not isinstance(output, dict):
@@ -379,6 +380,15 @@ class StatusBarProvider:
                 return int(used)
             except (TypeError, ValueError):
                 return 0
+        # Resume fallback: a freshly resumed process has no in-memory snapshot
+        # or live actions yet, so use the occupancy re-hydrated from the
+        # on-disk ``context_state`` section by ``AgenticNode.restore_context_state``.
+        try:
+            restored = int(getattr(node, "_restored_context_used", 0) or 0)
+            if restored > 0:
+                return restored
+        except (TypeError, ValueError):
+            pass
         return 0
 
     def _resolve_context_total(self) -> int:
@@ -390,4 +400,24 @@ class StatusBarProvider:
                     return int(length)
                 except (TypeError, ValueError):
                     pass
+            # Fallback: in-memory snapshot from ``TokenUsageHook`` carries
+            # the model's max context so the ratio stays meaningful even
+            # before the node populates ``context_length`` on first call.
+            running = getattr(node, "running_turn_usage", None)
+            if running is not None:
+                try:
+                    fallback = int(getattr(running, "context_length", 0) or 0)
+                    if fallback > 0:
+                        return fallback
+                except (TypeError, ValueError):
+                    pass
+            # Resume fallback: the context length re-hydrated from disk so the
+            # bar's denominator is correct before the node populates it on the
+            # first call of the resumed session.
+            try:
+                restored = int(getattr(node, "_restored_context_length", 0) or 0)
+                if restored > 0:
+                    return restored
+            except (TypeError, ValueError):
+                pass
         return 0

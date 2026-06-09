@@ -9,6 +9,7 @@ import pytest
 
 from datus.tools.func_tool.base import FuncToolResult, normalize_null
 from datus.tools.func_tool.generation_evidence import GenerationEvidence
+from datus.tools.func_tool.metric_queryability import extract_metric_queryability_contracts
 from datus.tools.func_tool.semantic_tools import _run_async
 from datus.tools.semantic_tools.models import QueryResult
 
@@ -58,6 +59,183 @@ class TestGenerationEvidence:
         assert evidence.metric_dry_run_passed is True
         assert evidence.metric_sqls == {}
         assert evidence.has_metric_dry_run(["revenue"]) is True
+
+    def test_queryability_contract_requires_grouped_dry_run(self):
+        evidence = GenerationEvidence()
+        evidence.set_metric_queryability_contracts(
+            [
+                {
+                    "source": "sql_1",
+                    "metric_hints": ["revenue_total"],
+                    "dimension_hints": ["customer_segment"],
+                }
+            ]
+        )
+        result = FuncToolResult(success=1, result={"metadata": {"sql": "SELECT 1"}})
+
+        evidence.record_metric_dry_run(["revenue_total"], result)
+
+        assert evidence.has_metric_dry_run(["revenue_total"]) is True
+        assert evidence.has_required_queryability_dry_runs(["revenue_total"]) is False
+
+        evidence.record_metric_dry_run(["revenue_total"], result, dimensions=["customer__segment_name"])
+
+        assert evidence.has_required_queryability_dry_runs(["revenue_total"]) is True
+
+    def test_queryability_contract_rejects_partial_dimension_token_match(self):
+        evidence = GenerationEvidence()
+        evidence.set_metric_queryability_contracts(
+            [
+                {
+                    "source": "sql_1",
+                    "metric_hints": ["revenue_total"],
+                    "dimension_hints": ["customer_segment"],
+                }
+            ]
+        )
+
+        evidence.record_metric_dry_run(
+            ["revenue_total"],
+            FuncToolResult(success=1, result={"metadata": {"sql": "SELECT 1"}}),
+            dimensions=["customer_region"],
+        )
+
+        assert evidence.has_required_queryability_dry_runs(["revenue_total"]) is False
+
+    def test_queryability_contract_time_hint_requires_metric_time_dimension_and_grain(self):
+        result = FuncToolResult(success=1, result={"metadata": {"sql": "SELECT 1"}})
+
+        evidence = GenerationEvidence()
+        evidence.set_metric_queryability_contracts(
+            [
+                {
+                    "source": "sql_1",
+                    "metric_hints": ["order_count"],
+                    "dimension_hints": ["order_date"],
+                }
+            ]
+        )
+        evidence.record_metric_dry_run(["order_count"], result, time_granularity="month")
+
+        assert evidence.has_required_queryability_dry_runs(["order_count"]) is False
+
+        evidence = GenerationEvidence()
+        evidence.set_metric_queryability_contracts(
+            [
+                {
+                    "source": "sql_1",
+                    "metric_hints": ["order_count"],
+                    "dimension_hints": ["order_date"],
+                }
+            ]
+        )
+        evidence.record_metric_dry_run(["order_count"], result, dimensions=["metric_time__month"])
+
+        assert evidence.has_required_queryability_dry_runs(["order_count"]) is False
+
+        evidence = GenerationEvidence()
+        evidence.set_metric_queryability_contracts(
+            [
+                {
+                    "source": "sql_1",
+                    "metric_hints": ["order_count"],
+                    "dimension_hints": ["order_date"],
+                }
+            ]
+        )
+        evidence.record_metric_dry_run(
+            ["order_count"],
+            result,
+            dimensions=["metric_time__month"],
+            time_granularity="month",
+        )
+
+        assert evidence.has_required_queryability_dry_runs(["order_count"]) is True
+
+    def test_extracts_grouped_metric_queryability_contract_from_sql(self):
+        contracts = extract_metric_queryability_contracts(
+            """
+            SQL:
+            SELECT n.n_name AS supplier_nation, SUM(l.l_extendedprice) AS shipped_revenue
+            FROM lineitem l
+            JOIN supplier s ON l.l_suppkey = s.s_suppkey
+            JOIN nation n ON s.s_nationkey = n.n_nationkey
+            GROUP BY n.n_name;
+            """
+        )
+
+        assert contracts == [
+            {
+                "source": "sql_1",
+                "dimension_hints": ["supplier_nation"],
+                "metric_hints": ["shipped_revenue"],
+                "sql": (
+                    "SELECT n.n_name AS supplier_nation, SUM(l.l_extendedprice) AS shipped_revenue\n"
+                    "            FROM lineitem l\n"
+                    "            JOIN supplier s ON l.l_suppkey = s.s_suppkey\n"
+                    "            JOIN nation n ON s.s_nationkey = n.n_nationkey\n"
+                    "            GROUP BY n.n_name"
+                ),
+            }
+        ]
+
+    def test_extracts_grouped_contract_from_dialect_fenced_sql(self):
+        contracts = extract_metric_queryability_contracts(
+            """
+            ```snowflake
+            SELECT customer_segment, SUM(revenue) AS revenue_total
+            FROM orders
+            GROUP BY customer_segment;
+            ```
+            """
+        )
+
+        assert contracts == [
+            {
+                "source": "sql_1",
+                "dimension_hints": ["customer_segment"],
+                "metric_hints": ["revenue_total"],
+                "sql": (
+                    "SELECT customer_segment, SUM(revenue) AS revenue_total\n"
+                    "            FROM orders\n"
+                    "            GROUP BY customer_segment"
+                ),
+            }
+        ]
+
+    def test_extracts_contract_from_final_select_not_grouped_cte(self):
+        contracts = extract_metric_queryability_contracts(
+            """
+            WITH daily AS (
+                SELECT order_date, customer_segment, SUM(revenue) AS day_revenue
+                FROM orders
+                GROUP BY order_date, customer_segment
+            )
+            SELECT customer_segment, SUM(day_revenue) AS revenue_total
+            FROM daily
+            GROUP BY customer_segment;
+            """
+        )
+
+        assert len(contracts) == 1
+        assert contracts[0]["source"] == "sql_1"
+        assert contracts[0]["dimension_hints"] == ["customer_segment"]
+        assert contracts[0]["metric_hints"] == ["revenue_total"]
+        assert contracts[0]["sql"].startswith("WITH daily AS")
+
+    def test_ignores_nested_group_when_final_select_is_ungrouped(self):
+        contracts = extract_metric_queryability_contracts(
+            """
+            WITH grouped AS (
+                SELECT customer_segment, SUM(revenue) AS revenue
+                FROM orders
+                GROUP BY customer_segment
+            )
+            SELECT SUM(revenue) AS revenue_total FROM grouped;
+            """
+        )
+
+        assert contracts == []
 
 
 class TestNormalizeNull:
@@ -124,7 +302,14 @@ class TestQueryMetricsCompression:
         )
         mock_adapter.query_metrics = Mock(return_value=query_result)
 
-        with patch("datus.tools.func_tool.semantic_tools._run_async", return_value=query_result):
+        with patch(
+            "datus.tools.func_tool.semantic_tools._run_async",
+            side_effect=[
+                [{"name": "date"}],
+                [{"name": "date"}],
+                query_result,
+            ],
+        ):
             result = semantic_tools.query_metrics(
                 metrics=["revenue", "orders"],
                 dimensions=["date"],
@@ -251,6 +436,81 @@ class TestQueryMetricsCompression:
             dry_run=False,
         )
 
+    def test_query_metrics_rejects_dimensions_not_common_to_all_metrics(self, semantic_tools, mock_adapter):
+        """Preflight reports incompatible metric/dimension combinations before adapter query."""
+        with patch(
+            "datus.tools.func_tool.semantic_tools._run_async",
+            side_effect=[
+                [{"name": "ship_date"}, {"name": "ship_mode"}],
+                [{"name": "ship_date"}, {"name": "ship_mode"}],
+                [{"name": "ship_date"}, {"name": "supplier_nation"}],
+            ],
+        ):
+            result = semantic_tools.query_metrics(
+                metrics=["shipped_revenue", "discount_amount", "discount_rate"],
+                dimensions=["supplier_nation"],
+            )
+
+        assert result.success == 0
+        assert "dimension preflight failed" in result.error
+        assert result.result["invalid_dimensions"] == [
+            {
+                "name": "supplier_nation",
+                "unsupported_metrics": ["shipped_revenue", "discount_amount"],
+                "supported_metrics": ["discount_rate"],
+            }
+        ]
+        assert result.result["common_dimensions"] == ["ship_date"]
+        assert result.result["suggested_metric_groups"] == [
+            {"metrics": ["shipped_revenue", "discount_amount"], "dimensions": []},
+            {"metrics": ["discount_rate"], "dimensions": ["supplier_nation"]},
+        ]
+        mock_adapter.query_metrics.assert_not_called()
+
+    def test_query_metrics_preflight_preserves_metric_time_in_retry_guidance(self, semantic_tools, mock_adapter):
+        """Preflight retry guidance keeps requested metric-time dimensions."""
+        with patch(
+            "datus.tools.func_tool.semantic_tools._run_async",
+            side_effect=[
+                [{"name": "ship_date"}, {"name": "ship_mode"}],
+                [{"name": "ship_date"}, {"name": "supplier_nation"}],
+            ],
+        ):
+            result = semantic_tools.query_metrics(
+                metrics=["shipped_revenue", "discount_rate"],
+                dimensions=["metric_time__month", "supplier_nation"],
+            )
+
+        assert result.success == 0
+        assert result.result["common_dimensions"] == ["metric_time__month", "ship_date"]
+        assert result.result["suggested_metric_groups"] == [
+            {"metrics": ["shipped_revenue"], "dimensions": ["metric_time__month"]},
+            {"metrics": ["discount_rate"], "dimensions": ["metric_time__month", "supplier_nation"]},
+        ]
+        mock_adapter.query_metrics.assert_not_called()
+
+    def test_query_metrics_preflight_allows_time_grain_alias_for_known_time_dimension(self, semantic_tools):
+        query_result = QueryResult(
+            columns=["metric_time__month", "orders"],
+            data=[{"metric_time__month": "2024-01-01", "orders": 10}],
+            metadata={},
+        )
+
+        with patch(
+            "datus.tools.func_tool.semantic_tools._run_async",
+            side_effect=[
+                [{"name": "order_date", "type": "TIME"}],
+                query_result,
+            ],
+        ):
+            result = semantic_tools.query_metrics(
+                metrics=["orders"],
+                dimensions=["order_date__month"],
+                time_granularity="month",
+            )
+
+        assert result.success == 1
+
     def test_query_metrics_adapter_exception(self, semantic_tools):
         """Test query_metrics handles adapter exceptions gracefully."""
         with patch(
@@ -289,11 +549,29 @@ class TestQueryMetricsCompression:
             metadata={"sql": "SELECT SUM(revenue) AS revenue FROM orders"},
         )
 
-        with patch("datus.tools.func_tool.semantic_tools._run_async", return_value=query_result):
-            result = semantic_tools.query_metrics(metrics=["revenue"], dry_run=True)
+        with patch(
+            "datus.tools.func_tool.semantic_tools._run_async",
+            side_effect=[
+                [{"name": "customer_segment"}],
+                query_result,
+            ],
+        ):
+            result = semantic_tools.query_metrics(
+                metrics=["revenue"],
+                dimensions=["customer_segment"],
+                time_granularity="month",
+                dry_run=True,
+            )
 
         assert result.success == 1
         assert evidence.metric_dry_run_passed is True
+        assert evidence.metric_dry_run_queries == [
+            {
+                "metrics": ["revenue"],
+                "dimensions": ["customer_segment"],
+                "time_granularity": "month",
+            }
+        ]
         assert evidence.metric_sqls == {"revenue": "SELECT SUM(revenue) AS revenue FROM orders"}
 
     def test_query_metrics_non_dry_run_does_not_record_publish_evidence(self, semantic_tools):
@@ -351,7 +629,13 @@ class TestQueryMetricsCompression:
         """Test that all parameters are correctly passed to the adapter."""
         query_result = QueryResult(columns=["x"], data=[{"x": 1}], metadata={})
 
-        with patch("datus.tools.func_tool.semantic_tools._run_async", return_value=query_result):
+        with patch(
+            "datus.tools.func_tool.semantic_tools._run_async",
+            side_effect=[
+                [{"name": "region"}],
+                query_result,
+            ],
+        ):
             result = semantic_tools.query_metrics(
                 metrics=["revenue"],
                 dimensions=["region"],
@@ -1022,6 +1306,9 @@ class TestExtractDbConfig:
             "host": "localhost",
             "port": 3306,
             "password": "secret",
+            "role": "ANALYST",
+            "private_key_file": "/tmp/rsa_key.p8",
+            "private_key_file_pwd": 1234,
             "extra": "skip",
             "logic_name": "skip",
             "path_pattern": "skip",
@@ -1034,6 +1321,9 @@ class TestExtractDbConfig:
         assert result["db_type"] == "mysql"
         assert result["host"] == "localhost"
         assert result["port"] == "3306"
+        assert result["role"] == "ANALYST"
+        assert result["private_key_file"] == "/tmp/rsa_key.p8"
+        assert result["private_key_file_pwd"] == "1234"
         assert "extra" not in result
         assert "logic_name" not in result
         assert "path_pattern" not in result

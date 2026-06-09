@@ -15,13 +15,16 @@ from typing import AsyncGenerator, Dict, List, Literal, Optional
 
 from datus.agent.node.agentic_node import AgenticNode
 from datus.api.models.cli_models import (
+    IMessageContent,
     SSEDataType,
     SSEEndData,
     SSEErrorData,
     SSEEvent,
     SSEMessageData,
+    SSEMessagePayload,
     SSEPingData,
     SSESessionData,
+    SSEUsageData,
     StreamChatInput,
 )
 from datus.api.services.action_sse_converter import action_to_sse_event
@@ -226,13 +229,30 @@ def _merge_delta_run(run: list[SSEEvent]) -> SSEEvent:
 
 
 def _fill_database_context(
-    agent_config: AgentConfig,  # noqa: ARG001
-    catalog: Optional[str] = None,  # noqa: ARG001 — reserved for future use
-    database: Optional[str] = None,  # noqa: ARG001 — reserved for future use
-    schema: Optional[str] = None,  # noqa: ARG001 — reserved for future use
-) -> None:
-    """No-op: current_datasource is resolved at bootstrap; per-request database
-    selection is a logical-DB concern handled downstream, not a datasource override."""
+    agent_config: Optional[AgentConfig],
+    catalog: Optional[str] = None,
+    database: Optional[str] = None,
+    schema: Optional[str] = None,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Resolve API database context without changing the active datasource."""
+    config = None
+    if agent_config is not None:
+        try:
+            config = agent_config.current_db_config()
+        except Exception:
+            config = None
+
+    def first_string(*values):
+        for value in values:
+            if isinstance(value, str) and value:
+                return value
+        return None
+
+    return (
+        first_string(catalog, getattr(config, "catalog", None)),
+        first_string(database, getattr(config, "database", None)),
+        first_string(schema, getattr(config, "schema", None)),
+    )
 
 
 class ChatTask:
@@ -318,7 +338,7 @@ class ChatTaskManager:
                 agent_config.set_active_custom(model_id, persist=False)
             else:
                 agent_config.set_active_provider_model(provider, model_id, persist=False)
-        _fill_database_context(
+        request.catalog, request.database, request.db_schema = _fill_database_context(
             agent_config,
             catalog=request.catalog,
             database=request.database,
@@ -526,6 +546,7 @@ class ChatTaskManager:
                 ),
             )
             event_id += 1
+            event_id = await self._push_degraded_capability_warnings(task, node, event_id)
 
             # 3. Resolve @-references
             at_tables, at_metrics, at_sqls = self._resolve_at_context(
@@ -610,6 +631,22 @@ class ChatTaskManager:
                     include_final_response=_should_include_final_response(action, assistant_response_sent),
                 )
                 if sse:
+                    # Per-LLM-call usage event: the converter has no access
+                    # to the service-level session ids, so we stamp them
+                    # here before fan-out. Skip the assistant-message dedup
+                    # path entirely since usage carries no rendered text.
+                    if sse.event == "usage" and isinstance(sse.data, SSEUsageData):
+                        sse.data.session_id = session_id
+                        # Only main-agent usage (depth==0) belongs to this
+                        # node's LLM session. Sub-agent usage (depth>0) keeps the
+                        # sub-agent session id stamped by the converter so the
+                        # consumer can attribute it to the right session instead
+                        # of mislabelling it as the parent's.
+                        if sse.data.depth == 0:
+                            sse.data.llm_session_id = node.session_id
+                        await self._push_event(task, sse)
+                        event_id += 1
+                        continue
                     if _should_skip_duplicate_assistant_message(
                         action,
                         sse,
@@ -868,6 +905,16 @@ class ChatTaskManager:
         """
         from datus.agent.node.node_factory import create_node_input
 
+        node_agent_config = getattr(current_node, "agent_config", None)
+        if not isinstance(node_agent_config, AgentConfig):
+            node_agent_config = None
+        catalog, database, db_schema = _fill_database_context(
+            node_agent_config,
+            catalog=catalog,
+            database=database,
+            schema=db_schema,
+        )
+
         return create_node_input(
             user_message=user_message,
             node=current_node,
@@ -886,6 +933,35 @@ class ChatTaskManager:
     # @ reference resolution
     # ------------------------------------------------------------------
 
+    async def _push_degraded_capability_warnings(self, task: ChatTask, node: AgenticNode, event_id: int) -> int:
+        degraded = getattr(node, "degraded_capabilities", {}) or {}
+        context_warning = degraded.get("context_search_tools")
+        if not context_warning:
+            return event_id
+
+        await self._push_event(
+            task,
+            SSEEvent(
+                id=event_id,
+                event="message",
+                data=SSEMessageData(
+                    type=SSEDataType.CREATE_MESSAGE,
+                    payload=SSEMessagePayload(
+                        message_id=f"context-degraded-{uuid.uuid4().hex[:8]}",
+                        role="assistant",
+                        content=[
+                            IMessageContent(
+                                type="markdown",
+                                payload={"content": context_warning},
+                            )
+                        ],
+                    ),
+                ),
+                timestamp=now_utc_iso(),
+            ),
+        )
+        return event_id + 1
+
     def _resolve_at_context(
         self,
         agent_config: AgentConfig,
@@ -894,8 +970,12 @@ class ChatTaskManager:
         sql_paths: Optional[List[str]],
     ) -> tuple[List[TableSchema], List[Metric], List[ReferenceSql]]:
         """Resolve @-reference paths to typed objects using a fresh completer."""
-        completer = AtReferenceCompleter(agent_config)
-        completer.reload_data()
+        try:
+            completer = AtReferenceCompleter(agent_config)
+            completer.reload_data()
+        except Exception as exc:
+            logger.warning("Failed to resolve @ references; continuing without context references: %s", exc)
+            return [], [], []
 
         tables: List[TableSchema] = []
         for path in table_paths or []:

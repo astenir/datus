@@ -16,6 +16,7 @@ from rich.live import Live
 from rich.markdown import Markdown
 from rich.text import Text
 
+from datus.cli._render_utils import format_io_tokens
 from datus.cli.action_display.markdown_stream import MarkdownStreamBuffer
 from datus.cli.action_display.renderers import (
     _truncate_middle,
@@ -36,6 +37,12 @@ logger = get_logger(__name__)
 # Static PROCESSING symbol: hollow circle (○). No blink — the refresh loop
 # is still driven by ``_tick`` but the glyph is constant.
 _PROCESSING_SYMBOL = "\u25cb"
+
+# In-progress hint shown in the pinned region while a major compact blocks the
+# run loop. Kept here (not via ``console.print``) so repeated majors overwrite a
+# single pinned line instead of stacking in the committed scrollback. Keep the
+# text in sync with ``cli_styles.render_compact_progress_line``.
+_COMPACT_PROGRESS_TEXT = "Compacting context\u2026"
 
 # In compact mode, only show the last N subagent actions in the Live overlay
 _SUBAGENT_ROLLING_WINDOW_SIZE = 2
@@ -156,6 +163,10 @@ class InlineStreamingContext:
         # region (TUI mode). ``_repaint_live`` reads this together with
         # ``_tick`` to animate the frame.
         self._processing_action: Optional[ActionHistory] = None
+        # True while a blocking major compact runs. Drawn by ``_repaint_live``
+        # as a single overwritable pinned line (set by ``compact_progress``,
+        # cleared by ``compact_summary``) so repeated majors never stack.
+        self._compact_in_progress: bool = False
         # ``action_id`` of every thinking_delta we've processed in the current
         # turn. The paired terminal ASSISTANT SUCCESS action from
         # ``openai_compatible`` / ``codex_model`` reuses the same id
@@ -347,12 +358,48 @@ class InlineStreamingContext:
             "first_action": first_action,
             "actions": [],
             "processing_action": None,
+            "token_input": 0,
+            "token_output": 0,
+            "token_cached": 0,
         }
+
+    @staticmethod
+    def _apply_subagent_usage(group: dict, action: ActionHistory) -> bool:
+        """Fold a subagent ``token_usage`` update into the group's counters.
+
+        Returns ``True`` when ``action`` was a usage update — the caller must
+        then skip the normal render path so the usage event never lands in
+        ``group["actions"]`` (which would draw it as a bogus tool row). The
+        cumulative input / output / cached counts are the running totals for
+        this subagent task, surfaced live in the pinned header.
+        """
+        if action.action_type != "token_usage":
+            return False
+        cumulative = action.output.get("cumulative") if isinstance(action.output, dict) else None
+        if isinstance(cumulative, dict):
+            group["token_input"] = int(cumulative.get("input_tokens", 0) or 0)
+            group["token_output"] = int(cumulative.get("output_tokens", 0) or 0)
+            group["token_cached"] = int(cumulative.get("cached_tokens", 0) or 0)
+        return True
+
+    @staticmethod
+    def _subagent_token_suffix(token_input: int, token_output: int, token_cached: int) -> str:
+        """Return `` · ↑12K(8K) ↓2.5K`` for a subagent's token totals.
+
+        Empty string when nothing is recorded yet; the input/output split and
+        cached parenthetical match the bottom status bar's
+        :meth:`StatusBarState.tokens_display`.
+        """
+        if token_input <= 0 and token_output <= 0:
+            return ""
+        return f" · {format_io_tokens(token_input, token_output, token_cached)}"
 
     def _update_subagent_display_sync(self, action: ActionHistory, group_key: Optional[str] = None) -> None:
         """Buffer sub-agent action (sync mode — no Live update)."""
         group = self._subagent_groups.get(group_key)
         if group is None:
+            return
+        if self._apply_subagent_usage(group, action):
             return
         if action.role == ActionRole.TOOL:
             group["tool_count"] += 1
@@ -383,7 +430,14 @@ class InlineStreamingContext:
             self.display.renderer.print_renderables(
                 self.display.console, self.display.renderer.render_subagent_action(buffered, self._verbose)
             )
-        done_text = self.display.renderer.render_subagent_done(group["tool_count"], group["start_time"], end_action)
+        done_text = self.display.renderer.render_subagent_done(
+            group["tool_count"],
+            group["start_time"],
+            end_action,
+            token_input=int(group.get("token_input", 0) or 0),
+            token_output=int(group.get("token_output", 0) or 0),
+            token_cached=int(group.get("token_cached", 0) or 0),
+        )
         self.display.console.print(done_text)
 
     # -- context manager (async mode) --------------------------------------
@@ -722,6 +776,12 @@ class InlineStreamingContext:
                 self._end_subagent_group_by_key(group_key, action)
                 continue
 
+            # -- compact feedback: in-progress hint / clear-screen + summary panel --
+            if action.action_type in ("compact_progress", "compact_summary"):
+                self._render_compact_action(action)
+                self._processed_index += 1
+                continue
+
             # -- Sub-agent action (depth > 0) --
             # The group must already exist — anchored by the matching task
             # PROCESSING action earlier in the stream (see Path A above).
@@ -833,6 +893,12 @@ class InlineStreamingContext:
                 self._end_subagent_group_by_key(group_key, action)
                 continue
 
+            # compact feedback (same handling as the live path)
+            if action.action_type in ("compact_progress", "compact_summary"):
+                self._render_compact_action(action)
+                self._processed_index += 1
+                continue
+
             # depth>0: render inside the sub-agent group. Group must
             # already exist (anchored by task PROCESSING). Orphans are
             # warned and dropped.
@@ -858,7 +924,12 @@ class InlineStreamingContext:
                 group = self._subagent_groups.pop(group_key)
                 first_action = group.get("first_action")
                 duration_sec = (datetime.now() - group["start_time"]).total_seconds() if group["start_time"] else 0.0
-                summary = f"  \u23bf  Done ({group['tool_count']} tool uses \u00b7 {duration_sec:.1f}s)"
+                token_suffix = self._subagent_token_suffix(
+                    int(group.get("token_input", 0) or 0),
+                    int(group.get("token_output", 0) or 0),
+                    int(group.get("token_cached", 0) or 0),
+                )
+                summary = f"  \u23bf  Done ({group['tool_count']} tool uses \u00b7 {duration_sec:.1f}s){token_suffix}"
                 if self._tui_mode:
                     # Header lives in the pinned region (just cleared) —
                     # emit ⏺ header + ⎿ Done together so the scrollback
@@ -921,12 +992,23 @@ class InlineStreamingContext:
         tool_count: int,
         start_time: Optional[datetime],
         end_action: ActionHistory,
+        token_input: int = 0,
+        token_output: int = 0,
+        token_cached: int = 0,
     ) -> None:
         """Emit the standard compact collapsed subagent block into the append area."""
         from datus.cli.tui.console_bridge import run_in_terminal_sync
 
         console = self.display.console
-        renderables = self.display.renderer.render_subagent_collapsed(first_action, tool_count, start_time, end_action)
+        renderables = self.display.renderer.render_subagent_collapsed(
+            first_action,
+            tool_count,
+            start_time,
+            end_action,
+            token_input=token_input,
+            token_output=token_output,
+            token_cached=token_cached,
+        )
 
         def _emit() -> None:
             self.display.renderer.print_renderables(console, renderables)
@@ -954,6 +1036,9 @@ class InlineStreamingContext:
                 "first_action": first_action,
                 "actions": [],
                 "processing_action": None,
+                "token_input": 0,
+                "token_output": 0,
+                "token_cached": 0,
             }
             self._update_subagent_groups_live()
 
@@ -961,6 +1046,12 @@ class InlineStreamingContext:
         """Buffer sub-agent action and update the grouped Live display."""
         group = self._subagent_groups.get(group_key)
         if group is None:
+            return
+        if self._apply_subagent_usage(group, action):
+            # Usage update: refresh the pinned header (token counter) without
+            # buffering a render row.
+            with self._print_lock:
+                self._update_subagent_groups_live()
             return
         if action.role == ActionRole.TOOL:
             group["tool_count"] += 1
@@ -1009,7 +1100,11 @@ class InlineStreamingContext:
             duration = f" \u00b7 {duration_sec:.1f}s"
 
         tool_count = group["tool_count"]
-        summary = f"  \u23bf  Done ({tool_count} tool uses{duration})"
+        token_input = int(group.get("token_input", 0) or 0)
+        token_output = int(group.get("token_output", 0) or 0)
+        token_cached = int(group.get("token_cached", 0) or 0)
+        token_suffix = self._subagent_token_suffix(token_input, token_output, token_cached)
+        summary = f"  \u23bf  Done ({tool_count} tool uses{duration}){token_suffix}"
 
         if self._tui_mode:
             # TUI mode: emit the same compact collapsed block that replay
@@ -1017,7 +1112,15 @@ class InlineStreamingContext:
             # Ctrl+O redraw for the same finished history.
             first_action = group.get("first_action")
             if first_action is not None:
-                self._print_subagent_collapsed_to_append(first_action, tool_count, group["start_time"], end_action)
+                self._print_subagent_collapsed_to_append(
+                    first_action,
+                    tool_count,
+                    group["start_time"],
+                    end_action,
+                    token_input=token_input,
+                    token_output=token_output,
+                    token_cached=token_cached,
+                )
             else:
                 self._print_to_append_area(f"[dim]{summary}[/dim]")
             # Refresh the pinned region: either paint remaining subagent
@@ -1137,7 +1240,12 @@ class InlineStreamingContext:
         for _group_key, group in self._subagent_groups.items():
             first_action = group.get("first_action")
             if first_action is not None:
-                header_segments = self._build_subagent_header_segments(first_action)
+                header_segments = self._build_subagent_header_segments(
+                    first_action,
+                    token_input=int(group.get("token_input", 0) or 0),
+                    token_output=int(group.get("token_output", 0) or 0),
+                    token_cached=int(group.get("token_cached", 0) or 0),
+                )
                 if header_segments:
                     result.append(LiveDisplayLine(segments=header_segments))
             tool_texts: List[Text] = []
@@ -1161,7 +1269,12 @@ class InlineStreamingContext:
         return result
 
     @staticmethod
-    def _build_subagent_header_segments(first_action: ActionHistory) -> List[Tuple[str, str]]:
+    def _build_subagent_header_segments(
+        first_action: ActionHistory,
+        token_input: int = 0,
+        token_output: int = 0,
+        token_cached: int = 0,
+    ) -> List[Tuple[str, str]]:
         """Split the ⏺ header into a cyan name segment + default goal segment.
 
         Mirrors the field layout of
@@ -1192,6 +1305,11 @@ class InlineStreamingContext:
         segments: List[Tuple[str, str]] = [("class:subagent-header-live", f"\u23fa {subagent_type}")]
         if goal:
             segments.append(("class:subagent-header-goal-live", f"({goal})"))
+        token_suffix = InlineStreamingContext._subagent_token_suffix(token_input, token_output, token_cached)
+        if token_suffix:
+            # Extra leading space so the counter reads as a separate column
+            # to the right of the name/goal.
+            segments.append(("class:subagent-header-tokens-live", f" {token_suffix}"))
         return segments
 
     # -- pinned-region painter (TUI-mode priority multiplexer) --------------
@@ -1220,6 +1338,13 @@ class InlineStreamingContext:
             return
         from datus.cli.tui.live_display_state import LiveDisplayLine
 
+        if self._compact_in_progress:
+            # A blocking major compact is running. One overwritable pinned line
+            # — repeated majors replace it in place, never stacking.
+            self._live_state.set_lines(
+                [LiveDisplayLine(segments=[("class:processing-live-top", _COMPACT_PROGRESS_TEXT)])]
+            )
+            return
         if self._processing_action is not None:
             frame = _PROCESSING_SYMBOL
             renderable = self.display.renderer.render_processing(self._processing_action, frame)
@@ -1467,6 +1592,62 @@ class InlineStreamingContext:
         return "\n".join(item.plain for item in items)
 
     # -- completed action printing -------------------------------------------
+
+    def _render_compact_action(self, action: ActionHistory) -> None:
+        """Render compact feedback.
+
+        ``compact_progress`` flips a pinned-region flag so the TUI draws a
+        single, overwritable "Compacting context…" line via ``_repaint_live``
+        — it is NEVER appended to the committed scrollback, so repeated majors
+        in one turn cannot stack into multiple lines. On a plain console there
+        is no pinned region (mirrors how PROCESSING tool frames are TUI-only).
+
+        ``compact_summary`` clears that flag, clears the screen, then prints the
+        summary panel to the committed scrollback. Unlike
+        :meth:`_reprint_with_collapse` we clear WITHOUT replaying history: a
+        major compact has just collapsed the session into this summary, so the
+        panel is the new visual anchor. TUI clears go through the pinned-region
+        callbacks (mirrors the verbose-toggle path); a plain console falls back
+        to ``console.clear()`` + ``\\033[3J``.
+        """
+        from datus.cli.cli_styles import render_compact_summary_panel
+
+        if action.action_type == "compact_progress":
+            self._compact_in_progress = True
+            self._repaint_live()
+            return
+
+        out = action.output if isinstance(action.output, dict) else {}
+        summary = str(out.get("summary", "") or "")
+        self._compact_in_progress = False
+        if not summary:
+            # Failed/empty major (e.g. the summary call errored): just drop the
+            # pinned hint — no screen wipe, no panel.
+            self._repaint_live()
+            return
+        self._stop_processing_live()
+        self._stop_subagent_live()
+        with self._print_lock:
+            if self._clear_screen_callback is not None:
+                try:
+                    self._clear_screen_callback()
+                except Exception as exc:
+                    logger.debug("clear_screen_callback raised in compact summary: %s", exc, exc_info=True)
+            else:
+                self.display.console.clear()
+                sys.stdout.write("\033[3J")
+                sys.stdout.flush()
+            # Do not repaint the welcome banner here: ``_clear_header_callback``
+            # is wired from ChatCommands for Ctrl+O history redraws, and the
+            # manual ``/compact`` path only clears and prints the summary panel.
+            # Reusing it would make the auto-compact path diverge visually.
+            self.display.console.print(
+                render_compact_summary_panel(
+                    summary,
+                    int(out.get("summary_token", 0) or 0),
+                    str(out.get("history_jsonl", "") or ""),
+                )
+            )
 
     def _print_completed_action(self, action: ActionHistory) -> None:
         """Print a completed action permanently to the console."""

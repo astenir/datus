@@ -278,6 +278,54 @@ class TestChatAgenticNodeToolSetup:
         # added in ``profiles._NORMAL_RULES`` would never fire.
         assert node.tool_registry.get("execute_command") == "bash_tools"
 
+    def test_context_search_failure_does_not_remove_db_tools(self, real_agent_config, mock_llm_create):
+        """Embedding/context setup failures should only remove context tools."""
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+        from datus.tools.func_tool.database import DBFuncTool
+
+        with patch("datus.agent.node.chat_agentic_node.ContextSearchTools", side_effect=RuntimeError("hf offline")):
+            node = ChatAgenticNode(
+                node_id="test_context_degraded",
+                description="Test context degradation",
+                node_type=NodeType.TYPE_CHAT,
+                agent_config=real_agent_config,
+            )
+
+        tool_names = {tool.name for tool in node.tools}
+        registry = node.tool_registry.to_dict()
+
+        assert isinstance(node.db_func_tool, DBFuncTool)
+        assert node.context_search_tools is None
+        assert "list_tables" in tool_names
+        assert "context_search_tools" not in set(registry.values())
+        assert registry["list_tables"] == "db_tools"
+        assert "context_search_tools" in node.degraded_capabilities
+        assert "hf offline" in node.degraded_capabilities["context_search_tools"]
+
+    def test_reference_template_failure_does_not_remove_db_tools(self, real_agent_config, mock_llm_create):
+        """Embedding/template setup failures should only remove template tools."""
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+        from datus.tools.func_tool.database import DBFuncTool
+
+        with patch("datus.agent.node.chat_agentic_node.ReferenceTemplateTools", side_effect=RuntimeError("hf offline")):
+            node = ChatAgenticNode(
+                node_id="test_reference_template_degraded",
+                description="Test reference template degradation",
+                node_type=NodeType.TYPE_CHAT,
+                agent_config=real_agent_config,
+            )
+
+        tool_names = {tool.name for tool in node.tools}
+        registry = node.tool_registry.to_dict()
+
+        assert isinstance(node.db_func_tool, DBFuncTool)
+        assert node.reference_template_tools is None
+        assert "list_tables" in tool_names
+        assert "reference_template_tools" not in set(registry.values())
+        assert registry["list_tables"] == "db_tools"
+        assert "reference_template_tools" in node.degraded_capabilities
+        assert "hf offline" in node.degraded_capabilities["reference_template_tools"]
+
     def test_has_ask_user_tools(self, real_agent_config, mock_llm_create):
         """Chat node has ask_user tool set up via _setup_ask_user_tool."""
         from datus.agent.node.chat_agentic_node import ChatAgenticNode
@@ -652,21 +700,6 @@ class TestChatAgenticNodeSystemPrompt:
         assert isinstance(prompt, str)
         assert len(prompt) >= 100
 
-    def test_get_system_prompt_with_conversation_summary(self, real_agent_config, mock_llm_create):
-        """_get_system_prompt accepts conversation summary argument."""
-        from datus.agent.node.chat_agentic_node import ChatAgenticNode
-
-        node = ChatAgenticNode(
-            node_id="test_prompt_summary",
-            description="Test prompt with summary",
-            node_type=NodeType.TYPE_CHAT,
-            agent_config=real_agent_config,
-        )
-
-        prompt = node._get_system_prompt(conversation_summary="Previous conversation about SQL queries.")
-        assert isinstance(prompt, str)
-        assert "Previous conversation about SQL queries." in prompt
-
     def test_get_system_prompt_contains_active_permission_profile(self, real_agent_config, mock_llm_create):
         """Runtime /profile changes must be visible to the next LLM turn."""
         from datus.agent.node.chat_agentic_node import ChatAgenticNode
@@ -683,6 +716,42 @@ class TestChatAgenticNodeSystemPrompt:
 
         assert "Current permission profile: dangerous" in prompt
         assert "authoritative for this turn" in prompt
+
+    def test_workflow_prompt_does_not_advertise_ask_user(self, real_agent_config, mock_llm_create):
+        """Workflow chat has no ask_user tool, so the prompt must not route to it."""
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+
+        node = ChatAgenticNode(
+            node_id="test_prompt_workflow",
+            description="Test workflow prompt",
+            node_type=NodeType.TYPE_CHAT,
+            agent_config=real_agent_config,
+            execution_mode="workflow",
+        )
+
+        prompt = node._get_system_prompt()
+
+        assert "Ask user tool (`ask_user`)" not in prompt
+        assert "call `ask_user` FIRST" not in prompt
+        assert "No ask_user tool is available" in prompt
+        assert "stop with a concise missing-information response" in prompt
+
+    def test_interactive_prompt_advertises_ask_user(self, real_agent_config, mock_llm_create):
+        """Interactive chat keeps ask_user routing guidance."""
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+
+        node = ChatAgenticNode(
+            node_id="test_prompt_interactive",
+            description="Test interactive prompt",
+            node_type=NodeType.TYPE_CHAT,
+            agent_config=real_agent_config,
+            execution_mode="interactive",
+        )
+
+        prompt = node._get_system_prompt()
+
+        assert "Ask user tool (`ask_user`)" in prompt
+        assert "call `ask_user` FIRST" in prompt
 
     def test_get_system_prompt_fallback_on_missing_template(self, real_agent_config, mock_llm_create):
         """_get_system_prompt falls back to chat_system when configured template is missing."""

@@ -75,6 +75,45 @@ def build_tool_result_content(action: ActionHistory) -> List[MessageContent]:
     return [MessageContent(type="call-tool-result", payload=payload_data)]
 
 
+def build_token_usage_content(action: ActionHistory) -> Optional[List[MessageContent]]:
+    """Build a structured ``usage`` content from a ``token_usage`` action.
+
+    Emitted once per LLM call so print-mode / programmatic consumers
+    (``datus -p``, desktop bridge) see the real token counts instead of a
+    bare "Token usage update" thinking line. Mirrors the API ``usage`` SSE
+    event payload (cumulative turn totals + this call's delta).
+    """
+    output = action.output if isinstance(action.output, dict) else {}
+    cumulative = output.get("cumulative") if isinstance(output.get("cumulative"), dict) else {}
+    delta = output.get("delta") if isinstance(output.get("delta"), dict) else {}
+
+    def _i(d: dict, key: str) -> int:
+        try:
+            return int(d.get(key, 0) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    payload = {
+        "requests": _i(cumulative, "requests"),
+        "input_tokens": _i(cumulative, "input_tokens"),
+        "output_tokens": _i(cumulative, "output_tokens"),
+        "total_tokens": _i(cumulative, "total_tokens"),
+        "cached_tokens": _i(cumulative, "cached_tokens"),
+        "reasoning_tokens": _i(cumulative, "reasoning_tokens"),
+        "last_call_input_tokens": _i(output, "last_call_input_tokens"),
+        "context_length": _i(output, "context_length"),
+        "delta": {
+            "requests": _i(delta, "requests"),
+            "input_tokens": _i(delta, "input_tokens"),
+            "output_tokens": _i(delta, "output_tokens"),
+            "total_tokens": _i(delta, "total_tokens"),
+            "cached_tokens": _i(delta, "cached_tokens"),
+            "reasoning_tokens": _i(delta, "reasoning_tokens"),
+        },
+    }
+    return [MessageContent(type="usage", payload=payload)]
+
+
 def build_thinking_content(action: ActionHistory) -> Optional[List[MessageContent]]:
     """Extract text content from action for thinking/markdown display."""
     action_type = action.action_type
@@ -167,6 +206,30 @@ def build_user_content(action: ActionHistory) -> List[MessageContent]:
     return [MessageContent(type="markdown", payload=payload_data)]
 
 
+def build_compact_summary_content(action: ActionHistory) -> Optional[List[MessageContent]]:
+    """Build a markdown content from a ``compact_summary`` action.
+
+    Carries a ``kind`` marker so a print/API frontend can recognise the
+    compacted-context summary (and e.g. collapse the prior transcript) instead
+    of treating it as a normal assistant message. The backend never clears the
+    screen or mutates anything here — it only emits data.
+    """
+    out = action.output if isinstance(action.output, dict) else {}
+    summary = str(out.get("summary", "") or "")
+    if not summary:
+        return None
+    # ``history_jsonl`` is a server-local filesystem path; it is intentionally
+    # excluded here so API/print consumers never receive backend filesystem
+    # details (the local CLI panel reads the path from the action output
+    # directly, not from this externally visible payload).
+    payload = {
+        "content": summary,
+        "kind": "compact_summary",
+        "summary_token": int(out.get("summary_token", 0) or 0),
+    }
+    return [MessageContent(type="markdown", payload=payload)]
+
+
 def action_to_content(action: ActionHistory) -> Optional[List[MessageContent]]:
     """Convert an ActionHistory object to a list of MessageContent.
 
@@ -176,6 +239,12 @@ def action_to_content(action: ActionHistory) -> Optional[List[MessageContent]]:
     role = action.role
     status = action.status
 
+    if action.action_type == "token_usage":
+        return build_token_usage_content(action)
+    if action.action_type == "compact_progress":
+        return None  # in-progress hint is REPL-only; print/API frontends skip it
+    if action.action_type == "compact_summary":
+        return build_compact_summary_content(action)
     if role == ActionRole.TOOL and status == ActionStatus.PROCESSING:
         return build_tool_call_content(action)
     elif role == ActionRole.TOOL:

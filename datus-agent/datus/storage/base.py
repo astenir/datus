@@ -136,6 +136,33 @@ class BaseEmbeddingStore(StorageBase):
                 self._create_scalar_index(col)
             logger.debug(f"Table {self.table_name} initialized successfully with embedding function")
 
+    def _open_existing_table_for_read(self) -> Optional[VectorTable]:
+        """Open an existing vector table for read-only access without embeddings."""
+        if self.table is not None:
+            return self.table
+        if not self.db.table_exists(self.table_name):
+            return None
+        self.table = self.db.open_table(self.table_name)
+        return self.table
+
+    def _empty_result(self, select_fields: Optional[List[str]] = None) -> pa.Table:
+        """Return an empty result table shaped like this store's schema."""
+        schema = self._schema or pa.schema([])
+        if select_fields is None:
+            fields = [field for field in schema if field.name != self.vector_column_name]
+        else:
+            fields = []
+            for field_name in select_fields:
+                if field_name == self.vector_column_name:
+                    continue
+                if field_name in schema.names:
+                    fields.append(schema.field(field_name))
+                else:
+                    fields.append(pa.field(field_name, pa.null()))
+        result_schema = pa.schema(fields)
+        arrays = [pa.array([], type=field.type) for field in fields]
+        return pa.Table.from_arrays(arrays, schema=result_schema)
+
     def _apply_default_values(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Fill in default values for rows that are missing them."""
         if not self._default_values:
@@ -148,12 +175,16 @@ class BaseEmbeddingStore(StorageBase):
     def _search_all(
         self, where: WhereExpr = None, select_fields: Optional[List[str]] = None, limit: Optional[int] = None
     ) -> pa.Table:
-        self._ensure_table_ready()
-        if limit:
+        table = self._open_existing_table_for_read()
+        if table is None:
+            return self._empty_result(select_fields)
+        if limit is not None:
             row_limit = limit
         else:
-            row_limit = self.table.count_rows(where) if where else self.table.count_rows()
-        result = self.table.search_all(where=where, select_fields=select_fields, limit=row_limit)
+            row_limit = table.count_rows(where) if where else table.count_rows()
+        if row_limit == 0:
+            return self._empty_result(select_fields)
+        result = table.search_all(where=where, select_fields=select_fields, limit=row_limit)
         if self.vector_column_name in result.column_names:
             result = result.drop([self.vector_column_name])
         return result
@@ -171,7 +202,12 @@ class BaseEmbeddingStore(StorageBase):
 
         # Try to access the model (this will trigger lazy loading)
         try:
-            _ = self.model.model
+            model = self.model.model
+            if model is None:
+                raise DatusException(
+                    ErrorCode.MODEL_EMBEDDING_ERROR,
+                    message=f"Embedding model '{self.model.model_name}' initialization produced no model",
+                )
         except DatusException as e:
             # Re-raise DatusException directly to avoid nesting
             raise e
@@ -180,6 +216,24 @@ class BaseEmbeddingStore(StorageBase):
                 ErrorCode.MODEL_EMBEDDING_ERROR,
                 message=f"Embedding model '{self.model.model_name}' initialization failed: {str(e)}",
             ) from e
+
+    def _ensure_embedding_cache_ready_for_search(self):
+        """Avoid on-demand downloads for read-time vector search."""
+        try:
+            has_snapshot = self.model.has_local_fastembed_snapshot()
+        except DatusException:
+            raise
+        except Exception as e:
+            raise DatusException(
+                ErrorCode.MODEL_EMBEDDING_ERROR,
+                message=f"Embedding cache readiness check failed for '{self.table_name}': {e}",
+            ) from e
+
+        if not has_snapshot:
+            raise DatusException(
+                ErrorCode.MODEL_EMBEDDING_ERROR,
+                message=f"Embedding model cache is missing for vector search on '{self.table_name}'",
+            )
 
     def truncate(self) -> None:
         """Drop the entire table and reset state (admin operation)."""
@@ -449,6 +503,14 @@ class BaseEmbeddingStore(StorageBase):
         where: WhereExpr = None,
         query_type: str = "vector",
     ) -> pa.Table:
+        table = self._open_existing_table_for_read()
+        if table is None:
+            return self._empty_result(select_fields)
+        row_count = table.count_rows(where) if where else table.count_rows()
+        if row_count == 0:
+            return self._empty_result(select_fields)
+
+        self._ensure_embedding_cache_ready_for_search()
         self._ensure_table_ready()
 
         if query_type == "hybrid":
@@ -512,8 +574,7 @@ class BaseEmbeddingStore(StorageBase):
             ) from e
 
     def table_size(self) -> int:
-        self._ensure_table_ready()
-        return self.table.count_rows()
+        return self._count_rows()
 
     def update(self, where: WhereExpr, update_values: Dict[str, Any], unique_filter: Optional[WhereExpr] = None):
         self._ensure_table_ready()
@@ -577,8 +638,10 @@ class BaseEmbeddingStore(StorageBase):
 
     def _count_rows(self, where: WhereExpr = None) -> int:
         """Count rows with optional filter."""
-        self._ensure_table_ready()
-        return self.table.count_rows(where)
+        table = self._open_existing_table_for_read()
+        if table is None:
+            return 0
+        return table.count_rows(where)
 
     def query_with_filter(
         self,
@@ -587,10 +650,14 @@ class BaseEmbeddingStore(StorageBase):
         limit: Optional[int] = None,
     ) -> pa.Table:
         """Query rows with filter, field selection, and optional limit."""
-        self._ensure_table_ready()
+        table = self._open_existing_table_for_read()
+        if table is None:
+            return self._empty_result(select_fields)
         if limit is None:
-            limit = self.table.count_rows(where)
-        return self.table.search_all(
+            limit = table.count_rows(where)
+        if limit == 0:
+            return self._empty_result(select_fields)
+        return table.search_all(
             where=where,
             select_fields=select_fields,
             limit=limit,

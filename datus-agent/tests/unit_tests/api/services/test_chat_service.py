@@ -330,17 +330,19 @@ class TestChatServiceCompactSession:
         verify_session = verify_sm.get_session(session_id)
         items = await verify_session.get_items()
 
-        # After compact, the session must contain exactly the user-marker
-        # and assistant-summary pair we wrote in _manual_compact.
-        assert len(items) == 2
-        assert items[0]["role"] == "user"
-        assert "compacted" in items[0]["content"].lower()
-        assert items[1]["role"] == "assistant"
-        # Assistant content is a list of typed parts; the first part is the summary text.
-        content = items[1]["content"]
-        assert isinstance(content, list)
-        assert content[0]["type"] == "output_text"
-        assert content[0]["text"] == "Summary of conversation"
+        # After the compact refactor, the session contains a single assistant
+        # message carrying the summary + a JSONL recovery pointer appended by
+        # the host. Storing as ``assistant`` (not ``user``) makes the next
+        # turn see the summary as a prior assistant utterance — the natural
+        # shape for "I summarized previously, now answer the next question",
+        # and avoids /chat/history rendering a phantom user message.
+        assert len(items) == 1
+        assert items[0]["role"] == "assistant"
+        content_blocks = items[0]["content"]
+        assert isinstance(content_blocks, list) and len(content_blocks) == 1
+        assert content_blocks[0]["type"] == "output_text"
+        body = content_blocks[0]["text"]
+        assert "Summary of conversation" in body
 
 
 @pytest.mark.asyncio

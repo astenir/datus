@@ -193,6 +193,21 @@ class TestCmdSchemaLinking:
 
         mock_rag.search_similar.assert_called_once()
 
+    def test_schema_search_embedding_failure_shows_warning(self, agent_commands):
+        mock_rag = MagicMock()
+        mock_rag.search_similar.side_effect = RuntimeError(
+            "error_code=300019 error_message=Embedding model cache is missing"
+        )
+
+        with patch("datus.storage.schema_metadata.SchemaWithValueRAG", return_value=mock_rag):
+            with patch.object(agent_commands, "_prompt_db_layers", return_value=("", "testdb", "")):
+                agent_commands.cli.prompt_input = MagicMock(return_value="5")
+                agent_commands.cmd_schema_linking("find tables about revenue")
+
+        output = agent_commands.console.file.getvalue()
+        assert "Context search and @ references are disabled" in output
+        assert "Error" not in output
+
 
 # ---------------------------------------------------------------------------
 # Tests: cmd_search_metrics
@@ -205,6 +220,39 @@ class TestCmdSearchMetrics:
         agent_commands.cmd_search_metrics("")
         output = agent_commands.console.file.getvalue()
         assert "Error" in output
+
+    def test_context_tools_unavailable_shows_warning(self, agent_commands):
+        """When ContextSearchTools fails, cmd_search_metrics prints a warning instead of crashing."""
+        with patch(
+            "datus.cli.agent_commands.ContextSearchTools",
+            side_effect=RuntimeError("embedding model download failed"),
+        ):
+            agent_commands._context_search_tools = None
+            agent_commands._context_search_warning = ""
+            agent_commands.cmd_search_metrics("revenue")
+
+        output = agent_commands.console.file.getvalue()
+        assert "Context search and @ references are disabled" in output
+
+    def test_search_embedding_failure_shows_warning_after_prompts(self, agent_commands):
+        from datus.tools.func_tool.base import FuncToolResult
+
+        mock_result = MagicMock(spec=FuncToolResult)
+        mock_result.success = False
+        mock_result.result = None
+        mock_result.error = "error_code=300019 error_message=Embedding model cache is missing"
+        agent_commands.cli.prompt_input = MagicMock(return_value="5")
+
+        with patch.object(agent_commands, "_context_search_tools") as mock_cst:
+            mock_cst.search_metrics.return_value = mock_result
+            with patch.object(agent_commands, "_prompt_subject_path", return_value=None) as prompt_subject:
+                agent_commands.cmd_search_metrics("revenue")
+
+        prompt_subject.assert_called_once()
+        agent_commands.cli.prompt_input.assert_called_once_with("Enter top_n to match", default="5")
+        output = agent_commands.console.file.getvalue()
+        assert "Context search and @ references are disabled" in output
+        assert "Error" not in output
 
     def test_success_displays_metrics(self, agent_commands):
         from datus.tools.func_tool.base import FuncToolResult
@@ -270,6 +318,39 @@ class TestCmdSearchReferenceSql:
         agent_commands.cmd_search_reference_sql("")
         output = agent_commands.console.file.getvalue()
         assert "Error" in output
+
+    def test_context_tools_unavailable_shows_warning(self, agent_commands):
+        """When ContextSearchTools fails, cmd_search_reference_sql prints a warning instead of crashing."""
+        with patch(
+            "datus.cli.agent_commands.ContextSearchTools",
+            side_effect=RuntimeError("embedding model download failed"),
+        ):
+            agent_commands._context_search_tools = None
+            agent_commands._context_search_warning = ""
+            agent_commands.cmd_search_reference_sql("revenue sql")
+
+        output = agent_commands.console.file.getvalue()
+        assert "Context search and @ references are disabled" in output
+
+    def test_search_embedding_failure_shows_warning_after_prompts(self, agent_commands):
+        from datus.tools.func_tool.base import FuncToolResult
+
+        mock_result = MagicMock(spec=FuncToolResult)
+        mock_result.success = False
+        mock_result.result = None
+        mock_result.error = "error_code=300019 error_message=Embedding model cache is missing"
+        agent_commands.cli.prompt_input = MagicMock(return_value="5")
+
+        with patch.object(agent_commands, "_context_search_tools") as mock_cst:
+            mock_cst.search_reference_sql.return_value = mock_result
+            with patch.object(agent_commands, "_prompt_subject_path", return_value=None) as prompt_subject:
+                agent_commands.cmd_search_reference_sql("revenue sql")
+
+        prompt_subject.assert_called_once()
+        agent_commands.cli.prompt_input.assert_called_once_with("Enter top_n to match", default="5")
+        output = agent_commands.console.file.getvalue()
+        assert "Context search and @ references are disabled" in output
+        assert "Error" not in output
 
     def test_success_displays_table(self, agent_commands):
         from datus.tools.func_tool.base import FuncToolResult
@@ -356,6 +437,24 @@ class TestCmdDocSearch:
         agent_commands.cmd_doc_search("")
         output = agent_commands.console.file.getvalue()
         assert "Keywords cannot be empty." in output
+
+    def test_document_embedding_failure_shows_warning(self, agent_commands):
+        mock_result = MagicMock()
+        mock_result.success = False
+        mock_result.error = "error_code=300019 error_message=Embedding model cache is missing"
+        mock_result.doc_count = 0
+        mock_result.docs = {}
+        mock_tool = MagicMock()
+        mock_tool._get_document_store.return_value = None
+        mock_tool.search_document.return_value = mock_result
+        agent_commands.cli.prompt_input = MagicMock(side_effect=["duckdb", "", "5"])
+
+        with patch("datus.tools.search_tools.search_tool.SearchTool", return_value=mock_tool):
+            agent_commands.cmd_doc_search("create table")
+
+        output = agent_commands.console.file.getvalue()
+        assert "Context search and @ references are disabled" in output
+        assert "Error" not in output
 
 
 # ---------------------------------------------------------------------------

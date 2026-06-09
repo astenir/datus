@@ -134,8 +134,8 @@ class ExploreAgenticNode(AgenticNode):
                 # the model cannot drift into broader schema exploration.
                 self.tools.extend(
                     [
-                        trans_to_function_tool(self.db_func_tool.describe_table),
-                        trans_to_function_tool(self.db_func_tool.read_query),
+                        self.db_func_tool.to_function_tool(self.db_func_tool.describe_table),
+                        self.db_func_tool.to_function_tool(self.db_func_tool.read_query),
                     ]
                 )
             else:
@@ -181,8 +181,8 @@ class ExploreAgenticNode(AgenticNode):
             # Mirror the subset actually exposed by this node — describe/read
             # always, the rest only when scoped_tables isn't set.
             db_bucket = [
-                trans_to_function_tool(self.db_func_tool.describe_table),
-                trans_to_function_tool(self.db_func_tool.read_query),
+                self.db_func_tool.to_function_tool(self.db_func_tool.describe_table),
+                self.db_func_tool.to_function_tool(self.db_func_tool.read_query),
             ]
             scoped = isinstance(self.input, ExploreNodeInput) and self.input.scoped_tables
             if not scoped:
@@ -201,9 +201,7 @@ class ExploreAgenticNode(AgenticNode):
             mapping["date_parsing_tools"] = list(self.date_parsing_tools.available_tools())
         return mapping
 
-    def _get_system_prompt(
-        self, conversation_summary: Optional[str] = None, prompt_version: Optional[str] = None
-    ) -> str:
+    def _get_system_prompt(self, prompt_version: Optional[str] = None) -> str:
         """Get the system prompt for the explore node."""
         from datus.prompts.prompt_manager import get_prompt_manager
         from datus.utils.time_utils import get_default_current_date
@@ -225,7 +223,6 @@ class ExploreAgenticNode(AgenticNode):
             "has_date_parsing_tools": bool(self.date_parsing_tools),
             **build_datasource_prompt_context(self.agent_config),
             "workspace_root": self._resolve_workspace_root(),
-            "conversation_summary": conversation_summary,
             "current_date": get_default_current_date(None),
             "scoped_tables": (
                 self.input.scoped_tables
