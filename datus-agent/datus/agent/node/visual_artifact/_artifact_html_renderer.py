@@ -234,35 +234,32 @@ def _copy_offline_assets(artifact_dir: Path, dist_dir: Path) -> Tuple[str, str]:
     )
 
 
-def render_artifact_html(
+def render_artifact_html_str(
     *,
     spec: ArtifactHtmlSpec,
     project_root: Path,
     slug: str,
     dist: Optional[Path] = None,
-) -> Path:
-    """Compile ``<artifact_dir>/index.html`` from render/ + queries.
+) -> str:
+    """Compile the HTML string for an artifact without writing to disk.
+
+    Same pipeline as :func:`render_artifact_html` but returns the rendered
+    HTML string instead of writing ``index.html``.  Useful for API
+    endpoints that serve the HTML directly (e.g.
+    ``GET /api/v1/dashboard/html``).
 
     Args:
-        spec: per-kind config (allowlist, template path, placeholders, …).
-        project_root: ``AgentConfig.project_root``; resolved to an
-            absolute path before the artifact dir is composed.
-        slug: target artifact slug (matches the on-disk directory name).
-        dist: optional path to a local ``@datus/web-artifact-render``
-            ``dist/`` directory containing ``index.css`` / ``index.umd.js``.
-            When provided and valid, the two files are copied next to the
-            generated HTML and the template links to them via relative
-            paths (so the page works offline through ``file://``). When
-            ``None`` (or the directory is missing / incomplete), the
-            template links to the pinned unpkg CDN instead.
+        spec: per-kind config.
+        project_root: resolved project root.
+        slug: artifact slug.
+        dist: optional local dist directory (offline mode).
 
     Returns:
-        Absolute path to the generated ``index.html``.
+        The rendered HTML string.
 
     Raises:
         ValueError: if ``slug`` fails ``spec.slug_regex``.
         FileNotFoundError: if ``render/app.jsx`` is missing.
-        OSError: on read/write failures.
     """
     if not spec.slug_regex.fullmatch(slug):
         raise ValueError(f"invalid {spec.kind}_slug {slug!r}; expected to match {spec.slug_regex.pattern}")
@@ -304,6 +301,46 @@ def render_artifact_html(
     for placeholder, value in spec.extra_placeholders.items():
         rendered = rendered.replace(placeholder, value)
 
+    return rendered
+
+
+def render_artifact_html(
+    *,
+    spec: ArtifactHtmlSpec,
+    project_root: Path,
+    slug: str,
+    dist: Optional[Path] = None,
+) -> Path:
+    """Compile ``<artifact_dir>/index.html`` from render/ + queries.
+
+    Delegates to :func:`render_artifact_html_str` for the HTML generation
+    and writes the result to ``<artifact_dir>/index.html``.
+
+    Args:
+        spec: per-kind config (allowlist, template path, placeholders, …).
+        project_root: ``AgentConfig.project_root``; resolved to an
+            absolute path before the artifact dir is composed.
+        slug: target artifact slug (matches the on-disk directory name).
+        dist: optional path to a local ``@datus/web-artifact-render``
+            ``dist/`` directory containing ``index.css`` / ``index.umd.js``.
+            When provided and valid, the two files are copied next to the
+            generated HTML and the template links to them via relative
+            paths (so the page works offline through ``file://``). When
+            ``None`` (or the directory is missing / incomplete), the
+            template links to the pinned unpkg CDN instead.
+
+    Returns:
+        Absolute path to the generated ``index.html``.
+
+    Raises:
+        ValueError: if ``slug`` fails ``spec.slug_regex``.
+        FileNotFoundError: if ``render/app.jsx`` is missing.
+        OSError: on read/write failures.
+    """
+    rendered = render_artifact_html_str(spec=spec, project_root=project_root, slug=slug, dist=dist)
+
+    project_root = project_root.resolve()
+    artifact_dir = project_root / spec.root_dir_name / slug
     out_path = artifact_dir / "index.html"
     out_path.write_text(rendered, encoding="utf-8")
     logger.info("%s HTML written to %s", spec.kind, out_path)

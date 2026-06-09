@@ -146,6 +146,137 @@ async def test_load_local_template_pair_rejects_invalid_dashboard_slug(tmp_path:
 
 
 # ---------------------------------------------------------------------------
+# DashboardService.list_dashboards
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_dashboards_empty_when_no_dashboards_dir(tmp_path: Path):
+    """No ``dashboards/`` directory → empty list, not an error."""
+    result = await DashboardService(agent_config=None).list_dashboards(
+        project_files_root=tmp_path,
+    )
+
+    assert result.success is True
+    assert result.data == []
+
+
+@pytest.mark.asyncio
+async def test_list_dashboards_returns_single_dashboard(tmp_path: Path):
+    _write_dashboard(tmp_path)
+
+    result = await DashboardService(agent_config=None).list_dashboards(
+        project_files_root=tmp_path,
+    )
+
+    assert result.success is True
+    assert len(result.data) == 1
+    assert result.data[0].slug == "demo"
+    assert result.data[0].name == "Demo Dashboard"
+    assert result.data[0].description == "Just a demo"
+    assert result.data[0].kind == "dashboard"
+
+
+@pytest.mark.asyncio
+async def test_list_dashboards_returns_multiple_sorted_by_recency(tmp_path: Path):
+    """Dashboards are sorted by ``updated_at ?? created_at`` descending."""
+    # Write two dashboards with distinct manifests
+    old_manifest = {
+        "slug": "old",
+        "name": "Old Dashboard",
+        "description": "An older dashboard",
+        "kind": "dashboard",
+        "created_at": "2026-01-01T00:00:00Z",
+    }
+    old_dir = tmp_path / "dashboards" / "old"
+    old_dir.mkdir(parents=True, exist_ok=True)
+    (old_dir / "render").mkdir(exist_ok=True)
+    (old_dir / "render" / "app.jsx").write_text(_SAMPLE_APP_JSX, encoding="utf-8")
+    (old_dir / "manifest.json").write_text(json.dumps(old_manifest), encoding="utf-8")
+
+    newer_manifest = {
+        "slug": "newer",
+        "name": "Newer Dashboard",
+        "description": "More recent",
+        "kind": "dashboard",
+        "created_at": "2026-06-01T00:00:00Z",
+        "updated_at": "2026-06-01T12:00:00Z",
+    }
+    newer_dir = tmp_path / "dashboards" / "newer"
+    newer_dir.mkdir(parents=True, exist_ok=True)
+    (newer_dir / "render").mkdir(exist_ok=True)
+    (newer_dir / "render" / "app.jsx").write_text(_SAMPLE_APP_JSX, encoding="utf-8")
+    (newer_dir / "manifest.json").write_text(json.dumps(newer_manifest), encoding="utf-8")
+
+    result = await DashboardService(agent_config=None).list_dashboards(
+        project_files_root=tmp_path,
+    )
+
+    assert result.success is True
+    assert len(result.data) == 2
+    # "newer" has updated_at, "old" has only created_at → newer comes first
+    assert result.data[0].slug == "newer"
+    assert result.data[1].slug == "old"
+
+
+@pytest.mark.asyncio
+async def test_list_dashboards_skips_corrupt_manifest(tmp_path: Path):
+    """A dashboard with a corrupt manifest.json is silently skipped."""
+    # Write a valid dashboard
+    good_manifest = {
+        "slug": "good",
+        "name": "Good Dashboard",
+        "description": "Valid manifest",
+        "kind": "dashboard",
+        "created_at": "2026-05-20T00:00:00Z",
+    }
+    good_dir = tmp_path / "dashboards" / "good"
+    good_dir.mkdir(parents=True, exist_ok=True)
+    (good_dir / "manifest.json").write_text(json.dumps(good_manifest), encoding="utf-8")
+
+    # Write a dashboard with corrupt manifest
+    bad_dir = tmp_path / "dashboards" / "bad"
+    bad_dir.mkdir(parents=True, exist_ok=True)
+    (bad_dir / "manifest.json").write_text("{not-json", encoding="utf-8")
+
+    result = await DashboardService(agent_config=None).list_dashboards(
+        project_files_root=tmp_path,
+    )
+
+    assert result.success is True
+    assert len(result.data) == 1
+    assert result.data[0].slug == "good"
+
+
+@pytest.mark.asyncio
+async def test_list_dashboards_skips_dir_without_manifest(tmp_path: Path):
+    """A subdirectory without manifest.json is silently skipped."""
+    good_manifest = {
+        "slug": "good",
+        "name": "Good Dashboard",
+        "description": "Valid manifest",
+        "kind": "dashboard",
+        "created_at": "2026-05-20T00:00:00Z",
+    }
+    good_dir = tmp_path / "dashboards" / "good"
+    good_dir.mkdir(parents=True, exist_ok=True)
+    (good_dir / "manifest.json").write_text(json.dumps(good_manifest), encoding="utf-8")
+
+    orphan = tmp_path / "dashboards" / "orphan"
+    orphan.mkdir(parents=True, exist_ok=True)
+    (orphan / "render").mkdir(exist_ok=True)
+    (orphan / "render" / "app.jsx").write_text("const x = 1;\n", encoding="utf-8")
+
+    result = await DashboardService(agent_config=None).list_dashboards(
+        project_files_root=tmp_path,
+    )
+
+    assert result.success is True
+    assert len(result.data) == 1
+    assert result.data[0].slug == "good"
+
+
+# ---------------------------------------------------------------------------
 # DashboardService.get_detail
 # ---------------------------------------------------------------------------
 

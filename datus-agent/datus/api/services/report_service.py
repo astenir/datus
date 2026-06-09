@@ -128,6 +128,100 @@ class ReportService:
         # need it for ``get_detail`` — bundle assembly is purely on-disk.
         self.agent_config = agent_config
 
+    # -- list ----------------------------------------------------------------
+
+    async def list_reports(
+        self,
+        *,
+        project_files_root: Path,
+    ) -> Result[List[ArtifactManifest]]:
+        """Enumerate all reports under ``<project_files_root>/reports/``.
+
+        Reads each subdirectory's ``manifest.json`` and returns a list of
+        :class:`ArtifactManifest` sorted by recency.  Corrupt or missing
+        manifests are silently skipped.
+        """
+        reports_root = project_files_root / "reports"
+        if not await asyncio.to_thread(reports_root.is_dir):
+            return Result(success=True, data=[])
+
+        def _scan() -> List[Path]:
+            return sorted(
+                (p for p in reports_root.iterdir() if p.is_dir()),
+                key=lambda p: p.name,
+            )
+
+        subdirs = await asyncio.to_thread(_scan)
+
+        manifests: List[ArtifactManifest] = []
+        for subdir in subdirs:
+            manifest_path = subdir / "manifest.json"
+            if not await asyncio.to_thread(manifest_path.is_file):
+                continue
+            try:
+                text = await asyncio.to_thread(manifest_path.read_text, "utf-8")
+                manifest = ArtifactManifest.model_validate(json.loads(text))
+                manifests.append(manifest)
+            except Exception as exc:
+                logger.warning("Skipping report %s: corrupt manifest.json (%s)", subdir.name, exc)
+                continue
+
+        def _sort_key(m: ArtifactManifest) -> str:
+            return m.updated_at or m.created_at or ""
+
+        manifests.sort(key=_sort_key, reverse=True)
+
+        return Result(success=True, data=manifests)
+
+    # -- html ----------------------------------------------------------------
+
+    async def render_html(
+        self,
+        *,
+        project_files_root: Path,
+        report_slug: str,
+    ) -> Result[str]:
+        """Compile the report HTML string for iframe rendering."""
+        from datus.agent.node.visual_artifact.report_html_renderer import (
+            render_report_html_str,
+        )
+
+        report_dir = _resolve_report_dir(project_files_root, report_slug)
+        if report_dir is None:
+            return Result(
+                success=False,
+                errorCode="INVALID_REPORT_SLUG",
+                errorMessage=f"report_slug must match {REPORT_SLUG_RE.pattern}",
+            )
+
+        try:
+            html_str = await asyncio.to_thread(
+                render_report_html_str,
+                project_root=project_files_root,
+                report_slug=report_slug,
+            )
+        except FileNotFoundError:
+            return Result(
+                success=False,
+                errorCode="REPORT_NOT_FOUND",
+                errorMessage=f"report {report_slug!r} not found or missing render/app.jsx",
+            )
+        except ValueError as exc:
+            return Result(
+                success=False,
+                errorCode="INVALID_REPORT_SLUG",
+                errorMessage=str(exc),
+            )
+        except Exception as exc:
+            logger.exception("Failed to render HTML for %s: %s", report_slug, exc)
+            return Result(
+                success=False,
+                errorCode="REPORT_NOT_FOUND",
+                errorMessage=str(exc),
+            )
+
+        return Result(success=True, data=html_str)
+
     # -- detail --------------------------------------------------------------
 
     async def get_detail(

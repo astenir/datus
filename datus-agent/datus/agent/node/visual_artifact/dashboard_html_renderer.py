@@ -47,6 +47,7 @@ from typing import Dict, Optional, Tuple
 from datus.agent.node.visual_artifact._artifact_html_renderer import (
     ArtifactHtmlSpec,
     render_artifact_html,
+    render_artifact_html_str,
 )
 from datus.utils.loggings import get_logger
 
@@ -158,4 +159,51 @@ def render_dashboard_html(
         project_root=project_root,
         slug=dashboard_slug,
         dist=dashboard_dist,
+    )
+
+
+def render_dashboard_html_str(
+    *,
+    project_root: Path,
+    dashboard_slug: str,
+    query_endpoint: Optional[str] = None,
+) -> str:
+    """Return the compiled HTML string for a dashboard without writing to disk.
+
+    Same as :func:`render_dashboard_html` but returns the HTML string
+    instead of writing ``index.html``.  Used by the ``GET
+    /api/v1/dashboard/html`` API endpoint.
+
+    Args:
+        project_root: ``AgentConfig.project_root``.
+        dashboard_slug: target dashboard slug.
+        query_endpoint: absolute URL the rendered HTML will POST to for
+            every dashboard query.  Defaults to
+            :data:`DEFAULT_QUERY_ENDPOINT`.
+
+    Returns:
+        The rendered HTML string.
+
+    Raises:
+        ValueError: if ``dashboard_slug`` is malformed.
+        FileNotFoundError: if ``render/app.jsx`` is missing.
+    """
+    spec = ArtifactHtmlSpec(
+        kind=_DASHBOARD_SPEC.kind,
+        root_dir_name=_DASHBOARD_SPEC.root_dir_name,
+        slug_regex=_DASHBOARD_SPEC.slug_regex,
+        artifact_dirs=_DASHBOARD_SPEC.artifact_dirs,
+        template_path=_DASHBOARD_SPEC.template_path,
+        data_placeholder=_DASHBOARD_SPEC.data_placeholder,
+        title_placeholder=_DASHBOARD_SPEC.title_placeholder,
+        css_url_placeholder=_DASHBOARD_SPEC.css_url_placeholder,
+        js_url_placeholder=_DASHBOARD_SPEC.js_url_placeholder,
+        extra_placeholders={
+            "__DATUS_QUERY_ENDPOINT__": _escape_js_single_quoted(query_endpoint or DEFAULT_QUERY_ENDPOINT),
+        },
+    )
+    return render_artifact_html_str(
+        spec=spec,
+        project_root=project_root,
+        slug=dashboard_slug,
     )

@@ -50,6 +50,7 @@ from typing import Dict, Optional, Tuple
 from datus.agent.node.visual_artifact._artifact_html_renderer import (
     ArtifactHtmlSpec,
     render_artifact_html,
+    render_artifact_html_str,
 )
 from datus.utils.loggings import get_logger
 
@@ -119,4 +120,22 @@ def render_report_html(
         project_root=project_root,
         slug=report_slug,
         dist=report_dist,
+    )
+
+
+def render_report_html_str(
+    *,
+    project_root: Path,
+    report_slug: str,
+) -> str:
+    """Return the compiled HTML string for a report without writing to disk.
+
+    Same as :func:`render_report_html` but returns the HTML string
+    instead of writing ``index.html``.  Used by the ``GET
+    /api/v1/report/html`` API endpoint.
+    """
+    return render_artifact_html_str(
+        spec=_REPORT_SPEC,
+        project_root=project_root,
+        slug=report_slug,
     )
