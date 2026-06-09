@@ -4,8 +4,13 @@
 
 """AskMetricsAgenticNode for fast metric-based question answering."""
 
+from __future__ import annotations
+
 import json
-from typing import Any, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+
+if TYPE_CHECKING:
+    from datus.agent.workflow import Workflow
 
 from agents import Tool
 
@@ -463,3 +468,62 @@ class AskMetricsAgenticNode(AgenticNode):
                 "total_tokens": int(tokens_used),
             },
         )
+
+    def update_context(self, workflow: "Workflow") -> Dict:
+        """Extract last query_metrics result into sql_context for OutputNode."""
+        actions = getattr(self.result, "action_history", None) or []
+        for action in reversed(actions):
+            if not isinstance(action, dict):
+                continue
+            if action.get("action_type") != "query_metrics":
+                continue
+            if action.get("status") != "success":
+                continue
+
+            output = action.get("output", {})
+            if not isinstance(output, dict):
+                continue
+            raw_output = output.get("raw_output", output)
+            if not isinstance(raw_output, dict) or not raw_output.get("success"):
+                continue
+            result = raw_output.get("result", {})
+            if not isinstance(result, dict):
+                continue
+
+            columns = result.get("columns", [])
+            data = result.get("data")
+            if not columns or not data:
+                continue
+
+            if isinstance(data, dict) and data.get("compressed_data"):
+                sql_return = data["compressed_data"]
+                row_count = data.get("original_rows", 0)
+            elif isinstance(data, list):
+                import csv
+                import io
+
+                buf = io.StringIO()
+                writer = csv.writer(buf)
+                writer.writerow(columns)
+                writer.writerows(data)
+                sql_return = buf.getvalue()
+                row_count = len(data)
+            else:
+                continue
+
+            metadata = result.get("metadata", {}) or {}
+            sql_query = ""
+            for key in ("sql", "compiled_sql", "generated_sql"):
+                if metadata.get(key):
+                    sql_query = metadata[key]
+                    break
+
+            from datus.schemas.node_models import SQLContext
+
+            workflow.context.sql_contexts.append(
+                SQLContext(sql_query=sql_query, sql_return=sql_return, row_count=row_count)
+            )
+            logger.info("Captured query_metrics result: %d columns, %d rows", len(columns), row_count)
+            return {"success": True, "message": "query_metrics result captured"}
+
+        return super().update_context(workflow)
