@@ -401,24 +401,89 @@
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--card);
+  overflow: hidden;
+}
+
+.detailCardBody {
   padding: 14px 16px;
 }
 
-.detailCardTitle {
-  margin: 0 0 8px;
-  color: var(--text-muted);
+.detailCardHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid #dbeafe;
+  background: #eff6ff;
+  padding: 6px 12px;
+  color: #1d4ed8;
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 700;
+}
+
+:root.dark .detailCardHeader {
+  border-bottom-color: oklch(0.3 0 0);
+  background: oklch(0.19 0 0);
+  color: oklch(0.7 0.08 250);
+}
+
+.detailCardHeaderTitle {
+  flex: 1;
+}
+
+/* ─── Header color variants ───────────────────────────────────────────────── */
+
+/* metric: green */
+.detailCardHeader--metric {
+  border-bottom-color: #bbf7d0;
+  background: #f0fdf4;
+  color: #15803d;
+}
+
+:root.dark .detailCardHeader--metric {
+  border-bottom-color: oklch(0.3 0 0);
+  background: oklch(0.19 0.04 155);
+  color: oklch(0.7 0.12 155);
+}
+
+/* reference_sql: blue (default) */
+/* knowledge: purple */
+.detailCardHeader--knowledge {
+  border-bottom-color: #e9d5ff;
+  background: #faf5ff;
+  color: #7e22ce;
+}
+
+:root.dark .detailCardHeader--knowledge {
+  border-bottom-color: oklch(0.3 0 0);
+  background: oklch(0.19 0.04 300);
+  color: oklch(0.7 0.1 300);
+}
+
+/* catalog / table: neutral */
+.detailCardHeader--table {
+  border-bottom-color: var(--line);
+  background: var(--surface-soft);
+  color: var(--text-muted);
+}
+
+:root.dark .detailCardHeader--table {
+  border-bottom-color: oklch(0.3 0 0);
+  background: oklch(0.19 0 0);
+  color: oklch(0.7 0 0);
+}
+
+.detailCardTitle {
+  margin: 0;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.04em;
 }
 
 .detailCard + .detailCard,
 .detailCard + .detailCollapsible,
-.detailCard + .sqlBlock,
 .detailCard + .knowledgeDetailActions,
-.sqlBlock + .detailCollapsible,
-.sqlBlock + .knowledgeDetailActions,
 .detailCollapsible + .knowledgeDetailActions {
   margin-top: 14px;
 }
@@ -428,6 +493,42 @@
   color: var(--text);
   font-size: 14px;
   line-height: 1.5;
+}
+
+.cardCopyBtn {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.cardSaveBtn {
+  color: #16a34a;
+}
+
+.cardEditMeta {
+  color: var(--text-soft);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+/* Textarea that visually matches view-mode text */
+.cardEditarea {
+  min-height: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.cardEditarea:focus {
+  outline: none;
+  box-shadow: none;
 }
 
 .searchTextSegments {
@@ -447,19 +548,36 @@
   line-height: 1.6;
 }
 
-/* ─── Metric specifics ────────────────────────────────────────────────────── */
+/* ─── Semantic Model specifics ────────────────────────────────────────────── */
 
-.metricCardHeader {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
+.smFieldGrid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 12px;
+  align-items: baseline;
+  font-size: 13px;
 }
 
-.metricCardName {
+.smFieldKey {
+  color: var(--text-muted);
+  font-weight: 600;
+  min-width: 80px;
+}
+
+.smFieldValue {
   color: var(--text);
-  font-size: 16px;
-  font-weight: 650;
+}
+
+.smFieldSql {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* ─── Metric specifics ────────────────────────────────────────────────────── */
+
+.metricCardName {
+  font-weight: 700;
 }
 
 .metricDescription {
@@ -509,40 +627,7 @@
   font-size: 12px;
 }
 
-/* ─── SQL block (mirrors chat ToolCard pattern) ────────────────────────────── */
-
-.sqlBlock {
-  border: 1px solid #bfdbfe;
-  border-radius: 12px;
-  overflow: hidden;
-}
-
-:root.dark .sqlBlock {
-  border-color: oklch(0.3 0 0);
-}
-
-.sqlBlockHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid #dbeafe;
-  background: #eff6ff;
-  padding: 6px 12px;
-  color: #1d4ed8;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-:root.dark .sqlBlockHeader {
-  border-bottom-color: oklch(0.3 0 0);
-  background: oklch(0.19 0 0);
-  color: oklch(0.7 0.08 250);
-}
-
-.sqlCopyBtn {
-  width: 24px;
-  height: 24px;
-}
+/* ─── SQL code block ───────────────────────────────────────────────────────── */
 
 .copySuccess {
   color: #16a34a;
@@ -550,7 +635,7 @@
 
 .sqlBlockCode {
   margin: 0;
-  padding: 12px;
+  padding: 12px 16px;
   color: var(--text);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   font-size: 12px;

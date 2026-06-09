@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Folder, FolderOpen, BookOpen, ChevronRight, ChevronDown, FolderPlus, Trash2 } from "@lucide/vue";
+import { Folder, FolderOpen, BookOpen, BarChart3, Code, ChevronRight, ChevronDown, FolderPlus, Trash2 } from "@lucide/vue";
 import type { SubjectNode, SubjectNodeType } from "@/types";
 
 defineProps<{
@@ -18,8 +18,8 @@ const expanded = defineModel<boolean>("expanded", { default: true });
 
 const typeIconMap: Record<string, typeof Folder> = {
   directory: Folder,
-  metric: BookOpen,
-  reference_sql: BookOpen,
+  metric: BarChart3,
+  reference_sql: Code,
   knowledge: BookOpen,
 };
 </script>
