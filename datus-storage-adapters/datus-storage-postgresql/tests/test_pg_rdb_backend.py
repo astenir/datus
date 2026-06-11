@@ -54,6 +54,15 @@ class ScopedRecord:
     name: Optional[str] = None
 
 
+@dataclass
+class UniqueColumnRecord:
+    """Dataclass with a column-level unique business key."""
+
+    id: Optional[int] = None
+    business_key: Optional[str] = None
+    name: Optional[str] = None
+
+
 @pytest.fixture
 def backend(pg_config):
     """Create and initialize a PostgresRdbBackend."""
@@ -751,6 +760,110 @@ class TestLogicalIsolation:
         db_b = logical_backend.connect(namespace="tenant_b", store_db_name="test")
         with db_a.get_connection() as conn:
             conn.execute("DROP TABLE IF EXISTS logical_unique_constraints")
+            conn.commit()
+
+        tbl_a = db_a.ensure_table(table_def)
+        tbl_b = db_b.ensure_table(table_def)
+
+        tbl_a.insert(ScopedRecord(datasource_id="jeff_shop", name="main"))
+        tbl_b.insert(ScopedRecord(datasource_id="jeff_shop", name="main"))
+
+        assert len(tbl_a.query(ScopedRecord)) == 1
+        assert len(tbl_b.query(ScopedRecord)) == 1
+
+    def test_column_unique_scoped_to_logical_namespace(self, logical_backend):
+        """ColumnDef(unique=True) is converted to a namespace-scoped unique index."""
+        table_def = TableDefinition(
+            table_name="logical_column_unique",
+            columns=[
+                ColumnDef(name="id", col_type="INTEGER", primary_key=True, autoincrement=True),
+                ColumnDef(name="business_key", col_type="TEXT", nullable=False, unique=True),
+                ColumnDef(name="name", col_type="TEXT", nullable=False),
+            ],
+        )
+        db_a = logical_backend.connect(namespace="tenant_a", store_db_name="test")
+        db_b = logical_backend.connect(namespace="tenant_b", store_db_name="test")
+        with db_a.get_connection() as conn:
+            conn.execute("DROP TABLE IF EXISTS logical_column_unique")
+            conn.commit()
+
+        tbl_a = db_a.ensure_table(table_def)
+        tbl_b = db_b.ensure_table(table_def)
+
+        tbl_a.insert(UniqueColumnRecord(business_key="same_key", name="from_a"))
+        tbl_b.insert(UniqueColumnRecord(business_key="same_key", name="from_b"))
+
+        assert len(tbl_a.query(UniqueColumnRecord)) == 1
+        assert len(tbl_b.query(UniqueColumnRecord)) == 1
+
+    def test_migrates_legacy_unique_index_to_logical_namespace(self, logical_backend):
+        """Existing global unique indexes are replaced with namespace-scoped indexes."""
+        table_def = TableDefinition(
+            table_name="logical_legacy_unique_index",
+            columns=[
+                ColumnDef(name="id", col_type="INTEGER", primary_key=True, autoincrement=True),
+                ColumnDef(name="datasource_id", col_type="TEXT", nullable=False),
+                ColumnDef(name="name", col_type="TEXT", nullable=False),
+            ],
+            indices=[
+                IndexDef(
+                    name="idx_logical_legacy_unique_index_ds_name", columns=["datasource_id", "name"], unique=True
+                ),
+            ],
+        )
+        db_a = logical_backend.connect(namespace="tenant_a", store_db_name="test")
+        db_b = logical_backend.connect(namespace="tenant_b", store_db_name="test")
+        with db_a.get_connection() as conn:
+            conn.execute("DROP TABLE IF EXISTS logical_legacy_unique_index")
+            conn.execute(
+                """
+                CREATE TABLE logical_legacy_unique_index (
+                    id SERIAL PRIMARY KEY,
+                    datasource_id TEXT NOT NULL,
+                    name TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX idx_logical_legacy_unique_index_ds_name "
+                "ON logical_legacy_unique_index(datasource_id, name)"
+            )
+            conn.commit()
+
+        tbl_a = db_a.ensure_table(table_def)
+        tbl_b = db_b.ensure_table(table_def)
+
+        tbl_a.insert(ScopedRecord(datasource_id="jeff_shop", name="main"))
+        tbl_b.insert(ScopedRecord(datasource_id="jeff_shop", name="main"))
+
+        assert len(tbl_a.query(ScopedRecord)) == 1
+        assert len(tbl_b.query(ScopedRecord)) == 1
+
+    def test_migrates_legacy_unique_constraint_to_logical_namespace(self, logical_backend):
+        """Existing global UNIQUE constraints are replaced with namespace-scoped indexes."""
+        table_def = TableDefinition(
+            table_name="logical_legacy_unique_constraint",
+            columns=[
+                ColumnDef(name="id", col_type="INTEGER", primary_key=True, autoincrement=True),
+                ColumnDef(name="datasource_id", col_type="TEXT", nullable=False),
+                ColumnDef(name="name", col_type="TEXT", nullable=False),
+            ],
+            constraints=["UNIQUE(datasource_id, name)"],
+        )
+        db_a = logical_backend.connect(namespace="tenant_a", store_db_name="test")
+        db_b = logical_backend.connect(namespace="tenant_b", store_db_name="test")
+        with db_a.get_connection() as conn:
+            conn.execute("DROP TABLE IF EXISTS logical_legacy_unique_constraint")
+            conn.execute(
+                """
+                CREATE TABLE logical_legacy_unique_constraint (
+                    id SERIAL PRIMARY KEY,
+                    datasource_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    UNIQUE(datasource_id, name)
+                )
+                """
+            )
             conn.commit()
 
         tbl_a = db_a.ensure_table(table_def)

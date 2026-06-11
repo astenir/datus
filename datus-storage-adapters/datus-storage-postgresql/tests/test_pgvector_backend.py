@@ -575,6 +575,69 @@ class TestVectorLogicalIsolation:
         assert result.column("datasource_id")[0].as_py() == "jeff_shop"
         assert LOGICAL_NAMESPACE_COLUMN not in result.column_names
 
+    def test_unique_columns_scoped_to_logical_namespace(self, logical_backend, test_schema, embedding_function):
+        """Fresh logical tables scope unique_columns by backend namespace."""
+        db_a = logical_backend.connect("tenant_a")
+        db_b = logical_backend.connect("tenant_b")
+
+        _drop_table_raw(db_a.pool, "logical_unique_vectors")
+        tbl_a = db_a.create_table(
+            "logical_unique_vectors",
+            schema=test_schema,
+            embedding_function=embedding_function,
+            unique_columns=["id"],
+        )
+        tbl_b = db_b.create_table(
+            "logical_unique_vectors",
+            schema=test_schema,
+            embedding_function=embedding_function,
+            unique_columns=["id"],
+        )
+
+        tbl_a.add(_sample_df(["same_id"]))
+        tbl_b.add(_sample_df(["same_id"]))
+
+        assert tbl_a.count_rows() == 1
+        assert tbl_b.count_rows() == 1
+
+    def test_migrates_legacy_unique_column_to_logical_namespace(self, logical_backend, test_schema, embedding_function):
+        """Existing global unique_columns are replaced with namespace-scoped indexes."""
+        db_a = logical_backend.connect("tenant_a")
+        db_b = logical_backend.connect("tenant_b")
+
+        _drop_table_raw(db_a.pool, "legacy_unique_vec")
+        with db_a.pool.connection() as conn:
+            conn.execute(
+                """
+                CREATE TABLE legacy_unique_vec (
+                    id TEXT UNIQUE,
+                    description TEXT,
+                    category TEXT,
+                    vector vector(4)
+                )
+                """
+            )
+            conn.commit()
+
+        tbl_a = db_a.create_table(
+            "legacy_unique_vec",
+            schema=test_schema,
+            embedding_function=embedding_function,
+            unique_columns=["id"],
+        )
+        tbl_b = db_b.create_table(
+            "legacy_unique_vec",
+            schema=test_schema,
+            embedding_function=embedding_function,
+            unique_columns=["id"],
+        )
+
+        tbl_a.add(_sample_df(["same_id"]))
+        tbl_b.add(_sample_df(["same_id"]))
+
+        assert tbl_a.count_rows() == 1
+        assert tbl_b.count_rows() == 1
+
     def test_search_all_filters_by_datasource(self, logical_backend, test_schema, embedding_function):
         """search_all only returns rows for the connected namespace."""
         db_a = logical_backend.connect("tenant_a")

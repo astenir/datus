@@ -608,6 +608,78 @@ class PgVectorDb(VectorDatabase):
             ).fetchall()
             return [r["table_name"] if isinstance(r, dict) else r[0] for r in rows]
 
+    def _find_legacy_unique_constraints(self, conn: Any, table_name: str, columns: List[str]) -> List[str]:
+        rows = conn.execute(
+            """
+            SELECT c.conname, array_agg(a.attname ORDER BY keys.ordinality) AS columns
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            JOIN unnest(c.conkey) WITH ORDINALITY AS keys(attnum, ordinality) ON TRUE
+            JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = keys.attnum
+            WHERE n.nspname = %s AND t.relname = %s AND c.contype = 'u'
+            GROUP BY c.conname
+            """,
+            (self._schema, table_name),
+        ).fetchall()
+        return [row["conname"] for row in rows if list(row["columns"]) == columns]
+
+    def _find_legacy_unique_indexes(self, conn: Any, table_name: str, columns: List[str]) -> List[str]:
+        rows = conn.execute(
+            """
+            SELECT i.relname AS indexname, array_agg(a.attname ORDER BY keys.ordinality) AS columns
+            FROM pg_index ix
+            JOIN pg_class i ON i.oid = ix.indexrelid
+            JOIN pg_class t ON t.oid = ix.indrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            JOIN unnest(ix.indkey) WITH ORDINALITY AS keys(attnum, ordinality) ON TRUE
+            JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = keys.attnum
+            LEFT JOIN pg_constraint c ON c.conindid = ix.indexrelid
+            WHERE n.nspname = %s
+              AND t.relname = %s
+              AND ix.indisunique
+              AND NOT ix.indisprimary
+              AND c.oid IS NULL
+            GROUP BY i.relname
+            """,
+            (self._schema, table_name),
+        ).fetchall()
+        return [row["indexname"] for row in rows if list(row["columns"]) == columns]
+
+    def _migrate_legacy_unique_scopes(self, conn: Any, table_name: str, unique_columns: Optional[List[str]]) -> None:
+        """Replace unscoped unique columns with namespace-scoped unique indexes."""
+        if self._isolation != IsolationType.LOGICAL or not unique_columns:
+            return
+        qualified = (
+            psql.Identifier(self._schema, table_name) if self._schema != "public" else psql.Identifier(table_name)
+        )
+        for ucol in unique_columns:
+            _validate_identifier(ucol)
+            old_columns = [ucol]
+            scoped_columns = [ucol, LOGICAL_NAMESPACE_COLUMN]
+            for constraint_name in self._find_legacy_unique_constraints(conn, table_name, old_columns):
+                conn.execute(
+                    psql.SQL("ALTER TABLE {} DROP CONSTRAINT IF EXISTS {}").format(
+                        qualified,
+                        psql.Identifier(constraint_name),
+                    )
+                )
+            for legacy_index_name in self._find_legacy_unique_indexes(conn, table_name, old_columns):
+                index_identifier = (
+                    psql.Identifier(self._schema, legacy_index_name)
+                    if self._schema != "public"
+                    else psql.Identifier(legacy_index_name)
+                )
+                conn.execute(psql.SQL("DROP INDEX IF EXISTS {}").format(index_identifier))
+            comp_idx = f"idx_{table_name}_{ucol}_{LOGICAL_NAMESPACE_COLUMN}_uq"
+            conn.execute(
+                psql.SQL("CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({})").format(
+                    psql.Identifier(comp_idx),
+                    qualified,
+                    psql.SQL(", ").join(psql.Identifier(col) for col in scoped_columns),
+                )
+            )
+
     def create_table(
         self,
         table_name: str,
@@ -633,7 +705,8 @@ class PgVectorDb(VectorDatabase):
                 if self._isolation == IsolationType.LOGICAL:
                     if LOGICAL_NAMESPACE_COLUMN not in schema.names:
                         schema = schema.append(pa.field(LOGICAL_NAMESPACE_COLUMN, pa.string()))
-                ddl = schema_to_create_table_sql(qualified, schema, unique_columns=unique_columns)
+                ddl_unique_columns = None if self._isolation == IsolationType.LOGICAL else unique_columns
+                ddl = schema_to_create_table_sql(qualified, schema, unique_columns=ddl_unique_columns)
                 column_names = [f.name for f in schema]
             else:
                 raise TypeError(f"Unsupported schema type: {type(schema)}")
@@ -647,6 +720,7 @@ class PgVectorDb(VectorDatabase):
                         f"ALTER TABLE {qualified} "
                         f"ADD COLUMN IF NOT EXISTS {LOGICAL_NAMESPACE_COLUMN} TEXT NOT NULL DEFAULT ''"
                     )
+                    self._migrate_legacy_unique_scopes(conn, table_name, unique_columns)
                     idx_name = f"idx_{table_token}_{LOGICAL_NAMESPACE_COLUMN}"
                     conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {qualified} ({LOGICAL_NAMESPACE_COLUMN})")
                     # Create composite unique indexes for upsert conflict targets
