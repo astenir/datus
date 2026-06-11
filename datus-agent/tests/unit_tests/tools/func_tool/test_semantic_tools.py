@@ -817,6 +817,7 @@ class TestQueryMetricsCompression:
         assert "columns" in result_dict
         assert "data" in result_dict
         assert "metadata" in result_dict
+        assert result_dict["result_id"] == result_dict["metadata"]["_full_result_cache_key"]
 
         # Verify data is now a compressed dict (not raw list)
         compressed_data = result_dict["data"]
@@ -830,7 +831,11 @@ class TestQueryMetricsCompression:
 
         # Verify metadata is preserved
         assert result_dict["columns"] == ["date", "revenue", "orders"]
-        assert result_dict["metadata"] == {"execution_time": 0.5}
+        assert result_dict["metadata"]["execution_time"] == 0.5
+        assert result_dict["metadata"]["_full_result_cache_key"]
+        assert result_dict["metadata"]["_full_result_cached"] is True
+        assert result_dict["metadata"]["_full_result_row_count"] == 2
+        assert "complete uncompressed query result is cached" in result_dict["metadata"]["_full_result_note"]
 
     def test_query_metrics_small_data_not_compressed(self, semantic_tools):
         """Test that small data within token threshold is not compressed."""
@@ -867,6 +872,62 @@ class TestQueryMetricsCompression:
         assert compressed_data["original_rows"] == 50
         assert compressed_data["is_compressed"] is True
         assert compressed_data["compression_type"] in ("rows", "rows_and_columns")
+
+        cache_key = result.result["metadata"]["_full_result_cache_key"]
+        assert result.result["result_id"] == cache_key
+        cached_result = semantic_tools.get_cached_query_metrics_result(cache_key)
+        assert cached_result["row_count"] == 50
+        assert result.result["metadata"]["_full_result_row_count"] == 50
+        assert "10,1000" in cached_result["csv"]
+        assert "49,4900" in cached_result["csv"]
+        assert "..." not in cached_result["csv"]
+
+    def test_query_metrics_full_result_cache_is_bounded(self, semantic_tools):
+        semantic_tools.MAX_QUERY_METRICS_RESULT_CACHE_SIZE = 2
+
+        first = semantic_tools._cache_query_metrics_result(["id"], [{"id": 1}])
+        second = semantic_tools._cache_query_metrics_result(["id"], [{"id": 2}])
+        third = semantic_tools._cache_query_metrics_result(["id"], [{"id": 3}])
+
+        assert semantic_tools.get_cached_query_metrics_result(first) is None
+        assert semantic_tools.get_cached_query_metrics_result(second)["row_count"] == 1
+        assert semantic_tools.get_cached_query_metrics_result(third)["row_count"] == 1
+
+    def test_query_metrics_result_cache_helpers_handle_supported_data_shapes(self, semantic_tools):
+        class NumRows:
+            num_rows = "7"
+
+        class BadNumRows:
+            num_rows = "bad"
+
+        class ShapeRows:
+            shape = (3, 2)
+
+        class BadShapeRows:
+            shape = ()
+
+        class CsvLike:
+            def to_csv(self, index=False):
+                assert index is False
+                return "x\n1\n"
+
+        class ToPandasLike:
+            def to_pandas(self):
+                return CsvLike()
+
+        assert semantic_tools._query_data_row_count(None) == 0
+        assert semantic_tools._query_data_row_count(NumRows()) == 7
+        assert semantic_tools._query_data_row_count(BadNumRows()) == 0
+        assert semantic_tools._query_data_row_count(ShapeRows()) == 3
+        assert semantic_tools._query_data_row_count(BadShapeRows()) == 0
+        assert semantic_tools._query_data_row_count(1) == 0
+
+        assert semantic_tools._query_data_to_csv(["x"], None) == ""
+        assert semantic_tools._query_data_to_csv(["x"], ToPandasLike()) == "x\n1\n"
+        assert semantic_tools._query_data_to_csv(["x"], [{"x": 1}, (2,), 3]) == "x\r\n1\r\n2\r\n3\r\n"
+        assert semantic_tools._cache_query_metrics_result(["x"], None) is None
+        with patch.object(semantic_tools, "_query_data_to_csv", return_value=""):
+            assert semantic_tools._cache_query_metrics_result(["x"], [{"x": 1}]) is None
 
     def test_query_metrics_empty_data(self, semantic_tools):
         """Test query_metrics with empty result set."""
@@ -1030,7 +1091,9 @@ class TestQueryMetricsCompression:
             )
 
         assert result.result["columns"] == ["metric_time__day", "revenue", "cost"]
-        assert result.result["metadata"] == {"sql": "SELECT ...", "row_count": 1}
+        assert result.result["metadata"]["sql"] == "SELECT ..."
+        assert result.result["metadata"]["row_count"] == 1
+        assert result.result["metadata"]["_full_result_cache_key"]
 
     def test_query_metrics_dry_run_records_generation_evidence(self, semantic_tools):
         """Successful dry-run evidence gates metric publishing."""
@@ -1393,6 +1456,15 @@ class TestListMetrics:
         assert envelope["has_more"] is True
         assert envelope["extra"] == {"next_offset": 5}
         mock_adapter.list_metrics.assert_called_once_with(path=["Finance"], limit=3, offset=2)
+
+    def test_drops_null_path_placeholders(self, semantic_tools_with_adapter):
+        tool, mock_adapter = semantic_tools_with_adapter
+
+        with patch("datus.tools.func_tool.semantic_tools._run_async", return_value=[]):
+            result = tool.list_metrics(path=[None, "", "null"], limit=50, offset=0)
+
+        assert result.success == 1
+        mock_adapter.list_metrics.assert_called_once_with(path=None, limit=50, offset=0)
 
     def test_ignores_non_dict_metric_metadata(self, semantic_tools_with_adapter):
         tool, _ = semantic_tools_with_adapter
