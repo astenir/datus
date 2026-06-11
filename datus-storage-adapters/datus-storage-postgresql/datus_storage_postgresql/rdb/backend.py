@@ -428,8 +428,7 @@ class PgRdbDatabase(RdbDatabase):
         if self._isolation == IsolationType.LOGICAL:
             ddl_statements.insert(
                 1,
-                f"ALTER TABLE {qualified} "
-                f"ADD COLUMN IF NOT EXISTS {DATASOURCE_ID_COLUMN} TEXT NOT NULL DEFAULT ''",
+                f"ALTER TABLE {qualified} ADD COLUMN IF NOT EXISTS {DATASOURCE_ID_COLUMN} TEXT NOT NULL DEFAULT ''",
             )
 
         try:

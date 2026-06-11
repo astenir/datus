@@ -122,6 +122,17 @@ class VectorTable(ABC):
     def create_scalar_index(self, column: str) -> None:
         """Create a scalar index."""
 
+    # -- Schema evolution --
+
+    def ensure_columns(self, expressions: Dict[str, str]) -> None:
+        """Best-effort add of missing columns, backfilled from SQL expressions.
+
+        Migration hook for evolving pre-existing tables (e.g. adding the
+        datasource-scoping ``datasource_id`` / ``storage_key`` columns). Maps
+        each column name to a backend SQL expression used to populate existing
+        rows. Backends that cannot evolve schemas may leave this as a no-op.
+        """
+
     # -- Maintenance operations (no-op defaults) --
 
     def compact_files(self) -> None:
