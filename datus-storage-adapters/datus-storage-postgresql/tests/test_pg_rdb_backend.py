@@ -6,6 +6,7 @@ from typing import Optional
 import pytest
 from psycopg_pool import PoolClosed
 
+from datus_storage_base.backend_config import LOGICAL_NAMESPACE_COLUMN
 from datus_storage_base.rdb.base import (
     ColumnDef,
     IndexDef,
@@ -42,6 +43,24 @@ class TypedRecord:
     name: Optional[str] = None
     score: Optional[float] = None
     active: Optional[bool] = None
+
+
+@dataclass
+class ScopedRecord:
+    """Dataclass with application-level datasource scoping."""
+
+    id: Optional[int] = None
+    datasource_id: Optional[str] = None
+    name: Optional[str] = None
+
+
+@dataclass
+class UniqueColumnRecord:
+    """Dataclass with a column-level unique business key."""
+
+    id: Optional[int] = None
+    business_key: Optional[str] = None
+    name: Optional[str] = None
 
 
 @pytest.fixture
@@ -704,40 +723,205 @@ class TestLogicalIsolation:
         table = logical_db.ensure_table(logical_test_table_def)
         assert table.table_name == "logical_test_items"  # no schema prefix
 
-    def test_datasource_id_column_created(self, logical_db, logical_test_table_def):
-        """ensure_table auto-adds datasource_id column."""
+    def test_logical_namespace_column_created(self, logical_db, logical_test_table_def):
+        """ensure_table auto-adds the internal logical namespace column."""
         logical_db.ensure_table(logical_test_table_def)
         with logical_db.get_connection() as conn:
             rows = logical_db.execute_query(
                 conn,
                 "SELECT column_name FROM information_schema.columns WHERE table_name = %s AND column_name = %s",
-                ("logical_test_items", "datasource_id"),
+                ("logical_test_items", LOGICAL_NAMESPACE_COLUMN),
             )
             assert len(rows) == 1
 
-    def test_datasource_id_index_created(self, logical_db, logical_test_table_def):
-        """ensure_table auto-creates B-tree index on datasource_id."""
+    def test_logical_namespace_index_created(self, logical_db, logical_test_table_def):
+        """ensure_table auto-creates B-tree index on the internal namespace."""
         logical_db.ensure_table(logical_test_table_def)
         with logical_db.get_connection() as conn:
             rows = logical_db.execute_query(
                 conn,
                 "SELECT indexname FROM pg_indexes WHERE tablename = %s AND indexname LIKE %s",
-                ("logical_test_items", "%datasource_id%"),
+                ("logical_test_items", f"%{LOGICAL_NAMESPACE_COLUMN}%"),
             )
             assert len(rows) >= 1
 
-    def test_insert_injects_datasource_id(self, logical_db, logical_table):
-        """Insert auto-injects datasource_id = namespace."""
+    def test_unique_constraint_scoped_to_logical_namespace(self, logical_backend):
+        """Raw UNIQUE constraints are scoped by backend namespace in logical mode."""
+        table_def = TableDefinition(
+            table_name="logical_unique_constraints",
+            columns=[
+                ColumnDef(name="id", col_type="INTEGER", primary_key=True, autoincrement=True),
+                ColumnDef(name="datasource_id", col_type="TEXT", nullable=False),
+                ColumnDef(name="name", col_type="TEXT", nullable=False),
+            ],
+            constraints=["UNIQUE(datasource_id, name)"],
+        )
+        db_a = logical_backend.connect(namespace="tenant_a", store_db_name="test")
+        db_b = logical_backend.connect(namespace="tenant_b", store_db_name="test")
+        with db_a.get_connection() as conn:
+            conn.execute("DROP TABLE IF EXISTS logical_unique_constraints")
+            conn.commit()
+
+        tbl_a = db_a.ensure_table(table_def)
+        tbl_b = db_b.ensure_table(table_def)
+
+        tbl_a.insert(ScopedRecord(datasource_id="jeff_shop", name="main"))
+        tbl_b.insert(ScopedRecord(datasource_id="jeff_shop", name="main"))
+
+        assert len(tbl_a.query(ScopedRecord)) == 1
+        assert len(tbl_b.query(ScopedRecord)) == 1
+
+    def test_column_unique_scoped_to_logical_namespace(self, logical_backend):
+        """ColumnDef(unique=True) is converted to a namespace-scoped unique index."""
+        table_def = TableDefinition(
+            table_name="logical_column_unique",
+            columns=[
+                ColumnDef(name="id", col_type="INTEGER", primary_key=True, autoincrement=True),
+                ColumnDef(name="business_key", col_type="TEXT", nullable=False, unique=True),
+                ColumnDef(name="name", col_type="TEXT", nullable=False),
+            ],
+        )
+        db_a = logical_backend.connect(namespace="tenant_a", store_db_name="test")
+        db_b = logical_backend.connect(namespace="tenant_b", store_db_name="test")
+        with db_a.get_connection() as conn:
+            conn.execute("DROP TABLE IF EXISTS logical_column_unique")
+            conn.commit()
+
+        tbl_a = db_a.ensure_table(table_def)
+        tbl_b = db_b.ensure_table(table_def)
+
+        tbl_a.insert(UniqueColumnRecord(business_key="same_key", name="from_a"))
+        tbl_b.insert(UniqueColumnRecord(business_key="same_key", name="from_b"))
+
+        assert len(tbl_a.query(UniqueColumnRecord)) == 1
+        assert len(tbl_b.query(UniqueColumnRecord)) == 1
+
+    def test_migrates_legacy_unique_index_to_logical_namespace(self, logical_backend):
+        """Existing global unique indexes are replaced with namespace-scoped indexes."""
+        table_def = TableDefinition(
+            table_name="logical_legacy_unique_index",
+            columns=[
+                ColumnDef(name="id", col_type="INTEGER", primary_key=True, autoincrement=True),
+                ColumnDef(name="datasource_id", col_type="TEXT", nullable=False),
+                ColumnDef(name="name", col_type="TEXT", nullable=False),
+            ],
+            indices=[
+                IndexDef(
+                    name="idx_logical_legacy_unique_index_ds_name", columns=["datasource_id", "name"], unique=True
+                ),
+            ],
+        )
+        db_a = logical_backend.connect(namespace="tenant_a", store_db_name="test")
+        db_b = logical_backend.connect(namespace="tenant_b", store_db_name="test")
+        with db_a.get_connection() as conn:
+            conn.execute("DROP TABLE IF EXISTS logical_legacy_unique_index")
+            conn.execute(
+                """
+                CREATE TABLE logical_legacy_unique_index (
+                    id SERIAL PRIMARY KEY,
+                    datasource_id TEXT NOT NULL,
+                    name TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                "CREATE UNIQUE INDEX idx_logical_legacy_unique_index_ds_name "
+                "ON logical_legacy_unique_index(datasource_id, name)"
+            )
+            conn.commit()
+
+        tbl_a = db_a.ensure_table(table_def)
+        tbl_b = db_b.ensure_table(table_def)
+
+        tbl_a.insert(ScopedRecord(datasource_id="jeff_shop", name="main"))
+        tbl_b.insert(ScopedRecord(datasource_id="jeff_shop", name="main"))
+
+        assert len(tbl_a.query(ScopedRecord)) == 1
+        assert len(tbl_b.query(ScopedRecord)) == 1
+
+    def test_migrates_legacy_unique_constraint_to_logical_namespace(self, logical_backend):
+        """Existing global UNIQUE constraints are replaced with namespace-scoped indexes."""
+        table_def = TableDefinition(
+            table_name="logical_legacy_unique_constraint",
+            columns=[
+                ColumnDef(name="id", col_type="INTEGER", primary_key=True, autoincrement=True),
+                ColumnDef(name="datasource_id", col_type="TEXT", nullable=False),
+                ColumnDef(name="name", col_type="TEXT", nullable=False),
+            ],
+            constraints=["UNIQUE(datasource_id, name)"],
+        )
+        db_a = logical_backend.connect(namespace="tenant_a", store_db_name="test")
+        db_b = logical_backend.connect(namespace="tenant_b", store_db_name="test")
+        with db_a.get_connection() as conn:
+            conn.execute("DROP TABLE IF EXISTS logical_legacy_unique_constraint")
+            conn.execute(
+                """
+                CREATE TABLE logical_legacy_unique_constraint (
+                    id SERIAL PRIMARY KEY,
+                    datasource_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    UNIQUE(datasource_id, name)
+                )
+                """
+            )
+            conn.commit()
+
+        tbl_a = db_a.ensure_table(table_def)
+        tbl_b = db_b.ensure_table(table_def)
+
+        tbl_a.insert(ScopedRecord(datasource_id="jeff_shop", name="main"))
+        tbl_b.insert(ScopedRecord(datasource_id="jeff_shop", name="main"))
+
+        assert len(tbl_a.query(ScopedRecord)) == 1
+        assert len(tbl_b.query(ScopedRecord)) == 1
+
+    def test_insert_injects_logical_namespace(self, logical_db, logical_table):
+        """Insert auto-injects the internal logical namespace."""
         logical_table.insert(TestItem(name="li1", value="v1"))
         with logical_db.get_connection() as conn:
             rows = logical_db.execute_query(
                 conn,
-                "SELECT datasource_id FROM logical_test_items WHERE name = %s",
+                f"SELECT {LOGICAL_NAMESPACE_COLUMN} FROM logical_test_items WHERE name = %s",
                 ("li1",),
             )
-            assert rows[0]["datasource_id"] == "tenant_a"
+            assert rows[0][LOGICAL_NAMESPACE_COLUMN] == "tenant_a"
 
-    def test_query_filters_by_datasource_id(self, logical_backend, logical_test_table_def):
+    def test_preserves_application_datasource_id(self, logical_db):
+        """Application datasource_id remains queryable under logical isolation."""
+        table_def = TableDefinition(
+            table_name="logical_scoped_records",
+            columns=[
+                ColumnDef(name="id", col_type="INTEGER", primary_key=True, autoincrement=True),
+                ColumnDef(name="datasource_id", col_type="TEXT", nullable=False),
+                ColumnDef(name="name", col_type="TEXT", nullable=False),
+            ],
+            indices=[
+                IndexDef(name="idx_logical_scoped_records_ds_name", columns=["datasource_id", "name"], unique=True),
+            ],
+        )
+        table = logical_db.ensure_table(table_def)
+        with logical_db.get_connection() as conn:
+            conn.execute("DELETE FROM logical_scoped_records")
+            conn.commit()
+
+        table.insert(ScopedRecord(datasource_id="jeff_shop", name="metric_node"))
+
+        with logical_db.get_connection() as conn:
+            rows = logical_db.execute_query(
+                conn,
+                f"SELECT datasource_id, {LOGICAL_NAMESPACE_COLUMN} FROM logical_scoped_records WHERE name = %s",
+                ("metric_node",),
+            )
+        assert rows == [{"datasource_id": "jeff_shop", LOGICAL_NAMESPACE_COLUMN: "tenant_a"}]
+
+        results = table.query(
+            ScopedRecord,
+            where=[("datasource_id", WhereOp.EQ, "jeff_shop")],
+        )
+        assert len(results) == 1
+        assert results[0].datasource_id == "jeff_shop"
+
+    def test_query_filters_by_logical_namespace(self, logical_backend, logical_test_table_def):
         """Query only returns rows for the connected namespace."""
         db_a = logical_backend.connect(namespace="tenant_a", store_db_name="test")
         db_b = logical_backend.connect(namespace="tenant_b", store_db_name="test")
@@ -757,7 +941,7 @@ class TestLogicalIsolation:
         assert len(tbl_a.query(TestItem)) == 1
         assert len(tbl_b.query(TestItem)) == 2
 
-    def test_update_scoped_to_datasource(self, logical_backend, logical_test_table_def):
+    def test_update_scoped_to_logical_namespace(self, logical_backend, logical_test_table_def):
         """Update only affects rows for the connected namespace."""
         db_a = logical_backend.connect(namespace="tenant_a", store_db_name="test")
         db_b = logical_backend.connect(namespace="tenant_b", store_db_name="test")
@@ -778,7 +962,7 @@ class TestLogicalIsolation:
         assert tbl_a.query(TestItem)[0].value == "new"
         assert tbl_b.query(TestItem)[0].value == "old"
 
-    def test_delete_scoped_to_datasource(self, logical_backend, logical_test_table_def):
+    def test_delete_scoped_to_logical_namespace(self, logical_backend, logical_test_table_def):
         """Delete only affects rows for the connected namespace."""
         db_a = logical_backend.connect(namespace="tenant_a", store_db_name="test")
         db_b = logical_backend.connect(namespace="tenant_b", store_db_name="test")
@@ -798,8 +982,8 @@ class TestLogicalIsolation:
         assert len(tbl_a.query(TestItem)) == 0
         assert len(tbl_b.query(TestItem)) == 1
 
-    def test_upsert_injects_datasource_id(self, logical_db):
-        """Upsert auto-injects datasource_id."""
+    def test_upsert_injects_logical_namespace(self, logical_db):
+        """Upsert auto-injects the internal logical namespace."""
         table_def = TableDefinition(
             table_name="logical_upsert",
             columns=[
@@ -813,10 +997,10 @@ class TestLogicalIsolation:
         assert len(results) == 1
         assert results[0].data == "d1"
 
-    def test_query_result_excludes_datasource_id(self, logical_table):
-        """Query results should not include datasource_id in model fields."""
+    def test_query_result_excludes_logical_namespace(self, logical_table):
+        """Query results should not include the internal namespace in model fields."""
         logical_table.insert(TestItem(name="excl1", value="v1"))
         results = logical_table.query(TestItem)
         assert len(results) == 1
-        # TestItem has fields: id, name, value, score — no datasource_id
+        # TestItem has fields: id, name, value, score, not the internal namespace
         assert isinstance(results[0], TestItem)

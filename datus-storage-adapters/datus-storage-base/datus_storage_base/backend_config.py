@@ -17,6 +17,7 @@ class IsolationType(str, Enum):
 
 
 DATASOURCE_ID_COLUMN = "datasource_id"
+LOGICAL_NAMESPACE_COLUMN = "_datus_namespace"
 
 
 @dataclass

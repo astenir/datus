@@ -19,7 +19,7 @@ from psycopg import sql as psql
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-from datus_storage_base.backend_config import DATASOURCE_ID_COLUMN, IsolationType
+from datus_storage_base.backend_config import LOGICAL_NAMESPACE_COLUMN, IsolationType
 from datus_storage_base.rdb.base import (
     BaseRdbBackend,
     ColumnDef,
@@ -62,6 +62,40 @@ def _pg_map_type(col_type: str) -> str:
     return _PG_TYPE_MAP.get(col_type.upper(), col_type)
 
 
+def _scope_unique_constraint(constraint: str) -> str:
+    """Append the internal namespace column to simple UNIQUE constraints.
+
+    TableDefinition stores raw SQL constraints. In logical isolation, any
+    unique constraint must include the backend namespace, otherwise rows from
+    different namespaces can conflict while sharing the public schema.
+    """
+    columns = _parse_unique_constraint_columns(constraint)
+    if not columns or LOGICAL_NAMESPACE_COLUMN in columns:
+        return constraint
+    return f"UNIQUE({', '.join(columns + [LOGICAL_NAMESPACE_COLUMN])})"
+
+
+def _parse_unique_constraint_columns(constraint: str) -> Optional[List[str]]:
+    """Return columns from a simple UNIQUE(...) constraint, if applicable."""
+    match = re.fullmatch(r"\s*UNIQUE\s*\(([^)]+)\)\s*", constraint, flags=re.IGNORECASE)
+    if not match:
+        return None
+    columns = [part.strip() for part in match.group(1).split(",")]
+    if not columns:
+        return None
+    for col in columns:
+        _validate_identifier(col)
+    return columns
+
+
+def _scoped_unique_index_name(table_name: str, columns: List[str]) -> str:
+    """Build a deterministic unique index name for a logical-scope key."""
+    table_token = _validate_identifier(table_name)
+    for col in columns:
+        _validate_identifier(col)
+    return f"idx_{table_token}_{'_'.join(columns)}_uq"
+
+
 def _pg_col_ddl(col: ColumnDef) -> str:
     """Generate DDL fragment for a single column (PostgreSQL dialect)."""
     col_name = _validate_identifier(col.name)
@@ -102,28 +136,28 @@ class PgRdbTable(RdbTable):
         local: threading.local,
         pk_column: str = "id",
         isolation: IsolationType = IsolationType.PHYSICAL,
-        datasource_id: Optional[str] = None,
+        logical_namespace: Optional[str] = None,
     ):
         self._pool = pool
         self._qualified_name = qualified_name
         self._local = local
         self._pk_column = pk_column
         self._isolation = isolation
-        self._datasource_id = datasource_id
+        self._logical_namespace = logical_namespace
 
-    def _inject_datasource_where(self, where: Optional[WhereClause]) -> Optional[WhereClause]:
-        """Prepend datasource_id condition for logical isolation."""
-        if self._isolation != IsolationType.LOGICAL or self._datasource_id is None:
+    def _inject_namespace_where(self, where: Optional[WhereClause]) -> Optional[WhereClause]:
+        """Prepend backend namespace condition for logical isolation."""
+        if self._isolation != IsolationType.LOGICAL or self._logical_namespace is None:
             return where
-        ds_condition = (DATASOURCE_ID_COLUMN, WhereOp.EQ, self._datasource_id)
+        namespace_condition = (LOGICAL_NAMESPACE_COLUMN, WhereOp.EQ, self._logical_namespace)
         conditions = _normalize_where(where)
-        return [ds_condition] + conditions
+        return [namespace_condition] + conditions
 
-    def _inject_datasource_into_record(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Add datasource_id to a record dict for logical isolation."""
-        if self._isolation != IsolationType.LOGICAL or self._datasource_id is None:
+    def _inject_namespace_into_record(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Add backend namespace to a record dict for logical isolation."""
+        if self._isolation != IsolationType.LOGICAL or self._logical_namespace is None:
             return data
-        return {**data, DATASOURCE_ID_COLUMN: self._datasource_id}
+        return {**data, LOGICAL_NAMESPACE_COLUMN: self._logical_namespace}
 
     @property
     def table_name(self) -> str:
@@ -180,7 +214,7 @@ class PgRdbTable(RdbTable):
 
     def insert(self, record: Any) -> int:
         data = {k: v for k, v in dataclasses.asdict(record).items() if v is not None}
-        data = self._inject_datasource_into_record(data)
+        data = self._inject_namespace_into_record(data)
         if not data:
             sql = f"INSERT INTO {self._qualified_name} DEFAULT VALUES RETURNING {self._pk_column}"
         else:
@@ -214,7 +248,7 @@ class PgRdbTable(RdbTable):
         columns: Optional[List[str]] = None,
         order_by: Optional[List[str]] = None,
     ) -> List[T]:
-        where = self._inject_datasource_where(where)
+        where = self._inject_namespace_where(where)
         if columns:
             for c in columns:
                 _validate_identifier(c)
@@ -228,14 +262,14 @@ class PgRdbTable(RdbTable):
             results = []
             for row in rows:
                 row_dict = dict(row)
-                row_dict.pop(DATASOURCE_ID_COLUMN, None)
+                row_dict.pop(LOGICAL_NAMESPACE_COLUMN, None)
                 results.append(model(**row_dict))
             return results
 
     def update(self, data: Dict[str, Any], where: Optional[WhereClause] = None) -> int:
-        if self._isolation == IsolationType.LOGICAL and DATASOURCE_ID_COLUMN in data:
-            raise ValueError(f"{DATASOURCE_ID_COLUMN} is managed internally and cannot be updated")
-        where = self._inject_datasource_where(where)
+        if self._isolation == IsolationType.LOGICAL and LOGICAL_NAMESPACE_COLUMN in data:
+            raise ValueError(f"{LOGICAL_NAMESPACE_COLUMN} is managed internally and cannot be updated")
+        where = self._inject_namespace_where(where)
         if not data:
             return 0
         for col in data.keys():
@@ -258,7 +292,7 @@ class PgRdbTable(RdbTable):
             raise
 
     def delete(self, where: Optional[WhereClause] = None) -> int:
-        where = self._inject_datasource_where(where)
+        where = self._inject_namespace_where(where)
         where_sql, params = self._build_where(where)
         sql = f"DELETE FROM {self._qualified_name}{where_sql}"
         with self._auto_conn() as conn:
@@ -267,12 +301,12 @@ class PgRdbTable(RdbTable):
 
     def upsert(self, record: Any, conflict_columns: List[str]) -> None:
         data = {k: v for k, v in dataclasses.asdict(record).items() if v is not None}
-        data = self._inject_datasource_into_record(data)
+        data = self._inject_namespace_into_record(data)
         if not data:
             raise ValueError("Cannot upsert a record with no non-None fields")
-        # In logical mode, scope conflict target to tenant
-        if self._isolation == IsolationType.LOGICAL and DATASOURCE_ID_COLUMN not in conflict_columns:
-            conflict_columns = list(conflict_columns) + [DATASOURCE_ID_COLUMN]
+        # In logical mode, scope conflict target to backend namespace
+        if self._isolation == IsolationType.LOGICAL and LOGICAL_NAMESPACE_COLUMN not in conflict_columns:
+            conflict_columns = list(conflict_columns) + [LOGICAL_NAMESPACE_COLUMN]
         columns = [_validate_identifier(k) for k in data.keys()]
         placeholders = ", ".join(["%s"] * len(columns))
         col_names = ", ".join(columns)
@@ -325,10 +359,10 @@ class PgRdbDatabase(RdbDatabase):
 
         if isolation == IsolationType.LOGICAL:
             self._schema = "public"
-            self._datasource_id = namespace
+            self._logical_namespace = namespace
         else:
             self._schema = _validate_identifier(namespace) if namespace else "public"
-            self._datasource_id = None
+            self._logical_namespace = None
 
         # Ensure schema exists for non-public namespaces
         if self._schema != "public":
@@ -372,69 +406,168 @@ class PgRdbDatabase(RdbDatabase):
 
         return statements
 
-    def ensure_table(self, table_def: TableDefinition) -> PgRdbTable:
-        # For logical isolation, inject datasource_id column if not present
-        if self._isolation == IsolationType.LOGICAL:
-            has_datasource_col = any(c.name == DATASOURCE_ID_COLUMN for c in table_def.columns)
-            if not has_datasource_col:
-                extra_col = ColumnDef(
-                    name=DATASOURCE_ID_COLUMN,
-                    col_type="TEXT",
-                    nullable=False,
-                )
-                # Add datasource_id to unique indices so tenants don't conflict
-                patched_indices = []
-                for idx in table_def.indices:
-                    if idx.unique and DATASOURCE_ID_COLUMN not in idx.columns:
-                        patched_indices.append(
-                            IndexDef(
-                                name=idx.name,
-                                columns=list(idx.columns) + [DATASOURCE_ID_COLUMN],
-                                unique=True,
-                            )
-                        )
-                    else:
-                        patched_indices.append(idx)
-                # Add composite unique index for PK + datasource_id (needed for upsert ON CONFLICT)
-                pk_cols = [c.name for c in table_def.columns if c.primary_key]
-                if pk_cols:
-                    patched_indices.append(
-                        IndexDef(
-                            name=f"idx_{table_def.table_name}_pk_{DATASOURCE_ID_COLUMN}",
-                            columns=pk_cols + [DATASOURCE_ID_COLUMN],
-                            unique=True,
-                        )
+    def _find_legacy_unique_constraints(self, conn: Any, table_name: str, columns: List[str]) -> List[str]:
+        rows = conn.execute(
+            """
+            SELECT c.conname, array_agg(a.attname ORDER BY keys.ordinality) AS columns
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            JOIN unnest(c.conkey) WITH ORDINALITY AS keys(attnum, ordinality) ON TRUE
+            JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = keys.attnum
+            WHERE n.nspname = %s AND t.relname = %s AND c.contype = 'u'
+            GROUP BY c.conname
+            """,
+            (self._schema, table_name),
+        ).fetchall()
+        return [row["conname"] for row in rows if list(row["columns"]) == columns]
+
+    def _find_legacy_unique_indexes(self, conn: Any, table_name: str, columns: List[str]) -> List[str]:
+        rows = conn.execute(
+            """
+            SELECT i.relname AS indexname, array_agg(a.attname ORDER BY keys.ordinality) AS columns
+            FROM pg_index ix
+            JOIN pg_class i ON i.oid = ix.indexrelid
+            JOIN pg_class t ON t.oid = ix.indrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            JOIN unnest(ix.indkey) WITH ORDINALITY AS keys(attnum, ordinality) ON TRUE
+            JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = keys.attnum
+            LEFT JOIN pg_constraint c ON c.conindid = ix.indexrelid
+            WHERE n.nspname = %s
+              AND t.relname = %s
+              AND ix.indisunique
+              AND NOT ix.indisprimary
+              AND c.oid IS NULL
+            GROUP BY i.relname
+            """,
+            (self._schema, table_name),
+        ).fetchall()
+        return [row["indexname"] for row in rows if list(row["columns"]) == columns]
+
+    def _migrate_legacy_unique_scopes(
+        self,
+        conn: Any,
+        table_name: str,
+        unique_specs: List[tuple[str, List[str], List[str]]],
+    ) -> None:
+        """Replace unscoped logical UNIQUE constraints/indexes with scoped ones."""
+        if not unique_specs:
+            return
+        qualified = (
+            psql.Identifier(self._schema, table_name) if self._schema != "public" else psql.Identifier(table_name)
+        )
+        for index_name, old_columns, scoped_columns in unique_specs:
+            if LOGICAL_NAMESPACE_COLUMN in old_columns:
+                continue
+            _validate_identifier(index_name)
+            for constraint_name in self._find_legacy_unique_constraints(conn, table_name, old_columns):
+                conn.execute(
+                    psql.SQL("ALTER TABLE {} DROP CONSTRAINT IF EXISTS {}").format(
+                        qualified,
+                        psql.Identifier(constraint_name),
                     )
-                # Add standalone datasource_id index for filtering
+                )
+            for legacy_index_name in self._find_legacy_unique_indexes(conn, table_name, old_columns):
+                index_identifier = (
+                    psql.Identifier(self._schema, legacy_index_name)
+                    if self._schema != "public"
+                    else psql.Identifier(legacy_index_name)
+                )
+                conn.execute(psql.SQL("DROP INDEX IF EXISTS {}").format(index_identifier))
+            scoped_identifiers = [psql.Identifier(col) for col in scoped_columns]
+            conn.execute(
+                psql.SQL("CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({})").format(
+                    psql.Identifier(index_name),
+                    qualified,
+                    psql.SQL(", ").join(scoped_identifiers),
+                )
+            )
+
+    def ensure_table(self, table_def: TableDefinition) -> PgRdbTable:
+        legacy_unique_specs: List[tuple[str, List[str], List[str]]] = []
+        # For logical isolation, inject an internal namespace column if not present
+        if self._isolation == IsolationType.LOGICAL:
+            patched_columns: List[ColumnDef] = []
+            patched_indices: List[IndexDef] = []
+            for col in table_def.columns:
+                if col.unique:
+                    scoped_cols = [col.name, LOGICAL_NAMESPACE_COLUMN]
+                    index_name = _scoped_unique_index_name(table_def.table_name, scoped_cols)
+                    legacy_unique_specs.append((index_name, [col.name], scoped_cols))
+                    patched_indices.append(IndexDef(name=index_name, columns=scoped_cols, unique=True))
+                    patched_columns.append(dataclasses.replace(col, unique=False))
+                else:
+                    patched_columns.append(col)
+
+            has_namespace_col = any(c.name == LOGICAL_NAMESPACE_COLUMN for c in patched_columns)
+            if not has_namespace_col:
+                patched_columns.append(
+                    ColumnDef(
+                        name=LOGICAL_NAMESPACE_COLUMN,
+                        col_type="TEXT",
+                        nullable=False,
+                    )
+                )
+
+            # Add the internal namespace to unique indices so tenants do not conflict
+            for idx in table_def.indices:
+                if idx.unique and LOGICAL_NAMESPACE_COLUMN not in idx.columns:
+                    scoped_cols = list(idx.columns) + [LOGICAL_NAMESPACE_COLUMN]
+                    legacy_unique_specs.append((idx.name, list(idx.columns), scoped_cols))
+                    patched_indices.append(IndexDef(name=idx.name, columns=scoped_cols, unique=True))
+                else:
+                    patched_indices.append(idx)
+
+            for constraint in table_def.constraints:
+                constraint_cols = _parse_unique_constraint_columns(constraint)
+                if constraint_cols and LOGICAL_NAMESPACE_COLUMN not in constraint_cols:
+                    scoped_cols = constraint_cols + [LOGICAL_NAMESPACE_COLUMN]
+                    legacy_unique_specs.append(
+                        (_scoped_unique_index_name(table_def.table_name, scoped_cols), constraint_cols, scoped_cols)
+                    )
+
+            # Add composite unique index for PK + namespace (needed for upsert ON CONFLICT)
+            pk_cols = [c.name for c in patched_columns if c.primary_key]
+            if pk_cols:
                 patched_indices.append(
                     IndexDef(
-                        name=f"idx_{table_def.table_name}_{DATASOURCE_ID_COLUMN}",
-                        columns=[DATASOURCE_ID_COLUMN],
+                        name=f"idx_{table_def.table_name}_pk_{LOGICAL_NAMESPACE_COLUMN}",
+                        columns=pk_cols + [LOGICAL_NAMESPACE_COLUMN],
+                        unique=True,
                     )
                 )
-                table_def = TableDefinition(
-                    table_name=table_def.table_name,
-                    columns=list(table_def.columns) + [extra_col],
-                    indices=patched_indices,
-                    constraints=list(table_def.constraints),
+            # Add standalone namespace index for filtering
+            patched_indices.append(
+                IndexDef(
+                    name=f"idx_{table_def.table_name}_{LOGICAL_NAMESPACE_COLUMN}",
+                    columns=[LOGICAL_NAMESPACE_COLUMN],
                 )
+            )
+            table_def = TableDefinition(
+                table_name=table_def.table_name,
+                columns=patched_columns,
+                indices=patched_indices,
+                constraints=[_scope_unique_constraint(c) for c in table_def.constraints],
+            )
 
         qualified = self._qualified(table_def.table_name)
         ddl_statements = self._generate_ddl(qualified, table_def)
 
-        # For logical isolation, ensure datasource_id exists on pre-existing tables.
+        # For logical isolation, ensure the internal namespace column exists on pre-existing tables.
         # CREATE TABLE IF NOT EXISTS is a no-op when the table already exists, so the
         # column would be missing and subsequent CREATE INDEX statements would fail.
         if self._isolation == IsolationType.LOGICAL:
             ddl_statements.insert(
                 1,
-                f"ALTER TABLE {qualified} ADD COLUMN IF NOT EXISTS {DATASOURCE_ID_COLUMN} TEXT NOT NULL DEFAULT ''",
+                f"ALTER TABLE {qualified} ADD COLUMN IF NOT EXISTS {LOGICAL_NAMESPACE_COLUMN} TEXT NOT NULL DEFAULT ''",
             )
 
         try:
             with self._pool.connection() as conn:
                 for stmt in ddl_statements:
                     conn.execute(stmt)
+                    if self._isolation == IsolationType.LOGICAL and stmt.startswith("ALTER TABLE"):
+                        self._migrate_legacy_unique_scopes(conn, table_def.table_name, legacy_unique_specs)
                 conn.commit()
         except Exception as e:
             ddl_text = "\n".join(ddl_statements)
@@ -455,7 +588,7 @@ class PgRdbDatabase(RdbDatabase):
             self._local,
             pk_column=pk_column,
             isolation=self._isolation,
-            datasource_id=self._datasource_id,
+            logical_namespace=self._logical_namespace,
         )
 
     @contextmanager

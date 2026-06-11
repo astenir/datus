@@ -19,7 +19,7 @@ from psycopg import sql as psql
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-from datus_storage_base.backend_config import DATASOURCE_ID_COLUMN, IsolationType
+from datus_storage_base.backend_config import LOGICAL_NAMESPACE_COLUMN, IsolationType
 from datus_storage_base.conditions import WhereExpr, build_where
 from datus_storage_base.vector.base import BaseVectorBackend, EmbeddingFunction, VectorDatabase, VectorTable
 from datus_storage_postgresql.vector.schema_converter import schema_to_create_table_sql
@@ -54,7 +54,7 @@ class PgVectorTable(VectorTable):
         vector_dim: int = 384,
         column_names: Optional[List[str]] = None,
         isolation: IsolationType = IsolationType.PHYSICAL,
-        datasource_id: Optional[str] = None,
+        logical_namespace: Optional[str] = None,
     ):
         self._table_name = table_name
         self._pool = pool
@@ -64,7 +64,7 @@ class PgVectorTable(VectorTable):
         self._vector_dim = vector_dim
         self._column_names = column_names or []
         self._isolation = isolation
-        self._datasource_id = datasource_id
+        self._logical_namespace = logical_namespace
         # Conflict-target columns whose UNIQUE index we have already ensured on
         # this handle, so upsert self-healing runs its DDL at most once.
         self._ensured_conflict_indexes: set = set()
@@ -96,12 +96,12 @@ class PgVectorTable(VectorTable):
     # -- Write operations --
 
     def add(self, data: pd.DataFrame) -> None:
-        df = self._inject_datasource_df(data)
+        df = self._inject_namespace_df(data)
         df = self._compute_embeddings_for_insert(df)
         self._insert_dataframe(df)
 
     def merge_insert(self, data: pd.DataFrame, on_column: str) -> None:
-        df = self._inject_datasource_df(data)
+        df = self._inject_namespace_df(data)
         df = self._compute_embeddings_for_insert(df)
         self._upsert_dataframe(df, on_column)
 
@@ -110,7 +110,7 @@ class PgVectorTable(VectorTable):
             compiled = where
         else:
             compiled = build_where(where)
-        combined, ds_params = self._ds_where_fragment(compiled)
+        combined, ds_params = self._namespace_where_fragment(compiled)
         if combined:
             sql = f"DELETE FROM {self._table_name} WHERE {combined}"
             with self._pool.connection() as conn:
@@ -118,8 +118,8 @@ class PgVectorTable(VectorTable):
                 conn.commit()
 
     def update(self, where: WhereExpr, values: Dict[str, Any]) -> None:
-        if self._isolation == IsolationType.LOGICAL and DATASOURCE_ID_COLUMN in values:
-            raise ValueError(f"{DATASOURCE_ID_COLUMN} is managed internally and cannot be updated")
+        if self._isolation == IsolationType.LOGICAL and LOGICAL_NAMESPACE_COLUMN in values:
+            raise ValueError(f"{LOGICAL_NAMESPACE_COLUMN} is managed internally and cannot be updated")
         if isinstance(where, str):
             compiled = where
         else:
@@ -131,7 +131,7 @@ class PgVectorTable(VectorTable):
             set_parts.append(f"{col} = %s")
             params.append(val)
         set_clause = ", ".join(set_parts)
-        combined, ds_params = self._ds_where_fragment(compiled)
+        combined, ds_params = self._namespace_where_fragment(compiled)
         where_clause = f" WHERE {combined}" if combined else ""
         sql = f"UPDATE {self._table_name} SET {set_clause}{where_clause}"
         with self._pool.connection() as conn:
@@ -188,7 +188,7 @@ class PgVectorTable(VectorTable):
             compiled = where
         else:
             compiled = build_where(where)
-        combined, ds_params = self._ds_where_fragment(compiled)
+        combined, ds_params = self._namespace_where_fragment(compiled)
         query_embedding = self._compute_query_embedding(query_text)
 
         columns = self._validate_select_fields(select_fields) if select_fields else self._select_columns()
@@ -229,7 +229,7 @@ class PgVectorTable(VectorTable):
             compiled = where
         else:
             compiled = build_where(where)
-        combined, ds_params = self._ds_where_fragment(compiled)
+        combined, ds_params = self._namespace_where_fragment(compiled)
         columns = self._validate_select_fields(select_fields) if select_fields else self._select_columns()
         where_clause = f"WHERE {combined}" if combined else ""
 
@@ -246,7 +246,7 @@ class PgVectorTable(VectorTable):
             compiled = where
         else:
             compiled = build_where(where)
-        combined, ds_params = self._ds_where_fragment(compiled)
+        combined, ds_params = self._namespace_where_fragment(compiled)
         where_clause = f"WHERE {combined}" if combined else ""
         sql = f"SELECT COUNT(*) AS cnt FROM {self._table_name} {where_clause}"
         with self._pool.connection() as conn:
@@ -303,26 +303,26 @@ class PgVectorTable(VectorTable):
 
     # -- Private helpers --
 
-    def _ds_where_fragment(self, existing_compiled: Optional[str] = None) -> tuple:
-        """Build WHERE clause fragment with datasource_id for logical isolation.
+    def _namespace_where_fragment(self, existing_compiled: Optional[str] = None) -> tuple:
+        """Build WHERE clause fragment with backend namespace for logical isolation.
 
         Returns:
             (clause_str, params_list) where clause_str may be empty and params
             is a list of bind values for %s placeholders.
         """
-        if self._isolation != IsolationType.LOGICAL or self._datasource_id is None:
+        if self._isolation != IsolationType.LOGICAL or self._logical_namespace is None:
             return (existing_compiled or "", [])
-        ds_cond = f"{DATASOURCE_ID_COLUMN} = %s"
+        namespace_cond = f"{LOGICAL_NAMESPACE_COLUMN} = %s"
         if existing_compiled:
-            return (f"{ds_cond} AND ({existing_compiled})", [self._datasource_id])
-        return (ds_cond, [self._datasource_id])
+            return (f"{namespace_cond} AND ({existing_compiled})", [self._logical_namespace])
+        return (namespace_cond, [self._logical_namespace])
 
-    def _inject_datasource_df(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Force datasource_id column on DataFrame for logical isolation."""
-        if self._isolation != IsolationType.LOGICAL or self._datasource_id is None:
+    def _inject_namespace_df(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Force backend namespace column on DataFrame for logical isolation."""
+        if self._isolation != IsolationType.LOGICAL or self._logical_namespace is None:
             return df
         df = df.copy()
-        df[DATASOURCE_ID_COLUMN] = self._datasource_id
+        df[LOGICAL_NAMESPACE_COLUMN] = self._logical_namespace
         return df
 
     def _compute_embeddings_for_insert(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -391,9 +391,9 @@ class PgVectorTable(VectorTable):
             _validate_identifier(c)
         _validate_identifier(on_column)
 
-        # In logical mode, scope conflict target to tenant
-        if self._isolation == IsolationType.LOGICAL and self._datasource_id is not None:
-            conflict_cols = [on_column, DATASOURCE_ID_COLUMN]
+        # In logical mode, scope conflict target to backend namespace
+        if self._isolation == IsolationType.LOGICAL and self._logical_namespace is not None:
+            conflict_cols = [on_column, LOGICAL_NAMESPACE_COLUMN]
         else:
             conflict_cols = [on_column]
         conflict_target = ", ".join(conflict_cols)
@@ -405,7 +405,7 @@ class PgVectorTable(VectorTable):
         placeholders = ", ".join(["%s"] * len(columns))
         skip_cols = {on_column}
         if self._isolation == IsolationType.LOGICAL:
-            skip_cols.add(DATASOURCE_ID_COLUMN)
+            skip_cols.add(LOGICAL_NAMESPACE_COLUMN)
         update_cols = [c for c in columns if c not in skip_cols]
         update_set = ", ".join(f"{c} = EXCLUDED.{c}" for c in update_cols)
 
@@ -474,11 +474,11 @@ class PgVectorTable(VectorTable):
         """Return column names filtered for the current isolation mode."""
         cols = self._column_names
         if self._isolation == IsolationType.LOGICAL:
-            cols = [c for c in cols if c != DATASOURCE_ID_COLUMN]
+            cols = [c for c in cols if c != LOGICAL_NAMESPACE_COLUMN]
         return cols
 
     def _select_columns(self) -> str:
-        """Build the default SELECT column list, excluding datasource_id in logical mode."""
+        """Build the default SELECT column list, excluding the backend namespace in logical mode."""
         cols = self._default_columns
         return ", ".join(cols) if cols else "*"
 
@@ -564,10 +564,10 @@ class PgVectorDb(VectorDatabase):
 
         if isolation == IsolationType.LOGICAL:
             self._schema = "public"
-            self._datasource_id = namespace
+            self._logical_namespace = namespace
         else:
             self._schema = _validate_identifier(namespace) if namespace else "public"
-            self._datasource_id = None
+            self._logical_namespace = None
 
         # Ensure schema exists for non-public namespaces
         if self._schema != "public":
@@ -608,6 +608,78 @@ class PgVectorDb(VectorDatabase):
             ).fetchall()
             return [r["table_name"] if isinstance(r, dict) else r[0] for r in rows]
 
+    def _find_legacy_unique_constraints(self, conn: Any, table_name: str, columns: List[str]) -> List[str]:
+        rows = conn.execute(
+            """
+            SELECT c.conname, array_agg(a.attname ORDER BY keys.ordinality) AS columns
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            JOIN unnest(c.conkey) WITH ORDINALITY AS keys(attnum, ordinality) ON TRUE
+            JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = keys.attnum
+            WHERE n.nspname = %s AND t.relname = %s AND c.contype = 'u'
+            GROUP BY c.conname
+            """,
+            (self._schema, table_name),
+        ).fetchall()
+        return [row["conname"] for row in rows if list(row["columns"]) == columns]
+
+    def _find_legacy_unique_indexes(self, conn: Any, table_name: str, columns: List[str]) -> List[str]:
+        rows = conn.execute(
+            """
+            SELECT i.relname AS indexname, array_agg(a.attname ORDER BY keys.ordinality) AS columns
+            FROM pg_index ix
+            JOIN pg_class i ON i.oid = ix.indexrelid
+            JOIN pg_class t ON t.oid = ix.indrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            JOIN unnest(ix.indkey) WITH ORDINALITY AS keys(attnum, ordinality) ON TRUE
+            JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = keys.attnum
+            LEFT JOIN pg_constraint c ON c.conindid = ix.indexrelid
+            WHERE n.nspname = %s
+              AND t.relname = %s
+              AND ix.indisunique
+              AND NOT ix.indisprimary
+              AND c.oid IS NULL
+            GROUP BY i.relname
+            """,
+            (self._schema, table_name),
+        ).fetchall()
+        return [row["indexname"] for row in rows if list(row["columns"]) == columns]
+
+    def _migrate_legacy_unique_scopes(self, conn: Any, table_name: str, unique_columns: Optional[List[str]]) -> None:
+        """Replace unscoped unique columns with namespace-scoped unique indexes."""
+        if self._isolation != IsolationType.LOGICAL or not unique_columns:
+            return
+        qualified = (
+            psql.Identifier(self._schema, table_name) if self._schema != "public" else psql.Identifier(table_name)
+        )
+        for ucol in unique_columns:
+            _validate_identifier(ucol)
+            old_columns = [ucol]
+            scoped_columns = [ucol, LOGICAL_NAMESPACE_COLUMN]
+            for constraint_name in self._find_legacy_unique_constraints(conn, table_name, old_columns):
+                conn.execute(
+                    psql.SQL("ALTER TABLE {} DROP CONSTRAINT IF EXISTS {}").format(
+                        qualified,
+                        psql.Identifier(constraint_name),
+                    )
+                )
+            for legacy_index_name in self._find_legacy_unique_indexes(conn, table_name, old_columns):
+                index_identifier = (
+                    psql.Identifier(self._schema, legacy_index_name)
+                    if self._schema != "public"
+                    else psql.Identifier(legacy_index_name)
+                )
+                conn.execute(psql.SQL("DROP INDEX IF EXISTS {}").format(index_identifier))
+            comp_idx = f"idx_{table_name}_{ucol}_{LOGICAL_NAMESPACE_COLUMN}_uq"
+            conn.execute(
+                psql.SQL("CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({})").format(
+                    psql.Identifier(comp_idx),
+                    qualified,
+                    psql.SQL(", ").join(psql.Identifier(col) for col in scoped_columns),
+                )
+            )
+
     def create_table(
         self,
         table_name: str,
@@ -629,11 +701,12 @@ class PgVectorDb(VectorDatabase):
         column_names = []
         if schema is not None:
             if isinstance(schema, pa.Schema):
-                # Inject datasource_id column for logical isolation
+                # Inject internal namespace column for logical isolation.
                 if self._isolation == IsolationType.LOGICAL:
-                    if DATASOURCE_ID_COLUMN not in schema.names:
-                        schema = schema.append(pa.field(DATASOURCE_ID_COLUMN, pa.string()))
-                ddl = schema_to_create_table_sql(qualified, schema, unique_columns=unique_columns)
+                    if LOGICAL_NAMESPACE_COLUMN not in schema.names:
+                        schema = schema.append(pa.field(LOGICAL_NAMESPACE_COLUMN, pa.string()))
+                ddl_unique_columns = None if self._isolation == IsolationType.LOGICAL else unique_columns
+                ddl = schema_to_create_table_sql(qualified, schema, unique_columns=ddl_unique_columns)
                 column_names = [f.name for f in schema]
             else:
                 raise TypeError(f"Unsupported schema type: {type(schema)}")
@@ -643,16 +716,21 @@ class PgVectorDb(VectorDatabase):
                 # Create indexes for logical isolation
                 if self._isolation == IsolationType.LOGICAL:
                     table_token = table_name
-                    idx_name = f"idx_{table_token}_{DATASOURCE_ID_COLUMN}"
-                    conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {qualified} ({DATASOURCE_ID_COLUMN})")
+                    conn.execute(
+                        f"ALTER TABLE {qualified} "
+                        f"ADD COLUMN IF NOT EXISTS {LOGICAL_NAMESPACE_COLUMN} TEXT NOT NULL DEFAULT ''"
+                    )
+                    self._migrate_legacy_unique_scopes(conn, table_name, unique_columns)
+                    idx_name = f"idx_{table_token}_{LOGICAL_NAMESPACE_COLUMN}"
+                    conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {qualified} ({LOGICAL_NAMESPACE_COLUMN})")
                     # Create composite unique indexes for upsert conflict targets
                     if unique_columns:
                         for ucol in unique_columns:
                             _validate_identifier(ucol)
-                            comp_idx = f"idx_{table_token}_{ucol}_{DATASOURCE_ID_COLUMN}_uq"
+                            comp_idx = f"idx_{table_token}_{ucol}_{LOGICAL_NAMESPACE_COLUMN}_uq"
                             conn.execute(
                                 f"CREATE UNIQUE INDEX IF NOT EXISTS {comp_idx} "
-                                f"ON {qualified} ({ucol}, {DATASOURCE_ID_COLUMN})"
+                                f"ON {qualified} ({ucol}, {LOGICAL_NAMESPACE_COLUMN})"
                             )
                 conn.commit()
         elif not exist_ok:
@@ -670,7 +748,7 @@ class PgVectorDb(VectorDatabase):
             vector_dim=vector_dim,
             column_names=column_names,
             isolation=self._isolation,
-            datasource_id=self._datasource_id,
+            logical_namespace=self._logical_namespace,
         )
         cache_key = (table_name, id(embedding_function), vector_dim, vector_column, source_column)
         self._table_cache[cache_key] = table
@@ -716,7 +794,7 @@ class PgVectorDb(VectorDatabase):
             vector_dim=vector_dim,
             column_names=column_names,
             isolation=self._isolation,
-            datasource_id=self._datasource_id,
+            logical_namespace=self._logical_namespace,
         )
         self._table_cache[cache_key] = table
         return table
@@ -743,7 +821,7 @@ class PgVectorDb(VectorDatabase):
             raise RuntimeError(
                 f"drop_table('{table_name}') is not allowed in logical isolation mode "
                 "because the table is shared across all tenants. "
-                "Use delete() with a datasource_id filter to remove tenant data."
+                "Use delete() with scoped filters to remove tenant data."
             )
         qualified = self._qualified(table_name)
         if_exists = "IF EXISTS " if ignore_missing else ""

@@ -6,6 +6,7 @@ import pytest
 from conftest import MockEmbeddingFunction
 from psycopg_pool import PoolClosed
 
+from datus_storage_base.backend_config import LOGICAL_NAMESPACE_COLUMN
 from datus_storage_base.conditions import and_, eq, not_, or_
 from datus_storage_postgresql.vector.backend import PgvectorBackend, PgVectorDb, PgVectorTable
 
@@ -514,22 +515,128 @@ class TestVectorLogicalIsolation:
         """Logical isolation uses public schema."""
         assert "." not in logical_table.table_name  # no schema prefix
 
-    def test_datasource_id_column_created(self, logical_db, logical_table):
-        """create_table auto-adds datasource_id column."""
+    def test_logical_namespace_column_created(self, logical_db, logical_table):
+        """create_table auto-adds the internal logical namespace column."""
         with logical_db.pool.connection() as conn:
             rows = conn.execute(
                 "SELECT column_name FROM information_schema.columns WHERE table_name = %s AND column_name = %s",
-                ("logical_vectors", "datasource_id"),
+                ("logical_vectors", LOGICAL_NAMESPACE_COLUMN),
             ).fetchall()
             assert len(rows) == 1
 
-    def test_add_injects_datasource_id(self, logical_db, logical_table):
-        """add() auto-injects datasource_id."""
+    def test_add_injects_logical_namespace(self, logical_db, logical_table):
+        """add() auto-injects the internal logical namespace."""
         logical_table.add(_sample_df(["la1"]))
         with logical_db.pool.connection() as conn:
-            rows = conn.execute("SELECT datasource_id FROM logical_vectors WHERE id = 'la1'").fetchall()
-            val = rows[0]["datasource_id"] if isinstance(rows[0], dict) else rows[0][0]
+            rows = conn.execute(f"SELECT {LOGICAL_NAMESPACE_COLUMN} FROM logical_vectors WHERE id = 'la1'").fetchall()
+            val = rows[0][LOGICAL_NAMESPACE_COLUMN] if isinstance(rows[0], dict) else rows[0][0]
             assert val == "tenant_a"
+
+    def test_preserves_application_datasource_id(self, logical_db, embedding_function):
+        """Application datasource_id remains queryable under logical isolation."""
+        _drop_table_raw(logical_db.pool, "logical_scoped_vectors")
+        schema = pa.schema(
+            [
+                pa.field("id", pa.string()),
+                pa.field("datasource_id", pa.string()),
+                pa.field("description", pa.string()),
+                pa.field("category", pa.string()),
+                pa.field("vector", pa.list_(pa.float32(), list_size=4)),
+            ]
+        )
+        table = logical_db.create_table(
+            "logical_scoped_vectors",
+            schema=schema,
+            embedding_function=embedding_function,
+            vector_column="vector",
+            source_column="description",
+            unique_columns=["id"],
+        )
+        table.add(
+            pd.DataFrame(
+                {
+                    "id": ["sv1"],
+                    "datasource_id": ["jeff_shop"],
+                    "description": ["scoped vector"],
+                    "category": ["metric"],
+                }
+            )
+        )
+
+        with logical_db.pool.connection() as conn:
+            row = conn.execute(
+                f"SELECT datasource_id, {LOGICAL_NAMESPACE_COLUMN} FROM logical_scoped_vectors WHERE id = 'sv1'"
+            ).fetchone()
+        assert row["datasource_id"] == "jeff_shop"
+        assert row[LOGICAL_NAMESPACE_COLUMN] == "tenant_a"
+
+        result = table.search_all(where=eq("datasource_id", "jeff_shop"))
+        assert result.num_rows == 1
+        assert result.column("datasource_id")[0].as_py() == "jeff_shop"
+        assert LOGICAL_NAMESPACE_COLUMN not in result.column_names
+
+    def test_unique_columns_scoped_to_logical_namespace(self, logical_backend, test_schema, embedding_function):
+        """Fresh logical tables scope unique_columns by backend namespace."""
+        db_a = logical_backend.connect("tenant_a")
+        db_b = logical_backend.connect("tenant_b")
+
+        _drop_table_raw(db_a.pool, "logical_unique_vectors")
+        tbl_a = db_a.create_table(
+            "logical_unique_vectors",
+            schema=test_schema,
+            embedding_function=embedding_function,
+            unique_columns=["id"],
+        )
+        tbl_b = db_b.create_table(
+            "logical_unique_vectors",
+            schema=test_schema,
+            embedding_function=embedding_function,
+            unique_columns=["id"],
+        )
+
+        tbl_a.add(_sample_df(["same_id"]))
+        tbl_b.add(_sample_df(["same_id"]))
+
+        assert tbl_a.count_rows() == 1
+        assert tbl_b.count_rows() == 1
+
+    def test_migrates_legacy_unique_column_to_logical_namespace(self, logical_backend, test_schema, embedding_function):
+        """Existing global unique_columns are replaced with namespace-scoped indexes."""
+        db_a = logical_backend.connect("tenant_a")
+        db_b = logical_backend.connect("tenant_b")
+
+        _drop_table_raw(db_a.pool, "legacy_unique_vec")
+        with db_a.pool.connection() as conn:
+            conn.execute(
+                """
+                CREATE TABLE legacy_unique_vec (
+                    id TEXT UNIQUE,
+                    description TEXT,
+                    category TEXT,
+                    vector vector(4)
+                )
+                """
+            )
+            conn.commit()
+
+        tbl_a = db_a.create_table(
+            "legacy_unique_vec",
+            schema=test_schema,
+            embedding_function=embedding_function,
+            unique_columns=["id"],
+        )
+        tbl_b = db_b.create_table(
+            "legacy_unique_vec",
+            schema=test_schema,
+            embedding_function=embedding_function,
+            unique_columns=["id"],
+        )
+
+        tbl_a.add(_sample_df(["same_id"]))
+        tbl_b.add(_sample_df(["same_id"]))
+
+        assert tbl_a.count_rows() == 1
+        assert tbl_b.count_rows() == 1
 
     def test_search_all_filters_by_datasource(self, logical_backend, test_schema, embedding_function):
         """search_all only returns rows for the connected namespace."""
@@ -546,7 +653,7 @@ class TestVectorLogicalIsolation:
         assert tbl_a.count_rows() == 1
         assert tbl_b.count_rows() == 2
 
-    def test_delete_scoped_to_datasource(self, logical_backend, test_schema, embedding_function):
+    def test_delete_scoped_to_logical_namespace(self, logical_backend, test_schema, embedding_function):
         """delete() only affects rows for the connected namespace."""
         db_a = logical_backend.connect("tenant_a")
         db_b = logical_backend.connect("tenant_b")
@@ -562,7 +669,7 @@ class TestVectorLogicalIsolation:
         assert tbl_a.count_rows() == 0
         assert tbl_b.count_rows() == 1
 
-    def test_update_scoped_to_datasource(self, logical_backend, test_schema, embedding_function):
+    def test_update_scoped_to_logical_namespace(self, logical_backend, test_schema, embedding_function):
         """update() only affects rows for the connected namespace."""
         db_a = logical_backend.connect("tenant_a")
         db_b = logical_backend.connect("tenant_b")
@@ -580,11 +687,11 @@ class TestVectorLogicalIsolation:
         assert result_a.column("category")[0].as_py() == "new"
         assert result_b.column("category")[0].as_py() == "old"
 
-    def test_search_all_excludes_datasource_id_from_results(self, logical_table):
-        """Default SELECT should not include datasource_id column."""
+    def test_search_all_excludes_logical_namespace_from_results(self, logical_table):
+        """Default SELECT should not include the internal namespace column."""
         logical_table.add(_sample_df(["ex1"]))
         result = logical_table.search_all()
-        assert "datasource_id" not in result.column_names
+        assert LOGICAL_NAMESPACE_COLUMN not in result.column_names
 
 
 # ==============================================================================
