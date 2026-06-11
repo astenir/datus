@@ -1,0 +1,377 @@
+name: "Publish Package Release"
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Workspace adapter package to release"
+        required: true
+        type: choice
+        options:
+          - datus-storage-base
+          - datus-storage-postgresql
+      version:
+        description: "Release version. Use auto to publish the latest PyPI version + 0.0.1 without downgrading main."
+        required: false
+        default: "auto"
+        type: string
+      update_dependent_bounds:
+        description: "Update lower bounds in workspace packages that depend on this package"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-package-release-${{ inputs.package }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: Pypi Publish
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ secrets.RELEASE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+        with:
+          enable-cache: true
+
+      - name: Install release tooling
+        run: pip install packaging twine
+
+      - name: Resolve release version
+        id: resolve
+        env:
+          PACKAGE_NAME: ${{ inputs.package }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import tomllib
+          import urllib.error
+          import urllib.request
+          from pathlib import Path
+
+          from packaging.version import Version
+
+          package_name = os.environ["PACKAGE_NAME"].strip()
+          requested_version = os.environ.get("REQUESTED_VERSION", "").strip()
+
+
+          def load_workspace_packages() -> dict[str, dict]:
+              root = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+              members = root.get("tool", {}).get("uv", {}).get("workspace", {}).get("members", [])
+              if not members:
+                  raise ValueError("No tool.uv.workspace.members found in root pyproject.toml")
+              packages: dict[str, dict] = {}
+              for member in members:
+                  member_path = Path(member)
+                  pyproject = tomllib.loads((member_path / "pyproject.toml").read_text(encoding="utf-8"))
+                  project = pyproject["project"]
+                  packages[str(project["name"])] = {
+                      "path": member_path,
+                      "version": Version(str(project["version"])),
+                  }
+              return packages
+
+
+          def pypi_json(path: str) -> dict | None:
+              url = f"https://pypi.org/pypi/{path}/json"
+              try:
+                  with urllib.request.urlopen(url, timeout=20) as response:
+                      return json.loads(response.read().decode("utf-8"))
+              except urllib.error.HTTPError as exc:
+                  if exc.code == 404:
+                      return None
+                  raise
+
+
+          def latest_pypi_version(package: str) -> Version | None:
+              payload = pypi_json(package)
+              if payload is None:
+                  return None
+              return Version(payload["info"]["version"])
+
+
+          def bump_patch(version: Version) -> Version:
+              release = list(version.release)
+              while len(release) < 3:
+                  release.append(0)
+              release[2] += 1
+              return Version(".".join(str(part) for part in release[:3]))
+
+
+          packages = load_workspace_packages()
+          if package_name not in packages:
+              available = ", ".join(sorted(packages))
+              raise ValueError(f"Unknown package {package_name!r}. Available packages: {available}")
+
+          current_version = packages[package_name]["version"]
+          latest_version = latest_pypi_version(package_name)
+
+          if requested_version and requested_version.lower() != "auto":
+              target_version = Version(requested_version)
+              if str(target_version) != requested_version:
+                  raise ValueError(
+                      f"Use canonical PEP 440 version {target_version!s} instead of {requested_version!r}"
+                  )
+          else:
+              default_base = latest_version or current_version
+              target_version = max(bump_patch(default_base), current_version)
+
+          if target_version < current_version:
+              raise ValueError(
+                  f"Refusing to downgrade {package_name}: pyproject has {current_version}, requested {target_version}"
+              )
+          if pypi_json(f"{package_name}/{target_version}") is not None:
+              raise ValueError(f"{package_name} {target_version} already exists on PyPI")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              print(f"package={package_name}", file=output)
+              print(f"version={target_version}", file=output)
+              print(f"tag={package_name}-v{target_version}", file=output)
+              print(f"all_packages={' '.join(packages)}", file=output)
+              print(f"package_path={packages[package_name]['path']}", file=output)
+              pyproject_paths = " ".join(str(info["path"] / "pyproject.toml") for info in packages.values())
+              print(f"pyproject_paths={pyproject_paths}", file=output)
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              print(f"### {package_name} release", file=summary)
+              print(f"- Current main version: `{current_version}`", file=summary)
+              print(f"- Latest PyPI version: `{latest_version or '<none>'}`", file=summary)
+              print(f"- Release version: `{target_version}`", file=summary)
+          PY
+
+      - name: Prepare release metadata
+        env:
+          PACKAGE: ${{ steps.resolve.outputs.package }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+          UPDATE_DEPENDENT_BOUNDS: ${{ inputs.update_dependent_bounds }}
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import os
+          import re
+          import tomllib
+          from pathlib import Path
+
+          from packaging.requirements import InvalidRequirement, Requirement
+          from packaging.utils import canonicalize_name
+
+          package_name = os.environ["PACKAGE"]
+          version = os.environ["VERSION"]
+          update_dependent_bounds = os.environ["UPDATE_DEPENDENT_BOUNDS"] == "true"
+
+          root = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          members = root["tool"]["uv"]["workspace"]["members"]
+          member_pyprojects: dict[str, Path] = {}
+          for member in members:
+              path = Path(member) / "pyproject.toml"
+              name = tomllib.loads(path.read_text(encoding="utf-8"))["project"]["name"]
+              member_pyprojects[str(name)] = path
+
+
+          def set_project_version(path: Path) -> None:
+              lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+              in_project = False
+              for index, line in enumerate(lines):
+                  stripped = line.strip()
+                  if stripped == "[project]":
+                      in_project = True
+                      continue
+                  if in_project and stripped.startswith("[") and stripped.endswith("]"):
+                      break
+                  if in_project and line.startswith("version = "):
+                      lines[index] = f'version = "{version}"\n'
+                      path.write_text("".join(lines), encoding="utf-8")
+                      return
+              raise ValueError(f"Unable to find [project] version in {path}")
+
+
+          def bump_lower_bound(requirement_text: str) -> str | None:
+              """Raise the >= bound to the release version, keeping extras, other
+              specifiers (upper bounds, exclusions), and environment markers."""
+              try:
+                  requirement = Requirement(requirement_text)
+              except InvalidRequirement:
+                  return None
+              if canonicalize_name(requirement.name) != canonicalize_name(package_name):
+                  return None
+              specifiers = [str(spec) for spec in requirement.specifier if spec.operator not in (">=", ">")]
+              specifiers.insert(0, f">={version}")
+              extras = f"[{','.join(sorted(requirement.extras))}]" if requirement.extras else ""
+              marker = ""
+              if requirement.marker:
+                  # packaging serializes marker values with double quotes, which would
+                  # terminate the surrounding TOML string; PEP 508 allows single quotes.
+                  marker = "; " + str(requirement.marker).replace('"', "'")
+              return f"{requirement.name}{extras}{','.join(specifiers)}{marker}"
+
+
+          def update_dependency_bound(path: Path) -> bool:
+              content = path.read_text(encoding="utf-8")
+
+              def fix_block(match: re.Match[str]) -> str:
+                  def fix_requirement(requirement_match: re.Match[str]) -> str:
+                      replacement = bump_lower_bound(requirement_match.group(1))
+                      return f'"{replacement}"' if replacement else requirement_match.group(0)
+
+                  return re.sub(r'"([^"]+)"', fix_requirement, match.group(0))
+
+              # Only rewrite [project] dependencies arrays; quoted package names may
+              # also appear in other sections that must stay untouched.
+              updated = re.sub(r"\ndependencies = \[.*?\n\]", fix_block, content, flags=re.DOTALL)
+              if updated == content:
+                  return False
+              path.write_text(updated, encoding="utf-8")
+              return True
+
+
+          set_project_version(member_pyprojects[package_name])
+          print(f"Set {package_name} version to {version}")
+
+          if update_dependent_bounds:
+              for name, path in member_pyprojects.items():
+                  if name != package_name and update_dependency_bound(path):
+                      print(f"Updated {package_name}>={version} lower bound in {path}")
+          PY
+          git diff
+
+      - name: Build and validate release artifacts
+        env:
+          PACKAGE: ${{ steps.resolve.outputs.package }}
+          PACKAGE_PATH: ${{ steps.resolve.outputs.package_path }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+          ALL_PACKAGES: ${{ steps.resolve.outputs.all_packages }}
+        run: |
+          set -euo pipefail
+
+          rm -rf dist/release dist/smoke
+          uv build --package "${PACKAGE}" --out-dir dist/release
+          python -m twine check dist/release/*
+
+          # Import smoke: install wheels for the whole workspace so intra-workspace
+          # dependencies resolve, then import the released package.
+          for package in ${ALL_PACKAGES}; do
+            uv build --package "${package}" --out-dir dist/smoke
+          done
+          with_args=()
+          for wheel in dist/smoke/*.whl; do
+            with_args+=(--with "${wheel}")
+          done
+          uv run --no-project --isolated "${with_args[@]}" \
+            python -c "import ${PACKAGE//-/_}; print('import smoke passed for ${PACKAGE}')"
+
+          if [ -e "${PACKAGE_PATH}/tests/unit" ]; then
+            echo "=== Unit tests: ${PACKAGE} ==="
+            uv run --all-packages --with pytest pytest "${PACKAGE_PATH}/tests/unit" -m "not integration" --tb=short
+          else
+            echo "Skipping unit tests: ${PACKAGE_PATH}/tests/unit does not exist"
+          fi
+
+          git diff --check
+
+      - name: Commit version and tag release
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          PACKAGE: ${{ steps.resolve.outputs.package }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          PYPROJECT_PATHS: ${{ steps.resolve.outputs.pyproject_paths }}
+        run: |
+          set -euo pipefail
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          git diff --check
+          # PYPROJECT_PATHS comes from the resolved workspace members; word
+          # splitting is intentional (paths contain no spaces).
+          git add -- ${PYPROJECT_PATHS}
+          if git diff --cached --quiet; then
+            echo "${PACKAGE} already declares ${VERSION}"
+          else
+            git commit -m "chore: release ${PACKAGE} ${VERSION}"
+          fi
+
+          git fetch --tags origin
+          if git rev-parse --verify --quiet "refs/tags/${TAG}" >/dev/null; then
+            echo "Tag ${TAG} already exists" >&2
+            exit 1
+          fi
+
+          git tag -a "${TAG}" -m "Release ${PACKAGE} ${VERSION}"
+          git push --atomic origin HEAD:main "refs/tags/${TAG}"
+
+      - name: Publish to PyPI
+        env:
+          PYPI_USERNAME: ${{ secrets.PYPI_USERNAME }}
+          PYPI_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          password="${PYPI_PASSWORD:-${PYPI_API_TOKEN:-${PYPI_TOKEN:-}}}"
+          if [ -z "${password}" ]; then
+            echo "Missing PyPI password/token secret" >&2
+            exit 1
+          fi
+
+          if [ -n "${PYPI_USERNAME:-}" ]; then
+            username="${PYPI_USERNAME}"
+          elif [ -n "${PYPI_PASSWORD:-}" ]; then
+            username="transform_data"
+          else
+            username="__token__"
+          fi
+
+          python -m twine upload --non-interactive --username "${username}" --password "${password}" dist/release/*
+
+      - name: Verify PyPI release
+        env:
+          PACKAGE: ${{ steps.resolve.outputs.package }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import os
+          import time
+          import urllib.request
+
+          package = os.environ["PACKAGE"]
+          version = os.environ["VERSION"]
+          url = f"https://pypi.org/pypi/{package}/{version}/json"
+          for attempt in range(12):
+              try:
+                  with urllib.request.urlopen(url, timeout=20) as response:
+                      response.read()
+                  print(f"Verified {package} {version} on PyPI")
+                  break
+              except Exception as exc:
+                  if attempt == 11:
+                      raise
+                  print(f"PyPI verification attempt {attempt + 1} failed: {exc}")
+                  time.sleep(10)
+          PY
