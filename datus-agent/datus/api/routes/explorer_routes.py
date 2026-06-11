@@ -11,7 +11,10 @@ from datus.api.models.explorer_models import (
     DeleteSubjectInput,
     EditMetricInput,
     EditSemanticModelInput,
+    MetricDimensionsData,
     MetricInfo,
+    MetricPreviewData,
+    MetricPreviewInput,
     ReferenceSQLInfo,
     ReferenceSQLInput,
     RenameSubjectInput,
@@ -92,6 +95,34 @@ async def get_metric(
 ) -> Result[MetricInfo]:
     """Get metric info."""
     return await svc.explorer.get_metric(request.subject_path)
+
+
+@router.post(
+    "/subject/metric/dimensions",
+    response_model=Result[MetricDimensionsData],
+    summary="Get Metric Dimensions",
+    description="List the queryable dimensions of a saved metric for the preview panel",
+)
+async def get_metric_dimensions(
+    request: SubjectPathInput,
+    svc: ServiceDep,
+) -> Result[MetricDimensionsData]:
+    """List a metric's queryable dimensions."""
+    return await svc.explorer.get_metric_dimensions(request.subject_path)
+
+
+@router.post(
+    "/subject/metric/preview",
+    response_model=Result[MetricPreviewData],
+    summary="Preview Metric",
+    description="Compile a saved metric into runnable SQL (dry-run) for previewing its data",
+)
+async def preview_metric(
+    request: MetricPreviewInput,
+    svc: ServiceDep,
+) -> Result[MetricPreviewData]:
+    """Compile a saved metric to SQL for preview."""
+    return await svc.explorer.preview_metric(request)
 
 
 @router.post(
