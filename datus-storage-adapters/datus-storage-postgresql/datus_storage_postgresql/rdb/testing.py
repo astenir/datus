@@ -7,7 +7,7 @@ Registered as an entry point: datus.storage.rdb.testing:postgresql
 import logging
 from typing import Any, Dict, Optional
 
-from datus_storage_base.backend_config import DATASOURCE_ID_COLUMN, IsolationType
+from datus_storage_base.backend_config import LOGICAL_NAMESPACE_COLUMN, IsolationType
 from datus_storage_base.testing import RdbTestEnv, TestEnvConfig
 
 logger = logging.getLogger(__name__)
@@ -68,20 +68,20 @@ class PostgresRdbTestEnv(RdbTestEnv):
         )
         with psycopg.connect(conninfo, autocommit=True) as conn:
             if self._isolation == IsolationType.LOGICAL:
-                # Delete rows by datasource_id only in base tables that have the column
+                # Delete rows by logical namespace only in base tables that have the column
                 rows = conn.execute(
                     "SELECT c.table_name FROM information_schema.columns c "
                     "JOIN information_schema.tables t "
                     "ON c.table_schema = t.table_schema AND c.table_name = t.table_name "
                     "WHERE c.table_schema = 'public' AND c.column_name = %s "
                     "AND t.table_type = 'BASE TABLE'",
-                    (DATASOURCE_ID_COLUMN,),
+                    (LOGICAL_NAMESPACE_COLUMN,),
                 ).fetchall()
                 for row in rows:
                     tbl = row[0] if not isinstance(row, dict) else row["table_name"]
                     conn.execute(
                         sql.SQL("DELETE FROM {} WHERE {} = %s").format(
-                            sql.Identifier(tbl), sql.Identifier(DATASOURCE_ID_COLUMN)
+                            sql.Identifier(tbl), sql.Identifier(LOGICAL_NAMESPACE_COLUMN)
                         ),
                         (namespace,),
                     )
