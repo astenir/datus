@@ -639,6 +639,8 @@ class PgVectorDb(VectorDatabase):
               AND t.relname = %s
               AND ix.indisunique
               AND NOT ix.indisprimary
+              AND ix.indpred IS NULL
+              AND ix.indexprs IS NULL
               AND c.oid IS NULL
             GROUP BY i.relname
             """,
@@ -646,39 +648,153 @@ class PgVectorDb(VectorDatabase):
         ).fetchall()
         return [row["indexname"] for row in rows if list(row["columns"]) == columns]
 
-    def _migrate_legacy_unique_scopes(self, conn: Any, table_name: str, unique_columns: Optional[List[str]]) -> None:
-        """Replace unscoped unique columns with namespace-scoped unique indexes."""
-        if self._isolation != IsolationType.LOGICAL or not unique_columns:
+    def _qualified_sql_identifier(self, table_name: str) -> Any:
+        return psql.Identifier(self._schema, table_name) if self._schema != "public" else psql.Identifier(table_name)
+
+    def _index_sql_identifier(self, index_name: str) -> Any:
+        return psql.Identifier(self._schema, index_name) if self._schema != "public" else psql.Identifier(index_name)
+
+    def _scoped_unique_index_name(self, table_name: str, columns: List[str]) -> str:
+        return f"idx_{table_name}_{'_'.join(columns)}_uq"
+
+    def _migrate_unique_scope_specs(
+        self,
+        conn: Any,
+        table_name: str,
+        specs: List[tuple[str, str, List[str]]],
+    ) -> None:
+        """Replace unscoped unique constraints/indexes with namespace-scoped indexes."""
+        if self._isolation != IsolationType.LOGICAL:
             return
-        qualified = (
-            psql.Identifier(self._schema, table_name) if self._schema != "public" else psql.Identifier(table_name)
-        )
-        for ucol in unique_columns:
-            _validate_identifier(ucol)
-            old_columns = [ucol]
-            scoped_columns = [ucol, LOGICAL_NAMESPACE_COLUMN]
-            for constraint_name in self._find_legacy_unique_constraints(conn, table_name, old_columns):
+        qualified = self._qualified_sql_identifier(table_name)
+        for kind, name, old_columns in specs:
+            if LOGICAL_NAMESPACE_COLUMN in old_columns:
+                continue
+            scoped_columns = old_columns + [LOGICAL_NAMESPACE_COLUMN]
+            if kind == "constraint":
                 conn.execute(
                     psql.SQL("ALTER TABLE {} DROP CONSTRAINT IF EXISTS {}").format(
                         qualified,
-                        psql.Identifier(constraint_name),
+                        psql.Identifier(name),
                     )
                 )
-            for legacy_index_name in self._find_legacy_unique_indexes(conn, table_name, old_columns):
-                index_identifier = (
-                    psql.Identifier(self._schema, legacy_index_name)
-                    if self._schema != "public"
-                    else psql.Identifier(legacy_index_name)
-                )
-                conn.execute(psql.SQL("DROP INDEX IF EXISTS {}").format(index_identifier))
-            comp_idx = f"idx_{table_name}_{ucol}_{LOGICAL_NAMESPACE_COLUMN}_uq"
+            elif kind == "index":
+                conn.execute(psql.SQL("DROP INDEX IF EXISTS {}").format(self._index_sql_identifier(name)))
+            else:
+                raise ValueError(f"Unsupported unique scope spec kind: {kind}")
             conn.execute(
                 psql.SQL("CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({})").format(
-                    psql.Identifier(comp_idx),
+                    psql.Identifier(self._scoped_unique_index_name(table_name, scoped_columns)),
                     qualified,
                     psql.SQL(", ").join(psql.Identifier(col) for col in scoped_columns),
                 )
             )
+
+    def _migrate_legacy_unique_scopes(self, conn: Any, table_name: str, unique_columns: Optional[List[str]]) -> None:
+        """Replace known unscoped unique columns with namespace-scoped unique indexes."""
+        if self._isolation != IsolationType.LOGICAL or not unique_columns:
+            return
+        specs: List[tuple[str, str, List[str]]] = []
+        for ucol in unique_columns:
+            _validate_identifier(ucol)
+            old_columns = [ucol]
+            specs.extend(
+                ("constraint", name, old_columns)
+                for name in self._find_legacy_unique_constraints(conn, table_name, old_columns)
+            )
+            specs.extend(
+                ("index", name, old_columns) for name in self._find_legacy_unique_indexes(conn, table_name, old_columns)
+            )
+        self._migrate_unique_scope_specs(conn, table_name, specs)
+
+    def _find_unscoped_unique_specs(self, conn: Any, table_name: str) -> List[tuple[str, str, List[str]]]:
+        """Return all non-primary unique constraints/indexes missing the namespace column."""
+        constraint_rows = conn.execute(
+            """
+            SELECT c.conname, array_agg(a.attname ORDER BY keys.ordinality) AS columns
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            JOIN unnest(c.conkey) WITH ORDINALITY AS keys(attnum, ordinality) ON TRUE
+            JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = keys.attnum
+            WHERE n.nspname = %s AND t.relname = %s AND c.contype = 'u'
+            GROUP BY c.conname
+            """,
+            (self._schema, table_name),
+        ).fetchall()
+        index_rows = conn.execute(
+            """
+            SELECT i.relname AS indexname, array_agg(a.attname ORDER BY keys.ordinality) AS columns
+            FROM pg_index ix
+            JOIN pg_class i ON i.oid = ix.indexrelid
+            JOIN pg_class t ON t.oid = ix.indrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            JOIN unnest(ix.indkey) WITH ORDINALITY AS keys(attnum, ordinality) ON TRUE
+            JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = keys.attnum
+            LEFT JOIN pg_constraint c ON c.conindid = ix.indexrelid
+            WHERE n.nspname = %s
+              AND t.relname = %s
+              AND ix.indisunique
+              AND NOT ix.indisprimary
+              AND ix.indpred IS NULL
+              AND ix.indexprs IS NULL
+              AND c.oid IS NULL
+            GROUP BY i.relname
+            """,
+            (self._schema, table_name),
+        ).fetchall()
+        specs: List[tuple[str, str, List[str]]] = []
+        for row in constraint_rows:
+            columns = list(row["columns"])
+            if LOGICAL_NAMESPACE_COLUMN not in columns:
+                specs.append(("constraint", row["conname"], columns))
+        for row in index_rows:
+            columns = list(row["columns"])
+            if LOGICAL_NAMESPACE_COLUMN not in columns:
+                specs.append(("index", row["indexname"], columns))
+        return specs
+
+    def _ensure_logical_namespace_scope(
+        self,
+        conn: Any,
+        table_name: str,
+        unique_columns: Optional[List[str]] = None,
+        migrate_all_unique: bool = False,
+    ) -> None:
+        """Ensure an existing logical table has the internal namespace scope."""
+        if self._isolation != IsolationType.LOGICAL:
+            return
+
+        qualified = self._qualified_sql_identifier(table_name)
+        conn.execute(
+            psql.SQL("ALTER TABLE {} ADD COLUMN IF NOT EXISTS {} TEXT NOT NULL DEFAULT ''").format(
+                qualified,
+                psql.Identifier(LOGICAL_NAMESPACE_COLUMN),
+            )
+        )
+        if self._logical_namespace is not None:
+            conn.execute(
+                psql.SQL("UPDATE {} SET {} = %s WHERE {} = ''").format(
+                    qualified,
+                    psql.Identifier(LOGICAL_NAMESPACE_COLUMN),
+                    psql.Identifier(LOGICAL_NAMESPACE_COLUMN),
+                ),
+                (self._logical_namespace,),
+            )
+
+        if migrate_all_unique:
+            self._migrate_unique_scope_specs(conn, table_name, self._find_unscoped_unique_specs(conn, table_name))
+        else:
+            self._migrate_legacy_unique_scopes(conn, table_name, unique_columns)
+
+        idx_name = f"idx_{table_name}_{LOGICAL_NAMESPACE_COLUMN}"
+        conn.execute(
+            psql.SQL("CREATE INDEX IF NOT EXISTS {} ON {} ({})").format(
+                psql.Identifier(idx_name),
+                qualified,
+                psql.Identifier(LOGICAL_NAMESPACE_COLUMN),
+            )
+        )
 
     def create_table(
         self,
@@ -716,13 +832,7 @@ class PgVectorDb(VectorDatabase):
                 # Create indexes for logical isolation
                 if self._isolation == IsolationType.LOGICAL:
                     table_token = table_name
-                    conn.execute(
-                        f"ALTER TABLE {qualified} "
-                        f"ADD COLUMN IF NOT EXISTS {LOGICAL_NAMESPACE_COLUMN} TEXT NOT NULL DEFAULT ''"
-                    )
-                    self._migrate_legacy_unique_scopes(conn, table_name, unique_columns)
-                    idx_name = f"idx_{table_token}_{LOGICAL_NAMESPACE_COLUMN}"
-                    conn.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {qualified} ({LOGICAL_NAMESPACE_COLUMN})")
+                    self._ensure_logical_namespace_scope(conn, table_name, unique_columns)
                     # Create composite unique indexes for upsert conflict targets
                     if unique_columns:
                         for ucol in unique_columns:
@@ -773,17 +883,23 @@ class PgVectorDb(VectorDatabase):
 
         qualified = self._qualified(table_name)
 
+        column_query = (
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = %s AND table_name = %s "
+            "ORDER BY ordinal_position"
+        )
         with self._pool.connection() as conn:
-            rows = conn.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_schema = %s AND table_name = %s "
-                "ORDER BY ordinal_position",
-                (self._schema, table_name),
-            ).fetchall()
+            rows = conn.execute(column_query, (self._schema, table_name)).fetchall()
             column_names = [r["column_name"] if isinstance(r, dict) else r[0] for r in rows]
-
-        if not column_names:
-            raise ValueError(f"Table '{table_name}' not found in schema '{self._schema}'. Use create_table() first.")
+            if not column_names:
+                raise ValueError(
+                    f"Table '{table_name}' not found in schema '{self._schema}'. Use create_table() first."
+                )
+            if self._isolation == IsolationType.LOGICAL:
+                self._ensure_logical_namespace_scope(conn, table_name, migrate_all_unique=True)
+                conn.commit()
+                rows = conn.execute(column_query, (self._schema, table_name)).fetchall()
+                column_names = [r["column_name"] if isinstance(r, dict) else r[0] for r in rows]
 
         table = PgVectorTable(
             table_name=qualified,

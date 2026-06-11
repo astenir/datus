@@ -1,6 +1,6 @@
 [project]
 name = "datus-storage-adapter"
-version = "0.1.4"
+version = "0.1.5"
 description = "Monorepo workspace for Datus storage adapter packages"
 requires-python = ">=3.12"
 license = "Apache-2.0"

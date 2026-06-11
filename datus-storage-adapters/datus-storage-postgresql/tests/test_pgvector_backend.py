@@ -146,6 +146,11 @@ class TestPgVectorDb:
         with pytest.raises(TypeError, match="Unsupported schema type"):
             db.create_table("fail_tbl2", schema={"bad": "schema"})
 
+    def test_open_table_missing_raises_value_error(self, db):
+        """open_table keeps a stable missing-table error before backend-specific DDL runs."""
+        with pytest.raises(ValueError, match="Table 'missing_vec' not found"):
+            db.open_table("missing_vec")
+
     def test_open_table_cached(self, db, table, embedding_function):
         """open_table returns the cached handle if available."""
         opened = db.open_table("test_vectors", embedding_function=embedding_function)
@@ -575,6 +580,12 @@ class TestVectorLogicalIsolation:
         assert result.column("datasource_id")[0].as_py() == "jeff_shop"
         assert LOGICAL_NAMESPACE_COLUMN not in result.column_names
 
+    def test_open_table_missing_raises_value_error_in_logical_mode(self, logical_backend):
+        """Logical open_table checks existence before running namespace migration DDL."""
+        db = logical_backend.connect("tenant_a")
+        with pytest.raises(ValueError, match="Table 'missing_logical_vec' not found"):
+            db.open_table("missing_logical_vec")
+
     def test_unique_columns_scoped_to_logical_namespace(self, logical_backend, test_schema, embedding_function):
         """Fresh logical tables scope unique_columns by backend namespace."""
         db_a = logical_backend.connect("tenant_a")
@@ -633,6 +644,82 @@ class TestVectorLogicalIsolation:
         )
 
         tbl_a.add(_sample_df(["same_id"]))
+        tbl_b.add(_sample_df(["same_id"]))
+
+        assert tbl_a.count_rows() == 1
+        assert tbl_b.count_rows() == 1
+
+    def test_open_table_migrates_missing_logical_namespace(self, logical_backend, test_schema, embedding_function):
+        """open_table() self-heals legacy logical tables missing the namespace column."""
+        db_a = logical_backend.connect("tenant_a")
+        db_b = logical_backend.connect("tenant_b")
+
+        _drop_table_raw(db_a.pool, "legacy_open_vec")
+        with db_a.pool.connection() as conn:
+            conn.execute(
+                """
+                CREATE TABLE legacy_open_vec (
+                    id TEXT UNIQUE,
+                    description TEXT,
+                    category TEXT,
+                    vector vector(4)
+                )
+                """
+            )
+            conn.execute(
+                "INSERT INTO legacy_open_vec (id, description, category, vector) "
+                "VALUES ('same_id', 'legacy row', 'legacy', '[0.1,0.2,0.3,0.4]')"
+            )
+            conn.commit()
+
+        tbl_a = db_a.open_table("legacy_open_vec", embedding_function=embedding_function)
+        assert tbl_a.count_rows() == 1
+        with db_a.pool.connection() as conn:
+            row = conn.execute(
+                f"SELECT {LOGICAL_NAMESPACE_COLUMN} FROM legacy_open_vec WHERE id = 'same_id'"
+            ).fetchone()
+        assert row[LOGICAL_NAMESPACE_COLUMN] == "tenant_a"
+
+        tbl_b = db_b.open_table("legacy_open_vec", embedding_function=embedding_function)
+        tbl_b.add(_sample_df(["same_id"]))
+
+        assert tbl_a.count_rows() == 1
+        assert tbl_b.count_rows() == 1
+
+    def test_open_table_migrates_legacy_unique_index(self, logical_backend, embedding_function):
+        """open_table() also migrates pre-existing unscoped unique indexes."""
+        db_a = logical_backend.connect("tenant_a")
+        db_b = logical_backend.connect("tenant_b")
+
+        _drop_table_raw(db_a.pool, "legacy_open_index_vec")
+        with db_a.pool.connection() as conn:
+            conn.execute(
+                f"""
+                CREATE TABLE legacy_open_index_vec (
+                    id TEXT,
+                    description TEXT,
+                    category TEXT,
+                    vector vector(4),
+                    {LOGICAL_NAMESPACE_COLUMN} TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
+            conn.execute("CREATE UNIQUE INDEX legacy_open_index_vec_id_uq ON legacy_open_index_vec(id)")
+            conn.execute(
+                "INSERT INTO legacy_open_index_vec (id, description, category, vector) "
+                "VALUES ('same_id', 'legacy row', 'legacy', '[0.1,0.2,0.3,0.4]')"
+            )
+            conn.commit()
+
+        tbl_a = db_a.open_table("legacy_open_index_vec", embedding_function=embedding_function)
+        assert tbl_a.count_rows() == 1
+        with db_a.pool.connection() as conn:
+            row = conn.execute(
+                f"SELECT {LOGICAL_NAMESPACE_COLUMN} FROM legacy_open_index_vec WHERE id = 'same_id'"
+            ).fetchone()
+        assert row[LOGICAL_NAMESPACE_COLUMN] == "tenant_a"
+
+        tbl_b = db_b.open_table("legacy_open_index_vec", embedding_function=embedding_function)
         tbl_b.add(_sample_df(["same_id"]))
 
         assert tbl_a.count_rows() == 1
