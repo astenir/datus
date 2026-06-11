@@ -65,6 +65,9 @@ class PgVectorTable(VectorTable):
         self._column_names = column_names or []
         self._isolation = isolation
         self._datasource_id = datasource_id
+        # Conflict-target columns whose UNIQUE index we have already ensured on
+        # this handle, so upsert self-healing runs its DDL at most once.
+        self._ensured_conflict_indexes: set = set()
 
     @property
     def table_name(self) -> str:
@@ -134,6 +137,35 @@ class PgVectorTable(VectorTable):
         with self._pool.connection() as conn:
             conn.execute(sql, params + ds_params)
             conn.commit()
+
+    # -- Schema evolution --
+
+    def ensure_columns(self, expressions: Dict[str, str]) -> None:
+        """Add missing columns (TEXT) and backfill them from SQL expressions.
+
+        Migration hook the storage layer calls after opening a pre-existing
+        table, used to add datasource-scoping columns (``datasource_id`` /
+        ``storage_key``) that newer code expects. ``expressions`` maps a column
+        name to the SQL used to populate existing rows; these are trusted
+        backend-internal expressions (e.g. ``'legacy:' || id``), not user input.
+        """
+        if not expressions:
+            return
+        existing = set(self._fetch_column_names())
+        missing = {name: expr for name, expr in expressions.items() if name not in existing}
+        if not missing:
+            return
+        with self._pool.connection() as conn:
+            for name, expr in missing.items():
+                _validate_identifier(name)
+                conn.execute(f"ALTER TABLE {self._table_name} ADD COLUMN IF NOT EXISTS {name} TEXT")
+                # Backfill rows that predate the column. expr is trusted internal SQL.
+                conn.execute(f"UPDATE {self._table_name} SET {name} = {expr} WHERE {name} IS NULL")
+            conn.commit()
+        # Keep the cached column list in sync for subsequent reads on this handle.
+        for name in missing:
+            if name not in self._column_names:
+                self._column_names.append(name)
 
     # -- Search operations --
 
@@ -361,9 +393,13 @@ class PgVectorTable(VectorTable):
 
         # In logical mode, scope conflict target to tenant
         if self._isolation == IsolationType.LOGICAL and self._datasource_id is not None:
-            conflict_target = f"{on_column}, {DATASOURCE_ID_COLUMN}"
+            conflict_cols = [on_column, DATASOURCE_ID_COLUMN]
         else:
-            conflict_target = on_column
+            conflict_cols = [on_column]
+        conflict_target = ", ".join(conflict_cols)
+        # A table migrated to a new conflict key (e.g. storage_key) has no
+        # matching UNIQUE index, which ON CONFLICT requires; ensure it exists.
+        self._ensure_conflict_index(conflict_cols)
 
         col_names = ", ".join(columns)
         placeholders = ", ".join(["%s"] * len(columns))
@@ -398,6 +434,40 @@ class PgVectorTable(VectorTable):
             with conn.cursor() as cur:
                 cur.executemany(sql, rows)
             conn.commit()
+
+    def _fetch_column_names(self) -> List[str]:
+        """Return the live column names of this table from the catalog."""
+        if "." in self._table_name:
+            schema, bare = self._table_name.split(".", 1)
+        else:
+            schema, bare = "public", self._table_name
+        with self._pool.connection() as conn:
+            rows = conn.execute(
+                "SELECT column_name FROM information_schema.columns WHERE table_schema = %s AND table_name = %s",
+                (schema, bare),
+            ).fetchall()
+        return [r["column_name"] if isinstance(r, dict) else r[0] for r in rows]
+
+    def _ensure_conflict_index(self, conflict_cols: List[str]) -> None:
+        """Ensure a UNIQUE index exists for an upsert conflict target.
+
+        ``create_table`` builds these for fresh tables, but a pre-existing table
+        migrated to a new conflict key lacks one, so ON CONFLICT would fail.
+        Idempotent (``IF NOT EXISTS``) and cached per handle. The index name
+        mirrors the one ``create_table`` uses for the logical composite key.
+        """
+        key = tuple(conflict_cols)
+        if key in self._ensured_conflict_indexes:
+            return
+        for col in conflict_cols:
+            _validate_identifier(col)
+        table_token = self._table_name.rsplit(".", 1)[-1]
+        index_name = f"idx_{table_token}_{'_'.join(conflict_cols)}_uq"
+        cols_sql = ", ".join(conflict_cols)
+        with self._pool.connection() as conn:
+            conn.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} ON {self._table_name} ({cols_sql})")
+            conn.commit()
+        self._ensured_conflict_indexes.add(key)
 
     @property
     def _default_columns(self) -> List[str]:

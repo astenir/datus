@@ -585,3 +585,78 @@ class TestVectorLogicalIsolation:
         logical_table.add(_sample_df(["ex1"]))
         result = logical_table.search_all()
         assert "datasource_id" not in result.column_names
+
+
+# ==============================================================================
+# Schema-evolution (ensure_columns) tests
+# ==============================================================================
+
+
+def _column_names(pool, table_name):
+    """Return the live column names of a table."""
+    with pool.connection() as conn:
+        rows = conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name = %s",
+            (table_name,),
+        ).fetchall()
+        return {r["column_name"] if isinstance(r, dict) else r[0] for r in rows}
+
+
+class TestVectorEnsureColumns:
+    """Pre-existing tables get scope columns added and backfilled on demand."""
+
+    def test_adds_and_backfills_missing_columns(self, db, test_schema, embedding_function):
+        # test_schema has no datasource_id / storage_key — it models an old table.
+        db.drop_table("ec_vectors", ignore_missing=True)
+        tbl = db.create_table("ec_vectors", schema=test_schema, embedding_function=embedding_function)
+        tbl.add(_sample_df(["e1", "e2"]))
+
+        tbl.ensure_columns({"datasource_id": "''", "storage_key": "'legacy:' || id"})
+
+        assert {"datasource_id", "storage_key"} <= _column_names(db.pool, "ec_vectors")
+        with db.pool.connection() as conn:
+            rows = conn.execute("SELECT id, datasource_id, storage_key FROM ec_vectors ORDER BY id").fetchall()
+        assert [r["storage_key"] for r in rows] == ["legacy:e1", "legacy:e2"]
+        assert [r["datasource_id"] for r in rows] == ["", ""]
+
+    def test_is_idempotent_and_preserves_values(self, db, test_schema, embedding_function):
+        db.drop_table("ec_idem", ignore_missing=True)
+        tbl = db.create_table("ec_idem", schema=test_schema, embedding_function=embedding_function)
+        tbl.add(_sample_df(["i1"]))
+
+        tbl.ensure_columns({"storage_key": "'legacy:' || id"})
+        # A second call must not re-run the backfill or fail.
+        tbl.ensure_columns({"storage_key": "'legacy:' || id"})
+
+        with db.pool.connection() as conn:
+            row = conn.execute("SELECT storage_key FROM ec_idem WHERE id = 'i1'").fetchone()
+        assert (row["storage_key"] if isinstance(row, dict) else row[0]) == "legacy:i1"
+
+    def test_empty_expressions_is_noop(self, db, test_schema, embedding_function):
+        db.drop_table("ec_noop", ignore_missing=True)
+        tbl = db.create_table("ec_noop", schema=test_schema, embedding_function=embedding_function)
+        before = _column_names(db.pool, "ec_noop")
+        tbl.ensure_columns({})
+        assert _column_names(db.pool, "ec_noop") == before
+
+    def test_upsert_on_migrated_column_self_heals_unique_index(self, db, test_schema, embedding_function):
+        # The migrated storage_key column has no UNIQUE index, which ON CONFLICT
+        # needs; merge_insert must create it on demand and succeed.
+        db.drop_table("ec_upsert", ignore_missing=True)
+        tbl = db.create_table("ec_upsert", schema=test_schema, embedding_function=embedding_function)
+        tbl.add(_sample_df(["m1"]))
+        tbl.ensure_columns({"storage_key": "'legacy:' || id"})
+
+        update_df = pd.DataFrame(
+            {
+                "id": ["m1", "m2"],
+                "storage_key": ["legacy:m1", "legacy:m2"],
+                "description": ["updated_m1", "new_m2"],
+                "category": ["updated", "new"],
+            }
+        )
+        tbl.merge_insert(update_df, "storage_key")
+
+        assert tbl.count_rows() == 2
+        result = tbl.search_all(where=eq("id", "m1"))
+        assert result.column("category")[0].as_py() == "updated"
