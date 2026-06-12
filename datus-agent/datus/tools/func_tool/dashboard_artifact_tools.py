@@ -436,6 +436,8 @@ class DashboardArtifactTools:
        every ``params`` literal's keys match the template's declaration.
     """
 
+    permission_category: str = "artifact_tools"
+
     def __init__(
         self,
         *,

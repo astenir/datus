@@ -220,6 +220,8 @@ class SubAgentTaskTool:
     for every task invocation to ensure fully independent context.
     """
 
+    permission_category: str = "sub_agent_tools"
+
     def __init__(
         self,
         agent_config: AgentConfig,
