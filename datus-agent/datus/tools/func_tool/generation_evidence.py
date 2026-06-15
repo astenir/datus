@@ -378,17 +378,24 @@ def _dry_run_satisfies_time_group(dry_run: Dict[str, Any], time_hint: Dict[str, 
         return True
 
     sql = dry_run.get("sql", "")
+    # MetricFlow canonicalizes the time dimension to metric_time, so accept it from
+    # either the recorded dimensions or the compiled SQL.
     if (
         isinstance(sql, str)
         and base_expr
         and dimensions
         and _sql_contains_base_expr_text(sql, base_expr)
-        and any(_is_metric_time_dimension(dimension) for dimension in dimensions)
+        and (any(_is_metric_time_dimension(dimension) for dimension in dimensions) or _sql_references_metric_time(sql))
     ):
         return True
     if not isinstance(sql, str) or not _sql_contains_time_group(sql, base_expr, grain):
         return False
     return True
+
+
+def _sql_references_metric_time(sql: str) -> bool:
+    """True when the compiled SQL references MetricFlow's metric_time column (any grain)."""
+    return bool(re.search(r"\bmetric_time(?:__\w+)?\b", str(sql or ""), flags=re.IGNORECASE))
 
 
 def _normalize_time_grain(value: Any) -> str:
@@ -439,8 +446,17 @@ def _sql_contains_time_group(sql: str, base_expr: str, grain: str) -> bool:
 def _sql_contains_base_expr_text(sql: str, base_expr: str) -> bool:
     normalized_sql = _normalize_sql_text(sql)
     normalized_base = _normalize_sql_text(base_expr)
-    if normalized_base and normalized_base in normalized_sql:
-        return True
+    if normalized_base:
+        # A bare identifier must match on identifier boundaries (against the
+        # whitespace-preserving SQL, since _normalize_sql_text would fuse it with
+        # the next token) so e.g. ``ordered_at`` matches a real column reference
+        # but not ``preordered_at`` / ``ordered_at_utc``. Richer expressions
+        # (containing parens/operators) are safe to match as a substring.
+        if re.fullmatch(r"[a-z_][a-z0-9_]*", normalized_base):
+            if re.search(rf"\b{re.escape(normalized_base)}\b", str(sql or "").lower()):
+                return True
+        elif normalized_base in normalized_sql:
+            return True
     leaf = _last_identifier(base_expr)
     normalized_leaf = _normalize_sql_text(leaf)
     return bool(
