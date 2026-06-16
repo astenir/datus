@@ -11,7 +11,7 @@ asyncio.Task so that client disconnects do not cancel the computation.
 """
 
 import asyncio
-from typing import Annotated, AsyncGenerator, Optional
+from typing import TYPE_CHECKING, Annotated, Any, AsyncGenerator, Optional
 
 from fastapi import APIRouter, HTTPException, Path, Query, Request
 from fastapi.responses import StreamingResponse
@@ -44,11 +44,16 @@ from datus.api.models.cli_models import (
     StreamChatInput,
     UserInteractionInput,
 )
+from datus.tools.data_access_policy import DataAccessConfig
 from datus.utils.feedback_prompt import build_reaction_feedback_prompt
 from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from datus.api.auth.context import AppContext
+    from datus.api.services.datus_service import DatusService
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 
@@ -76,6 +81,68 @@ def _is_valid_subagent_id(svc, subagent_id: str) -> bool:
     return False
 
 
+def _data_access_principal_pre_check(svc: "DatusService", ctx: "AppContext") -> Optional[ChatPreCheckOutcome]:
+    """Fail fast when enabled data-access policies need missing principal fields."""
+    agent_config = getattr(svc, "agent_config", None)
+    data_access_config = getattr(agent_config, "data_access_config", None)
+    if not isinstance(data_access_config, DataAccessConfig) or not data_access_config.enabled:
+        return None
+
+    principal = getattr(ctx, "principal", None) or {}
+    required_paths = _required_principal_paths(data_access_config.raw)
+    missing_paths = _missing_principal_paths(principal, required_paths)
+    if not missing_paths:
+        return None
+
+    detail = ""
+    if missing_paths:
+        missing_fields = ", ".join(f"principal.{path}" for path in missing_paths)
+        detail = f" Missing principal field(s): {missing_fields}."
+    return ChatPreCheckOutcome(
+        allow=False,
+        error=(
+            "Data access is enabled, but this request is missing principal data required by policy."
+            f"{detail} "
+            "Authenticate the request with a provider that populates principal fields required by "
+            "agent.data_access policies. The agent cannot infer or set request principal from SQL."
+        ),
+        error_type="DATA_ACCESS_PRINCIPAL_REQUIRED",
+    )
+
+
+def _required_principal_paths(raw: Any) -> list[str]:
+    paths: set[str] = set()
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            value_from = value.get("value_from")
+            if isinstance(value_from, str) and value_from.startswith("principal."):
+                path = value_from[len("principal.") :].strip()
+                if path:
+                    paths.add(path)
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(raw)
+    return sorted(paths)
+
+
+def _missing_principal_paths(principal: dict[str, Any], required_paths: list[str]) -> list[str]:
+    return [path for path in required_paths if not _principal_path_exists(principal, path)]
+
+
+def _principal_path_exists(principal: dict[str, Any], path: str) -> bool:
+    current: Any = principal
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return False
+        current = current[part]
+    return current not in (None, "", [])
+
+
 # ========== Stream Chat ==========
 
 
@@ -98,6 +165,14 @@ async def stream_chat(
             detail=f"Subagent '{sub_agent_id}' not found",
         )
 
+    data_access_denial = _data_access_principal_pre_check(svc, ctx)
+    if data_access_denial:
+        return StreamingResponse(
+            _emit_pre_check_denial(request, data_access_denial),
+            media_type="text/event-stream",
+            headers=_sse_headers(),
+        )
+
     hooks = get_chat_hooks()
     pre_outcome = await _run_pre_chat_hook(hooks, http_request, request, ctx.user_id)
     if pre_outcome and not pre_outcome.allow:
@@ -111,7 +186,7 @@ async def stream_chat(
 
     async def generate_sse():
         async for chunk in _stream_with_post_hook(
-            svc.chat.stream_chat(request, sub_agent_id=sub_agent_id, user_id=ctx.user_id),
+            svc.chat.stream_chat(request, sub_agent_id=sub_agent_id, user_id=ctx.user_id, principal=ctx.principal),
             http_request=http_request,
             request=request,
             user_id=ctx.user_id,
@@ -152,9 +227,18 @@ async def stream_chat_feedback(
         message=rendered_message,
         subagent_id="feedback",
     )
+    data_access_denial = _data_access_principal_pre_check(svc, ctx)
+    if data_access_denial:
+        return StreamingResponse(
+            _emit_pre_check_denial(stream_input, data_access_denial),
+            media_type="text/event-stream",
+            headers=_sse_headers(),
+        )
 
     async def generate_sse():
-        async for event in svc.chat.stream_chat(stream_input, sub_agent_id="feedback", user_id=ctx.user_id):
+        async for event in svc.chat.stream_chat(
+            stream_input, sub_agent_id="feedback", user_id=ctx.user_id, principal=ctx.principal
+        ):
             yield f"id: {event.id}\nevent: {event.event}\ndata: {event.data.model_dump_json()}\n\n"
 
     return StreamingResponse(generate_sse(), media_type="text/event-stream", headers=_sse_headers())
