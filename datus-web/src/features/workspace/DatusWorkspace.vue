@@ -5,7 +5,6 @@ import {
   BotIcon,
   DatabaseIcon,
   MessageSquareIcon,
-  PanelLeftIcon,
   RefreshCwIcon,
   ServerIcon,
   SettingsIcon,
@@ -13,9 +12,10 @@ import {
   TerminalIcon,
 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
 import { Toaster } from "@/components/ui/sonner"
 import { Spinner } from "@/components/ui/spinner"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Tabs, TabsContent } from "@/components/ui/tabs"
 import { useAuth } from "@/composables/useAuth"
 import { useChatWorkspace } from "@/composables/useChatWorkspace"
 import ChatPanel from "@/features/chat/ChatPanel.vue"
@@ -99,72 +99,52 @@ onMounted(async () => {
     v-else
     class="h-screen min-h-0 bg-background text-foreground"
   >
-    <Tabs
-      :model-value="activeView"
-      orientation="vertical"
-      class="flex h-full min-h-0 flex-row gap-0"
-      @update:model-value="setActiveView"
-    >
-      <SessionRail
-        :auth="authState"
-        :workspace="workspace"
-        :nav-items="navItems"
-        @open-chat="activeView = 'chat'"
-        @open-settings="settingsOpen = true"
-      />
+    <SidebarProvider class="h-full min-h-0">
+      <Tabs
+        :model-value="activeView"
+        orientation="vertical"
+        class="flex h-full min-h-0 w-full flex-row gap-0"
+        @update:model-value="setActiveView"
+      >
+        <SessionRail
+          :auth="authState"
+          :workspace="workspace"
+          :nav-items="navItems"
+          @open-chat="activeView = 'chat'"
+          @open-settings="settingsOpen = true"
+        />
 
-      <main class="flex min-w-0 flex-1 flex-col bg-background">
-        <header class="flex h-[74px] shrink-0 items-center gap-3 border-b px-3 md:px-5">
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="侧边栏"
-            class="hidden md:inline-flex"
-          >
-            <PanelLeftIcon data-icon="inline-start" />
-          </Button>
+        <SidebarInset class="min-w-0">
+          <header class="flex h-[74px] shrink-0 items-center gap-3 border-b px-3 md:px-5">
+            <SidebarTrigger
+              aria-label="侧边栏"
+              class="shrink-0"
+            />
 
-          <div class="min-w-0 flex-1 text-center">
-            <div class="truncate text-sm font-semibold">{{ activeNavItem.label }}</div>
-            <div class="truncate text-xs text-muted-foreground">{{ headerSubtitle }}</div>
-          </div>
+            <div class="min-w-0 flex-1 text-center">
+              <div class="truncate text-sm font-semibold">{{ activeNavItem.label }}</div>
+              <div class="truncate text-xs text-muted-foreground">{{ headerSubtitle }}</div>
+            </div>
 
-          <div class="flex items-center gap-1">
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="刷新连接"
-              @click="workspace.handleRefreshConnection"
-            >
-              <RefreshCwIcon data-icon="inline-start" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="设置"
-              @click="settingsOpen = true"
-            >
-              <SettingsIcon data-icon="inline-start" />
-            </Button>
-          </div>
-        </header>
-
-        <div class="shrink-0 border-b px-2 py-2 md:hidden">
-          <TabsList class="flex h-auto w-full gap-1 overflow-x-auto rounded-none bg-transparent p-0">
-            <TabsTrigger
-              v-for="item in navItems"
-              :key="item.value"
-              :value="item.value"
-              class="h-9 flex-none rounded-full px-3"
-            >
-              <component
-                :is="item.icon"
-                data-icon="inline-start"
-              />
-              {{ item.label }}
-            </TabsTrigger>
-          </TabsList>
-        </div>
+            <div class="flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="刷新连接"
+                @click="workspace.handleRefreshConnection"
+              >
+                <RefreshCwIcon data-icon="inline-start" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="设置"
+                @click="settingsOpen = true"
+              >
+                <SettingsIcon data-icon="inline-start" />
+              </Button>
+            </div>
+          </header>
 
         <TabsContent
           value="chat"
@@ -202,8 +182,9 @@ onMounted(async () => {
         >
           <AdminPanel />
         </TabsContent>
-      </main>
-    </Tabs>
+        </SidebarInset>
+      </Tabs>
+    </SidebarProvider>
 
     <SettingsSheet
       v-if="isReady"

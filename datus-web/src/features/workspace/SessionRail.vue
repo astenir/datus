@@ -15,8 +15,21 @@ import {
   InputGroupAddon,
   InputGroupInput,
 } from "@/components/ui/input-group"
-import { ScrollArea } from "@/components/ui/scroll-area"
-import { Separator } from "@/components/ui/separator"
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuAction,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarRail,
+  SidebarSeparator,
+} from "@/components/ui/sidebar"
 import { TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { AuthState } from "@/composables/useAuth"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
@@ -64,9 +77,9 @@ function createSession() {
 </script>
 
 <template>
-  <aside class="hidden w-[18.25rem] shrink-0 border-r bg-sidebar text-sidebar-foreground md:flex md:flex-col">
-    <div class="flex flex-col gap-3 p-3">
-      <InputGroup class="h-10 rounded-2xl bg-background/70">
+  <Sidebar collapsible="offcanvas">
+    <SidebarHeader class="gap-2 px-3 py-4">
+      <InputGroup class="h-10 rounded-2xl bg-background/80 shadow-xs">
         <InputGroupAddon>
           <SearchIcon data-icon="inline-start" />
         </InputGroupAddon>
@@ -84,22 +97,12 @@ function createSession() {
         </InputGroupAddon>
       </InputGroup>
 
-      <div class="flex items-center gap-2 px-2 py-1">
-        <Avatar
-          size="sm"
-          class="shrink-0"
-        >
-          <AvatarFallback>{{ userFallback }}</AvatarFallback>
-        </Avatar>
-        <span class="min-w-0 flex-1 truncate text-sm font-medium">{{ userLabel }}</span>
-      </div>
-
-      <TabsList class="flex h-auto w-full flex-col gap-1 rounded-none bg-transparent p-0">
+      <TabsList class="mt-2 flex h-auto w-full flex-col gap-1 rounded-none bg-transparent p-0">
         <TabsTrigger
           v-for="item in navItems"
           :key="item.value"
           :value="item.value"
-          class="h-11 w-full flex-none justify-start rounded-xl px-3 text-[15px] data-active:bg-background data-active:shadow-sm"
+          class="h-10 w-full flex-none justify-start rounded-xl px-3 text-sm text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground data-active:bg-background data-active:text-foreground data-active:shadow-xs"
         >
           <component
             :is="item.icon"
@@ -113,41 +116,37 @@ function createSession() {
           />
         </TabsTrigger>
       </TabsList>
-    </div>
+    </SidebarHeader>
 
-    <Separator />
+    <SidebarSeparator class="mx-3 my-1" />
 
-    <div class="flex min-h-0 flex-1 flex-col gap-2 px-3 py-4">
-      <div class="px-2 text-xs font-medium text-muted-foreground">历史对话</div>
-
-      <ScrollArea class="min-h-0 flex-1">
-        <div class="flex flex-col gap-1 pr-1">
-          <div
-            v-for="session in visibleSessions"
-            :key="session.session_id"
-            class="group flex min-h-10 items-center gap-1 rounded-xl"
-            :class="session.session_id === workspace.selectedSession.value ? 'bg-background text-foreground shadow-sm' : ''"
-          >
-            <Button
-              variant="ghost"
-              class="h-auto min-h-10 min-w-0 flex-1 justify-start gap-2 rounded-xl px-2 py-2 text-left text-[15px] font-normal text-sidebar-foreground hover:bg-background hover:text-foreground"
-              @click="openSession(session.session_id)"
+    <SidebarContent>
+      <SidebarGroup class="min-h-0 px-3 py-2">
+        <SidebarGroupLabel class="px-1 text-xs">历史对话</SidebarGroupLabel>
+        <SidebarGroupContent>
+          <SidebarMenu class="gap-0.5">
+            <SidebarMenuItem
+              v-for="session in visibleSessions"
+              :key="session.session_id"
             >
-              <MessageCircleIcon data-icon="inline-start" />
-              <span class="min-w-0 flex-1 truncate">
-                {{ titleFromQuery(session.user_query) }}
-              </span>
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              class="mr-1 opacity-0 group-hover:opacity-100"
-              aria-label="删除会话"
-              @click.stop="workspace.deleteSession(session.session_id)"
-            >
-              <Trash2Icon data-icon="inline-start" />
-            </Button>
-          </div>
+              <SidebarMenuButton
+                :is-active="session.session_id === workspace.selectedSession.value"
+                class="h-9 rounded-xl px-2 text-[15px] font-normal data-active:shadow-none"
+                :tooltip="titleFromQuery(session.user_query)"
+                @click="openSession(session.session_id)"
+              >
+                <MessageCircleIcon />
+                <span>{{ titleFromQuery(session.user_query) }}</span>
+              </SidebarMenuButton>
+              <SidebarMenuAction
+                show-on-hover
+                aria-label="删除会话"
+                @click.stop="workspace.deleteSession(session.session_id)"
+              >
+                <Trash2Icon />
+              </SidebarMenuAction>
+            </SidebarMenuItem>
+          </SidebarMenu>
 
           <div
             v-if="visibleSessions.length === 0"
@@ -155,43 +154,47 @@ function createSession() {
           >
             没有匹配的会话
           </div>
-        </div>
-      </ScrollArea>
-    </div>
+        </SidebarGroupContent>
+      </SidebarGroup>
+    </SidebarContent>
 
-    <Separator />
+    <SidebarSeparator class="mx-3 my-1" />
 
-    <div class="flex items-center gap-2 p-3">
-      <Avatar
-        size="default"
-        class="shrink-0"
-      >
-        <AvatarFallback>{{ userFallback }}</AvatarFallback>
-      </Avatar>
-      <Button
-        variant="ghost"
-        class="min-w-0 flex-1 justify-start rounded-xl px-2"
-        @click="emit('openSettings')"
-      >
-        <span class="min-w-0 flex-1 truncate text-left">{{ userLabel }}</span>
-        <ChevronRightIcon data-icon="inline-end" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label="设置"
-        @click="emit('openSettings')"
-      >
-        <SettingsIcon data-icon="inline-start" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label="新会话"
-        @click="createSession"
-      >
-        <PlusIcon data-icon="inline-start" />
-      </Button>
-    </div>
-  </aside>
+    <SidebarFooter class="px-3 py-3">
+      <div class="flex items-center gap-2">
+        <Avatar
+          size="default"
+          class="shrink-0"
+        >
+          <AvatarFallback>{{ userFallback }}</AvatarFallback>
+        </Avatar>
+        <Button
+          variant="ghost"
+          class="min-w-0 flex-1 justify-start rounded-xl px-2"
+          @click="emit('openSettings')"
+        >
+          <span class="min-w-0 flex-1 truncate text-left">{{ userLabel }}</span>
+          <ChevronRightIcon data-icon="inline-end" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="设置"
+          @click="emit('openSettings')"
+        >
+          <SettingsIcon data-icon="inline-start" />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="新会话"
+          @click="createSession"
+        >
+          <PlusIcon data-icon="inline-start" />
+        </Button>
+      </div>
+    </SidebarFooter>
+
+    <SidebarRail />
+  </Sidebar>
 </template>
