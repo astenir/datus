@@ -153,6 +153,33 @@ describe("tool execution blocks", () => {
     ]);
   });
 
+  it("unwraps tool result envelopes and keeps error text for the tool UI", () => {
+    const parsed = contentFromPayloadBlocks([
+      {
+        type: "call-tool-result",
+        payload: {
+          callToolId: "call-1",
+          toolName: "read_query",
+          result: {
+            success: 0,
+            error: "permission denied",
+            result: { rows: [] },
+          },
+        },
+      },
+    ]);
+
+    expect(parsed.blocks).toEqual([
+      {
+        type: "tool-result",
+        callToolId: "call-1",
+        toolName: "read_query",
+        errorText: "permission denied",
+        result: { rows: [] },
+      },
+    ]);
+  });
+
   it("merges matching tool calls and results into a single display block", () => {
     const displayBlocks = mergeToolExecutionBlocks([
       { type: "tool-call", callToolId: "call-1", toolName: "read_query", params: { sql: "select 1" } },
@@ -313,6 +340,17 @@ describe("messageFromPayload", () => {
 });
 
 describe("contentFromPayloadBlocks", () => {
+  it("keeps code payloads as dedicated code blocks", () => {
+    const parsed = contentFromPayloadBlocks([
+      { type: "code", payload: { codeType: "sql", content: "select 1" } },
+    ]);
+
+    expect(parsed.blocks).toEqual([
+      { type: "code", language: "sql", content: "select 1" },
+    ]);
+    expect(parsed.text).toBe("select 1");
+  });
+
   it("keeps thinking payloads as dedicated blocks", () => {
     const parsed = contentFromPayloadBlocks([
       { type: "thinking", payload: { content: "Checking schema" } },
@@ -391,6 +429,56 @@ describe("contentFromPayloadBlocks", () => {
             multiSelect: false,
           },
         ],
+      },
+    ]);
+  });
+
+  it("keeps sub-agent completion payloads structured for node rendering", () => {
+    const parsed = contentFromPayloadBlocks([
+      {
+        type: "subagent-complete",
+        payload: {
+          subagentType: "visual_report",
+          toolCount: 3,
+          duration: 1.25,
+          error: "render failed",
+        },
+      },
+    ]);
+
+    expect(parsed.blocks).toEqual([
+      {
+        type: "subagent-complete",
+        subagent: "visual_report",
+        toolCount: 3,
+        duration: 1.25,
+        errorText: "render failed",
+      },
+    ]);
+  });
+
+  it("keeps artifact payloads structured for artifact rendering", () => {
+    const parsed = contentFromPayloadBlocks([
+      {
+        type: "artifact",
+        payload: {
+          kind: "report",
+          slug: "fund-report",
+          name: "基金分析报告",
+          preview_summary: "报告已生成",
+          mode: "new",
+        },
+      },
+    ]);
+
+    expect(parsed.blocks).toEqual([
+      {
+        type: "artifact",
+        kind: "report",
+        slug: "fund-report",
+        name: "基金分析报告",
+        description: "报告已生成",
+        mode: "new",
       },
     ]);
   });

@@ -28,7 +28,9 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
+import { dashboardApi, reportApi } from "@/lib/api"
 import { mergeToolExecutionMessages } from "@/lib/chat"
+import { useConnection } from "@/composables/useConnection"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import ChatMessageItem from "@/features/chat/ChatMessageItem.vue"
 
@@ -40,6 +42,7 @@ const displayMessages = computed(() => mergeToolExecutionMessages(props.workspac
 const currentStatus = computed<ChatStatus>(() => props.workspace.isStreaming.value ? "streaming" : "ready")
 const schemaOptions = computed(() => props.workspace.schemaOptions.value)
 const pendingInteractionKey = shallowRef<string | null>(null)
+const { effectiveBase } = useConnection()
 
 const promptSuggestions = [
   "帮我分析基金持仓的关键变化",
@@ -73,6 +76,14 @@ async function submitInteraction(interactionKey: string, answers: string[][]) {
     pendingInteractionKey.value = null
   }
 }
+
+function openArtifact(kind: string, slug: string) {
+  const base = effectiveBase()
+  const url = kind === "report"
+    ? reportApi.htmlUrl(base, slug)
+    : dashboardApi.htmlUrl(base, slug)
+  window.open(url, "_blank", "noopener,noreferrer")
+}
 </script>
 
 <template>
@@ -85,14 +96,17 @@ async function submitInteraction(interactionKey: string, answers: string[][]) {
         有什么我能帮你的吗？
       </h1>
 
-      <Suggestions class="mx-auto mt-8 flex w-full max-w-5xl flex-nowrap justify-start gap-2 whitespace-nowrap px-1 sm:flex-wrap sm:justify-center sm:whitespace-normal">
+      <Suggestions class="mx-auto mt-8 flex w-full max-w-5xl flex-wrap justify-center gap-2 whitespace-normal px-1">
         <Suggestion
-          v-for="suggestion in promptSuggestions"
+          v-for="(suggestion, index) in promptSuggestions"
           :key="suggestion"
           :suggestion="suggestion"
           variant="secondary"
           size="lg"
-          class="h-auto min-h-11 max-w-full rounded-2xl border-transparent bg-muted px-5 py-2.5 text-base text-foreground hover:bg-muted/80"
+          :class="[
+            'h-auto min-h-10 max-w-full rounded-2xl border-transparent bg-muted px-5 py-2.5 text-base text-foreground hover:bg-muted/80 md:min-h-11',
+            index > 1 ? 'hidden sm:inline-flex' : '',
+          ]"
           @click="sendSuggestion"
         />
       </Suggestions>
@@ -110,6 +124,7 @@ async function submitInteraction(interactionKey: string, answers: string[][]) {
           :streaming="workspace.isStreaming.value"
           :interaction-disabled="Boolean(pendingInteractionKey)"
           @submit-interaction="submitInteraction"
+          @open-artifact="openArtifact"
         />
       </ConversationContent>
       <ConversationScrollButton />

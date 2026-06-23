@@ -100,15 +100,17 @@ export function mergeToolExecutionBlocks(blocks: readonly MessageDisplayBlock[])
       const result = resultByCallId.get(block.callToolId);
       if (result) {
         consumedResultIds.add(block.callToolId);
-        merged.push({
+        const mergedBlock: Extract<MessageDisplayBlock, { type: "tool-execution" }> = {
           type: "tool-execution",
           callToolId: block.callToolId,
           toolName: block.toolName,
           params: block.params,
-          duration: result.duration,
-          shortDesc: result.shortDesc,
           result: result.result,
-        });
+        };
+        if (result.duration != null) mergedBlock.duration = result.duration;
+        if (result.shortDesc) mergedBlock.shortDesc = result.shortDesc;
+        if (result.errorText) mergedBlock.errorText = result.errorText;
+        merged.push(mergedBlock);
         continue;
       }
     }
@@ -149,15 +151,17 @@ export function mergeToolExecutionMessages(messages: readonly ChatMessage[]): Ch
         const result = resultByCallId.get(block.callToolId);
         if (result) {
           consumedResultKeys.add(`${result.messageIndex}:${block.callToolId}`);
-          blocks.push({
+          const mergedBlock: Extract<MessageDisplayBlock, { type: "tool-execution" }> = {
             type: "tool-execution",
             callToolId: block.callToolId,
             toolName: block.toolName,
             params: block.params,
-            duration: result.block.duration,
-            shortDesc: result.block.shortDesc,
             result: result.block.result,
-          });
+          };
+          if (result.block.duration != null) mergedBlock.duration = result.block.duration;
+          if (result.block.shortDesc) mergedBlock.shortDesc = result.block.shortDesc;
+          if (result.block.errorText) mergedBlock.errorText = result.block.errorText;
+          blocks.push(mergedBlock);
           continue;
         }
       }
@@ -179,6 +183,7 @@ export function mergeToolExecutionMessages(messages: readonly ChatMessage[]): Ch
 
 function isReviewableMessageBlock(block: MessageBlock) {
   if (block.type === "artifact") return true;
+  if (block.type === "code") return true;
   if (block.type !== "markdown") return false;
 
   const content = block.content.trim();
@@ -364,7 +369,7 @@ export function contentFromPayloadBlocks(
       blocks.push({ type: "thinking", content: stringifyContent(payload.content) });
     } else if (type === "code") {
       const language = stringifyContent(payload.codeType ?? payload.code_type ?? "text") || "text";
-      blocks.push({ type: "markdown", content: `\`\`\`${language}\n${stringifyContent(payload.content ?? payload.code)}\n\`\`\`` });
+      blocks.push({ type: "code", language, content: stringifyContent(payload.content ?? payload.code) });
     } else if (type === "call-tool") {
       const callToolId = callToolIdFromPayload(payload);
       const toolName = stringifyContent(payload.toolName ?? payload.tool_name ?? "tool");
@@ -375,7 +380,17 @@ export function contentFromPayloadBlocks(
       const toolName = stringifyContent(payload.toolName ?? payload.tool_name ?? "tool");
       const duration = typeof payload.duration === "number" ? payload.duration : undefined;
       const shortDesc = stringifyContent(payload.shortDesc ?? payload.short_desc);
-      blocks.push({ type: "tool-result", callToolId, toolName, duration, shortDesc, result: payload.result });
+      const errorText = toolErrorText(payload);
+      const block: Extract<MessageBlock, { type: "tool-result" }> = {
+        type: "tool-result",
+        toolName,
+        result: unwrapToolResult(payload.result),
+      };
+      if (callToolId) block.callToolId = callToolId;
+      if (duration != null) block.duration = duration;
+      if (shortDesc) block.shortDesc = shortDesc;
+      if (errorText) block.errorText = errorText;
+      blocks.push(block);
     } else if (type === "error") {
       blocks.push({ type: "markdown", content: `**错误**\n\n${stringifyContent(payload.content)}` });
     } else if (type === "user-interaction") {
@@ -401,14 +416,26 @@ export function contentFromPayloadBlocks(
     } else if (type === "subagent-complete") {
       const subagent = stringifyContent(payload.subagentType ?? payload.subagent_type ?? "subagent");
       const toolCount = payload.toolCount ?? payload.tool_count;
-      const duration = typeof payload.duration === "number" ? ` · ${payload.duration.toFixed(2)}s` : "";
-      blocks.push({ type: "markdown", content: `**子 Agent 完成** \`${subagent}\`${toolCount == null ? "" : ` · ${toolCount} tools`}${duration}` });
+      const duration = typeof payload.duration === "number" ? payload.duration : undefined;
+      const errorText = stringifyContent(payload.error);
+      const block: Extract<MessageBlock, { type: "subagent-complete" }> = {
+        type: "subagent-complete",
+        subagent,
+      };
+      if (typeof toolCount === "number") block.toolCount = toolCount;
+      if (duration != null) block.duration = duration;
+      if (errorText) block.errorText = errorText;
+      blocks.push(block);
     } else if (type === "artifact") {
       const kind = stringifyContent(payload.kind ?? "dashboard");
       const slug = stringifyContent(payload.slug ?? "");
       const name = stringifyContent(payload.name ?? payload.slug ?? "artifact");
       const description = stringifyContent(payload.preview_summary ?? payload.description ?? "");
-      blocks.push({ type: "artifact", kind, slug, name, description });
+      const mode = stringifyContent(payload.mode);
+      const block: Extract<MessageBlock, { type: "artifact" }> = { type: "artifact", kind, slug, name };
+      if (description) block.description = description;
+      if (mode) block.mode = mode;
+      blocks.push(block);
     } else {
       if (typeof payload.content === "string") blocks.push({ type: "markdown", content: payload.content });
       else if (typeof payload.code === "string") blocks.push({ type: "markdown", content: payload.code });
@@ -420,9 +447,11 @@ export function contentFromPayloadBlocks(
     .map((block) => {
       if (block.type === "markdown") return block.content;
       if (block.type === "thinking") return block.content;
+      if (block.type === "code") return block.content;
       if (block.type === "tool-call") return `调用工具 ${block.toolName}`;
       if (block.type === "tool-result") return `工具结果 ${block.toolName}${block.shortDesc ? `\n${block.shortDesc}` : ""}`;
       if (block.type === "user-interaction") return `需要用户确认 (${block.actionType})`;
+      if (block.type === "subagent-complete") return `子 Agent 完成 ${block.subagent}`;
       if (block.type === "artifact") return block.name;
       return "";
     })
@@ -430,6 +459,26 @@ export function contentFromPayloadBlocks(
     .join("\n\n");
 
   return { text, blocks };
+}
+
+function unwrapToolResult(value: unknown): unknown {
+  if (isRecord(value) && "result" in value) {
+    return value.result;
+  }
+  return value;
+}
+
+function toolErrorText(payload: Record<string, unknown>): string | undefined {
+  const directError = stringifyContent(payload.error).trim();
+  if (directError) return directError;
+
+  const result = payload.result;
+  if (isRecord(result)) {
+    const nestedError = stringifyContent(result.error).trim();
+    if (nestedError) return nestedError;
+  }
+
+  return undefined;
 }
 
 export function parseSseBuffer(

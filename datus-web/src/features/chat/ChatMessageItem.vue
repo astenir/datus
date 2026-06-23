@@ -12,6 +12,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   submitInteraction: [interactionKey: string, answers: string[][]]
+  openArtifact: [kind: string, slug: string]
 }>()
 
 const isUserMessage = computed(() => props.message.role === "user")
@@ -32,6 +33,10 @@ const contentClass = computed(() =>
 
 function submitInteraction(interactionKey: string, answers: string[][]) {
   emit("submitInteraction", interactionKey, answers)
+}
+
+function openArtifact(kind: string, slug: string) {
+  emit("openArtifact", kind, slug)
 }
 </script>
 
@@ -57,6 +62,7 @@ function submitInteraction(interactionKey: string, answers: string[][]) {
             :streaming="streaming"
             :interaction-disabled="interactionDisabled"
             @submit-interaction="submitInteraction"
+            @open-artifact="openArtifact"
           />
         </template>
         <MessageResponse

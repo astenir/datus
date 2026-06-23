@@ -17,6 +17,7 @@ export type ToolResultBlock = {
   toolName: string;
   duration?: number;
   shortDesc?: string;
+  errorText?: string;
   result?: unknown;
 };
 export type ToolExecutionBlock = {
@@ -26,16 +27,19 @@ export type ToolExecutionBlock = {
   params: unknown;
   duration?: number;
   shortDesc?: string;
+  errorText?: string;
   result?: unknown;
 };
 
 export type MessageBlock =
   | { type: "markdown"; content: string }
   | { type: "thinking"; content: string }
+  | { type: "code"; language: string; content: string }
   | ToolCallBlock
   | ToolResultBlock
   | { type: "user-interaction"; interactionKey: string; actionType: string; requests: readonly UserInteractionRequest[] }
-  | { type: "artifact"; kind: string; slug: string; name: string; description?: string };
+  | { type: "subagent-complete"; subagent: string; toolCount?: number; duration?: number; errorText?: string }
+  | { type: "artifact"; kind: string; slug: string; name: string; description?: string; mode?: string };
 
 export type MessageDisplayBlock = MessageBlock | ToolExecutionBlock;
 

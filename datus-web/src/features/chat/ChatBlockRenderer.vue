@@ -1,4 +1,29 @@
 <script setup lang="ts">
+import type { BundledLanguage } from "shiki"
+import { ExternalLinkIcon } from "@lucide/vue"
+import {
+  Artifact,
+  ArtifactAction,
+  ArtifactActions,
+  ArtifactContent,
+  ArtifactDescription,
+  ArtifactHeader,
+  ArtifactTitle,
+} from "@/components/ai-elements/artifact"
+import {
+  CodeBlock,
+  CodeBlockActions,
+  CodeBlockCopyButton,
+  CodeBlockHeader,
+  CodeBlockTitle,
+} from "@/components/ai-elements/code-block"
+import {
+  Node,
+  NodeContent,
+  NodeDescription,
+  NodeHeader,
+  NodeTitle,
+} from "@/components/ai-elements/node"
 import {
   Reasoning,
   ReasoningContent,
@@ -23,10 +48,35 @@ defineProps<{
 
 const emit = defineEmits<{
   submitInteraction: [interactionKey: string, answers: string[][]]
+  openArtifact: [kind: string, slug: string]
 }>()
 
 function submitInteraction(interactionKey: string, answers: string[][]) {
   emit("submitInteraction", interactionKey, answers)
+}
+
+function openArtifact(kind: string, slug: string) {
+  if (!slug) return
+  emit("openArtifact", kind, slug)
+}
+
+function toolOutputState(errorText?: string) {
+  return errorText ? "output-error" : "output-available"
+}
+
+function codeLanguage(language: string) {
+  return (language.trim().toLowerCase() || "text") as BundledLanguage
+}
+
+function artifactKindLabel(kind: string) {
+  return kind === "report" ? "报表" : "仪表盘"
+}
+
+function subagentSummary(block: Extract<MessageDisplayBlock, { type: "subagent-complete" }>) {
+  const parts = []
+  if (block.toolCount != null) parts.push(`${block.toolCount} tools`)
+  if (block.duration != null) parts.push(`${block.duration.toFixed(2)}s`)
+  return parts.join(" · ") || "已完成"
 }
 </script>
 
@@ -44,6 +94,19 @@ function submitInteraction(interactionKey: string, answers: string[][]) {
     <ReasoningContent :content="block.content" />
   </Reasoning>
 
+  <CodeBlock
+    v-else-if="block.type === 'code'"
+    :code="block.content"
+    :language="codeLanguage(block.language)"
+  >
+    <CodeBlockHeader>
+      <CodeBlockTitle>{{ block.language }}</CodeBlockTitle>
+      <CodeBlockActions>
+        <CodeBlockCopyButton />
+      </CodeBlockActions>
+    </CodeBlockHeader>
+  </CodeBlock>
+
   <Tool v-else-if="block.type === 'tool-call'">
     <ToolHeader
       :type="`tool-${block.toolName}` as never"
@@ -58,13 +121,13 @@ function submitInteraction(interactionKey: string, answers: string[][]) {
   <Tool v-else-if="block.type === 'tool-result'">
     <ToolHeader
       :type="`tool-${block.toolName}` as never"
-      state="output-available"
+      :state="toolOutputState(block.errorText)"
       :title="block.toolName"
     />
     <ToolContent>
       <ToolOutput
         :output="block.result as never"
-        :error-text="undefined"
+        :error-text="block.errorText"
       />
     </ToolContent>
   </Tool>
@@ -72,22 +135,66 @@ function submitInteraction(interactionKey: string, answers: string[][]) {
   <Tool v-else-if="block.type === 'tool-execution'">
     <ToolHeader
       :type="`tool-${block.toolName}` as never"
-      state="output-available"
+      :state="toolOutputState(block.errorText)"
       :title="block.toolName"
     />
     <ToolContent>
       <ToolInput :input="block.params as never" />
       <ToolOutput
         :output="block.result as never"
-        :error-text="undefined"
+        :error-text="block.errorText"
       />
     </ToolContent>
   </Tool>
 
-  <MessageResponse
+  <Node
+    v-else-if="block.type === 'subagent-complete'"
+    class="w-full"
+  >
+    <NodeHeader>
+      <NodeTitle>{{ block.subagent }}</NodeTitle>
+      <NodeDescription>
+        {{ block.errorText ? "子 Agent 执行失败" : "子 Agent 已完成" }}
+      </NodeDescription>
+    </NodeHeader>
+    <NodeContent class="flex flex-col gap-2 text-sm">
+      <p class="text-muted-foreground">
+        {{ subagentSummary(block) }}
+      </p>
+      <p
+        v-if="block.errorText"
+        class="text-destructive"
+      >
+        {{ block.errorText }}
+      </p>
+    </NodeContent>
+  </Node>
+
+  <Artifact
     v-else-if="block.type === 'artifact'"
-    :content="`**${block.name}**\n\n${block.description ?? block.kind}`"
-  />
+  >
+    <ArtifactHeader>
+      <div class="min-w-0">
+        <ArtifactTitle class="truncate">
+          {{ block.name }}
+        </ArtifactTitle>
+        <ArtifactDescription>
+          {{ artifactKindLabel(block.kind) }}{{ block.mode ? ` · ${block.mode}` : "" }}
+        </ArtifactDescription>
+      </div>
+      <ArtifactActions>
+        <ArtifactAction
+          :icon="ExternalLinkIcon"
+          label="打开"
+          tooltip="打开产物"
+          @click="openArtifact(block.kind, block.slug)"
+        />
+      </ArtifactActions>
+    </ArtifactHeader>
+    <ArtifactContent class="text-sm text-muted-foreground">
+      {{ block.description || block.slug }}
+    </ArtifactContent>
+  </Artifact>
 
   <UserInteractionBlock
     v-else-if="block.type === 'user-interaction'"
