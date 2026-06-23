@@ -1,0 +1,147 @@
+<script setup lang="ts">
+import type { ComponentPublicInstance, HTMLAttributes } from 'vue'
+import type { PromptInputMessage } from './types'
+import { InputGroup } from '@/components/ui/input-group'
+import { cn } from '@/lib/utils'
+import { getCurrentInstance, inject, onMounted, onUnmounted } from 'vue'
+import { usePromptInputProvider } from './context'
+import { PROMPT_INPUT_KEY } from './types'
+
+const props = defineProps<{
+  class?: HTMLAttributes['class']
+  accept?: string
+  multiple?: boolean
+  globalDrop?: boolean
+  maxFiles?: number
+  maxFileSize?: number
+  initialInput?: string
+}>()
+
+const emit = defineEmits<{
+  (e: 'submit', payload: PromptInputMessage): void
+  (e: 'error', payload: { code: string, message: string }): void
+}>()
+
+const instance = getCurrentInstance()
+
+function getListener(name: 'onSubmit' | 'onError') {
+  return instance?.vnode.props?.[name]
+}
+
+function callListener<T>(listener: unknown, payload: T) {
+  if (Array.isArray(listener)) {
+    return Promise.all(listener.map(fn => typeof fn === 'function' ? fn(payload) : undefined))
+  }
+
+  if (typeof listener === 'function') {
+    return listener(payload)
+  }
+}
+
+// --- Dual-mode context handling ---
+const inheritedContext = inject(PROMPT_INPUT_KEY, null)
+const localContext = inheritedContext
+  ? null
+  : usePromptInputProvider({
+      initialInput: props.initialInput,
+      maxFiles: props.maxFiles,
+      maxFileSize: props.maxFileSize,
+      accept: props.accept,
+      onSubmit: (msg) => {
+        const listener = getListener('onSubmit')
+        if (listener)
+          return callListener(listener, msg)
+
+        emit('submit', msg)
+      },
+      onError: (err) => {
+        const listener = getListener('onError')
+        if (listener) {
+          void Promise.resolve(callListener(listener, err)).catch((error) => {
+            console.error('PromptInput onError listener failed:', error)
+          })
+          return
+        }
+
+        emit('error', err)
+      },
+    })
+
+const context = inheritedContext || localContext
+
+if (!context) {
+  throw new Error('PromptInput context is missing.')
+}
+
+const promptInputContext = context
+const { addFiles, submitForm } = promptInputContext
+
+function setFileInputRef(element: Element | ComponentPublicInstance | null) {
+  promptInputContext.fileInputRef.value = element instanceof HTMLInputElement ? element : null
+}
+
+function handleDragOver(e: DragEvent) {
+  if (e.dataTransfer?.types?.includes('Files')) {
+    e.preventDefault()
+  }
+}
+
+function handleDrop(e: DragEvent) {
+  if (e.dataTransfer?.types?.includes('Files')) {
+    e.preventDefault()
+  }
+  if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
+    addFiles(e.dataTransfer.files)
+  }
+}
+
+onMounted(() => {
+  if (props.globalDrop) {
+    document.addEventListener('dragover', handleDragOver)
+    document.addEventListener('drop', handleDrop)
+  }
+})
+
+onUnmounted(() => {
+  if (props.globalDrop) {
+    document.removeEventListener('dragover', handleDragOver)
+    document.removeEventListener('drop', handleDrop)
+  }
+})
+
+function onFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  if (input.files) {
+    addFiles(input.files)
+  }
+  input.value = ''
+}
+
+function onSubmit(e: Event) {
+  e.preventDefault()
+  submitForm()
+}
+</script>
+
+<template>
+  <div>
+    <input
+      :ref="setFileInputRef"
+      type="file"
+      class="hidden"
+      :accept="accept"
+      :multiple="multiple"
+      @change="onFileChange"
+    >
+    <form
+      :class="cn('w-full', props.class)"
+      @submit="onSubmit"
+      @dragover.prevent="handleDragOver"
+      @drop.prevent.stop="handleDrop"
+    >
+      <InputGroup class="overflow-hidden">
+        <slot />
+      </InputGroup>
+    </form>
+  </div>
+</template>
