@@ -12,6 +12,7 @@ import {
   messageFromEvent,
   messageFromPayload,
   mergeMessage,
+  normalizeHistoryMessages,
   parseSseBuffer,
   sessionUserQueryText,
   shouldResetConversationOnAgentChange,
@@ -475,6 +476,89 @@ describe("mergeMessage", () => {
         role: "assistant",
         content: "Thinking...",
         blocks: [{ type: "thinking", content: "Thinking..." }]
+      }
+    ]);
+  });
+
+  it("replaces a temporary thinking block when the final answer arrives as updateMessage markdown", () => {
+    const merged = mergeMessage(
+      [
+        {
+          id: "thinking_stream_ffb7d690",
+          role: "assistant",
+          content: "查询数据库并整理结果",
+          blocks: [{ type: "thinking", content: "查询数据库并整理结果" }]
+        }
+      ],
+      {
+        operation: "updateMessage",
+        message: {
+          id: "thinking_stream_ffb7d690",
+          role: "assistant",
+          content: "好的！数据库中 **鹏华基金管理有限公司** 共管理 **54只基金产品**。",
+          blocks: [
+            {
+              type: "markdown",
+              content: "好的！数据库中 **鹏华基金管理有限公司** 共管理 **54只基金产品**。"
+            }
+          ]
+        }
+      }
+    );
+
+    expect(merged).toEqual([
+      {
+        id: "thinking_stream_ffb7d690",
+        role: "assistant",
+        content: "好的！数据库中 **鹏华基金管理有限公司** 共管理 **54只基金产品**。",
+        blocks: [
+          {
+            type: "markdown",
+            content: "好的！数据库中 **鹏华基金管理有限公司** 共管理 **54只基金产品**。"
+          }
+        ]
+      }
+    ]);
+  });
+});
+
+describe("normalizeHistoryMessages", () => {
+  it("collapses stored thinking and final markdown payloads with the same message id", () => {
+    const messages = normalizeHistoryMessages([
+      {
+        message_id: "thinking_stream_ffb7d690",
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            payload: { content: "查询数据库并整理结果" }
+          }
+        ]
+      },
+      {
+        message_id: "thinking_stream_ffb7d690",
+        role: "assistant",
+        content: [
+          {
+            type: "markdown",
+            payload: { content: "好的！数据库中 **鹏华基金管理有限公司** 共管理 **54只基金产品**。" }
+          }
+        ]
+      }
+    ]);
+
+    expect(messages).toEqual([
+      {
+        id: "thinking_stream_ffb7d690",
+        role: "assistant",
+        content: "好的！数据库中 **鹏华基金管理有限公司** 共管理 **54只基金产品**。",
+        blocks: [
+          {
+            type: "markdown",
+            content: "好的！数据库中 **鹏华基金管理有限公司** 共管理 **54只基金产品**。"
+          }
+        ],
+        depth: undefined
       }
     ]);
   });

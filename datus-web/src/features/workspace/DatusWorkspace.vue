@@ -4,12 +4,15 @@ import {
   BarChart3Icon,
   BotIcon,
   DatabaseIcon,
-  FileTextIcon,
   MessageSquareIcon,
+  PanelLeftIcon,
+  RefreshCwIcon,
   ServerIcon,
+  SettingsIcon,
   ShieldIcon,
   TerminalIcon,
 } from "@lucide/vue"
+import { Button } from "@/components/ui/button"
 import { Toaster } from "@/components/ui/sonner"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -17,7 +20,8 @@ import { useAuth } from "@/composables/useAuth"
 import { useChatWorkspace } from "@/composables/useChatWorkspace"
 import ChatPanel from "@/features/chat/ChatPanel.vue"
 import SessionRail from "@/features/workspace/SessionRail.vue"
-import WorkspaceHeader from "@/features/workspace/WorkspaceHeader.vue"
+import type { WorkspaceNavItem, WorkspaceView } from "@/features/workspace/types"
+import { isWorkspaceView } from "@/features/workspace/types"
 
 const AdminPanel = defineAsyncComponent(() => import("@/features/admin/AdminPanel.vue"))
 const ArtifactsPanel = defineAsyncComponent(() => import("@/features/artifacts/ArtifactsPanel.vue"))
@@ -29,17 +33,35 @@ const SqlPanel = defineAsyncComponent(() => import("@/features/sql/SqlPanel.vue"
 const workspace = useChatWorkspace()
 const { state: authState, checkAuth } = useAuth()
 const settingsOpen = shallowRef(false)
+const activeView = shallowRef<WorkspaceView>("chat")
 
 const isReady = computed(() => authState.value.authenticated && !authState.value.loading)
 
-const navItems = [
-  { value: "chat", label: "对话", icon: MessageSquareIcon },
-  { value: "catalog", label: "知识", icon: DatabaseIcon },
+const chatNavItem: WorkspaceNavItem = { value: "chat", label: "新对话", icon: MessageSquareIcon }
+
+const navItems: WorkspaceNavItem[] = [
+  chatNavItem,
+  { value: "catalog", label: "数据目录", icon: DatabaseIcon },
   { value: "sql", label: "SQL", icon: TerminalIcon },
   { value: "mcp", label: "MCP", icon: ServerIcon },
   { value: "artifacts", label: "产物", icon: BarChart3Icon },
   { value: "admin", label: "管理", icon: ShieldIcon },
 ]
+
+const activeNavItem = computed(() => navItems.find(item => item.value === activeView.value) ?? chatNavItem)
+const headerSubtitle = computed(() => {
+  if (activeView.value === "chat") {
+    return "AI 生成可能有误，请核实"
+  }
+
+  return workspace.config.value?.current_datasource || "当前数据源未选择"
+})
+
+function setActiveView(value: unknown) {
+  if (typeof value === "string" && isWorkspaceView(value)) {
+    activeView.value = value
+  }
+}
 
 onMounted(async () => {
   await checkAuth()
@@ -75,28 +97,65 @@ onMounted(async () => {
 
   <div
     v-else
-    class="flex h-screen min-h-0 flex-col bg-background text-foreground"
+    class="h-screen min-h-0 bg-background text-foreground"
   >
-    <WorkspaceHeader
-      :auth="authState"
-      :workspace="workspace"
-      @open-settings="settingsOpen = true"
-    />
+    <Tabs
+      :model-value="activeView"
+      orientation="vertical"
+      class="flex h-full min-h-0 flex-row gap-0"
+      @update:model-value="setActiveView"
+    >
+      <SessionRail
+        :auth="authState"
+        :workspace="workspace"
+        :nav-items="navItems"
+        @open-chat="activeView = 'chat'"
+        @open-settings="settingsOpen = true"
+      />
 
-    <div class="flex min-h-0 flex-1">
-      <SessionRail :workspace="workspace" />
+      <main class="flex min-w-0 flex-1 flex-col bg-background">
+        <header class="flex h-[74px] shrink-0 items-center gap-3 border-b px-3 md:px-5">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="侧边栏"
+            class="hidden md:inline-flex"
+          >
+            <PanelLeftIcon data-icon="inline-start" />
+          </Button>
 
-      <Tabs
-        default-value="chat"
-        class="flex min-w-0 flex-1 flex-col"
-      >
-        <div class="flex h-12 shrink-0 items-center border-b px-3">
-          <TabsList class="gap-1">
+          <div class="min-w-0 flex-1 text-center">
+            <div class="truncate text-sm font-semibold">{{ activeNavItem.label }}</div>
+            <div class="truncate text-xs text-muted-foreground">{{ headerSubtitle }}</div>
+          </div>
+
+          <div class="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="刷新连接"
+              @click="workspace.handleRefreshConnection"
+            >
+              <RefreshCwIcon data-icon="inline-start" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="设置"
+              @click="settingsOpen = true"
+            >
+              <SettingsIcon data-icon="inline-start" />
+            </Button>
+          </div>
+        </header>
+
+        <div class="shrink-0 border-b px-2 py-2 md:hidden">
+          <TabsList class="flex h-auto w-full gap-1 overflow-x-auto rounded-none bg-transparent p-0">
             <TabsTrigger
               v-for="item in navItems"
               :key="item.value"
               :value="item.value"
-              class="gap-2"
+              class="h-9 flex-none rounded-full px-3"
             >
               <component
                 :is="item.icon"
@@ -105,10 +164,6 @@ onMounted(async () => {
               {{ item.label }}
             </TabsTrigger>
           </TabsList>
-          <div class="ml-auto hidden items-center gap-2 text-xs text-muted-foreground md:flex">
-            <FileTextIcon class="size-4" />
-            <span>{{ workspace.sessions.value.length }} sessions</span>
-          </div>
         </div>
 
         <TabsContent
@@ -147,8 +202,8 @@ onMounted(async () => {
         >
           <AdminPanel />
         </TabsContent>
-      </Tabs>
-    </div>
+      </main>
+    </Tabs>
 
     <SettingsSheet
       v-if="isReady"

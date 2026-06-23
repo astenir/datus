@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue"
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message"
-import { Badge } from "@/components/ui/badge"
 import ChatBlockRenderer from "@/features/chat/ChatBlockRenderer.vue"
 import type { ChatDisplayMessage } from "@/types"
 
@@ -15,11 +14,21 @@ const emit = defineEmits<{
   submitInteraction: [interactionKey: string, answers: string[][]]
 }>()
 
-const roleLabel = computed(() => {
-  if (props.message.role === "assistant") return "Datus"
-  if (props.message.role === "user") return "You"
-  return "System"
-})
+const isUserMessage = computed(() => props.message.role === "user")
+const isSystemMessage = computed(() => props.message.role === "system")
+const messageFrom = computed(() => isUserMessage.value ? "user" : "assistant")
+const messageClass = computed(() =>
+  isSystemMessage.value
+    ? "mx-auto !max-w-3xl justify-center"
+    : "mx-auto !max-w-3xl",
+)
+const contentClass = computed(() =>
+  isSystemMessage.value
+    ? "w-fit rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground"
+    : isUserMessage.value
+      ? "w-auto rounded-2xl bg-muted px-4 py-3 text-base leading-7"
+      : "w-full overflow-visible text-base leading-8 text-foreground",
+)
 
 function submitInteraction(interactionKey: string, answers: string[][]) {
   emit("submitInteraction", interactionKey, answers)
@@ -28,18 +37,15 @@ function submitInteraction(interactionKey: string, answers: string[][]) {
 
 <template>
   <Message
-    :from="message.role === 'user' ? 'user' : 'assistant'"
-    class="max-w-full"
+    :from="messageFrom"
+    :class="messageClass"
   >
-    <MessageContent class="w-full">
-      <div class="mb-2 flex items-center gap-2">
-        <Badge variant="secondary">{{ roleLabel }}</Badge>
-        <span
-          v-if="message.depth"
-          class="text-xs text-muted-foreground"
-        >
-          depth {{ message.depth }}
-        </span>
+    <MessageContent :class="contentClass">
+      <div
+        v-if="message.depth && !isUserMessage && !isSystemMessage"
+        class="mb-3 text-sm text-muted-foreground"
+      >
+        depth {{ message.depth }}
       </div>
 
       <div class="flex flex-col gap-3">

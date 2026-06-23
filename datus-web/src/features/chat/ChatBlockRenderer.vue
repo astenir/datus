@@ -44,10 +44,7 @@ function submitInteraction(interactionKey: string, answers: string[][]) {
     <ReasoningContent :content="block.content" />
   </Reasoning>
 
-  <Tool
-    v-else-if="block.type === 'tool-call'"
-    default-open
-  >
+  <Tool v-else-if="block.type === 'tool-call'">
     <ToolHeader
       :type="`tool-${block.toolName}` as never"
       state="input-available"
@@ -58,10 +55,7 @@ function submitInteraction(interactionKey: string, answers: string[][]) {
     </ToolContent>
   </Tool>
 
-  <Tool
-    v-else-if="block.type === 'tool-result'"
-    default-open
-  >
+  <Tool v-else-if="block.type === 'tool-result'">
     <ToolHeader
       :type="`tool-${block.toolName}` as never"
       state="output-available"
@@ -75,10 +69,7 @@ function submitInteraction(interactionKey: string, answers: string[][]) {
     </ToolContent>
   </Tool>
 
-  <Tool
-    v-else-if="block.type === 'tool-execution'"
-    default-open
-  >
+  <Tool v-else-if="block.type === 'tool-execution'">
     <ToolHeader
       :type="`tool-${block.toolName}` as never"
       state="output-available"

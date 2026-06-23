@@ -7,6 +7,7 @@ import {
   createClientId,
   mergeMessage,
   messageFromEvent,
+  normalizeHistoryMessages,
   parseSseBuffer,
   requestJson,
   extractResultData,
@@ -72,22 +73,7 @@ async function loadSessionHistory(sessionId: string) {
   try {
     const payload = await requestJson<unknown>(base, `/api/v1/chat/history?session_id=${encodeURIComponent(sessionId)}`);
     const data = extractResultData<{ messages?: unknown[] }>(payload);
-    const items = (data?.messages ?? []) as Array<{
-      message_id?: string | number;
-      role?: "user" | "assistant" | "system";
-      content?: Array<{ type?: string; payload?: Record<string, unknown> }>;
-      depth?: number;
-    }>;
-
-    const parsed: ChatMessage[] = [];
-    for (const item of items) {
-      const msg = messageFromEvent({
-        event: "message",
-        data: { type: "createMessage", payload: item },
-      });
-      if (msg) parsed.push(msg.message);
-    }
-    messages.value = parsed;
+    messages.value = normalizeHistoryMessages(data?.messages ?? []);
   } catch (error) {
     console.error("Failed to load session history:", error);
     messages.value = [];

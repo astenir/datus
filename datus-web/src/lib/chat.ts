@@ -491,6 +491,61 @@ export function messageFromPayload(
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isRole(value: unknown): value is NonNullable<SseMessagePayload["role"]> {
+  return value === "user" || value === "assistant" || value === "system";
+}
+
+function normalizePayloadContent(value: unknown): SseMessagePayload["content"] {
+  if (!Array.isArray(value)) return undefined;
+
+  return value
+    .map((item) => {
+      if (!isRecord(item)) return null;
+      const type = typeof item.type === "string" ? item.type : undefined;
+      const payload = isRecord(item.payload) ? item.payload : undefined;
+      const normalized: { type?: string; payload?: Record<string, unknown> } = {};
+      if (type) normalized.type = type;
+      if (payload) normalized.payload = payload;
+      return normalized;
+    })
+    .filter((item): item is { type?: string; payload?: Record<string, unknown> } => item !== null);
+}
+
+function historyPayloadFromUnknown(value: unknown): SseMessagePayload | null {
+  if (!isRecord(value) || !isRole(value.role)) return null;
+
+  const messageId = value.message_id ?? value.messageId;
+  const depth = typeof value.depth === "number" ? value.depth : undefined;
+
+  return {
+    message_id: typeof messageId === "string" || typeof messageId === "number" ? messageId : undefined,
+    role: value.role,
+    content: normalizePayloadContent(value.content),
+    depth
+  };
+}
+
+export function normalizeHistoryMessages(items: readonly unknown[]) {
+  let parsed: ChatMessage[] = [];
+
+  for (const item of items) {
+    const payload = historyPayloadFromUnknown(item);
+    if (!payload) continue;
+
+    const incoming = messageFromEvent({
+      event: "message",
+      data: { type: "createMessage", payload }
+    });
+    if (incoming) parsed = mergeMessage(parsed, incoming);
+  }
+
+  return parsed;
+}
+
 export function messageFromEvent(event: SseEvent): ParsedMessage | null {
   const data = event.data as
     | {
