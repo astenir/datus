@@ -14,13 +14,11 @@ import {
   ListChecksIcon,
   LoaderCircleIcon,
   MessageCircleIcon,
-  MoonIcon,
   PlusIcon,
   SearchIcon,
   ServerIcon,
   ShieldCheckIcon,
   ShieldIcon,
-  SunIcon,
   TerminalIcon,
   Trash2Icon,
 } from "@lucide/vue"
@@ -73,7 +71,6 @@ import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import type { AuthState } from "@/composables/useAuth"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
-import { useTheme } from "@/composables/useTheme"
 import type { ArtifactViewTab, WorkspaceView } from "@/features/workspace/types"
 import { cn } from "@/lib/utils"
 
@@ -93,7 +90,6 @@ const emit = defineEmits<{
 
 const searchQuery = shallowRef("")
 const userProfileOpen = shallowRef(false)
-const { theme, toggleTheme } = useTheme()
 
 type SidebarBadgeVariant = "default" | "secondary" | "destructive" | "outline" | "ghost" | "link"
 
@@ -172,7 +168,6 @@ const permissionModeLabel = computed(() => {
       return "普通"
   }
 })
-const themeToggleLabel = computed(() => theme.value === "dark" ? "切换到亮色模式" : "切换到暗色模式")
 const isWorkbenchActive = computed(() => {
   return props.activeView === "sql" || props.activeView === "catalog" || props.activeView === "mcp" || props.activeView === "agents"
 })
@@ -492,35 +487,35 @@ async function runDatasourceTest() {
     </div>
 
     <SidebarFooter class="px-3 pb-3 pt-2">
-      <div class="flex items-center gap-2 rounded-2xl bg-background/85 p-1.5 shadow-xs ring-1 ring-sidebar-border/80">
-        <DropdownMenu
-          v-model:open="userProfileOpen"
-          modal
-        >
-          <DropdownMenuTrigger as-child>
-            <Button
-              variant="ghost"
-              class="h-12 min-w-0 flex-1 justify-start rounded-xl px-1.5 hover:bg-sidebar-accent/80"
-            >
-              <Avatar
-                class="size-9 shrink-0 text-primary"
-              >
-                <AvatarFallback class="bg-primary/10 font-semibold text-primary">{{ userFallback }}</AvatarFallback>
-              </Avatar>
-              <span class="min-w-0 flex-1 text-left">
-                <span class="block truncate text-[13px] font-semibold leading-5">{{ userLabel }}</span>
-                <span class="block truncate text-[11px] font-normal leading-4 text-muted-foreground">{{ userMeta }}</span>
-              </span>
-              <ChevronRightIcon data-icon="inline-end" />
-            </Button>
-          </DropdownMenuTrigger>
-
-          <DropdownMenuContent
-            side="top"
-            align="start"
-            :avoid-collisions="false"
-            class="w-72 overflow-hidden rounded-2xl p-0 shadow-lg"
+      <DropdownMenu
+        v-model:open="userProfileOpen"
+        modal
+      >
+        <DropdownMenuTrigger as-child>
+          <Button
+            variant="ghost"
+            class="h-14 w-full min-w-0 justify-start rounded-2xl bg-background/85 p-2 shadow-xs ring-1 ring-sidebar-border/80 hover:bg-sidebar-accent/80"
           >
+            <Avatar class="size-10 shrink-0 text-primary">
+              <AvatarFallback class="bg-primary/10 font-semibold text-primary">{{ userFallback }}</AvatarFallback>
+            </Avatar>
+            <span class="min-w-0 flex-1 text-left">
+              <span class="block truncate text-[13px] font-semibold leading-5">{{ userLabel }}</span>
+              <span class="block truncate text-xs font-normal leading-4 text-muted-foreground">{{ userMeta }}</span>
+            </span>
+            <ChevronRightIcon
+              class="text-muted-foreground"
+              data-icon="inline-end"
+            />
+          </Button>
+        </DropdownMenuTrigger>
+
+        <DropdownMenuContent
+          side="top"
+          align="start"
+          :avoid-collisions="false"
+          class="w-72 overflow-hidden rounded-2xl p-0 shadow-lg"
+        >
             <div class="px-3 pb-3 pt-3">
               <div class="flex items-center gap-3 rounded-xl bg-muted/35 p-2">
                 <Avatar class="size-11 shrink-0 text-primary">
@@ -695,26 +690,8 @@ async function runDatasourceTest() {
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
             </DropdownMenuGroup>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          :aria-label="themeToggleLabel"
-          class="rounded-xl bg-muted/60 text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
-          @click="toggleTheme"
-        >
-          <SunIcon
-            v-if="theme === 'dark'"
-            data-icon="inline-start"
-          />
-          <MoonIcon
-            v-else
-            data-icon="inline-start"
-          />
-        </Button>
-      </div>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </SidebarFooter>
 
     <SidebarRail />

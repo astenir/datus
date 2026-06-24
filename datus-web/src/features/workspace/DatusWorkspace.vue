@@ -5,9 +5,11 @@ import {
   BotIcon,
   DatabaseIcon,
   MessageSquareIcon,
+  MoonIcon,
   RefreshCwIcon,
   ServerIcon,
   ShieldIcon,
+  SunIcon,
   TerminalIcon,
 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
@@ -18,6 +20,7 @@ import { Tabs, TabsContent } from "@/components/ui/tabs"
 import { useAuth } from "@/composables/useAuth"
 import { useChatWorkspace } from "@/composables/useChatWorkspace"
 import { usePermission } from "@/composables/usePermission"
+import { useTheme } from "@/composables/useTheme"
 import ChatPanel from "@/features/chat/ChatPanel.vue"
 import SessionRail from "@/features/workspace/SessionRail.vue"
 import type { ArtifactViewTab, WorkspaceNavItem, WorkspaceView } from "@/features/workspace/types"
@@ -34,10 +37,12 @@ const SqlPanel = defineAsyncComponent(() => import("@/features/sql/SqlPanel.vue"
 const workspace = useChatWorkspace()
 const { state: authState, checkAuth } = useAuth()
 const permission = usePermission()
+const { theme, toggleTheme } = useTheme()
 const activeView = shallowRef<WorkspaceView>("chat")
 const artifactTab = shallowRef<ArtifactViewTab>("dashboard")
 
 const canManagePermissions = computed(() => permission.isAdmin() || permission.hasFeaturePermission("admin"))
+const themeToggleLabel = computed(() => theme.value === "dark" ? "切换到亮色模式" : "切换到暗色模式")
 
 const chatNavItem: WorkspaceNavItem = { value: "chat", label: "新对话", icon: MessageSquareIcon }
 
@@ -166,6 +171,21 @@ onMounted(async () => {
                 @click="workspace.handleRefreshConnection"
               >
                 <RefreshCwIcon data-icon="inline-start" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                :aria-label="themeToggleLabel"
+                @click="toggleTheme"
+              >
+                <SunIcon
+                  v-if="theme === 'dark'"
+                  data-icon="inline-start"
+                />
+                <MoonIcon
+                  v-else
+                  data-icon="inline-start"
+                />
               </Button>
             </div>
           </header>
