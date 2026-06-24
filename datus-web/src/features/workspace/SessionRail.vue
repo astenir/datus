@@ -93,25 +93,31 @@ const userProfileOpen = shallowRef(false)
 
 type SidebarBadgeVariant = "default" | "secondary" | "destructive" | "outline" | "ghost" | "link"
 
-const primaryNavButtonClass = [
-  "h-8 w-full justify-start rounded-lg bg-primary px-2.5 text-sm font-medium text-primary-foreground shadow-xs",
+const newSessionButtonClass = [
+  "h-10 w-full justify-start rounded-xl px-3 text-sm font-medium shadow-xs",
+  "has-data-[icon=inline-start]:pl-2.5",
   "hover:bg-primary/90 hover:text-primary-foreground",
   "active:bg-primary/90 active:text-primary-foreground",
-  "data-active:bg-primary data-active:text-primary-foreground data-active:shadow-xs",
 ].join(" ")
 const secondaryNavButtonClass = [
-  "h-8 w-full justify-start rounded-lg px-2.5 text-sm font-medium text-sidebar-foreground/85",
-  "hover:bg-sidebar-accent/80 hover:text-sidebar-accent-foreground",
-  "data-active:bg-background data-active:text-foreground data-active:shadow-xs",
-  "data-active:ring-1 data-active:ring-sidebar-border/60",
+  "h-9 w-full justify-start rounded-lg px-2.5 text-sm font-medium text-sidebar-foreground/80",
+  "hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground",
+  "data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground data-active:font-semibold",
+  "data-active:shadow-none",
 ].join(" ")
 const subNavButtonClass = [
-  "h-8 w-full justify-start rounded-lg px-2.5 text-sm font-medium text-sidebar-foreground/85",
-  "hover:bg-sidebar-accent/80 hover:text-sidebar-accent-foreground",
-  "data-active:bg-background data-active:text-foreground data-active:shadow-xs",
-  "data-active:ring-1 data-active:ring-sidebar-border/60",
+  "h-8 w-full justify-start rounded-md px-2 !text-sm font-medium text-sidebar-foreground/75",
+  "hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground",
+  "data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground data-active:font-semibold",
+  "data-active:shadow-none",
 ].join(" ")
-const profileMenuSubTriggerClass = "h-10 rounded-xl px-2.5 text-[13px] [&>svg:last-child]:ml-1"
+const historySessionButtonClass = [
+  "relative h-9 rounded-md px-2 pl-3 text-sm font-normal",
+  "before:absolute before:left-0.5 before:h-4 before:w-0.5 before:rounded-full before:bg-primary before:opacity-0 before:content-['']",
+  "hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground",
+  "data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground data-active:font-medium data-active:shadow-none data-active:before:opacity-100",
+].join(" ")
+const profileMenuSubTriggerClass = "h-10 rounded-xl px-2.5 text-sm [&>svg:last-child]:ml-1"
 const profileMenuValueClass = "ml-auto w-12 shrink-0 text-right tracking-normal"
 const profileDatasourceMenuValueClass = "ml-auto w-20 shrink-0 truncate text-right tracking-normal"
 const profileMenuSwitchClass = "ml-auto flex w-14 shrink-0 justify-start"
@@ -134,6 +140,10 @@ const datasourceTestActionLabel = computed(() => {
   if (datasourceTestOk.value === true) return "重新测试数据源连接"
   if (datasourceTestOk.value === false) return "重新测试数据源连接"
   return "测试当前数据源连接"
+})
+const workspaceStatusLabel = computed(() => {
+  if (!currentDatasourceName.value) return "未选择数据源"
+  return currentDatasourceLabel.value
 })
 const datasourceConnectionStatusLabel = computed(() => {
   if (props.workspace.isTestingDatasource.value) return "正在测试连接"
@@ -284,34 +294,31 @@ async function runDatasourceTest() {
         </div>
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-1.5">
-            <span class="truncate text-sm font-semibold">Datus</span>
+            <span class="truncate text-base font-semibold">Datus</span>
             <Badge
               :variant="connectionBadgeVariant"
-              class="h-5 shrink-0 px-1.5 text-[11px]"
+              class="h-5 shrink-0 px-1.5 text-xs"
             >
               {{ connectionLabel }}
             </Badge>
           </div>
-          <div class="truncate text-xs text-muted-foreground">{{ currentDatasourceLabel }}</div>
+          <div class="truncate text-xs text-muted-foreground">{{ workspaceStatusLabel }}</div>
         </div>
       </div>
     </SidebarHeader>
 
     <SidebarContent class="gap-0 overflow-hidden px-0">
-      <SidebarGroup class="shrink-0 px-3 pb-1 pt-0.5">
-        <SidebarGroupContent>
-          <SidebarMenu class="gap-0.5">
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                :is-active="activeView === 'chat'"
-                :class="primaryNavButtonClass"
-                @click="createSession"
-              >
-                <PlusIcon />
-                <span>新会话</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
+      <SidebarGroup class="shrink-0 px-3 pb-1 pt-0">
+        <SidebarGroupContent class="flex flex-col gap-2">
+          <Button
+            :class="newSessionButtonClass"
+            @click="createSession"
+          >
+            <PlusIcon data-icon="inline-start" />
+            <span>新会话</span>
+          </Button>
 
+          <SidebarMenu class="gap-0.5">
             <SidebarMenuItem>
               <SidebarMenuButton
                 :is-active="activeView === 'artifacts' && artifactTab === 'report'"
@@ -354,7 +361,7 @@ async function runDatasourceTest() {
                   </SidebarMenuButton>
                 </CollapsibleTrigger>
                 <CollapsibleContent>
-                  <SidebarMenuSub class="mx-3 my-1 gap-0.5 border-sidebar-border/70 px-1.5 py-0.5">
+                  <SidebarMenuSub class="mx-2 my-0.5 gap-0.5 border-sidebar-border/60 px-1 py-0.5">
                     <SidebarMenuSubItem class="w-full">
                       <SidebarMenuSubButton
                         as="button"
@@ -419,21 +426,21 @@ async function runDatasourceTest() {
       </SidebarGroup>
 
       <div class="px-3 pb-1 pt-1.5">
-        <Separator class="bg-sidebar-border" />
+        <Separator class="bg-sidebar-border/70" />
       </div>
 
-      <SidebarGroup class="min-h-0 flex-1 px-3 pb-1.5 pt-1.5">
-        <SidebarGroupLabel class="h-6 justify-between px-1.5 text-[11px] font-medium text-muted-foreground">
+      <SidebarGroup class="min-h-0 flex-1 px-3 pb-1.5 pt-1">
+        <SidebarGroupLabel class="h-6 justify-between px-1.5 text-xs font-medium text-muted-foreground">
           <span>历史对话</span>
           <Badge
             variant="outline"
-            class="h-5 px-1.5"
+            class="h-5 rounded-md px-1.5"
           >
             {{ sessionCountLabel }}
           </Badge>
         </SidebarGroupLabel>
-        <SidebarGroupContent class="flex min-h-0 flex-1 flex-col gap-2.5">
-          <InputGroup class="mt-1.5 h-8 rounded-xl bg-sidebar-accent/45 ring-1 ring-sidebar-border/50">
+        <SidebarGroupContent class="flex min-h-0 flex-1 flex-col gap-2">
+          <InputGroup class="mt-1 h-9 rounded-lg bg-sidebar-accent/45 ring-1 ring-sidebar-border/50">
             <InputGroupAddon>
               <SearchIcon data-icon="inline-start" />
             </InputGroupAddon>
@@ -446,14 +453,14 @@ async function runDatasourceTest() {
           </InputGroup>
 
           <ScrollArea class="-mr-3 h-full pr-0">
-            <SidebarMenu class="gap-1.5 pr-4 pt-1">
+            <SidebarMenu class="gap-0.5 pr-4 pt-0.5">
               <SidebarMenuItem
                 v-for="session in visibleSessions"
                 :key="session.session_id"
               >
                 <SidebarMenuButton
                   :is-active="session.session_id === workspace.selectedSession.value"
-                  class="relative h-9 rounded-lg px-2.5 pl-3 text-sm font-normal before:absolute before:left-1 before:h-4 before:w-0.5 before:rounded-full before:bg-primary before:opacity-0 before:content-[''] data-active:bg-background data-active:text-foreground data-active:shadow-xs data-active:before:opacity-100"
+                  :class="historySessionButtonClass"
                   :tooltip="titleFromQuery(session.user_query)"
                   @click="openSession(session.session_id)"
                 >
@@ -463,7 +470,7 @@ async function runDatasourceTest() {
                 <SidebarMenuAction
                   show-on-hover
                   aria-label="删除会话"
-                  class="rounded-xl"
+                  class="rounded-md opacity-0 group-focus-within/menu-item:opacity-100 group-hover/menu-item:opacity-100"
                   @click.stop="workspace.deleteSession(session.session_id)"
                 >
                   <Trash2Icon />
@@ -473,7 +480,7 @@ async function runDatasourceTest() {
 
             <div
               v-if="visibleSessions.length === 0"
-              class="rounded-2xl bg-sidebar-accent/50 px-3 py-6 text-center text-sm text-muted-foreground"
+              class="rounded-lg bg-sidebar-accent/50 px-3 py-6 text-center text-sm text-muted-foreground"
             >
               没有匹配的会话
             </div>
@@ -483,10 +490,10 @@ async function runDatasourceTest() {
     </SidebarContent>
 
     <div class="px-3 py-0.5">
-      <Separator class="bg-sidebar-border" />
+      <Separator class="bg-sidebar-border/70" />
     </div>
 
-    <SidebarFooter class="px-3 pb-3 pt-2">
+    <SidebarFooter class="px-3 pb-3 pt-1.5">
       <DropdownMenu
         v-model:open="userProfileOpen"
         modal
@@ -494,13 +501,13 @@ async function runDatasourceTest() {
         <DropdownMenuTrigger as-child>
           <Button
             variant="ghost"
-            class="h-14 w-full min-w-0 justify-start rounded-2xl bg-background/85 p-2 shadow-xs ring-1 ring-sidebar-border/80 hover:bg-sidebar-accent/80"
+            class="h-12 w-full min-w-0 justify-start rounded-lg px-2 py-1.5 hover:bg-sidebar-accent/80"
           >
-            <Avatar class="size-10 shrink-0 text-primary">
+            <Avatar class="size-8 shrink-0 text-primary">
               <AvatarFallback class="bg-primary/10 font-semibold text-primary">{{ userFallback }}</AvatarFallback>
             </Avatar>
             <span class="min-w-0 flex-1 text-left">
-              <span class="block truncate text-[13px] font-semibold leading-5">{{ userLabel }}</span>
+              <span class="block truncate text-sm font-semibold leading-5">{{ userLabel }}</span>
               <span class="block truncate text-xs font-normal leading-4 text-muted-foreground">{{ userMeta }}</span>
             </span>
             <ChevronRightIcon
@@ -522,18 +529,18 @@ async function runDatasourceTest() {
                   <AvatarFallback class="bg-primary/10 font-semibold text-primary">{{ userFallback }}</AvatarFallback>
                 </Avatar>
                 <div class="min-w-0 flex-1">
-                  <div class="truncate text-[13px] font-semibold leading-5">{{ userLabel }}</div>
+                  <div class="truncate text-sm font-semibold leading-5">{{ userLabel }}</div>
                   <div class="truncate text-xs leading-4 text-muted-foreground">{{ props.auth.user?.username || "Datus" }}</div>
                   <div class="mt-1.5 flex flex-wrap gap-1.5">
                     <Badge
                       variant="secondary"
-                      class="h-5 px-1.5 text-[11px]"
+                      class="h-5 px-1.5 text-xs"
                     >
                       {{ userRoleLabel }}
                     </Badge>
                     <Badge
                       variant="outline"
-                      class="h-5 bg-background/70 px-1.5 text-[11px]"
+                      class="h-5 bg-background/70 px-1.5 text-xs"
                     >
                       {{ userStatusLabel }}
                     </Badge>
@@ -547,7 +554,7 @@ async function runDatasourceTest() {
                     <dt class="text-muted-foreground">当前数据源</dt>
                   </div>
                   <dd class="mt-1.5 flex min-w-0 items-center gap-2">
-                    <span class="min-w-0 flex-1 truncate text-[13px] font-semibold">{{ currentDatasourceLabel }}</span>
+                    <span class="min-w-0 flex-1 truncate text-sm font-semibold">{{ currentDatasourceLabel }}</span>
                     <Button
                       variant="ghost"
                       :disabled="!canTestDatasource"
@@ -614,7 +621,7 @@ async function runDatasourceTest() {
 
             <DropdownMenuGroup class="p-1.5">
               <DropdownMenuItem
-                class="h-10 rounded-xl px-2.5 text-[13px]"
+                class="h-10 rounded-xl px-2.5 text-sm"
                 @select.prevent="togglePlanMode"
               >
                 <ListChecksIcon />

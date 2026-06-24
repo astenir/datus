@@ -47,6 +47,34 @@ This file is the durable project rulebook for Codex work in this repository.
 - Use lucide icons through the configured shadcn-vue icon pattern.
 - Keep Cards for repeated records or framed tools. Do not nest cards or make page sections look like floating cards.
 
+## Typography Rules
+
+- Use Tailwind's standard type scale in project-owned UI by default; do not introduce arbitrary font-size utilities such as `text-[13px]` unless a shared primitive or browser rendering bug makes it unavoidable.
+- Keep typography semantic and consistent:
+  - `text-4xl` / `text-3xl`: main chat empty-state or first-paint hero-like workspace prompt only.
+  - `text-lg`: panel titles, route-level empty/error titles, and primary section headers.
+  - `text-base`: product or object names in compact identity areas, emphasized readable long-form content, and deliberately oversized first-paint actions only.
+  - `text-sm`: default body text, chat message bodies, prompt text, suggestion chips, primary operation controls, buttons, form controls, navigation items, menu items, panel body text, dense data rows, and table cells.
+  - `text-xs`: metadata, badges, counters, timestamps, labels, secondary descriptions, dense table helper text, and code/editor auxiliary text.
+- Treat `text-sm` as the default for operational UI density. New `src/features/**` text should use `text-sm` unless it clearly matches one of the explicit exceptions above.
+- `text-base` is an exception, not the default. In project-owned feature code it is allowed only for:
+  - app or product identity text such as the sidebar app name;
+  - object titles inside repeated cards when the card title is the primary scan target;
+  - intentionally emphasized readable prose that would otherwise be hard to scan;
+  - first-paint prompt actions only when the surrounding layout is spacious enough.
+- Do not use `text-base` for navigation rows, secondary menu items, history rows, toolbar controls, dropdown/menu items, compact buttons, form labels, table cells, badges, counters, or routine helper text.
+- Avoid `text-xl`, `text-2xl`, and other intermediate sizes in operational panels unless the view has a clear editorial or empty-state role.
+- Use weight and color for hierarchy before introducing another size: prefer `font-medium` / `font-semibold` and `text-muted-foreground` over custom font sizes.
+- Do not make selected, hover, loading, or error states change font size; use background, border, icon, color, or weight so layout does not shift.
+- Keep line height explicit when content is long or generated:
+  - chat and generated prose should use `text-sm leading-6` or `text-sm leading-7`;
+  - compact navigation, menus, and metadata should rely on fixed row heights and default line height;
+  - card descriptions, errors, and helper text should stay `text-sm` with default or `leading-6` depending on wrapping risk;
+  - code, prompt templates, and dense technical payloads should prefer `text-xs` with a monospace font.
+- Do not scale font size with viewport width. Use responsive layout, wrapping, truncation, or density changes instead.
+- If a new typography class outside `text-xs`, `text-sm`, `text-base`, `text-lg`, `text-3xl`, or `text-4xl` is introduced in `src/features/**`, explain the product reason in the change summary and verify it visually. Arbitrary font sizes such as `text-[13px]` should be treated as issues unless the change documents a primitive or browser rendering constraint.
+- Preserve the shadcn-vue primitive defaults when practical; feature components may add typography utilities for layout context, but must not edit generated primitives just to change project-specific type scale.
+
 ## Code Rules
 
 - All Vue single-file components must use `<script setup lang="ts">`.
@@ -292,6 +320,7 @@ npm run build
 For project-owned code rule audits, use these scans and treat matches as issues unless they are in an explicitly allowed boundary such as `src/lib/request.ts`:
 
 ```bash
+npm run lint:typography
 rg -n "\bany\b|as any|@ts-ignore|@ts-expect-error" src/features src/composables src/lib src/types.ts src/types src/App.vue src/main.ts vite.config.ts
 rg -n "<button|<style|:style=|\sstyle=" src/features src/App.vue
 rg -n "from ['\"]reka-ui|fetch\(" src/features src/composables src/lib src/types.ts src/types src/App.vue src/main.ts vite.config.ts

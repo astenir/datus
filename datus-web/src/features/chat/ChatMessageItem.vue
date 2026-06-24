@@ -27,8 +27,8 @@ const contentClass = computed(() =>
   isSystemMessage.value
     ? "w-fit rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground"
     : isUserMessage.value
-      ? "w-auto rounded-2xl bg-muted px-4 py-3 text-base leading-7"
-      : "w-full overflow-visible text-base leading-8 text-foreground",
+      ? "w-auto rounded-2xl bg-muted px-4 py-3 text-sm leading-6"
+      : "w-full overflow-visible text-sm leading-7 text-foreground",
 )
 
 function submitInteraction(interactionKey: string, answers: string[][]) {

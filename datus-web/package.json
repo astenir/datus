@@ -8,6 +8,7 @@
     "build": "vue-tsc -b && vite build",
     "test": "vitest run",
     "preview": "vite preview --host 0.0.0.0",
+    "lint:typography": "node scripts/lint-typography.mjs",
     "api:pull": "node scripts/sync-openapi.mjs",
     "api:types": "openapi-typescript openapi.json -o src/types/openapi.ts && node scripts/strip-openapi-comments.mjs",
     "api:sync": "npm run api:pull && npm run api:types",

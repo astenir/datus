@@ -104,7 +104,7 @@ function openArtifact(kind: string, slug: string) {
           variant="secondary"
           size="lg"
           :class="[
-            'h-auto min-h-10 max-w-full rounded-2xl border-transparent bg-muted px-5 py-2.5 text-base text-foreground hover:bg-muted/80 md:min-h-11',
+            'h-auto min-h-10 max-w-full rounded-2xl border-transparent bg-muted px-5 py-2.5 text-sm text-foreground hover:bg-muted/80 md:min-h-11',
             index > 1 ? 'hidden sm:inline-flex' : '',
           ]"
           @click="sendSuggestion"
@@ -147,7 +147,7 @@ function openArtifact(kind: string, slug: string) {
           <PromptInputBody>
             <PromptInputTextarea
               placeholder="发消息..."
-              class="min-h-16 px-5 pt-5 text-base"
+              class="min-h-16 px-5 pt-5 text-sm"
             />
           </PromptInputBody>
           <Separator />
@@ -156,6 +156,7 @@ function openArtifact(kind: string, slug: string) {
               <PromptInputButton
                 size="sm"
                 type="button"
+                class="text-sm"
                 @click="workspace.clearMessages"
               >
                 <PlusIcon data-icon="inline-start" />
@@ -167,6 +168,7 @@ function openArtifact(kind: string, slug: string) {
                 variant="outline"
                 size="sm"
                 type="button"
+                class="text-sm"
                 @click="workspace.stopSession"
               >
                 <SquareIcon data-icon="inline-start" />
@@ -174,7 +176,7 @@ function openArtifact(kind: string, slug: string) {
               </PromptInputButton>
 
               <Select v-model="workspace.selectedAgent.value">
-                <SelectTrigger class="h-8 w-32 rounded-full">
+                <SelectTrigger class="h-9 w-36 rounded-full text-sm">
                   <SelectValue placeholder="Agent" />
                 </SelectTrigger>
                 <SelectContent>
@@ -183,6 +185,7 @@ function openArtifact(kind: string, slug: string) {
                       v-for="agent in workspace.agentOptions.value"
                       :key="agent.value"
                       :value="agent.value"
+                      class="text-sm"
                     >
                       {{ agent.label }}
                     </SelectItem>
@@ -191,7 +194,7 @@ function openArtifact(kind: string, slug: string) {
               </Select>
 
               <Select v-model="workspace.selectedModel.value">
-                <SelectTrigger class="hidden h-8 w-40 rounded-full sm:inline-flex">
+                <SelectTrigger class="hidden h-9 w-44 rounded-full text-sm sm:inline-flex">
                   <SelectValue :placeholder="workspace.defaultModelLabel.value || 'Model'" />
                 </SelectTrigger>
                 <SelectContent>
@@ -200,6 +203,7 @@ function openArtifact(kind: string, slug: string) {
                       v-for="model in workspace.modelOptions.value"
                       :key="model.value"
                       :value="model.value"
+                      class="text-sm"
                     >
                       {{ model.label }}
                     </SelectItem>
@@ -211,7 +215,7 @@ function openArtifact(kind: string, slug: string) {
                 :model-value="workspace.database.value"
                 @update:model-value="(value) => workspace.setDatabase(String(value))"
               >
-                <SelectTrigger class="hidden h-8 w-36 rounded-full lg:inline-flex">
+                <SelectTrigger class="hidden h-9 w-40 rounded-full text-sm lg:inline-flex">
                   <SelectValue placeholder="Database" />
                 </SelectTrigger>
                 <SelectContent>
@@ -220,6 +224,7 @@ function openArtifact(kind: string, slug: string) {
                       v-for="database in workspace.databaseOptions.value"
                       :key="database.value"
                       :value="database.value"
+                      class="text-sm"
                     >
                       {{ database.label }}
                     </SelectItem>
@@ -231,7 +236,7 @@ function openArtifact(kind: string, slug: string) {
                 :model-value="workspace.schema.value"
                 @update:model-value="(value) => workspace.setSchema(String(value))"
               >
-                <SelectTrigger class="hidden h-8 w-32 rounded-full xl:inline-flex">
+                <SelectTrigger class="hidden h-9 w-36 rounded-full text-sm xl:inline-flex">
                   <SelectValue placeholder="Schema" />
                 </SelectTrigger>
                 <SelectContent>
@@ -240,6 +245,7 @@ function openArtifact(kind: string, slug: string) {
                       v-for="schema in schemaOptions"
                       :key="schema.value"
                       :value="schema.value"
+                      class="text-sm"
                     >
                       {{ schema.label }}
                     </SelectItem>
