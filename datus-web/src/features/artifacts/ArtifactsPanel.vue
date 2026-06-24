@@ -7,8 +7,18 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { dashboardApi, reportApi } from "@/lib/api"
 import { useConnection } from "@/composables/useConnection"
 import type { ArtifactManifest } from "@/types"
+import type { ArtifactViewTab } from "@/features/workspace/types"
+import { isArtifactViewTab } from "@/features/workspace/types"
 
 const { effectiveBase } = useConnection()
+const props = withDefaults(defineProps<{
+  tab?: ArtifactViewTab
+}>(), {
+  tab: "dashboard",
+})
+const emit = defineEmits<{
+  "update:tab": [value: ArtifactViewTab]
+}>()
 const dashboards = ref<ArtifactManifest[]>([])
 const reports = ref<ArtifactManifest[]>([])
 const loading = shallowRef(false)
@@ -28,14 +38,21 @@ async function loadArtifacts() {
   }
 }
 
+function setTab(value: unknown) {
+  if (typeof value === "string" && isArtifactViewTab(value)) {
+    emit("update:tab", value)
+  }
+}
+
 onMounted(loadArtifacts)
 </script>
 
 <template>
   <section class="min-h-0 flex-1 overflow-y-auto p-4">
     <Tabs
-      default-value="dashboard"
+      :model-value="props.tab"
       class="flex flex-col gap-4"
+      @update:model-value="setTab"
     >
       <div class="flex items-center gap-3">
         <TabsList>

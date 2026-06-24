@@ -18,12 +18,14 @@ import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsContent } from "@/components/ui/tabs"
 import { useAuth } from "@/composables/useAuth"
 import { useChatWorkspace } from "@/composables/useChatWorkspace"
+import { usePermission } from "@/composables/usePermission"
 import ChatPanel from "@/features/chat/ChatPanel.vue"
 import SessionRail from "@/features/workspace/SessionRail.vue"
-import type { WorkspaceNavItem, WorkspaceView } from "@/features/workspace/types"
+import type { ArtifactViewTab, WorkspaceNavItem, WorkspaceView } from "@/features/workspace/types"
 import { isWorkspaceView } from "@/features/workspace/types"
 
 const AdminPanel = defineAsyncComponent(() => import("@/features/admin/AdminPanel.vue"))
+const AgentManagerPanel = defineAsyncComponent(() => import("@/features/agent/AgentManagerPanel.vue"))
 const ArtifactsPanel = defineAsyncComponent(() => import("@/features/artifacts/ArtifactsPanel.vue"))
 const CatalogPanel = defineAsyncComponent(() => import("@/features/catalog/CatalogPanel.vue"))
 const McpPanel = defineAsyncComponent(() => import("@/features/mcp/McpPanel.vue"))
@@ -32,10 +34,13 @@ const SqlPanel = defineAsyncComponent(() => import("@/features/sql/SqlPanel.vue"
 
 const workspace = useChatWorkspace()
 const { state: authState, checkAuth } = useAuth()
+const permission = usePermission()
 const settingsOpen = shallowRef(false)
 const activeView = shallowRef<WorkspaceView>("chat")
+const artifactTab = shallowRef<ArtifactViewTab>("dashboard")
 
 const isReady = computed(() => authState.value.authenticated && !authState.value.loading)
+const canManagePermissions = computed(() => permission.isAdmin() || permission.hasFeaturePermission("admin"))
 
 const chatNavItem: WorkspaceNavItem = { value: "chat", label: "新对话", icon: MessageSquareIcon }
 
@@ -44,11 +49,19 @@ const navItems: WorkspaceNavItem[] = [
   { value: "catalog", label: "数据目录", icon: DatabaseIcon },
   { value: "sql", label: "SQL", icon: TerminalIcon },
   { value: "mcp", label: "MCP", icon: ServerIcon },
+  { value: "agents", label: "Agent 管理", icon: BotIcon },
   { value: "artifacts", label: "产物", icon: BarChart3Icon },
-  { value: "admin", label: "管理", icon: ShieldIcon },
+  { value: "admin", label: "权限管理", icon: ShieldIcon },
 ]
 
 const activeNavItem = computed(() => navItems.find(item => item.value === activeView.value) ?? chatNavItem)
+const headerTitle = computed(() => {
+  if (activeView.value === "artifacts") {
+    return artifactTab.value === "report" ? "报表" : "仪表盘"
+  }
+
+  return activeNavItem.value.label
+})
 const headerSubtitle = computed(() => {
   if (activeView.value === "chat") {
     return "AI 生成可能有误，请核实"
@@ -61,6 +74,11 @@ function setActiveView(value: unknown) {
   if (typeof value === "string" && isWorkspaceView(value)) {
     activeView.value = value
   }
+}
+
+function openArtifactTab(value: ArtifactViewTab) {
+  artifactTab.value = value
+  activeView.value = "artifacts"
 }
 
 onMounted(async () => {
@@ -109,8 +127,12 @@ onMounted(async () => {
         <SessionRail
           :auth="authState"
           :workspace="workspace"
-          :nav-items="navItems"
+          :active-view="activeView"
+          :artifact-tab="artifactTab"
+          :can-manage-permissions="canManagePermissions"
           @open-chat="activeView = 'chat'"
+          @open-view="activeView = $event"
+          @open-artifact-tab="openArtifactTab"
           @open-settings="settingsOpen = true"
         />
 
@@ -122,7 +144,7 @@ onMounted(async () => {
             />
 
             <div class="min-w-0 flex-1 text-center">
-              <div class="truncate text-sm font-semibold">{{ activeNavItem.label }}</div>
+              <div class="truncate text-sm font-semibold">{{ headerTitle }}</div>
               <div class="truncate text-xs text-muted-foreground">{{ headerSubtitle }}</div>
             </div>
 
@@ -171,10 +193,16 @@ onMounted(async () => {
           <McpPanel />
         </TabsContent>
         <TabsContent
+          value="agents"
+          class="m-0 flex min-h-0 flex-1"
+        >
+          <AgentManagerPanel />
+        </TabsContent>
+        <TabsContent
           value="artifacts"
           class="m-0 flex min-h-0 flex-1"
         >
-          <ArtifactsPanel />
+          <ArtifactsPanel v-model:tab="artifactTab" />
         </TabsContent>
         <TabsContent
           value="admin"
