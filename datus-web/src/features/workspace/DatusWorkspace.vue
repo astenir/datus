@@ -22,6 +22,7 @@ import ChatPanel from "@/features/chat/ChatPanel.vue"
 import SessionRail from "@/features/workspace/SessionRail.vue"
 import type { ArtifactViewTab, WorkspaceNavItem, WorkspaceView } from "@/features/workspace/types"
 import { isWorkspaceView } from "@/features/workspace/types"
+import { sessionUserQueryText } from "@/lib/chat"
 
 const AdminPanel = defineAsyncComponent(() => import("@/features/admin/AdminPanel.vue"))
 const AgentManagerPanel = defineAsyncComponent(() => import("@/features/agent/AgentManagerPanel.vue"))
@@ -51,7 +52,29 @@ const navItems: WorkspaceNavItem[] = [
 ]
 
 const activeNavItem = computed(() => navItems.find(item => item.value === activeView.value) ?? chatNavItem)
+const currentSession = computed(() => {
+  const sessionId = workspace.selectedSession.value
+  if (!sessionId) return null
+
+  return workspace.sessions.value.find(session => session.session_id === sessionId) ?? null
+})
+const firstUserMessageTitle = computed(() => {
+  const message = workspace.messages.value.find(item => item.role === "user" && item.content.trim())
+  const text = message?.content.trim() ?? ""
+
+  return text.length > 60 ? `${text.slice(0, 60)}…` : text
+})
+const chatHeaderTitle = computed(() => {
+  if (!workspace.selectedSession.value) return "新对话"
+
+  const sessionTitle = currentSession.value ? sessionUserQueryText(currentSession.value) : ""
+  return sessionTitle || firstUserMessageTitle.value || "未命名会话"
+})
 const headerTitle = computed(() => {
+  if (activeView.value === "chat") {
+    return chatHeaderTitle.value
+  }
+
   if (activeView.value === "artifacts") {
     return artifactTab.value === "report" ? "报表" : "仪表盘"
   }
