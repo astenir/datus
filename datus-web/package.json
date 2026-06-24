@@ -7,7 +7,11 @@
     "dev": "vite --host 0.0.0.0",
     "build": "vue-tsc -b && vite build",
     "test": "vitest run",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0",
+    "api:pull": "node scripts/sync-openapi.mjs",
+    "api:types": "openapi-typescript openapi.json -o src/types/openapi.ts && node scripts/strip-openapi-comments.mjs",
+    "api:sync": "npm run api:pull && npm run api:types",
+    "api:smoke": "node scripts/smoke-api.mjs"
   },
   "dependencies": {
     "@lucide/vue": "^1.21.0",
@@ -39,11 +43,13 @@
     "vue-stream-markdown": "^1.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@tailwindcss/vite": "^4.3.1",
     "@types/markdown-it": "^14.1.2",
     "@types/node": "^26.0.0",
     "@vitejs/plugin-vue": "^6.0.7",
     "@vue/tsconfig": "^0.9.1",
+    "openapi-typescript": "^7.13.0",
     "tailwindcss": "^4.3.1",
     "typescript": "^6.0.3",
     "vite": "^8.0.16",

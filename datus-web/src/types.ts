@@ -281,8 +281,17 @@ export type InternalCommandResult = {
 // ─── Configuration ───────────────────────────────────────────────────────────
 
 export type ProbeResult = {
-  ok: boolean;
+  ok?: boolean;
+  success?: boolean;
   message?: string;
+  error?: string;
+  errorMessage?: string;
+  [key: string]: unknown;
+};
+
+export type NormalizedProbeResult = {
+  ok: boolean;
+  message: string;
 };
 
 // ─── Models Catalog ──────────────────────────────────────────────────────────

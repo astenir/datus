@@ -7,7 +7,6 @@ import {
   MessageSquareIcon,
   RefreshCwIcon,
   ServerIcon,
-  SettingsIcon,
   ShieldIcon,
   TerminalIcon,
 } from "@lucide/vue"
@@ -29,17 +28,14 @@ const AgentManagerPanel = defineAsyncComponent(() => import("@/features/agent/Ag
 const ArtifactsPanel = defineAsyncComponent(() => import("@/features/artifacts/ArtifactsPanel.vue"))
 const CatalogPanel = defineAsyncComponent(() => import("@/features/catalog/CatalogPanel.vue"))
 const McpPanel = defineAsyncComponent(() => import("@/features/mcp/McpPanel.vue"))
-const SettingsSheet = defineAsyncComponent(() => import("@/features/workspace/SettingsSheet.vue"))
 const SqlPanel = defineAsyncComponent(() => import("@/features/sql/SqlPanel.vue"))
 
 const workspace = useChatWorkspace()
 const { state: authState, checkAuth } = useAuth()
 const permission = usePermission()
-const settingsOpen = shallowRef(false)
 const activeView = shallowRef<WorkspaceView>("chat")
 const artifactTab = shallowRef<ArtifactViewTab>("dashboard")
 
-const isReady = computed(() => authState.value.authenticated && !authState.value.loading)
 const canManagePermissions = computed(() => permission.isAdmin() || permission.hasFeaturePermission("admin"))
 
 const chatNavItem: WorkspaceNavItem = { value: "chat", label: "新对话", icon: MessageSquareIcon }
@@ -61,13 +57,6 @@ const headerTitle = computed(() => {
   }
 
   return activeNavItem.value.label
-})
-const headerSubtitle = computed(() => {
-  if (activeView.value === "chat") {
-    return "AI 生成可能有误，请核实"
-  }
-
-  return workspace.config.value?.current_datasource || "当前数据源未选择"
 })
 
 function setActiveView(value: unknown) {
@@ -133,11 +122,10 @@ onMounted(async () => {
           @open-chat="activeView = 'chat'"
           @open-view="activeView = $event"
           @open-artifact-tab="openArtifactTab"
-          @open-settings="settingsOpen = true"
         />
 
         <SidebarInset class="min-w-0">
-          <header class="flex h-[74px] shrink-0 items-center gap-3 border-b px-3 md:px-5">
+          <header class="flex h-14 shrink-0 items-center gap-3 border-b px-3 md:px-5">
             <SidebarTrigger
               aria-label="侧边栏"
               class="shrink-0"
@@ -145,7 +133,6 @@ onMounted(async () => {
 
             <div class="min-w-0 flex-1 text-center">
               <div class="truncate text-sm font-semibold">{{ headerTitle }}</div>
-              <div class="truncate text-xs text-muted-foreground">{{ headerSubtitle }}</div>
             </div>
 
             <div class="flex items-center gap-1">
@@ -156,14 +143,6 @@ onMounted(async () => {
                 @click="workspace.handleRefreshConnection"
               >
                 <RefreshCwIcon data-icon="inline-start" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label="设置"
-                @click="settingsOpen = true"
-              >
-                <SettingsIcon data-icon="inline-start" />
               </Button>
             </div>
           </header>
@@ -214,11 +193,6 @@ onMounted(async () => {
       </Tabs>
     </SidebarProvider>
 
-    <SettingsSheet
-      v-if="isReady"
-      v-model:open="settingsOpen"
-      :workspace="workspace"
-    />
     <Toaster rich-colors />
   </div>
 </template>

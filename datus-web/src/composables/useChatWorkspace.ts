@@ -19,8 +19,17 @@ export function useChatWorkspace() {
     setPermissionMode,
     setPlanMode,
   } = useChatSettings();
-  const { apiBase, connection, config, checkConnection, setApiBase } =
-    useConnection();
+  const {
+    apiBase,
+    connection,
+    config,
+    datasourceOptions,
+    isTestingDatasource,
+    checkConnection,
+    setApiBase,
+    testDatasource,
+    switchDatasource,
+  } = useConnection();
   const {
     messages,
     sessions,
@@ -85,6 +94,19 @@ export function useChatWorkspace() {
     loadCatalog();
   }
 
+  async function handleDatasourceTest(name?: string) {
+    return testDatasource(name);
+  }
+
+  async function handleDatasourceSwitch(name: string) {
+    const changed = await switchDatasource(name);
+    if (!changed) return;
+
+    setDatabase("");
+    setSchema("");
+    await loadCatalog();
+  }
+
   async function initialize() {
     if (initialized.value) return;
     if (initializePromise) return initializePromise;
@@ -122,6 +144,8 @@ export function useChatWorkspace() {
     apiBase,
     connection,
     config,
+    datasourceOptions,
+    isTestingDatasource,
     setApiBase,
     messages,
     sessions,
@@ -153,6 +177,8 @@ export function useChatWorkspace() {
     handleInsert,
     handleRefreshConnection,
     handleDatasourceSwitched,
+    handleDatasourceTest,
+    handleDatasourceSwitch,
     setLanguage,
     setPermissionMode,
     setPlanMode,

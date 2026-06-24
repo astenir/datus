@@ -248,7 +248,7 @@ This file is the durable project rulebook for Codex work in this repository.
 
 ## Current Feature Map
 
-- `src/features/workspace`: app shell, top bar, session rail, settings sheet
+- `src/features/workspace`: app shell, top bar, session rail, user profile/settings menu
 - `src/features/chat`: chat UI, message rendering, AI Elements composition
 - `src/features/catalog`: datasource and catalog view
 - `src/features/sql`: SQL execution panel
@@ -263,6 +263,21 @@ This file is the durable project rulebook for Codex work in this repository.
 - Preserve support for `VITE_DATUS_API_TARGET`.
 - The Vite dev server should proxy `/api` and `/health` to `VITE_DATUS_API_TARGET`, defaulting to `http://localhost:8000`.
 - Do not expose UI for backend routes that are not actually present.
+
+## API Contract Sync Rules
+
+- Treat backend OpenAPI as the source of truth for route availability, request bodies, and response envelopes.
+- Keep `openapi.json` and generated `src/types/openapi.ts` synchronized with the active backend when adding, changing, or debugging API calls.
+- Use `npm run api:sync` to pull `openapi.json` from the backend and regenerate OpenAPI TypeScript types.
+- `npm run api:sync` defaults to `http://localhost:8000/openapi.json`; override with `DATUS_OPENAPI_URL`, `VITE_DATUS_API_TARGET`, or `DATUS_API_TARGET` when testing another backend.
+- Use `npm run api:types` when `openapi.json` already matches the intended backend and only generated TypeScript types need refreshing.
+- Generated `src/types/openapi.ts` is a contract artifact. Do not edit it manually; update it through `npm run api:types` or `npm run api:sync`.
+- The OpenAPI type generation intentionally strips generated JSDoc comments through `scripts/strip-openapi-comments.mjs` so project no-`any` scans are not polluted by prose in backend descriptions.
+- Use `npm run api:smoke` after changing API helpers, request normalization, backend config handling, datasource switching, or OpenAPI-generated types.
+- `npm run api:smoke` must not print secrets. Keep its output limited to route status, current datasource, result state, and redacted payload shape.
+- If OpenAPI and the live backend behavior disagree, document the mismatch in the relevant API helper or test, add a focused regression test, and prefer a backend schema/normalization fix over duplicating ad hoc frontend guesses.
+- API helper request shape tests should live near `src/lib/api.test.ts` or the composable test that owns the normalization path.
+- Components must not compensate for backend contract drift directly; keep compatibility adapters in `src/lib/**` or composables.
 
 ## Verification
 
@@ -291,6 +306,20 @@ Add or update unit tests when changing `src/lib/**`, `src/composables/**`, reque
 UI-only layout changes do not require unit tests, but require a build and screenshot check.
 
 Bug fixes should include a regression test when the bug is in pure logic.
+
+For backend API contract changes or fixes, also run:
+
+```bash
+npm run api:sync
+npm run api:smoke
+```
+
+If the active backend is not `http://localhost:8000`, pass the target explicitly, for example:
+
+```bash
+VITE_DATUS_API_TARGET=http://127.0.0.1:8001 npm run api:sync
+VITE_DATUS_API_TARGET=http://127.0.0.1:8001 npm run api:smoke
+```
 
 ## Git Hygiene
 
