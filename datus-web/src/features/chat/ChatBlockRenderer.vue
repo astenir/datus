@@ -43,6 +43,7 @@ import type { MessageDisplayBlock } from "@/types"
 defineProps<{
   block: MessageDisplayBlock
   streaming?: boolean
+  thinkingDisplay?: "answer" | "reasoning"
   interactionDisabled?: boolean
 }>()
 
@@ -83,6 +84,11 @@ function subagentSummary(block: Extract<MessageDisplayBlock, { type: "subagent-c
 <template>
   <MessageResponse
     v-if="block.type === 'markdown'"
+    :content="block.content"
+  />
+
+  <MessageResponse
+    v-else-if="block.type === 'thinking' && thinkingDisplay === 'answer'"
     :content="block.content"
   />
 

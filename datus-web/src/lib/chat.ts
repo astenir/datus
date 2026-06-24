@@ -214,6 +214,18 @@ export function visibleMessageActionTargetId(
   return target.id;
 }
 
+export function activeStreamingMessageId(messages: readonly ChatMessage[]) {
+  return messages[messages.length - 1]?.id ?? null;
+}
+
+export function shouldRenderThinkingAsAnswer(message: Pick<ChatDisplayMessage, "role" | "depth" | "blocks">) {
+  const blocks = message.blocks ?? [];
+  return message.role === "assistant"
+    && !message.depth
+    && blocks.some((block) => block.type === "thinking")
+    && !blocks.some((block) => block.type === "markdown");
+}
+
 export function shouldResetConversationOnAgentChange() {
   return false;
 }

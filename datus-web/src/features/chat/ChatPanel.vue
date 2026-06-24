@@ -29,7 +29,7 @@ import {
 } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
 import { dashboardApi, reportApi } from "@/lib/api"
-import { mergeToolExecutionMessages } from "@/lib/chat"
+import { activeStreamingMessageId, mergeToolExecutionMessages } from "@/lib/chat"
 import { useConnection } from "@/composables/useConnection"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import ChatMessageItem from "@/features/chat/ChatMessageItem.vue"
@@ -40,6 +40,9 @@ const props = defineProps<{
 
 const displayMessages = computed(() => mergeToolExecutionMessages(props.workspace.messages.value))
 const currentStatus = computed<ChatStatus>(() => props.workspace.isStreaming.value ? "streaming" : "ready")
+const streamingMessageId = computed(() =>
+  props.workspace.isStreaming.value ? activeStreamingMessageId(props.workspace.messages.value) : null,
+)
 const schemaOptions = computed(() => props.workspace.schemaOptions.value)
 const pendingInteractionKey = shallowRef<string | null>(null)
 const { effectiveBase } = useConnection()
@@ -121,7 +124,7 @@ function openArtifact(kind: string, slug: string) {
           v-for="message in displayMessages"
           :key="message.id"
           :message="message"
-          :streaming="workspace.isStreaming.value"
+          :streaming="message.id === streamingMessageId"
           :interaction-disabled="Boolean(pendingInteractionKey)"
           @submit-interaction="submitInteraction"
           @open-artifact="openArtifact"

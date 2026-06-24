@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  activeStreamingMessageId,
   buildChatStreamRequest,
   buildUserInteractionInput,
   chatSessionsPath,
@@ -15,6 +16,7 @@ import {
   normalizeHistoryMessages,
   parseSseBuffer,
   sessionUserQueryText,
+  shouldRenderThinkingAsAnswer,
   shouldResetConversationOnAgentChange,
   visibleMessageActionTargetId
 } from "./chat";
@@ -481,6 +483,39 @@ describe("contentFromPayloadBlocks", () => {
         mode: "new",
       },
     ]);
+  });
+});
+
+describe("streaming thinking display compatibility", () => {
+  it("tracks only the latest message as actively streaming", () => {
+    expect(activeStreamingMessageId([])).toBeNull();
+    expect(activeStreamingMessageId([
+      { id: "m1", role: "assistant", content: "first" },
+      { id: "thinking_stream_1", role: "assistant", content: "partial" },
+    ])).toBe("thinking_stream_1");
+  });
+
+  it("renders top-level assistant thinking-only messages as visible answer text", () => {
+    expect(shouldRenderThinkingAsAnswer({
+      role: "assistant",
+      blocks: [{ type: "thinking", content: "partial answer" }],
+    })).toBe(true);
+
+    expect(shouldRenderThinkingAsAnswer({
+      role: "assistant",
+      blocks: [{ type: "markdown", content: "final answer" }],
+    })).toBe(false);
+
+    expect(shouldRenderThinkingAsAnswer({
+      role: "assistant",
+      depth: 1,
+      blocks: [{ type: "thinking", content: "internal reasoning" }],
+    })).toBe(false);
+
+    expect(shouldRenderThinkingAsAnswer({
+      role: "user",
+      blocks: [{ type: "thinking", content: "not an assistant answer" }],
+    })).toBe(false);
   });
 });
 
