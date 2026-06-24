@@ -356,3 +356,30 @@ VITE_DATUS_API_TARGET=http://127.0.0.1:8001 npm run api:smoke
 - Do not commit generated build output.
 - Do not reset or remove user changes unless explicitly asked.
 - If the repository has no tracked files yet, report that clearly when asked whether the project is clean.
+- Commit messages should follow Conventional Commits.
+  - Format: `<type>(<scope>): <description>`
+  - Use a lowercase English `type` from the allowed list below.
+  - Use a short scope when it clarifies the touched domain, such as `chat`, `workspace`, `api`, `auth`, `catalog`, `sql`, `mcp`, `agents`, `artifacts`, `docs`, `build`, or `typography`.
+  - Keep the subject line concise, preferably 72 characters or fewer.
+  - Use a concise Chinese description after the colon, preferably a short verb-object phrase such as `修复会话加载` or `新增字号检查`.
+  - Use a body when the commit needs rationale, migration notes, verification details, or tradeoffs.
+  - Use `!` after the type or scope for breaking changes, and include a `BREAKING CHANGE:` footer when needed.
+  - Do not use vague messages such as `update`, `fix bug`, `change stuff`, `调整代码`, or `wip`.
+- Allowed Conventional Commit types:
+  - `feat`: user-facing feature or visible capability.
+  - `fix`: bug fix or behavioral regression fix.
+  - `docs`: documentation-only change.
+  - `style`: formatting or purely visual style change that does not alter behavior.
+  - `refactor`: code structure change without feature or bug-fix intent.
+  - `perf`: performance improvement.
+  - `test`: tests, fixtures, or test utilities.
+  - `build`: dependencies, package scripts, generated contract artifacts, or build tooling.
+  - `ci`: CI or automation configuration.
+  - `chore`: repository maintenance that does not fit the categories above.
+  - `revert`: revert a previous commit.
+- Examples:
+  - `style(workspace): 统一侧边栏字号`
+  - `feat(chat): 新增交互块提交`
+  - `fix(api): 归一化数据源测试响应`
+  - `docs(agents): 补充提交信息规范`
+  - `build(typography): 新增字号检查脚本`
