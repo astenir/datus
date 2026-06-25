@@ -344,7 +344,7 @@ function openArtifact(kind: string, slug: string) {
                 :status="currentStatus"
                 :disabled="workspace.isStreaming.value"
                 title="发送"
-                class="size-10 shrink-0 rounded-full bg-foreground text-background shadow-none hover:bg-foreground/90"
+                class="size-10 shrink-0 rounded-full shadow-none"
               />
               <PromptInputButton
                 v-else
@@ -353,10 +353,10 @@ function openArtifact(kind: string, slug: string) {
                 type="button"
                 aria-label="停止生成"
                 title="停止生成"
-                class="size-10 shrink-0 rounded-full bg-foreground text-background shadow-none hover:bg-foreground/90"
+                class="size-10 shrink-0 rounded-full shadow-none"
                 @click="workspace.stopSession"
               >
-                <SquareIcon data-icon="inline-start" />
+                <SquareIcon />
               </PromptInputButton>
             </div>
           </PromptInputFooter>
