@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, shallowRef } from "vue"
 import type { ChatStatus } from "ai"
-import { Loader2Icon, PlusIcon, SquareIcon } from "@lucide/vue"
+import { ChevronDownIcon, CpuIcon, Loader2Icon, SquareIcon } from "@lucide/vue"
 import { toast } from "vue-sonner"
 import {
   Conversation,
@@ -18,32 +18,68 @@ import {
   PromptInputTools,
 } from "@/components/ai-elements/prompt-input"
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input/types"
-import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion"
 import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import { Separator } from "@/components/ui/separator"
+  ModelSelector,
+  ModelSelectorContent,
+  ModelSelectorEmpty,
+  ModelSelectorGroup,
+  ModelSelectorInput,
+  ModelSelectorItem,
+  ModelSelectorList,
+  ModelSelectorName,
+  ModelSelectorShortcut,
+  ModelSelectorTrigger,
+} from "@/components/ai-elements/model-selector"
+import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion"
 import { dashboardApi, reportApi } from "@/lib/api"
 import { activeStreamingMessageId, mergeToolExecutionMessages } from "@/lib/chat"
 import { useConnection } from "@/composables/useConnection"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
+import type { SelectOption } from "@/types"
+import ChatContextPicker from "@/features/chat/ChatContextPicker.vue"
 import ChatMessageItem from "@/features/chat/ChatMessageItem.vue"
 
 const props = defineProps<{
   workspace: ChatWorkspace
 }>()
 
+const DEFAULT_MODEL_VALUE = "__datus_default_model__"
+
+type ModelOptionGroup = {
+  provider: string
+  label: string
+  options: SelectOption[]
+}
+
 const displayMessages = computed(() => mergeToolExecutionMessages(props.workspace.messages.value))
 const currentStatus = computed<ChatStatus>(() => props.workspace.isStreaming.value ? "streaming" : "ready")
 const streamingMessageId = computed(() =>
   props.workspace.isStreaming.value ? activeStreamingMessageId(props.workspace.messages.value) : null,
 )
+const modelSelectorOpen = shallowRef(false)
 const schemaOptions = computed(() => props.workspace.schemaOptions.value)
+const selectedModelValue = computed({
+  get: () => props.workspace.selectedModel.value || DEFAULT_MODEL_VALUE,
+  set: (value: string) => {
+    props.workspace.selectedModel.value = value === DEFAULT_MODEL_VALUE ? "" : value
+  },
+})
+const defaultModelLabel = computed(() =>
+  props.workspace.defaultModelLabel.value ? `默认：${props.workspace.defaultModelLabel.value}` : "默认模型",
+)
+const selectedModelLabel = computed(() =>
+  optionLabel(props.workspace.selectedModel.value, props.workspace.modelOptions.value),
+)
+const modelTriggerLabel = computed(() => selectedModelLabel.value || defaultModelLabel.value)
+const modelOptionGroups = computed(() => groupModelOptions(props.workspace.modelOptions.value))
+const modelSelectorContentClass = [
+  "gap-0 overflow-hidden rounded-2xl border-border/70 shadow-2xl sm:max-w-md",
+  "[&_[data-slot=command]]:rounded-2xl [&_[data-slot=command]]:p-1",
+  "[&_[data-slot=command-input-wrapper]]:p-1 [&_[data-slot=command-input-wrapper]]:pb-1",
+  "[&_[data-slot=input-group]]:h-9 [&_[data-slot=input-group]]:rounded-xl",
+  "[&_[data-slot=command-group]]:p-1",
+  "[&_[data-slot=command-group-heading]]:px-2.5 [&_[data-slot=command-group-heading]]:py-1.5",
+].join(" ")
 const pendingInteractionKey = shallowRef<string | null>(null)
 const { effectiveBase } = useConnection()
 
@@ -64,6 +100,58 @@ function send(payload: PromptInputMessage) {
 
 function sendSuggestion(suggestion: string) {
   props.workspace.handleSend(suggestion)
+}
+
+function optionLabel(value: string, options: readonly SelectOption[]) {
+  if (!value) return ""
+  return options.find((option) => option.value === value)?.label ?? value
+}
+
+function providerKey(option: SelectOption) {
+  const [rawProvider] = option.value.split("/")
+  if (rawProvider && rawProvider !== option.value) return rawProvider.trim().toLowerCase()
+
+  const separatorIndex = option.label.indexOf(":")
+  if (separatorIndex > 0) return option.label.slice(0, separatorIndex).trim().toLowerCase()
+
+  return "other"
+}
+
+function providerLabel(option: SelectOption) {
+  const separatorIndex = option.label.indexOf(":")
+  if (separatorIndex > 0) return option.label.slice(0, separatorIndex).trim()
+
+  const [rawProvider] = option.value.split("/")
+  if (rawProvider && rawProvider !== option.value) return rawProvider.trim()
+
+  return "其他模型"
+}
+
+function groupModelOptions(options: readonly SelectOption[]) {
+  const groups = new Map<string, ModelOptionGroup>()
+
+  for (const option of options) {
+    const key = providerKey(option)
+    const group = groups.get(key)
+
+    if (group) {
+      group.options.push(option)
+      continue
+    }
+
+    groups.set(key, {
+      provider: key,
+      label: providerLabel(option),
+      options: [option],
+    })
+  }
+
+  return Array.from(groups.values())
+}
+
+function selectModel(value: string) {
+  selectedModelValue.value = value
+  modelSelectorOpen.value = false
 }
 
 async function submitInteraction(interactionKey: string, answers: string[][]) {
@@ -135,128 +223,142 @@ function openArtifact(kind: string, slug: string) {
 
     <footer class="shrink-0 px-4 pb-5 pt-3 md:px-8 md:pb-7">
       <div class="mx-auto max-w-[52rem]">
-        <div
-          v-if="workspace.isLoadingModels.value || workspace.isLoadingCatalog.value"
-          class="mb-2 flex items-center justify-center gap-2 text-xs text-muted-foreground"
-        >
-          <Loader2Icon class="size-3 animate-spin" />
-          <span>正在刷新模型或数据目录</span>
-        </div>
-
         <PromptInput
-          class="[&_[data-slot=input-group]]:min-h-32 [&_[data-slot=input-group]]:rounded-[30px] [&_[data-slot=input-group]]:border [&_[data-slot=input-group]]:border-ring/35 [&_[data-slot=input-group]]:bg-background [&_[data-slot=input-group]]:shadow-2xl [&_[data-slot=input-group]]:shadow-muted"
+          :global-drop="false"
+          :multiple="false"
+          accept=""
+          class="[&_[data-slot=input-group]]:min-h-28 [&_[data-slot=input-group]]:rounded-4xl [&_[data-slot=input-group]]:border [&_[data-slot=input-group]]:border-ring/30 [&_[data-slot=input-group]]:bg-background [&_[data-slot=input-group]]:shadow-xl [&_[data-slot=input-group]]:shadow-muted/70"
           @submit="send"
         >
           <PromptInputBody>
             <PromptInputTextarea
-              placeholder="发消息..."
-              class="min-h-16 px-5 pt-5 text-sm"
+              name="message"
+              aria-label="消息内容"
+              placeholder="有什么想了解的？"
+              :rows="2"
+              autocomplete="off"
+              autocapitalize="sentences"
+              spellcheck="true"
+              enterkeyhint="send"
+              class="max-h-44 min-h-16 px-5 pt-5 text-sm leading-6"
             />
           </PromptInputBody>
-          <Separator />
-          <PromptInputFooter class="flex-wrap px-4 py-3">
-            <PromptInputTools class="min-w-0 flex-wrap gap-1.5">
-              <PromptInputButton
-                size="sm"
-                type="button"
-                class="text-sm"
-                @click="workspace.clearMessages"
-              >
-                <PlusIcon data-icon="inline-start" />
-                新会话
-              </PromptInputButton>
 
+          <PromptInputFooter class="flex-wrap items-center gap-2 px-3 py-3 sm:px-4">
+            <PromptInputTools class="min-w-0 flex-1 flex-wrap items-center gap-1.5">
+              <ChatContextPicker
+                :database="workspace.database.value"
+                :schema="workspace.schema.value"
+                :selected-agent="workspace.selectedAgent.value"
+                :database-options="workspace.databaseOptions.value"
+                :schema-options="schemaOptions"
+                :agent-options="workspace.agentOptions.value"
+                :loading-catalog="workspace.isLoadingCatalog.value"
+                @update-database="workspace.setDatabase"
+                @update-schema="workspace.setSchema"
+                @update-agent="(value) => { workspace.selectedAgent.value = value }"
+              />
+            </PromptInputTools>
+
+            <div class="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
+              <ModelSelector v-model:open="modelSelectorOpen">
+                <ModelSelectorTrigger as-child>
+                  <PromptInputButton
+                    type="button"
+                    aria-label="选择 Model"
+                    title="Model"
+                    :disabled="workspace.isLoadingModels.value"
+                    class="h-8 max-w-44 justify-start rounded-full px-2 text-sm sm:max-w-56"
+                  >
+                    <Loader2Icon
+                      v-if="workspace.isLoadingModels.value"
+                      data-icon="inline-start"
+                      class="animate-spin"
+                    />
+                    <CpuIcon
+                      v-else
+                      data-icon="inline-start"
+                    />
+                    <span class="truncate">{{ modelTriggerLabel }}</span>
+                    <ChevronDownIcon data-icon="inline-end" />
+                  </PromptInputButton>
+                </ModelSelectorTrigger>
+
+                <ModelSelectorContent
+                  title="选择模型"
+                  :show-close-button="false"
+                  :class="modelSelectorContentClass"
+                >
+                  <ModelSelectorInput
+                    placeholder="搜索模型..."
+                    class="h-9 py-0"
+                  />
+                  <ModelSelectorList class="max-h-80 px-1 pb-1">
+                    <ModelSelectorEmpty class="py-6 text-sm">
+                      没有匹配的模型
+                    </ModelSelectorEmpty>
+
+                    <ModelSelectorGroup heading="默认">
+                      <ModelSelectorItem
+                        :value="DEFAULT_MODEL_VALUE"
+                        class="min-h-9 rounded-xl px-2.5 py-1.5"
+                        @select.prevent="selectModel(DEFAULT_MODEL_VALUE)"
+                      >
+                        <CpuIcon data-icon="inline-start" />
+                        <ModelSelectorName>
+                          {{ defaultModelLabel }}
+                        </ModelSelectorName>
+                        <ModelSelectorShortcut v-if="selectedModelValue === DEFAULT_MODEL_VALUE">
+                          当前
+                        </ModelSelectorShortcut>
+                      </ModelSelectorItem>
+                    </ModelSelectorGroup>
+
+                    <ModelSelectorGroup
+                      v-for="group in modelOptionGroups"
+                      :key="group.provider"
+                      :heading="group.label"
+                    >
+                      <ModelSelectorItem
+                        v-for="model in group.options"
+                        :key="model.value"
+                        :value="model.value"
+                        class="min-h-9 rounded-xl px-2.5 py-1.5"
+                        @select.prevent="selectModel(model.value)"
+                      >
+                        <CpuIcon data-icon="inline-start" />
+                        <ModelSelectorName>
+                          {{ model.label }}
+                        </ModelSelectorName>
+                        <ModelSelectorShortcut v-if="selectedModelValue === model.value">
+                          当前
+                        </ModelSelectorShortcut>
+                      </ModelSelectorItem>
+                    </ModelSelectorGroup>
+                  </ModelSelectorList>
+                </ModelSelectorContent>
+              </ModelSelector>
+
+              <PromptInputSubmit
+                v-if="!workspace.isStreaming.value"
+                :status="currentStatus"
+                :disabled="workspace.isStreaming.value"
+                title="发送"
+                class="size-10 shrink-0 rounded-full bg-foreground text-background shadow-none hover:bg-foreground/90"
+              />
               <PromptInputButton
-                v-if="workspace.isStreaming.value"
-                variant="outline"
-                size="sm"
+                v-else
+                variant="default"
+                size="icon-sm"
                 type="button"
-                class="text-sm"
+                aria-label="停止生成"
+                title="停止生成"
+                class="size-10 shrink-0 rounded-full bg-foreground text-background shadow-none hover:bg-foreground/90"
                 @click="workspace.stopSession"
               >
                 <SquareIcon data-icon="inline-start" />
-                停止
               </PromptInputButton>
-
-              <Select v-model="workspace.selectedAgent.value">
-                <SelectTrigger class="h-9 w-36 rounded-full text-sm">
-                  <SelectValue placeholder="Agent" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem
-                      v-for="agent in workspace.agentOptions.value"
-                      :key="agent.value"
-                      :value="agent.value"
-                      class="text-sm"
-                    >
-                      {{ agent.label }}
-                    </SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-
-              <Select v-model="workspace.selectedModel.value">
-                <SelectTrigger class="hidden h-9 w-44 rounded-full text-sm sm:inline-flex">
-                  <SelectValue :placeholder="workspace.defaultModelLabel.value || 'Model'" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem
-                      v-for="model in workspace.modelOptions.value"
-                      :key="model.value"
-                      :value="model.value"
-                      class="text-sm"
-                    >
-                      {{ model.label }}
-                    </SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-
-              <Select
-                :model-value="workspace.database.value"
-                @update:model-value="(value) => workspace.setDatabase(String(value))"
-              >
-                <SelectTrigger class="hidden h-9 w-40 rounded-full text-sm lg:inline-flex">
-                  <SelectValue placeholder="Database" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem
-                      v-for="database in workspace.databaseOptions.value"
-                      :key="database.value"
-                      :value="database.value"
-                      class="text-sm"
-                    >
-                      {{ database.label }}
-                    </SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-
-              <Select
-                :model-value="workspace.schema.value"
-                @update:model-value="(value) => workspace.setSchema(String(value))"
-              >
-                <SelectTrigger class="hidden h-9 w-36 rounded-full text-sm xl:inline-flex">
-                  <SelectValue placeholder="Schema" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem
-                      v-for="schema in schemaOptions"
-                      :key="schema.value"
-                      :value="schema.value"
-                      class="text-sm"
-                    >
-                      {{ schema.label }}
-                    </SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </PromptInputTools>
-            <PromptInputSubmit :status="currentStatus" />
+            </div>
           </PromptInputFooter>
         </PromptInput>
       </div>

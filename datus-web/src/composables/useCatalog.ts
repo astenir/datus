@@ -39,6 +39,9 @@ async function loadCatalog(databaseName?: string) {
 const schemaOptions = computed(() => schemaOptionsForDatabase(catalogEntries.value, database.value));
 
 function setDatabase(value: string) {
+  if (database.value !== value) {
+    schema.value = "";
+  }
   database.value = value;
 }
 
