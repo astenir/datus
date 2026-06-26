@@ -650,6 +650,12 @@ class TestCLIServiceExecuteSQL:
             ("SHOW TABLES FROM default_catalog.finance", True),
             ("SHOW TABLES FROM other_catalog.finance", False),
             ("SHOW DATABASES FROM other_catalog", False),
+            ("SHOW COLUMNS FROM default_catalog.finance.orders", True),
+            ("SHOW COLUMNS FROM other_catalog.finance.orders", False),
+            ("SHOW CREATE TABLE default_catalog.finance.orders", True),
+            ("SHOW CREATE TABLE other_catalog.finance.orders", False),
+            ("SHOW INDEX FROM default_catalog.finance.orders", True),
+            ("SHOW INDEX FROM other_catalog.finance.orders", False),
             ("SHOW TABLES", False),
         ],
     )

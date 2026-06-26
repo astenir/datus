@@ -129,6 +129,14 @@ _SHOW_NAMESPACE_RE = re.compile(
     r"^\s*SHOW\s+(?:FULL\s+)?(?P<kind>TABLES|VIEWS|DATABASES|SCHEMAS)\s+(?:FROM|IN)\s+(?P<target>[^\s;]+)",
     flags=re.IGNORECASE,
 )
+_SHOW_TABLE_TARGET_RE = re.compile(
+    r"^\s*SHOW\s+(?:FULL\s+)?(?:COLUMNS|FIELDS|INDEX|INDEXES|KEYS)\s+(?:FROM|IN)\s+(?P<target>[^\s;]+)",
+    flags=re.IGNORECASE,
+)
+_SHOW_CREATE_TARGET_RE = re.compile(
+    r"^\s*SHOW\s+CREATE\s+(?:TABLE|VIEW)\s+(?P<target>[^\s;]+)",
+    flags=re.IGNORECASE,
+)
 
 
 class CLIService:
@@ -463,7 +471,7 @@ class CLIService:
             return None
 
         statement = _first_statement(sql).strip()
-        target = CLIService._metadata_namespace_target(statement)
+        target = CLIService._metadata_scope_target(statement)
         if not target:
             return "Metadata SQL requires an authorized target under scoped datasource grants."
 
@@ -473,7 +481,12 @@ class CLIService:
         return f"Metadata SQL target is outside scoped context: {target}"
 
     @staticmethod
-    def _metadata_namespace_target(statement: str) -> str:
+    def _metadata_scope_target(statement: str) -> str:
+        for table_target_pattern in (_SHOW_CREATE_TARGET_RE, _SHOW_TABLE_TARGET_RE):
+            match = table_target_pattern.match(statement)
+            if match:
+                return match.group("target").strip().strip(";")
+
         match = _SHOW_NAMESPACE_RE.match(statement)
         if not match:
             return ""
