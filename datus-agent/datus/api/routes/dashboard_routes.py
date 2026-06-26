@@ -29,6 +29,7 @@ from datus.api.models.dashboard_models import (
 )
 from datus.configuration.agent_config import AgentConfig
 from datus_enterprise.artifact_acl import require_artifact_access
+from datus_enterprise.audit import AuditEvent, audit_decision
 
 router = APIRouter(prefix="/api/v1", tags=["dashboard"])
 DashboardViewModuleCtx = Annotated[AppContext, Depends(require_module("module.dashboard.view"))]
@@ -97,7 +98,7 @@ async def run_dashboard_query(
         )
         return datasource_projection.config
 
-    return await svc.dashboard.run_query(
+    result = await svc.dashboard.run_query(
         project_files_root=_project_files_root(svc),
         dashboard_slug=body.dashboard_slug,
         query_slug=body.query_slug,
@@ -107,4 +108,33 @@ async def run_dashboard_query(
         published_template_loader=None,
         agent_config=projection.config,
         agent_config_projector=_project_query_config,
+    )
+    await _audit_dashboard_query(ctx, body, result)
+    return result
+
+
+async def _audit_dashboard_query(
+    ctx: AppContext,
+    body: DashboardQueryRequest,
+    result: Result[SqlQueryResultEnvelope],
+) -> None:
+    data = result.data if result.success else None
+    error_code = str(result.errorCode) if not result.success and result.errorCode is not None else None
+    metadata = {
+        "query_slug": body.query_slug,
+        "published_version": body.published_version,
+        "datasource": getattr(data, "datasource", None),
+        "row_count": getattr(data, "row_count", None),
+        "error_code": error_code,
+    }
+    await audit_decision(
+        ctx,
+        AuditEvent(
+            action="dashboard.query",
+            resource_type="dashboard",
+            resource_id=body.dashboard_slug,
+            decision="allow" if result.success else "deny",
+            reason=None if result.success else (error_code or "Dashboard query failed"),
+            metadata={key: value for key, value in metadata.items() if value is not None},
+        ),
     )

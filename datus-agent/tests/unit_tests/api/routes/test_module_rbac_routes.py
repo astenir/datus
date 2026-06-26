@@ -33,13 +33,21 @@ from datus.schemas.artifact_manifest import ArtifactManifest
 from datus_enterprise.config_projection import DatasourceGrantConfigProjector
 
 
-def _enterprise_extensions(config_projector=None) -> EnterpriseExtensions:
+class CollectingAuditSink:
+    def __init__(self):
+        self.events = []
+
+    async def write(self, event):
+        self.events.append(event)
+
+
+def _enterprise_extensions(config_projector=None, audit_sink=None) -> EnterpriseExtensions:
     return EnterpriseExtensions(
         enabled=True,
         authorization_provider=LocalAuthorizationProvider(),
         config_projector=config_projector or PassthroughConfigProjector(),
         session_owner_store=InMemorySessionOwnerStore(),
-        audit_sink=NoopAuditSink(),
+        audit_sink=audit_sink or NoopAuditSink(),
     )
 
 
@@ -731,6 +739,38 @@ def test_dashboard_query_allows_module_dashboard_query(monkeypatch):
     assert callable(svc.dashboard.run_query.await_args.kwargs["agent_config_projector"])
 
 
+def test_dashboard_query_audits_sanitized_failure(monkeypatch):
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(audit_sink=audit_sink))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config()
+    svc.agent_config.project_root = "/tmp/project"
+    svc.dashboard.run_query = AsyncMock(
+        return_value=Result[SqlQueryResultEnvelope](
+            success=False,
+            errorCode="QUERY_EXECUTION_FAILED",
+            errorMessage="policy backend down at postgres://secret-host",
+        )
+    )
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.dashboard.query"})
+
+    with _client(dashboard_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/dashboard/query",
+            json={"dashboard_slug": "sales_overview", "query_slug": "summary", "params": {"region": "east"}},
+        )
+
+    assert response.status_code == 200
+    event = audit_sink.events[-1]
+    assert event.user_id == "u1"
+    assert event.action == "dashboard.query"
+    assert event.resource_type == "dashboard"
+    assert event.resource_id == "sales_overview"
+    assert event.decision == "deny"
+    assert event.reason == "QUERY_EXECUTION_FAILED"
+    assert event.metadata == {"query_slug": "summary", "error_code": "QUERY_EXECUTION_FAILED"}
+
+
 def test_dashboard_query_uses_projected_datasource_config(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
     svc = MagicMock()
@@ -896,6 +936,69 @@ def test_sql_execute_routes_allow_module_sql_executor(monkeypatch):
     svc.cli.execute_sql.assert_awaited_once()
     assert svc.cli.execute_sql.await_args.kwargs["user_id"] == "u1"
     assert svc.cli.execute_sql.await_args.kwargs["agent_config"].current_datasource == "default"
+
+
+def test_sql_execute_audits_sanitized_result(monkeypatch):
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(audit_sink=audit_sink))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config()
+    svc.cli.execute_sql = AsyncMock(
+        return_value=Result[ExecuteSQLData](
+            success=True,
+            data=ExecuteSQLData(
+                execute_task_id="task-1",
+                sql_query="SELECT secret FROM finance.payroll",
+                result_format="json",
+                row_count=3,
+                sql_return='[{"secret": "value"}]',
+                execution_time=0.01,
+                executed_at="2026-06-27T00:00:00Z",
+            ),
+        )
+    )
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.sql_executor"})
+
+    with _client(cli_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/sql/execute", json={"sql_query": "SELECT secret", "result_format": "json"})
+
+    assert response.status_code == 200
+    event = audit_sink.events[-1]
+    assert event.user_id == "u1"
+    assert event.action == "sql.execute"
+    assert event.resource_type == "datasource"
+    assert event.resource_id == "default"
+    assert event.decision == "allow"
+    assert event.reason is None
+    assert event.metadata == {"result_format": "json", "execute_task_id": "task-1", "row_count": 3}
+
+
+def test_sql_execute_audits_sanitized_failure(monkeypatch):
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(audit_sink=audit_sink))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config()
+    svc.cli.execute_sql = AsyncMock(
+        return_value=Result[ExecuteSQLData](
+            success=False,
+            errorCode="SQL_EXECUTION_ERROR",
+            errorMessage="policy backend down at postgres://secret-host",
+        )
+    )
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.sql_executor"})
+
+    with _client(cli_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/sql/execute", json={"sql_query": "SELECT secret", "result_format": "json"})
+
+    assert response.status_code == 200
+    event = audit_sink.events[-1]
+    assert event.user_id == "u1"
+    assert event.action == "sql.execute"
+    assert event.resource_type == "datasource"
+    assert event.resource_id == "default"
+    assert event.decision == "deny"
+    assert event.reason == "SQL_EXECUTION_ERROR"
+    assert event.metadata == {"result_format": "json", "error_code": "SQL_EXECUTION_ERROR"}
 
 
 def test_sql_execute_uses_projected_default_datasource(monkeypatch):
