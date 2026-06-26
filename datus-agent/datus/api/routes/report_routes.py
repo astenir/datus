@@ -21,6 +21,7 @@ from datus.api.deps import ServiceDep
 from datus.api.enterprise.deps import require_module
 from datus.api.models.base_models import Result
 from datus.api.models.report_models import ReportDetail
+from datus_enterprise.artifact_acl import require_artifact_access
 
 router = APIRouter(prefix="/api/v1", tags=["report"])
 ReportViewModuleCtx = Annotated[AppContext, Depends(require_module("module.report.view"))]
@@ -45,9 +46,10 @@ def _project_files_root(svc: ServiceDep) -> Path:
 )
 async def get_report_detail(
     svc: ServiceDep,
-    _ctx: ReportViewModuleCtx,
+    ctx: ReportViewModuleCtx,
     slug: str = Query(..., description="Report slug, e.g. 'account_activity_q1'"),
 ) -> Result[ReportDetail]:
+    await require_artifact_access(ctx, artifact_type="report", slug=slug, action="view")
     return await svc.report.get_detail(
         project_files_root=_project_files_root(svc),
         report_slug=slug,

@@ -965,18 +965,19 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - 接入 chat、catalog、report、dashboard、KB、MCP、config/admin routes。
 - subagent dispatch 前校验对应模块权限。
 
-当前阶段 3 前半部分主包接线状态：
+当前阶段 3 主包接线状态：
 
 - `chat` route 已接入 `module.chat`，覆盖 stream、feedback、resume、stop、session list/history/delete/compact、user interaction、insert 和 tool result。
+- chat subagent dispatch 前已按内置/自定义 subagent 类型叠加权限：`gen_sql` 使用 `module.sql_executor`，report 类 subagent 使用 `module.report.query`，dashboard 类 subagent 使用 `module.dashboard.query`。
 - datasource catalog route 已接入 `module.datasource_catalog`，覆盖当前 `/api/v1/catalog/list`。
 - 直接 SQL executor route 已接入 `module.sql_executor`，覆盖 `/api/v1/sql/execute` 和 `/api/v1/sql/stop_execute`。
-- report detail route 已接入 `module.report.view`，覆盖当前 `/api/v1/report/detail`。
-- dashboard detail/query route 已分别接入 `module.dashboard.view` 和 `module.dashboard.query`，覆盖当前 `/api/v1/dashboard/detail` 与 `/api/v1/dashboard/query`。
+- report route 已接入 `module.report.view`，覆盖当前 `/api/v1/report/detail`，并通过 enterprise artifact route 覆盖 `/api/v1/reports`、`/api/v1/reports/{slug}`、`/api/v1/reports/{slug}/html`。
+- dashboard route 已接入 `module.dashboard.view` 和 `module.dashboard.query`，覆盖当前 `/api/v1/dashboard/detail`、`/api/v1/dashboard/query`，并通过 enterprise artifact route 覆盖 `/api/v1/dashboards`、`/api/v1/dashboards/{slug}`、`/api/v1/dashboards/{slug}/html`。
 - config route 已接入 `module.config.view` 和 `module.config.edit`，覆盖 `/api/v1/config/agent`、配置更新接口和连接探测接口。
 - KB route 已接入 `module.kb`，覆盖 KB bootstrap、platform docs bootstrap 和对应 cancel 接口。
 - MCP route 已接入 `module.mcp`，覆盖 MCP server/tool/filter 的列表、管理和调用接口。
 - 当前已注册的 datasource admin route `/api/v1/admin/datasource-default` 已接入 `module.admin.datasources`，用于项目级默认数据源管理。
-- 其余 admin users/roles/datasource grants/sessions/artifacts/audit/quotas/secrets API 仍按后续阶段推进；本次没有引入 artifact ACL、datasource grant、请求级 config projection 或 SQL policy report/dashboard/direct SQL 兜底。
+- 其余 admin users/roles/datasource grants/sessions/artifacts/audit/quotas/secrets API 仍按阶段 6 推进；本阶段没有引入 datasource grant、请求级 config projection 或 SQL policy report/dashboard/direct SQL 兜底。
 
 验收：
 
@@ -984,6 +985,8 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - 无 `module.dashboard.query` 不能执行 dashboard query。
 - 无 `module.datasource_catalog` 不能列 catalog/schema/table。
 - 无 `module.chat` 不能启动 chat 或 feedback。
+- 仅有 `module.chat` 不能通过 chat subagent dispatch 绕过 SQL executor/report query/dashboard query 权限。
+- 无 `module.admin.datasources` 不能调用当前已注册的 datasource admin route。
 
 ### 阶段 4：数据源授权与 config projection
 

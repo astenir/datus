@@ -27,6 +27,7 @@ from datus.api.models.dashboard_models import (
     DashboardQueryRequest,
     SqlQueryResultEnvelope,
 )
+from datus_enterprise.artifact_acl import require_artifact_access
 
 router = APIRouter(prefix="/api/v1", tags=["dashboard"])
 DashboardViewModuleCtx = Annotated[AppContext, Depends(require_module("module.dashboard.view"))]
@@ -52,9 +53,10 @@ def _project_files_root(svc: ServiceDep) -> Path:
 )
 async def get_dashboard_detail(
     svc: ServiceDep,
-    _ctx: DashboardViewModuleCtx,
+    ctx: DashboardViewModuleCtx,
     slug: str = Query(..., description="Dashboard slug, e.g. 'revenue_overview'"),
 ) -> Result[DashboardDetail]:
+    await require_artifact_access(ctx, artifact_type="dashboard", slug=slug, action="view")
     return await svc.dashboard.get_detail(
         project_files_root=_project_files_root(svc),
         dashboard_slug=slug,
@@ -74,8 +76,9 @@ async def get_dashboard_detail(
 async def run_dashboard_query(
     body: DashboardQueryRequest,
     svc: ServiceDep,
-    _ctx: DashboardQueryModuleCtx,
+    ctx: DashboardQueryModuleCtx,
 ) -> Result[SqlQueryResultEnvelope]:
+    await require_artifact_access(ctx, artifact_type="dashboard", slug=body.dashboard_slug, action="query")
     return await svc.dashboard.run_query(
         project_files_root=_project_files_root(svc),
         dashboard_slug=body.dashboard_slug,

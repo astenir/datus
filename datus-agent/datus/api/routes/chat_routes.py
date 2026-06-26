@@ -57,6 +57,7 @@ from datus.tools.sql_policy import SqlPolicyConfig
 from datus.utils.feedback_prompt import build_reaction_feedback_prompt
 from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso
+from datus_enterprise.artifact_acl import require_artifact_access
 
 logger = get_logger(__name__)
 
@@ -81,8 +82,10 @@ _SUBAGENT_MODULE_PERMISSIONS = {
     "gen_sql": "module.sql_executor",
     "gen_report": "module.report.query",
     "gen_visual_report": "module.report.query",
+    "ask_report": "module.report.query",
     "gen_dashboard": "module.dashboard.query",
     "gen_visual_dashboard": "module.dashboard.query",
+    "ask_dashboard": "module.dashboard.query",
 }
 
 
@@ -96,15 +99,20 @@ def _is_valid_subagent_id(svc, subagent_id: str) -> bool:
 
 
 def _resolve_agentic_node_entry(svc, subagent_id: str) -> Optional[Any]:
+    _, entry = _resolve_agentic_node_entry_with_name(svc, subagent_id)
+    return entry
+
+
+def _resolve_agentic_node_entry_with_name(svc, subagent_id: str) -> tuple[Optional[str], Optional[Any]]:
     agentic_nodes = getattr(svc.agent_config, "agentic_nodes", None) or {}
     if subagent_id in agentic_nodes:
-        return agentic_nodes[subagent_id]
+        return subagent_id, agentic_nodes[subagent_id]
     # Custom sub-agents may be keyed by sanitized node_name with the original
     # UUID id stored under "id" — match either form.
-    for entry in agentic_nodes.values():
+    for name, entry in agentic_nodes.items():
         if isinstance(entry, dict) and entry.get("id") == subagent_id:
-            return entry
-    return None
+            return name, entry
+    return None, None
 
 
 async def _authorize_subagent_dispatch(svc, ctx: AppContext, subagent_id: Optional[str]) -> None:
@@ -120,6 +128,10 @@ async def _authorize_subagent_dispatch(svc, ctx: AppContext, subagent_id: Option
         permission_key,
         resource=ResourceRef(type="subagent", id=subagent_id),
     )
+    artifact_requirement = _subagent_artifact_acl_requirement(svc, subagent_id)
+    if artifact_requirement is not None:
+        artifact_type, artifact_slug = artifact_requirement
+        await require_artifact_access(ctx, artifact_type=artifact_type, slug=artifact_slug, action="query")
 
 
 def _subagent_module_permission(svc, subagent_id: str) -> Optional[str]:
@@ -127,11 +139,28 @@ def _subagent_module_permission(svc, subagent_id: str) -> Optional[str]:
     if permission_key is not None or svc is None:
         return permission_key
 
-    entry = _resolve_agentic_node_entry(svc, subagent_id)
+    entry_name, entry = _resolve_agentic_node_entry_with_name(svc, subagent_id)
     if not isinstance(entry, dict):
         return None
-    node_class = entry.get("node_class") or entry.get("type")
+    node_class = entry.get("node_class") or entry.get("type") or entry_name
     return _SUBAGENT_MODULE_PERMISSIONS.get(node_class)
+
+
+def _subagent_artifact_acl_requirement(svc, subagent_id: str) -> Optional[tuple[str, str]]:
+    entry_name, entry = _resolve_agentic_node_entry_with_name(svc, subagent_id)
+    if not isinstance(entry, dict):
+        return None
+
+    node_class = entry.get("node_class") or entry.get("type") or entry_name
+    if node_class not in {"ask_report", "ask_dashboard"}:
+        return None
+
+    artifact_slug = str(entry.get("artifact_slug") or "").strip()
+    if not artifact_slug:
+        raise HTTPException(status_code=403, detail="Artifact access denied.")
+
+    artifact_type = "report" if node_class == "ask_report" else "dashboard"
+    return artifact_type, artifact_slug
 
 
 def _sql_policy_principal_pre_check(svc: "DatusService", ctx: "AppContext") -> Optional[ChatPreCheckOutcome]:
