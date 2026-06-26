@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, List
+from typing import Annotated, List, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 
 from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
@@ -15,6 +16,7 @@ from datus.api.models.dashboard_models import DashboardDetail
 from datus.api.models.report_models import ReportDetail
 from datus.schemas.artifact_manifest import ArtifactManifest
 from datus_enterprise.artifact_acl import filter_visible_artifacts, require_artifact_access
+from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
 
 router = APIRouter(prefix="/api/v1", tags=["enterprise-artifacts"])
@@ -22,6 +24,14 @@ router = APIRouter(prefix="/api/v1", tags=["enterprise-artifacts"])
 
 DashboardViewCtx = Annotated[AppContext, Depends(require_module("module.dashboard.view"))]
 ReportViewCtx = Annotated[AppContext, Depends(require_module("module.report.view"))]
+AdminArtifactsCtx = Annotated[AppContext, Depends(require_module("module.admin.artifacts"))]
+
+
+class AdminArtifactSummary(BaseModel):
+    """Admin artifact inventory item."""
+
+    artifact_type: Literal["report", "dashboard"]
+    manifest: ArtifactManifest
 
 
 def _project_files_root(svc: ServiceDep) -> Path:
@@ -72,6 +82,38 @@ async def get_report_detail(svc: ServiceDep, ctx: ReportViewCtx, slug: str) -> R
 @router.get("/reports/{slug}/html", response_class=HTMLResponse, summary="Get Report HTML")
 async def get_report_html_by_path(svc: ServiceDep, ctx: ReportViewCtx, slug: str) -> Response:
     return await _render_report_html(svc, ctx, slug)
+
+
+@router.get("/admin/artifacts", response_model=Result[List[AdminArtifactSummary]], summary="List Admin Artifacts")
+async def list_admin_artifacts(svc: ServiceDep, ctx: AdminArtifactsCtx) -> Result[List[AdminArtifactSummary]]:
+    """Return all report/dashboard manifests for admin inventory workflows."""
+
+    root = _project_files_root(svc)
+    dashboards = await svc.dashboard.list_dashboards(project_files_root=root)
+    if not dashboards.success:
+        return Result(success=False, errorCode=dashboards.errorCode, errorMessage=dashboards.errorMessage)
+    reports = await svc.report.list_reports(project_files_root=root)
+    if not reports.success:
+        return Result(success=False, errorCode=reports.errorCode, errorMessage=reports.errorMessage)
+
+    items = [
+        *(AdminArtifactSummary(artifact_type="dashboard", manifest=manifest) for manifest in dashboards.data or []),
+        *(AdminArtifactSummary(artifact_type="report", manifest=manifest) for manifest in reports.data or []),
+    ]
+    items.sort(
+        key=lambda item: (item.manifest.updated_at or item.manifest.created_at or "", item.artifact_type), reverse=True
+    )
+    await audit_decision(
+        ctx,
+        AuditEvent(
+            action="module.admin.artifacts",
+            resource_type="artifact",
+            resource_id=None,
+            decision="allow",
+            metadata={"operation": "list_admin_artifacts", "count": len(items)},
+        ),
+    )
+    return Result(success=True, data=items)
 
 
 async def _render_dashboard_html(

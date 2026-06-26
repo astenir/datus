@@ -4,8 +4,18 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
 
+from datus.api import deps
 from datus.api.auth.context import AppContext
+from datus.api.enterprise.defaults import (
+    InMemorySessionOwnerStore,
+    LocalAuthorizationProvider,
+    NoopAuditSink,
+    PassthroughConfigProjector,
+)
+from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.service import create_app
 from datus.api.services.dashboard_service import DashboardService
 from datus.api.services.report_service import ReportService
@@ -63,11 +73,99 @@ async def test_dashboard_list_filters_through_enterprise_acl(tmp_path: Path):
     assert [item.slug for item in result.data] == ["hidden"]
 
 
+def test_admin_artifacts_lists_all_manifests_and_audits(monkeypatch, tmp_path: Path):
+    class CollectingAuditSink:
+        def __init__(self):
+            self.events = []
+
+        async def write(self, event):
+            self.events.append(event)
+
+    _write_manifest(tmp_path, "report", "visible_report")
+    _write_manifest(tmp_path, "report", "hidden_report")
+    _write_manifest(tmp_path, "dashboard", "hidden_dashboard")
+    audit_sink = CollectingAuditSink()
+    ctx = AppContext(
+        user_id="u1",
+        permissions={"module.admin.artifacts"},
+        principal={"artifact_acl": {"report": ["visible_report"], "dashboard": []}},
+    )
+    app = FastAPI()
+    app.include_router(artifact_routes.router)
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return _svc(tmp_path)
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=audit_sink,
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/admin/artifacts")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    listed = {(item["artifact_type"], item["manifest"]["slug"]) for item in body["data"]}
+    assert listed == {
+        ("report", "visible_report"),
+        ("report", "hidden_report"),
+        ("dashboard", "hidden_dashboard"),
+    }
+    event = audit_sink.events[-1]
+    assert event.user_id == "u1"
+    assert event.action == "module.admin.artifacts"
+    assert event.resource_type == "artifact"
+    assert event.resource_id is None
+    assert event.decision == "allow"
+    assert event.metadata == {"operation": "list_admin_artifacts", "count": 3}
+
+
+def test_admin_artifacts_rejects_without_admin_artifacts(monkeypatch, tmp_path: Path):
+    ctx = AppContext(permissions={"module.report.view"})
+    app = FastAPI()
+    app.include_router(artifact_routes.router)
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return _svc(tmp_path)
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/admin/artifacts")
+
+    assert response.status_code == 403
+    assert "module.admin.artifacts" in response.json()["detail"]
+
+
 def test_enterprise_artifact_routes_expose_resource_paths_only():
     args = argparse.Namespace(config="", datasource="default", output_dir="./output", log_level="INFO")
     app = create_app(args)
     route_paths = {route.path for route in app.routes if hasattr(route, "path")}
 
+    assert "/api/v1/admin/artifacts" in route_paths
     assert "/api/v1/reports" in route_paths
     assert "/api/v1/reports/{slug}/html" in route_paths
     assert "/api/v1/dashboards" in route_paths
