@@ -755,6 +755,7 @@ def test_sql_execute_routes_require_module_sql_executor(monkeypatch):
 def test_sql_execute_routes_allow_module_sql_executor(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()
+    svc.agent_config = _datasource_agent_config()
     svc.cli.execute_sql = AsyncMock(
         return_value=Result[ExecuteSQLData](
             success=True,
@@ -775,7 +776,70 @@ def test_sql_execute_routes_allow_module_sql_executor(monkeypatch):
     assert response.status_code == 200
     assert response.json()["success"] is True
     svc.cli.execute_sql.assert_awaited_once()
-    assert svc.cli.execute_sql.await_args.kwargs == {"user_id": "u1"}
+    assert svc.cli.execute_sql.await_args.kwargs["user_id"] == "u1"
+    assert svc.cli.execute_sql.await_args.kwargs["agent_config"].current_datasource == "default"
+
+
+def test_sql_execute_uses_projected_default_datasource(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config(current_datasource="hr")
+    svc.cli.execute_sql = AsyncMock(
+        return_value=Result[ExecuteSQLData](
+            success=True,
+            data=ExecuteSQLData(
+                execute_task_id="task-1",
+                sql_query="SELECT 1",
+                result_format="json",
+                execution_time=0.01,
+                executed_at="2026-06-27T00:00:00Z",
+            ),
+        )
+    )
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.sql_executor"},
+        datasource_grants={"finance": {"effect": "allow", "allow_sql": True}},
+    )
+
+    with _client(cli_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/sql/execute", json={"sql_query": "SELECT 1", "result_format": "json"})
+
+    assert response.status_code == 200
+    projected_config = svc.cli.execute_sql.await_args.kwargs["agent_config"]
+    assert projected_config.current_datasource == "finance"
+    assert set(projected_config.services.datasources) == {"finance"}
+    assert projected_config.principal["datasource"] == "finance"
+
+
+def test_sql_execute_rejects_unauthorized_database_before_execution(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config(current_datasource="finance")
+    svc.cli.execute_sql = AsyncMock()
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.sql_executor"},
+        datasource_grants={
+            "finance": {
+                "effect": "allow",
+                "allow_sql": True,
+                "databases": ["finance"],
+            }
+        },
+    )
+
+    with _client(cli_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/sql/execute",
+            json={"sql_query": "SELECT 1", "database_name": "hr", "result_format": "json"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Requested database 'hr' is not authorized for datasource 'finance'."
+    svc.cli.execute_sql.assert_not_awaited()
 
 
 def test_sql_stop_execute_routes_require_module_sql_executor(monkeypatch):

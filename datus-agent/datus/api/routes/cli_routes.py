@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Path
 
 from datus.api.auth.context import AppContext
 from datus.api.deps import AppContextDep, ServiceDep
-from datus.api.enterprise.deps import require_authorized_module, require_module
+from datus.api.enterprise.deps import project_request_config, require_authorized_module, require_module
 from datus.api.enterprise.models import ResourceRef
 from datus.api.models.base_models import Result
 from datus.api.models.cli_models import (
@@ -41,7 +41,13 @@ async def execute_sql(
     ctx: SqlExecutorModuleCtx,
 ) -> Result[ExecuteSQLData]:
     """Execute SQL query directly."""
-    return await svc.cli.execute_sql(request, user_id=ctx.user_id)
+    projection = await project_request_config(
+        ctx,
+        svc.agent_config,
+        operation="sql.execute",
+        requested_database=request.database_name,
+    )
+    return await svc.cli.execute_sql(request, user_id=ctx.user_id, agent_config=projection.config)
 
 
 @router.post(
