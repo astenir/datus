@@ -22,7 +22,7 @@ from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.models.base_models import Result
 from datus.api.models.cli_models import ChatSessionData, ExecuteSQLData, StopExecuteSQLData
 from datus.api.models.dashboard_models import DashboardDetail, SqlQueryResultEnvelope
-from datus.api.models.database_models import DatabasesData, ListDatabasesData
+from datus.api.models.database_models import DatabaseInfo, DatabasesData, ListDatabasesData
 from datus.api.models.report_models import ReportDetail
 from datus.api.routes import chat_routes, cli_routes, dashboard_routes, database_routes, report_routes
 from datus.api.services.cli_service import CLIService, _SQLTaskRecord
@@ -364,6 +364,106 @@ def test_datasource_catalog_uses_projected_default_datasource(monkeypatch):
     assert response.status_code == 200
     request = svc.datasource.list_databases.call_args.args[0]
     assert request.datasource_id == "finance"
+
+
+def test_datasource_catalog_false_grant_returns_empty_catalog(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config(current_datasource="default")
+    svc.datasource.current_datasource = "default"
+    svc.datasource.list_databases.return_value = Result[ListDatabasesData](
+        success=True,
+        data=ListDatabasesData(
+            databases=[
+                DatabaseInfo(
+                    name="main",
+                    uri="sqlite:///main.db",
+                    type="sqlite",
+                    current=True,
+                    connection_status="connected",
+                    tables=["public_table"],
+                )
+            ],
+            total_count=1,
+            current_database="main",
+        ),
+    )
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.datasource_catalog"},
+        datasource_grants={"default": False},
+    )
+
+    with _client(database_routes.router, ctx, svc) as client:
+        response = client.get("/api/v1/catalog/list")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["databases"] == []
+
+
+def test_datasource_catalog_prunes_tables_by_grant_scope(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config(current_datasource="finance")
+    svc.datasource.current_datasource = "finance"
+    svc.datasource.list_databases.return_value = Result[ListDatabasesData](
+        success=True,
+        data=ListDatabasesData(
+            databases=[
+                DatabaseInfo(
+                    name="finance",
+                    uri="sqlite:///finance.db",
+                    type="sqlite",
+                    current=True,
+                    catalog_name="prod",
+                    schema_name="mart",
+                    connection_status="connected",
+                    tables_count=3,
+                    tables=["fnd_balance", "dim_date", "hr_employee"],
+                ),
+                DatabaseInfo(
+                    name="finance",
+                    uri="sqlite:///finance.db",
+                    type="sqlite",
+                    current=True,
+                    catalog_name="prod",
+                    schema_name="private",
+                    connection_status="connected",
+                    tables_count=1,
+                    tables=["fnd_secret"],
+                ),
+            ],
+            total_count=2,
+            current_database="finance",
+        ),
+    )
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.datasource_catalog"},
+        datasource_grants={
+            "finance": {
+                "effect": "allow",
+                "allow_catalog": True,
+                "catalogs": ["prod"],
+                "databases": ["finance"],
+                "schemas": ["mart"],
+                "tables": ["fnd_*", "dim_date"],
+            }
+        },
+    )
+
+    with _client(database_routes.router, ctx, svc) as client:
+        response = client.get("/api/v1/catalog/list")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    databases = response.json()["data"]["databases"]
+    assert len(databases) == 1
+    assert databases[0]["schema_name"] == "mart"
+    assert databases[0]["tables"] == ["fnd_balance", "dim_date"]
+    assert databases[0]["tables_count"] == 2
 
 
 def test_report_detail_requires_module_report_view(monkeypatch):
