@@ -628,6 +628,25 @@ class DashboardService:
                 errorMessage=f"failed to resolve datasource {meta.datasource!r}: {exc}",
             )
 
+        from datus.api.services.cli_service import CLIService
+
+        try:
+            authorized_sql = CLIService._authorize_read_sql(rendered_sql, connector, execution_config)
+        except Exception as exc:
+            logger.exception("Dashboard SQL authorization failed for %s/%s: %s", dashboard_slug, query_slug, exc)
+            return Result(
+                success=False,
+                errorCode="QUERY_EXECUTION_FAILED",
+                errorMessage="SQL authorization failed",
+            )
+        if not isinstance(authorized_sql, str):
+            return Result(
+                success=False,
+                errorCode="QUERY_EXECUTION_FAILED",
+                errorMessage=authorized_sql.errorMessage,
+            )
+        rendered_sql = authorized_sql
+
         try:
             exec_result = await asyncio.to_thread(connector.execute_query, rendered_sql, result_format="list")
         except Exception as exc:
