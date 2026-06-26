@@ -5,17 +5,39 @@
 """Unit tests for POST /api/v1/chat/feedback endpoint."""
 
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
+from datus.api import deps
+from datus.api.enterprise.defaults import (
+    InMemorySessionOwnerStore,
+    LocalAuthorizationProvider,
+    NoopAuditSink,
+    PassthroughConfigProjector,
+)
+from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.models.cli_models import FeedbackChatInput, StreamChatInput
 from datus.api.routes.chat_routes import stream_chat_feedback
 from datus.tools.sql_policy import SqlPolicyConfig
+from datus_enterprise.config_projection import DatasourceGrantConfigProjector
 
 
 def _build_svc():
     svc = MagicMock()
+    svc.agent_config = SimpleNamespace(
+        services=SimpleNamespace(
+            datasources={
+                "finance": SimpleNamespace(type="sqlite"),
+                "hr": SimpleNamespace(type="sqlite"),
+            },
+            default_datasource=None,
+        ),
+        current_datasource="finance",
+        principal={},
+        sql_policy_config=None,
+    )
     svc.task_manager.get_task.return_value = None
     svc.chat.session_exists.return_value = True
 
@@ -28,11 +50,22 @@ def _build_svc():
     return svc
 
 
-def _build_ctx(user_id="tester"):
+def _build_ctx(user_id="tester", datasource_grants=None):
     ctx = MagicMock()
     ctx.user_id = user_id
     ctx.principal = {}
+    ctx.datasource_grants = datasource_grants or {}
     return ctx
+
+
+def _enterprise_extensions(config_projector=None) -> EnterpriseExtensions:
+    return EnterpriseExtensions(
+        enabled=True,
+        authorization_provider=LocalAuthorizationProvider(),
+        config_projector=config_projector or PassthroughConfigProjector(),
+        session_owner_store=InMemorySessionOwnerStore(),
+        audit_sink=NoopAuditSink(),
+    )
 
 
 async def _drain(response):
@@ -64,6 +97,36 @@ async def test_feedback_endpoint_renders_prompt_and_routes_to_feedback_subagent(
     assert call_args.kwargs["sub_agent_id"] == "feedback"
     assert call_args.kwargs["user_id"] == "tester"
     assert stream_input.message == '[The user reacted to this message "Here is your SQL result" with [thumbsup]]'
+
+
+@pytest.mark.asyncio
+async def test_feedback_endpoint_denies_unauthorized_datasource_before_task_start(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
+    svc = _build_svc()
+    svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
+    ctx = _build_ctx(
+        datasource_grants={
+            "finance": {"effect": "allow", "allow_sql": True},
+        }
+    )
+    request = FeedbackChatInput(
+        source_session_id="chat_session_abc",
+        reaction_emoji="thumbsup",
+        reference_msg="Here is your SQL result",
+        datasource="hr",
+    )
+
+    response = await stream_chat_feedback(request, svc, ctx)
+    chunks = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+    assert len(chunks) == 1
+    assert "event: error" in chunks[0]
+    payload = json.loads(next(line for line in chunks[0].splitlines() if line.startswith("data: "))[len("data: ") :])
+    assert payload["error_type"] == "DATASOURCE_ACCESS_DENIED"
+    assert payload["error"] == "Datasource 'hr' is not authorized for this request."
+    svc.chat.stream_chat.assert_not_called()
 
 
 @pytest.mark.parametrize(

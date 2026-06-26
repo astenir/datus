@@ -394,7 +394,47 @@ async def stream_chat_feedback(
             headers=_sse_headers(),
         )
 
-    sql_policy_denial = _sql_policy_principal_pre_check(svc, ctx)
+    try:
+        projection = await project_request_config(
+            ctx,
+            svc.agent_config,
+            operation="chat.feedback",
+            requested_datasource=stream_input.datasource,
+        )
+    except HTTPException as exc:
+        return StreamingResponse(
+            _emit_pre_check_denial(
+                stream_input,
+                ChatPreCheckOutcome(
+                    allow=False,
+                    error=str(exc.detail),
+                    error_type="DATASOURCE_ACCESS_DENIED",
+                ),
+            ),
+            media_type="text/event-stream",
+            headers=_sse_headers(),
+        )
+    except DatusException as exc:
+        error_type = exc.code.name if getattr(exc, "code", None) is not None else "CONFIG_PROJECTION_ERROR"
+        return StreamingResponse(
+            _emit_pre_check_denial(
+                stream_input,
+                ChatPreCheckOutcome(
+                    allow=False,
+                    error=str(exc),
+                    error_type=error_type,
+                ),
+            ),
+            media_type="text/event-stream",
+            headers=_sse_headers(),
+        )
+
+    sql_policy_denial = _sql_policy_principal_pre_check(
+        svc,
+        ctx,
+        agent_config=projection.config,
+        principal=projection.principal,
+    )
     if sql_policy_denial:
         return StreamingResponse(
             _emit_pre_check_denial(stream_input, sql_policy_denial),
@@ -404,7 +444,11 @@ async def stream_chat_feedback(
 
     async def generate_sse():
         async for event in svc.chat.stream_chat(
-            stream_input, sub_agent_id="feedback", user_id=ctx.user_id, principal=ctx.principal
+            stream_input,
+            sub_agent_id="feedback",
+            user_id=ctx.user_id,
+            principal=projection.principal,
+            agent_config=projection.config,
         ):
             yield f"id: {event.id}\nevent: {event.event}\ndata: {event.data.model_dump_json()}\n\n"
 
