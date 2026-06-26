@@ -20,9 +20,12 @@ from datus.api.enterprise.defaults import (
 from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.models.base_models import Result
 from datus.api.models.cli_models import ChatSessionData, ExecuteSQLData, StopExecuteSQLData
+from datus.api.models.dashboard_models import DashboardDetail, SqlQueryResultEnvelope
 from datus.api.models.database_models import DatabasesData, ListDatabasesData
-from datus.api.routes import chat_routes, cli_routes, database_routes
+from datus.api.models.report_models import ReportDetail
+from datus.api.routes import chat_routes, cli_routes, dashboard_routes, database_routes, report_routes
 from datus.api.services.cli_service import CLIService, _SQLTaskRecord
+from datus.schemas.artifact_manifest import ArtifactManifest
 
 
 def _enterprise_extensions() -> EnterpriseExtensions:
@@ -45,6 +48,50 @@ def _client(router, ctx: AppContext, svc: MagicMock):
 
     app.dependency_overrides[deps.get_datus_service] = override_service
     return TestClient(app, raise_server_exceptions=False)
+
+
+def _artifact_manifest(kind: str) -> ArtifactManifest:
+    return ArtifactManifest(
+        slug="sales_overview",
+        name="Sales Overview",
+        description="Sales overview artifact",
+        kind=kind,
+        created_at="2026-06-27T00:00:00Z",
+    )
+
+
+def _report_detail() -> ReportDetail:
+    return ReportDetail(
+        slug="sales_overview",
+        name="Sales Overview",
+        description="Sales overview artifact",
+        manifest=_artifact_manifest("report"),
+        created_at="2026-06-27T00:00:00Z",
+        files=[],
+    )
+
+
+def _dashboard_detail() -> DashboardDetail:
+    return DashboardDetail(
+        slug="sales_overview",
+        name="Sales Overview",
+        description="Sales overview artifact",
+        manifest=_artifact_manifest("dashboard"),
+        created_at="2026-06-27T00:00:00Z",
+        files=[],
+        templates=[],
+    )
+
+
+def _dashboard_query_result() -> SqlQueryResultEnvelope:
+    return SqlQueryResultEnvelope(
+        executed_at="2026-06-27T00:00:00Z",
+        datasource="warehouse",
+        row_count=0,
+        columns=[],
+        rows=[],
+        sql="SELECT 1",
+    )
 
 
 def test_chat_routes_require_module_chat(monkeypatch):
@@ -141,6 +188,105 @@ def test_datasource_catalog_routes_allow_module_datasource_catalog(monkeypatch):
     assert response.json()["success"] is True
     assert response.json()["data"] == DatabasesData(databases=[]).model_dump()
     svc.datasource.list_databases.assert_called_once()
+
+
+def test_report_detail_requires_module_report_view(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    svc.report.get_detail = AsyncMock(return_value=Result[ReportDetail](success=True, data=_report_detail()))
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    with _client(report_routes.router, ctx, svc) as client:
+        response = client.get("/api/v1/report/detail", params={"slug": "sales_overview"})
+
+    assert response.status_code == 403
+    svc.report.get_detail.assert_not_awaited()
+
+
+def test_report_detail_allows_module_report_view(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    svc.agent_config.project_root = "/tmp/project"
+    svc.report.get_detail = AsyncMock(return_value=Result[ReportDetail](success=True, data=_report_detail()))
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.report.view"})
+
+    with _client(report_routes.router, ctx, svc) as client:
+        response = client.get("/api/v1/report/detail", params={"slug": "sales_overview"})
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    svc.report.get_detail.assert_awaited_once()
+    assert svc.report.get_detail.await_args.kwargs["report_slug"] == "sales_overview"
+
+
+def test_dashboard_detail_requires_module_dashboard_view(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    svc.dashboard.get_detail = AsyncMock(return_value=Result[DashboardDetail](success=True, data=_dashboard_detail()))
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    with _client(dashboard_routes.router, ctx, svc) as client:
+        response = client.get("/api/v1/dashboard/detail", params={"slug": "sales_overview"})
+
+    assert response.status_code == 403
+    svc.dashboard.get_detail.assert_not_awaited()
+
+
+def test_dashboard_detail_allows_module_dashboard_view(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    svc.agent_config.project_root = "/tmp/project"
+    svc.dashboard.get_detail = AsyncMock(return_value=Result[DashboardDetail](success=True, data=_dashboard_detail()))
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.dashboard.view"})
+
+    with _client(dashboard_routes.router, ctx, svc) as client:
+        response = client.get("/api/v1/dashboard/detail", params={"slug": "sales_overview"})
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    svc.dashboard.get_detail.assert_awaited_once()
+    assert svc.dashboard.get_detail.await_args.kwargs["dashboard_slug"] == "sales_overview"
+
+
+def test_dashboard_query_requires_module_dashboard_query(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    svc.dashboard.run_query = AsyncMock(
+        return_value=Result[SqlQueryResultEnvelope](success=True, data=_dashboard_query_result())
+    )
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.dashboard.view"})
+
+    with _client(dashboard_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/dashboard/query",
+            json={"dashboard_slug": "sales_overview", "query_slug": "summary", "params": {}},
+        )
+
+    assert response.status_code == 403
+    svc.dashboard.run_query.assert_not_awaited()
+
+
+def test_dashboard_query_allows_module_dashboard_query(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    svc.agent_config.project_root = "/tmp/project"
+    svc.dashboard.run_query = AsyncMock(
+        return_value=Result[SqlQueryResultEnvelope](success=True, data=_dashboard_query_result())
+    )
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.dashboard.query"})
+
+    with _client(dashboard_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/dashboard/query",
+            json={"dashboard_slug": "sales_overview", "query_slug": "summary", "params": {"region": "east"}},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    svc.dashboard.run_query.assert_awaited_once()
+    assert svc.dashboard.run_query.await_args.kwargs["dashboard_slug"] == "sales_overview"
+    assert svc.dashboard.run_query.await_args.kwargs["query_slug"] == "summary"
+    assert svc.dashboard.run_query.await_args.kwargs["params"] == {"region": "east"}
 
 
 def test_sql_execute_routes_require_module_sql_executor(monkeypatch):
