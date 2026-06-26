@@ -573,6 +573,77 @@ class TestCLIServiceExecuteSQL:
         assert connector.executed is False
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("sql_query", "expected_success"),
+        [
+            ("SELECT * FROM default_catalog.finance.orders", True),
+            ("SELECT * FROM other_catalog.finance.orders", False),
+        ],
+    )
+    async def test_execute_sql_starrocks_catalog_grant_scopes_qualified_table(
+        self,
+        monkeypatch,
+        sql_query,
+        expected_success,
+    ):
+        """StarRocks catalog grants apply to catalog.database.table SQL."""
+
+        class FakeConnector:
+            dialect = "starrocks"
+            catalog_name = "default_catalog"
+            database_name = "finance"
+            schema_name = ""
+
+            def __init__(self):
+                self.executed_sql = None
+
+            def execute(self, input_params, result_format):
+                self.executed_sql = input_params["sql_query"]
+                return SimpleNamespace(success=True, sql_return="1", row_count=1)
+
+        connector = FakeConnector()
+
+        class FakeDBManager:
+            def __init__(self, datasource_configs):
+                self.datasource_configs = datasource_configs
+
+            def first_conn_with_name(self, datasource):
+                return "finance", connector
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("datus.api.services.cli_service.DBManager", FakeDBManager)
+        projected_config = SimpleNamespace(
+            datasource_configs={"starrocks_ds": object()},
+            current_datasource="starrocks_ds",
+            principal={
+                "datasource": "starrocks_ds",
+                "datasource_grants": {
+                    "starrocks_ds": {
+                        "effect": "allow",
+                        "catalogs": ["default_catalog"],
+                        "databases": ["finance"],
+                    }
+                },
+            },
+        )
+        svc = CLIService(agent_config=None, chat_service=None)
+
+        result = await svc.execute_sql(
+            ExecuteSQLInput(sql_query=sql_query, result_format="json"),
+            user_id="u1",
+            agent_config=projected_config,
+        )
+
+        assert result.success is expected_success
+        if expected_success:
+            assert connector.executed_sql == sql_query
+        else:
+            assert "outside scoped context" in result.errorMessage
+            assert connector.executed_sql is None
+
+    @pytest.mark.asyncio
     async def test_execute_sql_validates_with_requested_database_context(self, monkeypatch):
         """An explicit database_name is visible to scope validation before execution."""
 

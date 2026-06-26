@@ -62,17 +62,18 @@ def _scope_patterns(grant: dict, scope_key: str) -> list[str] | None:
 def _compose_scope_tokens(
     field_order: Optional[Sequence[str]],
     *,
+    catalogs: Optional[list[str]] = None,
     databases: Optional[list[str]] = None,
     schemas: Optional[list[str]] = None,
     tables: Optional[list[str]] = None,
 ) -> list[str]:
-    ordered_fields = list(field_order or ("database", "schema", "table"))
+    ordered_fields = list(field_order or ("catalog", "database", "schema", "table"))
     if "table" not in ordered_fields:
         ordered_fields.append("table")
 
     constrained_fields = [
         field
-        for field, values in (("database", databases), ("schema", schemas), ("table", tables))
+        for field, values in (("catalog", catalogs), ("database", databases), ("schema", schemas), ("table", tables))
         if values is not None and field in ordered_fields
     ]
     if not constrained_fields:
@@ -80,21 +81,24 @@ def _compose_scope_tokens(
 
     start_index = min(ordered_fields.index(field) for field in constrained_fields)
     scoped_fields = ordered_fields[start_index:]
+    catalog_values = catalogs if catalogs is not None and "catalog" in scoped_fields else [None]
     database_values = databases if databases is not None and "database" in scoped_fields else [None]
     schema_values = schemas if schemas is not None and "schema" in scoped_fields else [None]
     table_values = tables if tables is not None else ["*"]
 
     tokens: list[str] = []
-    for database in database_values:
-        for schema in schema_values:
-            for table in table_values:
-                values = {
-                    "database": database,
-                    "schema": schema,
-                    "table": table,
-                }
-                parts = [values.get(field) or "*" for field in scoped_fields]
-                tokens.append(".".join(parts))
+    for catalog in catalog_values:
+        for database in database_values:
+            for schema in schema_values:
+                for table in table_values:
+                    values = {
+                        "catalog": catalog,
+                        "database": database,
+                        "schema": schema,
+                        "table": table,
+                    }
+                    parts = [values.get(field) or "*" for field in scoped_fields]
+                    tokens.append(".".join(parts))
     return tokens
 
 
@@ -113,6 +117,10 @@ def _schema_qualified_dialect(dialect: str) -> bool:
         "mssql",
         "sqlserver",
     }
+
+
+def _catalog_qualified_dialect(dialect: str) -> bool:
+    return (dialect or "").strip().lower() in {"starrocks"}
 
 
 class CLIService:
@@ -435,8 +443,16 @@ class CLIService:
         if not isinstance(grant, dict):
             return order
 
+        has_catalog_scope = _scope_patterns(grant, "catalogs") is not None
         has_database_scope = _scope_patterns(grant, "databases") is not None
         has_schema_scope = _scope_patterns(grant, "schemas") is not None
+        if has_catalog_scope and "catalog" not in order:
+            database_index = order.index("database") if "database" in order else len(order)
+            table_index = order.index("table") if "table" in order else len(order)
+            order.insert(min(database_index, table_index), "catalog")
+        if has_catalog_scope and _catalog_qualified_dialect(dialect) and "database" not in order:
+            table_index = order.index("table") if "table" in order else len(order)
+            order.insert(table_index, "database")
         if has_database_scope and "database" not in order:
             table_index = order.index("table") if "table" in order else len(order)
             order.insert(table_index, "database")
@@ -457,15 +473,19 @@ class CLIService:
         table_patterns = _scope_patterns(grant, "tables")
         schema_patterns = _scope_patterns(grant, "schemas")
         database_patterns = _scope_patterns(grant, "databases")
+        catalog_patterns = _scope_patterns(grant, "catalogs")
         if table_patterns is not None:
             if not table_patterns:
                 return ["__NO_TABLES_ALLOWED__"]
+            if catalog_patterns == []:
+                return ["__NO_CATALOGS_ALLOWED__"]
             if database_patterns == []:
                 return ["__NO_DATABASES_ALLOWED__"]
             if schema_patterns == []:
                 return ["__NO_SCHEMAS_ALLOWED__"]
             return _compose_scope_tokens(
                 field_order,
+                catalogs=catalog_patterns,
                 databases=database_patterns,
                 schemas=schema_patterns,
                 tables=table_patterns,
@@ -474,17 +494,26 @@ class CLIService:
         if schema_patterns is not None:
             if not schema_patterns:
                 return ["__NO_SCHEMAS_ALLOWED__"]
+            if catalog_patterns == []:
+                return ["__NO_CATALOGS_ALLOWED__"]
             if database_patterns == []:
                 return ["__NO_DATABASES_ALLOWED__"]
             return _compose_scope_tokens(
                 field_order,
+                catalogs=catalog_patterns,
                 databases=database_patterns,
                 schemas=schema_patterns,
             )
         if database_patterns is not None:
             if not database_patterns:
                 return ["__NO_DATABASES_ALLOWED__"]
-            return _compose_scope_tokens(field_order, databases=database_patterns)
+            if catalog_patterns == []:
+                return ["__NO_CATALOGS_ALLOWED__"]
+            return _compose_scope_tokens(field_order, catalogs=catalog_patterns, databases=database_patterns)
+        if catalog_patterns is not None:
+            if not catalog_patterns:
+                return ["__NO_CATALOGS_ALLOWED__"]
+            return _compose_scope_tokens(field_order, catalogs=catalog_patterns)
         return None
 
     @staticmethod
