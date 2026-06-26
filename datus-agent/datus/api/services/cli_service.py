@@ -492,6 +492,8 @@ class CLIService:
             target = match.group("target").strip().strip(";")
             namespace = (match.group("namespace") or "").strip().strip(";")
             if namespace:
+                if "." in target:
+                    return ""
                 return f"{namespace}.{target}"
             return target
 
