@@ -975,7 +975,8 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - config route 已接入 `module.config.view` 和 `module.config.edit`，覆盖 `/api/v1/config/agent`、配置更新接口和连接探测接口。
 - KB route 已接入 `module.kb`，覆盖 KB bootstrap、platform docs bootstrap 和对应 cancel 接口。
 - MCP route 已接入 `module.mcp`，覆盖 MCP server/tool/filter 的列表、管理和调用接口。
-- admin 的阶段 3 后半部分仍按本节目标推进；本次没有引入 artifact ACL、datasource grant、请求级 config projection 或 SQL policy report/dashboard/direct SQL 兜底。
+- 当前已注册的 datasource admin route `/api/v1/admin/datasource-default` 已接入 `module.admin.datasources`，用于项目级默认数据源管理。
+- 其余 admin users/roles/datasource grants/sessions/artifacts/audit/quotas/secrets API 仍按后续阶段推进；本次没有引入 artifact ACL、datasource grant、请求级 config projection 或 SQL policy report/dashboard/direct SQL 兜底。
 
 验收：
 
