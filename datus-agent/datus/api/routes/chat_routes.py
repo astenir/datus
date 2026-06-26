@@ -81,8 +81,10 @@ _SUBAGENT_MODULE_PERMISSIONS = {
     "gen_sql": "module.sql_executor",
     "gen_report": "module.report.query",
     "gen_visual_report": "module.report.query",
+    "ask_report": "module.report.query",
     "gen_dashboard": "module.dashboard.query",
     "gen_visual_dashboard": "module.dashboard.query",
+    "ask_dashboard": "module.dashboard.query",
 }
 
 

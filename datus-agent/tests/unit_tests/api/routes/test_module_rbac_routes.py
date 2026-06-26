@@ -154,6 +154,26 @@ def test_chat_stream_denies_custom_privileged_subagent_with_module_chat_only(mon
     svc.chat.stream_chat.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("agent_type", "subagent_id"),
+    [("ask_report", "custom-ask-report-id"), ("ask_dashboard", "custom-ask-dashboard-id")],
+)
+def test_chat_stream_denies_custom_ask_artifact_subagent_with_module_chat_only(monkeypatch, agent_type, subagent_id):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    svc.agent_config.agentic_nodes = {"ask_artifact": {"id": subagent_id, "type": agent_type}}
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    with _client(chat_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/chat/stream",
+            json={"message": "inspect artifact", "subagent_id": subagent_id},
+        )
+
+    assert response.status_code == 403
+    svc.chat.stream_chat.assert_not_called()
+
+
 def test_datasource_catalog_routes_require_module_datasource_catalog(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()
@@ -219,6 +239,25 @@ def test_report_detail_allows_module_report_view(monkeypatch):
     assert svc.report.get_detail.await_args.kwargs["report_slug"] == "sales_overview"
 
 
+def test_report_detail_rejects_artifact_acl_denial(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    svc.agent_config.project_root = "/tmp/project"
+    svc.report.get_detail = AsyncMock(return_value=Result[ReportDetail](success=True, data=_report_detail()))
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.report.view"},
+        principal={"artifact_acl": {"report": ["other_report"]}},
+    )
+
+    with _client(report_routes.router, ctx, svc) as client:
+        response = client.get("/api/v1/report/detail", params={"slug": "sales_overview"})
+
+    assert response.status_code == 404
+    svc.report.get_detail.assert_not_awaited()
+
+
 def test_dashboard_detail_requires_module_dashboard_view(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()
@@ -246,6 +285,25 @@ def test_dashboard_detail_allows_module_dashboard_view(monkeypatch):
     assert response.json()["success"] is True
     svc.dashboard.get_detail.assert_awaited_once()
     assert svc.dashboard.get_detail.await_args.kwargs["dashboard_slug"] == "sales_overview"
+
+
+def test_dashboard_detail_rejects_artifact_acl_denial(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    svc.agent_config.project_root = "/tmp/project"
+    svc.dashboard.get_detail = AsyncMock(return_value=Result[DashboardDetail](success=True, data=_dashboard_detail()))
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.dashboard.view"},
+        principal={"artifact_acl": {"dashboard": ["other_dashboard"]}},
+    )
+
+    with _client(dashboard_routes.router, ctx, svc) as client:
+        response = client.get("/api/v1/dashboard/detail", params={"slug": "sales_overview"})
+
+    assert response.status_code == 404
+    svc.dashboard.get_detail.assert_not_awaited()
 
 
 def test_dashboard_query_requires_module_dashboard_query(monkeypatch):
