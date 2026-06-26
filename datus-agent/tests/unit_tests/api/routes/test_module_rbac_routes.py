@@ -96,6 +96,19 @@ def _dashboard_query_result() -> SqlQueryResultEnvelope:
     )
 
 
+def _datasource_agent_config(*, current_datasource: str = "default"):
+    datasources = {
+        "default": SimpleNamespace(type="sqlite"),
+        "finance": SimpleNamespace(type="sqlite"),
+        "hr": SimpleNamespace(type="sqlite"),
+    }
+    return SimpleNamespace(
+        services=SimpleNamespace(datasources=datasources, default_datasource=None),
+        current_datasource=current_datasource,
+        principal={},
+    )
+
+
 def test_chat_routes_require_module_chat(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()
@@ -292,6 +305,7 @@ def test_datasource_catalog_routes_require_module_datasource_catalog(monkeypatch
 def test_datasource_catalog_routes_allow_module_datasource_catalog(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()
+    svc.agent_config = _datasource_agent_config()
     svc.datasource.current_datasource = "default"
     svc.datasource.list_databases.return_value = Result[ListDatabasesData](
         success=True,
@@ -306,6 +320,50 @@ def test_datasource_catalog_routes_allow_module_datasource_catalog(monkeypatch):
     assert response.json()["success"] is True
     assert response.json()["data"] == DatabasesData(databases=[]).model_dump()
     svc.datasource.list_databases.assert_called_once()
+
+
+def test_datasource_catalog_rejects_unauthorized_requested_datasource(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config(current_datasource="finance")
+    svc.datasource.current_datasource = "finance"
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.datasource_catalog"},
+        datasource_grants={"finance": {"effect": "allow", "allow_catalog": True}},
+    )
+
+    with _client(database_routes.router, ctx, svc) as client:
+        response = client.get("/api/v1/catalog/list?datasource_id=hr")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Datasource 'hr' is not authorized for this request."
+    svc.datasource.list_databases.assert_not_called()
+
+
+def test_datasource_catalog_uses_projected_default_datasource(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config(current_datasource="hr")
+    svc.datasource.current_datasource = "hr"
+    svc.datasource.list_databases.return_value = Result[ListDatabasesData](
+        success=True,
+        data=ListDatabasesData(databases=[], total_count=0, current_database=None),
+    )
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.datasource_catalog"},
+        datasource_grants={"finance": {"effect": "allow", "allow_catalog": True}},
+    )
+
+    with _client(database_routes.router, ctx, svc) as client:
+        response = client.get("/api/v1/catalog/list")
+
+    assert response.status_code == 200
+    request = svc.datasource.list_databases.call_args.args[0]
+    assert request.datasource_id == "finance"
 
 
 def test_report_detail_requires_module_report_view(monkeypatch):

@@ -4,6 +4,7 @@
 
 """Unit tests for datus/api/routes/database_routes.py — list_catalogs endpoint."""
 
+from types import SimpleNamespace
 from typing import Optional
 from unittest.mock import ANY, MagicMock, patch
 
@@ -30,6 +31,17 @@ def _make_svc(
     current_datasource: str = "default_ds",
 ) -> MagicMock:
     svc = MagicMock()
+    svc.agent_config = SimpleNamespace(
+        services=SimpleNamespace(
+            datasources={
+                current_datasource: SimpleNamespace(type="sqlite"),
+                "explicit_ds": SimpleNamespace(type="sqlite"),
+            },
+            default_datasource=current_datasource,
+        ),
+        current_datasource=current_datasource,
+        principal={},
+    )
     svc.datasource.current_datasource = current_datasource
     if list_databases_return is not None:
         svc.datasource.list_databases.return_value = list_databases_return

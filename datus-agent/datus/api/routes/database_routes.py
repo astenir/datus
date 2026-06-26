@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query
 
 from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
-from datus.api.enterprise.deps import require_module
+from datus.api.enterprise.deps import project_request_config, require_module
 from datus.api.models.base_models import Result
 from datus.api.models.database_models import (
     DatabasesData,
@@ -49,8 +49,17 @@ async def list_catalogs(
     include_sys_schemas: bool = INCLUDE_SYS_SCHEMAS_QUERY,
 ) -> Result[DatabasesData]:
     """List available databases."""
+    projection = await project_request_config(
+        _ctx,
+        svc.agent_config,
+        operation="catalog.list",
+        requested_datasource=datasource_id or None,
+        requested_catalog=catalog_name or None,
+        requested_database=database_name or None,
+        requested_schema=schema_name or None,
+    )
     request = ListDatabasesInput(
-        datasource_id=datasource_id or svc.datasource.current_datasource,
+        datasource_id=datasource_id or projection.config.current_datasource or svc.datasource.current_datasource,
         catalog_name=catalog_name,
         database_name=database_name,
         schema_name=schema_name,
