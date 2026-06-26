@@ -219,8 +219,6 @@ class TestCreateParser:
                 "metricflow",
                 "--semantic_yaml",
                 "/tmp/s.yaml",
-                "--ext_knowledge",
-                "/tmp/ek.csv",
                 "--validate-only",
                 "--catalog",
                 "main",
@@ -233,7 +231,6 @@ class TestCreateParser:
         assert args.benchmark == "spider2"
         assert args.from_adapter == "metricflow"
         assert args.semantic_yaml == "/tmp/s.yaml"
-        assert args.ext_knowledge == "/tmp/ek.csv"
         assert args.validate_only is True
         assert args.catalog == "main"
         assert args.database_name == "demo"
@@ -333,6 +330,7 @@ class TestMainRunAction:
         mock_config = MagicMock()
         mock_config.current_db_name_type.return_value = ("mydb", "sqlite")
         mock_config.output_dir = "/tmp/output"
+        mock_config.current_datasource = "ns"
 
         with (
             patch("datus.main.configure_logging"),

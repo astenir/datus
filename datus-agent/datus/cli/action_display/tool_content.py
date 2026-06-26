@@ -236,7 +236,6 @@ _TOOL_ARGS_FORMATTERS: Dict[str, Callable[[dict], str]] = {
     "search_table": lambda a: _format_positional(a, "query_text", "query"),
     "read_query": lambda a: _format_positional(a, "query", "sql"),
     "query": lambda a: _format_positional(a, "query", "sql"),
-    "get_table_ddl": lambda a: _format_positional(a, "table_name", "name"),
     "list_databases": lambda _a: "",
     "list_schemas": lambda a: _format_positional(a, "database", "catalog"),
     # Filesystem tools
@@ -252,8 +251,6 @@ _TOOL_ARGS_FORMATTERS: Dict[str, Callable[[dict], str]] = {
     "search_reference_sql": lambda a: _format_positional(a, "query", "query_text"),
     "get_reference_sql": lambda a: _format_positional(a, "ref_id", "sql_id", "name"),
     "search_semantic_objects": lambda a: _format_positional(a, "query", "query_text"),
-    "search_knowledge": lambda a: _format_positional(a, "query", "query_text"),
-    "get_knowledge": lambda a: _format_positional(a, "doc_id", "id", "name"),
     # Date parsing tools
     "parse_temporal_expressions": lambda a: _format_positional(a, "expression", "text", "query"),
     # Reference template tools
@@ -270,8 +267,7 @@ _TOOL_ARGS_FORMATTERS: Dict[str, Callable[[dict], str]] = {
     "web_search_document": lambda a: _format_positional(a, "query", "query_text"),
     # Skill tools
     "load_skill": lambda a: _format_positional(a, "skill_name", "name"),
-    "skill_execute_command": lambda a: _format_kw(a, "skill_name", "command"),
-    "execute_command": lambda a: _format_kw(a, "skill_name", "command"),
+    "execute_command": lambda a: _format_kw(a, "command"),
 }
 
 
@@ -739,42 +735,6 @@ def _format_csv_preview_markup(csv_text: str, max_rows: int = 10, max_col_width:
     return lines
 
 
-def _format_get_table_ddl_output_markup(output_data) -> List[str]:
-    """Format get_table_ddl output with Rich markup and highlighted DDL."""
-    data = parse_output_data(output_data)
-    if data is None:
-        return format_output_verbose_markup(output_data)
-
-    lines: List[str] = []
-
-    if "success" in data:
-        lines.append(f"[bold]success[/bold]: {data['success']}")
-    if "error" in data and data["error"]:
-        lines.append(f"[bold red]error: {_escape_markup(str(data['error']))}[/bold red]")
-
-    result = data.get("result")
-    if not isinstance(result, dict):
-        if result is not None:
-            lines.append(f"[bold]result[/bold]: {_escape_markup(str(result))}")
-        return lines if lines else format_output_verbose_markup(output_data)
-
-    identifier = result.get("identifier")
-    if identifier:
-        lines.append(f"[bold]table[/bold]: [cyan]{_escape_markup(identifier)}[/cyan]")
-
-    table_type = result.get("table_type")
-    if table_type:
-        lines.append(f"[bold]type[/bold]: {_escape_markup(table_type)}")
-
-    definition = result.get("definition")
-    if isinstance(definition, str) and definition:
-        lines.append("[bold]definition[/bold]:")
-        for ddl_line in definition.split("\n"):
-            lines.append(f"  [bright_cyan]{_escape_markup(ddl_line)}[/bright_cyan]")
-
-    return lines if lines else format_output_verbose_markup(output_data)
-
-
 # ── Verbose format helpers for specific tools ─────────────────────
 
 
@@ -898,42 +858,6 @@ def _format_describe_table_output_verbose(output_data) -> List[str]:
             lines.append(f"  {col}")
 
     return lines
-
-
-def _format_get_table_ddl_output_verbose(output_data) -> List[str]:
-    """Format get_table_ddl output for verbose mode with formatted DDL."""
-    data = parse_output_data(output_data)
-    if data is None:
-        return format_output_verbose(output_data)
-
-    lines: List[str] = []
-
-    if "success" in data:
-        lines.append(f"success: {data['success']}")
-    if "error" in data and data["error"]:
-        lines.append(f"error: {data['error']}")
-
-    result = data.get("result")
-    if not isinstance(result, dict):
-        if result is not None:
-            lines.append(f"result: {result}")
-        return lines if lines else format_output_verbose(output_data)
-
-    identifier = result.get("identifier")
-    if identifier:
-        lines.append(f"table: {identifier}")
-
-    table_type = result.get("table_type")
-    if table_type:
-        lines.append(f"type: {table_type}")
-
-    definition = result.get("definition")
-    if isinstance(definition, str) and definition:
-        lines.append("definition:")
-        for ddl_line in definition.split("\n"):
-            lines.append(f"  {ddl_line}")
-
-    return lines if lines else format_output_verbose(output_data)
 
 
 # ── Per-tool builder functions ─────────────────────────────────────
@@ -1070,11 +994,6 @@ def _build_search_reference_sql(action: ActionHistory, verbose: bool) -> ToolCal
     return _build_search_generic(action, verbose, "reference SQL", "reference SQLs")
 
 
-def _build_search_external_knowledge(action: ActionHistory, verbose: bool) -> ToolCallContent:
-    """search_external_knowledge / search_knowledge: show knowledge count."""
-    return _build_search_generic(action, verbose, "knowledge entry", "knowledge entries")
-
-
 def _build_search_documents(action: ActionHistory, verbose: bool) -> ToolCallContent:
     """search_documents: show document count."""
     return _build_search_generic(action, verbose, "document", "documents")
@@ -1101,32 +1020,6 @@ def _build_search_generic(
         items = _get_items_from_output(action.output)
         count = len(items) if isinstance(items, list) else 0
         tc.compact_result = f"{count} {_plural_unit(count, unit_singular, unit_plural)} matched"
-    return tc
-
-
-def _build_get_table_ddl(action: ActionHistory, verbose: bool) -> ToolCallContent:
-    """get_table_ddl: show the table identifier and DDL size."""
-    tc = make_base_content(action)
-    if verbose:
-        tc.args_lines = extract_args_markup(action)
-        if action.output:
-            tc.output_lines = _format_get_table_ddl_output_markup(action.output)
-    else:
-        data = parse_output_data(action.output)
-        if data:
-            result = data.get("result")
-            if isinstance(result, dict):
-                identifier = result.get("identifier", "")
-                definition = result.get("definition") or ""
-                chars = len(definition) if isinstance(definition, str) else 0
-                if identifier and chars:
-                    tc.compact_result = f"{identifier} \u00b7 {chars:,} chars"
-                elif chars:
-                    tc.compact_result = f"{chars:,} chars"
-                elif identifier:
-                    tc.compact_result = str(identifier)
-                else:
-                    tc.compact_result = "DDL retrieved"
     return tc
 
 
@@ -1361,7 +1254,7 @@ def _build_list_subject_tree(action: ActionHistory, verbose: bool) -> ToolCallCo
     return tc
 
 
-_LEAF_KEYS = {"metrics", "reference_sql", "knowledge"}
+_LEAF_KEYS = {"metrics", "reference_sql"}
 
 
 def _format_subject_tree_markup(tree: dict, indent: str = "") -> List[str]:
@@ -1452,16 +1345,6 @@ def _build_execute_reference_template(action: ActionHistory, verbose: bool) -> T
 def _build_search_semantic_objects(action: ActionHistory, verbose: bool) -> ToolCallContent:
     """search_semantic_objects: show semantic object count."""
     return _build_search_generic(action, verbose, "semantic object", "semantic objects")
-
-
-def _build_search_knowledge(action: ActionHistory, verbose: bool) -> ToolCallContent:
-    """search_knowledge: show knowledge entry count."""
-    return _build_search_generic(action, verbose, "knowledge entry", "knowledge entries")
-
-
-def _build_get_knowledge(action: ActionHistory, verbose: bool) -> ToolCallContent:
-    """get_knowledge: show the fetched knowledge entry name."""
-    return _build_get_detail(action, verbose)
 
 
 def _build_list_metrics_semantic(action: ActionHistory, verbose: bool) -> ToolCallContent:
@@ -1975,7 +1858,7 @@ def _build_analyze_metric_candidates(action: ActionHistory, verbose: bool) -> To
 
 
 def _build_execute_command(action: ActionHistory, verbose: bool) -> ToolCallContent:
-    """execute_command / skill_execute_command: show success."""
+    """execute_command: show success."""
     return _build_simple_action(action, verbose, "Command executed")
 
 
@@ -2099,16 +1982,12 @@ class ToolCallContentBuilder:
         self._registry["read_query"] = _build_read_query
         self._registry["query"] = _build_read_query
         self._registry["search_table"] = _build_search_table
-        self._registry["get_table_ddl"] = _build_get_table_ddl
         self._registry["list_databases"] = _build_list_databases
         self._registry["list_schemas"] = _build_list_schemas
 
         # Context search tools
         self._registry["search_metrics"] = _build_search_metrics
         self._registry["search_reference_sql"] = _build_search_reference_sql
-        self._registry["search_external_knowledge"] = _build_search_external_knowledge
-        self._registry["search_knowledge"] = _build_search_knowledge
-        self._registry["get_knowledge"] = _build_get_knowledge
         self._registry["search_documents"] = _build_search_documents
         self._registry["search_document"] = _build_doc_search_result
         self._registry["list_subject_tree"] = _build_list_subject_tree
@@ -2165,7 +2044,6 @@ class ToolCallContentBuilder:
 
         # Skill tools
         self._registry["execute_command"] = _build_execute_command
-        self._registry["skill_execute_command"] = _build_execute_command
         self._registry["load_skill"] = _build_load_skill
 
         # Interaction tools

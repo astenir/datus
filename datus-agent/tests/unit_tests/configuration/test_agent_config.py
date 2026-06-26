@@ -168,10 +168,12 @@ class TestDbConfigFilterKwargs:
         assert cfg.private_key_file_pwd == "1234"
         assert cfg.extra == {"custom_option": "value123"}
 
-    def test_name_sets_logic_name(self):
-        kwargs = {"type": "sqlite", "uri": "sqlite:///db.db", "name": "my_logic_name"}
+    def test_name_kwarg_is_ignored(self):
+        # ``name`` is an internal field used as the datasource key elsewhere; it is not
+        # stored on DbConfig and must not leak into ``extra``.
+        kwargs = {"type": "sqlite", "uri": "sqlite:///db.db", "name": "my_alias"}
         cfg = DbConfig.filter_kwargs(DbConfig, kwargs)
-        assert cfg.logic_name == "my_logic_name"
+        assert not cfg.extra or "name" not in cfg.extra
 
     def test_sqlite_extracts_database_stem(self):
         kwargs = {"type": "sqlite", "uri": "sqlite:///path/mydata.db"}
@@ -337,10 +339,18 @@ class TestBenchmarkConfigValidate:
             "question_key": "q",
             "question_file": "f.json",
             "question_id_key": "id",
+            "datasource_key": "__datus_datasource",
+            "catalog_key": "__datus_catalog",
+            "database_key": "__datus_database",
+            "schema_key": "__datus_schema",
             "unknown_field": "ignored",
         }
         cfg = BenchmarkConfig.filter_kwargs(BenchmarkConfig, data)
         assert cfg.question_key == "q"
+        assert cfg.datasource_key == "__datus_datasource"
+        assert cfg.catalog_key == "__datus_catalog"
+        assert cfg.database_key == "__datus_database"
+        assert cfg.schema_key == "__datus_schema"
         assert not hasattr(cfg, "unknown_field")
 
 
@@ -507,6 +517,35 @@ class TestLoadModelConfig:
         d = cfg.to_dict()
         assert d["type"] == "openai"
         assert d["model"] == "gpt-4"
+
+    def test_ssl_verify_defaults_none(self):
+        cfg = ModelConfig(type="openai", api_key="sk", model="gpt-4")
+        assert cfg.ssl_verify is None
+        assert cfg.to_dict()["ssl_verify"] is None
+
+    def test_load_ssl_verify_passthrough(self):
+        cfg = load_model_config({"type": "claude", "model": "claude", "ssl_verify": "/etc/ssl/ca.pem"})
+        assert cfg.ssl_verify == "/etc/ssl/ca.pem"
+
+    def test_load_ssl_verify_absent_is_none(self):
+        cfg = load_model_config({"type": "claude", "model": "claude"})
+        assert cfg.ssl_verify is None
+
+    def test_load_ssl_verify_env_substitution(self, monkeypatch):
+        monkeypatch.setenv("MY_CA", "/etc/ssl/from-env.pem")
+        cfg = load_model_config({"type": "claude", "model": "claude", "ssl_verify": "${MY_CA}"})
+        assert cfg.ssl_verify == "/etc/ssl/from-env.pem"
+
+    @pytest.mark.parametrize("value", [123, ["x"], {"a": 1}])
+    def test_load_ssl_verify_invalid_type_raises(self, value):
+        with pytest.raises(DatusException):
+            load_model_config({"type": "claude", "model": "claude", "ssl_verify": value})
+
+    @pytest.mark.parametrize("value", ["/etc/ssl/ca.pem", True, False])
+    def test_ssl_verify_round_trips(self, value):
+        cfg = ModelConfig(type="claude", api_key="sk", model="claude", ssl_verify=value)
+        assert cfg.ssl_verify == value
+        assert cfg.to_dict()["ssl_verify"] == value
 
 
 class TestAgentConfigServiceSelectors:
@@ -840,7 +879,11 @@ class TestAgentConfigServiceSelectors:
             },
         )
 
-        assert cfg.services.datasources["sample"].uri == f"duckdb:///{db_file}"
+        # A path_pattern datasource is ONE multi-database datasource (keyed by the declared
+        # name); its databases are the matched files, enumerated via list_databases.
+        ds_cfg = cfg.services.datasources["duck_files"]
+        assert ds_cfg.path_pattern == f"{db_dir}/*.duckdb"  # env var expanded
+        assert cfg.list_databases("duck_files") == ["sample"]
 
     def test_scheduler_config_expands_env_vars(self, tmp_path, monkeypatch):
         dag_dir = tmp_path / "dags"
@@ -1350,7 +1393,6 @@ class TestAgentConfigProjectLayout:
         assert cfg.path_manager.subject_dir == subject
         assert cfg.path_manager.semantic_models_dir == subject / "semantic_models"
         assert cfg.path_manager.sql_summaries_dir == subject / "sql_summaries"
-        assert cfg.path_manager.ext_knowledge_dir == subject / "ext_knowledge"
 
     def test_project_name_auto_derived_from_cwd_when_absent(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
@@ -1735,6 +1777,13 @@ class TestProviderConfigurationDispatch:
                     "api_key_env": "KIMI_API_KEY",
                     "default_model": "kimi-k2.5",
                 },
+                "openrouter": {
+                    "type": "openrouter",
+                    "base_url": "https://openrouter.ai/api/v1",
+                    "api_key_env": "OPENROUTER_API_KEY",
+                    "default_model": "anthropic/claude-sonnet-4",
+                    "models": ["anthropic/claude-sonnet-4", "openai/gpt-4o"],
+                },
             },
             "model_overrides": {
                 "kimi-k2.5": {"temperature": 1.0, "top_p": 0.95},
@@ -1786,6 +1835,22 @@ class TestProviderConfigurationDispatch:
         assert active.api_key == "sk-test"
         assert active.model == "gpt-4.1"
         assert active.base_url == "https://api.openai.com/v1"
+
+    def test_openrouter_provider_synthesizes_openrouter_model_config(self, tmp_path):
+        """A provider whose catalog ``type`` is ``openrouter`` resolves to an
+        openrouter ModelConfig that drives ``OpenRouterModel`` via MODEL_TYPE_MAP,
+        keeping the full ``vendor/slug`` model name."""
+        cfg = self._make(
+            tmp_path,
+            providers={"openrouter": {"api_key": "sk-or-test"}},
+            target_provider="openrouter",
+            target_model="openai/gpt-4o",
+        )
+        active = cfg.active_model()
+        assert active.type == "openrouter"
+        assert active.api_key == "sk-or-test"
+        assert active.model == "openai/gpt-4o"
+        assert active.base_url == "https://openrouter.ai/api/v1"
 
     def test_model_overrides_applied_when_synthesizing(self, tmp_path):
         cfg = self._make(
@@ -1992,6 +2057,15 @@ class TestSetAgenticNodeOverride:
         assert entry["max_turns"] == 25
         # ``system_prompt`` is auto-filled so the YAML stays round-trippable.
         assert entry["system_prompt"] == "gen_sql"
+
+    def test_builtin_gen_sql_default_system_prompt_is_gen_sql(self, tmp_path):
+        cfg = self._make(tmp_path, agentic_nodes={"gen_sql": {}})
+        assert cfg.agentic_nodes["gen_sql"]["system_prompt"] == "gen_sql"
+
+    def test_override_builtin_gen_sql_default_system_prompt_is_gen_sql(self, tmp_path):
+        cfg = self._make(tmp_path)
+        cfg.set_agentic_node_override("gen_sql", model="legacy", max_turns=25, persist=False)
+        assert cfg.agentic_nodes["gen_sql"]["system_prompt"] == "gen_sql"
 
     def test_clear_model_preserves_max_turns(self, tmp_path):
         """Passing ``model=None`` clears only that key; max_turns stays

@@ -10,7 +10,7 @@ SQL generation with support for limited context, enhanced template variables,
 and flexible configuration through agent.yml.
 """
 
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union
 
 from datus.agent.node.agentic_node import AgenticNode
 from datus.agent.node.stream_run_context import StreamRunContext
@@ -63,11 +63,11 @@ class GenSQLAgenticNode(AgenticNode):
         Args:
             node_id: Unique identifier for the node
             description: Human-readable description of the node
-            node_type: Type of the node (should be 'gensql')
+            node_type: Type of the node (should be 'gen_sql')
             input_data: SQL generation input data
             agent_config: Agent configuration
             tools: List of tools (will be populated in setup_tools)
-            node_name: Name of the node configuration in agent.yml (e.g., "gensql", "gen_sql")
+            node_name: Name of the node configuration in agent.yml, typically "gen_sql"
             execution_mode: Execution mode - "interactive" (default) or "workflow"
             is_subagent: When True, skip SubAgentTaskTool setup (2-level depth enforcement)
         """
@@ -75,11 +75,11 @@ class GenSQLAgenticNode(AgenticNode):
         # Determine node name from node_type if not provided
         self.configured_node_name = node_name
 
-        self.max_turns = 30
+        self.max_turns = 50
         if agent_config and hasattr(agent_config, "agentic_nodes") and node_name in agent_config.agentic_nodes:
             agentic_node_config = agent_config.agentic_nodes[node_name]
             if isinstance(agentic_node_config, dict):
-                self.max_turns = agentic_node_config.get("max_turns", 30)
+                self.max_turns = agentic_node_config.get("max_turns", 50)
 
         # Initialize tool attributes BEFORE calling parent constructor
         # This is required because parent's __init__ calls _get_system_prompt()
@@ -134,7 +134,7 @@ class GenSQLAgenticNode(AgenticNode):
         Get the configured node name for this SQL generation agentic node.
 
         Returns:
-            The configured node name from agent.yml (e.g., "gensql", "gen_sql")
+            The configured node name from agent.yml
         """
         return self.configured_node_name
 
@@ -200,15 +200,17 @@ class GenSQLAgenticNode(AgenticNode):
         return {"success": True, "message": "GenSQL input prepared from workflow"}
 
     def _update_database_connection(self, database_name: str):
-        """
-        Update database connection to a different database.
+        """Rebuild the DB tool bound to ``database_name``.
+
+        ``default_database`` makes DBFuncTool clone the datasource config with the target
+        database, so the connector connects to it (works for PG/server DBs).
 
         Args:
-            database_name: The name of the database to connect to
+            database_name: The physical database to bind to.
         """
         self.db_func_tool = DBFuncTool(
             agent_config=self.agent_config,
-            default_datasource=database_name,
+            default_database=database_name,
             sub_agent_name=self.node_config.get("system_prompt"),
         )
         self._rebuild_tools()
@@ -597,6 +599,13 @@ class GenSQLAgenticNode(AgenticNode):
 
         return {getattr(tool, "name", "") for tool in cached_tools if getattr(tool, "name", "")}
 
+    def _runtime_context_current_date(self) -> str:
+        """Honor the benchmark/replay ``reference_date`` in the frozen runtime context."""
+        from datus.utils.time_utils import get_default_current_date
+
+        ref = self.date_parsing_tools.reference_date if self.date_parsing_tools else None
+        return get_default_current_date(ref)
+
     def _get_system_prompt(
         self,
         prompt_version: Optional[str] = None,
@@ -641,12 +650,10 @@ class GenSQLAgenticNode(AgenticNode):
                 "execute_reference_template",
             )
         )
-        from datus.utils.time_utils import get_default_current_date
-
-        ref = self.date_parsing_tools.reference_date if self.date_parsing_tools else None
-        context["current_date"] = get_default_current_date(ref)
+        # The current date is rendered by the shared runtime-context block via
+        # _runtime_context_current_date() (reference_date aware); the current
+        # datasource/dialect arrives per turn in the user message.
         prompt_version = prompt_version or self.node_config.get("prompt_version")
-        # Construct template name: {system_prompt}_system or fallback to {node_name}_system
         system_prompt_name = self.node_config.get("system_prompt") or self.get_node_name()
         template_name = f"{system_prompt_name}_system"
 
@@ -661,7 +668,7 @@ class GenSQLAgenticNode(AgenticNode):
         except FileNotFoundError:
             # Template not found - throw DatusException
             logger.warning(f"Failed to render system prompt '{system_prompt_name}', using the default template instead")
-            base_prompt = pm.render_template(template_name="sql_system", version=None, **context)
+            base_prompt = pm.render_template(template_name="gen_sql_system", version=prompt_version, **context)
             return self._finalize_system_prompt(base_prompt)
         except Exception as e:
             # Other template errors - wrap in DatusException
@@ -777,31 +784,6 @@ class GenSQLAgenticNode(AgenticNode):
             logger.error(f"Failed to update SQL generation context: {e}")
             return {"success": False, "message": str(e)}
 
-    def _tool_category_map(self) -> Dict[str, List[Any]]:
-        """Register tools under their canonical categories so permission rules fire.
-
-        Without this override the bound tools fall through to the ``tools.*``
-        catch-all (default ASK on normal/auto profiles), which would block at
-        ``InteractionBroker.request`` whenever a caller wires permission hooks
-        but does not also run an interactive broker listener.
-        """
-        mapping = super()._tool_category_map()
-        if getattr(self, "db_func_tool", None):
-            mapping["db_tools"] = list(self.db_func_tool.available_tools())
-        if getattr(self, "context_search_tools", None):
-            mapping["context_search_tools"] = list(self.context_search_tools.available_tools())
-        if getattr(self, "semantic_tools", None):
-            mapping["semantic_tools"] = list(self.semantic_tools.available_tools())
-        if getattr(self, "reference_template_tools", None):
-            mapping["semantic_tools"] = mapping.get("semantic_tools", []) + list(
-                self.reference_template_tools.available_tools()
-            )
-        if getattr(self, "date_parsing_tools", None):
-            mapping["date_parsing_tools"] = list(self.date_parsing_tools.available_tools())
-        if getattr(self, "filesystem_func_tool", None):
-            mapping["filesystem_tools"] = list(self.filesystem_func_tool.available_tools())
-        return mapping
-
     def _extract_sql_and_output_from_response(self, output: dict) -> tuple[Optional[str], Optional[str]]:
         """
         Extract SQL content and formatted output from model response.
@@ -835,7 +817,7 @@ class GenSQLAgenticNode(AgenticNode):
                 # Extract SQL
                 sql = parsed.get("sql")
 
-                # New sql_system protocol uses `output` as the single user-facing field.
+                # New gen_sql_system protocol uses `output` as the single user-facing field.
                 output_text = parsed.get("output")
                 explanation = parsed.get("explanation", "")
                 tables = parsed.get("tables", [])
@@ -980,13 +962,10 @@ def prepare_template_context(
     context["native_tools"] = node_config.tool_list
     context["mcp_tools"] = node_config.mcp
     # Limited context support
-    has_scoped_context = False
-
     scoped_context = node_config.scoped_context
-    if scoped_context:
-        has_scoped_context = bool(
-            scoped_context.tables or scoped_context.metrics or scoped_context.sqls or scoped_context.ext_knowledge
-        )
+    has_scoped_context = bool(
+        scoped_context and (scoped_context.tables or scoped_context.metrics or scoped_context.sqls)
+    )
 
     context["scoped_context"] = has_scoped_context
 

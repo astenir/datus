@@ -10,7 +10,7 @@ chat interactions with markdown output, database/filesystem tool support,
 skills, and permissions. This node is fully independent from GenSQLAgenticNode.
 """
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 from datus.agent.node.agentic_node import AgenticNode
 from datus.agent.node.gen_sql_agentic_node import prepare_template_context
@@ -78,11 +78,11 @@ class ChatAgenticNode(AgenticNode):
         self.configured_node_name = "chat"
 
         # Max turns from config
-        self.max_turns = 30
+        self.max_turns = 50
         if agent_config and hasattr(agent_config, "agentic_nodes") and "chat" in agent_config.agentic_nodes:
             agentic_node_config = agent_config.agentic_nodes["chat"]
             if isinstance(agentic_node_config, dict):
-                self.max_turns = agentic_node_config.get("max_turns", 30)
+                self.max_turns = agentic_node_config.get("max_turns", 50)
 
         # Initialize tool attributes BEFORE calling parent constructor
         self.db_func_tool: Optional[DBFuncTool] = None
@@ -126,13 +126,18 @@ class ChatAgenticNode(AgenticNode):
     # ── Tool Setup ──────────────────────────────────────────────────────
 
     def setup_tools(self):
-        """Initialize all tools with default database connection."""
+        """Initialize all tools, binding the DB tool to the active database (if any)."""
         node_name = self.get_node_name()
-        self.db_func_tool = DBFuncTool(agent_config=self.agent_config, sub_agent_name=node_name)
+        self.db_func_tool = DBFuncTool(
+            agent_config=self.agent_config,
+            sub_agent_name=node_name,
+            default_database=getattr(self, "active_database", "") or None,
+        )
         self._setup_context_search_tools()
         self._setup_reference_template_tools()
         self._setup_date_parsing_tools()
         self._setup_filesystem_tools()
+        self._setup_memory_tools()
         # self.bash_tool was created in AgenticNode.__init__; just surface its
         # tool in this node's eager tools list (rebuild_tools also re-appends).
         if self.bash_tool:
@@ -206,7 +211,7 @@ class ChatAgenticNode(AgenticNode):
     def _setup_skill_tools(self):
         """Setup skill discovery and loading tools with permission control."""
         try:
-            from datus.tools.permission.permission_config import PermissionConfig, PermissionLevel, PermissionRule
+            from datus.tools.permission.permission_config import PermissionConfig
 
             base_config = self.agent_config.permissions_config
             if base_config is not None:
@@ -218,17 +223,6 @@ class ChatAgenticNode(AgenticNode):
                 global_config=base_config,
                 node_overrides=self._get_node_permission_overrides(),
                 active_profile=getattr(self.agent_config, "active_profile_name", None) or "normal",
-            )
-            # Register bash ASK as a persistent rule so ``/profile dangerous``
-            # doesn't silently drop it on rebuild. ``add_persistent_rule``
-            # skips duplicates, so this is safe even if the profile base
-            # already contains the rule.
-            self.permission_manager.add_persistent_rule(
-                PermissionRule(
-                    tool="skills",
-                    pattern="skill_execute_command",
-                    permission=PermissionLevel.ASK,
-                )
             )
             self.permission_manager.set_permission_callback(self._handle_permission_ask)
 
@@ -247,39 +241,6 @@ class ChatAgenticNode(AgenticNode):
         except Exception as e:
             logger.error(f"Failed to setup skill tools: {e}")
 
-    def _tool_category_map(self) -> Dict[str, List[Any]]:
-        """Declare chat-specific tool categories for permission registration.
-
-        Picked up by ``AgenticNode._populate_tool_registry`` so the base
-        ``_ensure_permission_hooks`` can build ``PermissionHooks`` with the
-        full registry. The base implementation already covers ``skills`` and
-        ``bash_tools``; this override extends with chat's own tool surface.
-        Tools that aren't tied to a profile category (``ask_user_tool``,
-        ``_platform_doc_tool``) land in the ``tools`` catch-all so explicit
-        ``tools.*`` rules can still match them.
-        """
-        mapping = super()._tool_category_map()
-        if self.db_func_tool:
-            mapping["db_tools"] = list(self.db_func_tool.available_tools())
-        if self.context_search_tools:
-            mapping["context_search_tools"] = list(self.context_search_tools.available_tools())
-        if self.reference_template_tools:
-            mapping["reference_template_tools"] = list(self.reference_template_tools.available_tools())
-        if self.date_parsing_tools:
-            mapping["date_parsing_tools"] = list(self.date_parsing_tools.available_tools())
-        if self.filesystem_func_tool:
-            mapping["filesystem_tools"] = list(self.filesystem_func_tool.available_tools())
-        if self.sub_agent_task_tool:
-            mapping["sub_agent_tools"] = list(self.sub_agent_task_tool.available_tools())
-        catch_all: List[Any] = []
-        if self.ask_user_tool:
-            catch_all.extend(self.ask_user_tool.available_tools())
-        if self._platform_doc_tool:
-            catch_all.extend(self._platform_doc_tool.available_tools())
-        if catch_all:
-            mapping["tools"] = catch_all
-        return mapping
-
     def _rebuild_tools(self):
         """Rebuild the tools list with current tool instances including skills."""
         self.tools = []
@@ -293,6 +254,8 @@ class ChatAgenticNode(AgenticNode):
             self.tools.extend(self.date_parsing_tools.available_tools())
         if self.filesystem_func_tool:
             self.tools.extend(self.filesystem_func_tool.available_tools())
+        if self.memory_func_tool:
+            self.tools.extend(self.memory_func_tool.available_tools())
         if self.bash_tool:
             self.tools.extend(self.bash_tool.available_tools())
         if self.skill_func_tool:
@@ -305,11 +268,17 @@ class ChatAgenticNode(AgenticNode):
         self._register_plan_mode_tools()
 
     def _update_database_connection(self, database_name: str):
-        """Update database connection to a different database."""
+        """Rebuild the DB tool bound to ``database_name`` and remember it as the active database.
+
+        ``default_database`` makes DBFuncTool connect to that database (selects the file for a
+        glob datasource; sets the database in the URI for PG/server DBs). Remembering it on the
+        node keeps subsequent ``setup_tools()`` rebuilds bound to the same database.
+        """
+        self.active_database = database_name or ""
         self.db_func_tool = DBFuncTool(
             agent_config=self.agent_config,
             sub_agent_name=self.get_node_name(),
-            default_datasource=database_name,
+            default_database=database_name,
         )
         self._rebuild_tools()
 
@@ -457,10 +426,10 @@ class ChatAgenticNode(AgenticNode):
         )
         context["has_task_tool"] = bool(self.sub_agent_task_tool)
         context["has_ask_user_tool"] = "ask_user" in exposed
-        context["active_profile"] = getattr(self.agent_config, "active_profile_name", None) or "normal"
-        from datus.utils.time_utils import get_default_current_date
-
-        context["current_date"] = get_default_current_date(None)
+        # No per-turn values here: the current date lives in the shared
+        # runtime-context block, the current datasource/dialect in the user
+        # turn's <system_reminder>, and the permission profile is enforced by
+        # the permission hooks at tool-call time rather than prompted.
         prompt_version = prompt_version or self.node_config.get("prompt_version")
 
         system_prompt_name = self.node_config.get("system_prompt") or self.get_node_name()

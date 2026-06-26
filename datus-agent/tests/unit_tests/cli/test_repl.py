@@ -60,7 +60,7 @@ def _make_cli(agent_config, available_subagents=None):
     cli.actions = ActionHistoryManager()
 
     # Available subagents
-    cli.available_subagents = available_subagents or {"gensql", "chat", "compare"}
+    cli.available_subagents = available_subagents or {"gen_sql", "chat", "compare"}
 
     # Command handlers (mocked)
     cli.agent_commands = MagicMock()
@@ -111,6 +111,27 @@ def _make_cli(agent_config, available_subagents=None):
 @pytest.fixture
 def cli(real_agent_config):
     return _make_cli(real_agent_config)
+
+
+class TestTuiReflow:
+    def test_dumb_console_height_is_preserved_before_width_update(self, cli):
+        console = SimpleNamespace(
+            _width=120,
+            _height=None,
+            is_dumb_terminal=True,
+            size=SimpleNamespace(height=31),
+            width=120,
+        )
+        cli.console = console
+        cli._tui_output_buffer = SimpleNamespace(clear=MagicMock())
+        cli.chat_commands = None
+        cli._compute_pane_width = lambda sidebar_visible: 80
+
+        cli._reflow_for_sidebar(sidebar_visible=True)
+
+        assert console._height == 31
+        assert console._width == 80
+        cli._tui_output_buffer.clear.assert_called_once_with()
 
 
 # ---------------------------------------------------------------------------
@@ -713,9 +734,9 @@ class TestRenderUnknownCommand:
 
 class TestExecuteChatCommand:
     def test_delegates_to_chat_commands(self, cli):
-        cli._execute_chat_command("show revenue", subagent_name="gensql")
+        cli._execute_chat_command("show revenue", subagent_name="gen_sql")
         cli.chat_commands.execute_chat_command.assert_called_once_with(
-            "show revenue", plan_mode=False, subagent_name="gensql"
+            "show revenue", plan_mode=False, subagent_name="gen_sql"
         )
 
     def test_plan_mode_passed_through(self, cli):
@@ -915,7 +936,6 @@ class TestInitConnection:
 
         assert cli.db_connector is mock_conn
 
-        assert cli.cli_context.current_logic_db_name == "returned_db"
         assert cli.cli_context.current_db_name == "connector_db"
 
 

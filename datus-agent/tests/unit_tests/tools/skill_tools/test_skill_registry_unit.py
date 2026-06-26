@@ -209,25 +209,20 @@ class TestSkillRegistryDuplicateWarning:
 class TestSkillRegistryDiscoveryExtended:
     """Extended discovery tests for scripts, disabled model, and location type."""
 
-    def test_discover_skill_with_scripts(self, tmp_path):
-        skill_dir = tmp_path / "skills" / "script-skill"
+    def test_discover_skill_with_tags(self, tmp_path):
+        skill_dir = tmp_path / "skills" / "tagged-skill"
         skill_dir.mkdir(parents=True)
         (skill_dir / "SKILL.md").write_text(
-            "---\nname: script-skill\ndescription: A skill with scripts\n"
-            'tags: [scripts]\nallowed_commands:\n  - "python:scripts/*.py"\n  - "sh:*.sh"\n---\n\n# Script Skill\n'
+            "---\nname: tagged-skill\ndescription: A skill with tags\ntags: [sql, analysis]\n---\n\n# Tagged Skill\n"
         )
-        scripts_dir = skill_dir / "scripts"
-        scripts_dir.mkdir()
-        (scripts_dir / "analyze.py").write_text("print('analyzing')")
 
         config = SkillConfig(directories=[str(tmp_path / "skills")])
         registry = SkillRegistry(config=config)
         registry.scan_directories()
-        skill = registry.get_skill("script-skill")
-        assert skill.name == "script-skill"
-        assert skill.has_scripts() is True
-        assert "python:scripts/*.py" in skill.allowed_commands
-        assert "sh:*.sh" in skill.allowed_commands
+        skill = registry.get_skill("tagged-skill")
+        assert skill.name == "tagged-skill"
+        assert "sql" in skill.tags
+        assert "analysis" in skill.tags
 
     def test_discover_skill_disabled_model(self, tmp_path):
         skill_dir = tmp_path / "skills" / "user-only-skill"
@@ -324,6 +319,15 @@ class TestBuiltinSkillsResolution:
         registry.scan_directories()
         assert registry.skill_exists("init"), (
             "Built-in 'init' skill must resolve via the packaged "
+            "datus/resources/skills directory without any bootstrap copy"
+        )
+
+    def test_default_config_discovers_build_kb_skill(self):
+        """With the default SkillConfig, the bundled ``build-kb`` skill is discoverable."""
+        registry = SkillRegistry(config=SkillConfig())
+        registry.scan_directories()
+        assert registry.skill_exists("build-kb"), (
+            "Built-in 'build-kb' skill must resolve via the packaged "
             "datus/resources/skills directory without any bootstrap copy"
         )
 

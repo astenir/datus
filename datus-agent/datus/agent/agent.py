@@ -19,8 +19,6 @@ from datus.models.base import LLMBaseModel
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager
 from datus.schemas.batch_events import BatchEvent, BatchStage
 from datus.schemas.node_models import SqlTask
-from datus.storage.ext_knowledge.ext_knowledge_init import init_ext_knowledge, init_success_story_knowledge
-from datus.storage.ext_knowledge.store import ExtKnowledgeRAG
 from datus.storage.metric.metric_init import init_semantic_yaml_metrics, init_success_story_metrics
 from datus.storage.metric.store import MetricRAG
 from datus.storage.schema_metadata import SchemaWithValueRAG
@@ -47,6 +45,49 @@ from datus.utils.trace_context import (
 from datus.utils.traceable_utils import optional_traceable
 
 logger = get_logger(__name__)
+
+
+def _task_item_value(task_item: Dict[str, Any], key: Optional[str]) -> str:
+    if not key:
+        return ""
+    value = task_item.get(key)
+    return "" if value is None else str(value).strip()
+
+
+def _connector_context(conn: Any) -> Dict[str, str]:
+    context: Dict[str, Any] = {}
+    get_current_context = getattr(conn, "get_current_context", None)
+    if callable(get_current_context):
+        try:
+            context = get_current_context() or {}
+        except Exception as exc:  # pragma: no cover - defensive logging only
+            logger.warning(f"Failed to resolve connector context: {exc}")
+
+    return {
+        "catalog_name": str(
+            context["catalog_name"] if "catalog_name" in context else getattr(conn, "catalog_name", "") or ""
+        ),
+        "database_name": str(
+            context["database_name"] if "database_name" in context else getattr(conn, "database_name", "") or ""
+        ),
+        "schema_name": str(
+            context["schema_name"] if "schema_name" in context else getattr(conn, "schema_name", "") or ""
+        ),
+    }
+
+
+def _resolve_benchmark_sql_context(
+    benchmark_config: BenchmarkConfig,
+    task_item: Dict[str, Any],
+    conn: Any,
+) -> Dict[str, str]:
+    connector_context = _connector_context(conn)
+    return {
+        "catalog_name": _task_item_value(task_item, benchmark_config.catalog_key) or connector_context["catalog_name"],
+        "database_name": _task_item_value(task_item, benchmark_config.database_key)
+        or connector_context["database_name"],
+        "schema_name": _task_item_value(task_item, benchmark_config.schema_key) or connector_context["schema_name"],
+    }
 
 
 class Agent:
@@ -329,7 +370,10 @@ class Agent:
                 if action_name not in seen:
                     seen.add(action_name)
                     print(f"  {action_name}:", flush=True)
-            self._print_stream_lines(payload.get("output", {}).get("raw_output"), indent="    ", prefix="")
+            raw_output = payload.get("output", {}).get("raw_output")
+            if isinstance(raw_output, str) and len(raw_output) > 500:
+                raw_output = raw_output[:500] + "\n... (truncated)"
+            self._print_stream_lines(raw_output, indent="    ", prefix="")
             # Check for semantic model output
             output = payload.get("output")
             if isinstance(output, dict):
@@ -530,6 +574,7 @@ class Agent:
                         self.args.success_story,
                         subject_tree,
                         emit=self._emit_metrics_event,
+                        batch_size=getattr(self.args, "metrics_batch_size", 5),
                     )
 
                 if successful:
@@ -543,48 +588,6 @@ class Agent:
                 else:
                     result = {"status": "failed", "message": error_message}
                 return result
-            elif component == "ext_knowledge":
-                if kb_update_strategy == "overwrite":
-                    # Also clear the ext_knowledge directory
-                    ext_knowledge_dir = self.global_config.path_manager.ext_knowledge_path()
-                    force = self._force_delete
-                    if ext_knowledge_dir.exists() and not safe_rmtree(
-                        ext_knowledge_dir, "external knowledge directory", force=force
-                    ):
-                        return {
-                            "status": "cancelled",
-                            "message": "User cancelled deletion of external knowledge directory",
-                        }
-                    self.global_config.save_storage_config("ext_knowledge")
-                else:
-                    self.global_config.check_init_storage_config("ext_knowledge")
-                self.ext_knowledge_rag = ExtKnowledgeRAG(self.global_config)
-                if kb_update_strategy == "overwrite":
-                    self.ext_knowledge_rag.truncate()
-                # Initialize ext_knowledge using appropriate method
-                if hasattr(self.args, "ext_knowledge") and self.args.ext_knowledge:
-                    # Use CSV file directly
-                    init_ext_knowledge(
-                        self.ext_knowledge_rag.store,
-                        self.args.ext_knowledge,
-                        build_mode=kb_update_strategy,
-                        pool_size=pool_size,
-                    )
-                elif hasattr(self.args, "success_story") and self.args.success_story:
-                    # Use GenExtKnowledgeAgenticNode to generate from success story
-                    successful, error_message = init_success_story_knowledge(
-                        self.global_config, self.args.success_story, subject_tree
-                    )
-                    if not successful:
-                        return {
-                            "status": "failed",
-                            "message": error_message,
-                        }
-                return {
-                    "status": "success",
-                    "message": f"ext_knowledge bootstrap completed, "
-                    f"knowledge_size={self.ext_knowledge_rag.store.table_size()}",
-                }
             elif component == "reference_sql":
                 if kb_update_strategy == "overwrite":
                     # Also clear the sql_summaries directory (YAML files)
@@ -695,9 +698,8 @@ class Agent:
     def do_benchmark(
         self, benchmark_platform: str, target_task_ids: Optional[Set[str]] = None, run_id: Optional[str] = None
     ):
-        _, conn = db_manager_instance(self.global_config.datasource_configs).first_conn_with_name(
-            self.global_config.current_datasource
-        )
+        db_manager = self.db_manager
+        default_datasource = self.global_config.current_datasource
         self.check_db()
 
         def run_single_task(task_id: str, benchmark_config: BenchmarkConfig, task_item: Dict[str, Any]):
@@ -709,8 +711,21 @@ class Agent:
                     "please check your benchmark configuration."
                 )
                 return task_id, ""
-            database_name = task_item.get(benchmark_config.db_key) or conn.database_name or ""
+            task_datasource = _task_item_value(task_item, benchmark_config.datasource_key) or default_datasource
+            # A datasource may serve multiple databases; the per-task database (e.g. BIRD db_id)
+            # selects which one to connect to within the datasource.
+            task_database = _task_item_value(task_item, benchmark_config.database_key) or ""
+            task_conn = db_manager.get_conn(task_datasource, task_database)
+            sql_context = _resolve_benchmark_sql_context(benchmark_config, task_item, task_conn)
             logger.info(f"start benchmark with {task_id}: {task}")
+            logger.debug(
+                "Benchmark SQL context for %s: datasource=%s catalog=%s database=%s schema=%s",
+                task_id,
+                task_datasource,
+                sql_context["catalog_name"],
+                sql_context["database_name"],
+                sql_context["schema_name"],
+            )
             use_tables = None if not benchmark_config.use_tables_key else task_item.get(benchmark_config.use_tables_key)
 
             # Use hierarchical save directory structure
@@ -722,7 +737,7 @@ class Agent:
                 task_id=task_id,
                 workflow=getattr(self.args, "workflow", None),
                 context_type=getattr(self.args, "context_type", None),
-                datasource=self.global_config.current_datasource,
+                datasource=task_datasource,
                 agent_home=self.global_config.home,
                 extra={
                     "max_steps": getattr(self.args, "max_steps", None),
@@ -733,9 +748,12 @@ class Agent:
                 result = self.run(
                     SqlTask(
                         id=task_id,
-                        database_type=conn.dialect,
+                        datasource=task_datasource,
+                        database_type=task_conn.dialect,
                         task=task,
-                        database_name=database_name,
+                        catalog_name=sql_context["catalog_name"],
+                        database_name=sql_context["database_name"],
+                        schema_name=sql_context["schema_name"],
                         output_dir=output_dir,
                         current_date=self.args.current_date,
                         tables=use_tables,
@@ -950,9 +968,19 @@ class Agent:
 
                 if "workflow" in trajectory_data and "nodes" in trajectory_data["workflow"]:
                     for node in trajectory_data["workflow"]["nodes"]:
-                        if node.get("type") in ["reasoning", "generate_sql"]:
-                            if "result" in node and "sql_contexts" in node["result"]:
-                                sql_contexts = node["result"]["sql_contexts"]
+                        if node.get("type") in ["reasoning", "gen_sql"]:
+                            result = node.get("result") or {}
+                            if "sql_contexts" in result:
+                                sql_contexts = result["sql_contexts"]
+                                first_sql_node_id = node["id"]
+                                break
+                            if result.get("sql"):
+                                sql_contexts = [
+                                    {
+                                        "sql_query": result.get("sql", ""),
+                                        "explanation": result.get("response", "") or result.get("output", ""),
+                                    }
+                                ]
                                 first_sql_node_id = node["id"]
                                 break
 

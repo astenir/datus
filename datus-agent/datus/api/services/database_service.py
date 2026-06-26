@@ -50,11 +50,28 @@ class DatasourceService:
 
         self.db_manager = DBManager(agent_config.datasource_configs)
         self.current_datasource = agent_config.current_datasource
-        self.semantic_rag = SemanticModelRAG(self.agent_config)
+        self.semantic_rag = SemanticModelRAG(self.agent_config) if self.current_datasource else None
 
         self.current_db_connector = None
         self.current_db_name = None
         self._initialize_connection()
+
+    def _ensure_semantic_rag(self) -> SemanticModelRAG:
+        """Create semantic model storage only after a datasource is selected."""
+
+        if self.semantic_rag is not None:
+            return self.semantic_rag
+        self.current_datasource = self.agent_config.current_datasource
+        if not self.current_datasource:
+            from datus.utils.exceptions import DatusException
+            from datus.utils.exceptions import ErrorCode as StorageErrorCode
+
+            raise DatusException(
+                StorageErrorCode.STORAGE_INVALID_ARGUMENT,
+                message_args={"error_message": "No datasource is selected"},
+            )
+        self.semantic_rag = SemanticModelRAG(self.agent_config, datasource_id=self.current_datasource)
+        return self.semantic_rag
 
     def _get_database_type(self, database_name: Optional[str] = None) -> tuple[str, str]:
         """
@@ -72,14 +89,8 @@ class DatasourceService:
 
         try:
             if self.agent_config and self.current_datasource in self.agent_config.datasource_configs:
-                datasource_config = self.agent_config.datasource_configs[self.current_datasource]
-                if target_db and target_db in datasource_config:
-                    db_config = datasource_config[target_db]
-                    db_type = db_config.type.value if hasattr(db_config.type, "value") else str(db_config.type)
-                elif len(datasource_config) == 1:
-                    # Single database in datasource
-                    db_config = list(datasource_config.values())[0]
-                    db_type = db_config.type.value if hasattr(db_config.type, "value") else str(db_config.type)
+                db_config = self.agent_config.datasource_configs[self.current_datasource]
+                db_type = db_config.type.value if hasattr(db_config.type, "value") else str(db_config.type)
         except Exception as e:
             logger.warning(f"Failed to get db type from config: {e}")
 
@@ -296,7 +307,7 @@ class DatasourceService:
             return Result(success=True, data=data)
 
         except Exception as e:
-            logger.error(f"Failed to list databases: {e}")
+            logger.error(f"Failed to list databases: {e}", exc_info=True)
             return Result(
                 success=False,
                 errorCode=ErrorCode.PROVIDER_CONFIG_ERROR,
@@ -404,7 +415,7 @@ class DatasourceService:
         table_name = name_parts["table_name"]
 
         # Get semantic model using SemanticMetricsRAG
-        semantic_model = self.semantic_rag.get_semantic_model(
+        semantic_model = self._ensure_semantic_rag().get_semantic_model(
             catalog_name=catalog_name,
             database_name=database_name,
             schema_name=schema_name,

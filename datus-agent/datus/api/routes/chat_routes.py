@@ -11,7 +11,7 @@ asyncio.Task so that client disconnects do not cancel the computation.
 """
 
 import asyncio
-from typing import Annotated, AsyncGenerator, Optional
+from typing import TYPE_CHECKING, Annotated, Any, AsyncGenerator, Optional
 
 from fastapi import APIRouter, HTTPException, Path, Query, Request
 from fastapi.responses import StreamingResponse
@@ -44,14 +44,23 @@ from datus.api.models.cli_models import (
     StreamChatInput,
     UserInteractionInput,
 )
+from datus.api.services.background_drain import track_background_task
+from datus.tools.sql_policy import SqlPolicyConfig
 from datus.utils.feedback_prompt import build_reaction_feedback_prompt
 from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso
 
 logger = get_logger(__name__)
 
+if TYPE_CHECKING:
+    from datus.api.auth.context import AppContext
+    from datus.api.services.datus_service import DatusService
+
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 
+# Timeout for JuiceFS FUSE operations: os.listdir + sqlite3.connect per session file.
+# Slightly above fuse_meta_op's 10 s default to give directory scans extra headroom.
+_FUSE_IO_TIMEOUT = 15.0
 
 # Additional builtin subagents accepted by ``stream_chat`` beyond the canonical
 # ``BUILTIN_SUBAGENTS`` set — these are wired directly in
@@ -76,6 +85,68 @@ def _is_valid_subagent_id(svc, subagent_id: str) -> bool:
     return False
 
 
+def _sql_policy_principal_pre_check(svc: "DatusService", ctx: "AppContext") -> Optional[ChatPreCheckOutcome]:
+    """Fail fast when enabled SQL policies need missing principal fields."""
+    agent_config = getattr(svc, "agent_config", None)
+    sql_policy_config = getattr(agent_config, "sql_policy_config", None)
+    if not isinstance(sql_policy_config, SqlPolicyConfig) or not sql_policy_config.enabled:
+        return None
+
+    principal = getattr(ctx, "principal", None) or {}
+    required_paths = _required_principal_paths(sql_policy_config.raw)
+    missing_paths = _missing_principal_paths(principal, required_paths)
+    if not missing_paths:
+        return None
+
+    detail = ""
+    if missing_paths:
+        missing_fields = ", ".join(f"principal.{path}" for path in missing_paths)
+        detail = f" Missing principal field(s): {missing_fields}."
+    return ChatPreCheckOutcome(
+        allow=False,
+        error=(
+            "SQL policy is enabled, but this request is missing principal data required by policy."
+            f"{detail} "
+            "Authenticate the request with a provider that populates principal fields required by "
+            "agent.sql_policy. The agent cannot infer or set request principal from SQL."
+        ),
+        error_type="SQL_POLICY_PRINCIPAL_REQUIRED",
+    )
+
+
+def _required_principal_paths(raw: Any) -> list[str]:
+    paths: set[str] = set()
+
+    def visit(value: Any) -> None:
+        if isinstance(value, dict):
+            value_from = value.get("value_from")
+            if isinstance(value_from, str) and value_from.startswith("principal."):
+                path = value_from[len("principal.") :].strip()
+                if path:
+                    paths.add(path)
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(raw)
+    return sorted(paths)
+
+
+def _missing_principal_paths(principal: dict[str, Any], required_paths: list[str]) -> list[str]:
+    return [path for path in required_paths if not _principal_path_exists(principal, path)]
+
+
+def _principal_path_exists(principal: dict[str, Any], path: str) -> bool:
+    current: Any = principal
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return False
+        current = current[part]
+    return current not in (None, "", [])
+
+
 # ========== Stream Chat ==========
 
 
@@ -98,6 +169,14 @@ async def stream_chat(
             detail=f"Subagent '{sub_agent_id}' not found",
         )
 
+    sql_policy_denial = _sql_policy_principal_pre_check(svc, ctx)
+    if sql_policy_denial:
+        return StreamingResponse(
+            _emit_pre_check_denial(request, sql_policy_denial),
+            media_type="text/event-stream",
+            headers=_sse_headers(),
+        )
+
     hooks = get_chat_hooks()
     pre_outcome = await _run_pre_chat_hook(hooks, http_request, request, ctx.user_id)
     if pre_outcome and not pre_outcome.allow:
@@ -111,7 +190,7 @@ async def stream_chat(
 
     async def generate_sse():
         async for chunk in _stream_with_post_hook(
-            svc.chat.stream_chat(request, sub_agent_id=sub_agent_id, user_id=ctx.user_id),
+            svc.chat.stream_chat(request, sub_agent_id=sub_agent_id, user_id=ctx.user_id, principal=ctx.principal),
             http_request=http_request,
             request=request,
             user_id=ctx.user_id,
@@ -152,9 +231,18 @@ async def stream_chat_feedback(
         message=rendered_message,
         subagent_id="feedback",
     )
+    sql_policy_denial = _sql_policy_principal_pre_check(svc, ctx)
+    if sql_policy_denial:
+        return StreamingResponse(
+            _emit_pre_check_denial(stream_input, sql_policy_denial),
+            media_type="text/event-stream",
+            headers=_sse_headers(),
+        )
 
     async def generate_sse():
-        async for event in svc.chat.stream_chat(stream_input, sub_agent_id="feedback", user_id=ctx.user_id):
+        async for event in svc.chat.stream_chat(
+            stream_input, sub_agent_id="feedback", user_id=ctx.user_id, principal=ctx.principal
+        ):
             yield f"id: {event.id}\nevent: {event.event}\ndata: {event.data.model_dump_json()}\n\n"
 
     return StreamingResponse(generate_sse(), media_type="text/event-stream", headers=_sse_headers())
@@ -246,7 +334,15 @@ async def list_sessions(
         description="Filter by subagent id; 'chat' selects the default chat agent",
     ),
 ) -> Result[ChatSessionData]:
-    return svc.chat.list_sessions(user_id=ctx.user_id, subagent_id=subagent_id)
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(svc.chat.list_sessions, user_id=ctx.user_id, subagent_id=subagent_id),
+            timeout=_FUSE_IO_TIMEOUT,
+        )
+    except TimeoutError:
+        return Result[ChatSessionData](
+            success=False, errorCode="REQUEST_TIMEOUT", errorMessage="Session list timed out"
+        )
 
 
 @router.delete(
@@ -260,7 +356,15 @@ async def delete_session(
     svc: ServiceDep,
     ctx: AppContextDep,
 ) -> Result[ChatSessionData]:
-    return svc.chat.delete_session(session_id, user_id=ctx.user_id)
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(svc.chat.delete_session, session_id, user_id=ctx.user_id),
+            timeout=_FUSE_IO_TIMEOUT,
+        )
+    except TimeoutError:
+        return Result[ChatSessionData](
+            success=False, errorCode="REQUEST_TIMEOUT", errorMessage="Session delete timed out"
+        )
 
 
 # ========== Chat History (GET /api/v1/history/chat?session_id=xxx) ==========
@@ -277,7 +381,15 @@ async def get_chat_history(
     ctx: AppContextDep,
     session_id: str = Query(..., description="Session ID to retrieve history for"),
 ) -> Result[ChatHistoryData]:
-    return svc.chat.get_history(session_id, user_id=ctx.user_id)
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(svc.chat.get_history, session_id, user_id=ctx.user_id),
+            timeout=_FUSE_IO_TIMEOUT,
+        )
+    except TimeoutError:
+        return Result[ChatHistoryData](
+            success=False, errorCode="REQUEST_TIMEOUT", errorMessage="History fetch timed out"
+        )
 
 
 # ========== User Interaction ==========
@@ -567,10 +679,11 @@ async def _stream_with_post_hook(
             )
 
             try:
-                asyncio.create_task(
+                _task = asyncio.create_task(
                     _safe_post_chat(hooks, http_request, request, ctx),
                     name=f"chat-post-hook:{session_id_value or '-'}",
                 )
+                track_background_task(_task)
             except Exception:  # pragma: no cover — defensive
                 logger.error("Failed to schedule post_chat hook", exc_info=True)
 

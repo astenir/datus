@@ -32,7 +32,8 @@ from datus.cli.agent_commands import AgentCommands
 from datus.cli.cli_context import CliContext
 from datus.configuration.node_type import NodeType
 from datus.schemas.action_history import ActionHistoryManager
-from datus.schemas.node_models import GenerateSQLInput, SqlTask
+from datus.schemas.gen_sql_agentic_node_models import GenSQLNodeInput
+from datus.schemas.node_models import SqlTask
 from datus.schemas.reason_sql_node_models import ReasoningInput
 from datus.utils.constants import DBType
 
@@ -639,71 +640,6 @@ def sql_task():
 
 
 # ---------------------------------------------------------------------------
-# Tests: cmd_gen
-# ---------------------------------------------------------------------------
-
-
-class TestCmdGen:
-    def test_no_input_data_returns_early(self, agent_commands):
-        with patch.object(agent_commands, "create_node_input", return_value=None):
-            agent_commands.cmd_gen("")
-        # no exception, output unchanged
-        output = agent_commands.console.file.getvalue()
-        assert output == ""
-
-    def test_result_success_with_sql_contexts(self, agent_commands):
-        mock_ctx = MagicMock()
-        mock_ctx.sql_query = "SELECT 1"
-        mock_result = MagicMock()
-        mock_result.success = True
-        mock_result.sql_contexts = [mock_ctx]
-
-        with patch.object(agent_commands, "create_node_input", return_value=MagicMock()):
-            with patch.object(agent_commands, "run_standalone_node", return_value=mock_result):
-                agent_commands.cmd_gen("revenue")
-
-        output = agent_commands.console.file.getvalue()
-        assert "SELECT 1" in output
-
-    def test_result_success_sql_query_attribute(self, agent_commands):
-        mock_result = MagicMock()
-        mock_result.success = True
-        mock_result.sql_contexts = []
-        mock_result.sql_query = "SELECT 2"
-
-        with patch.object(agent_commands, "create_node_input", return_value=MagicMock()):
-            with patch.object(agent_commands, "run_standalone_node", return_value=mock_result):
-                agent_commands.cmd_gen("revenue")
-
-        output = agent_commands.console.file.getvalue()
-        assert "SELECT 2" in output
-
-    def test_result_success_no_sql(self, agent_commands):
-        mock_result = MagicMock()
-        mock_result.success = True
-        mock_result.sql_contexts = []
-        del mock_result.sql_query  # no sql_query attr
-
-        with patch.object(agent_commands, "create_node_input", return_value=MagicMock()):
-            with patch.object(agent_commands, "run_standalone_node", return_value=mock_result):
-                agent_commands.cmd_gen("revenue")
-
-        output = agent_commands.console.file.getvalue()
-        assert "completed" in output
-
-    def test_result_failure(self, agent_commands):
-        mock_result = MagicMock()
-        mock_result.success = False
-
-        with patch.object(agent_commands, "create_node_input", return_value=MagicMock()):
-            with patch.object(agent_commands, "run_standalone_node", return_value=mock_result):
-                agent_commands.cmd_gen("revenue")
-
-        output = agent_commands.console.file.getvalue()
-        assert "failed" in output.lower()
-
-
-# ---------------------------------------------------------------------------
 # Tests: cmd_fix
 # ---------------------------------------------------------------------------
 
@@ -873,6 +809,42 @@ class TestRunNode:
         result = agent_commands.run_node("schema_linking")
         assert result["success"] is False
 
+    def test_sql_node_result_prints_sql_once_and_excludes_sql_from_tree(self, agent_commands):
+        from types import SimpleNamespace
+
+        agent_commands.agent = MagicMock()
+        workflow = MagicMock()
+        workflow.tools = []
+        workflow.context.sql_contexts = []
+        runner = MagicMock()
+        runner.workflow_ready = True
+        runner.workflow = workflow
+        agent_commands.cli.workflow_runner = runner
+
+        node = MagicMock()
+        node.type = NodeType.TYPE_GEN_SQL
+        node.status = "success"
+        node.input = GenSQLNodeInput(user_message="count schools", database="california_schools")
+        node.result = SimpleNamespace(sql="SELECT 1", response="done", tokens_used=1)
+
+        tree_payloads = []
+
+        def fake_dict_to_tree(payload, console=None):
+            tree_payloads.append(payload)
+            return "TREE"
+
+        with (
+            patch("datus.cli.agent_commands.Node.new_instance", return_value=node),
+            patch("datus.cli.agent_commands.setup_node_input", return_value={"success": True}),
+            patch("datus.cli.agent_commands.update_context_from_node", return_value={"success": True}),
+            patch("datus.cli.agent_commands.dict_to_tree", side_effect=fake_dict_to_tree),
+        ):
+            result = agent_commands.run_node(NodeType.TYPE_GEN_SQL, need_confirm=False)
+
+        assert result["success"] is True
+        assert tree_payloads == [{"response": "done", "tokens_used": 1}]
+        assert "SELECT 1" in agent_commands.console.file.getvalue()
+
 
 # ---------------------------------------------------------------------------
 # Tests: _extract_sql_from_streaming_actions
@@ -932,6 +904,22 @@ class TestExtractSqlFromStreamingActions:
         agent_commands._extract_sql_from_streaming_actions([action], workflow, node)
         # Failed context (error != "") should not be added
         assert len(workflow.context.sql_contexts) == 0
+
+    def test_extracts_output_field_from_final_assistant_message(self, agent_commands):
+        workflow = MagicMock()
+        workflow.context.sql_contexts = []
+
+        action = MagicMock()
+        action.action_type = "message"
+        action.role = "assistant"
+        action.output = {"raw_output": '{"sql": "SELECT 1", "output": "compact response"}'}
+
+        node = MagicMock(spec=[])
+        agent_commands._extract_sql_from_streaming_actions([action], workflow, node)
+
+        assert len(workflow.context.sql_contexts) == 1
+        assert workflow.context.sql_contexts[0].sql_query == "SELECT 1"
+        assert workflow.context.sql_contexts[0].explanation == "compact response"
 
     def test_exception_in_extraction_does_not_raise(self, agent_commands):
         """Top-level exception in extraction should be caught and logged, not raised."""
@@ -1145,12 +1133,13 @@ class TestCmdDocSearchExtended:
 
 
 class TestCreateNodeInputExtended:
-    def test_generate_sql_type_returns_input(self, agent_commands, cli_context, sql_task):
+    def test_gen_sql_type_returns_agentic_input(self, agent_commands, cli_context, sql_task):
         cli_context.set_current_sql_task(sql_task)
         agent_commands.cli_context = cli_context
 
-        result = agent_commands.create_node_input(NodeType.TYPE_GENERATE_SQL, "show revenue")
-        assert isinstance(result, GenerateSQLInput)
+        result = agent_commands.create_node_input(NodeType.TYPE_GEN_SQL, "show revenue")
+        assert isinstance(result, GenSQLNodeInput)
+        assert result.user_message == "show revenue"
 
     def test_fix_type_no_sql_returns_none(self, agent_commands, cli_context, sql_task):
         """When there is no previous SQL, fix returns None."""
@@ -1169,7 +1158,7 @@ class TestCreateNodeInputExtended:
 
         Currently fails with ValidationError because create_node_input passes
         sql_query= as a keyword argument but ReasoningInput inherits extra='forbid'
-        from GenerateSQLInput.
+        from its base schema.
         """
         cli_context.set_current_sql_task(sql_task)
         agent_commands.cli_context = cli_context

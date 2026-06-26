@@ -276,7 +276,7 @@ class TestGenDashboardAgenticNodeInit:
             assert node.max_turns == 25
 
     def test_max_turns_default(self, real_agent_config, mock_llm_create):
-        """Default max_turns is 30 when gen_dashboard not in agentic_nodes."""
+        """Default max_turns is 50 when gen_dashboard not in agentic_nodes."""
         # Add dashboard config but no gen_dashboard agentic node
         real_agent_config.dashboard_config["superset"] = DashboardConfig(
             platform="superset",
@@ -289,7 +289,7 @@ class TestGenDashboardAgenticNodeInit:
             from datus.agent.node.gen_dashboard_agentic_node import GenDashboardAgenticNode
 
             node = GenDashboardAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
-            assert node.max_turns == 30
+            assert node.max_turns == 50
 
 
 # ---------------------------------------------------------------------------
@@ -420,7 +420,7 @@ class TestGenDashboardToolSetup:
 class TestGenDashboardPermissionWiring:
     """Without proper wiring ``bi_tools.delete_*`` DENY rules silently leak."""
 
-    def test_tool_category_map_registers_bi_tools(self, real_agent_config, mock_llm_create):
+    def test_tool_registry_registers_bi_tools(self, real_agent_config, mock_llm_create):
         """Every BI tool must land in the ``bi_tools`` category.
 
         Falling back to the ``tools`` catch-all would prevent
@@ -434,10 +434,10 @@ class TestGenDashboardPermissionWiring:
             from datus.agent.node.gen_dashboard_agentic_node import GenDashboardAgenticNode
 
             node = GenDashboardAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
-            mapping = node._tool_category_map()
-            assert "bi_tools" in mapping
-            bi_names = {t.name for t in mapping["bi_tools"]}
-            assert {"delete_chart", "delete_dataset", "delete_dashboard"}.issubset(bi_names)
+            node._populate_tool_registry()
+            registry = node.tool_registry.to_dict()
+            for name in ("delete_chart", "delete_dataset", "delete_dashboard"):
+                assert registry.get(name) == "bi_tools"
 
     def test_compose_hooks_yields_permission_hooks(self, real_agent_config, mock_llm_create):
         """``generate_with_tools_stream`` must receive a real hook, not None.
@@ -453,11 +453,15 @@ class TestGenDashboardPermissionWiring:
         _bi_core_mock.adapter_registry.get.return_value = lambda **kwargs: FullMockAdapter()
         with patch.dict(sys.modules, _BI_MODULES_PATCH):
             from datus.agent.node.gen_dashboard_agentic_node import GenDashboardAgenticNode
+            from datus.tools.permission.permission_hooks import CompositeHooks, PermissionHooks
 
             node = GenDashboardAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
             hooks = node._compose_hooks()
-            assert hooks is not None
-            assert node.permission_hooks is not None
+            # Workflow mode wires permission + compact + token_usage hooks, so the
+            # result must be a CompositeHooks bundle, and the permission gate must
+            # be a real PermissionHooks (not None, not some other hook type).
+            assert isinstance(hooks, CompositeHooks)
+            assert isinstance(node.permission_hooks, PermissionHooks)
 
     def test_tool_registry_routes_delete_chart_to_bi_tools(self, real_agent_config, mock_llm_create):
         """After ``_ensure_permission_hooks`` runs, registry must classify ``delete_chart``.
@@ -729,7 +733,9 @@ class TestGenDashboardRegistration:
             result = tool._build_node_input(node, "List all dashboards")
             assert isinstance(result, GenDashboardNodeInput)
             assert result.user_message == "List all dashboards"
-            assert result.database == real_agent_config.current_datasource
+            # ``database`` is a physical-database context field, not a datasource slot; the
+            # builder leaves it unset rather than mislabeling it with current_datasource.
+            assert result.database is None
 
 
 # ---------------------------------------------------------------------------

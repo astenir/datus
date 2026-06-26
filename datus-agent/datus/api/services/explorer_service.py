@@ -2,19 +2,22 @@
 Explorer service for catalog and subject tree management.
 """
 
+import asyncio
 import os
 from typing import List, Optional, Tuple
 
 from datus.api.models.base_models import Result
 from datus.api.models.explorer_models import (
     CreateDirectoryInput,
-    CreateKnowledgeInput,
     DeleteSubjectInput,
-    EditKnowledgeInput,
     EditMetricInput,
     EditSemanticModelInput,
-    KnowledgeInfo,
+    MetricDimensionItem,
+    MetricDimensionPreflight,
+    MetricDimensionsData,
     MetricInfo,
+    MetricPreviewData,
+    MetricPreviewInput,
     ReferenceSQLInfo,
     ReferenceSQLInput,
     RenameSubjectInput,
@@ -40,10 +43,17 @@ class ExplorerService:
             agent_config: Agent configuration object
         """
         self.agent_config = agent_config
-        self.datasource_id = agent_config.current_datasource
+        self.datasource_id = str(agent_config.current_datasource or "").strip()
         logger.info("ExplorerService initialized")
 
-        from datus.storage.ext_knowledge.store import ExtKnowledgeRAG
+        self.metric_rag = None
+        self.reference_sql_rag = None
+        self.semantic_model_rag = None
+        self.subject_tree_store = None
+        if not self.datasource_id:
+            logger.info("ExplorerService initialized without datasource; subject tree is empty until one is selected")
+            return
+
         from datus.storage.metric.store import MetricRAG
         from datus.storage.reference_sql.store import ReferenceSqlRAG
         from datus.storage.registry import get_subject_tree_store
@@ -51,21 +61,27 @@ class ExplorerService:
 
         self.metric_rag = MetricRAG(agent_config, datasource_id=self.datasource_id)
         self.reference_sql_rag = ReferenceSqlRAG(agent_config, datasource_id=self.datasource_id)
-        self.knowledge_rag = ExtKnowledgeRAG(agent_config, datasource_id=self.datasource_id)
         self.semantic_model_rag = SemanticModelRAG(agent_config, datasource_id=self.datasource_id)
-        self.subject_tree_store = get_subject_tree_store(project=agent_config.project_name)
+        self.subject_tree_store = get_subject_tree_store(
+            project=agent_config.project_name,
+            datasource_id=self.datasource_id,
+        )
+
+    def _require_datasource(self) -> None:
+        """Raise if no datasource is bound to this service instance."""
+        if not self.datasource_id:
+            from datus.utils.exceptions import DatusException, ErrorCode
+
+            raise DatusException(
+                ErrorCode.STORAGE_INVALID_ARGUMENT,
+                message_args={"error_message": "No datasource is selected; select a datasource first"},
+            )
 
     def _gen_reference_sql_id(self, sql: str) -> str:
         """Generate a stable identifier for reference SQL entries."""
         from datus.storage.reference_sql.init_utils import gen_reference_sql_id
 
         return gen_reference_sql_id(sql)
-
-    def _gen_subject_item_id(self, subject_path: List[str], name: str) -> str:
-        """Generate a stable identifier for subject-scoped knowledge entries."""
-        from datus.storage.ext_knowledge.store import gen_subject_item_id
-
-        return gen_subject_item_id(subject_path, name)
 
     def _get_semantic_file_path(
         self,
@@ -221,6 +237,9 @@ class ExplorerService:
 
             from datus.api.models.explorer_models import SubjectNodeType
 
+            if self.subject_tree_store is None:
+                return Result[SubjectListData](success=True, data=SubjectListData(subjects=[]))
+
             # Get tree structure from subject tree store
             tree_structure = self.subject_tree_store.get_tree_structure()
 
@@ -279,22 +298,6 @@ class ExplorerService:
                         except Exception as ex:
                             logger.debug(f"No reference SQL found for node {node_id}: {ex}")
 
-                        # Add knowledge entries as children if they exist
-                        try:
-                            knowledge_entries = self.knowledge_rag.store.list_entries(node_id)
-                            for knowledge in knowledge_entries:
-                                knowledge_name = knowledge.get("name", "")
-                                if knowledge_name:
-                                    knowledge_node = SubjectNode(
-                                        name=knowledge_name,
-                                        type=SubjectNodeType.KNOWLEDGE,
-                                        subject_path=current_path + [knowledge_name],
-                                        children=None,
-                                    )
-                                    child_nodes.append(knowledge_node)
-                        except Exception as ex:
-                            logger.debug(f"No knowledge found for node {node_id}: {ex}")
-
                     # Create directory SubjectNode
                     subject_node = SubjectNode(
                         name=name,
@@ -332,6 +335,7 @@ class ExplorerService:
             Result[dict]
         """
         try:
+            self._require_datasource()
             logger.info(f"Creating directory at path: {request.subject_path}")
 
             # Use SubjectTreeStore to create or find the directory path
@@ -371,6 +375,7 @@ class ExplorerService:
             Result[dict]
         """
         try:
+            self._require_datasource()
             logger.info(f"Creating reference SQL '{request.name}' at path: {request.subject_path}")
             from datus.api.models.config_models import ErrorCode
 
@@ -426,6 +431,7 @@ class ExplorerService:
             Result[dict]
         """
         try:
+            self._require_datasource()
             logger.info(f"Renaming {request.type} from {request.subject_path} to {request.new_subject_path}")
             from datus.api.models.config_models import ErrorCode
             from datus.api.models.explorer_models import SubjectNodeType
@@ -447,9 +453,6 @@ class ExplorerService:
             elif request.type == SubjectNodeType.REFERENCE_SQL:
                 # Rename reference SQL entry
                 self.reference_sql_rag.reference_sql_storage.rename(request.subject_path, request.new_subject_path)
-            elif request.type == SubjectNodeType.KNOWLEDGE:
-                # Rename knowledge entry
-                self.knowledge_rag.store.rename(request.subject_path, request.new_subject_path)
             else:
                 return Result[dict](
                     success=False,
@@ -547,6 +550,7 @@ class ExplorerService:
             Result[MetricInfo] with metric name and YAML content
         """
         try:
+            self._require_datasource()
             import yaml
 
             from datus.api.models.config_models import ErrorCode
@@ -604,6 +608,163 @@ class ExplorerService:
                 errorMessage=str(e),
             )
 
+    async def get_metric_dimensions(self, subject_path: List[str]) -> Result[MetricDimensionsData]:
+        """List the queryable dimensions of a saved metric.
+
+        Powers the preview panel's dimension picker, so the user only chooses
+        dimensions the metric actually supports.
+        """
+        from datus.api.models.config_models import ErrorCode
+
+        try:
+            self._require_datasource()
+
+            if not subject_path:
+                return Result[MetricDimensionsData](
+                    success=False,
+                    errorCode=ErrorCode.PROVIDER_CONFIG_ERROR,
+                    errorMessage="Subject path cannot be empty",
+                )
+
+            metric_name = subject_path[-1]
+
+            from datus.tools.func_tool.semantic_tools import SemanticTools
+
+            tools = SemanticTools(self.agent_config)
+            adapter = tools.adapter
+            if adapter is None:
+                return Result[MetricDimensionsData](
+                    success=False,
+                    errorCode=ErrorCode.PROVIDER_CONFIG_ERROR,
+                    errorMessage="Semantic adapter is not available; cannot load dimensions.",
+                )
+
+            dimensions = await adapter.get_dimensions(metric_name=metric_name)
+            items = [
+                MetricDimensionItem(
+                    name=d.name,
+                    type=getattr(d, "type", None),
+                    description=getattr(d, "description", None),
+                    is_primary_key=getattr(d, "is_primary_key", None),
+                )
+                for d in (dimensions or [])
+            ]
+            return Result[MetricDimensionsData](
+                success=True,
+                data=MetricDimensionsData(metric=metric_name, dimensions=items),
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to get metric dimensions: {e}")
+            return Result[MetricDimensionsData](
+                success=False,
+                errorCode=ErrorCode.PROVIDER_CONFIG_ERROR,
+                errorMessage=str(e),
+            )
+
+    async def preview_metric(self, request: MetricPreviewInput) -> Result[MetricPreviewData]:
+        """Compile a saved metric into runnable SQL via the semantic adapter.
+
+        Uses dry-run so nothing executes here: the frontend hands the returned
+        SQL to the existing SQL-result panel, which runs it and renders the
+        table / chart. Only already-saved (registered) metrics are supported.
+        When requested dimensions aren't supported, returns a structured
+        ``preflight_error`` (with the metric's valid dimensions) instead of SQL.
+        """
+        from datus.api.models.config_models import ErrorCode
+
+        try:
+            self._require_datasource()
+
+            if not request.subject_path:
+                return Result[MetricPreviewData](
+                    success=False,
+                    errorCode=ErrorCode.PROVIDER_CONFIG_ERROR,
+                    errorMessage="Subject path cannot be empty",
+                )
+
+            metric_name = request.subject_path[-1]
+
+            from datus.tools.func_tool.semantic_tools import SemanticTools
+
+            tools = SemanticTools(self.agent_config)
+            if tools.adapter is None:
+                return Result[MetricPreviewData](
+                    success=False,
+                    errorCode=ErrorCode.PROVIDER_CONFIG_ERROR,
+                    errorMessage="Semantic adapter is not available; cannot preview this metric.",
+                )
+
+            # query_metrics is sync (it wraps an async adapter call); run it off
+            # the event loop. dry_run renders SQL and runs the dimension preflight
+            # without executing anything.
+            func_result = await asyncio.to_thread(
+                tools.query_metrics,
+                metrics=[metric_name],
+                dimensions=request.dimensions or [],
+                time_start=request.time_start,
+                time_end=request.time_end,
+                time_granularity=request.time_granularity,
+                where=request.where,
+                limit=request.limit,
+                order_by=request.order_by or None,
+                dry_run=True,
+            )
+
+            if func_result.success == 1:
+                payload = func_result.result or {}
+                sql = (payload.get("metadata") or {}).get("sql")
+                if not sql:
+                    data = payload.get("data")
+                    if isinstance(data, list) and data:
+                        sql = (data[0] or {}).get("sql")
+                if not sql:
+                    return Result[MetricPreviewData](
+                        success=False,
+                        errorCode=ErrorCode.PROVIDER_CONFIG_ERROR,
+                        errorMessage=f"Failed to compile SQL for metric '{metric_name}'.",
+                    )
+                # The datasource id (logical key) is not a physical database; return the
+                # bound datasource's real default database so callers can run the SQL as-is.
+                # Pin the lookup to this service's datasource_id (not the implicit "current")
+                # so a multi-datasource config can never return another datasource's database.
+                database = self.agent_config.current_db_config(self.datasource_id).database or None
+                return Result[MetricPreviewData](
+                    success=True,
+                    data=MetricPreviewData(metric=metric_name, sql=sql, database=database),
+                )
+
+            # A dimension preflight failure carries structured detail; surface it
+            # so the UI can guide the user instead of showing a raw error.
+            detail = func_result.result
+            if isinstance(detail, dict) and detail.get("invalid_dimensions") is not None:
+                return Result[MetricPreviewData](
+                    success=True,
+                    data=MetricPreviewData(
+                        metric=metric_name,
+                        preflight_error=MetricDimensionPreflight(
+                            message=func_result.error or "Some dimensions are not supported by this metric.",
+                            invalid_dimensions=detail.get("invalid_dimensions") or [],
+                            common_dimensions=detail.get("common_dimensions") or [],
+                            suggested_metric_groups=detail.get("suggested_metric_groups") or [],
+                        ),
+                    ),
+                )
+
+            return Result[MetricPreviewData](
+                success=False,
+                errorCode=ErrorCode.PROVIDER_CONFIG_ERROR,
+                errorMessage=func_result.error or "Failed to preview metric.",
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to preview metric: {e}")
+            return Result[MetricPreviewData](
+                success=False,
+                errorCode=ErrorCode.PROVIDER_CONFIG_ERROR,
+                errorMessage=str(e),
+            )
+
     async def get_reference_sql(self, subject_path: List[str]) -> Result[ReferenceSQLInfo]:
         """Get reference SQL details.
 
@@ -614,6 +775,7 @@ class ExplorerService:
             Result[GetReferenceSQLData] with SQL details
         """
         try:
+            self._require_datasource()
             logger.info(f"Getting reference SQL at path: {subject_path}")
             from datus.api.models.config_models import ErrorCode
 
@@ -688,6 +850,7 @@ class ExplorerService:
             Result[dict]
         """
         try:
+            self._require_datasource()
             logger.info(f"Editing reference SQL at path: {request.subject_path}")
             from datus.api.models.config_models import ErrorCode
 
@@ -714,6 +877,7 @@ class ExplorerService:
                 subject_path=parent_path,
                 name=sql_name,
                 update_values=update_values,
+                extra_conditions=self.reference_sql_rag._sub_agent_conditions(),
             )
 
             logger.info(f"Successfully updated reference SQL: {sql_name}")
@@ -759,6 +923,7 @@ class ExplorerService:
             Result[dict]
         """
         try:
+            self._require_datasource()
             import yaml
 
             from datus.api.models.config_models import ErrorCode
@@ -902,6 +1067,7 @@ class ExplorerService:
             Result[dict]
         """
         try:
+            self._require_datasource()
             import yaml
 
             from datus.api.models.config_models import ErrorCode
@@ -1050,6 +1216,7 @@ class ExplorerService:
             Result[dict]
         """
         try:
+            self._require_datasource()
             from datus.api.models.config_models import ErrorCode
 
             logger.info(f"Editing semantic model entry: {request.entry_id}")
@@ -1071,6 +1238,7 @@ class ExplorerService:
             self.semantic_model_rag.storage.update_entry(
                 entry_id=request.entry_id,
                 update_values=request.update_values,
+                extra_conditions=self.semantic_model_rag._sub_agent_conditions(),
             )
 
             logger.info(f"Successfully updated semantic model entry: {request.entry_id}")
@@ -1086,205 +1254,13 @@ class ExplorerService:
                 errorMessage=str(e),
             )
 
-    async def create_knowledge(self, request: CreateKnowledgeInput) -> Result[dict]:
-        """Create knowledge entry.
-
-        Args:
-            request: Create knowledge input with subject_path, name, search_text, explanation
-
-        Returns:
-            Result[dict]
-        """
-        try:
-            logger.info(f"Creating knowledge '{request.name}' at path: {request.subject_path}")
-            from datus.api.models.config_models import ErrorCode
-
-            if not request.subject_path or not request.name:
-                return Result[dict](
-                    success=False,
-                    errorCode=ErrorCode.INVALID_PARAMETERS,
-                    errorMessage="Subject path and name are required",
-                )
-
-            # Get parent node to check if knowledge already exists
-            parent_node = self.subject_tree_store.get_node_by_path(request.subject_path)
-            if parent_node:
-                node_id = parent_node["node_id"]
-                # Check if knowledge already exists
-                existing = self.knowledge_rag.store.list_entries(node_id, name=request.name)
-                if existing:
-                    return Result[dict](
-                        success=False,
-                        errorCode=ErrorCode.INVALID_PARAMETERS,
-                        errorMessage=f"Knowledge '{request.name}' already exists at path: "
-                        f"{'/'.join(request.subject_path)}",
-                    )
-
-            # Store knowledge entry (PG backend auto-injects datasource_id)
-            knowledge_data = [
-                {
-                    "id": self._gen_subject_item_id(request.subject_path, request.name),
-                    "subject_path": request.subject_path,
-                    "name": request.name,
-                    "search_text": request.search_text,
-                    "explanation": request.explanation,
-                }
-            ]
-            self.knowledge_rag.store.batch_store_knowledge(knowledge_data)
-
-            logger.info(f"Created knowledge '{request.name}' successfully")
-            return Result[dict](success=True, data={})
-
-        except Exception as e:
-            logger.error(f"Failed to create knowledge: {e}")
-            from datus.api.models.config_models import ErrorCode
-
-            return Result[dict](
-                success=False,
-                errorCode=ErrorCode.PROVIDER_CONFIG_ERROR,
-                errorMessage=str(e),
-            )
-
-    async def get_knowledge(self, subject_path: List[str]) -> Result[KnowledgeInfo]:
-        """Get knowledge by subject path.
-
-        Args:
-            subject_path: Subject path (parent_path + knowledge_name)
-
-        Returns:
-            Result[KnowledgeInfo] with knowledge details
-        """
-        try:
-            logger.info(f"Getting knowledge at path: {subject_path}")
-            from datus.api.models.config_models import ErrorCode
-
-            if not subject_path or len(subject_path) < 1:
-                return Result[KnowledgeInfo](
-                    success=False,
-                    errorCode=ErrorCode.INVALID_PARAMETERS,
-                    errorMessage="Subject path cannot be empty",
-                )
-
-            # Extract parent path and knowledge name
-            parent_path = subject_path[:-1] if len(subject_path) > 1 else []
-            knowledge_name = subject_path[-1]
-
-            # Get parent node to find subject_node_id
-            if parent_path:
-                parent_node = self.subject_tree_store.get_node_by_path(parent_path)
-                if not parent_node:
-                    return Result[KnowledgeInfo](
-                        success=False,
-                        errorCode=ErrorCode.PROVIDER_CONFIG_ERROR,
-                        errorMessage=f"Parent path not found: {'/'.join(parent_path)}",
-                    )
-                node_id = parent_node["node_id"]
-            else:
-                return Result[KnowledgeInfo](
-                    success=False,
-                    errorCode=ErrorCode.INVALID_PARAMETERS,
-                    errorMessage="Knowledge cannot be at root level",
-                )
-
-            # Get knowledge entries
-            knowledge_entries = self.knowledge_rag.store.list_entries(node_id, name=knowledge_name)
-
-            if not knowledge_entries or len(knowledge_entries) == 0:
-                return Result[KnowledgeInfo](
-                    success=False,
-                    errorCode=ErrorCode.PROVIDER_CONFIG_ERROR,
-                    errorMessage=f"Knowledge not found: {knowledge_name}",
-                )
-
-            # Return first matching entry
-            knowledge_data = knowledge_entries[0]
-
-            return Result[KnowledgeInfo](
-                success=True,
-                data=KnowledgeInfo(
-                    name=knowledge_data.get("name", ""),
-                    search_text=knowledge_data.get("search_text", ""),
-                    explanation=knowledge_data.get("explanation", ""),
-                ),
-            )
-
-        except Exception as e:
-            logger.error(f"Failed to get knowledge: {e}")
-            from datus.api.models.config_models import ErrorCode
-
-            return Result[KnowledgeInfo](
-                success=False,
-                errorCode=ErrorCode.PROVIDER_CONFIG_ERROR,
-                errorMessage=str(e),
-            )
-
-    async def edit_knowledge(self, request: EditKnowledgeInput) -> Result[dict]:
-        """Edit knowledge entry.
-
-        Args:
-            request: Edit knowledge input with subject_path (parent_path + name), search_text, explanation
-
-        Returns:
-            Result[dict]
-        """
-        try:
-            logger.info(f"Editing knowledge at path: {request.subject_path}")
-            from datus.api.models.config_models import ErrorCode
-
-            if not request.subject_path or len(request.subject_path) < 2:
-                return Result[dict](
-                    success=False,
-                    errorCode=ErrorCode.INVALID_PARAMETERS,
-                    errorMessage="Subject path must have at least 2 components (parent_path + name)",
-                )
-
-            # Extract parent path and knowledge name
-            parent_path = request.subject_path[:-1]
-            knowledge_name = request.subject_path[-1]
-
-            # Build update values
-            update_values = {
-                "search_text": request.search_text,
-                "explanation": request.explanation,
-            }
-
-            # Update knowledge using update_entry
-            self.knowledge_rag.store.update_entry(
-                subject_path=parent_path,
-                name=knowledge_name,
-                update_values=update_values,
-            )
-
-            logger.info(f"Successfully updated knowledge: {knowledge_name}")
-            return Result[dict](success=True, data={})
-
-        except ValueError as e:
-            logger.error(f"Failed to edit knowledge: {e}")
-            from datus.api.models.config_models import ErrorCode
-
-            return Result[dict](
-                success=False,
-                errorCode=ErrorCode.PROVIDER_CONFIG_ERROR,
-                errorMessage=str(e),
-            )
-        except Exception as e:
-            logger.error(f"Failed to edit knowledge: {e}")
-            from datus.api.models.config_models import ErrorCode
-
-            return Result[dict](
-                success=False,
-                errorCode=ErrorCode.PROVIDER_CONFIG_ERROR,
-                errorMessage=str(e),
-            )
-
     async def delete_subject(self, request: DeleteSubjectInput) -> Result[dict]:
         """Delete subject from the subject tree.
 
         Handles deletion for:
-        - directory: Deletes the directory node and all child entries (metrics, reference_sql, knowledge)
+        - directory: Deletes the directory node and all child entries (metrics, reference_sql)
         - metric: Deletes from LanceDB and removes from YAML file
         - reference_sql: Deletes from LanceDB only
-        - knowledge: Deletes from LanceDB only
 
         Args:
             request: Delete subject input with type and subject_path
@@ -1293,6 +1269,7 @@ class ExplorerService:
             Result[dict]
         """
         try:
+            self._require_datasource()
             logger.info(f"Deleting {request.type} at path: {request.subject_path}")
             from datus.api.models.config_models import ErrorCode
             from datus.api.models.explorer_models import SubjectNodeType
@@ -1305,7 +1282,7 @@ class ExplorerService:
                 )
 
             if request.type == SubjectNodeType.DIRECTORY:
-                # Delete directory and all its entries (metrics, reference_sql, knowledge)
+                # Delete directory and all its entries (metrics, reference_sql)
                 node = self.subject_tree_store.get_node_by_path(request.subject_path)
                 if not node:
                     return Result[dict](
@@ -1347,17 +1324,6 @@ class ExplorerService:
                                 logger.info(f"Deleted reference_sql '{sql_name}' from node {nid}")
                     except Exception as ex:
                         logger.debug(f"Error deleting reference_sqls for node {nid}: {ex}")
-
-                    # Delete knowledge entries
-                    try:
-                        knowledge_entries = self.knowledge_rag.store.list_entries(nid)
-                        for knowledge in knowledge_entries:
-                            knowledge_name = knowledge.get("name", "")
-                            if knowledge_name:
-                                self.knowledge_rag.delete_knowledge(node_path, knowledge_name)
-                                logger.info(f"Deleted knowledge '{knowledge_name}' from node {nid}")
-                    except Exception as ex:
-                        logger.debug(f"Error deleting knowledge for node {nid}: {ex}")
 
                 # Finally delete the directory node with cascade
                 deleted = self.subject_tree_store.delete_node(node_id, cascade=True)
@@ -1415,29 +1381,6 @@ class ExplorerService:
                     )
 
                 logger.info(f"Successfully deleted reference_sql: {sql_name}")
-                return Result[dict](success=True, data={})
-
-            elif request.type == SubjectNodeType.KNOWLEDGE:
-                # Delete knowledge: extract parent_path and knowledge_name
-                if len(request.subject_path) < 1:
-                    return Result[dict](
-                        success=False,
-                        errorCode=ErrorCode.INVALID_PARAMETERS,
-                        errorMessage="Subject path must have at least one component for knowledge",
-                    )
-
-                parent_path = request.subject_path[:-1] if len(request.subject_path) > 1 else []
-                knowledge_name = request.subject_path[-1]
-
-                deleted = self.knowledge_rag.delete_knowledge(parent_path, knowledge_name)
-                if not deleted:
-                    return Result[dict](
-                        success=False,
-                        errorCode=ErrorCode.PROVIDER_CONFIG_ERROR,
-                        errorMessage=f"Knowledge not found: {knowledge_name}",
-                    )
-
-                logger.info(f"Successfully deleted knowledge: {knowledge_name}")
                 return Result[dict](success=True, data={})
 
             else:

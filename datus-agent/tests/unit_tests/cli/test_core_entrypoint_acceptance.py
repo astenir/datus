@@ -17,10 +17,12 @@ from rich.console import Console
 from datus.cli.bootstrap_bi_commands import BootstrapBiCommands
 from datus.cli.bootstrap_bi_picker import BootstrapBiPlan, DashboardCliOptions
 from datus.cli.bootstrap_streams import stream_metrics, stream_semantic_model
+from datus.cli.build_kb_commands import BuildKbCommands
 from datus.cli.datasource_commands import DatasourceCommands
 from datus.cli.init_commands import _INIT_PROMPT, InitCommands
 from datus.cli.model_commands import ModelCommands
 from datus.cli.repl import CommandType, DatusCLI
+from datus.cli.skill_command_utils import render_skill_prompt
 from datus.cli.slash_registry import lookup
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 
@@ -76,6 +78,8 @@ def _build_core_cli() -> DatusCLI:
     cli.bg_sync = MagicMock()
     cli.service_commands = MagicMock()
     cli.service_commands.dispatch = MagicMock(return_value=False)
+    cli.session_summarize_commands = MagicMock()
+    cli.memory_organize_commands = MagicMock()
 
     cli.agent_commands = MagicMock()
     cli.context_commands = MagicMock()
@@ -86,6 +90,7 @@ def _build_core_cli() -> DatusCLI:
     cli.language_commands = MagicMock()
     cli.effort_commands = MagicMock()
     cli.init_commands = InitCommands(cli)
+    cli.build_kb_commands = BuildKbCommands(cli)
     cli.datasource_commands = DatasourceCommands(cli)
     cli._cmd_help = MagicMock()
     cli._cmd_exit = MagicMock()
@@ -114,7 +119,7 @@ def test_cli_slash_commands_route_through_shared_repl_dispatch() -> None:
     assert (cmd_type, cmd, args) == (CommandType.SLASH, "/init", "")
     DatusCLI._execute_slash_command(cli, cmd, args)
     cli.chat_commands.execute_chat_command.assert_called_once_with(
-        _INIT_PROMPT,
+        render_skill_prompt(_INIT_PROMPT, ""),
         plan_mode=True,
         subagent_name=None,
     )
@@ -138,7 +143,6 @@ def test_cli_slash_commands_route_through_shared_repl_dispatch() -> None:
         catalog="catalog",
         db_name="warehouse_db",
         schema="analytics",
-        db_logic_name="warehouse",
     )
     cli.reset_session.assert_called_once_with()
     cli.chat_commands.update_chat_node_tools.assert_called_once_with()

@@ -33,10 +33,6 @@ class ErrorCode(Enum):
     # Node execution errors
     NODE_EXECUTION_FAILED = ("200001", "Node execution failed")
     NODE_NO_SQL_CONTEXT = ("200002", "No SQL context available. Please run a SQL generation node first.")
-    NODE_EXT_KNOWLEDGE_GOLD_SQL_INVALID = (
-        "200003",
-        "Gold SQL failed to execute before ext_knowledge generation: {error_message}",
-    )
 
     # Model errors
     MODEL_REQUEST_FAILED = ("300001", "LLM request failed")
@@ -59,6 +55,13 @@ class ErrorCode(Enum):
     MODEL_ILLEGAL_FORMAT_RESPONSE = (
         "300023",
         "Model returned response in illegal format. Response: '{response_preview}' (length: {response_length})",
+    )
+    MODEL_SSL_CERT_ERROR = (
+        "300024",
+        "TLS certificate verification failed for the model endpoint. If it uses a private or "
+        "self-signed CA, set `ssl_verify: <path-to-ca.pem>` on the model in agent.yml (or export "
+        "SSL_CERT_FILE=<path-to-ca.pem>). Avoid `ssl_verify: false`, which disables verification. "
+        "See docs/configuration/agent.md (Private or self-signed certificates).",
     )
 
     # OAuth authentication errors

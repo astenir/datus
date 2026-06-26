@@ -78,7 +78,7 @@ Call `analyze_metric_candidates_from_history` with all parsed SQL queries and `e
 3. **Deduplicate by business metric** — merge repeated aliases/normalized expressions across SQL files while preserving source evidence.
 4. **Separate non-metrics** — filter-only/detail SQL belongs in `non_metric_evidence`, not metric YAML.
 5. **Respect modeling classifications** — if `query_classification` is `metric_plus_derived_datasource` or `derived_datasource_recommendations` is non-empty, do not generate a direct metric from `blocked_direct_metric_candidates`; first model the recommended `sql_query` data source or materialized view, then define metrics on that data source.
-6. **Choose business-safe names** — if a candidate has `requires_name_translation: true`, treat `name` as a technical fallback only. Also inspect every `source_alias`: when the alias appears generated or lacks business meaning, do not use it as the final MetricFlow name. In interactive mode, ask the user to confirm if the business meaning is unclear; in batch/bootstrap mode, infer a clear English snake_case name from the SQL expression, question, table/column context, and external knowledge without stopping.
+6. **Choose business-safe names** — if a candidate has `requires_name_translation: true`, treat `name` as a technical fallback only. Also inspect every `source_alias`: when the alias appears generated or lacks business meaning, do not use it as the final MetricFlow name. In interactive mode, ask the user to confirm if the business meaning is unclear; in batch/bootstrap mode, infer a clear English snake_case name from the SQL expression, question, and table/column context without stopping.
 7. **Preserve SQL literal values** — if `literal_mappings` is present, keep the literal `value` exactly as it appears in SQL predicates/CASE/sql_query output. Only MetricFlow object names may be translated or normalized.
 8. **Preserve SQL time grain** — if `time_grain_evidence` is present, expose an equivalent time dimension in any derived data source. Do not replace a projected date such as `CURDATE() AS part_dt` or `DATE(create_time) AS part_dt` with raw `create_time` as the primary time dimension.
    Define `type: TIME` only for physical DATE/TIME/TIMESTAMP columns or SQL expressions / `sql_query` aliases guaranteed to return DATE/TIME/TIMESTAMP values. Numeric surrogate keys such as `*_date_sk`, `*_date_key`, `*_dt_key`, or integer YYYYMMDD keys must be identifiers or categorical dimensions unless converted to a real date.
@@ -86,6 +86,8 @@ Call `analyze_metric_candidates_from_history` with all parsed SQL queries and `e
 10. **Cross-reference with Phase 0** — remove any candidate that already exists in the knowledge base.
 11. **Separate derived metrics** — treat `derived_metric_candidates` as second-stage metrics over existing metrics. Do not mix them into base semantic model or measure generation.
 12. **Ignore passthrough references** — entries in `identity_metric_references` show existing metrics selected without new business formula; do not generate new metrics for them.
+13. **Do not promote support measures** — a SELECT projection that only supports another final KPI, such as a denominator, row count, or intermediate aggregation, may be added as a semantic-model measure. Do not also wrap it as a top-level business metric unless the user question or candidate plan identifies it as a final KPI.
+14. **Respect `support_measure_candidates`** — these are dependency or comparison measures, not direct metrics. You may add them to a semantic model only if a generated metric needs them, but do not publish a `metric:` block for them.
 
 **Step 1-batch-c: Business metric principle**
 
@@ -93,6 +95,7 @@ From N SQL queries, propose a focused set of business metrics. Ask yourself for 
 - Is this a final output a business user would recognize as a KPI?
 - Are its base measures complete enough to validate and dry-run?
 - Should the evidence be a metric, or only a filter/dimension/segment/view definition?
+- Is this alias only a supporting count/sum used by another final output? If yes, create or reuse the measure but do not publish a separate metric for it.
 - Does the tool say the metric depends on a ranked/windowed CTE or other derived data source? If yes, generate the derived data source first instead of forcing a direct metric.
 - Are SQL literals, output time grain, and HAVING/post-aggregation constraints preserved from the tool evidence?
 
@@ -200,7 +203,7 @@ Use when: non-equi JOINs, > 2 hop joins, subqueries, LATERAL/CROSS joins, comple
 - Metric file: `subject/semantic_models/<current_datasource>/metrics/{table_name}_metrics.yml`
 
 Bare filenames are silently normalized by the host, but the prefixed form is preferred for clarity. Absolute paths are also tolerated.
-Do not read, edit, or pass `metric_file` / `semantic_model_file` paths from another datasource directory such as `subject/semantic_models/other_datasource/...`.
+Do not read, edit, or pass `metric_file` / `semantic_model_files` paths from another datasource directory such as `subject/semantic_models/other_datasource/...`.
 
 1. **Check existing**: Call `check_semantic_object_exists(name="{metric_name}", kind="metric")` for each metric confirmed in Phase 1. If it already exists, inform the user and skip it.
 
@@ -222,7 +225,7 @@ Do not read, edit, or pass `metric_file` / `semantic_model_file` paths from anot
 
 After all generated metrics have passed validation and dry-run:
 - Collect all generated metrics and their dry-run SQLs into `metric_sqls_json`
-- You MUST call `end_metric_generation(metric_file, semantic_model_file, metric_sqls_json)` **ONCE** to sync them to Knowledge Base while you can still fix publish errors
+- You MUST call `end_metric_generation(metric_file, semantic_model_files, metric_sqls_json)` **ONCE** to sync them to Knowledge Base while you can still fix publish errors
 - Do not rely on the final JSON host fallback. The host fallback is only a last-resort guard when the tool call was accidentally missed.
 - If no metrics were generated, do NOT call `end_metric_generation`
 
@@ -243,6 +246,8 @@ Phase 1 confirms the generation scope; validation plus dry-run are the acceptanc
 6. **Every metric needs explicit YAML**: Whether it's a simple aggregation, filtered variant, ratio, expr, derived, or cumulative — write a `metric:` entry in the metrics YAML file so it can be persisted and discovered later.
 
 7. **Derived metrics are second-stage**: Generate non-derived metrics first, validate them, refresh the metric catalog with `list_metrics`, then generate `derived_metric_candidates` only when every referenced metric exists in the refreshed catalog or was generated earlier in the same batch.
+
+8. **Support measures are not always metrics**: Add support measures needed for ratios, expressions, filters, and validation, but do not publish each support measure as a separate metric unless it is itself a requested/final business KPI.
 
 ## Important Rules
 

@@ -2,6 +2,80 @@
 
 ## 0.3
 
+### 0.3.6
+
+**Enhancements**
+
+- **Scoped `/init` and `/build-kb` Runs** - `/init` now accepts optional scope text, and `/build-kb` can skip confirmation for clearly scoped or automated knowledge-base builds. [#1033](https://github.com/Datus-ai/Datus-agent/pull/1033) [init docs](https://docs.datus.ai/0.3/cli/init_command/) [build-kb docs](https://docs.datus.ai/0.3/cli/build_kb_command/)
+- **Model-Level SSL Verification** - Model providers can set `ssl_verify` to `true`, `false`, or a CA bundle path for private CA and self-signed LLM endpoints; the model-level setting takes precedence over `SSL_VERIFY` and `SSL_CERT_FILE`. [#1043](https://github.com/Datus-ai/Datus-agent/pull/1043) [docs](https://docs.datus.ai/0.3/configuration/agent/)
+- **Runtime Stack Dumps for API Diagnostics** - The API server can dump live async task stacks to logs with `SIGUSR1`, making production hangs easier to diagnose without stopping the process. [#1037](https://github.com/Datus-ai/Datus-agent/pull/1037)
+
+**Bug Fixes**
+
+- **Responsive Session and Catalog APIs** - Slow blocking filesystem or datasource calls in session and catalog endpoints now run off the event loop with bounded timeouts, so one slow request no longer stalls the API process. [#1036](https://github.com/Datus-ai/Datus-agent/pull/1036)
+- **Datasource Overrides Preserve Database Context** - Fixed datasource names being treated as physical database names; chat requests now carry datasource overrides and database context separately through connection, gateway, subagent, and validation paths. [#1048](https://github.com/Datus-ai/Datus-agent/pull/1048)
+- **Release and Test Stability** - The Prepare Release workflow now regenerates `uv.lock` before locked sync, and BIRD SQLite fixtures are isolated in temporary directories so tests no longer contaminate each other. [#1039](https://github.com/Datus-ai/Datus-agent/pull/1039) [#1047](https://github.com/Datus-ai/Datus-agent/pull/1047)
+
+**Upgrade Notes**
+
+- **Skill Execution** - Skills now execute through `load_skill`; the legacy `skill_execute_command` path and `allowed_commands` in skill config have been removed. [#1033](https://github.com/Datus-ai/Datus-agent/pull/1033)
+- **Database Schema Tools** - `get_table_ddl` is no longer exposed as an agent/MCP tool. Use `describe_table` and `read_query` for schema and sample-data inspection. [#1031](https://github.com/Datus-ai/Datus-agent/pull/1031)
+
+### 0.3.5
+
+**New Features**
+
+- **SQL Policy Framework** - Added a request-level SQL read policy framework. API callers can pass structured principal data through `X-Datus-Principal`, and custom providers can rewrite or reject read SQL before execution; rewritten SQL is revalidated as read-only before it reaches the datasource. [#1020](https://github.com/Datus-ai/Datus-agent/pull/1020) [#1028](https://github.com/Datus-ai/Datus-agent/pull/1028) [docs](https://docs.datus.ai/configuration/sql_policy/)
+- **Strict OSI Semantic Authoring** - `gen_semantic_model` and `gen_metrics` can now enter strict OSI authoring mode based on the configured OSI adapter, generate OSI core YAML, validate and dry-run through the adapter, and sync queryable metrics back into the Knowledge Base without leaking MetricFlow-only fields into the source semantic model. [#1007](https://github.com/Datus-ai/Datus-agent/pull/1007) [docs](https://docs.datus.ai/adapters/osi_semantic_adapter/)
+- **Metric Preview API** - Added endpoints for saved-metric dimension discovery and SQL preview, so the metric editor can list queryable dimensions, dry-run compile metric SQL, and return structured preflight feedback for incompatible dimension selections. [#992](https://github.com/Datus-ai/Datus-agent/pull/992)
+- **Lightweight `/init` + new `/build-kb`** - `/init` is now a fast project scan that writes an `AGENTS.md` inventory plus file-based knowledge/memory stores, while expensive vector-indexed KB construction moves to `/build-kb` with optional file, table, datasource, or business-domain scope. The new built-in `storage-classify` skill routes semantic models, metrics, reference SQL, knowledge, memory, skills, and `AGENTS.md` updates to the right stores. [#997](https://github.com/Datus-ai/Datus-agent/pull/997) [#1022](https://github.com/Datus-ai/Datus-agent/pull/1022) [docs](https://docs.datus.ai/skills/build_kb/)
+
+**Enhancements**
+
+- **System Prompt Prefix Caching** - AgenticNode snapshots the system prompt on the first LLM call in a session and reuses that prefix on later turns to preserve Anthropic ephemeral cache / OpenAI prompt cache hits; runtime datasource context now travels through the user-turn `<system_reminder>`, and switching models rebuilds the snapshot. [#996](https://github.com/Datus-ai/Datus-agent/pull/996)
+- **AskMetrics Query Flow Upgrade** - `ask_metrics` now supports optional final metric-result selection, full `query_metrics` result caching with compressed previews, and automatic expansion of current, previous-period, and delta metrics for period-over-period questions. [#1005](https://github.com/Datus-ai/Datus-agent/pull/1005) [docs](https://docs.datus.ai/subagent/ask_metrics/)
+- **Period-Offset Metric Generation and Querying** - `gen_metrics` can generate `offset_window` derived metrics from LAG SQL, and `ask_metrics` uses offset metadata to select the matching time-grain dimension, reducing missing first-period results from grain mismatches. [#989](https://github.com/Datus-ai/Datus-agent/pull/989)
+- **Non-Interactive Plan Mode** - `datus -p` adds `--plan-mode`, allowing print mode and benchmark runs to auto-confirm generated plans instead of blocking on manual confirmation. [#993](https://github.com/Datus-ai/Datus-agent/pull/993)
+
+**Bug Fixes**
+
+- **Concurrent Permission Prompts No Longer Block Each Other** - Permission prompt locks are now scoped per interaction broker instead of per event loop, so independent sessions and sub-agents sharing one API worker no longer hang behind another session's unanswered prompt while preserving one-prompt-at-a-time behavior within a run. [#1035](https://github.com/Datus-ai/Datus-agent/pull/1035)
+- **Interactive API Sessions Stay Reachable During Config Churn** - `DatusServiceCache` now keeps a busy service instance alive when the `AgentConfig` fingerprint changes, preventing `/chat/user_interaction` replies from hitting a fresh empty task manager and returning `SESSION_NOT_FOUND`. [#1032](https://github.com/Datus-ai/Datus-agent/pull/1032)
+- **Claude Native SDK Path Runs the Full Hook Lifecycle** - The Claude subscription OAuth token path now triggers permission, compact, generation, and lifecycle hooks consistently with the OpenAI Agents SDK Runner path. [#980](https://github.com/Datus-ai/Datus-agent/pull/980)
+- **More Stable Metric Queryability and Preview** - Fixed metric preview returning datasource ids instead of physical databases, canonical `metric_time` evidence handling in the queryability publish gate, period-offset metric discovery instability, and authoring-format coupling in offset-derived metric bootstrap. [#1019](https://github.com/Datus-ai/Datus-agent/pull/1019) [#1018](https://github.com/Datus-ai/Datus-agent/pull/1018) [#1017](https://github.com/Datus-ai/Datus-agent/pull/1017) [#1011](https://github.com/Datus-ai/Datus-agent/pull/1011)
+- **Anthropic SDK Auth Header Conflict** - Fixed duplicate `Authorization` headers when Anthropic SDK credentials fall back to environment variables. [#991](https://github.com/Datus-ai/Datus-agent/pull/991)
+- **Readable Python 3.12 CLI Help** - Migrated `DBType`, `LLMProvider`, `EmbeddingProvider`, and `SQLType` to `StrEnum` so argparse help displays usable enum values instead of raw class names. [#1001](https://github.com/Datus-ai/Datus-agent/pull/1001)
+- **Current Date for Non-DB Nodes** - Date injection is now separated from datasource catalog injection, so nodes without database tools such as `gen_visual_report` and `skill_creator` still receive current-date context in their system prompts. [#1026](https://github.com/Datus-ai/Datus-agent/pull/1026)
+- **Legacy JSON Array User Messages Parse Correctly** - `extract_user_input()` now recognizes old JSON-array message content and no longer shows raw JSON strings in the Web sidebar. [#888](https://github.com/Datus-ai/Datus-agent/pull/888)
+- **Background Tasks Drain on API Shutdown** - Fire-and-forget tasks are now registered and drained during FastAPI lifespan shutdown, with exceptions logged and `DatusServiceCache.shutdown()` called. [#1003](https://github.com/Datus-ai/Datus-agent/pull/1003)
+- **Clean CLI Teardown** - Fixed a prompt_toolkit teardown race where `run_in_terminal_sync()` could leave an unawaited coroutine behind during loop shutdown. [#952](https://github.com/Datus-ai/Datus-agent/pull/952)
+- **More Robust DBManager Connection State** - `DBManager` now tolerates nulled `_conn_dict` entries and logs `list_databases` tracebacks, reducing connection-state failures in long-running sessions. [#994](https://github.com/Datus-ai/Datus-agent/pull/994)
+
+### 0.3.4
+
+**New Features**
+
+- **AskMetrics Subagent** - A dedicated metric QA agent for KPI, trend, group-by, and attribution questions that reaches for metric-specific tools and prompts instead of raw SQL, with customizable routing, templates, and tools. [#954](https://github.com/Datus-ai/Datus-agent/pull/954) [docs](subagent/ask_metrics.md)
+- **OpenRouter Provider** - Point a single `OPENROUTER_API_KEY` at the full vendor/model catalog; the `/model` picker now has search filtering and hides the non-canonical `-fast` Claude aliases. [#973](https://github.com/Datus-ai/Datus-agent/pull/973) [#936](https://github.com/Datus-ai/Datus-agent/pull/936) [docs](cli/other_commands.md#model)
+- **Self-Update Commands** - `datus upgrade` / `datus update` check for and install new versions of your `datus-*` packages from the CLI; interactive sessions flag new versions on startup, and `--check` looks without installing. [#949](https://github.com/Datus-ai/Datus-agent/pull/949)
+- **Orchestrator Tools in Print Mode** - `--orchestrator-tools` lets an external orchestrator request issue comments, status updates, human input, blocked flags, and mission completion through proxy tools, with each tool's strict JSON schema preserved. [#950](https://github.com/Datus-ai/Datus-agent/pull/950)
+
+**Enhancements**
+
+- **Queryable Metrics by Default** - Metric generation now extracts a queryability contract and validates it with `query_metrics(dry_run=True)`, so you no longer get metrics that are structurally valid but cannot actually be queried at the original grain. [#943](https://github.com/Datus-ai/Datus-agent/pull/943) [#962](https://github.com/Datus-ai/Datus-agent/pull/962)
+- **Scoped Agent Memory** - Each agent gets a per-agent 2000-byte `MEMORY.md` that is write-only through `add_memory` / `edit_memory`; sub-agents inherit it read-only. [#975](https://github.com/Datus-ai/Datus-agent/pull/975) [docs](integration/memory.md)
+- **Built-in Knowledge Extraction** - External knowledge generation moved off the old `ext_knowledge` vector subsystem to the built-in `extract-knowledge` skill, trimming legacy storage and tooling while keeping the knowledge-base API. [#932](https://github.com/Datus-ai/Datus-agent/pull/932)
+- **Stronger Snowflake Support** - Snowflake setups now accept inline PEM private keys, reject unsupported catalog params, and normalize time-grain queries across the DB and MetricFlow adapters; docs clarify that password and private key are mutually exclusive, warehouse is required, and catalog usually should not be set. [#937](https://github.com/Datus-ai/Datus-agent/pull/937) [datus-db-adapters#70](https://github.com/Datus-ai/datus-db-adapters/pull/70) [datus-db-adapters#72](https://github.com/Datus-ai/datus-db-adapters/pull/72) [datus-semantic-adapter#27](https://github.com/Datus-ai/datus-semantic-adapter/pull/27) [datus-semantic-adapter#28](https://github.com/Datus-ai/datus-semantic-adapter/pull/28) [datus-semantic-adapter#29](https://github.com/Datus-ai/datus-semantic-adapter/pull/29) [docs](configuration/datasources.md)
+- **Unified `gen_sql` Naming** - The SQL-generation node, workflow, config, CLI command (`/gen_sql`), prompt templates, and sub-agent name now share one consistent `gen_sql` naming; projects on the old `generate_sql` / `sql_system` config should migrate. [#935](https://github.com/Datus-ai/Datus-agent/pull/935) [docs](configuration/nodes.md)
+- **Configurable Metrics Batch Size** - `bootstrap-kb --components metrics` adds `--metrics-batch-size`; set it to `1` when you need per-success-story provenance, or keep the default of `5` for the original throughput. [#976](https://github.com/Datus-ai/Datus-agent/pull/976)
+
+**Bug Fixes**
+
+- **Datasource-Isolated Metrics Bootstrap** - Metrics bootstrap now isolates rows per datasource in multi-datasource projects, so `overwrite` no longer deletes another datasource's KB data, with hardened MetricFlow YAML merge, batch refresh, final metric de-duplication, and CLI long-output truncation. [#974](https://github.com/Datus-ai/Datus-agent/pull/974)
+- **Robust Semantic Metric Query & Validation** - Snowflake table coordinates now reach semantic-model generation prompts, multi-metric dimension compatibility gets a preflight with split suggestions, temporary YAML validation no longer scans unrelated parent directories, and non-string / nullable PyArrow results display safely. [#941](https://github.com/Datus-ai/Datus-agent/pull/941) [#946](https://github.com/Datus-ai/Datus-agent/pull/946)
+- **Cross-Datasource Subject Node Migration** - Upgrading older SQLite storage migrates the stale `subject_nodes` UNIQUE constraint so same-named subject nodes can coexist across datasources while staying de-duplicated within one. [#964](https://github.com/Datus-ai/Datus-agent/pull/964)
+- **One Datasource, Multiple Databases** - A single datasource can now route to multiple databases — file-glob datasources, benchmark tasks, `/database` switching, DB tools, and node execution all select the connection by `(datasource, database)`, and benchmark SQL tasks can name their datasource explicitly. [#961](https://github.com/Datus-ai/Datus-agent/pull/961) [#934](https://github.com/Datus-ai/Datus-agent/pull/934) [datus-db-adapters#71](https://github.com/Datus-ai/datus-db-adapters/pull/71)
+
 ### 0.3.3
 
 **New Features**
@@ -52,7 +126,7 @@
 
 - **`/permission` Command** - Renamed `/profile` to `/permission`, with `normal` / `auto` / `dangerous` modes for matching different development workflows. [#769](https://github.com/Datus-ai/Datus-agent/pull/769) [docs](cli/reference.md)
 - **Custom Subagent Management** - Custom subagents can now be deleted via API or TUI, and the available-tools list per agent type is returned by a single backend source so SaaS and standalone UIs build and edit subagents consistently. [#807](https://github.com/Datus-ai/Datus-agent/pull/807) [#812](https://github.com/Datus-ai/Datus-agent/pull/812) [docs](subagent/customized_subagent.md)
-- **Per-Request Permission Mode** - Chat requests can pick `normal` / `auto` / `dangerous` per call, so multi-tenant SaaS deployments stop polluting a shared default. [#822](https://github.com/Datus-ai/Datus-agent/pull/822) [docs](integration/skills.md)
+- **Per-Request Permission Mode** - Chat requests can pick `normal` / `auto` / `dangerous` per call, so multi-tenant SaaS deployments stop polluting a shared default. [#822](https://github.com/Datus-ai/Datus-agent/pull/822) [docs](skills/introduction.md)
 
 **Bug Fixes**
 
@@ -76,17 +150,17 @@
 
 ***Project & Workspace Configuration***
 
-- **Project-aware Configure/Init Flow** - Split `setup` into project-aware `configure`/`init` flows with project-level `.datus/config.yml`, project memory, automatic datasource/service setup, and a redesigned `.datus` directory. [#542](https://github.com/Datus-ai/Datus-agent/pull/542) [#578](https://github.com/Datus-ai/Datus-agent/pull/578) [#592](https://github.com/Datus-ai/Datus-agent/pull/592) [#608](https://github.com/Datus-ai/Datus-agent/pull/608) [docs](cli/init_command.md)
+- **Project-aware Configure/Init Flow** - Split `setup` into project-aware `configure`/`init` flows with project-level `.datus/config.yml`, project memory, automatic datasource/service setup, and a redesigned `.datus` directory. [#542](https://github.com/Datus-ai/Datus-agent/pull/542) [#578](https://github.com/Datus-ai/Datus-agent/pull/578) [#592](https://github.com/Datus-ai/Datus-agent/pull/592) [#608](https://github.com/Datus-ai/Datus-agent/pull/608) [docs](skills/init.md)
 - **Unified Runtime Services Config** - Unified configuration around `services.datasources`, `services.bi_platforms`, semantic layer, and scheduler; CLI now uses `--datasource`. [#614](https://github.com/Datus-ai/Datus-agent/pull/614) [#633](https://github.com/Datus-ai/Datus-agent/pull/633) [#636](https://github.com/Datus-ai/Datus-agent/pull/636) [#642](https://github.com/Datus-ai/Datus-agent/pull/642) [docs](configuration/datasources.md)
 - **One-line Installer** - New Linux/macOS `curl | sh` install script with refreshed quickstart and service docs. [#613](https://github.com/Datus-ai/Datus-agent/pull/613) [#611](https://github.com/Datus-ai/Datus-agent/pull/611) [#667](https://github.com/Datus-ai/Datus-agent/pull/667) [docs](getting_started/Quickstart.md)
 
 ***CLI Experience***
 
 - **Unified `/` Command Prefix** - All interactive commands moved to `/` prefix; added `/model`, `/skill`, `/mcp`, `/agent`, `/subagent`, interactive input, and a streaming `/bootstrap` TUI. [#621](https://github.com/Datus-ai/Datus-agent/pull/621) [#635](https://github.com/Datus-ai/Datus-agent/pull/635) [#650](https://github.com/Datus-ai/Datus-agent/pull/650) [#655](https://github.com/Datus-ai/Datus-agent/pull/655) [#656](https://github.com/Datus-ai/Datus-agent/pull/656) [#659](https://github.com/Datus-ai/Datus-agent/pull/659) [#683](https://github.com/Datus-ai/Datus-agent/pull/683) [docs](cli/reference.md)
-- **`/language` and `/effort` Commands** - Pin response language with `/language`, control reasoning effort with `/effort`, plus `/<service>.<method>` dispatch for read-only service calls. [#641](https://github.com/Datus-ai/Datus-agent/pull/641) [#653](https://github.com/Datus-ai/Datus-agent/pull/653) [#631](https://github.com/Datus-ai/Datus-agent/pull/631) [docs](cli/language_command.md)
+- **`/language` and `/effort` Commands** - Pin response language with `/language`, control reasoning effort with `/effort`, plus `/<service>.<method>` dispatch for read-only service calls. [#641](https://github.com/Datus-ai/Datus-agent/pull/641) [#653](https://github.com/Datus-ai/Datus-agent/pull/653) [#631](https://github.com/Datus-ai/Datus-agent/pull/631) [docs](cli/other_commands.md#language)
 - **CLI Print Mode & UX Polish** - Print mode, proxy tools, reworked bottom status bar, fixed streaming/tool status line, improved markdown streaming, and restored `@` reference auto-completion. [#489](https://github.com/Datus-ai/Datus-agent/pull/489) [#501](https://github.com/Datus-ai/Datus-agent/pull/501) [#583](https://github.com/Datus-ai/Datus-agent/pull/583) [#586](https://github.com/Datus-ai/Datus-agent/pull/586) [#654](https://github.com/Datus-ai/Datus-agent/pull/654) [#664](https://github.com/Datus-ai/Datus-agent/pull/664) [#661](https://github.com/Datus-ai/Datus-agent/pull/661) [#662](https://github.com/Datus-ai/Datus-agent/pull/662) [docs](cli/introduction.md)
-- **New Model & Plan Providers** - Codex OAuth, Claude Subscription, Coding Plan, OpenRouter, MiniMax, GLM, BigModel, Z.AI support, with rebuilt provider-based model configuration and provider catalog. [#487](https://github.com/Datus-ai/Datus-agent/pull/487) [#635](https://github.com/Datus-ai/Datus-agent/pull/635) [#687](https://github.com/Datus-ai/Datus-agent/pull/687) [#693](https://github.com/Datus-ai/Datus-agent/pull/693) [docs](cli/model_command.md)
-- **Permission Profiles** - New `normal` / `auto` / `dangerous` permission profiles with subagent-aware permission hooks; safe discovery tools relaxed in normal mode. [#646](https://github.com/Datus-ai/Datus-agent/pull/646) [#652](https://github.com/Datus-ai/Datus-agent/pull/652) [docs](integration/skills.md)
+- **New Model & Plan Providers** - Codex OAuth, Claude Subscription, Coding Plan, OpenRouter, MiniMax, GLM, BigModel, Z.AI support, with rebuilt provider-based model configuration and provider catalog. [#487](https://github.com/Datus-ai/Datus-agent/pull/487) [#635](https://github.com/Datus-ai/Datus-agent/pull/635) [#687](https://github.com/Datus-ai/Datus-agent/pull/687) [#693](https://github.com/Datus-ai/Datus-agent/pull/693) [docs](cli/other_commands.md#model)
+- **Permission Profiles** - New `normal` / `auto` / `dangerous` permission profiles with subagent-aware permission hooks; safe discovery tools relaxed in normal mode. [#646](https://github.com/Datus-ai/Datus-agent/pull/646) [#652](https://github.com/Datus-ai/Datus-agent/pull/652) [docs](skills/introduction.md)
 
 ***Data Engineering Subagents & Skills***
 
@@ -129,7 +203,7 @@
 **New Features**
 
 - **Ask User Tool** - Introduced an interactive `ask_user` tool with inline free-text support and batch question capabilities, integrated into GenSQL and GenReport nodes for human-in-the-loop workflows. [#457](https://github.com/Datus-ai/Datus-agent/pull/457) [#460](https://github.com/Datus-ai/Datus-agent/pull/460) [#481](https://github.com/Datus-ai/Datus-agent/pull/481)
-- **Skill Marketplace CLI** - Built-in marketplace for discovering, installing, and managing community skills directly from the CLI. [#416](https://github.com/Datus-ai/Datus-agent/pull/416) [docs](integration/skills.md)
+- **Skill Marketplace CLI** - Built-in marketplace for discovering, installing, and managing community skills directly from the CLI. [#416](https://github.com/Datus-ai/Datus-agent/pull/416) [docs](skills/introduction.md)
 - **General Chat Agent** - A general-purpose chat agent for flexible conversational workflows beyond SQL generation. [#452](https://github.com/Datus-ai/Datus-agent/pull/452)
 - **Explore Task Tool** - New exploration tool for navigating and managing tasks within the agent. [#455](https://github.com/Datus-ai/Datus-agent/pull/455)
 - **Storage Adapter** - Pluggable storage adapter layer for flexible backend integration. [#446](https://github.com/Datus-ai/Datus-agent/pull/446)
@@ -164,12 +238,11 @@
 **New Features**
 
 - **OpenAI Agent SDK 0.7.0 Upgrade with Kimi-2.5 & Gemini-3 Support** - Rebuilt the model layer with `litellm_adapter` and `sdk_patches`, enabling seamless integration with the latest Kimi-2.5 and Gemini-3 series models.
-- **AgentSkills Support** - Introduced a complete Skill system with skill configuration, registration, management, and permission control, supporting both bash and function-based skill tools. [docs](integration/skills.md)
+- **AgentSkills Support** - Introduced a complete Skill system with skill configuration, registration, management, and permission control, supporting both bash and function-based skill tools. [docs](skills/introduction.md)
 - **Tools as MCP Server** - Expose Datus database tools and context search as an MCP server, enabling integration with Claude Desktop, Claude Code, and other MCP-compatible clients. [docs](integration/mcp.md)
 
 **Enhancements**
 
-- **Knowledge Generation Iteration** - Enhanced the external knowledge node with improved knowledge storage and more accurate context search. [docs](knowledge_base/ext_knowledge.md)
 - **Semantic Tools Optimization** - Optimized semantic tools and context search for faster, more relevant results in the CLI.
 - **Generation Prompt String Validation** - Strengthened string validation across multiple prompt templates for more reliable generation output.
 - **Action-Based User Interaction Model** - Redesigned the CLI interaction layer to use a unified action-based model for execution, generation, and planning.

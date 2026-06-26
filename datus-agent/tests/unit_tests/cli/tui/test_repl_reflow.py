@@ -18,25 +18,11 @@ screen" when it disappears. These tests:
 
 from __future__ import annotations
 
-import io
 from unittest import mock
 
 from rich.console import Console
 
 from datus.cli.repl import DatusCLI
-
-
-class _TestConsoleBuffer(io.StringIO):
-    def __init__(self) -> None:
-        super().__init__()
-        self.clear = mock.MagicMock(side_effect=self._clear)
-
-    def _clear(self) -> None:
-        self.seek(0)
-        self.truncate(0)
-
-    def isatty(self) -> bool:
-        return True
 
 
 def _bare_cli() -> DatusCLI:
@@ -74,14 +60,10 @@ class TestComputePaneWidth:
 class TestReflowForSidebar:
     def _build_cli(self, width: int = 100) -> DatusCLI:
         cli = _bare_cli()
-        buffer = _TestConsoleBuffer()
+        buffer = mock.MagicMock(spec=["write", "flush", "isatty", "clear"])
+        buffer.isatty.return_value = False
         cli._tui_output_buffer = buffer
-        cli.console = Console(
-            file=buffer,
-            width=width,
-            force_terminal=True,
-            _environ={"TERM": "xterm-256color"},
-        )
+        cli.console = Console(file=buffer, width=width, force_terminal=True)
         cli.tui_app = mock.MagicMock()
         cli.chat_commands = mock.MagicMock()
         cli.chat_commands._trace_verbose = False

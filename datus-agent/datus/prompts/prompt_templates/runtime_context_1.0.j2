@@ -1,0 +1,8 @@
+{# Shared runtime-context block appended uniformly by ``_finalize_system_prompt``.
+   Holds session-stable context that every agentic node may need. Datasource
+   catalog and sql-root hints live in ``datasource_runtime_context`` so date
+   injection does not require or imply DB-tool capability. #}
+Current context:
+{% if current_date -%}
+- Current date: {{ current_date }}
+{% endif -%}

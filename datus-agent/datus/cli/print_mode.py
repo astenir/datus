@@ -14,6 +14,7 @@ import os
 import select
 import sys
 import threading
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -48,8 +49,10 @@ class PrintModeRunner:
         self.session_id = getattr(args, "resume", None)
         self.subagent_name = getattr(args, "subagent", None) or None
         self.proxy_tool_patterns = getattr(args, "proxy_tools", None)
+        self.orchestrator_tools = getattr(args, "orchestrator_tools", False)
         self.scope = getattr(args, "session_scope", None)
         self.stream_thinking = getattr(args, "stream_thinking", False)
+        self.plan_mode = getattr(args, "plan_mode", False)
 
         self.catalog, self.database, self.db_schema = self._resolve_database_context(args)
 
@@ -86,6 +89,9 @@ class PrintModeRunner:
             execution_mode="workflow",
         )
 
+        if getattr(self, "orchestrator_tools", None):
+            self._attach_orchestrator_tools(node)
+
         if self.proxy_tool_patterns:
             from datus.tools.proxy.proxy_tool import apply_proxy_tools
 
@@ -102,7 +108,12 @@ class PrintModeRunner:
             at_tables=at_tables,
             at_metrics=at_metrics,
             at_sqls=at_sqls,
+            plan_mode=self.plan_mode,
         )
+        if self.plan_mode and hasattr(node_input, "auto_execute_plan"):
+            # Print mode is headless: the plan must be auto-approved so the
+            # run does not block waiting for an interactive confirmation.
+            node_input.auto_execute_plan = True
         node.input = node_input
         run_async(self._stream_chat(node))
 
@@ -265,6 +276,14 @@ class PrintModeRunner:
     def _write_payload(self, payload: MessagePayload):
         sys.stdout.write(payload.model_dump_json() + "\n")
         sys.stdout.flush()
+
+    def _attach_orchestrator_tools(self, node: Any) -> None:
+        from datus.tools.func_tool.orchestrator_tools import OrchestratorIssueTools
+
+        orchestrator_tools = OrchestratorIssueTools()
+        tools = orchestrator_tools.available_tools()
+        node.tools.extend(tools)
+        node.tool_registry.register_tools("orchestrator_tools", tools)
 
     def _read_interaction_input(self) -> str:
         line = sys.stdin.readline()

@@ -36,7 +36,7 @@ from datus.schemas.agent_models import ScopedContext, SubAgentConfig
 from datus.tools.func_tool.base import FuncToolResult
 from datus.utils.constants import SYS_SUB_AGENTS
 from datus.utils.loggings import get_logger
-from datus.utils.memory_loader import has_memory
+from datus.utils.memory_loader import resolve_memory_node
 
 if TYPE_CHECKING:
     from datus.agent.node.agentic_node import AgenticNode
@@ -47,12 +47,12 @@ logger = get_logger(__name__)
 
 # Mapping from subagent type string to NodeType constants
 NODE_CLASS_MAP = {
-    "gen_sql": NodeType.TYPE_GENSQL,
+    "gen_sql": NodeType.TYPE_GEN_SQL,
     "chat": NodeType.TYPE_CHAT,
+    "ask_metrics": NodeType.TYPE_ASK_METRICS,
     "gen_report": NodeType.TYPE_GEN_REPORT,
     "gen_visual_report": NodeType.TYPE_GEN_VISUAL_REPORT,
     "gen_visual_dashboard": NodeType.TYPE_GEN_VISUAL_DASHBOARD,
-    "ext_knowledge": NodeType.TYPE_EXT_KNOWLEDGE,
     "semantic": NodeType.TYPE_SEMANTIC,
     "sql_summary": NodeType.TYPE_SQL_SUMMARY,
     "explore": NodeType.TYPE_EXPLORE,
@@ -89,11 +89,17 @@ BUILTIN_SUBAGENT_DESCRIPTIONS = {
         "in PARALLEL with direction-specific prompts.\n"
         "  Returns JSON with {response, tokens_used}."
     ),
+    "ask_metrics": (
+        "Answer metric-based questions quickly using existing semantic metrics. "
+        "Use for KPI values, trends, grouped metric results, and metric attribution "
+        "when the question can be answered by the semantic layer. Does not fall back "
+        "to raw SQL. Returns JSON with {response, markdown_report, tokens_used}."
+    ),
     "gen_report": (
-        "Analyze and attribute metrics using reference SQL and semantic layer. "
-        "Use when the question involves metric attribution, root cause analysis, metric trend explanation, "
-        "or analyzing why a metric changed. "
-        "Prompt: provide the metric question, include reference SQL or metric name if available. "
+        "Legacy Markdown report subagent. Use only when the user explicitly asks to use "
+        "the gen_report subagent; do not automatically route attribution, root-cause, "
+        "trend explanation, or report requests here. "
+        "Prompt: provide the user's explicit gen_report request and any supplied context. "
         "Returns JSON with {response, report_result, tokens_used}."
     ),
     "gen_visual_report": (
@@ -161,15 +167,6 @@ BUILTIN_SUBAGENT_DESCRIPTIONS = {
         "Prompt: describe what skill to create, or 'optimize <skill-name>' to improve an existing skill. "
         "Returns JSON with {response, skill_name, skill_path, tokens_used}."
     ),
-    "gen_ext_knowledge": (
-        "Discover and extract business knowledge through blind-test → verify → extract workflow. "
-        "Use when asked to generate business knowledge entries, define domain concepts, or build knowledge base. "
-        "Prompt MUST contain a natural language business question AND the gold SQL (reference answer), "
-        "e.g. 'What is the total revenue by region? SELECT region, SUM(revenue) FROM sales GROUP BY region'. "
-        "The agent will parse both from the prompt, autonomously explore the database, write SQL, "
-        "verify against the gold SQL reference, and extract knowledge. "
-        "Returns JSON with {response, ext_knowledge_file, tokens_used}."
-    ),
     "gen_table": (
         "Create database tables with two input modes: "
         "(1) SQL-based: provide a JOIN/SELECT SQL → CTAS to create a wide table for query acceleration. "
@@ -222,6 +219,8 @@ class SubAgentTaskTool:
     with its own session, tools, and configuration. A fresh node is created
     for every task invocation to ensure fully independent context.
     """
+
+    permission_category: str = "sub_agent_tools"
 
     def __init__(
         self,
@@ -409,27 +408,32 @@ class SubAgentTaskTool:
                 is_subagent=True,
                 session_id=session_id,
             )
-        elif subagent_type == "gen_ext_knowledge":
-            from datus.agent.node.gen_ext_knowledge_agentic_node import GenExtKnowledgeAgenticNode
-
-            return GenExtKnowledgeAgenticNode(
-                node_name="gen_ext_knowledge",
-                agent_config=self.agent_config,
-                execution_mode=self._resolve_execution_mode(),
-                is_subagent=True,
-                session_id=session_id,
-            )
         elif subagent_type == "gen_sql":
             from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode
 
             return GenSQLAgenticNode(
                 node_id=f"task_gen_sql_{uuid.uuid4().hex[:8]}",
                 description="SQL generation node for gen_sql",
-                node_type="gensql",
+                node_type="gen_sql",
                 input_data=None,
                 agent_config=self.agent_config,
                 tools=None,
                 node_name="gen_sql",
+                execution_mode=self._resolve_execution_mode(),
+                is_subagent=True,
+                session_id=session_id,
+            )
+        elif subagent_type == "ask_metrics":
+            from datus.agent.node.ask_metrics_agentic_node import AskMetricsAgenticNode
+
+            return AskMetricsAgenticNode(
+                node_id=f"task_ask_metrics_{uuid.uuid4().hex[:8]}",
+                description="Metric question-answering node for ask_metrics",
+                node_type="ask_metrics",
+                input_data=None,
+                agent_config=self.agent_config,
+                tools=None,
+                node_name="ask_metrics",
                 execution_mode=self._resolve_execution_mode(),
                 is_subagent=True,
                 session_id=session_id,
@@ -574,10 +578,7 @@ class SubAgentTaskTool:
         """
         # Built-in gen_sql type
         if subagent_type == "gen_sql":
-            for key in ("gen_sql", "gensql"):
-                if key in self.agent_config.agentic_nodes:
-                    return NodeType.TYPE_GENSQL, key
-            return NodeType.TYPE_GENSQL, "gen_sql"
+            return NodeType.TYPE_GEN_SQL, "gen_sql"
 
         # Built-in explore type
         if subagent_type == "explore":
@@ -586,6 +587,9 @@ class SubAgentTaskTool:
         # Built-in gen_report type
         if subagent_type == "gen_report":
             return NodeType.TYPE_GEN_REPORT, "gen_report"
+
+        if subagent_type == "ask_metrics":
+            return NodeType.TYPE_ASK_METRICS, "ask_metrics"
 
         # Built-in gen_visual_report type
         if subagent_type == "gen_visual_report":
@@ -600,7 +604,7 @@ class SubAgentTaskTool:
             "gen_semantic_model": (NodeType.TYPE_SEMANTIC, "gen_semantic_model"),
             "gen_metrics": (NodeType.TYPE_SEMANTIC, "gen_metrics"),
             "gen_sql_summary": (NodeType.TYPE_SQL_SUMMARY, "gen_sql_summary"),
-            "gen_ext_knowledge": (NodeType.TYPE_EXT_KNOWLEDGE, "gen_ext_knowledge"),
+            "ask_metrics": (NodeType.TYPE_ASK_METRICS, "ask_metrics"),
             "gen_table": (NodeType.TYPE_GEN_TABLE, "gen_table"),
             "gen_job": (NodeType.TYPE_GEN_JOB, "gen_job"),
             "gen_dashboard": (NodeType.TYPE_GEN_DASHBOARD, "gen_dashboard"),
@@ -617,7 +621,7 @@ class SubAgentTaskTool:
         node_class = (
             sub_config.get("node_class") if isinstance(sub_config, dict) else getattr(sub_config, "node_class", None)
         )
-        node_type = NODE_CLASS_MAP.get(node_class or "gen_sql", NodeType.TYPE_GENSQL)
+        node_type = NODE_CLASS_MAP.get(node_class or "gen_sql", NodeType.TYPE_GEN_SQL)
         return node_type, subagent_type
 
     # ── broker injection ──────────────────────────────────────────────
@@ -715,10 +719,7 @@ class SubAgentTaskTool:
                     expected_owner = subagent_type
                 else:
                     _, expected_owner = self._resolve_node_type(subagent_type)
-                # Accept gen_sql/gensql alias (resolved per agent_config.agentic_nodes)
                 allowed_owners = {expected_owner}
-                if expected_owner in ("gen_sql", "gensql"):
-                    allowed_owners |= {"gen_sql", "gensql"}
                 if actual_owner not in allowed_owners:
                     return FuncToolResult(
                         success=0,
@@ -862,17 +863,17 @@ class SubAgentTaskTool:
         return self._convert_to_func_result(final_output, session_id=node.session_id)
 
     def _resolve_inherited_memory_node(self, subagent_type: str) -> Optional[str]:
-        """Pick the parent memory node name that a built-in child should inherit (read-only).
+        """Pick the memory node a sub-agent should inherit (read-only inline).
 
-        Returns ``None`` (no inheritance) when:
-        - the child has its own memory (custom subagent or ``chat``);
-        - the child is ``feedback`` — already injects the caller's memory via
-          ``override_node_name`` and would double-render;
-        - no parent node is registered, or the parent itself has no memory.
+        Every sub-agent (built-in or custom) sees its parent's memory inlined
+        read-only — sub-agents never write memory. Returns the parent's resolved
+        memory node (``resolve_memory_node`` maps built-in parents to the shared
+        ``chat`` memory; custom parents to their own name), or ``None`` when:
+        - the child is ``feedback`` — it injects the caller's memory via
+          ``override_node_name`` and would otherwise double-render;
+        - no parent node is registered.
         """
         if subagent_type == "feedback":
-            return None
-        if has_memory(subagent_type):
             return None
         if self._parent_node is None:
             return None
@@ -880,9 +881,9 @@ class SubAgentTaskTool:
             parent_name = self._parent_node.get_node_name()
         except Exception:
             return None
-        if not parent_name or not has_memory(parent_name):
+        if not parent_name:
             return None
-        return parent_name
+        return resolve_memory_node(parent_name)
 
     def _resolve_effective_sub_agent_config(self, subagent_type: str) -> SubAgentConfig:
         """Build an effective SubAgentConfig that inherits parent scoped_context when child has none."""
@@ -929,7 +930,13 @@ class SubAgentTaskTool:
     # ── input building ─────────────────────────────────────────────────
 
     def _build_node_input(self, node, prompt: str):
-        """Build the appropriate input object for the given node."""
+        """Build the appropriate input object for the given node.
+
+        The ``database`` context field is intentionally left unset: it denotes a physical
+        database name, not a datasource. Each node is constructed with ``agent_config`` and
+        routes through ``current_datasource``'s default database on its own, so stuffing the
+        datasource name into ``database`` here would only mislabel the context.
+        """
         from datus.agent.node.explore_agentic_node import ExploreAgenticNode
         from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode
         from datus.schemas.explore_agentic_node_models import ExploreNodeInput
@@ -938,17 +945,23 @@ class SubAgentTaskTool:
         if isinstance(node, ExploreAgenticNode):
             return ExploreNodeInput(
                 user_message=prompt,
-                database=self.agent_config.current_datasource,
             )
 
         if isinstance(node, GenSQLAgenticNode):
             return GenSQLNodeInput(
                 user_message=prompt,
-                database=self.agent_config.current_datasource,
+            )
+
+        from datus.agent.node.ask_metrics_agentic_node import AskMetricsAgenticNode
+
+        if isinstance(node, AskMetricsAgenticNode):
+            from datus.schemas.ask_metrics_agentic_node_models import AskMetricsNodeInput
+
+            return AskMetricsNodeInput(
+                user_message=prompt,
             )
 
         # Built-in system subagent input types
-        from datus.agent.node.gen_ext_knowledge_agentic_node import GenExtKnowledgeAgenticNode
         from datus.agent.node.gen_job_agentic_node import GenJobAgenticNode
         from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
         from datus.agent.node.gen_semantic_model_agentic_node import GenSemanticModelAgenticNode
@@ -960,7 +973,6 @@ class SubAgentTaskTool:
 
             return SemanticNodeInput(
                 user_message=prompt,
-                database=self.agent_config.current_datasource,
             )
 
         if isinstance(node, (GenSemanticModelAgenticNode, GenMetricsAgenticNode)):
@@ -968,7 +980,6 @@ class SubAgentTaskTool:
 
             return SemanticNodeInput(
                 user_message=prompt,
-                database=self.agent_config.current_datasource,
             )
 
         if isinstance(node, SqlSummaryAgenticNode):
@@ -976,13 +987,7 @@ class SubAgentTaskTool:
 
             return SqlSummaryNodeInput(
                 user_message=prompt,
-                database=self.agent_config.current_datasource,
             )
-
-        if isinstance(node, GenExtKnowledgeAgenticNode):
-            from datus.schemas.ext_knowledge_agentic_node_models import ExtKnowledgeNodeInput
-
-            return ExtKnowledgeNodeInput(user_message=prompt)
 
         from datus.agent.node.gen_dashboard_agentic_node import GenDashboardAgenticNode
 
@@ -991,7 +996,6 @@ class SubAgentTaskTool:
 
             return GenDashboardNodeInput(
                 user_message=prompt,
-                database=self.agent_config.current_datasource,
             )
 
         from datus.agent.node.scheduler_agentic_node import SchedulerAgenticNode
@@ -1001,7 +1005,6 @@ class SubAgentTaskTool:
 
             return SchedulerNodeInput(
                 user_message=prompt,
-                database=self.agent_config.current_datasource,
             )
 
         from datus.agent.node.gen_report_agentic_node import GenReportAgenticNode
@@ -1011,7 +1014,6 @@ class SubAgentTaskTool:
 
             return GenReportNodeInput(
                 user_message=prompt,
-                database=self.agent_config.current_datasource,
             )
 
         from datus.agent.node.gen_visual_report_agentic_node import GenVisualReportAgenticNode
@@ -1021,7 +1023,6 @@ class SubAgentTaskTool:
 
             return GenVisualReportNodeInput(
                 user_message=prompt,
-                database=self.agent_config.current_datasource,
             )
 
         from datus.agent.node.gen_visual_dashboard_agentic_node import GenVisualDashboardAgenticNode
@@ -1031,7 +1032,6 @@ class SubAgentTaskTool:
 
             return GenVisualDashboardNodeInput(
                 user_message=prompt,
-                database=self.agent_config.current_datasource,
             )
 
         from datus.agent.node.gen_skill_agentic_node import SkillCreatorAgenticNode
@@ -1137,17 +1137,6 @@ class SubAgentTaskTool:
                 }
             )
 
-        # External knowledge result: has 'ext_knowledge_file' key
-        ext_knowledge_file = output.get("ext_knowledge_file")
-        if ext_knowledge_file is not None:
-            return _wrap(
-                {
-                    "response": response,
-                    "ext_knowledge_file": ext_knowledge_file,
-                    "tokens_used": tokens,
-                }
-            )
-
         # Report result: has 'report_result' key
         report_result = output.get("report_result")
         if report_result is not None:
@@ -1155,6 +1144,15 @@ class SubAgentTaskTool:
                 {
                     "response": response,
                     "report_result": report_result,
+                    "tokens_used": tokens,
+                }
+            )
+
+        if "markdown_report" in output:
+            return _wrap(
+                {
+                    "response": response,
+                    "markdown_report": output.get("markdown_report", response),
                     "tokens_used": tokens,
                 }
             )

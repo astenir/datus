@@ -19,13 +19,15 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 
 import anthropic
 import httpx
 from agents import Agent, RunContextWrapper, Usage
 from agents.mcp import MCPServerStdio
-from agents.usage import InputTokensDetails, OutputTokensDetails
+from agents.tool_context import ToolContext
+from agents.usage import InputTokensDetails, OutputTokensDetails, RequestUsage
 
 from datus.configuration.agent_config import ModelConfig
 from datus.models.mcp_utils import multiple_mcp_servers
@@ -34,6 +36,7 @@ from datus.schemas.action_history import ActionHistory, ActionHistoryManager, Ac
 from datus.schemas.node_models import SQLContext
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
+from datus.utils.ssl_utils import is_ssl_cert_verification_error
 from datus.utils.traceable_utils import optional_traceable
 
 logger = get_logger(__name__)
@@ -174,13 +177,21 @@ class ClaudeModel(OpenAICompatibleModel):
         self.proxy_client = None
         self.async_proxy_client = None
 
-        if proxy_url:
+        # SSL verification (e.g. a private gateway CA) resolved by the parent
+        # __init__. The native client takes no `verify` argument, so we must pass a
+        # custom http_client. Only do so when a proxy is set or ssl_verify is
+        # configured; otherwise leave http_client=None to preserve default behavior
+        # (the Anthropic SDK's httpx client honors the standard SSL_CERT_FILE env var).
+        verify = getattr(self, "ssl_verify", None)
+        if proxy_url or verify is not None:
+            verify_kwargs = {} if verify is None else {"verify": verify}
+            proxy_kwargs = {"proxy": httpx.Proxy(url=proxy_url)} if proxy_url else {}
             self.proxy_client = httpx.Client(
-                transport=httpx.HTTPTransport(proxy=httpx.Proxy(url=proxy_url)),
+                transport=httpx.HTTPTransport(**verify_kwargs, **proxy_kwargs),
                 timeout=60.0,
             )
             self.async_proxy_client = httpx.AsyncClient(
-                transport=httpx.AsyncHTTPTransport(proxy=httpx.Proxy(url=proxy_url)),
+                transport=httpx.AsyncHTTPTransport(**verify_kwargs, **proxy_kwargs),
                 timeout=60.0,
             )
 
@@ -207,6 +218,11 @@ class ClaudeModel(OpenAICompatibleModel):
                 http_client=self.async_proxy_client,
                 default_headers=extra_headers or None,
             )
+            # The SDK falls back to the ANTHROPIC_API_KEY env var when api_key=None,
+            # and auth_headers merges both credentials — a stale env key would make
+            # requests carry X-Api-Key alongside the Bearer token and get rejected.
+            self.anthropic_client.api_key = None
+            self.async_anthropic_client.api_key = None
         else:
             self.anthropic_client = anthropic.Anthropic(
                 api_key=self.api_key,
@@ -220,6 +236,11 @@ class ClaudeModel(OpenAICompatibleModel):
                 http_client=self.async_proxy_client,
                 default_headers=extra_headers or None,
             )
+            # Symmetric guard: the SDK falls back to the ANTHROPIC_AUTH_TOKEN env
+            # var when auth_token is not given, which would add a spurious
+            # Authorization: Bearer header next to X-Api-Key.
+            self.anthropic_client.auth_token = None
+            self.async_anthropic_client.auth_token = None
 
         # Wrap with LangSmith if available. Wrap sync and async clients
         # independently so a failure on the async wrap (e.g. older langsmith
@@ -408,6 +429,8 @@ class ClaudeModel(OpenAICompatibleModel):
             self._diagnose_oauth_401(e)  # raises specific DatusException for OAuth tokens
             raise
         except Exception as e:
+            if is_ssl_cert_verification_error(e):
+                raise DatusException(ErrorCode.MODEL_SSL_CERT_ERROR) from e
             logger.error(f"Error generating with Anthropic: {str(e)}")
             raise
 
@@ -447,6 +470,7 @@ class ClaudeModel(OpenAICompatibleModel):
             async with multiple_mcp_servers(mcp_servers) as connected_servers:
                 # Get all tools and build tool-name-to-server mapping once
                 tool_server_map = {}  # tool_name -> connected_server
+                mcp_tool_objs = {}  # tool_name -> SDK tool object (carries .name for hooks)
                 for server_name, connected_server in connected_servers.items():
                     try:
                         agent = Agent(name="mcp-tools-agent")
@@ -459,12 +483,20 @@ class ClaudeModel(OpenAICompatibleModel):
                                     f"overwriting previous mapping"
                                 )
                             tool_server_map[tool.name] = connected_server
+                            mcp_tool_objs[tool.name] = tool
                         all_tools.extend(mcp_tools)
                         logger.info(f"Retrieved {len(mcp_tools)} tools from {server_name}")
 
                     except Exception as e:
                         logger.error(f"Error getting tools from {server_name}: {str(e)}")
                         continue
+
+                # Shared placeholder agent for hook lifecycle calls. The native
+                # loop is not driven by the openai-agents Runner, so we fire the
+                # composed ``hooks`` (permission / compact / KB-sync / token-usage)
+                # ourselves; the hooks barely read ``agent`` so one placeholder is
+                # sufficient for every callback.
+                hook_agent = Agent(name="claude-native-agent")
 
                 logger.info(f"Retrieved {len(all_tools)} total tools from MCP servers")
 
@@ -521,11 +553,15 @@ class ClaudeModel(OpenAICompatibleModel):
                 cache_read_tokens = 0
                 last_call_input_tokens = 0
 
-                # Reset the per-LLM-call usage baseline so the first response
-                # of this user turn reports its full usage as a delta (the
-                # native loop never triggers the SDK ``on_start`` that the
-                # streaming Runner path relies on for the same reset).
-                await self._reset_token_usage_hook(hooks)
+                # Drive the composed run hooks through their standard lifecycle
+                # so the native loop behaves exactly like the SDK Runner path.
+                # ``run_ctx`` carries a real SDK ``Usage`` accumulator that
+                # ``TokenUsageHook.on_llm_end`` reads via ``_extract_usage_info``
+                # (inherited from OpenAICompatibleModel) — no bespoke per-hook
+                # plumbing. ``on_start`` resets each hook's per-turn baseline so
+                # the first response reports its full usage as a delta.
+                run_ctx = RunContextWrapper(context=None, usage=Usage())
+                await self._invoke_hook(hooks, "on_start", run_ctx, hook_agent)
 
                 # Execute conversation loop
                 turn = -1
@@ -642,21 +678,20 @@ class ClaudeModel(OpenAICompatibleModel):
                         cache_read_tokens += call_cache_read
                         last_call_input_tokens = call_total_input
 
-                        # Drive the per-LLM-call usage update so the CLI status
-                        # bar / API ``usage`` events refresh mid-turn. The
-                        # native loop bypasses the SDK Runner, so this is the
-                        # only place the hook can observe each response.
-                        await self._emit_native_token_usage(
-                            hooks,
-                            self._build_native_usage_info(
-                                requests=turn + 1,
-                                cumulative_input_tokens=cumulative_input_tokens,
-                                cumulative_output_tokens=cumulative_output_tokens,
-                                cache_read_tokens=cache_read_tokens,
-                                cache_creation_tokens=cache_creation_tokens,
-                                last_call_input_tokens=last_call_input_tokens,
-                            ),
+                        # Drive the per-LLM-call usage update through the standard
+                        # ``on_llm_end`` hook so the CLI status bar / API ``usage``
+                        # events refresh mid-turn. The native loop bypasses the SDK
+                        # Runner, so we mutate the shared ``run_ctx.usage`` with an
+                        # SDK ``Usage`` snapshot and fire the hook exactly as the
+                        # Runner would after each model response.
+                        run_ctx.usage = self._build_sdk_usage(
+                            requests=turn + 1,
+                            cumulative_input_tokens=cumulative_input_tokens,
+                            cumulative_output_tokens=cumulative_output_tokens,
+                            cache_read_tokens=cache_read_tokens,
+                            last_call_input_tokens=last_call_input_tokens,
                         )
+                        await self._invoke_hook(hooks, "on_llm_end", run_ctx, hook_agent, response)
 
                     message = response.content
 
@@ -690,14 +725,50 @@ class ClaudeModel(OpenAICompatibleModel):
                                 action_history_manager.add_action(start_action)
                             yield start_action
 
+                            # Build the per-tool context and resolve a tool object
+                            # exposing ``.name`` BEFORE running the tool, then fire
+                            # ``on_tool_start`` so the composed permission hook can
+                            # gate execution exactly like the SDK Runner path. This
+                            # MUST sit before the execution try/except blocks below:
+                            # a ``PermissionDeniedException`` has to propagate out of
+                            # the generator (mirroring the SDK, where on_tool_start
+                            # raising aborts the run) instead of being swallowed and
+                            # downgraded into a tool_result error by them.
+                            tool_args = json.dumps(block.input, ensure_ascii=False)
+                            tool_ctx = ToolContext(
+                                context=None,
+                                usage=Usage(),
+                                tool_name=block.name,
+                                tool_call_id=block.id,
+                                tool_arguments=tool_args,
+                            )
+                            tool_obj = (
+                                func_tool_map.get(block.name)
+                                or mcp_tool_objs.get(block.name)
+                                or SimpleNamespace(name=block.name)
+                            )
+                            await self._invoke_hook(hooks, "on_tool_start", tool_ctx, hook_agent, tool_obj)
+
                             tool_executed = False
+                            # Raw structured result handed to ``on_tool_end``; GenerationHooks
+                            # inspects the FuncToolResult dict / result text to sync the KB.
+                            hook_result: Any = None
 
                             # Try function tools first
                             if block.name in func_tool_map:
                                 try:
                                     ft = func_tool_map[block.name]
-                                    run_context = RunContextWrapper(context=None, usage=Usage())
-                                    result_val = await ft.on_invoke_tool(run_context, json.dumps(block.input))
+                                    # Reuse ``tool_ctx`` (a ToolContext, not a bare
+                                    # RunContextWrapper) so the tool's ``tool_call_id``
+                                    # matches this block's ``action_id`` (``block.id``).
+                                    # The ``task`` tool reads ``tool_call_id`` to link
+                                    # every sub-agent action's ``parent_action_id`` to the
+                                    # wrapping task action; without it the CLI renderer
+                                    # cannot anchor the sub-agent group and mis-renders it
+                                    # as separate ``<node>_request`` / ``<node>_response``
+                                    # blocks.
+                                    result_val = await ft.on_invoke_tool(tool_ctx, tool_args)
+                                    hook_result = result_val
                                     # Ensure result is a string (Anthropic API requires string content)
                                     result_str = result_val if isinstance(result_val, str) else json.dumps(result_val)
                                     # Wrap in object matching MCP tool result format
@@ -719,6 +790,7 @@ class ClaudeModel(OpenAICompatibleModel):
                                             else block.input,
                                         )
                                         tool_call_cache[block.id] = tool_result
+                                        hook_result = tool_result.content[0].text if tool_result.content else ""
                                         tool_executed = True
                                     except Exception as e:
                                         logger.error(f"Error executing tool {block.name}: {str(e)}")
@@ -751,6 +823,19 @@ class ClaudeModel(OpenAICompatibleModel):
                             if action_history_manager is not None:
                                 action_history_manager.add_action(complete_action)
                             yield complete_action
+
+                            # Fire ``on_tool_end`` so the compact / KB-sync hooks run
+                            # per tool completion, mirroring the SDK Runner loop. On
+                            # failure pass a ``{"success": 0}`` marker so consumers that
+                            # inspect the result treat it as a failed call.
+                            await self._invoke_hook(
+                                hooks,
+                                "on_tool_end",
+                                tool_ctx,
+                                hook_agent,
+                                tool_obj,
+                                hook_result if tool_executed else {"success": 0, "error": result_summary},
+                            )
 
                     # Build assistant message content from all blocks
                     content = []
@@ -873,12 +958,19 @@ class ClaudeModel(OpenAICompatibleModel):
                         max_turns,
                     )
 
+                # Close out the composed hooks' lifecycle, completing parity with
+                # the SDK Runner path (current ``on_end`` implementations are
+                # no-ops, but the native loop now drives the full interface).
+                await self._invoke_hook(hooks, "on_end", run_ctx, hook_agent, final_content)
+
                 yield final_action
 
         except anthropic.AuthenticationError as e:
             self._diagnose_oauth_401(e)
             raise
         except Exception as e:
+            if is_ssl_cert_verification_error(e):
+                raise DatusException(ErrorCode.MODEL_SSL_CERT_ERROR) from e
             logger.error(f"Error in _generate_with_mcp_stream: {str(e)}")
             raise
 
@@ -923,39 +1015,76 @@ class ClaudeModel(OpenAICompatibleModel):
             "last_call_input_tokens": last_call_input_tokens,
         }
 
-    @staticmethod
-    def _iter_token_usage_hooks(hooks):
-        """Yield every ``TokenUsageHook`` reachable from a composed hook.
+    def _build_sdk_usage(
+        self,
+        *,
+        requests: int,
+        cumulative_input_tokens: int,
+        cumulative_output_tokens: int,
+        cache_read_tokens: int,
+        last_call_input_tokens: int,
+    ) -> Usage:
+        """Build an SDK ``Usage`` snapshot from the native loop's counters.
 
-        ``hooks`` may be a bare hook or a ``CompositeHooks`` wrapping several;
-        we duck-type on ``emit_manual`` so the native loop stays decoupled
-        from the concrete hook classes.
+        The native Anthropic loop bypasses the openai-agents Runner, so it must
+        feed :class:`TokenUsageHook` (via ``on_llm_end``) the same shape the
+        Runner would. ``TokenUsageHook._emit`` reads ``context.usage`` and calls
+        :meth:`OpenAICompatibleModel._extract_usage_info` (inherited here), which
+        consumes ``input_tokens`` / ``output_tokens`` / ``total_tokens``,
+        ``input_tokens_details.cached_tokens`` and ``request_usage_entries[-1]``
+        for the last-call input. ``cumulative_input_tokens`` already folds in the
+        cache_read / cache_creation components (done by the caller) so the OpenAI
+        "input includes cached" semantics carry through cache-hit-rate and
+        context-usage-ratio derivation.
+        """
+        total_tokens = cumulative_input_tokens + cumulative_output_tokens
+        return Usage(
+            requests=requests,
+            input_tokens=cumulative_input_tokens,
+            input_tokens_details=InputTokensDetails(cached_tokens=cache_read_tokens),
+            output_tokens=cumulative_output_tokens,
+            output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+            total_tokens=total_tokens,
+            # ``_extract_usage_info`` derives ``last_call_input_tokens`` from the
+            # final request entry's ``input_tokens`` — the real context-window
+            # occupancy of the most recent LLM call.
+            request_usage_entries=[
+                RequestUsage(
+                    input_tokens=last_call_input_tokens,
+                    output_tokens=0,
+                    total_tokens=last_call_input_tokens,
+                    input_tokens_details=InputTokensDetails(cached_tokens=cache_read_tokens),
+                    output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+                )
+            ],
+        )
+
+    async def _invoke_hook(self, hooks, method_name: str, *args) -> None:
+        """Drive one composed-hook lifecycle method from the native loop.
+
+        ``hooks`` may be a bare ``AgentHooks`` or a ``CompositeHooks`` wrapping
+        several; either way we call ``getattr(hooks, method_name)`` once and let
+        ``CompositeHooks`` fan out to its children. ``PermissionDeniedException``
+        MUST propagate so a denied tool aborts the run, mirroring the SDK path
+        (where ``on_tool_start`` raising surfaces as a ``UserError``). Every
+        other exception is logged and swallowed so a best-effort hook (compact,
+        KB sync, token usage) can never crash the agent loop.
         """
         if hooks is None:
             return
-        if hasattr(hooks, "emit_manual"):
-            yield hooks
-        inner = getattr(hooks, "hooks_list", None)
-        if inner:
-            for h in inner:
-                if hasattr(h, "emit_manual"):
-                    yield h
+        method = getattr(hooks, method_name, None)
+        if method is None:
+            return
+        # Local import keeps the module import graph light and matches the
+        # file's convention of importing permission types lazily.
+        from datus.tools.permission.permission_hooks import PermissionDeniedException
 
-    async def _reset_token_usage_hook(self, hooks) -> None:
-        """Reset each token-usage hook's per-turn delta baseline."""
-        for hook in self._iter_token_usage_hooks(hooks):
-            try:
-                await hook.on_start(None, None)
-            except Exception:  # noqa: BLE001 — never break the native loop
-                logger.debug("Failed to reset token usage hook baseline", exc_info=True)
-
-    async def _emit_native_token_usage(self, hooks, usage_info: dict) -> None:
-        """Push one per-LLM-call usage snapshot through the token-usage hook(s)."""
-        for hook in self._iter_token_usage_hooks(hooks):
-            try:
-                await hook.emit_manual(usage_info)
-            except Exception:  # noqa: BLE001 — never break the native loop
-                logger.debug("Failed to emit native token usage", exc_info=True)
+        try:
+            await method(*args)
+        except PermissionDeniedException:
+            raise
+        except Exception:  # noqa: BLE001 — best-effort hooks never break the loop
+            logger.debug("Hook '%s' raised; ignoring", method_name, exc_info=True)
 
     async def _store_native_turn_usage(self, session, usage_info: dict) -> None:
         """Persist the native turn's cumulative usage into ``turn_usage``.

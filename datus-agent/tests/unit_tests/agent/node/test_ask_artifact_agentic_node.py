@@ -1137,7 +1137,6 @@ class TestArtifactContextBlockInlining:
             subject_refs={
                 "metrics": [subj],
                 "reference_sql": [],
-                "ext_knowledge": [],
             },
         )
         block = node._render_artifact_context_block()
@@ -1183,7 +1182,6 @@ class TestArtifactContextBlockInlining:
             subject_refs={
                 "metrics": [commerce_aov, finance_aov],
                 "reference_sql": [],
-                "ext_knowledge": [],
             },
         )
         block = node._render_artifact_context_block()
@@ -1889,7 +1887,7 @@ class TestToolsWhitelist:
         when the whitelist omits ``db_tools``."""
         node = _make_ask_report_with_tools(real_agent_config, _NO_DB_WHITELIST)
         names = _tool_names(node)
-        for db_tool in ("read_query", "list_tables", "describe_table", "get_table_ddl"):
+        for db_tool in ("read_query", "list_tables", "describe_table"):
             assert db_tool not in names, f"{db_tool} leaked despite not being whitelisted"
 
     def test_whitelisted_tools_are_exposed(self, real_agent_config):
@@ -1915,7 +1913,7 @@ class TestToolsWhitelist:
         # Listed → present.
         assert "read_query" in names
         # Not listed (other DBFuncTool methods) → absent.
-        for other in ("list_tables", "describe_table", "get_table_ddl"):
+        for other in ("list_tables", "describe_table"):
             assert other not in names, f"{other} should not be exposed by a method-level whitelist"
 
     def test_filesystem_tools_require_whitelist(self, real_agent_config):
@@ -2180,7 +2178,7 @@ class TestChatDecoupling:
             real_agent_config, "date_parsing_tools.*,filesystem_tools.*", name="ask_noskill", slug="noskill"
         )
         node._get_system_prompt()
-        leaked = {"load_skill", "skill_execute_command"} & _tool_names(node)
+        leaked = {"load_skill"} & _tool_names(node)
         assert not leaked, f"skill tools leaked via prompt-build lazy injection: {sorted(leaked)}"
 
     def test_bash_present_when_whitelisted(self, real_agent_config):

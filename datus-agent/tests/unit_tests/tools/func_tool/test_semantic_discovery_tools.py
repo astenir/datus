@@ -3,6 +3,7 @@
 
 """Unit tests for datus/tools/func_tool/semantic_discovery_tools.py"""
 
+import json
 from unittest.mock import MagicMock, patch
 
 from datus.tools.func_tool.base import FuncToolResult
@@ -470,6 +471,10 @@ class TestAnalyzeMetricCandidatesFromHistory:
         assert len(candidates) == 1
         assert candidates[0]["name"] == "paid_arppu"
         assert candidates[0]["metric_type"] == "ratio"
+        assert candidates[0]["candidate_classification"] == "exact_metric"
+        assert candidates[0]["expression_kind"] == "aggregate_ratio_expr"
+        assert candidates[0]["equivalence"] == "exact"
+        assert candidates[0]["requires_validation"] is False
         assert candidates[0]["dimensions"] == ["dt"]
         assert candidates[0]["filters"] == ["status = 'paid'"]
         assert {m["agg"] for m in candidates[0]["base_measures"]} == {"SUM", "COUNT_DISTINCT"}
@@ -488,6 +493,8 @@ class TestAnalyzeMetricCandidatesFromHistory:
         candidate = result.result["metric_candidates"][0]
         assert candidate["name"] == "gross_margin_rate"
         assert candidate["metric_type"] == "expr"
+        assert candidate["candidate_classification"] == "exact_metric"
+        assert candidate["equivalence"] == "exact"
         assert len(candidate["base_measures"]) == 2
 
     def test_derived_candidate_for_existing_metric_expression(self):
@@ -560,6 +567,237 @@ class TestAnalyzeMetricCandidatesFromHistory:
         assert candidate["name"] == "rolling_7d_revenue"
         assert candidate["metric_type"] == "cumulative"
 
+    def test_lag_period_aggregation_becomes_previous_and_delta_metrics(self):
+        tools = _make_tools()
+        result = tools.analyze_metric_candidates_from_history(
+            sql_queries=[
+                """
+                WITH monthly_orders AS (
+                    SELECT
+                        DATE_TRUNC('month', order_date) AS metric_month,
+                        COUNT(DISTINCT order_id) AS order_count
+                    FROM fact_orders
+                    WHERE order_date >= '2025-01-01' AND order_date < '2025-07-01'
+                    GROUP BY DATE_TRUNC('month', order_date)
+                ),
+                period_comparison AS (
+                    SELECT
+                        metric_month,
+                        order_count,
+                        LAG(order_count) OVER (ORDER BY metric_month) AS order_count_previous_period
+                    FROM monthly_orders
+                )
+                SELECT
+                    metric_month,
+                    order_count,
+                    order_count_previous_period,
+                    order_count - order_count_previous_period AS order_count_period_delta
+                FROM period_comparison
+                ORDER BY metric_month
+                """
+            ]
+        )
+
+        assert result.success == 1
+        assert [candidate["name"] for candidate in result.result["direct_metric_candidates"]] == ["order_count"]
+
+        derived = {candidate["name"]: candidate for candidate in result.result["derived_metric_candidates"]}
+        assert sorted(derived) == ["order_count_period_delta", "order_count_previous_period"]
+
+        previous = derived["order_count_previous_period"]
+        assert previous["metric_type"] == "derived"
+        assert previous["metric_kind"] == "derived"
+        assert previous["expression"] == "order_count_previous_period"
+        assert previous["inputs"] == [
+            {
+                "name": "order_count",
+                "alias": "order_count_previous_period",
+                "offset_window": "1 month",
+            }
+        ]
+
+        delta = derived["order_count_period_delta"]
+        assert delta["metric_type"] == "derived"
+        assert delta["metric_kind"] == "derived"
+        assert delta["expression"] == "order_count - order_count_previous_period"
+        assert delta["inputs"] == [
+            {"name": "order_count"},
+            {
+                "name": "order_count",
+                "alias": "order_count_previous_period",
+                "offset_window": "1 month",
+            },
+        ]
+
+    def test_period_shift_source_lookup_accepts_legacy_from_key(self):
+        from sqlglot import parse_one
+
+        tools = _make_tools()
+        select = parse_one("SELECT order_id FROM fact_orders")
+        from_clause = select.args.pop("from_", None)
+        if from_clause is None:
+            from_clause = select.args.get("from")
+        select.args["from"] = from_clause
+
+        assert tools._direct_source_names(select) == ["fact_orders"]
+
+    def test_baisheng_seed_24_generates_previous_month_and_delta_metrics(self):
+        tools = _make_tools()
+        result = tools.analyze_metric_candidates_from_history(
+            sql_entries_json=json.dumps(
+                [
+                    {
+                        "name": "metric:seed:24",
+                        "question": "4月到10月活动数量月环比",
+                        "sql": """
+                        WITH monthly AS (
+                            SELECT
+                                DATE_TRUNC('month', start_date) AS start_month,
+                                COUNT(DISTINCT ac_code) AS activity_count
+                            FROM v_udata_ac_info
+                            WHERE start_date >= '2025-04-01' AND start_date <= '2025-10-31'
+                            GROUP BY DATE_TRUNC('month', start_date)
+                        ),
+                        compared AS (
+                            SELECT
+                                start_month,
+                                activity_count,
+                                LAG(activity_count) OVER (ORDER BY start_month)
+                                    AS previous_month_activity_count
+                            FROM monthly
+                        )
+                        SELECT
+                            start_month,
+                            activity_count,
+                            previous_month_activity_count,
+                            activity_count - previous_month_activity_count AS activity_count_mom_delta
+                        FROM compared
+                        ORDER BY start_month
+                        """,
+                    }
+                ]
+            ),
+            existing_metric_catalog_json=json.dumps([{"name": "activity_count", "type": "aggregate"}]),
+        )
+
+        assert result.success == 1
+        derived = {candidate["name"]: candidate for candidate in result.result["derived_metric_candidates"]}
+        assert sorted(derived) == ["activity_count_mom_delta", "previous_month_activity_count"]
+        assert derived["previous_month_activity_count"]["inputs"] == [
+            {
+                "name": "activity_count",
+                "alias": "previous_month_activity_count",
+                "offset_window": "1 month",
+            }
+        ]
+        assert derived["activity_count_mom_delta"]["inputs"] == [
+            {"name": "activity_count"},
+            {
+                "name": "activity_count",
+                "alias": "previous_month_activity_count",
+                "offset_window": "1 month",
+            },
+        ]
+
+    def test_inline_lag_metric_math_uses_source_time_grain_context(self):
+        tools = _make_tools()
+        result = tools.analyze_metric_candidates_from_history(
+            sql_queries=[
+                """
+                WITH monthly_orders AS (
+                    SELECT
+                        DATE_TRUNC('month', order_date) AS metric_month,
+                        COUNT(DISTINCT order_id) AS order_count
+                    FROM fact_orders
+                    GROUP BY DATE_TRUNC('month', order_date)
+                )
+                SELECT
+                    metric_month,
+                    order_count,
+                    order_count - LAG(order_count) OVER (ORDER BY metric_month) AS order_count_period_delta
+                FROM monthly_orders
+                ORDER BY metric_month
+                """
+            ]
+        )
+
+        assert result.success == 1
+        matches = [
+            candidate
+            for candidate in result.result["derived_metric_candidates"]
+            if candidate["name"] == "order_count_period_delta"
+        ]
+        assert len(matches) == 1
+        delta = matches[0]
+        assert delta["expression"] == "order_count - order_count_prev"
+        assert delta["inputs"] == [
+            {"name": "order_count"},
+            {
+                "name": "order_count",
+                "alias": "order_count_prev",
+                "offset_window": "1 month",
+            },
+        ]
+
+    def test_period_shift_aliases_are_scoped_to_source_select(self):
+        tools = _make_tools()
+        result = tools.analyze_metric_candidates_from_history(
+            sql_queries=[
+                """
+                WITH monthly_orders AS (
+                    SELECT
+                        DATE_TRUNC('month', order_date) AS metric_month,
+                        COUNT(DISTINCT order_id) AS order_count
+                    FROM fact_orders
+                    GROUP BY DATE_TRUNC('month', order_date)
+                ),
+                weekly_orders AS (
+                    SELECT
+                        DATE_TRUNC('week', order_date) AS metric_week,
+                        COUNT(DISTINCT order_id) AS order_count
+                    FROM fact_orders
+                    GROUP BY DATE_TRUNC('week', order_date)
+                ),
+                monthly_comparison AS (
+                    SELECT
+                        metric_month,
+                        order_count,
+                        LAG(order_count) OVER (ORDER BY metric_month) AS order_count_previous_period
+                    FROM monthly_orders
+                ),
+                weekly_comparison AS (
+                    SELECT
+                        metric_week,
+                        order_count,
+                        LAG(order_count) OVER (ORDER BY metric_week) AS order_count_previous_period
+                    FROM weekly_orders
+                )
+                SELECT
+                    metric_month,
+                    order_count,
+                    order_count_previous_period,
+                    order_count - order_count_previous_period AS order_count_period_delta
+                FROM monthly_comparison
+                ORDER BY metric_month
+                """
+            ]
+        )
+
+        assert result.success == 1
+        delta = next(
+            candidate
+            for candidate in result.result["derived_metric_candidates"]
+            if candidate["name"] == "order_count_period_delta"
+        )
+        assert delta["inputs"] == [
+            {"name": "order_count"},
+            {
+                "name": "order_count",
+                "alias": "order_count_previous_period",
+                "offset_window": "1 month",
+            },
+        ]
+
     def test_conditional_aggregation_keeps_case_measure_evidence(self):
         tools = _make_tools()
         result = tools.analyze_metric_candidates_from_history(
@@ -585,6 +823,154 @@ class TestAnalyzeMetricCandidatesFromHistory:
         evidence = result.result["non_metric_evidence"][0]
         assert evidence["tables"] == ["users"]
         assert evidence["filters"] == ["is_test = 0 AND country = 'US'"]
+
+    def test_raw_ratio_with_rate_context_becomes_llm_review_candidate(self):
+        tools = _make_tools()
+        result = tools.analyze_metric_candidates_from_history(
+            sql_entries_json=json.dumps(
+                [
+                    {
+                        "question": "Please list the lowest three eligible free rates for students aged 5-17.",
+                        "sql": """
+                        SELECT `Free Meal Count (Ages 5-17)` / `Enrollment (Ages 5-17)`
+                        FROM frpm
+                        WHERE `Educational Option Type` = 'Continuation School'
+                        ORDER BY `Free Meal Count (Ages 5-17)` / `Enrollment (Ages 5-17)` ASC
+                        LIMIT 3
+                        """,
+                    }
+                ]
+            )
+        )
+
+        assert result.success == 1
+        assert result.result["non_metric_evidence"] == []
+        assert result.result["direct_metric_candidates"] == []
+        candidate = result.result["llm_review_candidates"][0]
+        assert candidate["evidence_kind"] == "llm_review_projection"
+        assert candidate["candidate_classification"] == "llm_review_candidate"
+        assert candidate["expression_kind"] == "row_ratio_expr"
+        assert candidate["equivalence"] == "lifted"
+        assert candidate["requires_validation"] is True
+        assert candidate["name"] == "free_meal_count_ages_5_17_rate"
+        assert candidate["metric_type"] == "ratio"
+        assert candidate["requires_name_translation"] is True
+        assert candidate["source_context"] == "Please list the lowest three eligible free rates for students aged 5-17."
+        measures_by_role = {measure["role"]: measure for measure in candidate["base_measures"]}
+        assert measures_by_role["numerator"]["agg"] == "SUM"
+        assert measures_by_role["numerator"]["expr"] == '"Free Meal Count (Ages 5-17)"'
+        assert measures_by_role["denominator"]["agg"] == "SUM"
+        assert measures_by_role["denominator"]["expr"] == '"Enrollment (Ages 5-17)"'
+
+    def test_baisheng_like_success_story_keeps_detail_sql_non_metric(self):
+        tools = _make_tools()
+        result = tools.analyze_metric_candidates_from_history(
+            sql_entries_json=json.dumps(
+                [
+                    {
+                        "question": "Please list the lowest three eligible free rates for students aged 5-17.",
+                        "sql": """
+                        SELECT `Free Meal Count (Ages 5-17)` / `Enrollment (Ages 5-17)`
+                        FROM frpm
+                        WHERE `Educational Option Type` = 'Continuation School'
+                        ORDER BY `Free Meal Count (Ages 5-17)` / `Enrollment (Ages 5-17)` ASC
+                        LIMIT 3
+                        """,
+                    },
+                    {
+                        "question": "Please list the zip code of all charter schools.",
+                        "sql": """
+                        SELECT T2.Zip
+                        FROM frpm AS T1
+                        INNER JOIN schools AS T2 ON T1.CDSCode = T2.CDSCode
+                        WHERE T1.`District Name` = 'Fresno County Office of Education'
+                          AND T1.`Charter School (Y/N)` = 1
+                        """,
+                    },
+                ]
+            )
+        )
+
+        assert [candidate["metric_type"] for candidate in result.result["llm_review_candidates"]] == ["ratio"]
+        assert result.result["direct_metric_candidates"] == []
+        assert len(result.result["non_metric_evidence"]) == 1
+        assert result.result["non_metric_evidence"][0]["source_sql_name"] == "sql_2"
+        assert result.result["source_classifications"] == [
+            {"source_sql_name": "sql_1", "classification": "llm_review_candidate", "reason": ""},
+            {"source_sql_name": "sql_2", "classification": "cohort_or_dataset_only", "reason": ""},
+        ]
+
+    def test_raw_division_without_rate_context_becomes_llm_review_candidate(self):
+        tools = _make_tools()
+        result = tools.analyze_metric_candidates_from_history(
+            sql_queries=["SELECT price / quantity FROM order_lines WHERE quantity > 0"]
+        )
+
+        assert result.result["non_metric_evidence"] == []
+        candidate = result.result["llm_review_candidates"][0]
+        assert candidate["name"] == "price_per_quantity"
+        assert candidate["metric_type"] == "ratio"
+        assert candidate["confidence"] == "low"
+        assert candidate["equivalence"] == "lifted"
+        assert candidate["requires_validation"] is True
+
+    def test_percentage_scaled_raw_ratio_becomes_llm_review_candidate(self):
+        tools = _make_tools()
+        result = tools.analyze_metric_candidates_from_history(
+            sql_queries=["SELECT paid_users * 100.0 / total_users AS paid_user_pct FROM cohorts"]
+        )
+
+        candidate = result.result["llm_review_candidates"][0]
+        assert candidate["name"] == "paid_user_pct"
+        assert candidate["metric_type"] == "ratio"
+        measures_by_role = {measure["role"]: measure for measure in candidate["base_measures"]}
+        assert measures_by_role["numerator"]["expr"] == "paid_users"
+        assert measures_by_role["denominator"]["expr"] == "total_users"
+
+    def test_wrapped_raw_ratio_becomes_llm_review_candidate(self):
+        tools = _make_tools()
+        result = tools.analyze_metric_candidates_from_history(
+            sql_queries=["SELECT ROUND(CAST(a / NULLIF(b, 0) AS DOUBLE), 2) AS ratio_value FROM t"]
+        )
+
+        candidate = result.result["llm_review_candidates"][0]
+        assert candidate["expression_kind"] == "row_ratio_expr"
+        measures_by_role = {measure["role"]: measure for measure in candidate["base_measures"]}
+        assert measures_by_role["numerator"]["expr"] == "a"
+        assert measures_by_role["denominator"]["expr"] == "b"
+
+    def test_count_star_with_distinct_business_count_is_support_measure(self):
+        tools = _make_tools()
+        result = tools.analyze_metric_candidates_from_history(
+            sql_queries=[
+                """
+                SELECT COUNT(*) AS product_row_count,
+                       COUNT(DISTINCT ac_code) AS activity_count
+                FROM v_udata_ac_info
+                WHERE request_name LIKE '%小罗%' AND FIND_IN_SET('1', ac_tags)
+                """
+            ]
+        )
+
+        assert result.success == 1
+        assert [candidate["name"] for candidate in result.result["direct_metric_candidates"]] == ["activity_count"]
+        assert [candidate["name"] for candidate in result.result["metric_candidates"]] == ["activity_count"]
+        assert result.result["support_measure_candidates"][0]["name"] == "product_row_count"
+        assert result.result["support_measure_candidates"][0]["evidence_kind"] == "support_measure"
+        assert result.result["support_measure_candidates"][0]["base_measures"][0]["agg"] == "COUNT"
+
+    def test_count_star_without_distinct_business_count_stays_direct_metric(self):
+        tools = _make_tools()
+        result = tools.analyze_metric_candidates_from_history(
+            sql_queries=["SELECT COUNT(*) AS order_count, SUM(amount) AS revenue FROM orders"]
+        )
+
+        assert result.success == 1
+        assert [candidate["name"] for candidate in result.result["direct_metric_candidates"]] == [
+            "order_count",
+            "revenue",
+        ]
+        assert result.result["support_measure_candidates"] == []
 
     def test_repeated_aliases_are_merged(self):
         tools = _make_tools()
@@ -709,6 +1095,22 @@ class TestAnalyzeMetricCandidatesFromHistory:
         assert result.result["query_classification"] == "metric_plus_derived_datasource"
         assert result.result["direct_metric_candidates"] == []
         assert result.result["blocked_direct_metric_candidates"][0]["name"] == "time_count"
+        assert result.result["metric_generation_skips"] == [
+            {
+                "source_sql_name": "sql_1",
+                "reason": (
+                    "rank/window TopN query returns row-level or post-window results; skip during metric generation"
+                ),
+                "sql_shape": "ranked_window",
+                "window": {
+                    "function": "RANK",
+                    "partition_by": ["f.dt", "f.module"],
+                    "order_by": [{"expr": "f.sell_hitrate", "direction": "ASC"}],
+                },
+                "rank_alias": "rank_no",
+                "rank_filters": ["rank_no <= 10"],
+            }
+        ]
         recommendation = result.result["derived_datasource_recommendations"][0]
         assert recommendation["source_cte"] == "rank_data"
         assert recommendation["rank_alias"] == "rank_no"

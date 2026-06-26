@@ -21,7 +21,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from datus.agent.agent import Agent, _print_platform_doc_result, bootstrap_platform_doc
+from datus.agent.agent import Agent, _print_platform_doc_result, _task_item_value, bootstrap_platform_doc
 from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
 from datus.schemas.batch_events import BatchEvent, BatchStage
 from datus.schemas.node_models import SqlTask
@@ -64,6 +64,27 @@ class _FakeInitResult:
         self.duration_seconds = duration_seconds
         self.version_details = version_details
         self.errors = errors or []
+
+
+class TestTaskItemValue:
+    """Tests for the _task_item_value helper in datus.agent.agent."""
+
+    def test_returns_empty_string_when_key_is_none(self):
+        assert _task_item_value({"a": "1"}, None) == ""
+
+    def test_returns_empty_string_when_key_is_empty(self):
+        # An empty-string key is falsy too (e.g. an unset benchmark default key).
+        assert _task_item_value({"a": "1"}, "") == ""
+
+    def test_returns_empty_string_when_value_missing(self):
+        assert _task_item_value({}, "missing") == ""
+
+    def test_returns_empty_string_when_value_is_none(self):
+        assert _task_item_value({"a": None}, "a") == ""
+
+    def test_returns_stripped_string_value(self):
+        assert _task_item_value({"a": "  hello  "}, "a") == "hello"
+        assert _task_item_value({"a": 42}, "a") == "42"
 
 
 class TestPrintPlatformDocResult:
@@ -533,7 +554,6 @@ def _make_args_ext(**kwargs):
         subject_tree=None,
         from_adapter=None,
         semantic_yaml=None,
-        ext_knowledge=None,
         success_story=None,
         sql_dir=None,
         validate_only=False,
@@ -565,15 +585,13 @@ def _make_agent_config_ext(datasource="test_ns"):
     cfg.get_save_run_dir.return_value = "/tmp/output/run1"
     cfg.path_manager = MagicMock()
     cfg.path_manager.semantic_model_path.return_value = MagicMock(exists=MagicMock(return_value=False))
-    cfg.path_manager.ext_knowledge_path.return_value = MagicMock(exists=MagicMock(return_value=False))
     cfg.path_manager.sql_summary_path.return_value = MagicMock(exists=MagicMock(return_value=False))
     cfg.document_configs = {}
     cfg.benchmark_config.return_value = MagicMock(
         question_id_key="task_id",
         question_key="question",
-        db_key="db",
+        database_key="db",
         use_tables_key=None,
-        ext_knowledge_key=None,
     )
     return cfg
 
@@ -1138,57 +1156,6 @@ class TestBootstrapKbMetrics:
 
 
 # ---------------------------------------------------------------------------
-# bootstrap_kb — ext_knowledge branch
-# ---------------------------------------------------------------------------
-
-
-class TestBootstrapKbExtKnowledge:
-    def test_ext_knowledge_overwrite_with_csv(self):
-        args = _make_args_ext(components=["ext_knowledge"], kb_update_strategy="overwrite", ext_knowledge="data.csv")
-        agent = _make_agent_ext(args=args)
-
-        mock_rag = MagicMock()
-        mock_rag.store.table_size.return_value = 15
-
-        with (
-            patch("datus.agent.agent.ExtKnowledgeRAG", return_value=mock_rag),
-            patch("datus.agent.agent.init_ext_knowledge"),
-        ):
-            result = agent.bootstrap_kb()
-
-        assert result["status"] == "success"
-
-    def test_ext_knowledge_with_success_story(self):
-        args = _make_args_ext(components=["ext_knowledge"], kb_update_strategy="incremental", success_story="story/")
-        agent = _make_agent_ext(args=args)
-
-        mock_rag = MagicMock()
-        mock_rag.store.table_size.return_value = 5
-
-        with (
-            patch("datus.agent.agent.ExtKnowledgeRAG", return_value=mock_rag),
-            patch("datus.agent.agent.init_success_story_knowledge", return_value=(True, None)),
-        ):
-            result = agent.bootstrap_kb()
-
-        assert result["status"] == "success"
-
-    def test_ext_knowledge_success_story_failure(self):
-        args = _make_args_ext(components=["ext_knowledge"], kb_update_strategy="incremental", success_story="story/")
-        agent = _make_agent_ext(args=args)
-
-        mock_rag = MagicMock()
-
-        with (
-            patch("datus.agent.agent.ExtKnowledgeRAG", return_value=mock_rag),
-            patch("datus.agent.agent.init_success_story_knowledge", return_value=(False, "gen failed")),
-        ):
-            result = agent.bootstrap_kb()
-
-        assert result["status"] == "failed"
-
-
-# ---------------------------------------------------------------------------
 # bootstrap_kb — reference_sql branch
 # ---------------------------------------------------------------------------
 
@@ -1314,8 +1281,13 @@ class TestGenerateDataset:
                 "nodes": [
                     {
                         "id": "node1",
-                        "type": "generate_sql",
-                        "result": {"sql_contexts": [{"sql": "SELECT 1"}]},
+                        "type": "gen_sql",
+                        "result": {
+                            "success": True,
+                            "response": "Generated a count query.",
+                            "sql": "SELECT 1",
+                            "tokens_used": 0,
+                        },
                     }
                 ]
             }
@@ -1350,6 +1322,52 @@ class TestGenerateDataset:
         assert data[0]["user_prompt"] == "What is the count?"
         os.remove(out_file)
 
+    def test_generates_json_with_sql_contexts_result_shape(self, tmp_path):
+        import json
+
+        import yaml as pyyaml
+
+        traj_file = tmp_path / "0_1234567890.yaml"
+        traj_data = {
+            "workflow": {
+                "nodes": [
+                    {
+                        "id": "node1",
+                        "type": "gen_sql",
+                        "result": {"sql_contexts": [{"sql_query": "SELECT 1", "explanation": "legacy context"}]},
+                    }
+                ]
+            }
+        }
+        traj_file.write_text(pyyaml.dump(traj_data))
+
+        node_dir = tmp_path / "0"
+        node_dir.mkdir()
+        node_file = node_dir / "node1.yml"
+        node_file.write_text(
+            pyyaml.dump(
+                {
+                    "user_prompt": "What is the count?",
+                    "system_prompt": "You are a SQL expert.",
+                    "reason_content": [],
+                    "output_content": "SELECT COUNT(*) FROM t",
+                }
+            )
+        )
+
+        args = _make_args_ext(trajectory_dir=str(tmp_path), dataset_name=str(tmp_path / "legacy_ds"), format="json")
+        agent = _make_agent_ext(args=args)
+
+        result = agent.generate_dataset()
+
+        assert result["status"] == "success"
+        assert result["total_entries"] == 1
+        out_file = result["output_file"]
+        with open(out_file, "r") as f:
+            data = json.load(f)
+        assert data[0]["sql_contexts"] == [{"sql_query": "SELECT 1", "explanation": "legacy context"}]
+        os.remove(out_file)
+
     def test_filters_by_task_ids(self, tmp_path):
         import yaml as pyyaml
 
@@ -1361,8 +1379,13 @@ class TestGenerateDataset:
                     "nodes": [
                         {
                             "id": f"node_{task_id}",
-                            "type": "generate_sql",
-                            "result": {"sql_contexts": [{"sql": "SELECT 1"}]},
+                            "type": "gen_sql",
+                            "result": {
+                                "success": True,
+                                "response": "Generated a count query.",
+                                "sql": "SELECT 1",
+                                "tokens_used": 0,
+                            },
                         }
                     ]
                 }

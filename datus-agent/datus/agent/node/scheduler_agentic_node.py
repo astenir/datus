@@ -12,7 +12,7 @@ skill injection, and the domain result shape.
 
 from __future__ import annotations
 
-from typing import Any, ClassVar, Dict, List, Literal, Optional
+from typing import Any, ClassVar, Literal, Optional
 
 from datus.agent.node.deliverable_node import DeliverableAgenticNode
 from datus.configuration.agent_config import AgentConfig
@@ -32,7 +32,7 @@ class SchedulerAgenticNode(DeliverableAgenticNode):
     ACTION_TYPE: ClassVar[str] = "scheduler_response"
     result_class = SchedulerNodeResult
     PROMPT_TEMPLATE: ClassVar[str] = "scheduler_system"
-    DEFAULT_MAX_TURNS: ClassVar[int] = 30
+    DEFAULT_MAX_TURNS: ClassVar[int] = 50
     # Scheduler workflow + validation skills are injected dynamically based
     # on the configured platform. Leave ``DEFAULT_SKILLS`` empty so the
     # base-class fallback does not over-expose unrelated platforms.
@@ -134,17 +134,6 @@ class SchedulerAgenticNode(DeliverableAgenticNode):
             skills_to_inject,
         )
         self._setup_skill_func_tools()
-
-    def _tool_category_map(self) -> Dict[str, List[Any]]:
-        """Register scheduler tools so ``scheduler_tools.delete_job`` DENY fires."""
-        mapping = super()._tool_category_map()
-        if self.scheduler_tools:
-            mapping["scheduler_tools"] = list(self.scheduler_tools.available_tools())
-        if getattr(self, "filesystem_func_tool", None):
-            mapping["filesystem_tools"] = list(self.filesystem_func_tool.available_tools())
-        if self.ask_user_tool:
-            mapping.setdefault("tools", []).extend(self.ask_user_tool.available_tools())
-        return mapping
 
     # ── template context ──────────────────────────────────────────────
 

@@ -204,7 +204,7 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
         # whitelist may request them (metric/dimension/attribution analysis).
         # Declare the slot before super().__init__() (which triggers
         # ``setup_tools``) so the whitelist pass can build it on demand and
-        # ``_tool_category_map`` can reference it safely.
+        # ``_populate_tool_registry`` can pick it up safely.
         self.semantic_tools = None
 
         # Resolve the artifact binding BEFORE super().__init__() because
@@ -292,18 +292,6 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
         """
         super()._rebuild_tools()
         self._apply_tools_whitelist()
-
-    def _tool_category_map(self) -> Dict[str, List[Any]]:
-        """Register semantic tools under their canonical permission category.
-
-        The chat base has no semantic tools so its map omits them; when the
-        whitelist makes us build them, surface them here so PermissionHooks
-        matches ``semantic_tools.*`` rules instead of the ``tools.*`` catch-all.
-        """
-        mapping = super()._tool_category_map()
-        if getattr(self, "semantic_tools", None):
-            mapping["semantic_tools"] = list(self.semantic_tools.available_tools())
-        return mapping
 
     def _apply_tools_whitelist(self) -> None:
         """Replace ``self.tools`` with exactly the tools the whitelist grants.
@@ -1154,7 +1142,7 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
             uses = brief.get("uses") if isinstance(brief, dict) else None
             if not isinstance(uses, dict):
                 continue
-            for kind_key in ("metrics", "reference_sql", "ext_knowledge"):
+            for kind_key in ("metrics", "reference_sql"):
                 for entry in uses.get(kind_key) or []:
                     if not isinstance(entry, dict):
                         continue
@@ -1175,7 +1163,6 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
         for kind_key, label in (
             ("metrics", "metric"),
             ("reference_sql", "sql"),
-            ("ext_knowledge", "knowledge"),
         ):
             entries = refs.get(kind_key) or []
             if not isinstance(entries, list):
@@ -1208,8 +1195,7 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
             (
                 "The artifact was grounded in the following subject-library "
                 "assets. To fetch a canonical definition, call "
-                "`get_metrics(path, name)` / `get_reference_sql(path, name)` "
-                "/ `get_ext_knowledge(path, name)`:"
+                "`get_metrics(path, name)` / `get_reference_sql(path, name)`:"
             ),
             "",
         ]
@@ -1507,7 +1493,6 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
             for kind_key, label in (
                 ("metrics", "metric"),
                 ("reference_sql", "sql"),
-                ("ext_knowledge", "knowledge"),
             ):
                 for entry in uses.get(kind_key) or []:
                     if isinstance(entry, dict):

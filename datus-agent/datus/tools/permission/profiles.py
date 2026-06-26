@@ -98,6 +98,11 @@ _NORMAL_RULES = [
     _rule("filesystem_tools", "read_*", PermissionLevel.ALLOW),
     _rule("filesystem_tools", "glob", PermissionLevel.ALLOW),
     _rule("filesystem_tools", "grep", PermissionLevel.ALLOW),
+    # persistent memory: ALLOW. add_memory/edit_memory only touch a single
+    # hidden, 2000-byte-capped MEMORY.md with no external reach — gating
+    # benign self-notes behind a prompt would fire on routine "remember this"
+    # turns for zero safety benefit.
+    _rule("memory_tools", "*", PermissionLevel.ALLOW),
     # plan read
     _rule("tools", "todo_list", PermissionLevel.ALLOW),
     _rule("tools", "todo_read", PermissionLevel.ALLOW),
@@ -116,10 +121,27 @@ _NORMAL_RULES = [
     # subagent's own PermissionHooks instance. Double-prompting here would
     # fire on nearly every chat interaction for zero safety benefit.
     _rule("sub_agent_tools", "*", PermissionLevel.ALLOW),
-    # mcp: ASK; skill loading ALLOW, but skill script execution still ASK.
+    # reference templates: read-only end to end — search/get/render are pure
+    # lookups and ``execute_reference_template`` renders Jinja then runs
+    # ``db_tools.read_query`` (never a write). Historically gen_sql lumped
+    # these into ``semantic_tools`` (ALLOW) while chat left them in the
+    # catch-all (ASK); the dedicated category unifies on ALLOW.
+    _rule("reference_template_tools", "*", PermissionLevel.ALLOW),
+    # artifact authoring helpers (``start_new_*`` / ``bind_existing_*`` /
+    # ``save_query*`` / ``validate_render``) are subagent-internal state
+    # mutations confined to the artifact tree; users review the artifact as
+    # a whole via the rendered preview, not per-call prompts. Mirrors the
+    # historical lumping into ``semantic_tools``.
+    _rule("artifact_tools", "*", PermissionLevel.ALLOW),
+    # platform doc lookups are read-only; ``web_search_document`` reaches
+    # the network (Tavily) and stays at the profile default (ASK in
+    # normal/auto).
+    _rule("platform_doc_tools", "list_*", PermissionLevel.ALLOW),
+    _rule("platform_doc_tools", "get_*", PermissionLevel.ALLOW),
+    _rule("platform_doc_tools", "search_*", PermissionLevel.ALLOW),
+    # mcp: ASK; skill loading ALLOW.
     _rule("mcp.*", "*", PermissionLevel.ASK),
     _rule("skills", "*", PermissionLevel.ALLOW),
-    _rule("skills", "skill_execute_command", PermissionLevel.ASK),
     # General-purpose bash execution: always ASK in normal/auto so a stray
     # command can't run without user consent. ``dangerous`` profile (default
     # ALLOW, no rules) lets it through.

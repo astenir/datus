@@ -57,6 +57,10 @@ def _make_mock_scheduler_tools():
         tool.name = name
         fake_tools.append(tool)
     mock_tools.available_tools.return_value = fake_tools
+    # Plain-string category so AgenticNode._iter_tool_groups picks the mock
+    # up (Mock auto-attributes are excluded by the isinstance(str) guard).
+    mock_tools.permission_category = "scheduler_tools"
+    mock_tools.all_tools_name = lambda: fake_tool_names
     return mock_tools
 
 
@@ -200,7 +204,7 @@ class TestSchedulerAgenticNodeInit:
             assert node.max_turns == 25
 
     def test_max_turns_default(self, real_agent_config, mock_llm_create):
-        """Default max_turns is 30 when scheduler not in agentic_nodes."""
+        """Default max_turns is 50 when scheduler not in agentic_nodes."""
         # Add scheduler service config but no scheduler agentic node config
         real_agent_config.services.schedulers = {"airflow_local": _scheduler_service_config()}
         real_agent_config.init_scheduler_services(real_agent_config.services.schedulers)
@@ -208,7 +212,7 @@ class TestSchedulerAgenticNodeInit:
             from datus.agent.node.scheduler_agentic_node import SchedulerAgenticNode
 
             node = SchedulerAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
-            assert node.max_turns == 30
+            assert node.max_turns == 50
 
 
 # ---------------------------------------------------------------------------
@@ -298,20 +302,20 @@ class TestSchedulerToolSetup:
             assert "submit_sql_job" not in tool_names
             assert "write_file" in tool_names
 
-    def test_tool_category_map_registers_scheduler_tools(self, real_agent_config, mock_llm_create):
-        """``_tool_category_map`` must place scheduler tools under ``scheduler_tools``
-        so ``scheduler_tools.delete_job`` DENY rule fires under normal profile."""
+    def test_tool_registry_registers_scheduler_tools(self, real_agent_config, mock_llm_create):
+        """Scheduler tools must land under ``scheduler_tools`` so the
+        ``scheduler_tools.delete_job`` DENY rule fires under normal profile."""
         _add_scheduler_config(real_agent_config)
         with patch(_SCHEDULER_TOOLS_PATCH, return_value=_make_mock_scheduler_tools()):
             from datus.agent.node.scheduler_agentic_node import SchedulerAgenticNode
 
             node = SchedulerAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
-            mapping = node._tool_category_map()
-            tool_names = {t.name for t in mapping.get("scheduler_tools", [])}
-            assert "submit_sql_job" in tool_names
-            assert "trigger_scheduler_job" in tool_names
-            fs_tool_names = {t.name for t in mapping.get("filesystem_tools", [])}
-            assert "write_file" in fs_tool_names
+            node._populate_tool_registry()
+            registry = node.tool_registry.to_dict()
+            assert registry.get("submit_sql_job") == "scheduler_tools"
+            assert registry.get("trigger_scheduler_job") == "scheduler_tools"
+            assert registry.get("delete_job") == "scheduler_tools"
+            assert registry.get("write_file") == "filesystem_tools"
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +396,9 @@ class TestSchedulerRegistration:
             result = tool._build_node_input(node, "List all jobs")
             assert isinstance(result, SchedulerNodeInput)
             assert result.user_message == "List all jobs"
-            assert result.database == real_agent_config.current_datasource
+            # ``database`` is a physical-database context field, not a datasource slot; the
+            # builder leaves it unset rather than mislabeling it with current_datasource.
+            assert result.database is None
 
     def test_node_factory_with_input_data(self, real_agent_config, mock_llm_create):
         """Node.new_instance with input_data should set node.input."""

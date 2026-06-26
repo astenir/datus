@@ -93,7 +93,7 @@ class TestGenMetricsAgenticNodeInit:
         assert node.max_turns == 5
 
     def test_metrics_max_turns_default(self, real_agent_config, mock_llm_create):
-        """Test default max_turns is 30 when not configured."""
+        """Test default max_turns is 50 when not configured."""
         from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
 
         # Remove gen_metrics from agentic_nodes to test default
@@ -103,13 +103,13 @@ class TestGenMetricsAgenticNodeInit:
                 agent_config=real_agent_config,
                 execution_mode="workflow",
             )
-            assert node.max_turns == 40
+            assert node.max_turns == 50
         finally:
             if original is not None:
                 real_agent_config.agentic_nodes["gen_metrics"] = original
 
-    def test_tool_category_map_splits_semantic_and_db(self, real_agent_config, mock_llm_create):
-        """``_tool_category_map`` buckets semantic helpers into ``semantic_tools`` and
+    def test_tool_registry_splits_semantic_and_db(self, real_agent_config, mock_llm_create):
+        """The registry buckets semantic helpers into ``semantic_tools`` and
         DB helpers into ``db_tools`` so profile rules for each match correctly."""
         from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
 
@@ -117,12 +117,12 @@ class TestGenMetricsAgenticNodeInit:
             agent_config=real_agent_config,
             execution_mode="workflow",
         )
-        mapping = node._tool_category_map()
-        semantic_names = {t.name for t in mapping.get("semantic_tools", [])}
-        assert "end_metric_generation" in semantic_names
-        assert "check_semantic_object_exists" in semantic_names
-        assert "db_tools" in mapping
-        assert "filesystem_tools" in mapping
+        node._populate_tool_registry()
+        registry = node.tool_registry.to_dict()
+        assert registry.get("end_metric_generation") == "semantic_tools"
+        assert registry.get("check_semantic_object_exists") == "semantic_tools"
+        assert registry.get("read_query") == "db_tools"
+        assert registry.get("write_file") == "filesystem_tools"
 
 
 # ---------------------------------------------------------------------------
@@ -526,7 +526,7 @@ class TestExtractMetricAndOutputFromResponse:
         }
         sem_model, metric_file, status, out = node._extract_metric_and_output_from_response(output)
         assert metric_file == "revenue_metrics.yml"
-        assert sem_model == "model.yml"
+        assert sem_model == ["model.yml"]
         assert status is None
         assert out == "Generated successfully"
 
@@ -542,6 +542,7 @@ class TestExtractMetricAndOutputFromResponse:
         output = {"content": content}
         sem_model, metric_file, status, out = node._extract_metric_and_output_from_response(output)
         assert metric_file == "sales_metrics.yml"
+        assert sem_model == ["model.yml"]
         assert status is None
         assert out == "Done"
 
@@ -556,7 +557,7 @@ class TestExtractMetricAndOutputFromResponse:
             }
         }
         sem_model, metric_file, status, out = node._extract_metric_and_output_from_response(output)
-        assert sem_model == "model.yml"
+        assert sem_model == ["model.yml"]
         assert metric_file is None
         assert status == "skipped"
         assert out.startswith("All requested metrics already exist")
@@ -572,7 +573,7 @@ class TestExtractMetricAndOutputFromResponse:
             }
         }
         sem_model, metric_file, status, out = node._extract_metric_and_output_from_response(output)
-        assert sem_model == "model.yml"
+        assert sem_model == ["model.yml"]
         assert metric_file is None
         assert status == "generated"
         assert out == "Generated successfully."
@@ -588,7 +589,7 @@ class TestExtractMetricAndOutputFromResponse:
             }
         }
         sem_model, metric_file, status, out = node._extract_metric_and_output_from_response(output)
-        assert sem_model == "model.yml"
+        assert sem_model == ["model.yml"]
         assert metric_file is None
         assert status == "done"
         assert out == "Done."
@@ -605,6 +606,7 @@ class TestExtractMetricAndOutputFromResponse:
         )
         output = {"content": content}
         sem_model, metric_file, status, out = node._extract_metric_and_output_from_response(output)
+        assert sem_model == ["model.yml"]
         assert metric_file is None
         assert status == "skipped"
         assert out == "Skipped: metric already exists."
@@ -709,6 +711,24 @@ class TestGetSystemPrompt:
             call_kwargs = mock_pm.return_value.render_template.call_args
             version = call_kwargs.kwargs.get("version")
             assert version == "1.2", f"Expected explicit version '1.2', got '{version}'"
+
+    def test_osi_authoring_uses_osi_prompt_template(self, real_agent_config, mock_llm_create):
+        node = _make_node(real_agent_config, mock_llm_create, execution_mode="workflow")
+        node.node_config["authoring_format"] = "osi"
+        node.input = SemanticNodeInput(user_message="Generate OSI metrics", prompt_version="1.2")
+
+        with (
+            patch("datus.agent.node.semantic_authoring.osi_prompt_version", return_value="osi-latest") as version_mock,
+            patch("datus.prompts.prompt_manager.get_prompt_manager") as mock_pm,
+        ):
+            mock_pm.return_value.render_template.return_value = "osi prompt"
+
+            node._get_system_prompt(template_context={})
+
+        version_mock.assert_called_once_with(real_agent_config, "gen_metrics", "1.2")
+        call_kwargs = mock_pm.return_value.render_template.call_args.kwargs
+        assert call_kwargs["template_name"] == "gen_metrics_osi_system"
+        assert call_kwargs["version"] == "osi-latest"
 
 
 # ---------------------------------------------------------------------------
@@ -850,7 +870,7 @@ class TestExecuteStreamGenMetricsError:
         node.semantic_tools.query_metrics.assert_called_once_with(metrics=["orders_total"], dry_run=True)
         node.generation_tools.end_metric_generation.assert_called_once_with(
             metric_file=str(metric_path),
-            semantic_model_file=str(real_agent_config.path_manager.semantic_model_path(datasource) / "orders.yml"),
+            semantic_model_files=[str(real_agent_config.path_manager.semantic_model_path(datasource) / "orders.yml")],
         )
 
     def test_final_metric_publish_requires_grouped_source_sql_dry_run(self, real_agent_config, mock_llm_create):
@@ -924,8 +944,292 @@ class TestExecuteStreamGenMetricsError:
 
         node.generation_tools.end_metric_generation.assert_called_once_with(
             metric_file=str(metric_path),
-            semantic_model_file=str(real_agent_config.path_manager.semantic_model_path(datasource) / "orders.yml"),
+            semantic_model_files=[str(real_agent_config.path_manager.semantic_model_path(datasource) / "orders.yml")],
         )
+
+    def test_osi_final_metric_publish_uses_semantic_model_files(self, real_agent_config, mock_llm_create):
+        from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
+        from datus.tools.func_tool.base import FuncToolResult
+
+        datasource = real_agent_config.current_datasource
+        semantic_dir = real_agent_config.path_manager.semantic_model_path(datasource)
+        metric_dir = semantic_dir / "metrics"
+        metric_dir.mkdir(parents=True, exist_ok=True)
+        metric_path = metric_dir / "orders_metrics.yml"
+        metric_path.write_text(
+            """
+version: 0.2.0.dev0
+semantic_model:
+  - name: shop
+    datasets:
+      - name: orders
+        source: orders
+    metrics:
+      - name: order_count
+        expression:
+          dialects:
+            - dialect: ANSI_SQL
+              expression: COUNT(DISTINCT order_id)
+""",
+            encoding="utf-8",
+        )
+        reported_semantic_path = f"subject/semantic_models/{datasource}/orders.yml"
+        reported_metric_path = f"subject/semantic_models/{datasource}/metrics/orders_metrics.yml"
+
+        node = GenMetricsAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        node.node_config["authoring_format"] = "osi"
+        node.input = SemanticNodeInput(user_message="Generate OSI metrics")
+        node.semantic_tools = MagicMock()
+        node.semantic_tools.validate_semantic = MagicMock(return_value=FuncToolResult(result={"valid": True}))
+        node.semantic_tools.query_metrics = MagicMock(
+            return_value=FuncToolResult(result={"metadata": {"sql": "SELECT 1"}})
+        )
+        node.generation_tools.end_metric_generation = MagicMock(return_value=FuncToolResult(result={"message": "ok"}))
+
+        node._finalize_metric_generation([reported_semantic_path], reported_metric_path, "generated")
+
+        node.semantic_tools.query_metrics.assert_called_once_with(metrics=["order_count"], dry_run=True)
+        node.generation_tools.end_metric_generation.assert_called_once_with(
+            metric_file=str(metric_path),
+            semantic_model_files=[str(semantic_dir / "orders.yml")],
+        )
+
+    def test_osi_final_metric_publish_handles_string_semantic_model_file(self, real_agent_config, mock_llm_create):
+        from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
+        from datus.tools.func_tool.base import FuncToolResult
+
+        datasource = real_agent_config.current_datasource
+        semantic_dir = real_agent_config.path_manager.semantic_model_path(datasource)
+        metric_dir = semantic_dir / "metrics"
+        metric_dir.mkdir(parents=True, exist_ok=True)
+        metric_path = metric_dir / "orders_metrics.yml"
+        metric_path.write_text(
+            """
+version: 0.2.0.dev0
+semantic_model:
+  - name: shop
+    metrics:
+      - name: order_count
+""",
+            encoding="utf-8",
+        )
+
+        node = GenMetricsAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        node.node_config["authoring_format"] = "osi"
+        node.input = SemanticNodeInput(user_message="Generate OSI metrics")
+        node.semantic_tools = MagicMock()
+        node.semantic_tools.validate_semantic = MagicMock(return_value=FuncToolResult(result={"valid": True}))
+        node.semantic_tools.query_metrics = MagicMock(
+            return_value=FuncToolResult(result={"metadata": {"sql": "SELECT 1"}})
+        )
+        node.generation_tools.end_metric_generation = MagicMock(return_value=FuncToolResult(result={"message": "ok"}))
+
+        node._finalize_metric_generation(
+            f"subject/semantic_models/{datasource}/orders.yml",
+            f"subject/semantic_models/{datasource}/metrics/orders_metrics.yml",
+            "generated",
+        )
+
+        node.generation_tools.end_metric_generation.assert_called_once_with(
+            metric_file=str(metric_path),
+            semantic_model_files=[str(semantic_dir / "orders.yml")],
+        )
+
+    def test_osi_final_metric_publish_skips_when_already_synced(self, real_agent_config, mock_llm_create):
+        from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
+
+        node = GenMetricsAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        node.node_config["authoring_format"] = "osi"
+        node.generation_evidence.mark_kb_sync("metric")
+        node.generation_tools.end_metric_generation = MagicMock()
+
+        node._finalize_metric_generation(None, "orders_metrics.yml", "generated")
+
+        node.generation_tools.end_metric_generation.assert_not_called()
+
+    def test_osi_skipped_status_without_metric_file_returns_cleanly(self, real_agent_config, mock_llm_create):
+        from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
+
+        node = GenMetricsAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        node.node_config["authoring_format"] = "osi"
+        node.generation_tools.end_metric_generation = MagicMock()
+
+        node._finalize_metric_generation(None, None, "skipped")
+
+        node.generation_tools.end_metric_generation.assert_not_called()
+
+    def test_osi_skipped_status_with_metric_file_fails_closed(self, real_agent_config, mock_llm_create):
+        from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
+
+        node = GenMetricsAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        node.node_config["authoring_format"] = "osi"
+
+        with pytest.raises(RuntimeError, match="status='skipped' with a non-null metric_file"):
+            node._finalize_metric_generation(None, "orders_metrics.yml", "skipped")
+
+    def test_osi_generated_status_without_metric_file_fails_closed(self, real_agent_config, mock_llm_create):
+        from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
+
+        node = GenMetricsAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        node.node_config["authoring_format"] = "osi"
+
+        with pytest.raises(RuntimeError, match="status='generated' without a metric_file"):
+            node._finalize_metric_generation(None, None, "generated")
+
+    def test_osi_empty_final_response_without_metric_file_is_noop(self, real_agent_config, mock_llm_create):
+        from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
+
+        node = GenMetricsAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        node.node_config["authoring_format"] = "osi"
+        node.generation_tools.end_metric_generation = MagicMock()
+
+        node._finalize_metric_generation(None, None, None)
+
+        node.generation_tools.end_metric_generation.assert_not_called()
+
+    def test_osi_final_metric_publish_requires_generation_tools(self, real_agent_config, mock_llm_create):
+        from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
+
+        node = GenMetricsAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        node.node_config["authoring_format"] = "osi"
+        node.generation_tools = None
+
+        with pytest.raises(RuntimeError, match="generation tools are unavailable"):
+            node._finalize_metric_generation(None, "orders_metrics.yml", "generated")
+
+    def test_osi_final_metric_publish_requires_validation_tool(self, real_agent_config, mock_llm_create):
+        from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
+
+        node = GenMetricsAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        node.node_config["authoring_format"] = "osi"
+        node.semantic_tools = None
+
+        with pytest.raises(RuntimeError, match="validate_semantic is unavailable"):
+            node._finalize_metric_generation(None, "orders_metrics.yml", "generated")
+
+    def test_osi_final_metric_publish_reports_validation_failure(self, real_agent_config, mock_llm_create):
+        from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
+        from datus.tools.func_tool.base import FuncToolResult
+
+        node = GenMetricsAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        node.node_config["authoring_format"] = "osi"
+        node.semantic_tools = MagicMock()
+        node.semantic_tools.validate_semantic = MagicMock(
+            return_value=FuncToolResult(success=0, error="invalid OSI", result={"valid": False})
+        )
+
+        with pytest.raises(RuntimeError, match="validate_semantic failed"):
+            node._finalize_metric_generation(None, "orders_metrics.yml", "generated")
+
+    def test_osi_final_metric_publish_requires_query_metrics_tool(self, real_agent_config, mock_llm_create):
+        from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
+
+        datasource = real_agent_config.current_datasource
+        metric_dir = real_agent_config.path_manager.semantic_model_path(datasource) / "metrics"
+        metric_dir.mkdir(parents=True, exist_ok=True)
+        (metric_dir / "orders_metrics.yml").write_text(
+            "version: 0.2.0.dev0\nsemantic_model:\n  - name: shop\n    metrics:\n      - name: order_count\n",
+            encoding="utf-8",
+        )
+
+        node = GenMetricsAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        node.node_config["authoring_format"] = "osi"
+        node.generation_evidence.validation_passed = True
+        node.semantic_tools = None
+
+        with pytest.raises(RuntimeError, match="query_metrics is unavailable"):
+            node._finalize_metric_generation(
+                None,
+                f"subject/semantic_models/{datasource}/metrics/orders_metrics.yml",
+                "generated",
+            )
+
+    def test_osi_final_metric_publish_reports_dry_run_failure(self, real_agent_config, mock_llm_create):
+        from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
+        from datus.tools.func_tool.base import FuncToolResult
+
+        datasource = real_agent_config.current_datasource
+        metric_dir = real_agent_config.path_manager.semantic_model_path(datasource) / "metrics"
+        metric_dir.mkdir(parents=True, exist_ok=True)
+        (metric_dir / "orders_metrics.yml").write_text(
+            "version: 0.2.0.dev0\nsemantic_model:\n  - name: shop\n    metrics:\n      - name: order_count\n",
+            encoding="utf-8",
+        )
+
+        node = GenMetricsAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        node.node_config["authoring_format"] = "osi"
+        node.semantic_tools = MagicMock()
+        node.semantic_tools.validate_semantic = MagicMock(return_value=FuncToolResult(result={"valid": True}))
+        node.semantic_tools.query_metrics = MagicMock(return_value=FuncToolResult(success=0, error="compile failed"))
+
+        with pytest.raises(RuntimeError, match="query_metrics\\(dry_run=True\\) failed"):
+            node._finalize_metric_generation(
+                None, f"subject/semantic_models/{datasource}/metrics/orders_metrics.yml", "generated"
+            )
+
+    def test_osi_final_metric_publish_requires_queryability_contracts(self, real_agent_config, mock_llm_create):
+        from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
+        from datus.tools.func_tool.base import FuncToolResult
+        from datus.utils.exceptions import DatusException
+
+        datasource = real_agent_config.current_datasource
+        metric_dir = real_agent_config.path_manager.semantic_model_path(datasource) / "metrics"
+        metric_dir.mkdir(parents=True, exist_ok=True)
+        (metric_dir / "revenue_metrics.yml").write_text(
+            "version: 0.2.0.dev0\nsemantic_model:\n  - name: shop\n    metrics:\n      - name: revenue_total\n",
+            encoding="utf-8",
+        )
+
+        node = GenMetricsAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        node.node_config["authoring_format"] = "osi"
+        node.input = SemanticNodeInput(
+            user_message="SELECT customer_segment, SUM(revenue) FROM orders GROUP BY customer_segment"
+        )
+        node.semantic_tools = MagicMock()
+        node.semantic_tools.validate_semantic = MagicMock(return_value=FuncToolResult(result={"valid": True}))
+        node.semantic_tools.query_metrics = MagicMock(
+            return_value=FuncToolResult(result={"metadata": {"sql": "SELECT 1"}})
+        )
+        node.generation_tools.end_metric_generation = MagicMock()
+
+        with pytest.raises(DatusException, match="source SQL group-by dimensions"):
+            node._finalize_metric_generation(
+                None,
+                f"subject/semantic_models/{datasource}/metrics/revenue_metrics.yml",
+                "generated",
+            )
+
+        node.generation_tools.end_metric_generation.assert_not_called()
+
+    def test_osi_final_metric_publish_reports_sync_failure(self, real_agent_config, mock_llm_create):
+        from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
+        from datus.tools.func_tool.base import FuncToolResult
+
+        datasource = real_agent_config.current_datasource
+        metric_dir = real_agent_config.path_manager.semantic_model_path(datasource) / "metrics"
+        metric_dir.mkdir(parents=True, exist_ok=True)
+        (metric_dir / "orders_metrics.yml").write_text(
+            "version: 0.2.0.dev0\nsemantic_model:\n  - name: shop\n    metrics:\n      - name: order_count\n",
+            encoding="utf-8",
+        )
+
+        node = GenMetricsAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
+        node.node_config["authoring_format"] = "osi"
+        node.semantic_tools = MagicMock()
+        node.semantic_tools.validate_semantic = MagicMock(return_value=FuncToolResult(result={"valid": True}))
+        node.semantic_tools.query_metrics = MagicMock(
+            return_value=FuncToolResult(result={"metadata": {"sql": "SELECT 1"}})
+        )
+        node.generation_tools.end_metric_generation = MagicMock(
+            return_value=FuncToolResult(success=0, error="sync failed")
+        )
+
+        with pytest.raises(RuntimeError, match="OSI metric KB sync failed"):
+            node._finalize_metric_generation(
+                None,
+                f"subject/semantic_models/{datasource}/metrics/orders_metrics.yml",
+                "generated",
+            )
 
     @pytest.mark.asyncio
     async def test_final_metric_file_rejects_out_of_sandbox_absolute_path(

@@ -1,13 +1,13 @@
 """Tests for datus.api.services.explorer_service — catalog and subject tree."""
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from datus.api.models.base_models import Result
 from datus.api.models.explorer_models import (
     CreateDirectoryInput,
-    CreateKnowledgeInput,
     DeleteSubjectInput,
-    EditKnowledgeInput,
     ReferenceSQLInput,
     RenameSubjectInput,
     SubjectListData,
@@ -27,15 +27,13 @@ class TestExplorerServiceInit:
         assert svc.datasource_id == real_agent_config.current_datasource
 
     def test_init_creates_rag_stores(self, real_agent_config):
-        """ExplorerService creates metric, ref_sql, and knowledge RAG stores."""
-        from datus.storage.ext_knowledge.store import ExtKnowledgeRAG
+        """ExplorerService creates metric and ref_sql RAG stores."""
         from datus.storage.metric.store import MetricRAG
         from datus.storage.reference_sql.store import ReferenceSqlRAG
 
         svc = ExplorerService(agent_config=real_agent_config)
         assert isinstance(svc.metric_rag, MetricRAG)
         assert isinstance(svc.reference_sql_rag, ReferenceSqlRAG)
-        assert isinstance(svc.knowledge_rag, ExtKnowledgeRAG)
 
     def test_init_creates_subject_tree_store(self, real_agent_config):
         """ExplorerService creates subject tree store."""
@@ -63,7 +61,7 @@ class TestExplorerServiceGetSubjectList:
         assert hasattr(result.data, "subjects")
 
     async def test_get_subject_list_with_populated_tree(self, real_agent_config):
-        """get_subject_list returns tree with directories, metrics, ref_sql, knowledge."""
+        """get_subject_list returns tree with directories and ref_sql entries."""
         svc = ExplorerService(agent_config=real_agent_config)
         # Create some structure
         await svc.create_directory(CreateDirectoryInput(subject_path=["tree_test"]))
@@ -76,14 +74,6 @@ class TestExplorerServiceGetSubjectList:
                 search_text="test",
             )
         )
-        await svc.create_knowledge(
-            CreateKnowledgeInput(
-                subject_path=["tree_test"],
-                name="tree_kb",
-                search_text="test",
-                explanation="test",
-            )
-        )
 
         result = await svc.get_subject_list()
         assert result.success is True
@@ -93,11 +83,10 @@ class TestExplorerServiceGetSubjectList:
         tree_test_nodes = [node for node in result.data.subjects if node.name == "tree_test"]
         assert len(tree_test_nodes) == 1
         tree_test_node = tree_test_nodes[0]
-        # Children should include ref_sql and knowledge
+        # Children should include ref_sql.
         assert isinstance(tree_test_node.children, list)
         child_names = {c.name for c in tree_test_node.children}
         assert "tree_sql" in child_names
-        assert "tree_kb" in child_names
 
 
 @pytest.mark.asyncio
@@ -234,6 +223,35 @@ class TestExplorerServiceReferenceSql:
         )
         assert result.success is True
 
+    async def test_edit_reference_sql_uses_sub_agent_conditions(self, real_agent_config):
+        """edit_reference_sql should preserve scoped-agent filters when updating storage."""
+        svc = ExplorerService(agent_config=real_agent_config)
+        marker_condition = object()
+        svc.reference_sql_rag._sub_agent_conditions = MagicMock(return_value=[marker_condition])
+        svc.reference_sql_rag.reference_sql_storage.update_entry = MagicMock(return_value=True)
+
+        result = await svc.edit_reference_sql(
+            ReferenceSQLInput(
+                subject_path=["edit_ref", "editable"],
+                name="editable",
+                sql="SELECT 2",
+                summary="updated",
+                search_text="updated",
+            )
+        )
+
+        assert result.success is True
+        svc.reference_sql_rag.reference_sql_storage.update_entry.assert_called_once_with(
+            subject_path=["edit_ref"],
+            name="editable",
+            update_values={
+                "sql": "SELECT 2",
+                "summary": "updated",
+                "search_text": "updated",
+            },
+            extra_conditions=[marker_condition],
+        )
+
 
 @pytest.mark.asyncio
 class TestExplorerServiceRenameSubject:
@@ -270,27 +288,6 @@ class TestExplorerServiceRenameSubject:
                 type=SubjectNodeType.REFERENCE_SQL,
                 subject_path=["rename_sql_dir", "old_sql"],
                 new_subject_path=["rename_sql_dir", "new_sql"],
-            )
-        )
-        assert result.success is True
-
-    async def test_rename_knowledge(self, real_agent_config):
-        """rename_subject renames a knowledge entry."""
-        svc = ExplorerService(agent_config=real_agent_config)
-        await svc.create_directory(CreateDirectoryInput(subject_path=["rename_kb_dir"]))
-        await svc.create_knowledge(
-            CreateKnowledgeInput(
-                subject_path=["rename_kb_dir"],
-                name="old_kb",
-                search_text="test",
-                explanation="test",
-            )
-        )
-        result = await svc.rename_subject(
-            RenameSubjectInput(
-                type=SubjectNodeType.KNOWLEDGE,
-                subject_path=["rename_kb_dir", "old_kb"],
-                new_subject_path=["rename_kb_dir", "new_kb"],
             )
         )
         assert result.success is True
@@ -371,26 +368,6 @@ class TestExplorerServiceDeleteSubject:
         )
         assert result.success is True
 
-    async def test_delete_knowledge(self, real_agent_config):
-        """delete_subject removes knowledge entry."""
-        svc = ExplorerService(agent_config=real_agent_config)
-        await svc.create_directory(CreateDirectoryInput(subject_path=["del_kb_dir"]))
-        await svc.create_knowledge(
-            CreateKnowledgeInput(
-                subject_path=["del_kb_dir"],
-                name="del_kb",
-                search_text="test",
-                explanation="test",
-            )
-        )
-        result = await svc.delete_subject(
-            DeleteSubjectInput(
-                type=SubjectNodeType.KNOWLEDGE,
-                subject_path=["del_kb_dir", "del_kb"],
-            )
-        )
-        assert result.success is True
-
     async def test_delete_metric_nonexistent(self, real_agent_config):
         """delete_subject for nonexistent metric returns error."""
         svc = ExplorerService(agent_config=real_agent_config)
@@ -417,14 +394,6 @@ class TestExplorerServiceDeleteSubject:
                 search_text="test",
             )
         )
-        await svc.create_knowledge(
-            CreateKnowledgeInput(
-                subject_path=["cascade_dir"],
-                name="child_kb",
-                search_text="test",
-                explanation="test",
-            )
-        )
         # Delete parent — should cascade
         result = await svc.delete_subject(
             DeleteSubjectInput(
@@ -436,105 +405,8 @@ class TestExplorerServiceDeleteSubject:
 
 
 @pytest.mark.asyncio
-class TestExplorerServiceKnowledge:
-    """Tests for knowledge CRUD operations."""
-
-    async def test_create_knowledge_success(self, real_agent_config):
-        """create_knowledge stores a new knowledge entry."""
-        svc = ExplorerService(agent_config=real_agent_config)
-        await svc.create_directory(CreateDirectoryInput(subject_path=["kb_test"]))
-        request = CreateKnowledgeInput(
-            subject_path=["kb_test"],
-            name="test_knowledge",
-            search_text="california schools types",
-            explanation="Schools in California have various types.",
-        )
-        result = await svc.create_knowledge(request)
-        assert result.success is True
-
-    async def test_get_knowledge_nonexistent(self, real_agent_config):
-        """get_knowledge for nonexistent entry returns error."""
-        svc = ExplorerService(agent_config=real_agent_config)
-        result = await svc.get_knowledge(["nonexistent", "knowledge"])
-        assert result.success is False
-
-    async def test_get_knowledge_empty_path(self, real_agent_config):
-        """get_knowledge with empty path returns error."""
-        svc = ExplorerService(agent_config=real_agent_config)
-        result = await svc.get_knowledge([])
-        assert result.success is False
-
-    async def test_create_then_get_knowledge(self, real_agent_config):
-        """Full lifecycle: create knowledge then retrieve it."""
-        svc = ExplorerService(agent_config=real_agent_config)
-        await svc.create_directory(CreateDirectoryInput(subject_path=["kb_full"]))
-        await svc.create_knowledge(
-            CreateKnowledgeInput(
-                subject_path=["kb_full"],
-                name="test_kb",
-                search_text="california schools types",
-                explanation="Schools in California have various types.",
-            )
-        )
-        result = await svc.get_knowledge(["kb_full", "test_kb"])
-        assert result.success is True
-        assert result.data.name == "test_kb"
-
-    async def test_create_knowledge_empty_path_fails(self, real_agent_config):
-        """create_knowledge with empty path returns error."""
-        svc = ExplorerService(agent_config=real_agent_config)
-        request = CreateKnowledgeInput(
-            subject_path=[],
-            name="x",
-            search_text="test",
-            explanation="test",
-        )
-        result = await svc.create_knowledge(request)
-        assert result.success is False
-
-    async def test_create_knowledge_duplicate_fails(self, real_agent_config):
-        """create_knowledge rejects duplicate names in same directory."""
-        svc = ExplorerService(agent_config=real_agent_config)
-        await svc.create_directory(CreateDirectoryInput(subject_path=["dup_kb_dir"]))
-        await svc.create_knowledge(
-            CreateKnowledgeInput(
-                subject_path=["dup_kb_dir"],
-                name="dup_entry",
-                search_text="first",
-                explanation="first",
-            )
-        )
-        result = await svc.create_knowledge(
-            CreateKnowledgeInput(
-                subject_path=["dup_kb_dir"],
-                name="dup_entry",
-                search_text="second",
-                explanation="second",
-            )
-        )
-        assert result.success is False
-        assert "already exists" in result.errorMessage
-
-    async def test_get_knowledge_root_level_fails(self, real_agent_config):
-        """get_knowledge at root level (single component path) returns error."""
-        svc = ExplorerService(agent_config=real_agent_config)
-        result = await svc.get_knowledge(["only_name"])
-        assert result.success is False
-        assert "root level" in result.errorMessage.lower()
-
-    async def test_edit_knowledge_short_path_fails(self, real_agent_config):
-        """edit_knowledge with path < 2 components returns error."""
-        svc = ExplorerService(agent_config=real_agent_config)
-        result = await svc.edit_knowledge(
-            EditKnowledgeInput(
-                subject_path=["only_one"],
-                name="kb",
-                search_text="test",
-                explanation="test",
-            )
-        )
-        assert result.success is False
-        assert "2 components" in result.errorMessage
+class TestExplorerServiceSubjectAssets:
+    """Tests for subject asset CRUD operations."""
 
     async def test_create_reference_sql_duplicate_fails(self, real_agent_config):
         """create_reference_sql rejects duplicate names."""
@@ -620,6 +492,7 @@ class TestExplorerServiceCreateMetric:
     async def test_create_metric_with_valid_yaml(self, real_agent_config):
         """create_metric with valid YAML exercises the full creation path."""
         import os
+        from unittest.mock import patch
 
         from datus.api.models.explorer_models import EditMetricInput
 
@@ -635,12 +508,14 @@ class TestExplorerServiceCreateMetric:
             subject_path=["metric_create_test"],
             yaml="metric:\n  name: test_revenue\n  type: measure_proxy\n  type_params:\n    measure: count_orders\n",
         )
-        result = await svc.create_metric(request)
-        # May fail on deep validation (no data_source in model) — that's expected.
-        # The important thing is it exercises the full path: parse → check existence → validate
+        with (
+            patch.object(svc, "_validate_metric_yaml", return_value=(True, [])),
+            patch("datus.cli.generation_hooks.GenerationHooks._sync_semantic_to_db", return_value={"success": True}),
+        ):
+            result = await svc.create_metric(request)
         assert isinstance(result, Result)
-        assert result.success is False
-        assert "validation" in result.errorMessage.lower()
+        assert result.success is True
+        assert (metrics_dir / "test_revenue.yml").exists()
 
     async def test_create_metric_duplicate_file_fails(self, real_agent_config):
         """create_metric rejects when file already exists on disk."""
@@ -738,45 +613,6 @@ class TestExplorerServiceEditMetric:
         )
         result = await svc.edit_metric(request)
         assert result.success is False
-
-
-@pytest.mark.asyncio
-class TestExplorerServiceEditKnowledge:
-    """Tests for edit_knowledge operations."""
-
-    async def test_edit_knowledge_empty_path(self, real_agent_config):
-        """edit_knowledge with empty path returns error."""
-        svc = ExplorerService(agent_config=real_agent_config)
-        request = EditKnowledgeInput(
-            subject_path=[],
-            name="test",
-            search_text="updated",
-            explanation="updated",
-        )
-        result = await svc.edit_knowledge(request)
-        assert result.success is False
-
-    async def test_edit_knowledge_updates(self, real_agent_config):
-        """edit_knowledge updates an existing knowledge entry."""
-        svc = ExplorerService(agent_config=real_agent_config)
-        await svc.create_directory(CreateDirectoryInput(subject_path=["edit_kb"]))
-        await svc.create_knowledge(
-            CreateKnowledgeInput(
-                subject_path=["edit_kb"],
-                name="editable_kb",
-                search_text="original",
-                explanation="original explanation",
-            )
-        )
-        result = await svc.edit_knowledge(
-            EditKnowledgeInput(
-                subject_path=["edit_kb", "editable_kb"],
-                name="editable_kb",
-                search_text="updated search",
-                explanation="updated explanation",
-            )
-        )
-        assert result.success is True
 
 
 @pytest.mark.asyncio
@@ -1047,16 +883,204 @@ class TestExplorerServiceHelpers:
         id2 = svc._gen_reference_sql_id("SELECT 2")
         assert id1 != id2
 
-    def test_gen_subject_item_id_deterministic(self, real_agent_config):
-        """_gen_subject_item_id returns stable ID for same inputs."""
-        svc = ExplorerService(agent_config=real_agent_config)
-        id1 = svc._gen_subject_item_id(["root", "child"], "item1")
-        id2 = svc._gen_subject_item_id(["root", "child"], "item1")
-        assert id1 == id2
 
-    def test_gen_subject_item_id_different_for_different_path(self, real_agent_config):
-        """_gen_subject_item_id returns different IDs for different paths."""
+@pytest.mark.asyncio
+class TestExplorerServiceMetricDimensions:
+    """Tests for get_metric_dimensions — power the preview panel's dim picker."""
+
+    @staticmethod
+    def _patch_adapter(monkeypatch, *, adapter):
+        from types import SimpleNamespace
+
+        tools_stub = SimpleNamespace(adapter=adapter)
+        monkeypatch.setattr(
+            "datus.tools.func_tool.semantic_tools.SemanticTools",
+            lambda *a, **k: tools_stub,
+        )
+
+    async def test_empty_subject_path_fails(self, real_agent_config):
+        """Empty subject path is rejected before touching the adapter."""
         svc = ExplorerService(agent_config=real_agent_config)
-        id1 = svc._gen_subject_item_id(["root", "child"], "item1")
-        id2 = svc._gen_subject_item_id(["root", "other"], "item1")
-        assert id1 != id2
+        result = await svc.get_metric_dimensions([])
+        assert result.success is False
+        assert "Subject path cannot be empty" in result.errorMessage
+
+    async def test_adapter_unavailable_fails(self, real_agent_config, monkeypatch):
+        """A missing semantic adapter surfaces a clear error."""
+        self._patch_adapter(monkeypatch, adapter=None)
+        svc = ExplorerService(agent_config=real_agent_config)
+        result = await svc.get_metric_dimensions(["Finance", "revenue"])
+        assert result.success is False
+        assert "adapter is not available" in result.errorMessage
+
+    async def test_maps_dimension_fields(self, real_agent_config, monkeypatch):
+        """Adapter DimensionInfo objects are mapped onto the response model."""
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        adapter = MagicMock()
+        adapter.get_dimensions = AsyncMock(
+            return_value=[
+                SimpleNamespace(name="region", type="string", description="Sales region", is_primary_key=False),
+                SimpleNamespace(name="metric_time", type="time", description=None, is_primary_key=None),
+            ]
+        )
+        self._patch_adapter(monkeypatch, adapter=adapter)
+
+        svc = ExplorerService(agent_config=real_agent_config)
+        result = await svc.get_metric_dimensions(["Finance", "revenue"])
+
+        assert result.success is True
+        assert result.data.metric == "revenue"
+        assert [d.name for d in result.data.dimensions] == ["region", "metric_time"]
+        assert result.data.dimensions[0].type == "string"
+        assert result.data.dimensions[1].type == "time"
+        assert adapter.get_dimensions.await_args.kwargs["metric_name"] == "revenue"
+
+
+@pytest.mark.asyncio
+class TestExplorerServicePreviewMetric:
+    """Tests for preview_metric — compile a saved metric to SQL via dry-run."""
+
+    @staticmethod
+    def _patch_tools(monkeypatch, *, adapter, query_metrics=None):
+        """Stub SemanticTools(...) with an ``adapter`` and sync ``query_metrics``."""
+        from types import SimpleNamespace
+
+        tools_stub = SimpleNamespace(adapter=adapter, query_metrics=query_metrics)
+        monkeypatch.setattr(
+            "datus.tools.func_tool.semantic_tools.SemanticTools",
+            lambda *a, **k: tools_stub,
+        )
+        return tools_stub
+
+    @staticmethod
+    def _func_result(*, success=1, error=None, result=None):
+        from datus.tools.func_tool.base import FuncToolResult
+
+        return FuncToolResult(success=success, error=error, result=result)
+
+    async def test_empty_subject_path_fails(self, real_agent_config):
+        """Empty subject path is rejected before touching the adapter."""
+        from datus.api.models.explorer_models import MetricPreviewInput
+
+        svc = ExplorerService(agent_config=real_agent_config)
+        result = await svc.preview_metric(MetricPreviewInput(subject_path=[]))
+        assert result.success is False
+        assert "Subject path cannot be empty" in result.errorMessage
+
+    async def test_adapter_unavailable_fails(self, real_agent_config, monkeypatch):
+        """A missing semantic adapter surfaces a clear error, not a crash."""
+        from datus.api.models.explorer_models import MetricPreviewInput
+
+        self._patch_tools(monkeypatch, adapter=None)
+        svc = ExplorerService(agent_config=real_agent_config)
+        result = await svc.preview_metric(MetricPreviewInput(subject_path=["Finance", "revenue"]))
+        assert result.success is False
+        assert "adapter is not available" in result.errorMessage
+
+    async def test_returns_compiled_sql_from_metadata(self, real_agent_config, monkeypatch):
+        """Happy path: leaf is the metric, SQL comes from dry-run metadata."""
+        from datus.api.models.explorer_models import MetricPreviewInput
+
+        query_metrics = MagicMock(
+            return_value=self._func_result(
+                result={"metadata": {"explain": True, "sql": "SELECT 1 AS revenue"}, "data": []}
+            )
+        )
+        self._patch_tools(monkeypatch, adapter=MagicMock(), query_metrics=query_metrics)
+
+        svc = ExplorerService(agent_config=real_agent_config)
+        result = await svc.preview_metric(
+            MetricPreviewInput(subject_path=["Finance", "revenue"], dimensions=["region"], limit=100)
+        )
+
+        assert result.success is True
+        assert result.data.metric == "revenue"
+        assert result.data.sql == "SELECT 1 AS revenue"
+        # Carries the bound datasource's physical database, not the logical datasource id.
+        assert result.data.database == (real_agent_config.current_db_config(svc.datasource_id).database or None)
+        assert result.data.preflight_error is None
+        # dry_run must be requested so nothing actually executes.
+        assert query_metrics.call_args.kwargs["dry_run"] is True
+        assert query_metrics.call_args.kwargs["metrics"] == ["revenue"]
+        assert query_metrics.call_args.kwargs["dimensions"] == ["region"]
+
+    async def test_falls_back_to_data_row_sql(self, real_agent_config, monkeypatch):
+        """SQL is recovered from the single data row when metadata omits it."""
+        from datus.api.models.explorer_models import MetricPreviewInput
+
+        query_metrics = MagicMock(
+            return_value=self._func_result(result={"metadata": {}, "data": [{"sql": "SELECT 2"}]})
+        )
+        self._patch_tools(monkeypatch, adapter=MagicMock(), query_metrics=query_metrics)
+
+        svc = ExplorerService(agent_config=real_agent_config)
+        result = await svc.preview_metric(MetricPreviewInput(subject_path=["revenue"]))
+        assert result.success is True
+        assert result.data.sql == "SELECT 2"
+
+    async def test_dimension_preflight_failure_is_structured(self, real_agent_config, monkeypatch):
+        """A dimension preflight failure becomes a structured preflight_error, not a raw error."""
+        from datus.api.models.explorer_models import MetricPreviewInput
+
+        preflight = {
+            "metrics": ["revenue"],
+            "requested_dimensions": ["country"],
+            "invalid_dimensions": [{"name": "country", "unsupported_metrics": ["revenue"], "supported_metrics": []}],
+            "common_dimensions": ["metric_time", "region"],
+            "suggested_metric_groups": [{"metrics": ["revenue"], "dimensions": ["region"]}],
+        }
+        query_metrics = MagicMock(
+            return_value=self._func_result(success=0, error="dimension preflight failed", result=preflight)
+        )
+        self._patch_tools(monkeypatch, adapter=MagicMock(), query_metrics=query_metrics)
+
+        svc = ExplorerService(agent_config=real_agent_config)
+        result = await svc.preview_metric(MetricPreviewInput(subject_path=["revenue"], dimensions=["country"]))
+
+        assert result.success is True
+        assert result.data.sql is None
+        pf = result.data.preflight_error
+        assert pf is not None
+        assert pf.common_dimensions == ["metric_time", "region"]
+        assert pf.invalid_dimensions[0]["name"] == "country"
+        assert pf.suggested_metric_groups[0]["dimensions"] == ["region"]
+
+    async def test_no_sql_compiled_fails(self, real_agent_config, monkeypatch):
+        """When neither metadata nor data carry SQL, report a clean failure."""
+        from datus.api.models.explorer_models import MetricPreviewInput
+
+        query_metrics = MagicMock(return_value=self._func_result(result={"metadata": {}, "data": []}))
+        self._patch_tools(monkeypatch, adapter=MagicMock(), query_metrics=query_metrics)
+
+        svc = ExplorerService(agent_config=real_agent_config)
+        result = await svc.preview_metric(MetricPreviewInput(subject_path=["revenue"]))
+        assert result.success is False
+        assert "Failed to compile SQL" in result.errorMessage
+
+    async def test_hard_failure_surfaces_error(self, real_agent_config, monkeypatch):
+        """A non-preflight tool failure becomes a failed Result with its message."""
+        from datus.api.models.explorer_models import MetricPreviewInput
+
+        query_metrics = MagicMock(
+            return_value=self._func_result(success=0, error="unknown metric 'revenue'", result=None)
+        )
+        self._patch_tools(monkeypatch, adapter=MagicMock(), query_metrics=query_metrics)
+
+        svc = ExplorerService(agent_config=real_agent_config)
+        result = await svc.preview_metric(MetricPreviewInput(subject_path=["revenue"]))
+        assert result.success is False
+        assert "unknown metric" in result.errorMessage
+
+    async def test_exception_is_caught(self, real_agent_config, monkeypatch):
+        """Unexpected errors become a failed Result rather than propagating."""
+        from datus.api.models.explorer_models import MetricPreviewInput
+
+        query_metrics = MagicMock(side_effect=RuntimeError("boom"))
+        self._patch_tools(monkeypatch, adapter=MagicMock(), query_metrics=query_metrics)
+
+        svc = ExplorerService(agent_config=real_agent_config)
+        result = await svc.preview_metric(MetricPreviewInput(subject_path=["revenue"]))
+        assert result.success is False
+        assert "boom" in result.errorMessage

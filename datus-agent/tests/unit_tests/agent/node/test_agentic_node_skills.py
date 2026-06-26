@@ -145,8 +145,8 @@ def create_test_node(node_id, mock_agent_config):
 class TestFinalizeSystemPrompt:
     """Test suite for _finalize_system_prompt method."""
 
-    def test_no_skill_func_tool_returns_prompt_unchanged(self, mock_agent_config, monkeypatch):
-        """When skill_func_tool is None, returns base_prompt as-is (memory injection mocked out)."""
+    def test_no_skill_func_tool_only_appends_runtime_context(self, mock_agent_config, monkeypatch):
+        """Without skill_func_tool, finalization still appends shared runtime context."""
         node = MinimalAgenticNode(
             node_id="test1",
             description="Test node",
@@ -160,7 +160,12 @@ class TestFinalizeSystemPrompt:
         base_prompt = "This is the base system prompt."
         result = node._finalize_system_prompt(base_prompt)
 
-        assert result == base_prompt
+        assert result.startswith(base_prompt)
+        assert "Current context:" in result
+        assert "Current date:" in result
+        assert "Available datasources:" not in result
+        assert "Current sql files root directory:" not in result
+        assert "<available_skills>" not in result
 
     def test_with_skill_func_tool_appends_xml(self, mock_agent_config, skill_manager):
         """When skill_func_tool exists and _get_available_skills_context() returns XML, it's appended."""
@@ -182,7 +187,6 @@ class TestFinalizeSystemPrompt:
         assert result.startswith(base_prompt)
         assert "<available_skills>" in result
         assert "sql-analysis" in result
-        assert "skill-owned scripts" in result
         assert "native tool directly" in result
 
     def test_with_skill_func_tool_empty_xml_appends_explicit_none_block(
@@ -269,10 +273,9 @@ class TestEnsureSkillToolsInTools:
         node._ensure_skill_tools_in_tools()
 
         # Should have added skill tools
-        assert len(node.tools) == 2  # load_skill and skill_execute_command
+        assert len(node.tools) == 1  # load_skill only
         tool_names = [t.name for t in node.tools]
         assert "load_skill" in tool_names
-        assert "skill_execute_command" in tool_names
 
     def test_idempotent_does_not_duplicate(self, mock_agent_config, skill_manager):
         """Calling twice doesn't add duplicate tools."""
@@ -316,10 +319,9 @@ class TestEnsureSkillToolsInTools:
 
         # Should have created tools list
         assert isinstance(node.tools, list)
-        assert len(node.tools) == 2
+        assert len(node.tools) == 1
         tool_names = [t.name for t in node.tools]
         assert "load_skill" in tool_names
-        assert "skill_execute_command" in tool_names
 
     def test_preserves_existing_tools(self, mock_agent_config, skill_manager):
         """When self.tools has existing tools, they are preserved."""
@@ -340,11 +342,10 @@ class TestEnsureSkillToolsInTools:
         node._ensure_skill_tools_in_tools()
 
         # Should have both existing and skill tools
-        assert len(node.tools) == 3
+        assert len(node.tools) == 2
         tool_names = [t.name for t in node.tools]
         assert "existing_tool" in tool_names
         assert "load_skill" in tool_names
-        assert "skill_execute_command" in tool_names
 
 
 class TestSetupSkillFuncTools:
@@ -768,15 +769,17 @@ class TestSkillIntegrationEdgeCases:
         base_prompt = "Base prompt"
         node._finalize_system_prompt(base_prompt)
 
-        # Should have all tools: 2 existing + 2 skill tools + 1 bash tool
-        # (BashTool is created by AgenticNode.__init__ and lazy-injected here).
-        assert len(node.tools) == 5
+        # Should have all tools: 2 existing + 1 skill tool + 1 bash tool +
+        # 2 memory tools (this node is a main agent, so add_memory/edit_memory
+        # are lazy-injected alongside skills and bash).
+        assert len(node.tools) == 6
         tool_names = [t.name for t in node.tools]
         assert "tool1" in tool_names
         assert "tool2" in tool_names
         assert "load_skill" in tool_names
-        assert "skill_execute_command" in tool_names
         assert "execute_command" in tool_names
+        assert "add_memory" in tool_names
+        assert "edit_memory" in tool_names
 
     def test_setup_exception_handling(self, mock_agent_config):
         """Test that setup exceptions are handled gracefully."""
@@ -1032,9 +1035,10 @@ class TestBashToolToggle:
         node.tools = []
         node._ensure_bash_tool_in_tools()
         assert node.tools == []
-        # Category map must drop the ``bash_tools`` bucket so profile
-        # rules don't inherit a phantom entry.
-        assert "bash_tools" not in node._tool_category_map()
+        # The registry must not carry a phantom ``bash_tools`` entry when
+        # the bash tool is disabled.
+        node._populate_tool_registry()
+        assert "bash_tools" not in node.tool_registry.to_dict().values()
 
     def test_bash_tool_skipped_without_permission_manager(self, mock_agent_config):
         """Without permission enforcement, BashTool must NOT be created.

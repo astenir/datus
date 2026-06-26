@@ -53,14 +53,14 @@ class TestChatAgenticNodeInheritance:
 
         assert isinstance(node, AgenticNode)
 
-    def test_not_instance_of_gensql(self, real_agent_config, mock_llm_create):
+    def test_not_instance_of_gen_sql(self, real_agent_config, mock_llm_create):
         """ChatAgenticNode is NOT a subclass of GenSQLAgenticNode."""
         from datus.agent.node.chat_agentic_node import ChatAgenticNode
         from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode
 
         node = ChatAgenticNode(
-            node_id="test_no_gensql",
-            description="Test not gensql",
+            node_id="test_no_gen_sql",
+            description="Test not gen_sql",
             node_type=NodeType.TYPE_CHAT,
             agent_config=real_agent_config,
         )
@@ -383,17 +383,14 @@ class TestChatMemoryFlowAcceptance:
     async def test_chat_turn_writes_memory_and_later_turn_receives_it(self, real_agent_config, mock_llm_create):
         from datus.agent.node.chat_agentic_node import ChatAgenticNode
 
-        memory_text = "# Memory\n\n## Revenue conventions\n- Net revenue excludes refunds.\n"
+        memory_text = "Net revenue excludes refunds."
         mock_llm_create.reset(
             responses=[
                 build_tool_then_response(
                     tool_calls=[
                         MockToolCall(
-                            name="write_file",
-                            arguments={
-                                "path": ".datus/memory/chat/MEMORY.md",
-                                "content": memory_text,
-                            },
+                            name="add_memory",
+                            arguments={"content": memory_text},
                         )
                     ],
                     content="Saved the revenue convention to memory.",
@@ -431,7 +428,7 @@ class TestChatMemoryFlowAcceptance:
         async for _ in second_turn.execute_stream(action_manager):
             pass
 
-        tool_calls = [item for item in mock_llm_create.tool_results if item["tool"] == "write_file"]
+        tool_calls = [item for item in mock_llm_create.tool_results if item["tool"] == "add_memory"]
         assert len(tool_calls) == 1
         assert tool_calls[0]["executed"] is True
 
@@ -595,10 +592,10 @@ class TestChatAgenticNodeUpdateContext:
 
 
 class TestChatAgenticNodeUpdateDatabaseConnection:
-    """Verify _update_database_connection switches DB connection and rebuilds tools."""
+    """Verify _update_database_connection rebuilds the DB tool bound to the target database."""
 
     def test_update_database_connection_rebuilds_tools(self, real_agent_config, mock_llm_create):
-        """_update_database_connection creates a new DBFuncTool and rebuilds tools list."""
+        """_update_database_connection creates a new DBFuncTool (bound to db) and rebuilds tools."""
         from datus.agent.node.chat_agentic_node import ChatAgenticNode
 
         node = ChatAgenticNode(
@@ -610,12 +607,13 @@ class TestChatAgenticNodeUpdateDatabaseConnection:
 
         original_db_tool = node.db_func_tool
 
-        # Update to the same database (only one available in fixture)
+        # Update to the same database available in the fixture.
         node._update_database_connection("california_schools")
 
-        # db_func_tool should be a new instance
+        # db_func_tool should be a new instance carrying the requested default_database.
         assert node.db_func_tool is not original_db_tool
-        # Tools should still be rebuilt and contain core db tools
+        assert node.db_func_tool._default_database == "california_schools"
+        # Tools should be rebuilt and contain core db tools.
         tool_names = [t.name for t in node.tools]
         assert "list_tables" in tool_names
         assert "describe_table" in tool_names
@@ -700,22 +698,26 @@ class TestChatAgenticNodeSystemPrompt:
         assert isinstance(prompt, str)
         assert len(prompt) >= 100
 
-    def test_get_system_prompt_contains_active_permission_profile(self, real_agent_config, mock_llm_create):
-        """Runtime /profile changes must be visible to the next LLM turn."""
+    def test_get_system_prompt_excludes_permission_profile(self, real_agent_config, mock_llm_create):
+        """The permission profile is enforced by hooks at tool-call time, never prompted.
+
+        Keeping it out of the system prompt also keeps the frozen per-session
+        snapshot byte-stable across a runtime /profile switch.
+        """
         from datus.agent.node.chat_agentic_node import ChatAgenticNode
 
         real_agent_config.active_profile_name = "dangerous"
         node = ChatAgenticNode(
             node_id="test_prompt_profile",
-            description="Test active permission profile in prompt",
+            description="Test permission profile absent from prompt",
             node_type=NodeType.TYPE_CHAT,
             agent_config=real_agent_config,
         )
 
         prompt = node._get_system_prompt()
 
-        assert "Current permission profile: dangerous" in prompt
-        assert "authoritative for this turn" in prompt
+        assert "Current permission profile" not in prompt
+        assert "dangerous" not in prompt
 
     def test_workflow_prompt_does_not_advertise_ask_user(self, real_agent_config, mock_llm_create):
         """Workflow chat has no ask_user tool, so the prompt must not route to it."""
@@ -818,7 +820,6 @@ class TestChatAgenticNodeSetupInput:
         task = SqlTask(
             task="Tell me about the schools",
             database_name="california_schools",
-            external_knowledge="Some context info",
             catalog_name="test_catalog",
             schema_name="public",
         )
@@ -829,7 +830,6 @@ class TestChatAgenticNodeSetupInput:
         assert result["success"] is True
         assert node.input.user_message == "Tell me about the schools"
         assert node.input.database == "california_schools"
-        assert node.input.external_knowledge == "Some context info"
         assert node.input.catalog == "test_catalog"
         assert node.input.db_schema == "public"
 
@@ -852,7 +852,6 @@ class TestChatAgenticNodeSetupInput:
         task = SqlTask(
             task="New question about data",
             database_name="california_schools",
-            external_knowledge="Updated knowledge",
             catalog_name="new_catalog",
             schema_name="new_schema",
         )
@@ -863,7 +862,6 @@ class TestChatAgenticNodeSetupInput:
         assert result["success"] is True
         assert node.input.user_message == "New question about data"
         assert node.input.database == "california_schools"
-        assert node.input.external_knowledge == "Updated knowledge"
         assert node.input.catalog == "new_catalog"
         assert node.input.db_schema == "new_schema"
 
@@ -1616,6 +1614,41 @@ class TestChatAgenticNodePlanMode:
 
             # Re-activation after toggle off still reuses the same file.
             assert node.activate_plan_mode() == first_path
+        finally:
+            os.chdir(cwd)
+
+    def test_build_plan_mode_prompt_passes_auto_execute_flag(self, real_agent_config, mock_llm_create, tmp_path):
+        """build_plan_mode_enhanced_prompt forwards input.auto_execute_plan to the template."""
+        import os
+
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+
+        cwd = os.getcwd()
+        os.chdir(tmp_path)
+        try:
+            node = ChatAgenticNode(
+                node_id="test_auto_exec_prompt",
+                description="Plan prompt auto-execute flag",
+                node_type=NodeType.TYPE_CHAT,
+                agent_config=real_agent_config,
+            )
+            node.activate_plan_mode()
+            node.input = ChatNodeInput(user_message="hi", plan_mode=True, auto_execute_plan=True)
+
+            with patch("datus.agent.node.agentic_node.get_prompt_manager") as mock_pm:
+                mock_pm.return_value.render_template.return_value = "RENDERED"
+                rendered = node.build_plan_mode_enhanced_prompt()
+
+            assert rendered == "RENDERED"
+            assert mock_pm.return_value.render_template.call_args.kwargs["auto_execute_plan"] is True
+
+            # Interactive default: the flag resolves False.
+            node.workflow_prompt_sent = False
+            node.input = ChatNodeInput(user_message="hi", plan_mode=True)
+            with patch("datus.agent.node.agentic_node.get_prompt_manager") as mock_pm:
+                mock_pm.return_value.render_template.return_value = "RENDERED"
+                node.build_plan_mode_enhanced_prompt()
+            assert mock_pm.return_value.render_template.call_args.kwargs["auto_execute_plan"] is False
         finally:
             os.chdir(cwd)
 

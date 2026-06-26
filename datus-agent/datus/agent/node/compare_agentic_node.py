@@ -66,12 +66,12 @@ class CompareAgenticNode(AgenticNode):
             session_id=session_id,
         )
 
-        # Get max_turns from agentic_nodes configuration, default to 30
-        self.max_turns = 30
+        # Get max_turns from agentic_nodes configuration, default to 50
+        self.max_turns = 50
         if agent_config and hasattr(agent_config, "agentic_nodes") and node_name in agent_config.agentic_nodes:
             agentic_node_config = agent_config.agentic_nodes[node_name]
             if isinstance(agentic_node_config, dict):
-                self.max_turns = agentic_node_config.get("max_turns", 30)
+                self.max_turns = agentic_node_config.get("max_turns", 50)
 
         self.setup_tools()
 
@@ -108,19 +108,6 @@ class CompareAgenticNode(AgenticNode):
         except Exception as exc:
             logger.error(f"Failed to initialize tools for CompareAgenticNode: {exc}")
             self.tools = self.tools or []
-
-    def _tool_category_map(self) -> Dict[str, List[Any]]:
-        """Register the db tools under ``db_tools`` so permission rules fire.
-
-        Without this override the bound ``read_query`` lookup falls through to
-        the ``tools.*`` catch-all (default ASK on normal/auto profiles), which
-        would block at ``InteractionBroker.request`` whenever a caller wires
-        permission hooks but does not also run an interactive broker listener.
-        """
-        mapping = super()._tool_category_map()
-        if getattr(self, "db_func_tool", None):
-            mapping["db_tools"] = list(self.db_func_tool.available_tools())
-        return mapping
 
     @staticmethod
     def _prepare_prompt_components(

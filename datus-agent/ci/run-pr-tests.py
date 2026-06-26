@@ -58,7 +58,6 @@ PR_ACCEPTANCE_TARGETS = [
     "tests/unit_tests/agent/node/test_explore_agentic_node.py",
     "tests/unit_tests/agent/node/test_feedback_agentic_node.py",
     "tests/unit_tests/agent/node/test_gen_report_agentic_node.py",
-    "tests/unit_tests/agent/node/test_gen_ext_knowledge_agentic_node.py",
     "tests/unit_tests/agent/node/test_gen_metrics_agentic_node.py",
     "tests/unit_tests/agent/node/test_gen_semantic_model_agentic_node.py",
     "tests/unit_tests/agent/node/test_gen_table_agentic_node.py",
@@ -153,7 +152,10 @@ def log(msg: str) -> None:
     print(f"[ci] {msg}", flush=True)
 
 
-TEST_CMD_TIMEOUT = int(os.environ.get("TEST_CMD_TIMEOUT", "1800"))
+TEST_CMD_TIMEOUT = int(os.environ.get("TEST_CMD_TIMEOUT", "3600"))
+# Worker count for the impacted full unit suite (pytest-xdist). Kept low because
+# CI runners are modest; override via env if a beefier runner is used.
+IMPACTED_UNIT_PARALLEL_WORKERS = os.environ.get("IMPACTED_UNIT_PARALLEL_WORKERS", "2")
 GIT_CMD_TIMEOUT = int(os.environ.get("GIT_CMD_TIMEOUT", "60"))
 DIFF_COVER_TIMEOUT = int(os.environ.get("DIFF_COVER_TIMEOUT", "300"))
 _COMPARE_BRANCH_CACHE: dict[str, str | None] = {}
@@ -332,6 +334,7 @@ def _build_pytest_command(
     append: bool = False,
     emit_reports: bool = True,
     basetemp: str | None = None,
+    parallel: bool = False,
 ) -> list[str]:
     cmd = [
         sys.executable,
@@ -344,6 +347,12 @@ def _build_pytest_command(
 
     if mark_expr:
         cmd.extend(["-m", mark_expr])
+
+    if parallel:
+        # Distribute the suite across a few pytest-xdist workers so the full unit
+        # run stays under TEST_CMD_TIMEOUT; pytest-cov merges per-worker data.
+        # Worker count stays low (default 2) because CI runners are modest.
+        cmd.extend(["-n", IMPACTED_UNIT_PARALLEL_WORKERS])
 
     cmd.append("--cov=datus")
     if append:
@@ -382,6 +391,7 @@ def _run_pytest_suite(
     mark_expr: str | None = None,
     append: bool = False,
     emit_reports: bool = True,
+    parallel: bool = False,
 ) -> int:
     """Run one pytest suite and stream logs to stdout and the CI log file."""
     basetemp = _suite_pytest_basetemp(suite_name)
@@ -393,6 +403,7 @@ def _run_pytest_suite(
         append=append,
         emit_reports=emit_reports,
         basetemp=basetemp,
+        parallel=parallel,
     )
     log(f"Running {suite_name}: {' '.join(cmd)}")
     log(f"{suite_name} pytest basetemp: {basetemp}")
@@ -706,6 +717,7 @@ def run_tests(base_ref: str = "") -> tuple[int, list[str]]:
                     mark_expr=IMPACTED_UNIT_MARK_EXPR,
                     append=True,
                     emit_reports=True,
+                    parallel=True,
                 )
                 exit_codes.append(
                     _normalize_suite_exit_code(

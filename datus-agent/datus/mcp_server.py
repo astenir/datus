@@ -827,7 +827,7 @@ class DatusMCPServer:
     This server exposes the following tool categories:
     1. Database Tools (DBFuncTool):
        - list_databases, list_schemas, list_tables
-       - search_table, describe_table, get_table_ddl
+       - search_table, describe_table
        - read_query
 
     2. Context Search Tools (ContextSearchTools):
@@ -835,7 +835,6 @@ class DatusMCPServer:
        - search_metrics, get_metrics
        - search_reference_sql, get_reference_sql
        - search_semantic_objects
-       - search_knowledge, get_knowledge
     """
 
     def __init__(
