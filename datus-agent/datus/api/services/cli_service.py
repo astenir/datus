@@ -8,7 +8,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
-from typing import Dict, Optional
+from typing import Callable, Dict, Optional
 
 from datus.api.models.base_models import Result
 from datus.api.models.cli_models import (
@@ -32,7 +32,10 @@ from datus.schemas.action_history import (
     ActionRole,
     ActionStatus,
 )
-from datus.tools.db_tools.db_manager import DBManager, db_manager_instance
+from datus.tools.db_tools import db_manager as db_manager_module
+from datus.tools.db_tools.db_manager import DBManager
+from datus.tools.func_tool.database import DBFuncTool
+from datus.utils.exceptions import DatusException
 from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso
 
@@ -126,7 +129,7 @@ class CLIService:
     ) -> Result[ExecuteSQLData]:
         """Synchronous SQL execution logic (runs in a thread)."""
         try:
-            connector, current_db_name = self._execution_connector(agent_config)
+            connector, current_db_name, cleanup_connector = self._execution_connector(agent_config)
             if not connector:
                 return Result(
                     success=False,
@@ -134,130 +137,138 @@ class CLIService:
                     errorMessage="No database connection available",
                 )
 
-            effective_database = request.database_name or current_db_name
-            denial = self._database_grant_denial(agent_config, effective_database)
-            if denial:
-                return Result(
-                    success=False,
-                    errorCode=ErrorCode.SQL_EXECUTION_ERROR,
-                    errorMessage=denial,
+            try:
+                effective_database = request.database_name or current_db_name
+                denial = self._database_grant_denial(agent_config, effective_database)
+                if denial:
+                    return Result(
+                        success=False,
+                        errorCode=ErrorCode.SQL_EXECUTION_ERROR,
+                        errorMessage=denial,
+                    )
+
+                sql_query = self._authorize_read_sql(request.sql_query, connector, agent_config)
+                if isinstance(sql_query, Result):
+                    return sql_query
+
+                # Switch to the requested database/catalog context before executing.
+                if request.database_name:
+                    catalog = getattr(connector, "catalog_name", "") or ""
+                    connector.switch_context(
+                        catalog_name=catalog,
+                        database_name=request.database_name,
+                    )
+
+                # Create action for SQL execution (local to avoid cross-request state)
+                actions = ActionHistoryManager()
+                sql_action = ActionHistory.create_action(
+                    role=ActionRole.USER,
+                    action_type="sql_execution",
+                    messages=(
+                        f"Executing SQL: {sql_query[:100]}..."
+                        if len(sql_query) > 100
+                        else f"Executing SQL: {sql_query}"
+                    ),
+                    input_data={"sql": sql_query, "system": request.system},
+                    status=ActionStatus.PROCESSING,
                 )
+                actions.add_action(sql_action)
 
-            # Switch to the requested database/catalog context before executing.
-            if request.database_name:
-                catalog = getattr(connector, "catalog_name", "") or ""
-                connector.switch_context(
-                    catalog_name=catalog,
-                    database_name=request.database_name,
-                )
-
-            # Create action for SQL execution (local to avoid cross-request state)
-            actions = ActionHistoryManager()
-            sql_action = ActionHistory.create_action(
-                role=ActionRole.USER,
-                action_type="sql_execution",
-                messages=(
-                    f"Executing SQL: {request.sql_query[:100]}..."
-                    if len(request.sql_query) > 100
-                    else f"Executing SQL: {request.sql_query}"
-                ),
-                input_data={"sql": request.sql_query, "system": request.system},
-                status=ActionStatus.PROCESSING,
-            )
-            actions.add_action(sql_action)
-
-            # Execute the query
-            start_time = time.time()
-            result = connector.execute(
-                input_params={"sql_query": request.sql_query},
-                result_format=request.result_format,
-            )
-            end_time = time.time()
-            exec_time = end_time - start_time
-
-            if not result:
-                actions.update_action_by_id(
-                    sql_action.action_id,
-                    status=ActionStatus.FAILED,
-                    output={"error": "No result from query"},
-                    messages="SQL execution failed: No result from query",
-                )
-                return Result(
-                    success=False,
-                    errorCode=ErrorCode.SQL_EXECUTION_ERROR,
-                    errorMessage="No result from the query",
-                )
-
-            if result.success:
-                sql_return = None
-                row_count = None
-                columns = None
-
-                if hasattr(result.sql_return, "column_names"):
-                    if request.result_format == "csv":
-                        import csv
-                        import io
-
-                        rows = result.sql_return.to_pylist()
-                        output = io.StringIO()
-                        if rows:
-                            writer = csv.DictWriter(output, fieldnames=result.sql_return.column_names)
-                            writer.writeheader()
-                            writer.writerows(rows)
-                        sql_return = output.getvalue()
-                    elif request.result_format == "json":
-                        import json
-
-                        rows = result.sql_return.to_pylist()
-                        sql_return = json.dumps(rows)
-                    else:
-                        sql_return = str(result.sql_return)
-
-                    row_count = result.sql_return.num_rows
-                    columns = result.sql_return.column_names
-                else:
-                    sql_return = str(result.sql_return) if result.sql_return else ""
-                    row_count = result.row_count
-
-                actions.update_action_by_id(
-                    sql_action.action_id,
-                    status=ActionStatus.SUCCESS,
-                    output={
-                        "row_count": row_count,
-                        "execution_time": exec_time,
-                        "columns": columns,
-                        "success": True,
-                    },
-                    messages=f"SQL executed successfully: {row_count or 0} rows in {exec_time:.2f}s",
-                )
-
-                data = ExecuteSQLData(
-                    execute_task_id=task_id,
-                    sql_query=request.sql_query,
-                    row_count=row_count,
-                    sql_return=sql_return,
+                # Execute the query
+                start_time = time.time()
+                result = connector.execute(
+                    input_params={"sql_query": sql_query},
                     result_format=request.result_format,
-                    execution_time=exec_time,
-                    executed_at=now_utc_iso(),
-                    columns=columns,
                 )
+                end_time = time.time()
+                exec_time = end_time - start_time
 
-                return Result(success=True, data=data)
-            else:
-                error_msg = result.error or "Unknown SQL error"
+                if not result:
+                    actions.update_action_by_id(
+                        sql_action.action_id,
+                        status=ActionStatus.FAILED,
+                        output={"error": "No result from query"},
+                        messages="SQL execution failed: No result from query",
+                    )
+                    return Result(
+                        success=False,
+                        errorCode=ErrorCode.SQL_EXECUTION_ERROR,
+                        errorMessage="No result from the query",
+                    )
 
-                actions.update_action_by_id(
-                    sql_action.action_id,
-                    status=ActionStatus.FAILED,
-                    output={"error": error_msg, "sql_error": True},
-                    messages=f"SQL error: {error_msg}",
-                )
+                if result.success:
+                    sql_return = None
+                    row_count = None
+                    columns = None
 
-                return Result(
-                    success=False,
-                    errorCode=ErrorCode.SQL_EXECUTION_ERROR,
-                    errorMessage=error_msg,
-                )
+                    if hasattr(result.sql_return, "column_names"):
+                        if request.result_format == "csv":
+                            import csv
+                            import io
+
+                            rows = result.sql_return.to_pylist()
+                            output = io.StringIO()
+                            if rows:
+                                writer = csv.DictWriter(output, fieldnames=result.sql_return.column_names)
+                                writer.writeheader()
+                                writer.writerows(rows)
+                            sql_return = output.getvalue()
+                        elif request.result_format == "json":
+                            import json
+
+                            rows = result.sql_return.to_pylist()
+                            sql_return = json.dumps(rows)
+                        else:
+                            sql_return = str(result.sql_return)
+
+                        row_count = result.sql_return.num_rows
+                        columns = result.sql_return.column_names
+                    else:
+                        sql_return = str(result.sql_return) if result.sql_return else ""
+                        row_count = result.row_count
+
+                    actions.update_action_by_id(
+                        sql_action.action_id,
+                        status=ActionStatus.SUCCESS,
+                        output={
+                            "row_count": row_count,
+                            "execution_time": exec_time,
+                            "columns": columns,
+                            "success": True,
+                        },
+                        messages=f"SQL executed successfully: {row_count or 0} rows in {exec_time:.2f}s",
+                    )
+
+                    data = ExecuteSQLData(
+                        execute_task_id=task_id,
+                        sql_query=sql_query,
+                        row_count=row_count,
+                        sql_return=sql_return,
+                        result_format=request.result_format,
+                        execution_time=exec_time,
+                        executed_at=now_utc_iso(),
+                        columns=columns,
+                    )
+
+                    return Result(success=True, data=data)
+                else:
+                    error_msg = result.error or "Unknown SQL error"
+
+                    actions.update_action_by_id(
+                        sql_action.action_id,
+                        status=ActionStatus.FAILED,
+                        output={"error": error_msg, "sql_error": True},
+                        messages=f"SQL error: {error_msg}",
+                    )
+
+                    return Result(
+                        success=False,
+                        errorCode=ErrorCode.SQL_EXECUTION_ERROR,
+                        errorMessage=error_msg,
+                    )
+            finally:
+                if cleanup_connector:
+                    cleanup_connector()
 
         except Exception as e:
             logger.error(f"Failed to execute SQL: {e}")
@@ -269,26 +280,67 @@ class CLIService:
 
     def _execution_connector(self, agent_config: Optional[AgentConfig] = None):
         if agent_config is None:
-            return self.current_db_connector, self.current_db_name
-        db_manager = db_manager_instance(agent_config.datasource_configs)
+            return self.current_db_connector, self.current_db_name, None
+        db_manager, cleanup = self._request_scoped_db_manager(agent_config.datasource_configs)
         datasource = getattr(agent_config, "current_datasource", "") or ""
         db_name, connector = db_manager.first_conn_with_name(datasource)
-        return connector, db_name
+        return connector, db_name, cleanup
+
+    @staticmethod
+    def _request_scoped_db_manager(datasource_configs: dict) -> tuple[DBManager, Optional[Callable[[], None]]]:
+        if db_manager_module._factory is not None:
+            return db_manager_module.db_manager_instance(datasource_configs), None
+        db_manager = DBManager(datasource_configs)
+        return db_manager, db_manager.close
+
+    @staticmethod
+    def _authorize_read_sql(sql: str, connector, agent_config: Optional[AgentConfig]) -> str | Result[ExecuteSQLData]:
+        guard = object.__new__(DBFuncTool)
+        guard._primary_connector = connector
+        guard.agent_config = agent_config
+        principal = getattr(agent_config, "principal", {}) if agent_config is not None else {}
+        guard.principal = dict(principal) if isinstance(principal, dict) else {}
+        guard.sub_agent_name = None
+        guard._field_order = guard._determine_field_order()
+        scoped_tables = CLIService._scoped_table_patterns(agent_config)
+        guard._scoped_patterns = guard._load_scoped_patterns(scoped_tables)
+
+        validation_error, _ = guard._validate_read_sql(sql, connector)
+        if validation_error:
+            return Result(
+                success=False,
+                errorCode=ErrorCode.SQL_EXECUTION_ERROR,
+                errorMessage=validation_error.error,
+            )
+
+        datasource = str(guard.principal.get("datasource") or getattr(agent_config, "current_datasource", "") or "")
+        try:
+            rewritten_sql = guard._enforce_sql_policy(
+                sql,
+                datasource=datasource or "default",
+                dialect=getattr(connector, "dialect", "") or "",
+            )
+        except DatusException as exc:
+            return Result(
+                success=False,
+                errorCode=ErrorCode.SQL_EXECUTION_ERROR,
+                errorMessage=str(exc),
+            )
+        validation_error, _ = guard._validate_read_sql(rewritten_sql, connector)
+        if validation_error:
+            return Result(
+                success=False,
+                errorCode=ErrorCode.SQL_EXECUTION_ERROR,
+                errorMessage=validation_error.error,
+            )
+        return rewritten_sql
 
     @staticmethod
     def _database_grant_denial(agent_config: Optional[AgentConfig], database_name: Optional[str]) -> Optional[str]:
-        if agent_config is None:
-            return None
-        principal = getattr(agent_config, "principal", {}) or {}
-        if not isinstance(principal, dict):
-            return None
-        datasource_grants = principal.get("datasource_grants")
-        if not isinstance(datasource_grants, dict) or not datasource_grants:
-            return None
-
-        datasource = str(principal.get("datasource") or getattr(agent_config, "current_datasource", "") or "")
-        grant = datasource_grants.get(datasource)
+        datasource, grant = CLIService._current_datasource_grant(agent_config)
         if grant is True:
+            return None
+        if grant is None:
             return None
         if not isinstance(grant, dict):
             return f"Datasource '{datasource}' is not authorized for this request."
@@ -302,6 +354,41 @@ class CLIService:
         if patterns and any(fnmatchcase(requested_database, pattern) for pattern in patterns):
             return None
         return f"Requested database '{requested_database}' is not authorized for datasource '{datasource}'."
+
+    @staticmethod
+    def _scoped_table_patterns(agent_config: Optional[AgentConfig]) -> Optional[list[str]]:
+        _datasource, grant = CLIService._current_datasource_grant(agent_config)
+        if not isinstance(grant, dict):
+            return None
+
+        table_patterns = _scope_patterns(grant, "tables")
+        if table_patterns is not None:
+            return table_patterns or ["__NO_TABLES_ALLOWED__"]
+
+        schema_patterns = _scope_patterns(grant, "schemas")
+        database_patterns = _scope_patterns(grant, "databases")
+        if schema_patterns is not None:
+            if not schema_patterns:
+                return ["__NO_SCHEMAS_ALLOWED__"]
+            if database_patterns:
+                return [f"{database}.{schema}.*" for database in database_patterns for schema in schema_patterns]
+            return [f"{schema}.*" for schema in schema_patterns]
+        if database_patterns is not None:
+            return [f"{database}.*" for database in database_patterns] or ["__NO_DATABASES_ALLOWED__"]
+        return None
+
+    @staticmethod
+    def _current_datasource_grant(agent_config: Optional[AgentConfig]) -> tuple[str, object | None]:
+        if agent_config is None:
+            return "", None
+        principal = getattr(agent_config, "principal", {}) or {}
+        if not isinstance(principal, dict):
+            return "", None
+        datasource_grants = principal.get("datasource_grants")
+        if not isinstance(datasource_grants, dict) or not datasource_grants:
+            return "", None
+        datasource = str(principal.get("datasource") or getattr(agent_config, "current_datasource", "") or "")
+        return datasource, datasource_grants.get(datasource)
 
     async def execute_sql(
         self,

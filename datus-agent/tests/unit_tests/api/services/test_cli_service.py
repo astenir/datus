@@ -10,6 +10,37 @@ from datus.api.models.cli_models import ExecuteContextInput, ExecuteSQLInput
 from datus.api.services.chat_service import ChatService
 from datus.api.services.chat_task_manager import ChatTaskManager
 from datus.api.services.cli_service import CLIService, _SQLTaskRecord
+from datus.tools.sql_policy import EnforcementResult, SqlPolicyConfig
+
+
+class DenyCliSqlPolicyEnforcer:
+    def __init__(self, config: SqlPolicyConfig) -> None:
+        self.config = config
+
+    def enforce_read(
+        self,
+        sql: str,
+        *,
+        datasource: str,
+        dialect: str,
+        principal: dict | None,
+    ) -> EnforcementResult:
+        return EnforcementResult(allowed=False, reason="direct SQL policy denied")
+
+
+class RewriteCliSqlPolicyEnforcer:
+    def __init__(self, config: SqlPolicyConfig) -> None:
+        self.config = config
+
+    def enforce_read(
+        self,
+        sql: str,
+        *,
+        datasource: str,
+        dialect: str,
+        principal: dict | None,
+    ) -> EnforcementResult:
+        return EnforcementResult(allowed=True, sql="SELECT 2 AS rewritten", applied_policies=["rewrite"])
 
 
 @pytest.fixture
@@ -161,6 +192,7 @@ class TestCLIServiceExecuteSQL:
         """Request-scoped config can route direct SQL without replacing shared task tracking."""
 
         class FakeConnector:
+            dialect = "sqlite"
             catalog_name = "prod"
 
             def __init__(self):
@@ -178,15 +210,19 @@ class TestCLIServiceExecuteSQL:
         seen = {}
 
         class FakeDBManager:
+            def __init__(self, datasource_configs):
+                seen["datasource_configs"] = datasource_configs
+                self.closed = False
+
             def first_conn_with_name(self, datasource):
                 seen["datasource"] = datasource
                 return "finance_db", connector
 
-        def fake_db_manager_instance(datasource_configs):
-            seen["datasource_configs"] = datasource_configs
-            return FakeDBManager()
+            def close(self):
+                seen["closed"] = True
+                self.closed = True
 
-        monkeypatch.setattr("datus.api.services.cli_service.db_manager_instance", fake_db_manager_instance)
+        monkeypatch.setattr("datus.api.services.cli_service.DBManager", FakeDBManager)
         projected_config = SimpleNamespace(
             datasource_configs={"finance": object()},
             current_datasource="finance",
@@ -204,15 +240,81 @@ class TestCLIServiceExecuteSQL:
         )
 
         assert result.success is True
-        assert seen == {"datasource_configs": projected_config.datasource_configs, "datasource": "finance"}
+        assert seen == {
+            "datasource_configs": projected_config.datasource_configs,
+            "datasource": "finance",
+            "closed": True,
+        }
         assert connector.switch_calls == [("prod", "finance_db")]
         assert svc._sql_tasks == {}
+
+    @pytest.mark.asyncio
+    async def test_execute_sql_uses_each_projected_config_with_same_datasource_key(self, monkeypatch):
+        """Request-scoped direct SQL must not reuse a cached manager for stale configs."""
+
+        class FakeConnector:
+            dialect = "sqlite"
+
+            def __init__(self):
+                self.executed_sql = []
+
+            def execute(self, input_params, result_format):
+                self.executed_sql.append(input_params["sql_query"])
+                return SimpleNamespace(success=True, sql_return="1", row_count=1)
+
+        connectors = {}
+        seen_databases = []
+
+        class FakeDBManager:
+            def __init__(self, datasource_configs):
+                self.datasource_configs = datasource_configs
+
+            def first_conn_with_name(self, datasource):
+                database = self.datasource_configs[datasource].database
+                seen_databases.append(database)
+                connector = FakeConnector()
+                connectors[database] = connector
+                return database, connector
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("datus.api.services.cli_service.DBManager", FakeDBManager)
+
+        def projected_config(database):
+            return SimpleNamespace(
+                datasource_configs={"finance": SimpleNamespace(database=database)},
+                current_datasource="finance",
+                principal={
+                    "datasource": "finance",
+                    "datasource_grants": {"finance": {"effect": "allow", "databases": [database]}},
+                },
+            )
+
+        svc = CLIService(agent_config=None, chat_service=None)
+        result_a = await svc.execute_sql(
+            ExecuteSQLInput(sql_query="SELECT 1", result_format="json"),
+            user_id="u1",
+            agent_config=projected_config("finance_a"),
+        )
+        result_b = await svc.execute_sql(
+            ExecuteSQLInput(sql_query="SELECT 1", result_format="json"),
+            user_id="u1",
+            agent_config=projected_config("finance_b"),
+        )
+
+        assert result_a.success is True
+        assert result_b.success is True
+        assert seen_databases == ["finance_a", "finance_b"]
+        assert set(connectors) == {"finance_a", "finance_b"}
 
     @pytest.mark.asyncio
     async def test_execute_sql_rejects_ungranted_resolved_default_database(self, monkeypatch):
         """Database grants apply to the resolved default database when request omits it."""
 
         class FakeConnector:
+            dialect = "sqlite"
+
             def __init__(self):
                 self.executed = False
 
@@ -223,10 +325,16 @@ class TestCLIServiceExecuteSQL:
         connector = FakeConnector()
 
         class FakeDBManager:
+            def __init__(self, datasource_configs):
+                self.datasource_configs = datasource_configs
+
             def first_conn_with_name(self, datasource):
                 return "hr", connector
 
-        monkeypatch.setattr("datus.api.services.cli_service.db_manager_instance", lambda _configs: FakeDBManager())
+            def close(self):
+                pass
+
+        monkeypatch.setattr("datus.api.services.cli_service.DBManager", FakeDBManager)
         projected_config = SimpleNamespace(
             datasource_configs={"finance": object()},
             current_datasource="finance",
@@ -247,6 +355,153 @@ class TestCLIServiceExecuteSQL:
         assert result.errorMessage == "Requested database 'hr' is not authorized for datasource 'finance'."
         assert connector.executed is False
         assert svc._sql_tasks == {}
+
+    @pytest.mark.asyncio
+    async def test_execute_sql_rejects_ungranted_table_scope(self, monkeypatch):
+        """Table-level datasource grants apply before raw direct SQL execution."""
+
+        class FakeConnector:
+            dialect = "sqlite"
+
+            def __init__(self):
+                self.executed = False
+
+            def execute(self, input_params, result_format):
+                self.executed = True
+                return SimpleNamespace(success=True, sql_return="1", row_count=1)
+
+        connector = FakeConnector()
+
+        class FakeDBManager:
+            def __init__(self, datasource_configs):
+                self.datasource_configs = datasource_configs
+
+            def first_conn_with_name(self, datasource):
+                return "finance", connector
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("datus.api.services.cli_service.DBManager", FakeDBManager)
+        projected_config = SimpleNamespace(
+            datasource_configs={"finance": object()},
+            current_datasource="finance",
+            principal={
+                "datasource": "finance",
+                "datasource_grants": {"finance": {"effect": "allow", "tables": ["allowed_table"]}},
+            },
+        )
+        svc = CLIService(agent_config=None, chat_service=None)
+
+        result = await svc.execute_sql(
+            ExecuteSQLInput(sql_query="SELECT * FROM denied_table", result_format="json"),
+            user_id="u1",
+            agent_config=projected_config,
+        )
+
+        assert result.success is False
+        assert "outside scoped context" in result.errorMessage
+        assert connector.executed is False
+
+    @pytest.mark.asyncio
+    async def test_execute_sql_applies_sql_policy_denial(self, monkeypatch):
+        """Direct SQL uses the configured SQL policy before connector execution."""
+
+        class FakeConnector:
+            dialect = "sqlite"
+
+            def __init__(self):
+                self.executed = False
+
+            def execute(self, input_params, result_format):
+                self.executed = True
+                return SimpleNamespace(success=True, sql_return="1", row_count=1)
+
+        connector = FakeConnector()
+
+        class FakeDBManager:
+            def __init__(self, datasource_configs):
+                self.datasource_configs = datasource_configs
+
+            def first_conn_with_name(self, datasource):
+                return "finance", connector
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("datus.api.services.cli_service.DBManager", FakeDBManager)
+        projected_config = SimpleNamespace(
+            datasource_configs={"finance": object()},
+            current_datasource="finance",
+            sql_policy_config=SqlPolicyConfig.from_dict(
+                {
+                    "enabled": True,
+                    "provider": "tests.unit_tests.api.services.test_cli_service:DenyCliSqlPolicyEnforcer",
+                }
+            ),
+            principal={"datasource": "finance", "datasource_grants": {"finance": {"effect": "allow"}}},
+        )
+        svc = CLIService(agent_config=None, chat_service=None)
+
+        result = await svc.execute_sql(
+            ExecuteSQLInput(sql_query="SELECT * FROM allowed_table", result_format="json"),
+            user_id="u1",
+            agent_config=projected_config,
+        )
+
+        assert result.success is False
+        assert "direct SQL policy denied" in result.errorMessage
+        assert connector.executed is False
+
+    @pytest.mark.asyncio
+    async def test_execute_sql_applies_sql_policy_rewrite(self, monkeypatch):
+        """Direct SQL executes the SQL returned by policy enforcement."""
+
+        class FakeConnector:
+            dialect = "sqlite"
+
+            def __init__(self):
+                self.executed_sql = None
+
+            def execute(self, input_params, result_format):
+                self.executed_sql = input_params["sql_query"]
+                return SimpleNamespace(success=True, sql_return="2", row_count=1)
+
+        connector = FakeConnector()
+
+        class FakeDBManager:
+            def __init__(self, datasource_configs):
+                self.datasource_configs = datasource_configs
+
+            def first_conn_with_name(self, datasource):
+                return "finance", connector
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("datus.api.services.cli_service.DBManager", FakeDBManager)
+        projected_config = SimpleNamespace(
+            datasource_configs={"finance": object()},
+            current_datasource="finance",
+            sql_policy_config=SqlPolicyConfig.from_dict(
+                {
+                    "enabled": True,
+                    "provider": "tests.unit_tests.api.services.test_cli_service:RewriteCliSqlPolicyEnforcer",
+                }
+            ),
+            principal={"datasource": "finance", "datasource_grants": {"finance": {"effect": "allow"}}},
+        )
+        svc = CLIService(agent_config=None, chat_service=None)
+
+        result = await svc.execute_sql(
+            ExecuteSQLInput(sql_query="SELECT * FROM orders", result_format="json"),
+            user_id="u1",
+            agent_config=projected_config,
+        )
+
+        assert result.success is True
+        assert connector.executed_sql == "SELECT 2 AS rewritten"
+        assert result.data.sql_query == "SELECT 2 AS rewritten"
 
 
 class TestCLIServiceStopExecuteSQL:
