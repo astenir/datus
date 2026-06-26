@@ -60,6 +60,7 @@ from datus.utils.feedback_prompt import build_reaction_feedback_prompt
 from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso
 from datus_enterprise.artifact_acl import require_artifact_access
+from datus_enterprise.audit import AuditEvent, audit_decision
 
 logger = get_logger(__name__)
 
@@ -197,6 +198,37 @@ def _sql_policy_principal_pre_check(
             "agent.sql_policy. The agent cannot infer or set request principal from SQL."
         ),
         error_type="SQL_POLICY_PRINCIPAL_REQUIRED",
+        extra={"missing_principal_paths": missing_paths},
+    )
+
+
+async def _audit_chat_sql_policy_denial(
+    ctx: AppContext,
+    request: StreamChatInput,
+    denial: ChatPreCheckOutcome,
+    *,
+    operation: str,
+) -> None:
+    """Record a sanitized audit event for chat SQL-policy pre-check denial."""
+
+    await audit_decision(
+        ctx,
+        AuditEvent(
+            action="sql.policy.principal",
+            resource_type="chat",
+            resource_id=request.session_id,
+            decision="deny",
+            reason=denial.error_type or "SQL_POLICY_PRINCIPAL_REQUIRED",
+            metadata={
+                "operation": operation,
+                "session_id": request.session_id,
+                "subagent_id": request.subagent_id,
+                "datasource": request.datasource,
+                "database": request.database,
+                "error_code": denial.error_type,
+                "missing_principal_paths": denial.extra.get("missing_principal_paths", []),
+            },
+        ),
     )
 
 
@@ -313,6 +345,7 @@ async def stream_chat(
         principal=projection.principal,
     )
     if sql_policy_denial:
+        await _audit_chat_sql_policy_denial(ctx, request, sql_policy_denial, operation="chat.stream")
         return StreamingResponse(
             _emit_pre_check_denial(request, sql_policy_denial),
             media_type="text/event-stream",
@@ -436,6 +469,7 @@ async def stream_chat_feedback(
         principal=projection.principal,
     )
     if sql_policy_denial:
+        await _audit_chat_sql_policy_denial(ctx, stream_input, sql_policy_denial, operation="chat.feedback")
         return StreamingResponse(
             _emit_pre_check_denial(stream_input, sql_policy_denial),
             media_type="text/event-stream",

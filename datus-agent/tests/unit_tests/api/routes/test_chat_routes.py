@@ -67,6 +67,14 @@ def _mock_ctx(user_id=None, permissions=None):
     return ctx
 
 
+class CollectingAuditSink:
+    def __init__(self):
+        self.events = []
+
+    async def write(self, event):
+        self.events.append(event)
+
+
 def _patch_owner_extensions(monkeypatch, owner_store, *, enabled=False):
     import datus.api.deps as api_deps
     import datus.api.enterprise.deps as enterprise_deps
@@ -390,7 +398,11 @@ class TestStreamChatSqlPolicyPreCheck:
     """SQL policy enabled chat requests must carry required request principal fields."""
 
     @pytest.mark.asyncio
-    async def test_enabled_sql_policy_without_principal_returns_sse_error(self):
+    async def test_enabled_sql_policy_without_principal_returns_sse_error(self, monkeypatch):
+        import datus.api.enterprise.deps as enterprise_deps
+
+        audit_sink = CollectingAuditSink()
+        monkeypatch.setattr(enterprise_deps, "get_audit_sink", lambda: audit_sink)
         svc = _mock_svc_with_nodes()
         svc.agent_config.sql_policy_config = SqlPolicyConfig.from_dict(
             {
@@ -420,6 +432,22 @@ class TestStreamChatSqlPolicyPreCheck:
         assert "provider that populates principal fields" in payload["error"]
         assert "agent.sql_policy" in payload["error"]
         svc.chat.stream_chat.assert_not_called()
+        event = audit_sink.events[-1]
+        assert event.user_id is None
+        assert event.action == "sql.policy.principal"
+        assert event.resource_type == "chat"
+        assert event.resource_id is None
+        assert event.decision == "deny"
+        assert event.reason == "SQL_POLICY_PRINCIPAL_REQUIRED"
+        assert event.metadata == {
+            "operation": "chat.stream",
+            "session_id": None,
+            "subagent_id": None,
+            "datasource": None,
+            "database": None,
+            "error_code": "SQL_POLICY_PRINCIPAL_REQUIRED",
+            "missing_principal_paths": ["market_code"],
+        }
 
     @pytest.mark.asyncio
     async def test_enabled_sql_policy_with_required_principal_allows_service_call(self):
