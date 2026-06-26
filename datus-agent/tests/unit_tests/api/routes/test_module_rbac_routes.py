@@ -206,6 +206,36 @@ def test_chat_stream_denies_custom_ask_artifact_subagent_for_acl_miss(
     svc.chat.stream_chat.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("agent_type", "permission", "artifact_type"),
+    [
+        ("ask_report", "module.report.query", "report"),
+        ("ask_dashboard", "module.dashboard.query", "dashboard"),
+    ],
+)
+def test_chat_stream_denies_builtin_name_ask_artifact_subagent_for_acl_miss(
+    monkeypatch, agent_type, permission, artifact_type
+):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    svc.agent_config.agentic_nodes = {agent_type: {"artifact_slug": "sales_overview"}}
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.chat", permission},
+        principal={"artifact_acl": {artifact_type: ["other_artifact"]}},
+    )
+
+    with _client(chat_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/chat/stream",
+            json={"message": "inspect artifact", "subagent_id": agent_type},
+        )
+
+    assert response.status_code == 404
+    svc.chat.stream_chat.assert_not_called()
+
+
 def test_datasource_catalog_routes_require_module_datasource_catalog(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()

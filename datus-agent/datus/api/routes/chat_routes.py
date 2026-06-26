@@ -99,15 +99,20 @@ def _is_valid_subagent_id(svc, subagent_id: str) -> bool:
 
 
 def _resolve_agentic_node_entry(svc, subagent_id: str) -> Optional[Any]:
+    _, entry = _resolve_agentic_node_entry_with_name(svc, subagent_id)
+    return entry
+
+
+def _resolve_agentic_node_entry_with_name(svc, subagent_id: str) -> tuple[Optional[str], Optional[Any]]:
     agentic_nodes = getattr(svc.agent_config, "agentic_nodes", None) or {}
     if subagent_id in agentic_nodes:
-        return agentic_nodes[subagent_id]
+        return subagent_id, agentic_nodes[subagent_id]
     # Custom sub-agents may be keyed by sanitized node_name with the original
     # UUID id stored under "id" — match either form.
-    for entry in agentic_nodes.values():
+    for name, entry in agentic_nodes.items():
         if isinstance(entry, dict) and entry.get("id") == subagent_id:
-            return entry
-    return None
+            return name, entry
+    return None, None
 
 
 async def _authorize_subagent_dispatch(svc, ctx: AppContext, subagent_id: Optional[str]) -> None:
@@ -134,19 +139,19 @@ def _subagent_module_permission(svc, subagent_id: str) -> Optional[str]:
     if permission_key is not None or svc is None:
         return permission_key
 
-    entry = _resolve_agentic_node_entry(svc, subagent_id)
+    entry_name, entry = _resolve_agentic_node_entry_with_name(svc, subagent_id)
     if not isinstance(entry, dict):
         return None
-    node_class = entry.get("node_class") or entry.get("type")
+    node_class = entry.get("node_class") or entry.get("type") or entry_name
     return _SUBAGENT_MODULE_PERMISSIONS.get(node_class)
 
 
 def _subagent_artifact_acl_requirement(svc, subagent_id: str) -> Optional[tuple[str, str]]:
-    entry = _resolve_agentic_node_entry(svc, subagent_id)
+    entry_name, entry = _resolve_agentic_node_entry_with_name(svc, subagent_id)
     if not isinstance(entry, dict):
         return None
 
-    node_class = entry.get("node_class") or entry.get("type")
+    node_class = entry.get("node_class") or entry.get("type") or entry_name
     if node_class not in {"ask_report", "ask_dashboard"}:
         return None
 
