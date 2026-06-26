@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -32,6 +33,7 @@ from datus.api.services.dashboard_service import (
     _validate_params,
 )
 from datus.schemas.gen_visual_dashboard_models import TemplateParamDecl
+from datus.tools.sql_policy import EnforcementResult, SqlPolicyConfig
 
 _SAMPLE_SQL_J2 = "SELECT * FROM sales WHERE region = :region;\n"
 _SAMPLE_META = {
@@ -54,12 +56,29 @@ _SAMPLE_MANIFEST = {
 _SAMPLE_APP_JSX = "import React from 'react';\nexport default function App() { return null; }\n"
 
 
+class RewriteDashboardSqlPolicyEnforcer:
+    def __init__(self, config: SqlPolicyConfig) -> None:
+        self.config = config
+
+    def enforce_read(
+        self,
+        sql: str,
+        *,
+        datasource: str,
+        dialect: str,
+        principal: dict | None,
+    ) -> EnforcementResult:
+        return EnforcementResult(allowed=True, sql="SELECT 2 AS rewritten", applied_policies=["rewrite"])
+
+
 def _write_dashboard(
     project_files_root: Path,
     *,
     dashboard_slug: str = "demo",
     query_slug: str = "by_region",
     with_template: bool = True,
+    sql_template: str = _SAMPLE_SQL_J2,
+    meta: dict | None = None,
 ) -> Path:
     """Lay out a minimal on-disk dashboard fixture under
     ``<project_files_root>/dashboards/<slug>/``.
@@ -73,8 +92,8 @@ def _write_dashboard(
     if with_template:
         queries_dir = dashboard_dir / "queries"
         queries_dir.mkdir(parents=True, exist_ok=True)
-        (queries_dir / f"{query_slug}.sql.j2").write_text(_SAMPLE_SQL_J2, encoding="utf-8")
-        (queries_dir / f"{query_slug}.params.json").write_text(json.dumps(_SAMPLE_META), encoding="utf-8")
+        (queries_dir / f"{query_slug}.sql.j2").write_text(sql_template, encoding="utf-8")
+        (queries_dir / f"{query_slug}.params.json").write_text(json.dumps(meta or _SAMPLE_META), encoding="utf-8")
     return dashboard_dir
 
 
@@ -91,6 +110,8 @@ def _patch_executor(monkeypatch, *, captured: dict) -> None:
         sql_return = [{"region": "APAC", "amount": 100}]
 
     class _FakeConnector:
+        dialect = "sqlite"
+
         def execute_query(self, sql, result_format="list"):
             captured["sql"] = sql
             captured["result_format"] = result_format
@@ -448,6 +469,95 @@ async def test_run_query_projects_config_for_template_datasource(monkeypatch, tm
 
 
 @pytest.mark.asyncio
+async def test_run_query_rejects_write_sql_before_execution(monkeypatch, tmp_path: Path):
+    """Rendered dashboard SQL must stay read-only before connector execution."""
+    _write_dashboard(
+        tmp_path,
+        sql_template="DELETE FROM sales WHERE region = :region;\n",
+    )
+    captured: dict = {}
+    _patch_executor(monkeypatch, captured=captured)
+    agent_config = SimpleNamespace(
+        current_datasource="warehouse",
+        principal={"datasource": "warehouse", "datasource_grants": {"warehouse": {"effect": "allow"}}},
+    )
+
+    result = await DashboardService(agent_config=agent_config).run_query(
+        project_files_root=tmp_path,
+        dashboard_slug="demo",
+        query_slug="by_region",
+        params={"region": "APAC"},
+        agent_config=agent_config,
+    )
+
+    assert result.success is False
+    assert result.errorCode == "QUERY_EXECUTION_FAILED"
+    assert "Only read-only queries" in (result.errorMessage or "")
+    assert "sql" not in captured
+
+
+@pytest.mark.asyncio
+async def test_run_query_rejects_table_outside_grant_scope(monkeypatch, tmp_path: Path):
+    """Dashboard query execution shares direct-SQL table-scope enforcement."""
+    _write_dashboard(
+        tmp_path,
+        sql_template="SELECT * FROM denied_table WHERE region = :region;\n",
+    )
+    captured: dict = {}
+    _patch_executor(monkeypatch, captured=captured)
+    agent_config = SimpleNamespace(
+        current_datasource="warehouse",
+        principal={
+            "datasource": "warehouse",
+            "datasource_grants": {"warehouse": {"effect": "allow", "tables": ["allowed_table"]}},
+        },
+    )
+
+    result = await DashboardService(agent_config=agent_config).run_query(
+        project_files_root=tmp_path,
+        dashboard_slug="demo",
+        query_slug="by_region",
+        params={"region": "APAC"},
+        agent_config=agent_config,
+    )
+
+    assert result.success is False
+    assert result.errorCode == "QUERY_EXECUTION_FAILED"
+    assert "outside scoped context" in (result.errorMessage or "")
+    assert "sql" not in captured
+
+
+@pytest.mark.asyncio
+async def test_run_query_applies_sql_policy_rewrite(monkeypatch, tmp_path: Path):
+    """Dashboard query executes the SQL returned by policy enforcement."""
+    _write_dashboard(tmp_path)
+    captured: dict = {}
+    _patch_executor(monkeypatch, captured=captured)
+    agent_config = SimpleNamespace(
+        current_datasource="warehouse",
+        principal={"datasource": "warehouse", "datasource_grants": {"warehouse": {"effect": "allow"}}},
+        sql_policy_config=SqlPolicyConfig.from_dict(
+            {
+                "enabled": True,
+                "provider": "tests.unit_tests.api.services.test_dashboard_service:RewriteDashboardSqlPolicyEnforcer",
+            }
+        ),
+    )
+
+    result = await DashboardService(agent_config=agent_config).run_query(
+        project_files_root=tmp_path,
+        dashboard_slug="demo",
+        query_slug="by_region",
+        params={"region": "APAC"},
+        agent_config=agent_config,
+    )
+
+    assert result.success is True
+    assert captured["sql"] == "SELECT 2 AS rewritten"
+    assert result.data.sql == "SELECT 2 AS rewritten"
+
+
+@pytest.mark.asyncio
 async def test_run_query_rejects_invalid_query_slug(tmp_path: Path):
     """Defence-in-depth: the slug regex guard fires before any I/O so a
     crafted slug can't reach the filesystem walker."""
@@ -677,6 +787,8 @@ def _patch_failing_executor(monkeypatch, *, exc: Exception | None = None, exec_r
     """
 
     class _Connector:
+        dialect = "sqlite"
+
         def execute_query(self, sql, result_format="list"):
             if exc is not None:
                 raise exc
