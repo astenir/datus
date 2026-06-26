@@ -291,8 +291,10 @@ MVP 中 `datasource_grants` 采用每个 `(subject_type, subject_id, datasource_
 - chat route：统一使用 `module.chat`。
 - datasource catalog route：`/api/v1/catalog/list` 使用 `module.datasource_catalog`。
 - direct SQL executor route：`/api/v1/sql/execute` 和 `/api/v1/sql/stop_execute` 使用 `module.sql_executor`。
+- report detail route：`/api/v1/report/detail` 使用 `module.report.view`。
+- dashboard detail/query route：`/api/v1/dashboard/detail` 使用 `module.dashboard.view`，`/api/v1/dashboard/query` 使用 `module.dashboard.query`。
 
-后续继续阶段 3 时，应继续使用 `require_module()` dependency 接 report/dashboard、KB、MCP、config/admin routes，并在 subagent dispatch 前叠加对应模块权限。不要把 report/dashboard 的 query 权限合并进 `module.chat`；自然语言入口只能证明用户可用 chat，不能自动证明用户可实时查询报表或仪表盘。
+后续继续阶段 3 时，应继续使用 `require_module()` dependency 接 KB、MCP、config/admin routes，并在 subagent dispatch 前叠加对应模块权限。不要把 report/dashboard 的 query 权限合并进 `module.chat`；自然语言入口只能证明用户可用 chat，不能自动证明用户可实时查询报表或仪表盘。report/dashboard 当前只完成模块入口权限；artifact ACL、datasource grant、请求级 config projection、SQL policy 和审计兜底仍属于阶段 4/5/6。
 
 ### SQL 与数据安全
 

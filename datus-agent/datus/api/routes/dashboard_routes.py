@@ -14,10 +14,13 @@ SaaS host that wraps this service when present.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
+from datus.api.enterprise.deps import require_module
 from datus.api.models.base_models import Result
 from datus.api.models.dashboard_models import (
     DashboardDetail,
@@ -26,6 +29,8 @@ from datus.api.models.dashboard_models import (
 )
 
 router = APIRouter(prefix="/api/v1", tags=["dashboard"])
+DashboardViewModuleCtx = Annotated[AppContext, Depends(require_module("module.dashboard.view"))]
+DashboardQueryModuleCtx = Annotated[AppContext, Depends(require_module("module.dashboard.query"))]
 
 
 def _project_files_root(svc: ServiceDep) -> Path:
@@ -47,6 +52,7 @@ def _project_files_root(svc: ServiceDep) -> Path:
 )
 async def get_dashboard_detail(
     svc: ServiceDep,
+    _ctx: DashboardViewModuleCtx,
     slug: str = Query(..., description="Dashboard slug, e.g. 'revenue_overview'"),
 ) -> Result[DashboardDetail]:
     return await svc.dashboard.get_detail(
@@ -68,6 +74,7 @@ async def get_dashboard_detail(
 async def run_dashboard_query(
     body: DashboardQueryRequest,
     svc: ServiceDep,
+    _ctx: DashboardQueryModuleCtx,
 ) -> Result[SqlQueryResultEnvelope]:
     return await svc.dashboard.run_query(
         project_files_root=_project_files_root(svc),

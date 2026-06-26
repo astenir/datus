@@ -12,14 +12,18 @@ service when present.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
+from datus.api.enterprise.deps import require_module
 from datus.api.models.base_models import Result
 from datus.api.models.report_models import ReportDetail
 
 router = APIRouter(prefix="/api/v1", tags=["report"])
+ReportViewModuleCtx = Annotated[AppContext, Depends(require_module("module.report.view"))]
 
 
 def _project_files_root(svc: ServiceDep) -> Path:
@@ -41,6 +45,7 @@ def _project_files_root(svc: ServiceDep) -> Path:
 )
 async def get_report_detail(
     svc: ServiceDep,
+    _ctx: ReportViewModuleCtx,
     slug: str = Query(..., description="Report slug, e.g. 'account_activity_q1'"),
 ) -> Result[ReportDetail]:
     return await svc.report.get_detail(
