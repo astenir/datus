@@ -68,12 +68,14 @@ class ChatService:
         sub_agent_id: Optional[str] = None,
         user_id: Optional[str] = None,
         principal: Optional[Dict[str, Any]] = None,
+        agent_config: Optional[AgentConfig] = None,
     ) -> AsyncGenerator[SSEEvent, None]:
         """Start a background chat task and yield SSE events."""
         task_manager = self._task_manager
+        active_config = agent_config or self.agent_config
         try:
             task = await task_manager.start_chat(
-                self.agent_config,
+                active_config,
                 request,
                 sub_agent_id=sub_agent_id,
                 user_id=user_id,

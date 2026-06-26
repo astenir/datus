@@ -70,8 +70,13 @@ def _mock_ctx(user_id=None, permissions=None):
 def _patch_owner_extensions(monkeypatch, owner_store, *, enabled=False):
     import datus.api.deps as api_deps
     import datus.api.enterprise.deps as enterprise_deps
+    from datus.api.enterprise.defaults import PassthroughConfigProjector
 
-    extensions = SimpleNamespace(enabled=enabled, session_owner_store=owner_store)
+    extensions = SimpleNamespace(
+        enabled=enabled,
+        session_owner_store=owner_store,
+        config_projector=PassthroughConfigProjector(),
+    )
     monkeypatch.setattr(api_deps, "get_enterprise_extensions", lambda: extensions)
     monkeypatch.setattr(enterprise_deps, "get_audit_sink", lambda: SimpleNamespace(write=AsyncMock()))
 
@@ -169,7 +174,9 @@ class TestSubmitUserInteractionConversion:
 
 def _mock_svc_with_nodes(agentic_nodes=None):
     svc = MagicMock()
-    svc.agent_config.agentic_nodes = agentic_nodes or {}
+    svc.agent_config = SimpleNamespace(agentic_nodes=agentic_nodes or {}, principal={}, sql_policy_config=None)
+    svc.task_manager.get_task.return_value = None
+    svc.chat.session_exists.return_value = True
     return svc
 
 

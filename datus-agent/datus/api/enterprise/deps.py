@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, NamedTuple, Optional
 from fastapi import Depends, HTTPException, Request
 
 from datus.api.auth.context import AppContext
-from datus.api.enterprise.models import AuditEvent, ResourceRef
+from datus.api.enterprise.models import AuditEvent, ProjectionInput, ProjectionResult, ResourceRef
 from datus.api.models.base_models import Result
 
 if TYPE_CHECKING:
@@ -26,9 +26,56 @@ def get_audit_sink():
     return get_enterprise_extensions().audit_sink
 
 
+def get_config_projector():
+    from datus.api.deps import get_enterprise_extensions
+
+    return get_enterprise_extensions().config_projector
+
+
 async def authorize(ctx: AppContext, *, action: str, resource: ResourceRef | None = None):
     provider = get_authorization_provider()
     return await provider.check(ctx, action, resource or ResourceRef(type="module"))
+
+
+async def project_request_config(
+    ctx: AppContext,
+    base_config,
+    *,
+    operation: str,
+    requested_datasource: str | None = None,
+    requested_catalog: str | None = None,
+    requested_database: str | None = None,
+    requested_schema: str | None = None,
+    metadata: dict | None = None,
+) -> ProjectionResult:
+    """Project a request-scoped AgentConfig clone through the configured provider."""
+
+    result = await get_config_projector().project(
+        ProjectionInput(
+            ctx=ctx,
+            base_config=base_config,
+            operation=operation,
+            requested_datasource=requested_datasource,
+            requested_catalog=requested_catalog,
+            requested_database=requested_database,
+            requested_schema=requested_schema,
+            metadata=metadata or {},
+        )
+    )
+    if result.denied_reason:
+        resource_id = requested_datasource or result.principal.get("datasource")
+        await get_audit_sink().write(
+            AuditEvent(
+                user_id=ctx.user_id,
+                action=operation,
+                resource_type="datasource",
+                resource_id=resource_id,
+                decision="deny",
+                reason=result.denied_reason,
+            )
+        )
+        raise HTTPException(status_code=403, detail=result.denied_reason)
+    return result
 
 
 async def require_authorized_module(
