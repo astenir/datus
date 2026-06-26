@@ -76,8 +76,9 @@ async def get_dashboard_detail(
 async def run_dashboard_query(
     body: DashboardQueryRequest,
     svc: ServiceDep,
-    _ctx: DashboardQueryModuleCtx,
+    ctx: DashboardQueryModuleCtx,
 ) -> Result[SqlQueryResultEnvelope]:
+    await require_artifact_access(ctx, artifact_type="dashboard", slug=body.dashboard_slug, action="query")
     return await svc.dashboard.run_query(
         project_files_root=_project_files_root(svc),
         dashboard_slug=body.dashboard_slug,

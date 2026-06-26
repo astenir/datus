@@ -174,6 +174,38 @@ def test_chat_stream_denies_custom_ask_artifact_subagent_with_module_chat_only(m
     svc.chat.stream_chat.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    ("agent_type", "permission", "artifact_type", "subagent_id"),
+    [
+        ("ask_report", "module.report.query", "report", "custom-ask-report-id"),
+        ("ask_dashboard", "module.dashboard.query", "dashboard", "custom-ask-dashboard-id"),
+    ],
+)
+def test_chat_stream_denies_custom_ask_artifact_subagent_for_acl_miss(
+    monkeypatch, agent_type, permission, artifact_type, subagent_id
+):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    svc.agent_config.agentic_nodes = {
+        "ask_artifact": {"id": subagent_id, "type": agent_type, "artifact_slug": "sales_overview"}
+    }
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.chat", permission},
+        principal={"artifact_acl": {artifact_type: ["other_artifact"]}},
+    )
+
+    with _client(chat_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/chat/stream",
+            json={"message": "inspect artifact", "subagent_id": subagent_id},
+        )
+
+    assert response.status_code == 404
+    svc.chat.stream_chat.assert_not_called()
+
+
 def test_datasource_catalog_routes_require_module_datasource_catalog(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()
@@ -345,6 +377,30 @@ def test_dashboard_query_allows_module_dashboard_query(monkeypatch):
     assert svc.dashboard.run_query.await_args.kwargs["dashboard_slug"] == "sales_overview"
     assert svc.dashboard.run_query.await_args.kwargs["query_slug"] == "summary"
     assert svc.dashboard.run_query.await_args.kwargs["params"] == {"region": "east"}
+
+
+def test_dashboard_query_rejects_artifact_acl_denial(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    svc.agent_config.project_root = "/tmp/project"
+    svc.dashboard.run_query = AsyncMock(
+        return_value=Result[SqlQueryResultEnvelope](success=True, data=_dashboard_query_result())
+    )
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.dashboard.query"},
+        principal={"artifact_acl": {"dashboard": ["other_dashboard"]}},
+    )
+
+    with _client(dashboard_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/dashboard/query",
+            json={"dashboard_slug": "sales_overview", "query_slug": "summary", "params": {}},
+        )
+
+    assert response.status_code == 404
+    svc.dashboard.run_query.assert_not_awaited()
 
 
 def test_sql_execute_routes_require_module_sql_executor(monkeypatch):
