@@ -45,6 +45,7 @@ async def authorize_session_access(
     *,
     action: str,
     require_existing_session: bool = False,
+    allow_admin: bool = True,
 ) -> SessionAccess:
     """Return the disk-scope owner user id when ``ctx`` can access a session."""
 
@@ -77,7 +78,7 @@ async def authorize_session_access(
     if owner == ctx.user_id:
         return SessionAccess(error=None, user_id=ctx.user_id)
 
-    if await _can_administer_sessions(ctx, session_id):
+    if allow_admin and await _can_administer_sessions(ctx, session_id):
         return SessionAccess(error=None, user_id=owner)
 
     await _audit_session_deny(ctx, session_id, action, "session owner mismatch")

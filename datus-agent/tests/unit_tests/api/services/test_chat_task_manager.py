@@ -630,6 +630,22 @@ class TestChatTaskManagerBehavior:
 class TestStartChat:
     """Tests for start_chat — background task creation."""
 
+    async def test_start_chat_owner_store_failure_removes_placeholder_task(self, real_agent_config):
+        """A failed owner write must not leave an uncancellable running placeholder."""
+        from datus.api.models.cli_models import StreamChatInput
+
+        class FailingOwnerStore:
+            async def set_owner(self, project_id, session_id, user_id):
+                raise RuntimeError("owner store unavailable")
+
+        manager = ChatTaskManager(project_id="project-1", session_owner_store=FailingOwnerStore())
+        request = StreamChatInput(message="hello", session_id="owned-session")
+
+        with pytest.raises(RuntimeError, match="owner store unavailable"):
+            await manager.start_chat(real_agent_config, request, user_id="alice")
+
+        assert manager._tasks == {}
+
     async def test_start_chat_records_task_owner(self, real_agent_config, monkeypatch):
         """start_chat stores raw owner metadata before the background loop runs."""
         from datus.api.enterprise.defaults import InMemorySessionOwnerStore

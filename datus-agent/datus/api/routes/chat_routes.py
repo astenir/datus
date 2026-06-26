@@ -170,6 +170,21 @@ async def stream_chat(
             detail=f"Subagent '{sub_agent_id}' not found",
         )
 
+    if request.session_id:
+        access = await authorize_session_access(
+            svc,
+            ctx,
+            request.session_id,
+            action="stream",
+            allow_admin=False,
+        )
+        if access.error:
+            return StreamingResponse(
+                _emit_session_access_denial(request, access.error),
+                media_type="text/event-stream",
+                headers=_sse_headers(),
+            )
+
     sql_policy_denial = _sql_policy_principal_pre_check(svc, ctx)
     if sql_policy_denial:
         return StreamingResponse(
@@ -232,6 +247,21 @@ async def stream_chat_feedback(
         message=rendered_message,
         subagent_id="feedback",
     )
+    source_access = await authorize_session_access(
+        svc,
+        ctx,
+        request.source_session_id,
+        action="feedback_source",
+        require_existing_session=True,
+        allow_admin=False,
+    )
+    if source_access.error:
+        return StreamingResponse(
+            _emit_session_access_denial(stream_input, source_access.error),
+            media_type="text/event-stream",
+            headers=_sse_headers(),
+        )
+
     sql_policy_denial = _sql_policy_principal_pre_check(svc, ctx)
     if sql_policy_denial:
         return StreamingResponse(
@@ -606,6 +636,20 @@ async def _emit_pre_check_denial(
     error_payload = SSEErrorData(
         error=outcome.error or "Request denied",
         error_type=outcome.error_type or "PRE_CHAT_DENIED",
+        session_id=request.session_id,
+    )
+    event = SSEEvent(id=1, event="error", data=error_payload, timestamp=now_utc_iso())
+    yield f"id: {event.id}\nevent: {event.event}\ndata: {event.data.model_dump_json()}\n\n"
+
+
+async def _emit_session_access_denial(
+    request: StreamChatInput,
+    error: Result[dict],
+) -> AsyncGenerator[str, None]:
+    """Emit a single SSE error event for a session owner denial."""
+    error_payload = SSEErrorData(
+        error=error.errorMessage or "Session access denied",
+        error_type=error.errorCode or "SESSION_FORBIDDEN",
         session_id=request.session_id,
     )
     event = SSEEvent(id=1, event="error", data=error_payload, timestamp=now_utc_iso())

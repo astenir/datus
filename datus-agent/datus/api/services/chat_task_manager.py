@@ -370,8 +370,12 @@ class ChatTaskManager:
         # Placeholder — asyncio_task set immediately after
         task = ChatTask(session_id=session_id, asyncio_task=None, owner_user_id=user_id)  # type: ignore[arg-type]
         self._tasks[session_id] = task
-        if user_id and self._session_owner_store is not None:
-            await self._session_owner_store.set_owner(self._project_id, session_id, user_id)
+        try:
+            if user_id and self._session_owner_store is not None:
+                await self._session_owner_store.set_owner(self._project_id, session_id, user_id)
+        except Exception:
+            self._tasks.pop(session_id, None)
+            raise
 
         asyncio_task = asyncio.create_task(
             self._run_loop(

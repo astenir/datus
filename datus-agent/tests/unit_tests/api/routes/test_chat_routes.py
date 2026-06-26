@@ -17,6 +17,7 @@ from datus.api.models.base_models import Result
 from datus.api.models.cli_models import (
     ChatHistoryData,
     ChatSessionData,
+    FeedbackChatInput,
     SSEEndData,
     SSEEvent,
     SSESessionData,
@@ -30,6 +31,7 @@ from datus.api.routes.chat_routes import (
     get_chat_history,
     list_sessions,
     stream_chat,
+    stream_chat_feedback,
     submit_user_interaction,
 )
 from datus.tools.sql_policy import SqlPolicyConfig
@@ -63,6 +65,15 @@ def _mock_ctx(user_id=None, permissions=None):
     ctx.permissions = permissions or set()
     ctx.principal = {}
     return ctx
+
+
+def _patch_owner_extensions(monkeypatch, owner_store, *, enabled=False):
+    import datus.api.deps as api_deps
+    import datus.api.enterprise.deps as enterprise_deps
+
+    extensions = SimpleNamespace(enabled=enabled, session_owner_store=owner_store)
+    monkeypatch.setattr(api_deps, "get_enterprise_extensions", lambda: extensions)
+    monkeypatch.setattr(enterprise_deps, "get_audit_sink", lambda: SimpleNamespace(write=AsyncMock()))
 
 
 class TestSubmitUserInteractionConversion:
@@ -229,6 +240,145 @@ class TestStreamChat404Gate:
         assert response.media_type == "text/event-stream"
 
 
+class TestStreamChatSessionOwner:
+    """Owner checks for client-supplied stream session ids."""
+
+    @pytest.mark.asyncio
+    async def test_existing_session_id_owned_by_other_user_returns_sse_error(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+
+        owner_store = InMemorySessionOwnerStore()
+        await owner_store.set_owner("project-1", "s1", "alice")
+        _patch_owner_extensions(monkeypatch, owner_store)
+        svc = _mock_svc_with_nodes()
+        svc.project_id = "project-1"
+        svc.task_manager.get_task.return_value = None
+        svc.chat.session_exists.return_value = False
+        svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
+        request = StreamChatInput(message="hi", session_id="s1")
+
+        response = await stream_chat(request, svc, _mock_ctx(user_id="bob"), MagicMock())
+        chunks = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+        payload = json.loads(
+            next(line for line in chunks[0].splitlines() if line.startswith("data: "))[len("data: ") :]
+        )
+        assert payload["error_type"] == "SESSION_FORBIDDEN"
+        assert await owner_store.get_owner("project-1", "s1") == "alice"
+        svc.chat.stream_chat.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_existing_session_id_owned_by_current_user_allows_stream(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+
+        async def empty_stream(*_args, **_kwargs):
+            if False:
+                yield
+
+        owner_store = InMemorySessionOwnerStore()
+        await owner_store.set_owner("project-1", "s1", "alice")
+        _patch_owner_extensions(monkeypatch, owner_store)
+        svc = _mock_svc_with_nodes()
+        svc.project_id = "project-1"
+        svc.task_manager.get_task.return_value = None
+        svc.chat.stream_chat = MagicMock(return_value=empty_stream())
+        request = StreamChatInput(message="hi", session_id="s1")
+
+        response = await stream_chat(request, svc, _mock_ctx(user_id="alice"), MagicMock())
+        async for _ in response.body_iterator:
+            pass
+
+        svc.chat.stream_chat.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_admin_permission_does_not_allow_cross_user_stream(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+
+        owner_store = InMemorySessionOwnerStore()
+        await owner_store.set_owner("project-1", "s1", "alice")
+        _patch_owner_extensions(monkeypatch, owner_store)
+        monkeypatch.setattr(
+            "datus.api.enterprise.deps.authorize",
+            AsyncMock(return_value=AccessDecision(allowed=True, reason="admin session permission")),
+        )
+        svc = _mock_svc_with_nodes()
+        svc.project_id = "project-1"
+        svc.task_manager.get_task.return_value = None
+        svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
+        request = StreamChatInput(message="hi", session_id="s1")
+
+        response = await stream_chat(
+            request,
+            svc,
+            _mock_ctx(user_id="bob", permissions={"module.admin.sessions"}),
+            MagicMock(),
+        )
+        chunks = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+        assert "SESSION_FORBIDDEN" in chunks[0]
+        svc.chat.stream_chat.assert_not_called()
+
+
+class TestFeedbackSessionOwner:
+    """Owner checks for feedback source_session_id."""
+
+    @pytest.mark.asyncio
+    async def test_feedback_source_owned_by_other_user_returns_sse_error(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+
+        owner_store = InMemorySessionOwnerStore()
+        await owner_store.set_owner("project-1", "source-s1", "alice")
+        _patch_owner_extensions(monkeypatch, owner_store)
+        svc = _mock_svc_with_nodes()
+        svc.project_id = "project-1"
+        svc.task_manager.get_task.return_value = None
+        svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
+        request = FeedbackChatInput(
+            source_session_id="source-s1",
+            reaction_emoji="thumbsup",
+            reference_msg="good answer",
+        )
+
+        response = await stream_chat_feedback(request, svc, _mock_ctx(user_id="bob"))
+        chunks = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+        assert "SESSION_FORBIDDEN" in chunks[0]
+        svc.chat.stream_chat.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_feedback_source_owned_by_current_user_allows_stream(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+
+        async def empty_stream(*_args, **_kwargs):
+            if False:
+                yield
+
+        owner_store = InMemorySessionOwnerStore()
+        await owner_store.set_owner("project-1", "source-s1", "alice")
+        _patch_owner_extensions(monkeypatch, owner_store)
+        svc = _mock_svc_with_nodes()
+        svc.project_id = "project-1"
+        svc.task_manager.get_task.return_value = None
+        svc.chat.stream_chat = MagicMock(return_value=empty_stream())
+        request = FeedbackChatInput(
+            source_session_id="source-s1",
+            reaction_emoji="thumbsup",
+            reference_msg="good answer",
+        )
+
+        response = await stream_chat_feedback(request, svc, _mock_ctx(user_id="alice"))
+        async for _ in response.body_iterator:
+            pass
+
+        svc.chat.stream_chat.assert_called_once()
+
+
 class TestStreamChatSqlPolicyPreCheck:
     """SQL policy enabled chat requests must carry required request principal fields."""
 
@@ -365,6 +515,8 @@ class TestChatRouteAcceptance:
             )
 
         svc = _mock_svc_with_nodes()
+        svc.task_manager.get_task.return_value = None
+        svc.chat.session_exists.return_value = False
         svc.chat.stream_chat = MagicMock(return_value=fake_chat_stream())
         ctx = MagicMock(user_id="user-1")
         request = StreamChatInput(
@@ -528,15 +680,6 @@ class TestInsertMessageEndpoint:
 class TestSessionOwnerAccess:
     """Owner checks for chat session runtime endpoints."""
 
-    @staticmethod
-    def _patch_owner_extensions(monkeypatch, owner_store, *, enabled=False):
-        import datus.api.deps as api_deps
-        import datus.api.enterprise.deps as enterprise_deps
-
-        extensions = SimpleNamespace(enabled=enabled, session_owner_store=owner_store)
-        monkeypatch.setattr(api_deps, "get_enterprise_extensions", lambda: extensions)
-        monkeypatch.setattr(enterprise_deps, "get_audit_sink", lambda: SimpleNamespace(write=AsyncMock()))
-
     @pytest.mark.asyncio
     async def test_insert_denies_non_owner_without_admin_permission(self, monkeypatch):
         from datus.api.enterprise.defaults import InMemorySessionOwnerStore
@@ -544,7 +687,7 @@ class TestSessionOwnerAccess:
 
         owner_store = InMemorySessionOwnerStore()
         await owner_store.set_owner("project-1", "s1", "alice")
-        self._patch_owner_extensions(monkeypatch, owner_store)
+        _patch_owner_extensions(monkeypatch, owner_store)
         monkeypatch.setattr(
             "datus.api.enterprise.deps.authorize",
             AsyncMock(return_value=AccessDecision(allowed=False, reason="missing admin permission")),
@@ -572,7 +715,7 @@ class TestSessionOwnerAccess:
 
         owner_store = InMemorySessionOwnerStore()
         await owner_store.set_owner("project-1", "s1", "alice")
-        self._patch_owner_extensions(monkeypatch, owner_store)
+        _patch_owner_extensions(monkeypatch, owner_store)
         monkeypatch.setattr(
             "datus.api.enterprise.deps.authorize",
             AsyncMock(return_value=AccessDecision(allowed=True, reason="admin session permission")),
@@ -684,7 +827,7 @@ class TestDeleteSession:
 
         owner_store = InMemorySessionOwnerStore()
         await owner_store.set_owner("project-1", "session123", "alice")
-        TestSessionOwnerAccess._patch_owner_extensions(monkeypatch, owner_store)
+        _patch_owner_extensions(monkeypatch, owner_store)
         monkeypatch.setattr(
             "datus.api.enterprise.deps.authorize",
             AsyncMock(return_value=AccessDecision(allowed=True, reason="admin session permission")),
