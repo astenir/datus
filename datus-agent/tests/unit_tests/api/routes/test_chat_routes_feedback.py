@@ -58,13 +58,21 @@ def _build_ctx(user_id="tester", datasource_grants=None):
     return ctx
 
 
-def _enterprise_extensions(config_projector=None) -> EnterpriseExtensions:
+class CollectingAuditSink:
+    def __init__(self):
+        self.events = []
+
+    async def write(self, event):
+        self.events.append(event)
+
+
+def _enterprise_extensions(config_projector=None, audit_sink=None) -> EnterpriseExtensions:
     return EnterpriseExtensions(
         enabled=True,
         authorization_provider=LocalAuthorizationProvider(),
         config_projector=config_projector or PassthroughConfigProjector(),
         session_owner_store=InMemorySessionOwnerStore(),
-        audit_sink=NoopAuditSink(),
+        audit_sink=audit_sink or NoopAuditSink(),
     )
 
 
@@ -177,7 +185,9 @@ async def test_feedback_endpoint_appends_optional_reaction_msg():
 
 
 @pytest.mark.asyncio
-async def test_feedback_endpoint_denies_when_sql_policy_enabled_without_principal():
+async def test_feedback_endpoint_denies_when_sql_policy_enabled_without_principal(monkeypatch):
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(audit_sink=audit_sink))
     svc = _build_svc()
     svc.agent_config.sql_policy_config = SqlPolicyConfig.from_dict(
         {
@@ -207,3 +217,19 @@ async def test_feedback_endpoint_denies_when_sql_policy_enabled_without_principa
     assert "provider that populates principal fields" in payload["error"]
     assert "agent.sql_policy" in payload["error"]
     svc.chat.stream_chat.assert_not_called()
+    event = audit_sink.events[-1]
+    assert event.user_id is None
+    assert event.action == "sql.policy.principal"
+    assert event.resource_type == "chat"
+    assert event.resource_id is None
+    assert event.decision == "deny"
+    assert event.reason == "SQL_POLICY_PRINCIPAL_REQUIRED"
+    assert event.metadata == {
+        "operation": "chat.feedback",
+        "session_id": None,
+        "subagent_id": "feedback",
+        "datasource": None,
+        "database": None,
+        "error_code": "SQL_POLICY_PRINCIPAL_REQUIRED",
+        "missing_principal_paths": ["market_code"],
+    }
