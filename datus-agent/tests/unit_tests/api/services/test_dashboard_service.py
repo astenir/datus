@@ -71,6 +71,21 @@ class RewriteDashboardSqlPolicyEnforcer:
         return EnforcementResult(allowed=True, sql="SELECT 2 AS rewritten", applied_policies=["rewrite"])
 
 
+class RaisingDashboardSqlPolicyEnforcer:
+    def __init__(self, config: SqlPolicyConfig) -> None:
+        self.config = config
+
+    def enforce_read(
+        self,
+        sql: str,
+        *,
+        datasource: str,
+        dialect: str,
+        principal: dict | None,
+    ) -> EnforcementResult:
+        raise RuntimeError("policy backend down")
+
+
 def _write_dashboard(
     project_files_root: Path,
     *,
@@ -555,6 +570,37 @@ async def test_run_query_applies_sql_policy_rewrite(monkeypatch, tmp_path: Path)
     assert result.success is True
     assert captured["sql"] == "SELECT 2 AS rewritten"
     assert result.data.sql == "SELECT 2 AS rewritten"
+
+
+@pytest.mark.asyncio
+async def test_run_query_returns_result_when_sql_policy_raises(monkeypatch, tmp_path: Path):
+    """Policy backend failures must not escape the dashboard Result contract."""
+    _write_dashboard(tmp_path)
+    captured: dict = {}
+    _patch_executor(monkeypatch, captured=captured)
+    agent_config = SimpleNamespace(
+        current_datasource="warehouse",
+        principal={"datasource": "warehouse", "datasource_grants": {"warehouse": {"effect": "allow"}}},
+        sql_policy_config=SqlPolicyConfig.from_dict(
+            {
+                "enabled": True,
+                "provider": "tests.unit_tests.api.services.test_dashboard_service:RaisingDashboardSqlPolicyEnforcer",
+            }
+        ),
+    )
+
+    result = await DashboardService(agent_config=agent_config).run_query(
+        project_files_root=tmp_path,
+        dashboard_slug="demo",
+        query_slug="by_region",
+        params={"region": "APAC"},
+        agent_config=agent_config,
+    )
+
+    assert result.success is False
+    assert result.errorCode == "QUERY_EXECUTION_FAILED"
+    assert result.errorMessage == "policy backend down"
+    assert "sql" not in captured
 
 
 @pytest.mark.asyncio

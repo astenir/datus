@@ -630,7 +630,15 @@ class DashboardService:
 
         from datus.api.services.cli_service import CLIService
 
-        authorized_sql = CLIService._authorize_read_sql(rendered_sql, connector, execution_config)
+        try:
+            authorized_sql = CLIService._authorize_read_sql(rendered_sql, connector, execution_config)
+        except Exception as exc:
+            logger.exception("Dashboard SQL authorization failed for %s/%s: %s", dashboard_slug, query_slug, exc)
+            return Result(
+                success=False,
+                errorCode="QUERY_EXECUTION_FAILED",
+                errorMessage=str(exc),
+            )
         if not isinstance(authorized_sql, str):
             return Result(
                 success=False,
