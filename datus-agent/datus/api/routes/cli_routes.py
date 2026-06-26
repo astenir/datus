@@ -21,6 +21,7 @@ from datus.api.models.cli_models import (
     StopExecuteSQLData,
     StopExecuteSQLInput,
 )
+from datus_enterprise.audit import AuditEvent, audit_decision
 
 router = APIRouter(prefix="/api/v1", tags=["cli"])
 SqlExecutorModuleCtx = Annotated[AppContext, Depends(require_module("module.sql_executor"))]
@@ -47,7 +48,9 @@ async def execute_sql(
         operation="sql.execute",
         requested_database=request.database_name,
     )
-    return await svc.cli.execute_sql(request, user_id=ctx.user_id, agent_config=projection.config)
+    result = await svc.cli.execute_sql(request, user_id=ctx.user_id, agent_config=projection.config)
+    await _audit_sql_execute(ctx, request, projection, result)
+    return result
 
 
 @router.post(
@@ -126,4 +129,28 @@ async def _require_datasource_catalog_for_internal_command(ctx: AppContext, comm
         ctx,
         "module.datasource_catalog",
         resource=ResourceRef(type="cli_internal_command", id=normalized),
+    )
+
+
+async def _audit_sql_execute(ctx: AppContext, request: ExecuteSQLInput, projection, result: Result[ExecuteSQLData]) -> None:
+    datasource = projection.principal.get("datasource") or getattr(projection.config, "current_datasource", None)
+    data = result.data if result.success else None
+    error_code = str(result.errorCode) if not result.success and result.errorCode is not None else None
+    metadata = {
+        "database": request.database_name,
+        "result_format": request.result_format,
+        "execute_task_id": getattr(data, "execute_task_id", None),
+        "row_count": getattr(data, "row_count", None),
+        "error_code": error_code,
+    }
+    await audit_decision(
+        ctx,
+        AuditEvent(
+            action="sql.execute",
+            resource_type="datasource",
+            resource_id=str(datasource) if datasource else None,
+            decision="allow" if result.success else "deny",
+            reason=None if result.success else (error_code or "SQL execution failed"),
+            metadata={key: value for key, value in metadata.items() if value is not None},
+        ),
     )
