@@ -1,4 +1,14 @@
-from datus_oceanbase_oracle.connector import OceanBaseOracleConnector, _parse_base_username, _parse_tenant
+# Copyright 2025-present DatusAI, Inc.
+# Licensed under the Apache License, Version 2.0.
+# See http://www.apache.org/licenses/LICENSE-2.0 for details.
+
+from datus_oceanbase_oracle import connector as connector_module
+from datus_oceanbase_oracle.connector import (
+    OceanBaseOracleConnector,
+    _JayDeBeApiCreator,
+    _parse_base_username,
+    _parse_tenant,
+)
 
 
 def make_connector_without_pool(schema_name="APP"):
@@ -11,44 +21,367 @@ def make_connector_without_pool(schema_name="APP"):
     return connector
 
 
-def test_parse_oceanbase_username_parts():
-    assert _parse_base_username("app@tenant#cluster") == "app"
-    assert _parse_tenant("app@tenant#cluster") == "tenant"
-    assert _parse_base_username("app@tenant") == "app"
-    assert _parse_tenant("app@tenant") == "tenant"
-    assert _parse_base_username("app") == "app"
-    assert _parse_tenant("app") == ""
+class TestParseUsername:
+    def test_parse_oceanbase_username_parts(self):
+        assert _parse_base_username("app@tenant#cluster") == "app"
+        assert _parse_tenant("app@tenant#cluster") == "tenant"
+        assert _parse_base_username("app@tenant") == "app"
+        assert _parse_tenant("app@tenant") == "tenant"
+        assert _parse_base_username("app") == "app"
+        assert _parse_tenant("app") == ""
+
+    def test_parse_username_with_special_chars(self):
+        assert _parse_base_username("app_user@tenant#cluster") == "app_user"
+        assert _parse_tenant("app_user@tenant#cluster") == "tenant"
 
 
-def test_metadata_queries_use_all_views(monkeypatch):
-    connector = make_connector_without_pool()
-    sql_calls = []
+class TestConnectionPool:
+    def test_jaydebeapi_creator_calls_connect_with_positional_args(self, monkeypatch):
+        calls = []
+        sentinel_connection = object()
 
-    def fake_execute_sql(sql):
-        sql_calls.append(sql.upper())
+        def fake_connect(*args, **kwargs):
+            calls.append((args, kwargs))
+            return sentinel_connection
 
-        class FakeSeries(list):
-            def tolist(self):
-                return list(self)
+        monkeypatch.setattr(connector_module.jaydebeapi, "connect", fake_connect)
 
-        class FakeFrame:
-            columns = ["TABLE_NAME"]
+        connection = _JayDeBeApiCreator.connect(
+            driver_class="com.oceanbase.jdbc.Driver",
+            jdbc_url="jdbc:oceanbase://db.example.com:2883/APP?useSSL=false",
+            username="app@tenant#cluster",
+            password="secret",
+            jar_path="/opt/oceanbase-client.jar",
+        )
 
-            def __getitem__(self, key):
-                assert key == "TABLE_NAME"
-                return FakeSeries()
+        assert connection is sentinel_connection
+        assert calls == [
+            (
+                (
+                    "com.oceanbase.jdbc.Driver",
+                    "jdbc:oceanbase://db.example.com:2883/APP?useSSL=false",
+                    ["app@tenant#cluster", "secret"],
+                    "/opt/oceanbase-client.jar",
+                    None,
+                ),
+                {},
+            )
+        ]
 
-        return FakeFrame()
+    def test_connector_uses_pool_creator_adapter(self, monkeypatch):
+        captured = {}
 
-    monkeypatch.setattr(connector, "_execute_sql", fake_execute_sql)
+        class FakePool:
+            def __init__(self, *args, **kwargs):
+                captured["args"] = args
+                captured["kwargs"] = kwargs
 
-    assert connector.get_tables(schema_name="APP") == []
+        monkeypatch.setattr(connector_module, "PooledDB", FakePool)
 
-    assert "FROM ALL_TABLES" in sql_calls[0]
-    assert "DBA_TABLES" not in sql_calls[0]
+        OceanBaseOracleConnector(
+            {
+                "host": "db.example.com",
+                "port": 2883,
+                "username": "app@tenant#cluster",
+                "password": "secret",
+                "schema": "app",
+                "jar_path": "/opt/oceanbase-client.jar",
+                "pool_mincached": 0,
+            }
+        )
+
+        assert captured["args"] == ()
+        assert captured["kwargs"]["creator"] is _JayDeBeApiCreator
+        assert captured["kwargs"]["driver_class"] == "com.oceanbase.jdbc.Driver"
+        assert captured["kwargs"]["jdbc_url"].startswith("jdbc:oceanbase://db.example.com:2883/APP?")
+        assert captured["kwargs"]["username"] == "app@tenant#cluster"
+        assert captured["kwargs"]["password"] == "secret"
+        assert captured["kwargs"]["jar_path"] == "/opt/oceanbase-client.jar"
+        assert "driver" not in captured["kwargs"]
+        assert "url" not in captured["kwargs"]
+        assert "driver_args" not in captured["kwargs"]
+        assert "jars" not in captured["kwargs"]
+        assert "libs" not in captured["kwargs"]
 
 
-def test_full_name_quotes_embedded_double_quotes():
-    connector = make_connector_without_pool(schema_name='A"P')
+class TestQueryExecution:
+    def test_execute_sql_uses_cursor_dataframe_reader(self, monkeypatch):
+        connector = make_connector_without_pool()
+        calls = []
 
-    assert connector.full_name(table_name='T"B') == '"A""P"."T""B"'
+        class FakeCursor:
+            description = [("ID",), ("NAME",)]
+
+            def execute(self, sql):
+                calls.append(("execute", sql))
+
+            def fetchall(self):
+                return [(1, "alpha")]
+
+            def close(self):
+                calls.append(("cursor_close", None))
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+            def close(self):
+                calls.append(("connection_close", None))
+
+        monkeypatch.setattr(connector, "_get_raw_connection", lambda: FakeConnection())
+        monkeypatch.setattr(
+            connector_module.pd,
+            "read_sql",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("pd.read_sql should not be called")),
+        )
+
+        df = connector._execute_sql("SELECT ID, NAME FROM APP.T")
+
+        assert df.to_dict(orient="records") == [{"ID": 1, "NAME": "alpha"}]
+        assert calls == [
+            ("execute", "SELECT ID, NAME FROM APP.T"),
+            ("cursor_close", None),
+            ("connection_close", None),
+        ]
+
+    def test_execute_queries_select_uses_cursor_dataframe_reader(self, monkeypatch):
+        connector = make_connector_without_pool()
+        calls = []
+
+        class FakeCursor:
+            description = [("ID",)]
+            rowcount = -1
+
+            def execute(self, sql):
+                calls.append(("execute", sql))
+
+            def fetchall(self):
+                return [(1,), (2,)]
+
+            def close(self):
+                calls.append(("cursor_close", None))
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+            def commit(self):
+                calls.append(("commit", None))
+
+            def rollback(self):
+                calls.append(("rollback", None))
+
+            def close(self):
+                calls.append(("connection_close", None))
+
+        monkeypatch.setattr(connector, "_get_raw_connection", lambda: FakeConnection())
+        monkeypatch.setattr(
+            connector_module.pd,
+            "read_sql",
+            lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("pd.read_sql should not be called")),
+        )
+
+        results = connector.execute_queries(["SELECT ID FROM APP.T"])
+
+        assert results == [[{"ID": 1}, {"ID": 2}]]
+        assert calls == [
+            ("execute", "SELECT ID FROM APP.T"),
+            ("cursor_close", None),
+            ("commit", None),
+            ("connection_close", None),
+        ]
+
+
+class TestMetadataQueries:
+    def test_metadata_queries_use_all_views(self, monkeypatch):
+        connector = make_connector_without_pool()
+        sql_calls = []
+
+        def fake_execute_sql(sql):
+            sql_calls.append(sql.upper())
+
+            class FakeSeries(list):
+                def tolist(self):
+                    return list(self)
+
+            class FakeFrame:
+                columns = ["TABLE_NAME"]
+
+                def __getitem__(self, key):
+                    assert key == "TABLE_NAME"
+                    return FakeSeries()
+
+            return FakeFrame()
+
+        monkeypatch.setattr(connector, "_execute_sql", fake_execute_sql)
+
+        assert connector.get_tables(schema_name="APP") == []
+        assert "FROM ALL_TABLES" in sql_calls[0]
+        assert "DBA_TABLES" not in sql_calls[0]
+
+    def test_get_views_uses_all_views(self, monkeypatch):
+        connector = make_connector_without_pool()
+        sql_calls = []
+
+        def fake_execute_sql(sql):
+            sql_calls.append(sql.upper())
+
+            class FakeSeries(list):
+                def tolist(self):
+                    return list(self)
+
+            class FakeFrame:
+                columns = ["VIEW_NAME"]
+
+                def __getitem__(self, key):
+                    assert key == "VIEW_NAME"
+                    return FakeSeries()
+
+            return FakeFrame()
+
+        monkeypatch.setattr(connector, "_execute_sql", fake_execute_sql)
+        assert connector.get_views(schema_name="APP") == []
+        assert "FROM ALL_VIEWS" in sql_calls[0]
+
+    def test_get_schemas_queries_all_users(self, monkeypatch):
+        connector = make_connector_without_pool()
+        sql_calls = []
+
+        def fake_execute_sql(sql):
+            sql_calls.append(sql.upper())
+
+            class FakeSeries(list):
+                def tolist(self):
+                    return list(self)
+
+            class FakeFrame:
+                columns = ["USERNAME"]
+
+                def __getitem__(self, key):
+                    assert key == "USERNAME"
+                    return FakeSeries(["SYS", "SYSTEM", "APP"])
+
+            return FakeFrame()
+
+        monkeypatch.setattr(connector, "_execute_sql", fake_execute_sql)
+        schemas = connector.get_schemas()
+        assert "FROM ALL_USERS" in sql_calls[0]
+        # System schemas should be filtered out
+        assert "SYS" not in schemas
+        assert "SYSTEM" not in schemas
+        assert "APP" in schemas
+
+
+class TestFullName:
+    def test_full_name_quotes_embedded_double_quotes(self):
+        connector = make_connector_without_pool(schema_name='A"P')
+        assert connector.full_name(table_name='T"B') == '"A""P"."T""B"'
+
+    def test_full_name_with_schema(self):
+        connector = make_connector_without_pool(schema_name="MY_SCHEMA")
+        assert connector.full_name(table_name="MY_TABLE") == '"MY_SCHEMA"."MY_TABLE"'
+
+    def test_full_name_without_schema(self):
+        connector = make_connector_without_pool(schema_name="")
+        connector._default_schema = ""
+        assert connector.full_name(table_name="MY_TABLE") == '"MY_TABLE"'
+
+
+class TestIdentifier:
+    def test_identifier_with_database_and_schema(self):
+        connector = make_connector_without_pool(schema_name="SCHEMA")
+        result = connector.identifier(database_name="DB", schema_name="SCHEMA", table_name="TABLE")
+        assert result == "DB.SCHEMA.TABLE"
+
+    def test_identifier_with_schema_only(self):
+        connector = make_connector_without_pool(schema_name="SCHEMA")
+        connector._default_database = ""
+        result = connector.identifier(schema_name="SCHEMA", table_name="TABLE")
+        assert result == "SCHEMA.TABLE"
+
+    def test_identifier_without_schema(self):
+        connector = make_connector_without_pool(schema_name="")
+        connector._default_schema = ""
+        connector._default_database = ""
+        result = connector.identifier(table_name="TABLE")
+        assert result == "TABLE"
+
+
+class TestFormatColumnType:
+    def test_number_with_precision(self):
+        connector = make_connector_without_pool()
+        row = {"DATA_TYPE": "NUMBER", "DATA_PRECISION": 10, "DATA_SCALE": 2, "DATA_LENGTH": 22}
+        assert connector._format_column_type(row) == "NUMBER(10,2)"
+
+    def test_number_without_precision(self):
+        connector = make_connector_without_pool()
+        row = {"DATA_TYPE": "NUMBER", "DATA_PRECISION": None, "DATA_SCALE": None, "DATA_LENGTH": 22}
+        assert connector._format_column_type(row) == "NUMBER"
+
+    def test_varchar2_with_length(self):
+        connector = make_connector_without_pool()
+        row = {"DATA_TYPE": "VARCHAR2", "DATA_PRECISION": None, "DATA_SCALE": None, "DATA_LENGTH": 255}
+        assert connector._format_column_type(row) == "VARCHAR2(255)"
+
+    def test_timestamp_type(self):
+        connector = make_connector_without_pool()
+        row = {"DATA_TYPE": "TIMESTAMP", "DATA_PRECISION": None, "DATA_SCALE": None, "DATA_LENGTH": 11}
+        assert connector._format_column_type(row) == "TIMESTAMP"
+
+
+class TestMapSourceType:
+    def test_hugeint_to_number(self):
+        connector = make_connector_without_pool()
+        assert connector.map_source_type("duckdb", "HUGEINT") == "NUMBER(38,0)"
+
+    def test_boolean_to_number(self):
+        connector = make_connector_without_pool()
+        assert connector.map_source_type("duckdb", "BOOLEAN") == "NUMBER(1)"
+
+    def test_unknown_type_returns_none(self):
+        connector = make_connector_without_pool()
+        assert connector.map_source_type("duckdb", "UNKNOWN_TYPE") is None
+
+    def test_type_with_precision_stripped(self):
+        connector = make_connector_without_pool()
+        assert connector.map_source_type("mysql", "BIGINT(20)") == "NUMBER(19)"
+
+
+class TestValidateDdl:
+    def test_accepts_standard_ddl(self):
+        connector = make_connector_without_pool()
+        ddl = 'CREATE TABLE "S"."T" ("ID" NUMBER PRIMARY KEY)'
+        assert connector.validate_ddl(ddl) == []
+
+    def test_rejects_auto_increment(self):
+        connector = make_connector_without_pool()
+        errors = connector.validate_ddl("CREATE TABLE t (id INT AUTO_INCREMENT)")
+        assert len(errors) > 0
+        assert any("AUTO_INCREMENT" in e for e in errors)
+
+    def test_rejects_engine_clause(self):
+        connector = make_connector_without_pool()
+        errors = connector.validate_ddl("CREATE TABLE t (id INT) ENGINE=InnoDB")
+        assert len(errors) > 0
+        assert any("ENGINE" in e for e in errors)
+
+    def test_rejects_duplicate_key(self):
+        connector = make_connector_without_pool()
+        errors = connector.validate_ddl('CREATE TABLE t (id BIGINT) DUPLICATE KEY("ID")')
+        assert len(errors) > 0
+
+
+class TestSysSchemas:
+    def test_returns_set_with_known_system_schemas(self):
+        connector = make_connector_without_pool()
+        schemas = connector._sys_schemas()
+        assert isinstance(schemas, set)
+        assert "SYS" in schemas
+        assert "SYSTEM" in schemas
+        assert "LBACSYS" in schemas
+
+    def test_includes_extended_schemas(self):
+        connector = make_connector_without_pool()
+        schemas = connector._sys_schemas()
+        assert "DBFS_MOCA" in schemas
+        assert "APEX_PUBLIC_USER" in schemas

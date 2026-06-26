@@ -553,6 +553,35 @@ def test_get_schemas_handles_uppercase_result_column():
     assert connector.get_schemas() == ["app"]
 
 
+def test_get_schemas_executes_against_requested_database():
+    """get_schemas switches to the requested database before querying information_schema."""
+    connector = _make_pg_connector_for_metadata(database_name="ccks_fund")
+    df = _df([("public",), ("testschema",)], ["schema_name"])
+    connector._execute_pandas = MagicMock(return_value=df)
+
+    assert connector.get_schemas(database_name="databasetest") == ["public", "testschema"]
+    connector._execute_pandas.assert_called_once()
+    assert connector._execute_pandas.call_args.kwargs["database_name"] == "databasetest"
+
+
+def test_get_schemas_filters_dynamic_temp_schemas():
+    """get_schemas hides dynamically numbered PostgreSQL temp schemas by default."""
+    connector = _make_pg_connector_for_metadata()
+    df = _df(
+        [
+            ("public",),
+            ("pg_temp_3",),
+            ("pg_toast_temp_3",),
+            ("app",),
+        ],
+        ["schema_name"],
+    )
+    connector._execute_pandas = MagicMock(return_value=df)
+
+    assert connector.get_schemas() == ["public", "app"]
+    assert connector.get_schemas(include_sys=True) == ["public", "pg_temp_3", "pg_toast_temp_3", "app"]
+
+
 def test_get_schema_strict_match_hits_no_fallback():
     """Exact case match returns rows from first query and never executes the lower() fallback."""
     connector = _make_pg_connector_for_metadata()

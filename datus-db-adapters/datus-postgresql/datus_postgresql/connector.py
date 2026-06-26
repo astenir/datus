@@ -116,6 +116,10 @@ class PostgreSQLConnector(SQLAlchemyConnector, MigrationTargetMixin):
             "pg_toast_temp_1",
         }
 
+    def _is_sys_schema(self, schema_name: str) -> bool:
+        """Return whether a schema is PostgreSQL-managed and should be hidden by default."""
+        return schema_name in self._sys_schemas() or schema_name.startswith(("pg_temp_", "pg_toast_temp_"))
+
     # ==================== Utility Methods ====================
 
     # quote_identifier: uses BaseSqlConnector default (ANSI double quotes)
@@ -208,6 +212,8 @@ class PostgreSQLConnector(SQLAlchemyConnector, MigrationTargetMixin):
         result = []
         for i in range(len(query_result)):
             schema = query_result["table_schema"][i]
+            if not schema_name and self._is_sys_schema(str(schema)):
+                continue
             tb_name = query_result["table_name"][i]
             result.append(
                 {
@@ -519,15 +525,14 @@ class PostgreSQLConnector(SQLAlchemyConnector, MigrationTargetMixin):
         database_name = database_name or self.database_name
         safe_db = database_name.replace("'", "''") if database_name else ""
         sql = f"SELECT schema_name FROM information_schema.schemata WHERE catalog_name = '{safe_db}'"
-        result = self._execute_pandas(sql)
+        result = self._execute_pandas(sql, database_name=database_name)
         if result.empty:
             return []
         column_lookup = {str(column).lower(): column for column in result.columns}
         schemas = result[column_lookup["schema_name"]].tolist()
 
         if not include_sys:
-            sys_schemas = self._sys_schemas()
-            schemas = [s for s in schemas if s not in sys_schemas]
+            schemas = [s for s in schemas if not self._is_sys_schema(str(s))]
 
         return schemas
 

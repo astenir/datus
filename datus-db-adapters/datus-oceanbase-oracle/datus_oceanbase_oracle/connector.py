@@ -4,6 +4,7 @@
 
 import re
 from typing import Any, Dict, List, Literal, Optional, Set, Union, override
+from urllib.parse import urlencode
 
 import jaydebeapi
 import pandas as pd
@@ -11,12 +12,30 @@ from dbutils.pooled_db import PooledDB
 
 from datus_db_core import BaseSqlConnector, ConnectionConfig, MigrationTargetMixin, get_logger
 from datus_db_core.models import ExecuteSQLResult
+from datus_db_core.sql_utils import strip_sql_comments
 
 from .config import OceanBaseOracleConfig
 
 logger = get_logger(__name__)
 
 _TENANT_RE = re.compile(r"@([^#]+)")
+
+
+class _JayDeBeApiCreator:
+    """DB-API shaped creator that adapts DBUtils kwargs to JayDeBeApi."""
+
+    threadsafety = jaydebeapi.threadsafety
+    apilevel = jaydebeapi.apilevel
+    paramstyle = jaydebeapi.paramstyle
+    Error = jaydebeapi.Error
+    DatabaseError = jaydebeapi.DatabaseError
+    OperationalError = jaydebeapi.OperationalError
+    InterfaceError = jaydebeapi.InterfaceError
+    InternalError = jaydebeapi.InternalError
+
+    @staticmethod
+    def connect(*, driver_class: str, jdbc_url: str, username: str, password: str, jar_path: str):
+        return jaydebeapi.connect(driver_class, jdbc_url, [username, password], jar_path, None)
 
 
 def _parse_base_username(username: str) -> str:
@@ -52,10 +71,24 @@ class OceanBaseOracleConnector(BaseSqlConnector, MigrationTargetMixin):
         self._password = config.password
         self._jar_path = config.jar_path
         self._driver_class = config.driver_class
+        self._connect_timeout_seconds = config.connect_timeout_seconds
+        self._query_timeout_seconds = config.query_timeout_seconds
 
         tenant = config.database or _parse_tenant(config.username)
         schema = config.schema_name or _parse_base_username(config.username).upper()
-        self._jdbc_url = f"jdbc:oceanbase://{config.host}:{config.port}/{schema}"
+
+        # Build JDBC URL with recommended parameters
+        jdbc_params: Dict[str, str] = {
+            "useSSL": str(config.use_ssl).lower(),
+            "useUnicode": "true",
+            "characterEncoding": "utf-8",
+        }
+        if config.connect_timeout_seconds:
+            jdbc_params["connectTimeout"] = str(int(config.connect_timeout_seconds) * 1000)
+        if config.extra_jdbc_params:
+            jdbc_params.update(config.extra_jdbc_params)
+        query_string = urlencode(jdbc_params)
+        self._jdbc_url = f"jdbc:oceanbase://{config.host}:{config.port}/{schema}?{query_string}"
 
         super().__init__(ConnectionConfig(timeout_seconds=config.timeout_seconds), dialect="oceanbase-oracle")
         self.config = config
@@ -63,16 +96,16 @@ class OceanBaseOracleConnector(BaseSqlConnector, MigrationTargetMixin):
         self._default_schema = schema
 
         self._pool = PooledDB(
-            creator=jaydebeapi,
-            maxconnections=10,
-            mincached=2,
-            maxcached=5,
-            blocking=True,
-            driver=self._driver_class,
-            url=self._jdbc_url,
-            driver_args=[self._username, self._password],
-            jars=self._jar_path,
-            libs=None,
+            creator=_JayDeBeApiCreator,
+            maxconnections=config.pool_maxconnections,
+            mincached=config.pool_mincached,
+            maxcached=config.pool_maxcached,
+            blocking=config.pool_blocking,
+            driver_class=self._driver_class,
+            jdbc_url=self._jdbc_url,
+            username=self._username,
+            password=self._password,
+            jar_path=self._jar_path,
         )
 
     def connect(self):
@@ -102,12 +135,15 @@ class OceanBaseOracleConnector(BaseSqlConnector, MigrationTargetMixin):
 
     def _apply_context(self, conn):
         schema_name = self.schema_name
-        if schema_name:
-            cursor = conn.cursor()
-            try:
+        cursor = conn.cursor()
+        try:
+            # ob_query_timeout is in microseconds
+            if self._query_timeout_seconds:
+                cursor.execute(f"ALTER SESSION SET ob_query_timeout = {int(self._query_timeout_seconds) * 1_000_000}")
+            if schema_name:
                 cursor.execute(f"ALTER SESSION SET CURRENT_SCHEMA = {_quote_identifier(schema_name)}")
-            finally:
-                cursor.close()
+        finally:
+            cursor.close()
 
     @override
     def do_switch_context(self, conn, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
@@ -158,6 +194,12 @@ class OceanBaseOracleConnector(BaseSqlConnector, MigrationTargetMixin):
             "ORDSYS",
             "DVSYS",
             "AUDSYS",
+            "DBFS_MOCA",
+            "ORDS_PUBLIC_USER",
+            "ORDS_METADATA",
+            "APEX_PUBLIC_USER",
+            "APEX_REST_PUBLIC_USER",
+            "REMOTE_SCHEDULER_AGENT",
         }
 
     @override
@@ -196,9 +238,19 @@ class OceanBaseOracleConnector(BaseSqlConnector, MigrationTargetMixin):
     def _execute_sql(self, sql: str) -> pd.DataFrame:
         conn = self._get_raw_connection()
         try:
-            return pd.read_sql(sql, conn)
+            return self._read_dataframe(conn, sql)
         finally:
             conn.close()
+
+    @staticmethod
+    def _read_dataframe(conn: Any, sql: str) -> pd.DataFrame:
+        cursor = conn.cursor()
+        try:
+            cursor.execute(sql)
+            columns = [column[0] for column in (cursor.description or [])]
+            return pd.DataFrame.from_records(cursor.fetchall(), columns=columns)
+        finally:
+            cursor.close()
 
     def _execute_dml(self, sql: str) -> int:
         conn = self._get_raw_connection()
@@ -336,17 +388,15 @@ class OceanBaseOracleConnector(BaseSqlConnector, MigrationTargetMixin):
         try:
             for query in queries:
                 query_stripped = query.strip()
-                query_upper = query_stripped.upper()
-                if query_upper.startswith(("SELECT", "WITH")):
-                    df = pd.read_sql(query_stripped, conn)
+                clean = strip_sql_comments(query_stripped).strip().upper()
+                if clean.startswith(("SELECT", "WITH")):
+                    df = self._read_dataframe(conn, query_stripped)
                     results.append(df.to_dict(orient="records"))
                 else:
                     cursor = conn.cursor()
                     try:
                         cursor.execute(query_stripped)
-                        results.append(
-                            cursor.rowcount if query_upper.startswith(("INSERT", "UPDATE", "DELETE")) else None
-                        )
+                        results.append(cursor.rowcount if clean.startswith(("INSERT", "UPDATE", "DELETE")) else None)
                     finally:
                         cursor.close()
             conn.commit()
@@ -509,15 +559,31 @@ class OceanBaseOracleConnector(BaseSqlConnector, MigrationTargetMixin):
         columns = self.get_schema(schema_name=schema_name, table_name=table_name)
         if not columns:
             return f"-- DDL not available for {full_name}"
+        if object_type == "VIEW":
+            return f"CREATE VIEW {full_name} AS\n-- View definition not available"
+
         col_defs = []
+        comment_stmts = []
         for col in columns:
             col_def = f"    {self.quote_identifier(col['name'])} {col['type']}"
             if not col.get("nullable", True):
                 col_def += " NOT NULL"
             col_defs.append(col_def)
-        if object_type == "VIEW":
-            return f"CREATE VIEW {full_name} AS\n-- View definition not available"
-        return f"CREATE TABLE {full_name} (\n" + ",\n".join(col_defs) + "\n);"
+            if col.get("comment"):
+                comment_stmts.append(
+                    f"COMMENT ON COLUMN {full_name}.{self.quote_identifier(col['name'])} "
+                    f"IS '{_sql_string(col['comment'])}'"
+                )
+
+        pk_cols = [col["name"] for col in columns if col.get("pk")]
+        if pk_cols:
+            pk_names = ", ".join(self.quote_identifier(c) for c in pk_cols)
+            col_defs.append(f"    PRIMARY KEY ({pk_names})")
+
+        ddl = f"CREATE TABLE {full_name} (\n" + ",\n".join(col_defs) + "\n);"
+        if comment_stmts:
+            ddl += "\n\n" + "\n".join(comment_stmts) + ";"
+        return ddl
 
     @override
     def get_tables_with_ddl(
@@ -658,6 +724,7 @@ class OceanBaseOracleConnector(BaseSqlConnector, MigrationTargetMixin):
             "DOUBLE": "BINARY_DOUBLE",
             "SERIAL": "NUMBER GENERATED BY DEFAULT AS IDENTITY",
             "BIGSERIAL": "NUMBER GENERATED BY DEFAULT AS IDENTITY",
+            "AUTO_INCREMENT": "NUMBER GENERATED BY DEFAULT AS IDENTITY",
             "JSON": "CLOB",
             "JSONB": "CLOB",
             "ENUM": "VARCHAR2(255)",
