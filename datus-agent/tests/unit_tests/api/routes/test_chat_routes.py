@@ -518,7 +518,7 @@ class TestChatRouteAcceptance:
         svc.task_manager.get_task.return_value = None
         svc.chat.session_exists.return_value = False
         svc.chat.stream_chat = MagicMock(return_value=fake_chat_stream())
-        ctx = MagicMock(user_id="user-1")
+        ctx = _mock_ctx(user_id="user-1", permissions={"module.chat", "module.sql_executor"})
         request = StreamChatInput(
             message="Generate SQL for school count",
             session_id="gen_sql_acceptance",
@@ -544,7 +544,7 @@ class TestChatRouteAcceptance:
     async def test_valid_builtin_passes_gate(self):
         svc = _mock_svc_with_nodes()
         svc.chat.stream_chat = MagicMock(return_value=AsyncMock().__aiter__())
-        ctx = MagicMock(user_id="u1")
+        ctx = _mock_ctx(user_id="u1", permissions={"module.chat", "module.sql_executor"})
         request = StreamChatInput(message="hi", subagent_id="gen_sql")
 
         response = await stream_chat(request, svc, ctx, MagicMock())

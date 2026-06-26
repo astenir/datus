@@ -7,8 +7,9 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path
 
 from datus.api.auth.context import AppContext
-from datus.api.deps import ServiceDep
-from datus.api.enterprise.deps import require_module
+from datus.api.deps import AppContextDep, ServiceDep
+from datus.api.enterprise.deps import require_authorized_module, require_module
+from datus.api.enterprise.models import ResourceRef
 from datus.api.models.base_models import Result
 from datus.api.models.cli_models import (
     ExecuteContextData,
@@ -24,6 +25,9 @@ from datus.api.models.cli_models import (
 router = APIRouter(prefix="/api/v1", tags=["cli"])
 SqlExecutorModuleCtx = Annotated[AppContext, Depends(require_module("module.sql_executor"))]
 
+_DATASOURCE_CATALOG_CONTEXT_TYPES = {"tables", "catalogs"}
+_DATASOURCE_CATALOG_INTERNAL_COMMANDS = {"database", "databases", "schemas", "tables"}
+
 
 @router.post(
     "/sql/execute",
@@ -34,10 +38,10 @@ SqlExecutorModuleCtx = Annotated[AppContext, Depends(require_module("module.sql_
 async def execute_sql(
     request: ExecuteSQLInput,
     svc: ServiceDep,
-    _ctx: SqlExecutorModuleCtx,
+    ctx: SqlExecutorModuleCtx,
 ) -> Result[ExecuteSQLData]:
     """Execute SQL query directly."""
-    return await svc.cli.execute_sql(request)
+    return await svc.cli.execute_sql(request, user_id=ctx.user_id)
 
 
 @router.post(
@@ -49,10 +53,10 @@ async def execute_sql(
 async def stop_execute_sql(
     request: StopExecuteSQLInput,
     svc: ServiceDep,
-    _ctx: SqlExecutorModuleCtx,
+    ctx: SqlExecutorModuleCtx,
 ) -> Result[StopExecuteSQLData]:
     """Stop a running SQL execution."""
-    return await svc.cli.stop_execute_sql(request.execute_task_id)
+    return await svc.cli.stop_execute_sql(request.execute_task_id, user_id=ctx.user_id)
 
 
 @router.post(
@@ -64,9 +68,11 @@ async def stop_execute_sql(
 async def execute_context(
     context_type: Annotated[str, Path(description="Type of context command")],
     svc: ServiceDep,
+    ctx: AppContextDep,
     request: ExecuteContextInput = None,
 ) -> Result[ExecuteContextData]:
     """Execute context command."""
+    await _require_datasource_catalog_for_context(ctx, context_type)
     if request is None:
         request = ExecuteContextInput(context_type="")
     # Update the context_type from path parameter
@@ -83,11 +89,35 @@ async def execute_context(
 async def execute_internal_command(
     command: Annotated[str, Path(description="Internal command name")],
     svc: ServiceDep,
+    ctx: AppContextDep,
     request: InternalCommandInput = None,
 ) -> Result[InternalCommandData]:
     """Execute internal command."""
+    await _require_datasource_catalog_for_internal_command(ctx, command)
     if request is None:
         request = InternalCommandInput(command="", args="")
     # Update the command from path parameter
     request.command = command
     return svc.cli.execute_internal_command(command, request)
+
+
+async def _require_datasource_catalog_for_context(ctx: AppContext, context_type: str) -> None:
+    normalized = context_type.strip().lower()
+    if normalized not in _DATASOURCE_CATALOG_CONTEXT_TYPES:
+        return
+    await require_authorized_module(
+        ctx,
+        "module.datasource_catalog",
+        resource=ResourceRef(type="cli_context", id=normalized),
+    )
+
+
+async def _require_datasource_catalog_for_internal_command(ctx: AppContext, command: str) -> None:
+    normalized = command.strip().lower()
+    if normalized not in _DATASOURCE_CATALOG_INTERNAL_COMMANDS:
+        return
+    await require_authorized_module(
+        ctx,
+        "module.datasource_catalog",
+        resource=ResourceRef(type="cli_internal_command", id=normalized),
+    )

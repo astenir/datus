@@ -5,6 +5,7 @@
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -21,6 +22,7 @@ from datus.api.models.base_models import Result
 from datus.api.models.cli_models import ChatSessionData, ExecuteSQLData, StopExecuteSQLData
 from datus.api.models.database_models import DatabasesData, ListDatabasesData
 from datus.api.routes import chat_routes, cli_routes, database_routes
+from datus.api.services.cli_service import CLIService, _SQLTaskRecord
 
 
 def _enterprise_extensions() -> EnterpriseExtensions:
@@ -70,6 +72,39 @@ def test_chat_routes_allow_module_chat(monkeypatch):
     assert response.status_code == 200
     assert response.json()["success"] is True
     svc.chat.list_sessions.assert_called_once_with(user_id="u1", subagent_id=None)
+
+
+@pytest.mark.parametrize(
+    "subagent_id",
+    ["gen_sql", "gen_report", "gen_visual_report", "gen_dashboard", "gen_visual_dashboard"],
+)
+def test_chat_stream_denies_privileged_subagents_with_module_chat_only(monkeypatch, subagent_id):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    svc.agent_config.agentic_nodes = {}
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    with _client(chat_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/chat/stream", json={"message": "run it", "subagent_id": subagent_id})
+
+    assert response.status_code == 403
+    svc.chat.stream_chat.assert_not_called()
+
+
+def test_chat_stream_denies_custom_privileged_subagent_with_module_chat_only(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    svc.agent_config.agentic_nodes = {"sales_dashboard": {"id": "custom-dashboard-id", "node_class": "gen_dashboard"}}
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    with _client(chat_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/chat/stream",
+            json={"message": "build dashboard", "subagent_id": "custom-dashboard-id"},
+        )
+
+    assert response.status_code == 403
+    svc.chat.stream_chat.assert_not_called()
 
 
 def test_datasource_catalog_routes_require_module_datasource_catalog(monkeypatch):
@@ -155,6 +190,7 @@ def test_sql_execute_routes_allow_module_sql_executor(monkeypatch):
     assert response.status_code == 200
     assert response.json()["success"] is True
     svc.cli.execute_sql.assert_awaited_once()
+    assert svc.cli.execute_sql.await_args.kwargs == {"user_id": "u1"}
 
 
 def test_sql_stop_execute_routes_require_module_sql_executor(monkeypatch):
@@ -173,3 +209,50 @@ def test_sql_stop_execute_routes_require_module_sql_executor(monkeypatch):
 
     assert response.status_code == 403
     svc.cli.stop_execute_sql.assert_not_awaited()
+
+
+def test_sql_stop_execute_routes_pass_user_owner_and_hide_other_user_task(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    cli = CLIService(agent_config=None, chat_service=None)
+    svc.cli = cli
+
+    task = MagicMock()
+    cli._sql_tasks["alice-task"] = _SQLTaskRecord(task=task, owner_user_id="alice")
+    ctx = AppContext(user_id="bob", project_id="proj", permissions={"module.sql_executor"})
+
+    with _client(cli_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/sql/stop_execute", json={"execute_task_id": "alice-task"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is False
+    assert payload["data"]["stopped"] is False
+    assert "No running SQL execution" in payload["errorMessage"]
+    task.cancel.assert_not_called()
+
+
+@pytest.mark.parametrize("context_type", ["tables", "catalogs"])
+def test_cli_context_metadata_requires_datasource_catalog(monkeypatch, context_type):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    with _client(cli_routes.router, ctx, svc) as client:
+        response = client.post(f"/api/v1/context/{context_type}", json={"context_type": context_type})
+
+    assert response.status_code == 403
+    svc.cli.execute_context.assert_not_called()
+
+
+@pytest.mark.parametrize("command", ["databases", "tables"])
+def test_cli_internal_metadata_requires_datasource_catalog(monkeypatch, command):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    with _client(cli_routes.router, ctx, svc) as client:
+        response = client.post(f"/api/v1/internal/{command}", json={"command": command, "args": ""})
+
+    assert response.status_code == 403
+    svc.cli.execute_internal_command.assert_not_called()

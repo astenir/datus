@@ -31,6 +31,32 @@ async def authorize(ctx: AppContext, *, action: str, resource: ResourceRef | Non
     return await provider.check(ctx, action, resource or ResourceRef(type="module"))
 
 
+async def require_authorized_module(
+    ctx: AppContext, permission_key: str, *, resource: ResourceRef | None = None
+) -> None:
+    """Raise 403 unless ``ctx`` can use ``permission_key``."""
+
+    decision = await authorize(
+        ctx,
+        action=permission_key,
+        resource=resource or ResourceRef(type="module", id=permission_key),
+    )
+    if decision.allowed:
+        return
+
+    await get_audit_sink().write(
+        AuditEvent(
+            user_id=ctx.user_id,
+            action=permission_key,
+            resource_type=(resource.type if resource else "module"),
+            resource_id=(resource.id if resource else permission_key),
+            decision="deny",
+            reason=decision.reason,
+        )
+    )
+    raise HTTPException(status_code=403, detail=decision.reason or "Permission denied.")
+
+
 class SessionAccess(NamedTuple):
     """Resolved session access decision for route handlers."""
 
@@ -133,19 +159,7 @@ def require_module(permission_key: str):
 
     async def _dependency(request: Request, _service: object = Depends(get_datus_service)) -> AppContext:
         ctx = get_app_context(request)
-        decision = await authorize(ctx, action=permission_key, resource=ResourceRef(type="module", id=permission_key))
-        if not decision.allowed:
-            await get_audit_sink().write(
-                AuditEvent(
-                    user_id=ctx.user_id,
-                    action=permission_key,
-                    resource_type="module",
-                    resource_id=permission_key,
-                    decision="deny",
-                    reason=decision.reason,
-                )
-            )
-            raise HTTPException(status_code=403, detail=decision.reason or "Permission denied.")
+        await require_authorized_module(ctx, permission_key)
         return ctx
 
     return _dependency

@@ -8,7 +8,7 @@ import pytest
 from datus.api.models.cli_models import ExecuteContextInput, ExecuteSQLInput
 from datus.api.services.chat_service import ChatService
 from datus.api.services.chat_task_manager import ChatTaskManager
-from datus.api.services.cli_service import CLIService
+from datus.api.services.cli_service import CLIService, _SQLTaskRecord
 
 
 @pytest.fixture
@@ -204,7 +204,7 @@ class TestCLIServiceStopExecuteSQL:
 
         task = asyncio.create_task(_slow_task())
         task_id = "test-stop-task"
-        svc._sql_tasks[task_id] = task
+        svc._sql_tasks[task_id] = _SQLTaskRecord(task=task, owner_user_id=None)
 
         stop_result = await svc.stop_execute_sql(task_id)
         assert stop_result.success is True
@@ -214,6 +214,28 @@ class TestCLIServiceStopExecuteSQL:
         # Give the event loop a chance to process the cancellation
         await asyncio.sleep(0)
         assert task.cancelled()
+
+    @pytest.mark.asyncio
+    async def test_stop_running_task_rejects_owner_mismatch(self):
+        """A SQL executor user cannot cancel another user's running task."""
+        svc = CLIService(agent_config=None, chat_service=None)
+
+        async def _slow_task():
+            await asyncio.sleep(60)
+
+        task = asyncio.create_task(_slow_task())
+        task_id = "alice-owned-task"
+        svc._sql_tasks[task_id] = _SQLTaskRecord(task=task, owner_user_id="alice")
+
+        try:
+            stop_result = await svc.stop_execute_sql(task_id, user_id="bob")
+            assert stop_result.success is False
+            assert stop_result.data.stopped is False
+            assert "No running SQL execution" in stop_result.errorMessage
+            assert task.cancelled() is False
+        finally:
+            task.cancel()
+            await asyncio.sleep(0)
 
     @pytest.mark.asyncio
     async def test_execute_sql_honors_caller_supplied_task_id(self, cli_svc):
@@ -233,7 +255,8 @@ class TestCLIServiceStopExecuteSQL:
             await asyncio.sleep(60)
 
         caller_task_id = "caller-cancel-id"
-        svc._sql_tasks[caller_task_id] = asyncio.create_task(_slow_task())
+        task = asyncio.create_task(_slow_task())
+        svc._sql_tasks[caller_task_id] = _SQLTaskRecord(task=task, owner_user_id=None)
 
         stop_result = await svc.stop_execute_sql(caller_task_id)
         assert stop_result.success is True
@@ -250,7 +273,7 @@ class TestCLIServiceStopExecuteSQL:
 
         in_use_id = "in-use-task-id"
         existing = asyncio.create_task(_slow_task())
-        svc._sql_tasks[in_use_id] = existing
+        svc._sql_tasks[in_use_id] = _SQLTaskRecord(task=existing, owner_user_id=None)
 
         try:
             result = await svc.execute_sql(ExecuteSQLInput(sql_query="SELECT 1", execute_task_id=in_use_id))

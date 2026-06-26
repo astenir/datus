@@ -19,7 +19,13 @@ from fastapi.responses import StreamingResponse
 from datus.api.auth.context import AppContext
 from datus.api.constants import BUILTIN_SUBAGENTS
 from datus.api.deps import ServiceDep
-from datus.api.enterprise.deps import authorize_session_access, delete_session_owner, require_module
+from datus.api.enterprise.deps import (
+    authorize_session_access,
+    delete_session_owner,
+    require_authorized_module,
+    require_module,
+)
+from datus.api.enterprise.models import ResourceRef
 from datus.api.hooks import (
     ChatHooks,
     ChatPostUsageContext,
@@ -71,20 +77,61 @@ _FUSE_IO_TIMEOUT = 15.0
 # in :meth:`ChatTaskManager._create_node`.
 _EXTRA_BUILTIN_SUBAGENTS = {"feedback"}
 
+_SUBAGENT_MODULE_PERMISSIONS = {
+    "gen_sql": "module.sql_executor",
+    "gen_report": "module.report.query",
+    "gen_visual_report": "module.report.query",
+    "gen_dashboard": "module.dashboard.query",
+    "gen_visual_dashboard": "module.dashboard.query",
+}
+
 
 def _is_valid_subagent_id(svc, subagent_id: str) -> bool:
     """Return True if *subagent_id* resolves to a builtin or custom sub-agent."""
     if subagent_id in BUILTIN_SUBAGENTS or subagent_id in _EXTRA_BUILTIN_SUBAGENTS:
         return True
+    if _resolve_agentic_node_entry(svc, subagent_id) is not None:
+        return True
+    return False
+
+
+def _resolve_agentic_node_entry(svc, subagent_id: str) -> Optional[Any]:
     agentic_nodes = getattr(svc.agent_config, "agentic_nodes", None) or {}
     if subagent_id in agentic_nodes:
-        return True
+        return agentic_nodes[subagent_id]
     # Custom sub-agents may be keyed by sanitized node_name with the original
     # UUID id stored under "id" — match either form.
     for entry in agentic_nodes.values():
         if isinstance(entry, dict) and entry.get("id") == subagent_id:
-            return True
-    return False
+            return entry
+    return None
+
+
+async def _authorize_subagent_dispatch(svc, ctx: AppContext, subagent_id: Optional[str]) -> None:
+    """Enforce module permissions before dispatching privileged builtin subagents."""
+
+    if not subagent_id:
+        return
+    permission_key = _subagent_module_permission(svc, subagent_id)
+    if permission_key is None:
+        return
+    await require_authorized_module(
+        ctx,
+        permission_key,
+        resource=ResourceRef(type="subagent", id=subagent_id),
+    )
+
+
+def _subagent_module_permission(svc, subagent_id: str) -> Optional[str]:
+    permission_key = _SUBAGENT_MODULE_PERMISSIONS.get(subagent_id)
+    if permission_key is not None or svc is None:
+        return permission_key
+
+    entry = _resolve_agentic_node_entry(svc, subagent_id)
+    if not isinstance(entry, dict):
+        return None
+    node_class = entry.get("node_class") or entry.get("type")
+    return _SUBAGENT_MODULE_PERMISSIONS.get(node_class)
 
 
 def _sql_policy_principal_pre_check(svc: "DatusService", ctx: "AppContext") -> Optional[ChatPreCheckOutcome]:
@@ -170,6 +217,7 @@ async def stream_chat(
             status_code=404,
             detail=f"Subagent '{sub_agent_id}' not found",
         )
+    await _authorize_subagent_dispatch(svc, ctx, sub_agent_id)
 
     if request.session_id:
         access = await authorize_session_access(

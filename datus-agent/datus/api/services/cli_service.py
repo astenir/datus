@@ -6,6 +6,7 @@ import asyncio
 import threading
 import time
 import uuid
+from dataclasses import dataclass
 from typing import Dict, Optional
 
 from datus.api.models.base_models import Result
@@ -35,6 +36,12 @@ from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class _SQLTaskRecord:
+    task: asyncio.Task
+    owner_user_id: Optional[str]
 
 
 class CLIService:
@@ -72,8 +79,8 @@ class CLIService:
         if self.agent_config:
             self._initialize_connection()
 
-        # Track running SQL execution tasks: {task_id: asyncio.Task}
-        self._sql_tasks: Dict[str, asyncio.Task] = {}
+        # Track running SQL execution tasks with request-owner metadata.
+        self._sql_tasks: Dict[str, _SQLTaskRecord] = {}
         self._sql_tasks_lock = threading.Lock()
 
     def _initialize_connection(self):
@@ -233,7 +240,7 @@ class CLIService:
                 errorMessage=str(e),
             )
 
-    async def execute_sql(self, request: ExecuteSQLInput) -> Result[ExecuteSQLData]:
+    async def execute_sql(self, request: ExecuteSQLInput, user_id: Optional[str] = None) -> Result[ExecuteSQLData]:
         """Execute SQL query asynchronously with cancellation support.
 
         If ``request.execute_task_id`` is provided, it is used as-is and returned
@@ -263,11 +270,11 @@ class CLIService:
                     errorMessage=f"execute_task_id '{task_id}' is already in use",
                 )
             task = asyncio.create_task(_run())
-            self._sql_tasks[task_id] = task
+            self._sql_tasks[task_id] = _SQLTaskRecord(task=task, owner_user_id=user_id)
 
         return await task
 
-    async def stop_execute_sql(self, task_id: str) -> Result[StopExecuteSQLData]:
+    async def stop_execute_sql(self, task_id: str, user_id: Optional[str] = None) -> Result[StopExecuteSQLData]:
         """Stop a running SQL execution task.
 
         Args:
@@ -277,9 +284,9 @@ class CLIService:
             Result indicating whether the task was stopped.
         """
         with self._sql_tasks_lock:
-            task = self._sql_tasks.get(task_id)
+            record = self._sql_tasks.get(task_id)
 
-        if not task:
+        if not record or (user_id is not None and record.owner_user_id != user_id):
             return Result(
                 success=False,
                 errorCode=ErrorCode.SQL_EXECUTION_ERROR,
@@ -287,6 +294,7 @@ class CLIService:
                 data=StopExecuteSQLData(execute_task_id=task_id, stopped=False),
             )
 
+        task = record.task
         if task.done():
             self._cleanup_sql_task(task_id)
             return Result(
