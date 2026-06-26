@@ -178,18 +178,43 @@ class TestFingerprintEviction:
         old.shutdown.assert_awaited_once()
         assert cache._cache["p"] is new
 
-    async def test_mismatched_fingerprint_with_active_tasks_defers(self):
+    async def test_mismatched_fingerprint_with_active_tasks_defers_rebuild(self):
+        """Fingerprint changes are deferred while tasks are active.
+
+        Rebuilding would orphan the in-flight task's interaction broker, so the
+        existing instance must keep serving requests (e.g. a pending
+        /chat/user_interaction answer) until its tasks drain.
+        """
         cache = DatusServiceCache()
         old = _mock_service("p", has_active=True, fingerprint="fp-old")
         await cache.get_or_create("p", AsyncMock(return_value=old))
 
-        new = _mock_service("p", fingerprint="fp-new")
-        await cache.get_or_create("p", AsyncMock(return_value=new), expected_fingerprint="fp-new")
+        factory = AsyncMock()
+        result = await cache.get_or_create("p", factory, expected_fingerprint="fp-new")
 
-        # Old was not immediately shut down; deferred via active-tasks path
+        # No rebuild: the busy instance is preserved and returned as-is.
+        factory.assert_not_called()
         old.shutdown.assert_not_awaited()
-        await asyncio.sleep(0.05)
-        old.task_manager.wait_all_tasks.assert_awaited()
+        assert result is old
+        assert cache._cache["p"] is old
+
+    async def test_mismatched_fingerprint_rebuilds_after_tasks_drain(self):
+        """Once the busy instance goes idle, the next request rebuilds."""
+        cache = DatusServiceCache()
+        old = _mock_service("p", has_active=True, fingerprint="fp-old")
+        await cache.get_or_create("p", AsyncMock(return_value=old))
+
+        # First mismatched request is deferred (tasks still active).
+        await cache.get_or_create("p", AsyncMock(return_value=_mock_service("p")), expected_fingerprint="fp-new")
+        assert cache._cache["p"] is old
+
+        # Task drained — the next mismatched request evicts and rebuilds.
+        old.has_active_tasks.return_value = False
+        new = _mock_service("p", fingerprint="fp-new")
+        result = await cache.get_or_create("p", AsyncMock(return_value=new), expected_fingerprint="fp-new")
+
+        assert result is new
+        old.shutdown.assert_awaited_once()
         assert cache._cache["p"] is new
 
     async def test_none_fingerprint_preserves_legacy_behavior(self):
@@ -235,6 +260,106 @@ class TestEvict:
         await asyncio.sleep(0.1)
         # task_manager.wait_all_tasks should have been called
         svc.task_manager.wait_all_tasks.assert_awaited()
+
+
+@pytest.mark.asyncio
+class TestPendingTaskTracking:
+    """Tests for _track() / drain() — background task lifecycle management."""
+
+    async def test_lru_eviction_task_is_tracked(self):
+        """LRU eviction create_task is registered in _pending_tasks."""
+        cache = DatusServiceCache(max_size=1)
+        svc_a = _mock_service("a", has_active=False)
+        svc_b = _mock_service("b", has_active=False)
+
+        # Pause the shutdown task so it stays in _pending_tasks when we check.
+        pause = asyncio.Event()
+
+        async def _paused_shutdown():
+            await pause.wait()
+
+        svc_a.shutdown = AsyncMock(side_effect=_paused_shutdown)
+
+        await cache.get_or_create("a", AsyncMock(return_value=svc_a))
+        await cache.get_or_create("b", AsyncMock(return_value=svc_b))
+
+        assert len(cache._pending_tasks) == 1
+
+        pause.set()
+        await cache.drain()
+
+    async def test_deferred_shutdown_task_is_tracked(self):
+        """_dispose with active tasks registers the deferred-shutdown Task."""
+        cache = DatusServiceCache()
+        pause = asyncio.Event()
+
+        async def _paused_wait():
+            await pause.wait()
+
+        svc = _mock_service("p", has_active=True)
+        svc.task_manager.wait_all_tasks = AsyncMock(side_effect=_paused_wait)
+        await cache.get_or_create("p", AsyncMock(return_value=svc))
+
+        await cache._dispose("p", svc)
+
+        assert len(cache._pending_tasks) == 1
+
+        pause.set()
+        await cache.drain()
+
+    async def test_pending_task_removed_on_completion(self):
+        """Completed task is discarded from _pending_tasks via done callback."""
+        cache = DatusServiceCache()
+        svc = _mock_service("p")
+        await cache.get_or_create("p", AsyncMock(return_value=svc))
+        await cache._dispose("p", svc)  # has_active=False → direct await, no task
+
+        assert len(cache._pending_tasks) == 0
+
+    async def test_drain_awaits_pending_tasks(self):
+        """drain() awaits all registered background tasks."""
+        cache = DatusServiceCache()
+        completed = []
+
+        async def _slow_work():
+            await asyncio.sleep(0.01)
+            completed.append(1)
+
+        task = asyncio.create_task(_slow_work())
+        cache._track(task)
+        assert len(cache._pending_tasks) == 1
+
+        await cache.drain()
+        assert completed == [1]
+        assert len(cache._pending_tasks) == 0
+
+    async def test_drain_tolerates_task_exception(self):
+        """drain() swallows task exceptions and clears the pending set."""
+        cache = DatusServiceCache()
+
+        async def _boom():
+            raise RuntimeError("background failure")
+
+        cache._track(asyncio.create_task(_boom()))
+        await cache.drain()
+        assert len(cache._pending_tasks) == 0
+
+    async def test_shutdown_drains_before_clearing_cache(self):
+        """shutdown() calls drain() before shutting down cached services."""
+        cache = DatusServiceCache()
+        order = []
+
+        async def _background():
+            await asyncio.sleep(0.01)
+            order.append("drained")
+
+        svc = _mock_service("p")
+        svc.shutdown = AsyncMock(side_effect=lambda: order.append("service-shutdown"))
+        await cache.get_or_create("p", AsyncMock(return_value=svc))
+        cache._track(asyncio.create_task(_background()))
+
+        await cache.shutdown()
+        assert order == ["drained", "service-shutdown"]
 
 
 @pytest.mark.asyncio

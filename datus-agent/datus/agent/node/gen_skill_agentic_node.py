@@ -12,7 +12,7 @@ higher max_turns budget for extended multi-step interactions.
 """
 
 import re
-from typing import Any, Dict, List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from datus.agent.node.agentic_node import AgenticNode
 from datus.agent.node.stream_run_context import StreamRunContext
@@ -69,13 +69,13 @@ class SkillCreatorAgenticNode(AgenticNode):
         self._configured_node_name = node_name or self.NODE_NAME
         self.execution_mode = execution_mode
 
-        # Default max_turns = 30, can be overridden by agent.yml
-        self.max_turns = 30
+        # Default max_turns = 50, can be overridden by agent.yml
+        self.max_turns = 50
         config_key = self._configured_node_name
         if agent_config and hasattr(agent_config, "agentic_nodes") and config_key in (agent_config.agentic_nodes or {}):
             agentic_node_config = agent_config.agentic_nodes.get(config_key, {})
             if isinstance(agentic_node_config, dict):
-                self.max_turns = agentic_node_config.get("max_turns", 30)
+                self.max_turns = agentic_node_config.get("max_turns", 50)
 
         # Initialize tool attributes before parent constructor
         self.db_func_tool: Optional[DBFuncTool] = None
@@ -209,29 +209,6 @@ class SkillCreatorAgenticNode(AgenticNode):
         except Exception as e:
             logger.warning(f"Failed to setup session search tool, continuing without: {e}")
 
-    def _tool_category_map(self) -> Dict[str, List[Any]]:
-        """Register filesystem / db / skill-loading tools for permission rules."""
-        mapping = super()._tool_category_map()
-        if getattr(self, "filesystem_func_tool", None):
-            mapping["filesystem_tools"] = list(self.filesystem_func_tool.available_tools())
-        if getattr(self, "db_func_tool", None):
-            mapping["db_tools"] = list(self.db_func_tool.available_tools())
-        # Skill loader is a second ``SkillFuncTool`` instance distinct from
-        # the base ``skill_func_tool`` (authoring flow). Register it under
-        # ``skills`` so ``skills.*`` rules still apply.
-        if getattr(self, "skill_func_tool_instance", None):
-            mapping.setdefault("skills", []).extend(self.skill_func_tool_instance.available_tools())
-        catchall: List[Any] = []
-        if self.ask_user_tool:
-            catchall.extend(self.ask_user_tool.available_tools())
-        if getattr(self, "skill_validate_tool", None):
-            catchall.extend(self.skill_validate_tool.available_tools())
-        if getattr(self, "_session_search_tool", None):
-            catchall.extend(self._session_search_tool.available_tools())
-        if catchall:
-            mapping.setdefault("tools", []).extend(catchall)
-        return mapping
-
     # Companion skills loaded into system prompt
     COMPANION_SKILLS = ("create-skill", "optimize-skill")
 
@@ -272,7 +249,6 @@ class SkillCreatorAgenticNode(AgenticNode):
     def _get_system_prompt(self, prompt_version: Optional[str] = None) -> str:
         """Get the system prompt for the skill creator node."""
         from datus.prompts.prompt_manager import get_prompt_manager
-        from datus.utils.time_utils import get_default_current_date
 
         version = prompt_version or self.node_config.get("prompt_version")
         template_name = "skill_creator_system"
@@ -306,7 +282,6 @@ class SkillCreatorAgenticNode(AgenticNode):
             "skill_directories": skill_directories,
             "existing_skills": existing_skills,
             "workspace_root": self._resolve_workspace_root(),
-            "current_date": get_default_current_date(None),
             **build_datasource_prompt_context(self.agent_config),
         }
 

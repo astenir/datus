@@ -1069,6 +1069,73 @@ class TestRenderActionHistory:
         assert "Done" in combined
         assert "1 tool uses" in combined
 
+    def test_subagent_token_usage_not_rendered(self):
+        """A subagent depth>0 ``token_usage`` action is dropped, not rendered as a row."""
+        display = ActionHistoryDisplay()
+        actions = [
+            _make_action(
+                ActionRole.USER,
+                ActionStatus.PROCESSING,
+                depth=1,
+                action_type="gen_sql",
+                messages="User: What is total revenue?",
+            ),
+            # TokenUsageHook emits this as an ASSISTANT action with the bare
+            # "Token usage update" message and a usage-only output payload.
+            _make_action(
+                ActionRole.ASSISTANT,
+                ActionStatus.SUCCESS,
+                depth=1,
+                action_type="token_usage",
+                messages="Token usage update",
+                output_data={"cumulative": {"input_tokens": 100, "output_tokens": 20}},
+            ),
+            _make_action(
+                ActionRole.TOOL,
+                ActionStatus.SUCCESS,
+                depth=1,
+                messages="describe_table(orders)",
+                input_data={"function_name": "describe_table"},
+            ),
+            _make_action(
+                ActionRole.TOOL,
+                ActionStatus.SUCCESS,
+                depth=0,
+                action_type="task",
+                input_data={"function_name": "task"},
+                end_time=datetime(2025, 1, 1, 12, 0, 5),
+            ),
+        ]
+        actions[0].start_time = datetime(2025, 1, 1, 12, 0, 0)
+
+        printed = self._collect_prints(display, actions, verbose=True)
+        combined = "\n".join(printed)
+
+        # The usage event must never surface as a transcript line.
+        assert "Token usage update" not in combined
+        # The real subagent work is still rendered.
+        assert "describe_table" in combined
+        assert "Done" in combined
+        # token_usage is not a tool — the Done count stays at the single tool.
+        assert "1 tool uses" in combined
+
+    def test_main_agent_token_usage_not_rendered(self):
+        """A depth=0 ``token_usage`` action (e.g. from .resume replay) is skipped."""
+        display = ActionHistoryDisplay()
+        actions = [
+            _make_action(
+                ActionRole.ASSISTANT,
+                ActionStatus.SUCCESS,
+                depth=0,
+                action_type="token_usage",
+                messages="Token usage update",
+                output_data={"cumulative": {"input_tokens": 100, "output_tokens": 20}},
+            ),
+        ]
+        printed = self._collect_prints(display, actions)
+        combined = "\n".join(printed)
+        assert "Token usage update" not in combined
+
     def test_subagent_verbose_shows_args_and_output(self):
         """In verbose mode, subagent tool actions show full arguments and output."""
         display = ActionHistoryDisplay()
@@ -3087,19 +3154,6 @@ class TestGetToolOutputPreview:
         )
         tc = _build_search_reference_sql(action, verbose=False)
         assert "1 reference SQL matched" in tc.compact_result
-
-    def test_search_external_knowledge_function(self):
-        """search_external_knowledge function shows knowledge count via registered builder."""
-        from datus.cli.action_display.tool_content import _build_search_external_knowledge
-
-        action = _make_action(
-            ActionRole.TOOL,
-            ActionStatus.SUCCESS,
-            input_data={"function_name": "search_external_knowledge"},
-            output_data={"result": [1]},
-        )
-        tc = _build_search_external_knowledge(action, verbose=False)
-        assert "1 knowledge entry matched" in tc.compact_result
 
     def test_search_documents_function(self):
         """search_documents function shows document count via registered builder."""

@@ -10,7 +10,7 @@ semantic model generation with support for filesystem tools, generation tools,
 database tools, hooks, and metricflow MCP server integration.
 """
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal, Optional
 
 from datus.agent.node.agentic_node import AgenticNode
 from datus.agent.node.stream_run_context import StreamRunContext
@@ -62,12 +62,12 @@ class GenSemanticModelAgenticNode(AgenticNode):
         """
         self.execution_mode = execution_mode
 
-        # Get max_turns from agentic_nodes configuration, default to 30
-        self.max_turns = 40
+        # Get max_turns from agentic_nodes configuration, default to 50
+        self.max_turns = 50
         if agent_config and hasattr(agent_config, "agentic_nodes") and self.NODE_NAME in agent_config.agentic_nodes:
             agentic_node_config = agent_config.agentic_nodes[self.NODE_NAME]
             if isinstance(agentic_node_config, dict):
-                self.max_turns = agentic_node_config.get("max_turns", 40)
+                self.max_turns = agentic_node_config.get("max_turns", 50)
 
         self.semantic_model_dir = str(agent_config.path_manager.semantic_model_path(agent_config.current_datasource))
         # ``knowledge_base_dir`` is the sandbox root for FilesystemFuncTool. It
@@ -205,9 +205,14 @@ class GenSemanticModelAgenticNode(AgenticNode):
     def _setup_generation_tools(self):
         """Setup generation tools."""
         try:
+            from datus.agent.node.semantic_authoring import resolve_authoring_format
             from datus.tools.func_tool import trans_to_function_tool
 
-            self.generation_tools = GenerationTools(self.agent_config, generation_evidence=self.generation_evidence)
+            self.generation_tools = GenerationTools(
+                self.agent_config,
+                generation_evidence=self.generation_evidence,
+                authoring_format=resolve_authoring_format(self.agent_config, self.node_config),
+            )
 
             self.tools.append(trans_to_function_tool(self.generation_tools.check_semantic_object_exists))
             self.tools.append(trans_to_function_tool(self.generation_tools.end_semantic_model_generation))
@@ -215,6 +220,16 @@ class GenSemanticModelAgenticNode(AgenticNode):
 
         except Exception as e:
             logger.error(f"Failed to setup generation tools: {e}")
+
+    def _setup_skill_func_tools(self) -> None:
+        """Avoid injecting MetricFlow authoring skills into OSI workflows."""
+        from datus.agent.node.semantic_authoring import is_osi_authoring
+
+        node_config = getattr(self, "node_config", None) or {}
+        if is_osi_authoring(self.agent_config, node_config) and "skills" not in node_config:
+            logger.info("Skipping default MetricFlow skills for OSI semantic-model authoring")
+            return
+        super()._setup_skill_func_tools()
 
     def _setup_hooks(self):
         """Setup hooks for interactive mode."""
@@ -228,33 +243,6 @@ class GenSemanticModelAgenticNode(AgenticNode):
             logger.info("Setup hooks: generation_hooks")
         except Exception as e:
             logger.error(f"Failed to setup generation_hooks: {e}")
-
-    def _tool_category_map(self) -> Dict[str, List[Any]]:
-        """Route tools to permission categories so profile rules apply."""
-        from datus.tools.func_tool import trans_to_function_tool
-
-        mapping = super()._tool_category_map()
-        if self.db_func_tool:
-            mapping["db_tools"] = list(self.db_func_tool.available_tools())
-        semantic_bucket: List[Any] = []
-        if getattr(self, "semantic_func_tool", None):
-            semantic_bucket.extend(self.semantic_func_tool.available_tools())
-        if self.generation_tools:
-            semantic_bucket.extend(
-                [
-                    trans_to_function_tool(self.generation_tools.check_semantic_object_exists),
-                    trans_to_function_tool(self.generation_tools.end_semantic_model_generation),
-                ]
-            )
-        if self.semantic_discovery_tools:
-            semantic_bucket.extend(self.semantic_discovery_tools.available_tools())
-        if semantic_bucket:
-            mapping["semantic_tools"] = semantic_bucket
-        if self.filesystem_func_tool:
-            mapping["filesystem_tools"] = list(self.filesystem_func_tool.available_tools())
-        if self.ask_user_tool:
-            mapping.setdefault("tools", []).extend(self.ask_user_tool.available_tools())
-        return mapping
 
     def _get_existing_subject_trees(self) -> list:
         """
@@ -318,12 +306,25 @@ class GenSemanticModelAgenticNode(AgenticNode):
         Returns:
             System prompt string loaded from the template
         """
+        from datus.agent.node.semantic_authoring import (
+            AUTHORING_FORMAT_OSI,
+            osi_prompt_version,
+            osi_template_name,
+            resolve_authoring_format,
+        )
+
         # ``prompt_version`` kwarg wins over the config default; preserves the
         # template's signature parity with the other nodes.
-        version = prompt_version or self.node_config.get("prompt_version")
-
-        # Hardcoded system_prompt template name
-        template_name = f"{self.NODE_NAME}_system"
+        # OSI mode uses a separate template name so the default metricflow
+        # template and its latest-version scan are left untouched.
+        authoring_format = resolve_authoring_format(self.agent_config, self.node_config)
+        if authoring_format == AUTHORING_FORMAT_OSI:
+            template_name = osi_template_name(self.NODE_NAME)
+            requested = prompt_version or self.node_config.get("prompt_version")
+            version = osi_prompt_version(self.agent_config, self.NODE_NAME, requested)
+        else:
+            template_name = f"{self.NODE_NAME}_system"
+            version = prompt_version or self.node_config.get("prompt_version")
 
         try:
             # Prepare template variables
@@ -539,6 +540,20 @@ class GenSemanticModelAgenticNode(AgenticNode):
 
             if not os.path.exists(full_path):
                 logger.warning(f"Semantic model file not found: {full_path}")
+                return False
+
+            from datus.agent.node.semantic_authoring import is_osi_authoring
+
+            if is_osi_authoring(self.agent_config, self.node_config):
+                if not self.generation_tools:
+                    logger.error("Generation tools unavailable for OSI semantic sync")
+                    return False
+                result = self.generation_tools.sync_osi_semantic_to_db(full_path)
+                if result.get("success"):
+                    self.generation_evidence.mark_kb_sync("semantic")
+                    logger.info(f"Successfully saved OSI semantic model to database: {result.get('message')}")
+                    return True
+                logger.error(f"Failed to save OSI semantic model to database: {result.get('error', 'unknown error')}")
                 return False
 
             # Call static method to save to database

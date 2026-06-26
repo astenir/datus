@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
-from collections import defaultdict
+import dataclasses
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
 from datus_db_core import BaseSqlConnector, ConnectionConfig, DatusDbException, connector_registry
@@ -14,6 +14,7 @@ from datus.tools.db_tools.restricted_connector import RestrictedSqlConnector, _n
 from datus.utils.constants import DBType
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
+from datus.utils.path_utils import get_files_from_glob_pattern
 
 logger = get_logger(__name__)
 
@@ -173,108 +174,131 @@ def _port_or_none(port_value: Optional[Union[str, int]]) -> Optional[int]:
 
 
 def get_connection(
-    connections: Union[BaseSqlConnector, Dict[str, BaseSqlConnector]], logic_name: str = ""
+    connections: Union[BaseSqlConnector, Dict[str, BaseSqlConnector]], name: str = ""
 ) -> BaseSqlConnector:
     if isinstance(connections, (BaseSqlConnector, RestrictedSqlConnector)):
         return connections
     if len(connections) == 1:
         return next(iter(connections.values()))
 
-    if not logic_name:
+    if not name:
         return list(connections.values())[0]
-    if logic_name not in connections:
+    if name not in connections:
         raise DatusException(
             code=ErrorCode.DB_CONNECTION_FAILED,
             message_args={
-                "error_message": f"Database {logic_name} not found in current datasource",
+                "error_message": f"Database {name} not found in current datasource",
             },
         )
-    return connections[logic_name]
+    return connections[name]
 
 
 class DBManager:
-    def __init__(self, db_configs: Dict[str, Dict[str, DbConfig]]):
-        self._conn_dict: Dict[str, Union[BaseSqlConnector, Dict[str, BaseSqlConnector]]] = defaultdict(dict)
-        self._db_configs: Dict[str, Dict[str, DbConfig]] = db_configs
+    def __init__(self, db_configs: Dict[str, DbConfig]):
+        # {datasource: {database: connector}} — a datasource may serve multiple databases.
+        self._conn_dict: Dict[str, Dict[str, BaseSqlConnector]] = {}
+        self._db_configs: Dict[str, DbConfig] = db_configs
 
-    def get_conn(self, datasource: str, logic_name: str = "") -> BaseSqlConnector:
-        self._init_connections(datasource)
-        connector_or_dict = self._conn_dict[datasource]
-        return get_connection(connector_or_dict, logic_name)
+    def get_conn(self, datasource: str, database: str = "") -> BaseSqlConnector:
+        """Connector for ``(datasource, database)``.
 
-    def get_connections(self, datasource: str = "") -> Union[BaseSqlConnector, Dict[str, BaseSqlConnector]]:
-        self._init_connections(datasource)
-        return self._conn_dict[datasource]
+        ``database`` empty → the datasource's default database. For a glob (``path_pattern``)
+        datasource each matched file is a database; for server DBs ``database`` overrides the
+        configured one (cloned into the connection URI).
+        """
+        return self._init_connection(datasource, database)
 
-    def current_db_configs(self, datasource: str) -> Dict[str, DbConfig]:
-        return self._db_configs[datasource]
+    def get_connections(self, datasource: str = "") -> Dict[str, BaseSqlConnector]:
+        """Connectors for every database served by ``datasource``, keyed by database name.
 
-    def _init_connections(self, datasource):
-        if datasource in self._conn_dict:
-            return
+        A glob (``path_pattern``) datasource yields one connector per matched file; a server
+        datasource yields its single configured database. Callers that probe health or list
+        databases must iterate the map so multi-database datasources aren't reduced to one.
+        """
+        cfg = self._db_configs.get(datasource)
+        # Only a glob datasource's keys are genuine per-file database names safe to pass back
+        # as an override. A single datasource's key may be a display fallback (the datasource
+        # name when ``database`` is unconfigured); feeding that back would mis-set the
+        # connection's database to the datasource name, so resolve it via the default path.
+        if cfg is not None and cfg.path_pattern:
+            return {db_name: self._init_connection(datasource, db_name) for db_name in self.get_db_uris(datasource)}
+        return {db_name: self._init_connection(datasource, "") for db_name in self.get_db_uris(datasource)}
+
+    def first_conn(self, datasource: str) -> BaseSqlConnector:
+        return self._init_connection(datasource, "")
+
+    def first_conn_with_name(self, datasource: str) -> Tuple[str, BaseSqlConnector]:
+        """Default connector for ``datasource`` plus its resolved database name.
+
+        The name is the *database* name (a glob datasource's first file, or a server
+        datasource's configured ``database``), not the datasource name — empty when no
+        database is configured. Callers needing a display label must fall back to the
+        datasource name themselves rather than relying on this slot.
+        """
+        connector = self._init_connection(datasource, "")
+        resolved, _ = self._resolve_db_config(datasource, "")
+        # Prefer the connector's own database name (e.g. SQLite/DuckDB derive it from the
+        # file path, which ``cfg.database`` doesn't carry); fall back to the config-resolved
+        # name. Both are real database names — never the datasource name.
+        return (connector.database_name or resolved), connector
+
+    def get_db_uris(self, datasource: str) -> Dict[str, str]:
+        cfg = self._db_configs.get(datasource)
+        if cfg is None:
+            return {}
+        if cfg.path_pattern:
+            return {f["name"]: f["uri"] for f in get_files_from_glob_pattern(cfg.path_pattern, cfg.type)}
+        return {cfg.database or datasource: cfg.uri}
+
+    def _resolve_db_config(self, datasource: str, database: str) -> Tuple[str, DbConfig]:
+        """Resolve (datasource, database) → (db_name, DbConfig bound to that database)."""
         if datasource not in self._db_configs:
             raise DatusException(
                 code=ErrorCode.COMMON_CONFIG_ERROR, message=f"Datasource {datasource} not found in config"
             )
-        configs = self._db_configs[datasource]
-        if len(configs) == 1:
-            db_config = list(configs.values())[0]
-            self._init_conn(datasource, db_config)
-            return
-        # Multiple database configuration
-        for database_name, db_config in configs.items():
-            self._init_conn(datasource, db_config, database_name=database_name)
+        cfg = self._db_configs[datasource]
+        if cfg.path_pattern:
+            files = get_files_from_glob_pattern(cfg.path_pattern, cfg.type)
+            if not files:
+                raise DatusException(
+                    code=ErrorCode.COMMON_CONFIG_ERROR,
+                    message=f"No database files for datasource '{datasource}' (path_pattern: {cfg.path_pattern}).",
+                )
+            target = database or cfg.database or files[0]["name"]
+            match = next((f for f in files if f["name"] == target), None)
+            if match is None:
+                raise DatusException(
+                    ErrorCode.COMMON_VALIDATION_FAILED,
+                    message=f"Database '{target}' is not in datasource '{datasource}'. "
+                    f"Available: {', '.join(f['name'] for f in files)}.",
+                )
+            return match["name"], dataclasses.replace(cfg, uri=match["uri"], database=match["name"], path_pattern="")
+        if database and database != cfg.database:
+            return database, dataclasses.replace(cfg, database=database)
+        return cfg.database or "", cfg
 
-        if datasource not in self._conn_dict:
-            raise DatusException(
-                ErrorCode.COMMON_CONFIG_ERROR,
-                message=(
-                    f"Database initialization under datasource {datasource} failed with the current configuration:"
-                    f" {configs}"
-                ),
-            )
+    def _init_connection(self, datasource: str, database: str) -> BaseSqlConnector:
+        db_name, db_config = self._resolve_db_config(datasource, database)
+        # Self-heal: a caller may have nulled this datasource's entry to mark its
+        # connectors closed (e.g. an external pool on eviction). setdefault keeps
+        # an existing None, so rebuild a fresh group rather than calling .get on it.
+        group = self._conn_dict.get(datasource)
+        if not isinstance(group, dict):
+            group = {}
+            self._conn_dict[datasource] = group
+        cached = group.get(db_name)
+        if cached is not None:
+            return cached
+        conn = self._build_conn(db_config)
+        group[db_name] = conn
+        return conn
 
-    def first_conn(self, datasource: str) -> BaseSqlConnector:
-        self._init_connections(datasource)
-        dbs: Union[BaseSqlConnector, Dict[str, BaseSqlConnector]] = self._conn_dict[datasource]
-        if isinstance(dbs, dict):
-            return list(dbs.values())[0]
-        return dbs
-
-    def first_conn_with_name(self, datasource: str) -> Tuple[str, BaseSqlConnector]:
-        self._init_connections(datasource)
-        dbs: Union[BaseSqlConnector, Dict[str, BaseSqlConnector]] = self._conn_dict[datasource]
-        if isinstance(dbs, dict):
-            name = list(dbs.keys())[0]
-            conn = dbs[name]
-            return name, conn
-
-        config = list(self._db_configs[datasource].values())[0]
-        return config.logic_name, dbs
-
-    def get_db_uris(self, datasource: str) -> Dict[str, str]:
-        dbs = self._db_configs.get(datasource, {})
-        return {name: db.uri for name, db in dbs.items()}
-
-    def _init_conn(self, datasource: str, db_config: DbConfig, database_name: Optional[str] = None) -> BaseSqlConnector:
-        """Initialize connection using the registry
-
-        Args:
-            datasource: Datasource identifier
-            db_config: Database configuration
-            database_name: Optional database name for multi-database setup
-
-        Returns:
-            Initialized connector instance
-        """
-        # Convert DbConfig to ConnectionConfig
+    def _build_conn(self, db_config: DbConfig) -> BaseSqlConnector:
+        """Build a connector from a (fully-resolved) DbConfig via the registry."""
         connection_config = self._db_config_to_connection_config(db_config)
-
         db_type = _normalize_dialect_name(db_config.type)
         if not connector_registry.is_registered(db_type):
             _auto_install_adapter(db_type)
-
-        # Use registry to create connector
         conn = connector_registry.create_connector(db_config.type, connection_config)
         allowed_databases, allowed_schemas, allowed_tables = self._resolve_allowed_context(db_config)
         if allowed_databases or allowed_schemas or allowed_tables:
@@ -284,13 +308,6 @@ class DBManager:
                 allowed_databases=allowed_databases,
                 allowed_schemas=allowed_schemas,
             )
-
-        # Store connection
-        if database_name:
-            self._conn_dict[datasource][database_name] = conn
-        else:
-            self._conn_dict[datasource] = conn
-
         return conn
 
     @staticmethod
@@ -386,26 +403,18 @@ class DBManager:
 
     def close(self):
         """Close all database connections."""
-        for name, conn in list(self._conn_dict.items()):
-            if conn is None:
+        for datasource, group in list(self._conn_dict.items()):
+            if not isinstance(group, dict):
                 continue
-            try:
-                if isinstance(conn, dict):
-                    for db_name, sub_conn in list(conn.items()):
-                        if sub_conn is None:
-                            continue
-                        try:
-                            sub_conn.close()
-                        except Exception as e:
-                            logger.warning(f"Error closing connection {name}.{db_name}: {str(e)}")
-                        finally:
-                            conn[db_name] = None
-                else:
+            for db_name, conn in list(group.items()):
+                if conn is None:
+                    continue
+                try:
                     conn.close()
-            except Exception as e:
-                logger.warning(f"Error closing connection {name}: {str(e)}")
-            finally:
-                self._conn_dict[name] = None
+                except Exception as e:
+                    logger.warning(f"Error closing connection {datasource}.{db_name}: {str(e)}")
+                finally:
+                    group.pop(db_name, None)
 
     def __enter__(self):
         """Context manager entry point."""
@@ -417,20 +426,20 @@ class DBManager:
 
 
 def db_config_name(datasource: str, db_type: str, name: str = "") -> str:
-    if db_type == DBType.SQLITE or db_type == DBType.DUCKDB:
-        return f"{datasource}::{name}"
-    # fix local snowflake
-    return f"{datasource}::{datasource}"
+    # ``datasource::<database>`` for every dialect. The second component is the physical
+    # database name (empty when unspecified); the datasource name is never duplicated into
+    # it — a datasource is a connection profile, not a database.
+    return f"{datasource}::{name}"
 
 
 # External factory for DBManager creation (used by SaaS backend for connection pooling)
-_factory: Optional[Callable[[Dict[str, Dict[str, DbConfig]]], DBManager]] = None
+_factory: Optional[Callable[[Dict[str, DbConfig]], DBManager]] = None
 # CLI-mode cache: keyed by frozenset of datasource names to avoid creating
 # duplicate DBManager instances (and leaking connections) for the same config.
 _cli_cache: Dict[frozenset, DBManager] = {}
 
 
-def set_db_manager_factory(factory: Optional[Callable[[Dict[str, Dict[str, DbConfig]]], "DBManager"]] = None) -> None:
+def set_db_manager_factory(factory: Optional[Callable[[Dict[str, DbConfig]], "DBManager"]] = None) -> None:
     """Set an external factory for DBManager creation.
 
     When set, ``db_manager_instance()`` delegates to this factory instead of
@@ -450,14 +459,15 @@ def set_db_manager_factory(factory: Optional[Callable[[Dict[str, Dict[str, DbCon
 
 
 def db_manager_instance(
-    db_configs: Optional[Dict[str, Dict[str, DbConfig]]] = None,
+    db_configs: Optional[Dict[str, DbConfig]] = None,
 ) -> DBManager:
     """Create or obtain a DBManager instance.
 
     - With a factory set (SaaS mode): delegates to the factory every call,
       which typically returns a pooled/ref-counted instance.
-    - Without a factory (CLI mode): caches by datasource keys to avoid
-      creating duplicate instances and leaking connections.
+    - Without a factory (CLI mode): caches by datasource keys. The per-database
+      dimension lives inside DBManager (get_conn(datasource, database)), so the
+      manager is shared across databases of the same datasource set.
     """
     if _factory is not None:
         return _factory(db_configs or {})

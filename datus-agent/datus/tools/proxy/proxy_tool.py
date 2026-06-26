@@ -35,7 +35,6 @@ _FS_DEPENDENT_NODES: Set[str] = {
     "gen_semantic_model",
     "gen_metrics",
     "gen_sql_summary",
-    "gen_ext_knowledge",
     "gen_visual_report",
     "gen_visual_dashboard",
 }
@@ -58,6 +57,7 @@ def create_proxy_tool(original: FunctionTool, channel: ToolResultChannel) -> Fun
         description=original.description,
         params_json_schema=original.params_json_schema,
         on_invoke_tool=proxy_invoke,
+        strict_json_schema=original.strict_json_schema,
     )
 
 

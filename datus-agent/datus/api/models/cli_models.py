@@ -151,6 +151,10 @@ class ChatInput(BaseModel):
     )
 
     # Database context fields
+    datasource: Optional[str] = Field(
+        None,
+        description="Datasource (connection profile) override; selects which configured datasource to use",
+    )
     catalog: Optional[str] = Field(None, description="Database catalog for context")
     database: Optional[str] = Field(None, description="Database name for context")
     db_schema: Optional[str] = Field(None, description="Database schema for context")
@@ -220,7 +224,7 @@ class ChatData(BaseModel):
     # Enhanced fields from ChatAgenticNode
     sql: Optional[str] = Field(None, description="Generated or referenced SQL query")
     tokens_used: int = Field(0, description="Tokens used in this interaction")
-    node_type: str = Field(default="chat", description="Node type used (chat/gensql)")
+    node_type: str = Field(default="chat", description="Node type used (chat/gen_sql)")
 
     # Execution details
     actions: List[ActionInfo] = Field(default_factory=list, description="Execution actions performed")

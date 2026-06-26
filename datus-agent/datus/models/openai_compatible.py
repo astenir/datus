@@ -7,6 +7,7 @@
 import asyncio
 import hashlib
 import json
+import os
 import threading
 import time
 from contextlib import nullcontext
@@ -138,6 +139,15 @@ def classify_openai_compatible_error(error: Exception) -> tuple[ErrorCode, bool]
     """Classify OpenAI-compatible API errors and return error code and whether it's retryable."""
     error_msg = str(error).lower()
 
+    # TLS certificate failures must be detected first: the litellm SSL error
+    # string contains "internal" (from InternalServerError) and would otherwise
+    # be misclassified as a retryable MODEL_API_ERROR. Not retryable — retrying a
+    # cert mismatch never helps. The dedicated code carries the ssl_verify hint.
+    from datus.utils.ssl_utils import is_ssl_cert_verification_error
+
+    if is_ssl_cert_verification_error(error):
+        return ErrorCode.MODEL_SSL_CERT_ERROR, False
+
     if isinstance(error, APIError):
         # Handle specific HTTP status codes and error types
         if any(indicator in error_msg for indicator in ["401", "unauthorized", "authentication"]):
@@ -226,6 +236,31 @@ class OpenAICompatibleModel(LLMBaseModel):
         self.api_key = self._get_api_key()
         self.base_url = self._get_base_url()
         self.default_headers = dict(self.model_config.default_headers) if self.model_config.default_headers else None
+
+        # Resolve SSL/TLS verification for this endpoint (e.g. a private gateway CA).
+        # When configured, it takes priority over the SSL_VERIFY / SSL_CERT_FILE env
+        # vars (house convention: config first, env fallback). We materialize it into
+        # SSL_VERIFY so litellm honors it across both the agents-SDK LitellmModel path
+        # (whose __init__ accepts no ssl argument) and direct litellm.completion calls.
+        # The native Anthropic client (ClaudeModel) reads self.ssl_verify directly.
+        #
+        # Why a process-level env var and not a per-request kwarg: litellm does NOT
+        # thread a per-call ``ssl_verify`` into the Anthropic provider's HTTP client
+        # (verified — the kwarg is silently ignored), and a scoped set/restore around
+        # each call would break the agents-SDK streaming path (Runner.run_streamed does
+        # its network I/O after returning). A process global is the only mechanism that
+        # works across all paths. Blast radius is limited: ``SSL_VERIFY`` is a
+        # litellm-specific variable that standard libraries (requests/httpx/curl) ignore.
+        from datus.utils.ssl_utils import normalize_ssl_verify, ssl_verify_to_env
+
+        ssl_verify_cfg = getattr(self.model_config, "ssl_verify", None)
+        # Only act on real bool/str config values; a non-(bool|str) (e.g. unset, or a
+        # test double) leaves behavior untouched.
+        if isinstance(ssl_verify_cfg, (bool, str)):
+            self.ssl_verify = normalize_ssl_verify(ssl_verify_cfg)
+            os.environ["SSL_VERIFY"] = ssl_verify_to_env(self.ssl_verify)
+        else:
+            self.ssl_verify = None
 
         # Initialize LiteLLM adapter for unified LLM calls
         self.litellm_adapter = LiteLLMAdapter(

@@ -522,11 +522,94 @@ class TestRunUsesFactory:
 
 
 # ---------------------------------------------------------------------------
+# Tests: run() with --plan-mode
+# ---------------------------------------------------------------------------
+
+
+class TestRunPlanMode:
+    def _run_with_plan_mode(self, plan_mode_override):
+        overrides = {} if plan_mode_override is None else {"plan_mode": plan_mode_override}
+        runner = _make_runner(**overrides)
+
+        mock_node = MagicMock()
+        mock_node.session_id = None
+
+        async def fake_stream(actions):
+            return
+            yield
+
+        mock_node.execute_stream_with_interactions = fake_stream
+        # Real-shaped input: plan fields behave like ChatNodeInput defaults.
+        node_input = SimpleNamespace(plan_mode=False, auto_execute_plan=False)
+
+        with (
+            patch("datus.cli.print_mode.create_interactive_node", return_value=mock_node),
+            patch("datus.cli.print_mode.create_node_input", return_value=node_input) as mock_create_input,
+        ):
+            runner.run()
+        return mock_create_input, mock_node
+
+    def test_plan_mode_flag_enables_auto_execute(self):
+        mock_create_input, mock_node = self._run_with_plan_mode(True)
+
+        assert mock_create_input.call_args.kwargs["plan_mode"] is True
+        # Print mode is headless, so the generated plan must auto-confirm.
+        assert mock_node.input.auto_execute_plan is True
+
+    def test_plan_mode_default_off(self):
+        mock_create_input, mock_node = self._run_with_plan_mode(False)
+
+        assert mock_create_input.call_args.kwargs["plan_mode"] is False
+        assert mock_node.input.auto_execute_plan is False
+
+    def test_plan_mode_missing_arg_defaults_off(self):
+        # Older callers build args without the plan_mode attribute at all.
+        mock_create_input, mock_node = self._run_with_plan_mode(None)
+
+        assert mock_create_input.call_args.kwargs["plan_mode"] is False
+        assert mock_node.input.auto_execute_plan is False
+
+
+# ---------------------------------------------------------------------------
 # Tests: run() with proxy_tool_patterns
 # ---------------------------------------------------------------------------
 
 
 class TestRunProxyTools:
+    def test_run_attaches_orchestrator_tools_before_proxying(self):
+        """Verify orchestrator tools are registered and then available to proxy."""
+        runner = _make_runner(orchestrator_tools=True, proxy_tools="orchestrator_tools.*")
+
+        mock_node = MagicMock()
+        mock_node.session_id = None
+        mock_node.tools = []
+        mock_node.tool_registry = MagicMock()
+
+        async def fake_stream(actions):
+            return
+            yield
+
+        mock_node.execute_stream_with_interactions = fake_stream
+
+        with (
+            patch("datus.cli.print_mode.create_interactive_node", return_value=mock_node),
+            patch("datus.cli.print_mode.create_node_input", return_value=MagicMock()),
+            patch("datus.tools.proxy.proxy_tool.apply_proxy_tools") as mock_apply,
+        ):
+            runner.run()
+
+        registered_tools = mock_node.tool_registry.register_tools.call_args.args[1]
+        assert mock_node.tool_registry.register_tools.call_args.args[0] == "orchestrator_tools"
+        assert {tool.name for tool in registered_tools} == {
+            "create_issue_comment",
+            "update_issue_status",
+            "request_human_input",
+            "mark_blocked",
+            "finish_mission",
+        }
+        assert mock_node.tools == registered_tools
+        mock_apply.assert_called_once_with(mock_node, ["orchestrator_tools.*"])
+
     def test_run_applies_proxy_tools_when_patterns_set(self):
         """Verify that apply_proxy_tools is called when proxy_tool_patterns is set."""
         runner = _make_runner(proxy_tools="filesystem_tools.*,db_tools.*")

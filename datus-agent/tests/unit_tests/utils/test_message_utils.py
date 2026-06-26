@@ -106,7 +106,7 @@ def test_is_structured_content_envelope_with_multiline_enhanced():
         ("", ""),
         ("  padded  ", "  padded  "),
         ('{"key": "value"}', '{"key": "value"}'),
-        ('[{"type": "user", "content": "legacy"}]', '[{"type": "user", "content": "legacy"}]'),
+        ('[{"type": "user", "content": "legacy"}]', "legacy"),
     ],
     ids=["plain", "empty", "padded", "json_object", "legacy_json_array"],
 )
@@ -115,6 +115,28 @@ def test_extract_user_input_non_envelope_returns_unchanged(value, expected):
 
     assert result == expected
     assert isinstance(result, str)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        '["hello", "world"]',
+        "[1, 2, 3]",
+        '[{"foo": "bar"}]',
+        '[{"type": "unknown", "content": "x"}]',
+        "[]",
+    ],
+    ids=[
+        "string_array",
+        "int_array",
+        "dict_no_recognized_type",
+        "dict_unknown_type",
+        "empty_array",
+    ],
+)
+def test_extract_user_input_non_legacy_json_array_returned_unchanged(value):
+    """Non-legacy JSON arrays must pass through as-is, never return empty string."""
+    assert extract_user_input(value) == value
 
 
 def test_extract_user_input_envelope_returns_user_portion():
@@ -224,6 +246,37 @@ def test_extract_user_input_block_list_text_field_non_string_is_skipped():
     ]
 
     assert extract_user_input(blocks) == "real text"
+
+
+def test_extract_user_input_legacy_json_string_enhanced_plus_user():
+    """Full issue #887 scenario: legacy JSON array with enhanced + user blocks."""
+    content = (
+        '[{"type": "enhanced", "content": "Database Context: starrocks"},'
+        ' {"type": "user", "content": "What can you do?"}]'
+    )
+
+    assert extract_user_input(content) == "What can you do?"
+
+
+def test_extract_user_input_legacy_list_user_block_directly():
+    """Already-parsed list path: legacy user block bypassing the string branch."""
+    blocks = [{"type": "user", "content": "direct list input"}]
+
+    assert extract_user_input(blocks) == "direct list input"
+
+
+def test_extract_user_input_legacy_user_block_empty_content_uses_empty():
+    """When content is empty string, should NOT fallback to text field."""
+    blocks = [{"type": "user", "content": "", "text": "fallback"}]
+
+    assert extract_user_input(blocks) == ""
+
+
+def test_extract_user_input_legacy_user_block_none_content_uses_text():
+    """When content is None, should fallback to text field."""
+    blocks = [{"type": "user", "text": "from text field"}]
+
+    assert extract_user_input(blocks) == "from text field"
 
 
 def test_extract_user_input_pydantic_compatible_for_chat_session_item_info():

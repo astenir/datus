@@ -107,7 +107,6 @@ class AgenticNode(Node):
         mcp_servers: Optional[Dict[str, MCPServerStdio]] = None,
         scope: Optional[str] = None,
         is_subagent: bool = False,
-        memory_enabled: Optional[bool] = None,
         session_id: Optional[str] = None,
     ):
         """
@@ -116,19 +115,13 @@ class AgenticNode(Node):
         Args:
             node_id: Unique identifier for the node
             description: Human-readable description of the node
-            node_type: Type of the node (e.g., 'chat', 'gensql')
+            node_type: Type of the node (e.g., 'chat', 'gen_sql')
             input_data: Input data for the node
             agent_config: Agent configuration
             tools: List of function tools available to this node
             mcp_servers: Dictionary of MCP servers available to this node
             scope: Optional session scope for directory isolation
             is_subagent: When True, skip SubAgentTaskTool setup (2-level depth enforcement)
-            memory_enabled: Whether this node should get the Auto Memory section injected
-                into its system prompt. When ``None`` (default), resolved from
-                ``has_memory(self.get_node_name())`` — built-in subagents (gen_sql,
-                gen_report, feedback, etc.) default to ``False``; only ``chat`` and
-                custom/user-defined subagents default to ``True``. Pass an explicit
-                bool to override.
             session_id: Optional resume target. When provided, the node opens
                 this session id and persisted plan-mode state on disk is
                 restored automatically. When ``None``, a fresh id is generated
@@ -171,12 +164,6 @@ class AgenticNode(Node):
         # it from the session id prefix. ``None`` when no switch occurred.
         self.caller_node_name: Optional[str] = None
 
-        # Whether memory context is injected into this node's system prompt.
-        # Resolves from has_memory() when not explicitly set by the caller.
-        from datus.utils.memory_loader import has_memory
-
-        self.memory_enabled: bool = memory_enabled if memory_enabled is not None else has_memory(self.get_node_name())
-
         # Permission and skill management
         self.permission_manager: Optional["PermissionManager"] = None
         # PermissionHooks is attached lazily once tools are set up — see
@@ -189,6 +176,7 @@ class AgenticNode(Node):
         self.ask_user_tool = None
         self.sub_agent_task_tool = None
         self.bash_tool = None
+        self.memory_func_tool = None
         self._is_subagent = is_subagent
         self._permission_callback: Optional[Callable[[str, str, Dict[str, Any]], Awaitable[bool]]] = None
 
@@ -501,12 +489,14 @@ class AgenticNode(Node):
         if not self.plan_mode_active or not self.plan_file_path:
             return ""
 
+        auto_execute_plan = bool(getattr(self.input, "auto_execute_plan", False))
         try:
             rendered = get_prompt_manager(agent_config=self.agent_config).render_template(
                 template_name="plan_mode_system",
                 version=None,
                 plan_file_path=self.plan_file_path,
                 workflow_prompt_sent=self.workflow_prompt_sent,
+                auto_execute_plan=auto_execute_plan,
             )
         except FileNotFoundError:
             logger.warning("plan_mode_system template not found, using inline fallback")
@@ -657,8 +647,13 @@ class AgenticNode(Node):
         # Lambda resolves session_id lazily — at setup time it's still None,
         # ``_get_or_create_session`` allocates it on the first turn. Snapshot
         # would leave the storage permanently unbound and never persist.
-        tools: List[Tool] = list(PlanTool(self._session, session_id=lambda: self.session_id).available_tools())
-        tools.extend(ConfirmPlanTool(self).available_tools())
+        # Keep both instances on the node so ``_iter_tool_groups`` registers
+        # their ``permission_category`` — locals would silently fall back to
+        # the ``tools`` catch-all at hook time.
+        self.plan_tool = PlanTool(self._session, session_id=lambda: self.session_id)
+        self.confirm_plan_tool = ConfirmPlanTool(self)
+        tools: List[Tool] = list(self.plan_tool.available_tools())
+        tools.extend(self.confirm_plan_tool.available_tools())
         return tools
 
     def _register_plan_mode_tools(self) -> None:
@@ -691,6 +686,49 @@ class AgenticNode(Node):
             self.activate_plan_mode()
         elif self.is_in_plan_mode():
             self.deactivate_plan_mode()
+
+    def _build_datasource_reminder(self, user_input: Any = None) -> str:
+        """Live per-turn datasource line for the user-message envelope.
+
+        The frozen system-prompt snapshot must never pin the *current*
+        datasource: a mid-session ``/datasource`` switch would silently leave a
+        stale dialect in every later turn. Instead this line rides in the
+        ``<system_reminder>`` envelope of each user message. It merges what
+        used to be a separate "Database Context" block — dialect, catalog,
+        database (resolved via the connector default), and schema — into one
+        line so the dialect is stated exactly once per turn. Gated on
+        ``db_func_tool`` so non-DB nodes add no noise; returns an empty string
+        when no datasource is selected.
+        """
+        agent_config = getattr(self, "agent_config", None)
+        if not agent_config or getattr(self, "db_func_tool", None) is None:
+            return ""
+        from datus.utils.node_utils import build_datasource_prompt_context, resolve_database_name_for_prompt
+
+        ds_ctx = build_datasource_prompt_context(agent_config)
+        datasource = ds_ctx.get("datasource")
+        if not datasource:
+            return ""
+
+        details: List[str] = []
+        dialect = ds_ctx.get("current_datasource_dialect")
+        if dialect:
+            details.append(f"dialect: {dialect}")
+        catalog = getattr(user_input, "catalog", "") or ""
+        if catalog:
+            details.append(f"catalog: {catalog}")
+        connector = getattr(self.db_func_tool, "connector", None)
+        database = resolve_database_name_for_prompt(connector, getattr(user_input, "database", "") or "")
+        if database:
+            details.append(f"database: {database}")
+        schema = getattr(user_input, "db_schema", "") or ""
+        if schema:
+            details.append(f"schema: {schema}")
+        suffix = f" ({', '.join(details)})" if details else ""
+        return (
+            f"Current datasource: {datasource}{suffix}. This is the authoritative "
+            "target for this turn; generate SQL for THIS dialect."
+        )
 
     def _build_enhanced_message(
         self,
@@ -730,12 +768,22 @@ class AgenticNode(Node):
 
         enhanced_parts: List[str] = []
 
+        # Live per-turn datasource line (dialect + catalog/database/schema in
+        # one place). Deliberately NOT in the frozen system-prompt snapshot —
+        # injecting it here keeps the system-prompt prefix byte-stable across
+        # a mid-session datasource switch while the model still targets the
+        # right dialect THIS turn. It supersedes the legacy "Database Context"
+        # block, which only renders below when this line is absent.
+        datasource_reminder = self._build_datasource_reminder(user_input)
+        if datasource_reminder:
+            enhanced_parts.append(datasource_reminder)
+
         ext_know = getattr(user_input, "external_knowledge", "") or ""
         if ext_know:
             enhanced_parts.append(f"MUST use these business logic:\n{ext_know}")
 
         db_type = getattr(self.agent_config, "db_type", "") if self.agent_config else ""
-        if db_type:
+        if db_type and not datasource_reminder:
             # Always resolve empty database via the connector default — the
             # helper is a no-op when no connector is wired or value is set.
             from datus.utils.node_utils import resolve_database_name_for_prompt
@@ -854,6 +902,88 @@ class AgenticNode(Node):
             return node_class
         return AgenticNode.get_node_name(self)
 
+    def _system_prompt_snapshot_meta(self, prompt_version: Optional[str]) -> Dict[str, str]:
+        """Identity keys that invalidate the cached system-prompt snapshot.
+
+        The snapshot is replayed verbatim while these stay equal. They cover
+        the inputs that change the prompt's identity within a session: the
+        node template, its version, and the active model (a model switch also
+        resets the provider-side prefix cache, so rebuilding is free). The
+        live per-turn datasource/dialect is injected in the user message
+        instead, so it deliberately does **not** appear here; date, language,
+        memory, and skills are frozen until the snapshot is rebuilt.
+        """
+        agent_config = getattr(self, "agent_config", None)
+        version = prompt_version
+        if version is None and agent_config is not None and hasattr(agent_config, "prompt_version"):
+            version = agent_config.prompt_version
+        # A node-level model override (``node_config.model``) pins the
+        # effective model regardless of the agent-level target, so it must be
+        # the identity when set — otherwise a /model switch that doesn't
+        # affect this node would spuriously rebuild (and vice versa).
+        node_model = getattr(self, "_node_model_name", None)
+        if node_model:
+            model_id = f"node:{node_model}"
+        else:
+            model_id = ""
+            try:
+                mc = agent_config.active_model() if agent_config is not None else None
+                if mc is not None:
+                    model_id = f"{getattr(mc, 'type', '') or ''}:{getattr(mc, 'model', '') or ''}"
+            except Exception:
+                model_id = ""
+        return {
+            "node_name": self.get_node_name(),
+            "prompt_version": str(version or ""),
+            "model_name": model_id,
+        }
+
+    def _get_session_system_prompt(
+        self,
+        prompt_version: Optional[str] = None,
+        template_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Return the system prompt for this turn, served from a session snapshot.
+
+        On the first LLM call of a session the finalized prompt is built via
+        :meth:`_get_system_prompt` (subclass overrides honored) and persisted
+        under ``{session_dir}/{session_id}.sysprompt.json``. Later turns —
+        including new node instances, API per-request nodes, ``/resume``, and
+        subagent sessions — replay the exact bytes, keeping the provider
+        prefix cache warm and skipping the per-turn template render and
+        AGENTS.md/MEMORY.md file reads. A major compact or ``/clear`` drops
+        the snapshot so it rebuilds (session-rebuild semantics); a model
+        switch invalidates it via the meta comparison.
+        """
+        session_id = getattr(self, "session_id", "") or ""
+        meta = self._system_prompt_snapshot_meta(prompt_version)
+        sm = None
+        if session_id:
+            try:
+                sm = self.session_manager
+            except Exception as exc:  # session manager wiring is optional in some unit paths
+                logger.debug("System-prompt snapshot disabled (no session manager): %s", exc)
+                sm = None
+
+        if sm is not None:
+            snapshot = sm.load_system_prompt_snapshot(session_id)
+            if snapshot is not None and all(snapshot.get(k) == v for k, v in meta.items()):
+                # The replayed prompt advertises skill/bash/memory tools whose
+                # mounting is normally a side effect of the (skipped) build.
+                self._ensure_lazy_tools_mounted()
+                return snapshot["prompt"]
+
+        # Cache miss / stale meta: rebuild. Preserve the call shape — several
+        # subclass overrides accept only ``prompt_version``.
+        if template_context:
+            prompt = self._get_system_prompt(prompt_version=prompt_version, template_context=template_context)
+        else:
+            prompt = self._get_system_prompt(prompt_version=prompt_version)
+
+        if sm is not None:
+            sm.save_system_prompt_snapshot(session_id, prompt, meta)
+        return prompt
+
     def _get_system_prompt(
         self,
         prompt_version: Optional[str] = None,
@@ -932,16 +1062,18 @@ class AgenticNode(Node):
         Returns:
             Prompt with skills XML and memory context appended
         """
+        # Inject session-stable runtime context. The current datasource
+        # selection lives in the per-turn user message instead.
+        base_prompt = self._inject_runtime_context(base_prompt)
+        base_prompt = self._inject_datasource_runtime_context(base_prompt)
+
         # Inject AGENTS.md project context if present in cwd
         agents_md = self._load_agents_md()
         if agents_md:
             base_prompt = base_prompt + "\n\n" + agents_md
 
-        # Ensure skill tools are in self.tools (lazy injection after subclass setup_tools()).
-        self._ensure_skill_tools_in_tools()
-
-        # Same lazy-injection trick for the general-purpose BashTool.
-        self._ensure_bash_tool_in_tools()
+        # Mount the lazily injected skill/bash/memory tools.
+        self._ensure_lazy_tools_mounted()
 
         # Inject available skills XML into system prompt when skill_func_tool is active.
         if self.skill_func_tool:
@@ -956,6 +1088,79 @@ class AgenticNode(Node):
         # sub-agents invoked via ``task`` — honors the configured output language.
         base_prompt = self._inject_response_language(base_prompt)
 
+        return base_prompt
+
+    def _ensure_lazy_tools_mounted(self) -> None:
+        """Mount the lazily injected skill/bash/memory tools into ``self.tools``.
+
+        Normally a side effect of :meth:`_finalize_system_prompt` during the
+        prompt build. A snapshot cache hit skips that build entirely, so the
+        hit path calls this directly — the replayed prompt advertises these
+        capabilities and a fresh node instance (API per-request, ``/resume``)
+        must actually have them mounted. All three are idempotent; subclass
+        gating overrides (e.g. artifact-ask nodes) are honored via virtual
+        dispatch.
+        """
+        self._ensure_skill_tools_in_tools()
+        self._ensure_bash_tool_in_tools()
+        self._ensure_memory_tool_in_tools()
+
+    def _runtime_context_current_date(self) -> str:
+        """Current-date reference rendered into the shared runtime-context block.
+
+        Defaults to today. Subclasses with a reference-date concept (e.g.
+        GenSQL/AskMetrics, which honor a benchmark/replay ``reference_date``)
+        override this so the frozen prompt reflects the intended evaluation
+        date.
+        """
+        from datus.utils.time_utils import get_default_current_date
+
+        return get_default_current_date(None)
+
+    def _inject_runtime_context(self, base_prompt: str) -> str:
+        """Append the shared runtime-context block.
+
+        Renders ``runtime_context_1.0.j2`` with date-only session-stable
+        context. Date context is runtime input, not DB-tool capability.
+        """
+        agent_config = getattr(self, "agent_config", None)
+        try:
+            section = get_prompt_manager(agent_config=agent_config).render_template(
+                template_name="runtime_context",
+                version=None,
+                current_date=self._runtime_context_current_date(),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to inject runtime context: {e}")
+            return base_prompt
+        if section and section.strip():
+            base_prompt = base_prompt + "\n\n" + section.strip()
+        return base_prompt
+
+    def _inject_datasource_runtime_context(self, base_prompt: str) -> str:
+        """Append datasource/sql-root context for DB-tool-capable nodes.
+
+        This preserves the old scope for datasource catalog and sql-root hints
+        while allowing date context to be injected independently.
+        """
+        if getattr(self, "db_func_tool", None) is None:
+            return base_prompt
+        agent_config = getattr(self, "agent_config", None)
+        try:
+            from datus.utils.node_utils import build_datasource_prompt_context
+
+            ds_ctx = build_datasource_prompt_context(agent_config) if agent_config else {}
+            section = get_prompt_manager(agent_config=agent_config).render_template(
+                template_name="datasource_runtime_context",
+                version=None,
+                available_datasources=ds_ctx.get("available_datasources") or {},
+                workspace_root=self._resolve_workspace_root(),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to inject datasource runtime context: {e}")
+            return base_prompt
+        if section and section.strip():
+            base_prompt = base_prompt + "\n\n" + section.strip()
         return base_prompt
 
     def _inject_response_language(self, base_prompt: str) -> str:
@@ -988,15 +1193,14 @@ class AgenticNode(Node):
         """Inject memory context into the system prompt.
 
         Injection rules (resolved in order):
-        1. ``override_node_name`` provided (feedback path) → unconditional
-           injection of that node's memory, writable.
-        2. ``self.memory_enabled`` True (chat / custom subagents) → own memory,
-           writable.
-        3. ``inherited_memory`` contextvar set by ``SubAgentTaskTool`` for this
-           node name → render the parent's memory in **read-only** mode. Built-in
-           subagents launched via ``task`` see their originating parent's memory
-           for context but cannot modify it.
-        4. None of the above → no memory section is appended.
+        1. ``override_node_name`` provided (feedback path) → writable injection of
+           that node's memory (the feedback node injects its caller's memory).
+        2. ``inherited_memory`` contextvar set by ``SubAgentTaskTool`` → this node
+           is running as a **sub-agent**; render the parent's memory **read-only**
+           (content only, no write manual). It has no memory write tools.
+        3. Otherwise this is a **main** agent → render its own memory writable.
+           The owner is ``resolve_memory_node(get_node_name())`` (built-in main
+           agents share ``chat``; custom agents use their own name).
 
         Args:
             base_prompt: The prompt to append memory context to.
@@ -1005,19 +1209,24 @@ class AgenticNode(Node):
                 feedback node injects its caller's memory).
         """
         from datus.configuration.inherited_memory_overrides import get_inherited_memory
-        from datus.utils.memory_loader import get_memory_dir, load_memory_context
+        from datus.utils.memory_loader import get_memory_dir, load_memory_context, resolve_memory_node
 
         read_only = False
         if override_node_name:
             node_name = override_node_name
-        elif self.memory_enabled:
-            node_name = self.get_node_name()
         else:
             inherited = get_inherited_memory(self.get_node_name())
-            if not inherited:
+            if inherited:
+                # Sub-agent: inline the parent's memory read-only.
+                node_name = inherited
+                read_only = True
+            elif self._is_subagent:
+                # Sub-agent whose parent has no memory: nothing to show, and a
+                # sub-agent must never get the writable manual (it has no tools).
                 return base_prompt
-            node_name = inherited
-            read_only = True
+            else:
+                # Main agent: own writable memory (built-in → shared 'chat').
+                node_name = resolve_memory_node(self.get_node_name())
 
         try:
             workspace_root = self._resolve_workspace_root()
@@ -1188,6 +1397,14 @@ class AgenticNode(Node):
                 compact_action_id = f"compact_{uuid.uuid4().hex[:8]}"
                 self._emit_compact_display_action(compact_action_id, "progress")
                 result = await self._major_compact(reason=reason)
+                # A major compact is a session rebuild: drop the frozen system
+                # prompt so the next turn re-bakes it (fresh date, AGENTS.md,
+                # memory, skills) instead of replaying the pre-compact snapshot.
+                if result.get("success") and self.session_id:
+                    try:
+                        self.session_manager.delete_system_prompt_snapshot(self.session_id)
+                    except Exception as exc:
+                        logger.debug("Failed to drop system-prompt snapshot after compact: %s", exc)
                 # Always emit the terminal action — even on failure — so the
                 # pinned hint is cleared; the renderer only draws the panel when
                 # a summary is actually present.
@@ -1750,6 +1967,8 @@ class AgenticNode(Node):
             "scoped_kb_path",
             "adapter_type",
             "semantic_adapter",
+            "subject_tree_prompt_limit",
+            "require_final_result_selection",
             "sql_file_threshold",
             "sql_preview_lines",
             "bi_platform",
@@ -2108,6 +2327,40 @@ class AgenticNode(Node):
             f"{[t.name for t in self.bash_tool.available_tools()]}"
         )
 
+    def _ensure_memory_tool_in_tools(self) -> None:
+        """Ensure ``add_memory`` / ``edit_memory`` are in ``self.tools`` for a main agent.
+
+        Mirrors :meth:`_ensure_skill_tools_in_tools`: a single lazy chokepoint so
+        every main-agent node gets the memory tools without each ``setup_tools``
+        having to wire them. Sub-agents are skipped entirely — they never write
+        memory, only see the parent's memory inlined read-only. Idempotent; the
+        memory owner defaults to ``resolve_memory_node(get_node_name())`` (built-in
+        main agents share ``chat``; custom agents use their own name), but a node
+        that already built its own ``memory_func_tool`` (e.g. feedback, bound to
+        its caller) keeps it.
+        """
+        if self._is_subagent:
+            return
+
+        if self.memory_func_tool is None:
+            from datus.utils.memory_loader import resolve_memory_node
+
+            try:
+                self.memory_func_tool = self._make_memory_tool(memory_node=resolve_memory_node(self.get_node_name()))
+            except Exception as e:
+                logger.error(f"Failed to build memory tool for node '{self.get_node_name()}': {e}")
+                return
+
+        memory_tool_names = {t.name for t in self.memory_func_tool.available_tools()}
+        existing_names = {t.name for t in (self.tools or [])}
+        if memory_tool_names.issubset(existing_names):
+            return
+
+        if self.tools is None:
+            self.tools = []
+        self.tools.extend(self.memory_func_tool.available_tools())
+        logger.debug(f"Memory tools injected into node '{self.get_node_name()}': {sorted(memory_tool_names)}")
+
     def set_permission_callback(self, callback: Callable[[str, str, Dict[str, Any]], Awaitable[bool]]) -> None:
         """
         Set callback for ASK permission prompts.
@@ -2149,43 +2402,6 @@ class AgenticNode(Node):
             patterns=skill_patterns,
             node_class=self.get_node_class_name(),
         )
-
-    def _get_tool_category(self, tool_name: str) -> str:
-        """
-        Determine tool category from tool name for permission checking.
-
-        Args:
-            tool_name: Name of the tool
-
-        Returns:
-            Tool category string: "db_tools", "mcp", "skills", or "tools"
-        """
-        # Check for skill-related tools
-        if tool_name == "load_skill" or tool_name.startswith("skill_"):
-            return "skills"
-
-        # Check for database tools
-        if tool_name.startswith("db_") or tool_name in [
-            "list_tables",
-            "describe_table",
-            "execute_ddl",
-            "execute_write",
-            "transfer_query_result",
-            "execute_sql",
-            "get_sample_data",
-        ]:
-            return "db_tools"
-
-        # Check for MCP tools (usually have mcp_ prefix or are in mcp_servers)
-        mcp_tool_names = set()
-        for server_name in self.mcp_servers.keys():
-            mcp_tool_names.add(f"{server_name}_")
-        for mcp_prefix in mcp_tool_names:
-            if tool_name.startswith(mcp_prefix):
-                return "mcp"
-
-        # Default to generic tools category
-        return "tools"
 
     def setup_input(self, workflow: "Workflow") -> Dict:
         """
@@ -2394,18 +2610,17 @@ class AgenticNode(Node):
 
             template_context = self._build_template_context(ctx)
             prompt_version = getattr(self.input, "prompt_version", None)
-            if template_context:
-                ctx.system_instruction = self._get_system_prompt(
-                    prompt_version=prompt_version,
-                    template_context=template_context,
-                )
-            else:
-                ctx.system_instruction = self._get_system_prompt(prompt_version=prompt_version)
+            # Served from a per-session snapshot when available; rebuilt and
+            # re-persisted on a cache miss or when the snapshot meta is stale.
+            ctx.system_instruction = self._get_session_system_prompt(
+                prompt_version=prompt_version,
+                template_context=template_context,
+            )
 
             # Compose the user prompt, optionally with a per-run override of
             # ``user_input.user_message`` set during ``_before_stream`` (used
-            # by Compare and GenExtKnowledge to inject node-specific text
-            # without mutating the caller's input object).
+            # by Compare to inject node-specific text without mutating the
+            # caller's input object).
             if ctx.user_message_override is not None:
                 original = self.input.user_message
                 self.input.user_message = ctx.user_message_override
@@ -2590,9 +2805,9 @@ class AgenticNode(Node):
                         candidate = (
                             output.get("content", "") or output.get("response", "") or output.get("raw_output", "")
                         )
-                        # Preserve dict candidates (used by Deliverable / ExtKnowledge
-                        # for structured outputs); coerce only when the candidate is
-                        # a non-empty non-string scalar.
+                        # Preserve dict candidates (used by Deliverable for structured
+                        # outputs); coerce only when the candidate is a non-empty
+                        # non-string scalar.
                         if isinstance(candidate, str):
                             if candidate:
                                 ctx.response_content = candidate
@@ -2632,6 +2847,12 @@ class AgenticNode(Node):
         (which various subclasses already define with ``(user_input, …)``
         signatures); subclasses that need template context override this hook
         and typically delegate: ``return self._prepare_template_context(ctx.user_input)``.
+
+        Contract: the returned values are rendered into the system prompt,
+        which is frozen into the per-session snapshot and replayed on later
+        turns — so they must be **session-stable** (tool wiring, execution
+        mode), never per-turn (current datasource, user input). Per-turn
+        values belong in :meth:`_build_enhanced_message`.
         """
         return None
 
@@ -2641,8 +2862,7 @@ class AgenticNode(Node):
         Default: include ``self.hooks`` (typically a ``GenerationHooks``
         instance for todo/plan workflow nodes) only in interactive mode;
         otherwise return permission hooks alone. This covers SqlSummary,
-        Feedback, GenSemanticModel, GenExtKnowledge, GenMetrics out of the
-        box.
+        Feedback, GenSemanticModel, and GenMetrics out of the box.
 
         Subclasses with non-``self.hooks`` extras (Deliverable's
         ``_validation_hook``) override to call ``self._compose_hooks(extra)``
@@ -2666,9 +2886,8 @@ class AgenticNode(Node):
         """Hook: return a :class:`RetryPolicy` to drive validate/retry.
 
         Default returns :class:`NoRetryPolicy` (single execution). Override
-        to return :class:`ValidationHookRetryPolicy` (deliverable_node.py) /
-        :class:`VerifySqlRetryPolicy` (gen_ext_knowledge_agentic_node.py) when
-        the node needs re-prompting on validation failure. Concrete policies
+        to return :class:`ValidationHookRetryPolicy` when the node needs
+        re-prompting on validation failure. Concrete policies
         live in their owning node's module — there is no shared ``policies/``
         package since each policy is bound to a specific node's internals.
         """
@@ -2952,13 +3171,13 @@ class AgenticNode(Node):
 
         All production call sites go through this helper so ``root_path`` is
         uniformly ``_resolve_workspace_root()`` and ``current_node`` matches
-        ``get_node_name()`` — the two inputs the path policy module expects to
-        classify ``.datus/memory/{current_node}/**`` as a whitelist subtree
-        for this node only. The ``strict`` flag is resolved from
+        ``get_node_name()``. The ``strict`` flag is resolved from
         ``agent_config.filesystem_strict`` so API / gateway can opt out of
-        interactive EXTERNAL prompts.
+        interactive EXTERNAL prompts. Persistent memory is no longer reachable
+        through this tool — the whole ``.datus/memory/**`` subtree is HIDDEN and
+        owned exclusively by the dedicated ``add_memory`` / ``edit_memory``
+        tools (see ``_make_memory_tool``).
         """
-        from datus.configuration.inherited_memory_overrides import get_inherited_memory
         from datus.tools.func_tool import FilesystemFuncTool
 
         root_path = kwargs.pop("root_path", None) or self._resolve_workspace_root()
@@ -2974,19 +3193,50 @@ class AgenticNode(Node):
         if strict is None:
             strict = self._resolve_filesystem_strict()
         current_node = kwargs.pop("current_node", None) or self.get_node_name()
-        inherited_memory_node = kwargs.pop("inherited_memory_node", None)
-        if inherited_memory_node is None:
-            inherited_memory_node = get_inherited_memory(current_node)
         session_data_dir = kwargs.pop("session_data_dir", None) or self._resolve_session_data_dir()
         return FilesystemFuncTool(
             root_path=root_path,
             current_node=current_node,
             datus_home=datus_home,
             strict=strict,
-            inherited_memory_node=inherited_memory_node,
             session_data_dir=session_data_dir,
             **kwargs,
         )
+
+    def _make_memory_tool(self, **kwargs):
+        """Construct a ``MemoryFuncTool`` bound to a single memory owner node.
+
+        ``memory_node`` defaults to ``get_node_name()`` (chat / custom subagents
+        own their memory) but the feedback node passes its caller's name so it
+        writes the caller's memory instead of its own.
+        """
+        from datus.tools.func_tool import MemoryFuncTool
+
+        root_path = kwargs.pop("root_path", None) or self._resolve_workspace_root()
+        memory_node = kwargs.pop("memory_node", None) or self.get_node_name()
+        return MemoryFuncTool(root_path=root_path, memory_node=memory_node, **kwargs)
+
+    def _setup_memory_tools(self, memory_node: Optional[str] = None) -> None:
+        """Mount the dedicated memory tools (``add_memory`` / ``edit_memory``).
+
+        Only *main* agents write memory. A node running as a sub-agent (launched
+        via ``task``) never mounts the tools — it only sees the parent's memory
+        inlined read-only (see ``_inject_memory_context``). The memory owner
+        defaults to ``resolve_memory_node(get_node_name())`` (built-in main
+        agents share ``chat``; custom agents use their own name); the feedback
+        node passes an explicit ``memory_node`` (its caller's resolved memory).
+        """
+        from datus.utils.memory_loader import resolve_memory_node
+
+        if self._is_subagent:
+            return
+        node = memory_node or resolve_memory_node(self.get_node_name())
+        try:
+            self.memory_func_tool = self._make_memory_tool(memory_node=node)
+            self.tools.extend(self.memory_func_tool.available_tools())
+            logger.debug(f"Setup memory tools for node: {self.memory_func_tool.memory_node}")
+        except Exception as e:
+            logger.error(f"Failed to setup memory tools: {e}")
 
     def _resolve_session_data_dir(self) -> Optional[str]:
         """Resolve the compact-archive data dir for this node's current session.
@@ -3045,36 +3295,66 @@ class AgenticNode(Node):
     # never fired for anything other than ``chat``. These helpers let
     # every subclass participate in the permission system with one call.
 
-    def _tool_category_map(self) -> Dict[str, List[Any]]:
-        """Return ``{category: tools}`` for permission registration.
+    def _iter_tool_groups(self) -> List[Any]:
+        """Collect tool-group instances mounted as attributes on this node.
 
-        Subclasses override this to declare which of ``self.tools`` belong
-        to which permission category (``bi_tools``, ``scheduler_tools``,
-        ``db_tools``, etc.). Categories not declared here fall back to the
-        ``tools`` catch-all, which only matches explicit ``tools.*`` rules.
-
-        The base implementation registers ``skill_func_tool`` under
-        ``skills`` and ``bash_tool`` under ``bash_tools`` so the
-        ``skills.*`` and ``bash_tools.*`` profile rules apply to every
-        subagent that exposes them — overrides should ``super()`` +
-        extend.
+        A tool group is any object that declares both ``permission_category``
+        (the class-level category from ``BaseTool`` or a plain class attribute)
+        and ``available_tools()``. Category declaration lives at the tool's
+        definition site, so nodes no longer maintain hand-written
+        category maps that silently drift when a tool is added or renamed.
         """
-        mapping: Dict[str, List[Any]] = {}
-        if self.skill_func_tool:
-            mapping["skills"] = list(self.skill_func_tool.available_tools())
-        bash_tool = getattr(self, "bash_tool", None)
-        if bash_tool:
-            bash_tools = list(bash_tool.available_tools())
-            if bash_tools:
-                mapping["bash_tools"] = bash_tools
-        return mapping
+        groups: List[Any] = []
+        seen: set = set()
+        for attr_name in sorted(vars(self)):
+            value = getattr(self, attr_name, None)
+            if value is None or id(value) in seen:
+                continue
+            if isinstance(value, type):
+                continue
+            # ``permission_category`` must be a plain string — this also keeps
+            # ``Mock()`` stand-ins in tests out of the registry unless they
+            # explicitly declare a category.
+            category = getattr(value, "permission_category", None)
+            if isinstance(category, str) and callable(getattr(value, "available_tools", None)):
+                seen.add(id(value))
+                groups.append(value)
+        return groups
+
+    @staticmethod
+    def _tool_group_names(group: Any) -> List[str]:
+        """Return every permission-relevant tool name a group can expose.
+
+        Prefers ``all_tools_name()`` (the full surface, independent of
+        runtime availability) over ``available_tools()`` so the registry
+        also covers method-level wrappers some nodes mount directly (e.g.
+        ``DBFuncTool.execute_ddl`` on gen_job) and conditional tools that
+        appear only with certain configs. Registering a superset is safe:
+        the registry is a name → category lookup consulted per call, so
+        names that are never mounted are never queried.
+        """
+        all_names = getattr(group, "all_tools_name", None)
+        if callable(all_names):
+            try:
+                return [str(name) for name in all_names()]
+            except Exception:
+                logger.debug("all_tools_name() failed for %s", type(group).__name__, exc_info=True)
+        try:
+            return [getattr(tool, "name", str(tool)) for tool in group.available_tools()]
+        except Exception:
+            logger.debug("available_tools() failed for %s", type(group).__name__, exc_info=True)
+            return []
 
     def _populate_tool_registry(self) -> None:
-        """Register every tool in :meth:`_tool_category_map` into
-        :attr:`tool_registry`.
+        """Register every mounted tool group's names into :attr:`tool_registry`.
+
+        Categories come from each tool class's ``permission_category``
+        declaration (see :meth:`_iter_tool_groups`), so the mapping is
+        deterministic across nodes — the same tool name always lands in the
+        same category no matter which node mounts it.
 
         Decoupled from :meth:`_ensure_permission_hooks` so callers that
-        need the category map filled *before* the first LLM turn — most
+        need the registry filled *before* the first LLM turn — most
         importantly :func:`apply_proxy_tools`, which inspects the
         registry to honour the ``_FS_DEPENDENT_NODES`` exclusion — can
         trigger it eagerly. Safe to call multiple times because
@@ -3085,9 +3365,10 @@ class AgenticNode(Node):
         a ``permission_manager`` and never builds ``PermissionHooks``.
         """
         try:
-            for category, tools in self._tool_category_map().items():
-                if tools:
-                    self.tool_registry.register_tools(category, tools)
+            for group in self._iter_tool_groups():
+                names = self._tool_group_names(group)
+                if names:
+                    self.tool_registry.register_tools(group.permission_category, names)
         except Exception:
             logger.debug(
                 "Failed to populate tool_registry for %s; falling back to lazy registration.",

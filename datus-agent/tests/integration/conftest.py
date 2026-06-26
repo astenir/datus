@@ -131,7 +131,7 @@ def pytest_collection_modifyitems(items):
     """Automatically mark all tests under integration/ with the 'integration' marker.
 
     Also reorder gen_* agent tests to respect logical dependencies:
-    semantic_model → metrics → ext_knowledge
+    semantic_model → metrics
     (metrics reference measures defined in semantic models)
     """
     for item in items:
@@ -142,7 +142,6 @@ def pytest_collection_modifyitems(items):
     gen_test_order = {
         "test_gen_semantic_model_agentic": 0,
         "test_gen_metrics_agentic": 1,
-        "test_gen_ext_knowledge_agentic": 2,
     }
 
     gen_items = [(i, item) for i, item in enumerate(items) if item.fspath.purebasename in gen_test_order]
@@ -240,15 +239,18 @@ NIGHTLY_SUB_AGENT_NAMES = ["nightly_test", "nightly_n7_test"]
 
 
 @pytest.fixture
-def nightly_agent_config() -> AgentConfig:
+def nightly_agent_config(tmp_path) -> AgentConfig:
     """Load acceptance config for nightly sub-agent tests.
 
     Function-scoped with deepcopy of agentic_nodes to prevent test mutations
-    from leaking into the configuration_manager cache.
+    from leaking into the configuration_manager cache. The SQLite benchmark
+    datasource is also function-scoped so adapters that create support tables
+    cannot mutate the shared ``~/benchmark`` fixture.
     """
-    from tests.conftest import load_acceptance_config
+    from tests.conftest import isolate_bird_sqlite_databases, load_acceptance_config
 
     config = load_acceptance_config(datasource="bird_school")
+    isolate_bird_sqlite_databases(config, tmp_path, ("california_schools",))
     config.rag_base_path = "tests/data"
     config.agentic_nodes = copy.deepcopy(config.agentic_nodes)
     return config
@@ -264,11 +266,18 @@ def cleanup_sub_agent_data(nightly_agent_config):
     after each test run.
     """
 
+    # Confine deletions to the test data tree so a misconfigured/empty
+    # rag_base_path can never resolve rmtree onto real user data.
+    safe_base = (TESTS_ROOT / "data").resolve()
+
     def _cleanup():
         for name in NIGHTLY_SUB_AGENT_NAMES:
-            sub_agent_dir = Path(nightly_agent_config.rag_base_path) / "sub_agents" / name
+            sub_agent_dir = (Path(nightly_agent_config.rag_base_path) / "sub_agents" / name).resolve()
+            if safe_base not in sub_agent_dir.parents:
+                pytest.fail(f"Refusing to rmtree outside test data tree: {sub_agent_dir}")
             if sub_agent_dir.exists():
-                shutil.rmtree(sub_agent_dir, ignore_errors=True)
+                # safe: dir is asserted under TESTS_ROOT/data above
+                shutil.rmtree(sub_agent_dir, ignore_errors=True)  # audit-noqa: rmtree_outside_tmp
 
     _cleanup()
     yield

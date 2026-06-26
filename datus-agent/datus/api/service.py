@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from datus.agent.agent import Agent
 from datus.api.auth import load_auth_provider
 from datus.api.deps import init_deps
+from datus.api.services.background_drain import drain_background_tasks
 from datus.api.services.datus_service_cache import DatusServiceCache
 from datus.configuration.agent_config_loader import load_agent_config, parse_config_path
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
@@ -116,6 +117,7 @@ class DatusAPIService:
 
         return SqlTask(
             id=task_id,
+            datasource=request.datasource,
             task=request.task,
             catalog_name=request.catalog_name or "",
             database_name=request.database_name or "default",
@@ -438,10 +440,23 @@ async def lifespan(app: FastAPI):
         stream_thinking=getattr(args, "stream_thinking", False),
     )
 
+    # Install a SIGUSR1 handler so operators can dump async task stacks from a
+    # running (possibly daemonised) server: ``kill -USR1 <pid>`` writes the
+    # snapshot to the log. Useful when a request hangs on an interaction that
+    # never resolves — the loop is alive but a coroutine is parked.
+    from datus.utils.async_debug import install_task_dump_signal_handler
+
+    install_task_dump_signal_handler()
+
     logger.info("Datus API Service started")
-    yield
-    # Shutdown
-    logger.info("Datus API Service shutting down")
+    try:
+        yield
+    finally:
+        logger.info("Datus API Service shutting down")
+        try:
+            await drain_background_tasks()
+        finally:
+            await service_cache.shutdown()
 
 
 def create_app(agent_args: argparse.Namespace) -> FastAPI:

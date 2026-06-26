@@ -97,19 +97,27 @@ Before generating metrics, verify that semantic models exist for all involved ta
 - Restrict filesystem reads/writes/reuse to `{{ kind_subdir }}/...`. Do not read, reuse, edit, or sync YAML files from sibling datasource directories; they are outside the active `{{ current_datasource }}` MetricFlow adapter scope.
 - Preserve final business output expressions as metric candidates.
 - Parse aggregations (SUM, COUNT, AVG, etc.) → dependency measures
+- Support aggregations that only feed another final KPI should be added/reused as semantic-model measures, not published as separate top-level metrics unless the user question or candidate plan identifies them as final KPIs.
+- Treat `support_measure_candidates` as dependency or comparison measures only. Do not publish a `metric:` block for them; add/reuse the measure only when another generated metric needs it.
+- Treat `llm_review_candidates` as possible metric evidence, not confirmed metrics. For each item, decide whether the row-level or ambiguous expression should be lifted into a reusable MetricFlow metric. Generate it only when the SQL, table/column semantics, and user question support that lift; otherwise record it as query-only/detail evidence and do not create a metric.
+- For candidates with `equivalence: "lifted"` or `requires_validation: true`, do not assume exact equivalence to the historical SQL. Prefer a semantically correct aggregate metric such as `SUM(numerator) / SUM(denominator)` only when that lift is business-valid; otherwise skip the metric.
 - Parse GROUP BY → dimensions
 - Deduplicate only the underlying measure definition when the aggregation/expression is identical
 - Preserve separate metrics when filters or business semantics differ (e.g., paid revenue vs refunded revenue)
 - Treat filter-only/detail SQL as filter, segment, dimension, or view evidence instead of a metric.
 - For filtered metrics, prefer adding a conditional measure to the semantic model, then write a `measure_proxy` metric that references that measure by name
 - If the tool returns `query_classification: "metric_plus_derived_datasource"` or non-empty `derived_datasource_recommendations`, do NOT generate direct metrics from `blocked_direct_metric_candidates`. First create the recommended `sql_query` data source or materialized view, then define final metrics on that derived data source.
-- If a candidate has `requires_name_translation: true`, treat its `name` as a technical fallback only. Also inspect every `source_alias`: when the alias appears generated or lacks business meaning, do not use it as the final MetricFlow name. In interactive mode, ask the user to confirm if the business meaning is unclear; in batch/bootstrap mode, infer a clear English snake_case name from the SQL expression, question, table/column context, and external knowledge without stopping.
+- If a candidate has `requires_name_translation: true`, treat its `name` as a technical fallback only. Also inspect every `source_alias`: when the alias appears generated or lacks business meaning, do not use it as the final MetricFlow name. In interactive mode, ask the user to confirm if the business meaning is unclear; in batch/bootstrap mode, infer a clear English snake_case name from the SQL expression, question, and table/column context without stopping.
 - Preserve SQL literal values from `literal_mappings` exactly inside `sql_query`, CASE, WHERE, and filter expressions. MetricFlow object names may be normalized, but string literal values must not be translated or renamed.
 - Preserve output time grain from `time_grain_evidence`. If SQL projects a day-grain field such as `CURDATE() AS part_dt` or `DATE(create_time) AS part_dt`, expose the same day-grain time dimension instead of using raw `create_time` as the primary time dimension.
 - Define `type: TIME` only for physical DATE/TIME/TIMESTAMP columns or expressions / `sql_query` aliases guaranteed to return DATE/TIME/TIMESTAMP values. Do not use numeric surrogate keys such as `*_date_sk`, `*_date_key`, `*_dt_key`, or integer YYYYMMDD keys as TIME dimensions; join/convert to a real date first.
 - Preserve `post_aggregation_constraints` such as HAVING clauses as query constraints, metric usage notes, or later derived data sources. Do not silently drop them or push them into base measures.
 - Treat `derived_metric_candidates` as second-stage metrics over existing or newly generated metrics. Generate non-derived metrics first, validate, refresh `list_metrics`, then generate derived metrics only when every referenced metric exists.
+- For period-over-period SQL that projects both a prior-period value and a delta/rate, generate both derived metrics. The prior-period value metric should use the shifted input alias as its `expr` (for example `{metric_name}_previous_period`), and the delta/rate metric should reference both the current metric and shifted input alias (for example `{metric_name}_period_delta`).
+- Materialize EVERY `derived_metric_candidates` entry whose inputs carry `offset_window`, including previous-period identity candidates whose `expr` is just the shifted input alias (for example `previous_month_{metric_name}`). A delta metric that references the same shifted alias does NOT replace the identity metric — publish both. The bootstrap host verifies offset candidate completeness after all batches and re-runs generation for anything missing.
+- Use the candidate's `name` exactly as the published metric name. When a candidate lists `equivalent_names`, those are acceptable aliases for the same metric — publish ONE metric (prefer the candidate `name`), never one per alias.
 - Treat `identity_metric_references` as evidence that the SQL selected an existing metric without a new formula. Do not generate a new metric for those references.
+- Natural-language fields in the candidate plan (`question`, `name`, `summary`, or `source_context`) are naming and business-meaning evidence only. They should never override the SQL expression structure or turn a detail query into a metric by themselves.
 
 **For natural language input:**
 - Identify metric type: simple counting+filter, aggregation+filter, ratio, expr, derived, or cumulative
@@ -138,7 +146,7 @@ Skip any metric that already exists — do NOT update or overwrite.
 
 ### Step 5: Write, Validate, and Dry-Run
 
-**File paths**: All `write_file` / `edit_file` / `read_file` calls — and the `metric_file` / `semantic_model_file` arguments to `end_metric_generation` — should include the `{{ kind_subdir }}/` prefix:
+**File paths**: All `write_file` / `edit_file` / `read_file` calls — and the `metric_file` / `semantic_model_files` arguments to `end_metric_generation` — should include the `{{ kind_subdir }}/` prefix:
   - Semantic model: `{{ kind_subdir }}/{table_name}.yml`
   - Metric file: `{{ kind_subdir }}/metrics/{table_name}_metrics.yml`
   Bare filenames are silently normalized by the host but the prefixed form is preferred so subsequent reads use the same path. Absolute paths are also tolerated.
@@ -146,7 +154,7 @@ Skip any metric that already exists — do NOT update or overwrite.
 
 1. **Write files**: Use `write_file` to save metric YAML (and semantic model if newly created)
 2. **Validate (MUST PASS)**: Use `validate_semantic` — if validation fails, fix errors with `edit_file` and retry until it **passes**. Do NOT proceed to Step 6 until validation passes.
-3. **Dry-run SQL**: Use `query_metrics(metrics=["metric_name"], dry_run=True)` to generate SQL. If the source SQL groups by dimensions or a time grain, also dry-run the generated metric set with matching `dimensions` / `time_granularity` from that source query. Use `get_dimensions` to find the exact generated dimension names; if a grouped source dimension cannot be queried, fix the semantic model joins/dimensions and retry.
+3. **Dry-run SQL**: Use `query_metrics(metrics=["metric_name"], dry_run=True)` to generate SQL. If the source SQL groups by dimensions or a time grain, also dry-run the generated metric set with matching `dimensions` / `time_granularity` from that source query. For a source SQL with multiple output metrics, either dry-run all corresponding generated metrics together with the same grouped dimensions/time grain, or dry-run each generated metric separately with those same grouped arguments. Use `get_dimensions` to find the exact generated dimension names; if a grouped source dimension cannot be queried, fix the semantic model joins/dimensions and retry.
 
 Collect each generated SQL into `metric_sqls_json`.
 
@@ -160,7 +168,7 @@ Review each generated metric yourself:
 ### Step 7: Batch Sync to Knowledge Base
 
 After all generated metrics pass validation and dry-run SQL:
-- You MUST call `end_metric_generation(metric_file, semantic_model_file, metric_sqls_json)` ONCE to sync them to Knowledge Base and catch publish errors while you can still fix files
+- You MUST call `end_metric_generation(metric_file, semantic_model_files, metric_sqls_json)` ONCE to sync them to Knowledge Base and catch publish errors while you can still fix files
 - Do not rely on the final JSON host fallback. The host fallback is only a last-resort guard when the tool call was accidentally missed.
 - If no metrics were generated, do NOT call `end_metric_generation`
 
@@ -175,14 +183,14 @@ After all generated metrics pass validation and dry-run SQL:
 
 ```json
 {
-  "semantic_model_file": "{{ kind_subdir }}/{table_name}.yml",
+  "semantic_model_files": ["{{ kind_subdir }}/{table_name}.yml"],
   "metric_file": "{{ kind_subdir }}/metrics/{table_name}_metrics.yml",
   "status": "generated",
   "output": "markdown summary of the metric definition"
 }
 ```
 
-- `semantic_model_file`: Path using the semantic model prefix, e.g. `"{{ kind_subdir }}/users.yml"`
+- `semantic_model_files`: List of paths using the semantic model prefix, e.g. `["{{ kind_subdir }}/users.yml"]`; use an empty array when no semantic model file was changed
 - `metric_file`: Path using the semantic model prefix, e.g. `"{{ kind_subdir }}/metrics/users_metrics.yml"`
 - `status`: One of `"generated"` (at least one new metric was created and synced via `end_metric_generation`) or `"skipped"` (every requested metric already existed and was skipped per Step 4 — set `metric_file` to `null` in this case).
 - `output`: Brief summary message
@@ -191,7 +199,7 @@ After all generated metrics pass validation and dry-run SQL:
 If every requested metric already exists, return:
 ```json
 {
-  "semantic_model_file": null,
+  "semantic_model_files": [],
   "metric_file": null,
   "status": "skipped",
   "output": "All requested metrics already exist; no new metric was generated."
@@ -331,13 +339,40 @@ metric:
     metrics:
       - name: metric_a
         # Optional: period-over-period comparison
+        alias: metric_a_prev
         offset_window: 1 week    # compare to 1 week ago (WoW)
       - name: metric_b
         offset_to_grain: month   # compare to start of current month (MTD)
-    expr: "{expression}"  # e.g. "metric_a / metric_b"
+    expr: "{expression}"  # e.g. "metric_a / metric_a_prev"
   locked_metadata:
     tags:
       - "subject_tree: {domain}/{layer1}/{layer2}"
+```
+
+Period-over-period example — a MoM SQL like `LAG(metric_a) OVER (ORDER BY month) AS previous_month_metric_a` yields TWO derived metrics, an identity metric for the prior-period value (named after the SQL alias) and a delta metric:
+```yaml
+metric:
+  name: previous_month_metric_a
+  description: "{metric_a description} of the previous month"
+  type: derived
+  type_params:
+    metrics:
+      - name: metric_a
+        alias: previous_month_metric_a
+        offset_window: 1 month
+    expr: "previous_month_metric_a"
+---
+metric:
+  name: metric_a_mom_delta
+  description: "Month-over-month {metric_a description} delta"
+  type: derived
+  type_params:
+    metrics:
+      - name: metric_a
+      - name: metric_a
+        alias: previous_month_metric_a
+        offset_window: 1 month
+    expr: "metric_a - previous_month_metric_a"
 ```
 
 **cumulative** (running total over time):
@@ -362,11 +397,11 @@ metric:
 {% else %}1. **Proceed carefully**: If required input is missing or ambiguous, stop and explain what information is needed.
 {% endif %}
 2. **Skill-first**: Always check for and load matching skills before proceeding
-3. **Preserve final output expressions**: Historical SQL aliases and final SELECT expressions are metric candidates; base measures are dependencies
+3. **Preserve final output expressions**: Historical SQL aliases and final SELECT expressions are metric candidates; base measures are dependencies, not automatically separate metrics
 4. **COUNT requires `expr: "1"`**: Never use `expr: {column}` with `agg: COUNT`
 5. **Primary time dimension correctness**: Every metric data_source needs one primary `type: TIME` dimension when a reliable DATE/TIME/TIMESTAMP column or expression exists. Do not force a primary TIME dimension from numeric surrogate keys; use a `sql_query` join to a date dimension or an explicit date conversion first.
 6. **Validate**: Always validate before completing
-7. **Generate SQL**: Use `query_metrics(dry_run=True)` to get SQL for each metric
+7. **Generate SQL**: Use `query_metrics(dry_run=True)` to get SQL for each metric; for grouped source SQL, include matching dimensions/time grain in dry-runs before syncing
 8. **Complete**: You MUST call `end_metric_generation` with `metric_sqls_json` after validation and dry-run pass; final JSON `metric_file` is only a last-resort fallback
 9. **YAML String Quoting**: ALWAYS wrap `description` values in double quotes. Escape special characters: `"` → `\"`, `\` → `\\`
 10. **Snapshot data**: Use `non_additive_dimension` for balance/inventory/point-in-time measures

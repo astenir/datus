@@ -11,7 +11,6 @@ Main entry point for the CLI application.
 import argparse
 
 from datus import __version__
-from datus.cli.repl import DatusCLI
 from datus.utils.async_utils import setup_windows_policy
 from datus.utils.constants import DBType
 from datus.utils.exceptions import DatusException, ErrorCode
@@ -23,7 +22,13 @@ logger = get_logger(__name__)
 class ArgumentParser:
     def __init__(self):
         self.parser = argparse.ArgumentParser(
-            description="Datus: Data engineering agent builds evolvable context for your data system"
+            description="Datus: Data engineering agent builds evolvable context for your data system",
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+            epilog=(
+                "subcommands:\n"
+                "  upgrade            Upgrade datus-agent and installed datus-* packages to the latest release\n"
+                "  upgrade --check    Report the latest version without installing"
+            ),
         )
         self._setup_arguments()
 
@@ -37,7 +42,8 @@ class ArgumentParser:
             dest="db_type",
             choices=[DBType.SQLITE, "snowflake", DBType.DUCKDB],
             default=DBType.SQLITE,
-            help="Database type to connect to",
+            metavar="DB_TYPE",
+            help="Database type to connect to (%(choices)s)",
         )
         self.parser.add_argument(
             "--db_path", dest="db_path", type=str, help="Path to database file (for SQLite/DuckDB)"
@@ -197,6 +203,25 @@ class ArgumentParser:
             help="Enable streaming thinking deltas in print mode (token-by-token output)",
         )
 
+        self.parser.add_argument(
+            "--orchestrator-tools",
+            dest="orchestrator_tools",
+            action="store_true",
+            default=False,
+            help="Expose orchestrator issue lifecycle tools in print mode",
+        )
+
+        self.parser.add_argument(
+            "--plan-mode",
+            dest="plan_mode",
+            action="store_true",
+            default=False,
+            help=(
+                "Enable plan mode in print mode: the agent writes a plan first, the plan is "
+                "auto-confirmed (no interactive approval), then executed in the same run"
+            ),
+        )
+
     def parse_args(self):
         return self.parser.parse_args()
 
@@ -226,6 +251,12 @@ class Application:
         if args.proxy_tools and args.print_mode is None:
             self.arg_parser.parser.error("--proxy_tools requires --print mode")
 
+        if getattr(args, "orchestrator_tools", False) and args.print_mode is None:
+            self.arg_parser.parser.error("--orchestrator-tools requires --print mode")
+
+        if getattr(args, "plan_mode", False) and args.print_mode is None:
+            self.arg_parser.parser.error("--plan-mode requires --print mode (use Shift+Tab in the REPL)")
+
         if args.print_mode is not None:
             from datus.cli.print_mode import PrintModeRunner
 
@@ -233,6 +264,10 @@ class Application:
         elif args.web:
             self._run_web_interface(args)
         else:
+            # Import lazily so the 'upgrade' interceptor in main() can run even
+            # when datus.cli.repl is broken (the whole point of self-upgrade).
+            from datus.cli.repl import DatusCLI
+
             cli = DatusCLI(args)
             cli.run()
 
@@ -494,6 +529,15 @@ def main():
     """Entry point for console scripts"""
     import signal
     import sys
+
+    # Intercept 'upgrade' subcommand: self-upgrade datus-agent and the installed
+    # datus-* adapter packages. Handled before the REPL is built so it works even
+    # when the installed CLI is otherwise broken.
+    if len(sys.argv) > 1 and sys.argv[1] == "upgrade":
+        from datus.cli.upgrade_cli import run_upgrade_command
+
+        configure_logging(False, console_output=False)
+        sys.exit(run_upgrade_command(sys.argv[2:]))
 
     # Intercept 'skill' subcommand and delegate to datus.main's skill handler
     if len(sys.argv) > 1 and sys.argv[1] == "skill":

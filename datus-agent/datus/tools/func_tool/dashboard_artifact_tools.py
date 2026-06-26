@@ -436,6 +436,8 @@ class DashboardArtifactTools:
        every ``params`` literal's keys match the template's declaration.
     """
 
+    permission_category: str = "artifact_tools"
+
     def __init__(
         self,
         *,
@@ -727,7 +729,7 @@ class DashboardArtifactTools:
                 month-over-month, justifying drilldown"). Required and
                 non-empty.
             uses: Optional ``{"metrics": [{"path": [...], "name": "..."}],
-                "reference_sql": [...], "ext_knowledge": [...]}``. Each
+                "reference_sql": [...]}``. Each
                 bucket lists subject-library assets this template draws on,
                 identified by their ``path`` + ``name`` pair (the same two
                 fields ``list_metrics`` / ``search_metrics`` /

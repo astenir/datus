@@ -71,7 +71,6 @@ class TestGenTableAgenticNodeInit:
         assert "list_tables" in tool_names
         assert "describe_table" in tool_names
         assert "read_query" in tool_names
-        assert "get_table_ddl" in tool_names
 
     def test_setup_tools_includes_filesystem_tools(self, real_agent_config, mock_llm_create):
         """gen_table node should include filesystem tools for SQL artifact handling."""
@@ -96,7 +95,7 @@ class TestGenTableAgenticNodeInit:
         original = real_agent_config.agentic_nodes.pop("gen_table", None)
         try:
             node = GenTableAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
-            assert node.max_turns == 20
+            assert node.max_turns == 50
         finally:
             if original is not None:
                 real_agent_config.agentic_nodes["gen_table"] = original
@@ -107,17 +106,17 @@ class TestGenTableAgenticNodeInit:
         node = GenTableAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
         assert node.execution_mode == "workflow"
 
-    def test_tool_category_map_buckets_db_and_filesystem(self, real_agent_config, mock_llm_create):
+    def test_tool_registry_buckets_db_and_filesystem(self, real_agent_config, mock_llm_create):
         """DB helpers (incl. ``execute_ddl``) land in ``db_tools`` and FS tools
         in ``filesystem_tools`` so profile rules gate them correctly."""
         from datus.agent.node.gen_table_agentic_node import GenTableAgenticNode
 
         node = GenTableAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
-        mapping = node._tool_category_map()
-        db_names = {t.name for t in mapping.get("db_tools", [])}
-        assert "execute_ddl" in db_names
-        assert "read_query" in db_names
-        assert "filesystem_tools" in mapping
+        node._populate_tool_registry()
+        registry = node.tool_registry.to_dict()
+        assert registry.get("execute_ddl") == "db_tools"
+        assert registry.get("read_query") == "db_tools"
+        assert registry.get("write_file") == "filesystem_tools"
 
     def test_interactive_mode(self, real_agent_config, mock_llm_create):
         from datus.agent.node.gen_table_agentic_node import GenTableAgenticNode

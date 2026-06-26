@@ -1,5 +1,7 @@
+import csv
 from datetime import date
 from decimal import Decimal
+from io import StringIO
 from typing import Dict, List
 from unittest.mock import patch
 
@@ -92,6 +94,19 @@ def test_compress_mock():
     assert "user_id" in result_large["compressed_data"]
 
 
+def test_compressed_csv_quotes_values_with_commas():
+    data = [{"month": "2025-04-01", "ac_channel": f"1,{i}", "activity_count": i} for i in range(25)]
+
+    result = DataCompressor(model_name="gpt-3.5-turbo", token_threshold=1024, output_format="csv").compress(data)
+
+    assert result["is_compressed"] is True
+    rows = list(csv.DictReader(StringIO(result["compressed_data"])))
+    assert rows[0]["ac_channel"] == "1,0"
+    assert rows[9]["ac_channel"] == "1,9"
+    assert rows[10]["month"] == "..."
+    assert rows[-1]["ac_channel"] == "1,24"
+
+
 @pytest.fixture
 def agent_config():
     return load_acceptance_config()
@@ -101,7 +116,7 @@ def agent_config():
 def db_manager(agent_config: AgentConfig) -> DBManager:
     # Only pass sqlite/duckdb databases to avoid connector-not-installed errors
     sqlite_dbs = {
-        name: {name: cfg} for name, cfg in agent_config.services.datasources.items() if cfg.type in ("sqlite", "duckdb")
+        name: cfg for name, cfg in agent_config.services.datasources.items() if cfg.type in ("sqlite", "duckdb")
     }
     return db_manager_instance(sqlite_dbs)
 
@@ -126,7 +141,7 @@ ORDER BY
         ELSE 4
     END,
     name;"""
-    connector: BaseSqlConnector = db_manager.get_conn("card_games", "card_games")
+    connector: BaseSqlConnector = db_manager.get_conn("bird_sqlite", "card_games")
     tool = DBFuncTool(connector)
     result = tool.read_query(sql)
 

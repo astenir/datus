@@ -197,24 +197,24 @@ class TestGetAvailableTypes:
 @pytest.mark.ci
 class TestResolveNodeType:
     def test_gen_sql_with_config(self, task_tool):
-        """gen_sql resolves to TYPE_GENSQL using config key."""
+        """gen_sql resolves to TYPE_GEN_SQL using config key."""
         node_type, node_name = task_tool._resolve_node_type("gen_sql")
-        assert node_type == NodeType.TYPE_GENSQL
+        assert node_type == NodeType.TYPE_GEN_SQL
         assert node_name == "gen_sql"
 
     def test_gen_sql_without_config(self):
-        """gen_sql falls back to TYPE_GENSQL with default name."""
+        """gen_sql falls back to TYPE_GEN_SQL with default name."""
         config = Mock(spec=AgentConfig)
         config.agentic_nodes = {}
         tool = SubAgentTaskTool(agent_config=config)
         node_type, node_name = tool._resolve_node_type("gen_sql")
-        assert node_type == NodeType.TYPE_GENSQL
+        assert node_type == NodeType.TYPE_GEN_SQL
         assert node_name == "gen_sql"
 
     def test_custom_type_gen_sql_class(self, task_tool):
-        """Custom type with node_class=gen_sql maps to TYPE_GENSQL."""
+        """Custom type with node_class=gen_sql maps to TYPE_GEN_SQL."""
         node_type, node_name = task_tool._resolve_node_type("sales_analyst")
-        assert node_type == NodeType.TYPE_GENSQL
+        assert node_type == NodeType.TYPE_GEN_SQL
         assert node_name == "sales_analyst"
 
     def test_unknown_type_raises(self, task_tool):
@@ -235,6 +235,12 @@ class TestResolveNodeType:
         assert node_name == "gen_visual_report"
         assert NODE_CLASS_MAP["gen_visual_report"] == NodeType.TYPE_GEN_VISUAL_REPORT
         assert "gen_visual_report" in BUILTIN_SUBAGENT_DESCRIPTIONS
+
+    def test_ask_metrics_resolves(self, task_tool):
+        node_type, node_name = task_tool._resolve_node_type("ask_metrics")
+
+        assert node_type == NodeType.TYPE_ASK_METRICS
+        assert node_name == "ask_metrics"
 
     def test_gen_visual_report_constructs_and_builds_input(self, task_tool, tmp_path):
         """Mirror of ``test_gen_visual_dashboard_constructs_and_builds_input``
@@ -263,7 +269,9 @@ class TestResolveNodeType:
             f"input builder returned wrong type: {type(node_input).__name__}"
         )
         assert node_input.user_message == prompt
-        assert node_input.database == "test_db"
+        # The ``database`` context field denotes a physical database, not a datasource, so the
+        # builder must not stuff the datasource name ("test_db") into it; it stays unset.
+        assert node_input.database is None
 
     def test_gen_visual_report_rejects_session_id(self, task_tool):
         """gen_visual_report has the same no-resume contract as
@@ -330,9 +338,9 @@ class TestResolveNodeType:
             f"input builder returned wrong type: {type(node_input).__name__}"
         )
         assert node_input.user_message == prompt
-        # ``database`` is sourced from ``agent_config.current_datasource``
-        # which the fixture pins to "test_db".
-        assert node_input.database == "test_db"
+        # ``database`` denotes a physical database, not a datasource, so the builder leaves it
+        # unset rather than stuffing in ``current_datasource`` ("test_db").
+        assert node_input.database is None
 
     def test_gen_visual_dashboard_rejects_session_id(self, task_tool):
         """``_create_builtin_node`` for gen_visual_dashboard MUST fail
@@ -399,7 +407,7 @@ class TestResolveNodeType:
         parent = MagicMock()
         parent.get_node_name.return_value = "sales_analyst"
         task_tool._parent_node = parent
-        # 'sales_analyst' is a custom subagent → has_memory() is True → inherit
+        # custom parent owns its own memory node → child inherits it
         assert task_tool._resolve_inherited_memory_node("gen_sql") == "sales_analyst"
 
     def test_resolve_inherited_memory_returns_none_for_feedback(self, task_tool):
@@ -409,24 +417,25 @@ class TestResolveNodeType:
         task_tool._parent_node = parent
         assert task_tool._resolve_inherited_memory_node("feedback") is None
 
-    def test_resolve_inherited_memory_returns_none_for_custom_child(self, task_tool):
-        """Custom subagents already have their own memory and should not be overridden."""
+    def test_resolve_inherited_memory_custom_child_inherits_parent(self, task_tool):
+        """Every sub-agent (including custom ones) inlines the parent's memory
+        read-only when run via task — sub-agents never write memory."""
         parent = MagicMock()
         parent.get_node_name.return_value = "chat"
         task_tool._parent_node = parent
-        # 'sales_analyst' is a custom subagent (not in built-in set) → has_memory=True
-        assert task_tool._resolve_inherited_memory_node("sales_analyst") is None
+        assert task_tool._resolve_inherited_memory_node("sales_analyst") == "chat"
 
     def test_resolve_inherited_memory_returns_none_when_no_parent(self, task_tool):
         task_tool._parent_node = None
         assert task_tool._resolve_inherited_memory_node("gen_sql") is None
 
-    def test_resolve_inherited_memory_returns_none_when_parent_has_no_memory(self, task_tool):
-        """Defensive: if parent itself is a no-memory built-in, do not propagate."""
+    def test_resolve_inherited_memory_resolves_builtin_parent_to_chat(self, task_tool):
+        """A built-in parent owns no memory of its own — as a main agent it uses
+        the shared ``chat`` memory, so its sub-agents inherit ``chat``."""
         parent = MagicMock()
-        parent.get_node_name.return_value = "gen_report"  # built-in, no memory
+        parent.get_node_name.return_value = "gen_report"
         task_tool._parent_node = parent
-        assert task_tool._resolve_inherited_memory_node("gen_sql") is None
+        assert task_tool._resolve_inherited_memory_node("gen_sql") == "chat"
 
     def test_resolve_inherited_memory_swallows_parent_exceptions(self, task_tool):
         """If the parent's get_node_name() raises, fall back to no inheritance."""
@@ -438,12 +447,12 @@ class TestResolveNodeType:
     def test_node_class_map_coverage(self):
         """NODE_CLASS_MAP contains exactly the expected key→NodeType mappings."""
         expected_map = {
-            "gen_sql": NodeType.TYPE_GENSQL,
+            "gen_sql": NodeType.TYPE_GEN_SQL,
             "chat": NodeType.TYPE_CHAT,
+            "ask_metrics": NodeType.TYPE_ASK_METRICS,
             "gen_report": NodeType.TYPE_GEN_REPORT,
             "gen_visual_report": NodeType.TYPE_GEN_VISUAL_REPORT,
             "gen_visual_dashboard": NodeType.TYPE_GEN_VISUAL_DASHBOARD,
-            "ext_knowledge": NodeType.TYPE_EXT_KNOWLEDGE,
             "semantic": NodeType.TYPE_SEMANTIC,
             "sql_summary": NodeType.TYPE_SQL_SUMMARY,
             "explore": NodeType.TYPE_EXPLORE,
@@ -519,6 +528,14 @@ class TestBuildTaskDescription:
         assert "migration" in haystack
         assert "cross-database migration" in haystack
 
+    def test_gen_report_description_is_explicit_only(self, task_tool):
+        """The task tool must not advertise gen_report as automatic root-cause routing."""
+        desc = task_tool._build_task_description()
+        assert "Legacy Markdown report subagent" in desc
+        assert "Use only when the user explicitly asks to use the gen_report subagent" in desc
+        assert "do not automatically route attribution" in desc
+        assert "Use when the question involves metric attribution" not in desc
+
 
 # ── node creation (fresh per invocation) ──────────────────────────
 
@@ -555,13 +572,24 @@ class TestBuildNodeInput:
 
         # Create a mock that is an instance of GenSQLAgenticNode
         mock_node = Mock(spec=GenSQLAgenticNode)
-        mock_node.type = NodeType.TYPE_GENSQL
+        mock_node.type = NodeType.TYPE_GEN_SQL
 
         result = task_tool._build_node_input(mock_node, "Show all users")
 
         assert isinstance(result, GenSQLNodeInput)
         assert result.user_message == "Show all users"
-        assert result.database == "test_db"
+        assert result.database is None
+
+    def test_ask_metrics_node_input(self, task_tool):
+        from datus.agent.node.ask_metrics_agentic_node import AskMetricsAgenticNode
+        from datus.schemas.ask_metrics_agentic_node_models import AskMetricsNodeInput
+
+        mock_node = Mock(spec=AskMetricsAgenticNode)
+        result = task_tool._build_node_input(mock_node, "Show revenue by month")
+
+        assert isinstance(result, AskMetricsNodeInput)
+        assert result.user_message == "Show revenue by month"
+        assert result.database is None
 
 
 # ── _convert_to_func_result ───────────────────────────────────────
@@ -603,6 +631,19 @@ class TestConvertToFuncResult:
         result = task_tool._convert_to_func_result(output)
         assert result.success == 1
         assert result.result["response"] == "Some content"
+
+    def test_markdown_report_result(self, task_tool):
+        output = {"response": "Metric answer", "markdown_report": "## Metric answer", "tokens_used": 25}
+
+        result = task_tool._convert_to_func_result(output, session_id="ask-metrics-session")
+
+        assert result.success == 1
+        assert result.result == {
+            "response": "Metric answer",
+            "markdown_report": "## Metric answer",
+            "tokens_used": 25,
+            "session_id": "ask-metrics-session",
+        }
 
     def test_visual_dashboard_result_preserves_documented_fields(self, task_tool):
         """``GenVisualDashboardNodeResult.model_dump()`` carries
@@ -690,7 +731,7 @@ class TestSubAgentTaskAcceptance:
 
         assert "sales_analyst" in task_tool._get_available_types()
         node_type, node_name = task_tool._resolve_node_type("sales_analyst")
-        assert node_type == NodeType.TYPE_GENSQL
+        assert node_type == NodeType.TYPE_GEN_SQL
         assert node_name == "sales_analyst"
 
         effective = task_tool._resolve_effective_sub_agent_config("sales_analyst")
@@ -706,7 +747,7 @@ class TestSubAgentTaskAcceptance:
             "success": True,
         }
         mock_node = Mock(spec=GenSQLAgenticNode)
-        mock_node.type = NodeType.TYPE_GENSQL
+        mock_node.type = NodeType.TYPE_GEN_SQL
         mock_node.session_id = "sales_session_1"
 
         async def mock_stream(ahm):
@@ -722,7 +763,7 @@ class TestSubAgentTaskAcceptance:
         assert result.result["sql"] == "SELECT SUM(amount) FROM sales"
         create_node.assert_called_once_with("sales_analyst", session_id=None)
         assert mock_node.input.user_message == "Summarize sales"
-        assert mock_node.input.database == "test_db"
+        assert mock_node.input.database is None
 
 
 # ── task execution ─────────────────────────────────────────────────
@@ -1344,15 +1385,15 @@ class TestResolveNodeTypeBuiltIn:
         assert node_type == NodeType.TYPE_SQL_SUMMARY
         assert node_name == "gen_sql_summary"
 
-    def test_gen_ext_knowledge(self, task_tool):
-        node_type, node_name = task_tool._resolve_node_type("gen_ext_knowledge")
-        assert node_type == NodeType.TYPE_EXT_KNOWLEDGE
-        assert node_name == "gen_ext_knowledge"
-
     def test_gen_table(self, task_tool):
         node_type, node_name = task_tool._resolve_node_type("gen_table")
         assert node_type == NodeType.TYPE_GEN_TABLE
         assert node_name == "gen_table"
+
+    def test_ask_metrics(self, task_tool):
+        node_type, node_name = task_tool._resolve_node_type("ask_metrics")
+        assert node_type == NodeType.TYPE_ASK_METRICS
+        assert node_name == "ask_metrics"
 
 
 # ── Built-in subagent: _create_builtin_node ────────────────────────
@@ -1385,17 +1426,6 @@ class TestCreateBuiltinNode:
         task_tool._create_builtin_node("gen_sql_summary")
         mock_init.assert_called_once_with(
             node_name="gen_sql_summary",
-            agent_config=task_tool.agent_config,
-            execution_mode="interactive",
-            is_subagent=True,
-            session_id=None,
-        )
-
-    @patch("datus.agent.node.gen_ext_knowledge_agentic_node.GenExtKnowledgeAgenticNode.__init__", return_value=None)
-    def test_gen_ext_knowledge(self, mock_init, task_tool):
-        task_tool._create_builtin_node("gen_ext_knowledge")
-        mock_init.assert_called_once_with(
-            node_name="gen_ext_knowledge",
             agent_config=task_tool.agent_config,
             execution_mode="interactive",
             is_subagent=True,
@@ -1522,10 +1552,6 @@ class TestBuiltinNodeInheritsExecutionMode:
             ),
             ("gen_metrics", "datus.agent.node.gen_metrics_agentic_node.GenMetricsAgenticNode.__init__"),
             ("gen_sql_summary", "datus.agent.node.sql_summary_agentic_node.SqlSummaryAgenticNode.__init__"),
-            (
-                "gen_ext_knowledge",
-                "datus.agent.node.gen_ext_knowledge_agentic_node.GenExtKnowledgeAgenticNode.__init__",
-            ),
             ("gen_table", "datus.agent.node.gen_table_agentic_node.GenTableAgenticNode.__init__"),
             ("gen_dashboard", "datus.agent.node.gen_dashboard_agentic_node.GenDashboardAgenticNode.__init__"),
             ("scheduler", "datus.agent.node.scheduler_agentic_node.SchedulerAgenticNode.__init__"),
@@ -1545,6 +1571,7 @@ class TestBuiltinNodeInheritsExecutionMode:
         "subagent_type,init_path",
         [
             ("gen_sql", "datus.agent.node.gen_sql_agentic_node.GenSQLAgenticNode.__init__"),
+            ("ask_metrics", "datus.agent.node.ask_metrics_agentic_node.AskMetricsAgenticNode.__init__"),
             ("gen_report", "datus.agent.node.gen_report_agentic_node.GenReportAgenticNode.__init__"),
             ("gen_skill", "datus.agent.node.gen_skill_agentic_node.SkillCreatorAgenticNode.__init__"),
         ],
@@ -1573,7 +1600,7 @@ class TestBuildNodeInputBuiltIn:
         result = task_tool._build_node_input(mock_node, "orders table")
         assert isinstance(result, SemanticNodeInput)
         assert result.user_message == "orders table"
-        assert result.database == "test_db"
+        assert result.database is None
 
     def test_metrics_node_input(self, task_tool):
         from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
@@ -1583,7 +1610,7 @@ class TestBuildNodeInputBuiltIn:
         result = task_tool._build_node_input(mock_node, "SELECT SUM(amount) FROM orders")
         assert isinstance(result, SemanticNodeInput)
         assert result.user_message == "SELECT SUM(amount) FROM orders"
-        assert result.database == "test_db"
+        assert result.database is None
 
     def test_sql_summary_node_input(self, task_tool):
         from datus.agent.node.sql_summary_agentic_node import SqlSummaryAgenticNode
@@ -1593,16 +1620,7 @@ class TestBuildNodeInputBuiltIn:
         result = task_tool._build_node_input(mock_node, "SELECT * FROM users")
         assert isinstance(result, SqlSummaryNodeInput)
         assert result.user_message == "SELECT * FROM users"
-        assert result.database == "test_db"
-
-    def test_ext_knowledge_node_input(self, task_tool):
-        from datus.agent.node.gen_ext_knowledge_agentic_node import GenExtKnowledgeAgenticNode
-        from datus.schemas.ext_knowledge_agentic_node_models import ExtKnowledgeNodeInput
-
-        mock_node = Mock(spec=GenExtKnowledgeAgenticNode)
-        result = task_tool._build_node_input(mock_node, "What is total revenue by region?")
-        assert isinstance(result, ExtKnowledgeNodeInput)
-        assert result.user_message == "What is total revenue by region?"
+        assert result.database is None
 
     def test_gen_table_node_input(self, task_tool):
         from datus.agent.node.gen_table_agentic_node import GenTableAgenticNode
@@ -1612,7 +1630,18 @@ class TestBuildNodeInputBuiltIn:
         result = task_tool._build_node_input(mock_node, "Create wide table from orders and customers")
         assert isinstance(result, SemanticNodeInput)
         assert result.user_message == "Create wide table from orders and customers"
-        assert result.database == "test_db"
+        assert result.database is None
+
+    def test_ask_metrics_node_input(self, task_tool):
+        from datus.agent.node.ask_metrics_agentic_node import AskMetricsAgenticNode
+        from datus.schemas.ask_metrics_agentic_node_models import AskMetricsNodeInput
+
+        mock_node = Mock(spec=AskMetricsAgenticNode)
+        result = task_tool._build_node_input(mock_node, "Show active users")
+
+        assert isinstance(result, AskMetricsNodeInput)
+        assert result.user_message == "Show active users"
+        assert result.database is None
 
 
 # ── Built-in subagent: _build_task_description ─────────────────────
@@ -1642,10 +1671,6 @@ class TestBuildTaskDescriptionBuiltIn:
     def test_gen_sql_summary_description_content(self, task_tool):
         desc = task_tool._build_task_description()
         assert "sql_summary_file" in desc
-
-    def test_gen_ext_knowledge_description_content(self, task_tool):
-        desc = task_tool._build_task_description()
-        assert "ext_knowledge_file" in desc
 
 
 # ── Built-in subagent: _convert_to_func_result ────────────────────
@@ -1685,17 +1710,6 @@ class TestConvertToFuncResultBuiltIn:
         assert result.success == 1
         assert result.result["sql_summary_file"] == "knowledge/summaries/query_001.yml"
         assert result.result["response"] == "Summarized query"
-
-    def test_ext_knowledge_file_result(self, task_tool):
-        output = {
-            "response": "Extracted knowledge",
-            "ext_knowledge_file": "knowledge/ext/revenue_by_region.yml",
-            "tokens_used": 800,
-        }
-        result = task_tool._convert_to_func_result(output)
-        assert result.success == 1
-        assert result.result["ext_knowledge_file"] == "knowledge/ext/revenue_by_region.yml"
-        assert result.result["response"] == "Extracted knowledge"
 
     def test_sql_file_path_takes_priority_over_semantic_models(self, task_tool):
         """sql_file_path still takes priority (checked first)."""
@@ -1838,32 +1852,6 @@ class TestTaskExecutionBuiltIn:
 
         assert result.success == 1
         assert result.result["sql_summary_file"] == "knowledge/summaries/query_001.yml"
-
-    @pytest.mark.asyncio
-    async def test_execute_gen_ext_knowledge(self, task_tool):
-        mock_action = Mock(spec=ActionHistory)
-        mock_action.status = ActionStatus.SUCCESS
-        mock_action.role = ActionRole.ASSISTANT
-        mock_action.output = {
-            "response": "Knowledge extracted",
-            "ext_knowledge_file": "knowledge/ext/revenue.yml",
-            "tokens_used": 900,
-        }
-
-        mock_node = MagicMock()
-
-        async def mock_stream(ahm):
-            yield mock_action
-
-        mock_node.execute_stream_with_interactions = mock_stream
-
-        with patch.object(task_tool, "_create_node", return_value=mock_node):
-            with patch.object(task_tool, "_build_node_input", return_value=Mock()):
-                result = await task_tool.task(type="gen_ext_knowledge", prompt="What is total revenue by region?")
-
-        assert result.success == 1
-        assert result.result["ext_knowledge_file"] == "knowledge/ext/revenue.yml"
-        assert result.result["tokens_used"] == 900
 
 
 # ── SubAgent complete action ──────────────────────────────────────
@@ -2326,7 +2314,7 @@ class TestProxyToolPropagation:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "subagent_type",
-        ["gen_semantic_model", "gen_metrics", "gen_sql_summary", "gen_ext_knowledge"],
+        ["gen_semantic_model", "gen_metrics", "gen_sql_summary"],
     )
     async def test_fs_dependent_types_still_call_apply_proxy(self, task_tool, subagent_type):
         """FS-dependent subagents still call apply_proxy_tools (exclusion is internal to proxy_tool)."""

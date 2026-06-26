@@ -9,7 +9,7 @@ This document covers thirteen core subagents:
 1. **[gen_sql_summary](#gen_sql_summary)** — Summarizes and classifies SQL queries
 2. **[gen_semantic_model](#gen_semantic_model)** — Generates MetricFlow semantic models
 3. **[gen_metrics](#gen_metrics)** — Generates MetricFlow metric definitions
-4. **[gen_ext_knowledge](#gen_ext_knowledge)** — Generates business concept definitions
+4. **[ask_metrics](ask_metrics.md)** — Answers KPI, trend, grouped metric, and attribution questions from existing semantic metrics
 5. **[explore](#explore)** — Read-only data exploration and context gathering
 6. **[gen_sql](#gen_sql)** — Specialized SQL generation with deep expertise
 7. **[gen_report](#gen_report)** — Flexible report generation with configurable tools
@@ -35,12 +35,12 @@ agent:
       model: claude     # Optional: defaults to configured model
       max_turns: 30     # Optional: defaults to 30
 
+    ask_metrics:
+      model: claude     # Optional: defaults to configured model
+      max_turns: 12     # Optional: defaults to 12
+
     gen_sql_summary:
       model: deepseek   # Optional: defaults to configured model
-      max_turns: 30     # Optional: defaults to 30
-
-    gen_ext_knowledge:
-      model: claude     # Optional: defaults to configured model
       max_turns: 30     # Optional: defaults to 30
 
     explore:
@@ -548,122 +548,6 @@ The metrics generation feature provides:
 
 ---
 
-## gen_ext_knowledge
-
-### Overview
-
-The external knowledge generation feature helps you create and manage business concepts and domain-specific definitions. Using an AI assistant, you can document business knowledge in a structured format that becomes searchable in the Knowledge Base, enabling better context retrieval for SQL generation and data analysis tasks.
-
-### What is External Knowledge?
-
-**External knowledge** captures business-specific information that isn't directly stored in database schemas:
-
-- **Business Rules**: Calculation logic and business constraints
-- **Domain Concepts**: Industry or company-specific knowledge
-- **Data Interpretations**: How to understand specific data fields or values
-
-This knowledge helps the AI agent understand your business context when generating SQL queries or analyzing data.
-
-### Quick Start
-
-Launch the external knowledge generation subagent:
-
-
-```bash
-/gen_ext_knowledge Extract knowledge from this sql
--- Question: What is the highest eligible free rate for K-12 students in the schools in Alameda County?
--- SQL: 
-SELECT 
-  `Free Meal Count (K-12)` / `Enrollment (K-12)` 
-FROM 
-  frpm 
-WHERE 
-  `County Name` = 'Alameda' 
-ORDER BY 
-  (
-    CAST(`Free Meal Count (K-12)` AS REAL) / `Enrollment (K-12)`
-  ) DESC 
-LIMIT 1
-```
-
-### Generation Workflow
-
-The workflow follows a **knowledge gap discovery** approach: the agent first attempts to solve the problem independently, then compares with the reference SQL to identify implicit business knowledge.
-
-```mermaid
-graph LR
-    A[User provides Question + SQL] --> B[Agent attempts to solve]
-    B --> C[Compare with reference SQL]
-    C --> D[Identify knowledge gaps]
-    D --> E[Check for duplicates]
-    E --> F[Generate YAML]
-    F --> G[Save file]
-    G --> H[Sync to Knowledge Base]
-```
-
-**Detailed Steps:**
-
-1. **Understand the Problem**: Read the question from SQL comments and understand the goal
-2. **Attempt to Solve**: The agent uses available tools to try solving the problem
-3. **Compare with Reference SQL**: Find gaps between attempt and reference sql
-4. **Extract Knowledge from Gaps**: Discovering hidden business concepts in gaps
-5. **Check for Duplicates**: Use `search_knowledge` to verify extracted knowledge doesn't already exist
-6. **Generate YAML**: Create structured knowledge entries with unique IDs via `generate_ext_knowledge_id()`
-7. **Save File**: Write YAML using `write_file(path, content, file_type="ext_knowledge")`
-8. **Sync to Knowledge Base**: Store in vector database for semantic search
-
-> **Important**: If no knowledge gaps are found (agent's attempt matches reference SQL), no knowledge file is generated.
-
-### Sync Behavior
-
-In interactive mode, after the YAML file is written successfully, the generation hook syncs it to the Knowledge Base automatically. In workflow/API mode, use the explicit sync step or tool.
-
-### Subject Path Categorization
-
-Subject path allows organizing external knowledge hierarchically. In CLI mode, include it in your question:
-
-**Example with subject_path:**
-```bash
-/gen_ext_knowledge Extract knowledge from this sql
-Question: What is the highest eligible free rate for K-12 students in the schools in Alameda County?
-subject_tree: education/schools/data_integration
-SQL: ***
-```
-
-**Example without subject_path:**
-```bash
-/gen_ext_knowledge Extract knowledge from this sql
-Question: What is the highest eligible free rate for K-12 students in the schools in Alameda County?
-SQL: ***
-```
-
-When not provided, the agent operates in learning mode and suggests categories based on existing subject trees in the Knowledge Base.
-
-### YAML Structure
-
-The generated external knowledge follows this structure:
-
-```yaml
-id: education/schools/data_integration/CDS code school identifier California Department of Education join tables                                                                
-name: CDS Code as School Identifier                                                                                                                                             
-search_text: CDS code school identifier California Department of Education join tables                                                                                          
-explanation: |                                                                                                                                                                  
-  The CDS (California Department of Education) code serves as the primary identifier for linking educational datasets in California. Use `cds` field in SAT scores table to join
-subject_path: education/schools/data_integration       
-```
-
-#### Field Descriptions
-
-| Field | Required | Description                                                         | Example |
-|-------|----------|---------------------------------------------------------------------|---------|
-| `id` | Yes | Unique ID `generate_ext_knowledge_id()`)                            | `education/schools/data_integration/CDS code school identifier California Department of Education join tables` |
-| `name` | Yes | Short identifier name (max 30 chars)                                | `Free Meal Rate`, `GMV` |
-| `search_text` | Yes | Search keywords for retrieval (vector/inverted index)               | `eligible free rate K-12` |
-| `explanation` | Yes | Concise explanation (2-4 sentences): what it is + when/how to apply | Business rule, calculation logic |
-| `subject_path` | Yes | Hierarchical classification (slash-separated)                       | `Education/School Metrics/FRPM` |
-
----
-
 ## explore
 
 ### Overview
@@ -695,7 +579,7 @@ agent:
 
 | Tool Category | Tools | Purpose |
 |---------------|-------|---------|
-| Database | `list_databases`, `list_schemas`, `list_tables`, `search_table`, `describe_table`, `get_table_ddl`, `read_query` | Schema discovery and data sampling (read-only) |
+| Database | `list_databases`, `list_schemas`, `list_tables`, `search_table`, `describe_table`, `read_query` | Schema discovery and data sampling (read-only) |
 | Context Search | `search_metrics`, `search_reference_sql`, `search_knowledge`, `search_semantic_objects`, `list_subject_tree`, `get_metrics`, `get_reference_sql`, `get_knowledge` | Knowledge base retrieval |
 | Filesystem | `read_file`, `glob`, `grep` | Read-only file browsing |
 | Date Parsing | `get_current_date`, `parse_temporal_expressions` | Date context |
@@ -1148,7 +1032,7 @@ agent:
 | `gen_sql_summary` | Summarize and classify SQL queries | YAML (SQL summary) | `/data/reference_sql` | Subject tree categorization, auto context retrieval |
 | `gen_semantic_model` | Generate semantic model from tables | YAML (semantic model) | `/data/semantic_models` | DDL to MetricFlow model, built-in validation |
 | `gen_metrics` | Generate metrics from SQL | YAML (metric) | `/data/semantic_models` | SQL to MetricFlow metric, subject tree support |
-| `gen_ext_knowledge` | Generate business concepts | YAML (external knowledge) | `/data/ext_knowledge` | Question plus SQL to knowledge extraction |
+| `ask_metrics` | Answer existing metric questions | Markdown report | N/A | KPI values, trends, grouped results, attribution, no raw SQL fallback |
 | `explore` | Read-only data exploration | Structured context | N/A | Strictly read-only, fast turn budget, three exploration directions |
 | `gen_sql` | Generate optimized SQL | SQL query / SQL file | N/A | Deep SQL expertise, auto-validation, file-based output |
 | `gen_report` | Flexible report generation | Structured report | N/A | Configurable tools, extensible, custom report subagents |

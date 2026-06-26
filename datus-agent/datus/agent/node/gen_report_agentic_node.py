@@ -75,11 +75,11 @@ class GenReportAgenticNode(AgenticNode):
         # Determine node name from node_type if not provided
         self.configured_node_name = node_name
 
-        self.max_turns = 30
+        self.max_turns = 50
         if agent_config and hasattr(agent_config, "agentic_nodes") and node_name in agent_config.agentic_nodes:
             agentic_node_config = agent_config.agentic_nodes[node_name]
             if isinstance(agentic_node_config, dict):
-                self.max_turns = agentic_node_config.get("max_turns", 30)
+                self.max_turns = agentic_node_config.get("max_turns", 50)
 
         # Initialize tool attributes BEFORE calling parent constructor
         # This is required because parent's __init__ calls _get_system_prompt()
@@ -202,25 +202,6 @@ class GenReportAgenticNode(AgenticNode):
 
         except Exception as e:
             logger.error(f"Failed to setup tool pattern '{pattern}': {e}")
-
-    def _tool_category_map(self) -> Dict[str, List[Any]]:
-        """Register tools under their canonical categories so permission rules fire.
-
-        Without this override the bound tools fall through to the ``tools.*``
-        catch-all (default ASK on normal/auto profiles), which would block at
-        ``InteractionBroker.request`` whenever a caller wires permission hooks
-        but does not also run an interactive broker listener.
-        """
-        mapping = super()._tool_category_map()
-        if getattr(self, "db_func_tool", None):
-            mapping["db_tools"] = list(self.db_func_tool.available_tools())
-        if getattr(self, "semantic_tools", None):
-            mapping["semantic_tools"] = list(self.semantic_tools.available_tools())
-        if getattr(self, "context_search_tools", None):
-            mapping["context_search_tools"] = list(self.context_search_tools.available_tools())
-        if getattr(self, "filesystem_func_tool", None):
-            mapping["filesystem_tools"] = list(self.filesystem_func_tool.available_tools())
-        return mapping
 
     def _setup_db_tools(self):
         """Setup database tools."""
@@ -346,10 +327,6 @@ class GenReportAgenticNode(AgenticNode):
 
             context.update(build_datasource_prompt_context(self.agent_config))
             context["db_name"] = context.get("datasource")
-
-        from datus.utils.time_utils import get_default_current_date
-
-        context["current_date"] = get_default_current_date(None)
 
         version = None if prompt_version in (None, "") else str(prompt_version)
 

@@ -184,7 +184,6 @@ class TestRegistryRouting:
             "execute_write",
             "execute_ddl",
             "describe_table",
-            "get_table_ddl",
             "list_tables",
             "list_databases",
             "list_schemas",
@@ -258,13 +257,6 @@ class TestDatabaseFormatters:
     def test_describe_table(self):
         cols = [{"name": "id"}, {"name": "name"}, {"name": "email"}]
         assert _summarize("describe_table", {"success": 1, "result": {"columns": cols}}) == "3 cols"
-
-    def test_get_table_ddl(self):
-        out = _summarize(
-            "get_table_ddl",
-            {"success": 1, "result": {"identifier": "public.orders", "definition": "CREATE TABLE..."}},
-        )
-        assert out == "DDL: public.orders"
 
     def test_list_tables_no_preview(self):
         out = _summarize(
@@ -559,7 +551,7 @@ class TestContextSearchFormatters:
                 "Revenue": {"metrics": ["revenue", "gmv"], "reference_sql": ["q1"]},
                 "Cost": {"metrics": ["cogs"]},
             },
-            "Marketing": {"knowledge": ["k1", "k2"]},
+            "Marketing": {"reference_template": ["t1", "t2"]},
         }
         out = _summarize("list_subject_tree", {"success": 1, "result": tree})
         assert out == "6 items"
@@ -575,10 +567,6 @@ class TestContextSearchFormatters:
     def test_get_reference_sql_single(self):
         out = _summarize("get_reference_sql", {"success": 1, "result": {"name": "top_users"}})
         assert out == "SQL: top_users"
-
-    def test_get_knowledge_list(self):
-        out = _summarize("get_knowledge", {"success": 1, "result": [{"name": "a"}, {"name": "b"}]})
-        assert out == "2 knowledge"
 
 
 class TestReferenceTemplateFormatters:
@@ -860,7 +848,6 @@ def test_failure_path_uniform(tool: str):
         # Database fallbacks
         ("read_query", [1, 2, 3], "3 rows"),
         ("describe_table", {"schema": [{"name": "id"}, {"name": "v"}]}, "2 cols"),
-        ("get_table_ddl", {"table_name": "orders", "definition": "CREATE TABLE..."}, "DDL: orders"),
         ("list_tables", [{"name": "orders"}], "1 table"),
         ("list_databases", ["mydb"], "1 db"),
         # Semantic fallbacks
@@ -907,7 +894,6 @@ def test_failure_path_uniform(tool: str):
         ("task", {"sql_file_path": "/tmp/q.sql"}, "SQL file generated"),
         ("task", {"semantic_models": ["a.yml", "b.yml"]}, "2 semantic models"),
         ("task", {"sql_summary_file": "x"}, "SQL summary saved"),
-        ("task", {"ext_knowledge_file": "k"}, "knowledge saved"),
         ("task", {"report_result": {}}, "report ready"),
         ("task", {"skill_path": "/tmp", "skill_name": "x"}, 'skill "x" generated'),
         ("task", {"scheduler_result": {}}, "scheduler updated"),
@@ -935,7 +921,6 @@ _LENGTH_CONTRACT_SAMPLES: list[tuple[str, Any]] = [
     ("execute_write", {"row_count": 9999999}),
     ("execute_ddl", {"message": "ok"}),
     ("describe_table", {"columns": [{"name": str(i)} for i in range(99)]}),
-    ("get_table_ddl", {"identifier": "very_long_schema.very_long_table_name", "definition": "CREATE..."}),
     ("list_tables", [{"name": str(i)} for i in range(50)]),
     ("table_overview", [{"name": str(i)} for i in range(50)]),
     ("list_databases", [str(i) for i in range(99)]),
@@ -969,7 +954,6 @@ _LENGTH_CONTRACT_SAMPLES: list[tuple[str, Any]] = [
     ("search_metrics", [{}] * 99),
     ("search_reference_sql", [{}] * 99),
     ("search_semantic_objects", [{}] * 99),
-    ("search_knowledge", [{}] * 99),
     # generation
     ("check_semantic_object_exists", {"exists": True, "kind": "long_kind_name"}),
     ("check_semantic_model_exists", {"exists": False}),
@@ -998,7 +982,6 @@ _LENGTH_CONTRACT_SAMPLES: list[tuple[str, Any]] = [
     ("list_subject_tree", {"a": {"metrics": ["m"] * 999}}),
     ("get_metrics", {"name": "very_long_metric_name_here"}),
     ("get_reference_sql", {"name": "very_long_sql_name_here"}),
-    ("get_knowledge", [{}] * 99),
     # reference templates
     ("search_reference_template", [{}] * 99),
     ("get_reference_template", {"name": "very_long_template_name_here"}),

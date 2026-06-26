@@ -47,6 +47,7 @@ from datus.cli.autocomplete import (
     SlashCommandCompleter,
 )
 from datus.cli.bootstrap_bi_commands import BootstrapBiCommands
+from datus.cli.build_kb_commands import BuildKbCommands
 from datus.cli.chat_commands import ChatCommands
 from datus.cli.cli_styles import (
     PASTE_COLLAPSE_THRESHOLD,
@@ -67,6 +68,7 @@ from datus.cli.model_commands import ModelCommands
 from datus.cli.service_commands import ServiceCommands
 from datus.cli.slash_registry import GROUP_ORDER, GROUP_TITLES, iter_visible, lookup
 from datus.cli.status_bar import StatusBarProvider
+from datus.cli.summarize_commands import MemoryOrganizeCommands, SessionSummarizeCommands
 from datus.cli.todo_sidebar import TodoSidebarProvider
 from datus.cli.tui import DatusApp, tui_enabled
 from datus.cli.tui.app import EXIT_SENTINEL
@@ -270,6 +272,9 @@ class DatusCLI:
         self.language_commands = LanguageCommands(self)
         self.effort_commands = EffortCommands(self)
         self.init_commands = InitCommands(self)
+        self.build_kb_commands = BuildKbCommands(self)
+        self.session_summarize_commands = SessionSummarizeCommands(self)
+        self.memory_organize_commands = MemoryOrganizeCommands(self)
         self.service_commands = ServiceCommands(self)
         from datus.cli.datasource_commands import DatasourceCommands
 
@@ -292,7 +297,6 @@ class DatusCLI:
             "!search_sql": self.agent_commands.cmd_search_reference_sql,
             "!sd": self.agent_commands.cmd_doc_search,
             "!search_document": self.agent_commands.cmd_doc_search,
-            # "!gen": self.agent_commands.cmd_gen,
             # "!fix": self.agent_commands.cmd_fix,
             "!save": self.agent_commands.cmd_save,
             "!bash": self._cmd_bash,
@@ -354,6 +358,9 @@ class DatusCLI:
             "model": self.model_commands.cmd_model,
             "effort": self.effort_commands.cmd_effort,
             "init": self.init_commands.cmd_init,
+            "build-kb": self.build_kb_commands.cmd_build_kb,
+            "session-summarize": self.session_summarize_commands.cmd_session_summarize,
+            "memory-organize": self.memory_organize_commands.cmd_memory_organize,
             "services": self.service_commands.cmd_services,
             "permission": self._cmd_permission,
             "profile": self._cmd_profile,
@@ -604,7 +611,22 @@ class DatusCLI:
         current_console = getattr(self, "console", None)
         if current_console is None:
             return
-        if getattr(current_console, "width", None) == new_width:
+        # Rich ignores an explicit width on dumb terminals unless height is
+        # explicit too. The TUI output console is backed by an in-memory buffer,
+        # so preserve the existing height to make width reflow deterministic.
+        if (
+            getattr(current_console, "_width", None) is not None
+            and getattr(current_console, "_height", None) is None
+            and getattr(current_console, "is_dumb_terminal", False)
+        ):
+            try:
+                current_console._height = current_console.size.height
+            except Exception:  # pragma: no cover - defensive
+                current_console._height = 25
+        if (
+            getattr(current_console, "_width", None) == new_width
+            or getattr(current_console, "width", None) == new_width
+        ):
             return
         buffer = getattr(self, "_tui_output_buffer", None)
         if buffer is None:
@@ -974,6 +996,7 @@ class DatusCLI:
     def _run_prompt_session(self):
         """Classic ``PromptSession`` main loop (used for non-TTY fallback)."""
         self._print_welcome()
+        self._check_for_upgrade()
         self._warn_no_model()
         self._warn_no_datasource()
         self._bootstrap_services()
@@ -1031,6 +1054,7 @@ class DatusCLI:
         """
         self._pin_tui_to_bottom()
         self._print_welcome()
+        self._check_for_upgrade()
         self._warn_no_model()
         self._warn_no_datasource()
         self._bootstrap_services()
@@ -2141,6 +2165,59 @@ class DatusCLI:
         if not self.agent_config.services.datasources:
             self.console.print("[yellow]No datasources configured. Use /datasource to add one.[/]")
 
+    def _check_for_upgrade(self) -> None:
+        """Hint that a newer ``datus-agent`` is available, then refresh the cache.
+
+        Two-step, deliberately non-blocking and non-racy:
+
+        * **Synchronous fast path** — if a *fresh* on-disk cache already
+          knows of a newer release, print a one-line yellow hint right
+          after the banner. A cold cache shows nothing (no network call on
+          the main thread).
+        * **Background refresh** — a daemon thread re-queries PyPI and
+          updates the cache only. It never prints (which would interleave
+          with the prompt); the hint surfaces from the next launch onward.
+
+        Skipped entirely for non-interactive sessions or when
+        ``DATUS_DISABLE_VERSION_CHECK`` is set. Any failure is swallowed —
+        a version check must never abort startup.
+        """
+        import os
+
+        if os.environ.get("DATUS_DISABLE_VERSION_CHECK"):
+            return
+        try:
+            from datus.cli.service_bootstrap import _is_interactive
+
+            if not _is_interactive():
+                return
+        except Exception:  # pragma: no cover - defensive
+            return
+
+        from datus import __version__
+        from datus.cli import upgrade_service as upgrade_svc
+
+        try:
+            newer = upgrade_svc.newer_version_available(__version__, agent_config=self.agent_config, cached_only=True)
+            if newer:
+                self.console.print(
+                    f"[yellow]A new datus-agent is available: {__version__} -> {newer}. "
+                    f"Run [bold]datus upgrade[/] to update.[/]"
+                )
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("cached version check failed: %s", exc)
+
+        def _worker() -> None:
+            try:
+                upgrade_svc.get_latest_version(agent_config=self.agent_config)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.debug("background version fetch failed: %s", exc)
+
+        try:
+            threading.Thread(target=_worker, daemon=True).start()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("could not start version-check thread: %s", exc)
+
     def _bootstrap_services(self) -> None:
         """Pin project defaults and kick off background adapter installs.
 
@@ -2227,12 +2304,11 @@ class DatusCLI:
 
             # Update context based on dialect
             if self.db_connector.dialect in (DBType.SQLITE, DBType.DUCKDB):
-                self.cli_context.update_database_context(db_name=self.db_connector.database_name, db_logic_name=db_name)
+                self.cli_context.update_database_context(db_name=self.db_connector.database_name)
             else:
                 self.cli_context.update_database_context(
                     catalog=self.db_connector.catalog_name,
                     db_name=self.db_connector.database_name,
-                    db_logic_name=db_name or self.db_connector.database_name or current_datasource,
                 )
 
             # Test the connection with timeout

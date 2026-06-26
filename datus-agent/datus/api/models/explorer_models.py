@@ -41,7 +41,6 @@ class SubjectNodeType(str, Enum):
     DIRECTORY = "directory"
     METRIC = "metric"
     REFERENCE_SQL = "reference_sql"
-    KNOWLEDGE = "knowledge"
 
 
 class SubjectNode(BaseModel):
@@ -114,6 +113,59 @@ class EditMetricInput(BaseModel):
     yaml: str = Field(..., description="Updated YAML content")
 
 
+class MetricPreviewInput(BaseModel):
+    """Preview a saved metric by compiling it to SQL (dry-run)."""
+
+    subject_path: List[str] = Field(..., description="Path to the saved metric; the leaf is the metric name")
+    dimensions: Optional[List[str]] = Field(None, description="Optional dimensions to group by")
+    time_start: Optional[str] = Field(None, description="Optional start time (ISO or relative, e.g. '-7d')")
+    time_end: Optional[str] = Field(None, description="Optional end time (ISO or relative, e.g. 'now')")
+    time_granularity: Optional[str] = Field(None, description="Optional grain: day/week/month/quarter/year")
+    where: Optional[str] = Field(None, description="Optional SQL WHERE clause (without the WHERE keyword)")
+    limit: Optional[int] = Field(None, description="Optional row limit")
+    order_by: Optional[List[str]] = Field(None, description="Optional order-by columns; prefix '-' for descending")
+
+
+class MetricDimensionItem(BaseModel):
+    """A queryable dimension of a metric."""
+
+    name: str = Field(..., description="Dimension name")
+    type: Optional[str] = Field(None, description="Dimension type, e.g. 'time', 'string', 'number'")
+    description: Optional[str] = Field(None, description="Dimension description")
+    is_primary_key: Optional[bool] = Field(None, description="Whether the dimension is a primary key")
+
+
+class MetricDimensionsData(BaseModel):
+    """Available dimensions for a saved metric."""
+
+    metric: str = Field(..., description="Metric name")
+    dimensions: List[MetricDimensionItem] = Field(default_factory=list, description="Queryable dimensions")
+
+
+class MetricDimensionPreflight(BaseModel):
+    """Why the requested dimensions are not all supported by the metric."""
+
+    message: str = Field(..., description="Human-readable explanation")
+    invalid_dimensions: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Requested dimensions the metric does not support"
+    )
+    common_dimensions: List[str] = Field(default_factory=list, description="Dimensions the metric does support")
+    suggested_metric_groups: List[Dict[str, Any]] = Field(
+        default_factory=list, description="Compatible metric/dimension groupings"
+    )
+
+
+class MetricPreviewData(BaseModel):
+    """Compiled SQL for previewing a metric's data, or a dimension preflight error."""
+
+    metric: str = Field(..., description="Metric name")
+    sql: Optional[str] = Field(None, description="Runnable SQL compiled from the metric definition")
+    database: Optional[str] = Field(None, description="Physical database the SQL should run against")
+    preflight_error: Optional[MetricDimensionPreflight] = Field(
+        None, description="Set instead of sql when the requested dimensions are invalid"
+    )
+
+
 class EditSemanticModelInput(BaseModel):
     """Edit semantic model entry (table or column)."""
 
@@ -143,31 +195,3 @@ class SubjectPathInput(BaseModel):
     """Subject path input."""
 
     subject_path: List[str] = Field(..., description="Subject path name")
-
-
-# ========== Knowledge Create/Get/Edit ==========
-
-
-class CreateKnowledgeInput(BaseModel):
-    """Create knowledge input."""
-
-    subject_path: List[str] = Field(..., description="Subject path for the knowledge")
-    name: str = Field(..., min_length=1, description="Knowledge name")
-    search_text: str = Field(..., min_length=1, description="Search text for vector retrieval")
-    explanation: str = Field(..., min_length=1, description="Knowledge explanation/details")
-
-
-class KnowledgeInfo(BaseModel):
-    """Knowledge information for get response."""
-
-    name: str = Field(..., description="Knowledge name")
-    search_text: str = Field(..., description="Search text for vector retrieval")
-    explanation: str = Field(..., description="Knowledge explanation/details")
-
-
-class EditKnowledgeInput(BaseModel):
-    """Edit knowledge input."""
-
-    subject_path: List[str] = Field(..., description="Subject path to the knowledge (parent_path + name)")
-    search_text: str = Field(..., description="Updated search text")
-    explanation: str = Field(..., description="Updated explanation")

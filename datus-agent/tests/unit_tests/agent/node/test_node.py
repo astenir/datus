@@ -1,3 +1,4 @@
+import copy
 import glob
 import json
 import time
@@ -19,8 +20,6 @@ from datus.schemas.doc_search_node_models import DocSearchInput, DocSearchResult
 from datus.schemas.node_models import (
     ExecuteSQLInput,
     ExecuteSQLResult,
-    GenerateSQLInput,
-    GenerateSQLResult,
     ReflectionInput,
     SQLContext,
     SqlTask,
@@ -31,22 +30,13 @@ from datus.schemas.search_metrics_node_models import SearchMetricsInput, SearchM
 from datus.tools.func_tool import db_function_tools
 from datus.utils.constants import DBType
 from datus.utils.loggings import get_logger
-from tests.conftest import TEST_DATA_DIR, load_acceptance_config
+from tests.conftest import TEST_DATA_DIR, isolate_bird_sqlite_databases, load_acceptance_config
 from tests.unit_tests.mock_llm_model import (
     MockLLMResponse,
     MockToolCall,
-    build_tool_then_response,
 )
 
 logger = get_logger(__name__)
-
-
-@pytest.fixture
-def generate_sql_input():
-    """load idata from YAML file"""
-    yaml_path = TEST_DATA_DIR / "GenerateSQLInput.yaml"
-    with open(yaml_path, "r") as f:
-        return yaml.safe_load(f)
 
 
 @pytest.fixture
@@ -107,7 +97,7 @@ def search_metrics_input() -> List[Dict[str, Any]]:
 
 
 # @pytest.fixture
-# def mock_generate_sql_input() -> Dict[str, Any]:
+# def mock_gen_sql_input() -> Dict[str, Any]:
 #    return {
 #        "database_type": "sqlite",
 #        "table_schemas": "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)",
@@ -116,23 +106,37 @@ def search_metrics_input() -> List[Dict[str, Any]]:
 #    }
 
 
+@pytest.fixture(scope="module")
+def isolated_bird_sqlite_root(tmp_path_factory) -> Path:
+    return tmp_path_factory.mktemp("bird_sqlite")
+
+
+@pytest.fixture(scope="module")
+def isolated_metricflow_duckdb_path(tmp_path_factory) -> Path:
+    return init_metricflow_db(tmp_path_factory.mktemp("metricflow_duckdb") / "duck.db")
+
+
 @pytest.fixture
-def agent_config() -> AgentConfig:
+def agent_config(isolated_bird_sqlite_root, isolated_metricflow_duckdb_path) -> AgentConfig:
     # Post-refactor (PR #542) legacy configs with `path_pattern` expand into
     # one database per matched file (keyed by logic name). The old "bird_sqlite" key is no
     # longer valid, so the loader drops it; individual tests override `current_datasource` as
     # needed. Seed a valid default here so fixtures that touch the DB (e.g. `function_tools`)
     # can initialize.
     agent_config = load_acceptance_config(datasource="bird_sqlite")
+    isolate_bird_sqlite_databases(
+        agent_config,
+        isolated_bird_sqlite_root,
+        ("california_schools", "financial", "toxicology", "card_games"),
+        reuse_existing=True,
+    )
+    if "duckdb" in agent_config.services.datasources:
+        agent_config.services.datasources["duckdb"].uri = str(isolated_metricflow_duckdb_path)
+    agent_config.agentic_nodes = copy.deepcopy(agent_config.agentic_nodes)
     if not agent_config.current_datasource and agent_config.services.datasources:
-        agent_config.current_datasource = "california_schools"
+        agent_config.current_datasource = "bird_school"
     Path(agent_config.rag_storage_path()).mkdir(parents=True, exist_ok=True)
     return agent_config
-
-
-@pytest.fixture
-def function_tools(agent_config: AgentConfig) -> List[Tool]:
-    return db_function_tools(agent_config)
 
 
 def save_to_yaml(content: BaseModel, filename: str):
@@ -141,28 +145,34 @@ def save_to_yaml(content: BaseModel, filename: str):
         yaml.dump(content.to_dict(), f, allow_unicode=True)
 
 
-def init_metricflow_db() -> None:
-    db_dir = TEST_DATA_DIR / "datus_metricflow_db"
-    db_path = db_dir / "duck.db"
-    if not db_dir.exists():
-        db_dir.mkdir(parents=True, exist_ok=True)
+@pytest.fixture
+def function_tools(agent_config: AgentConfig) -> List[Tool]:
+    return db_function_tools(agent_config)
+
+
+def init_metricflow_db(db_path: Path) -> Path:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    if db_path.exists():
+        db_path.unlink()
     csv_path: Path = Path(__file__).parent / "data/metricflow_csv" / "*.csv"
     conn = duckdb.connect(db_path)
-    conn.execute("CREATE SCHEMA IF NOT EXISTS mf_demo;")
-    csv_files = glob.glob(str(csv_path))
-    for csv_file in csv_files:
-        full_file_name = Path(csv_file).name
-        file_name = full_file_name.split(".")[0]
-        table_name = f"mf_demo.{file_name}"
-        conn.execute(f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM read_csv_auto('{csv_file}', header=TRUE)")
-    conn.close()
+    try:
+        conn.execute("CREATE SCHEMA IF NOT EXISTS mf_demo;")
+        csv_files = glob.glob(str(csv_path))
+        for csv_file in csv_files:
+            full_file_name = Path(csv_file).name
+            file_name = full_file_name.split(".")[0]
+            table_name = f"mf_demo.{file_name}"
+            conn.execute(
+                f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM read_csv_auto('{csv_file}', header=TRUE)"
+            )
+    finally:
+        conn.close()
+    return db_path
 
 
 class TestNodeFactory:
     """Test suite for Node class"""
-
-    def setup_method(self) -> None:
-        init_metricflow_db()
 
     def test_node_initialization(self, agent_config):
         """Test node initialization"""
@@ -309,7 +319,7 @@ class TestNodeFactory:
             ]
         )
 
-        agent_config.current_datasource = "california_schools"
+        agent_config.current_datasource = "bird_school"
         agent_config.rag_base_path = "/tmp/test_data"
         node = Node.new_instance(
             node_id="schema_link",
@@ -329,73 +339,6 @@ class TestNodeFactory:
         assert res.success is True
         assert res.schema_count > 0
         assert res.value_count == 0
-
-    def test_generation_node(self, generate_sql_input, agent_config, function_tools: List[Tool], mock_llm_create):
-        """Test SQL generation node with mock LLM and SQLite database"""
-        try:
-            # Mock LLM response for SQL generation
-            mock_llm_create.reset(
-                responses=[
-                    build_tool_then_response(
-                        tool_calls=[
-                            MockToolCall(name="list_tables", arguments="{}"),
-                            MockToolCall(name="describe_table", arguments='{"table_name": "schools"}'),
-                        ],
-                        content=json.dumps(
-                            {
-                                "sql": "SELECT * FROM schools WHERE City = 'Fresno' LIMIT 10",
-                                "tables": ["schools"],
-                                "explanation": "Query to retrieve schools in Fresno city",
-                            }
-                        ),
-                    ),
-                ]
-            )
-
-            # Create table schema from input data
-            input_data = GenerateSQLInput(**generate_sql_input[0]["input"])
-
-            # Create node instance for testing
-            node = Node.new_instance(
-                node_id="gen_sql_test",
-                description="Generate SQL Test",
-                node_type=NodeType.TYPE_GENERATE_SQL,
-                input_data=input_data,
-                agent_config=agent_config,
-                tools=function_tools,
-            )
-
-            # Verify initial node configuration
-            assert node.type == NodeType.TYPE_GENERATE_SQL
-            assert isinstance(node.input, GenerateSQLInput)
-            assert node.input.sql_task.task == generate_sql_input[0]["input"]["sql_task"]["task"]
-            assert node.input.database_type == DBType.SQLITE
-            assert len(node.input.table_schemas) == 3
-            assert node.input.table_schemas[0].table_name == "schools"
-
-            # Test validation error for invalid input
-            with pytest.raises(ValidationError):
-                GenerateSQLInput(**{"invalid": "data"})
-
-            # Execute node with valid dependencies
-            result = node.run()
-            logger.debug(f"Generation node result: {result.to_str()}")
-
-            # Verify execution results
-            assert node.status == "completed", f"Node execution failed with status: {node.status}"
-            assert result.success is True, f"Node execution failed: {result}"
-            assert isinstance(result, GenerateSQLResult), "Result type mismatch"
-            assert result.sql_query == "SELECT * FROM schools WHERE City = 'Fresno' LIMIT 10"
-            assert result.tables == ["schools"]
-
-            # Test error state handling
-            node.fail("Test error")
-            assert node.status == "failed"
-            assert node.result["error"] == "Test error"
-
-        except Exception as e:
-            logger.error(f"Generation node test failed: {str(e)}")
-            raise
 
     def test_node_dependencies(self, agent_config):
         """Test node dependencies"""
@@ -499,7 +442,6 @@ class TestNodeFactory:
                     output_dir="output/test",
                 ),
                 database_type="sqlite",
-                external_knowledge="",
                 prompt_version="",
             )
 
@@ -598,11 +540,12 @@ class TestNodeFactory:
                 # Create execution input from test data
                 exec_input = execute_sql_input[test_case_num]["input"]
                 input_data = ExecuteSQLInput(**exec_input)
-                # Use the database_name from the input to set the current database
+                # All BIRD databases (california_schools, financial, ...) live under the
+                # bird_sqlite glob datasource; the input's database_name selects which one.
                 if exec_input.get("database_name") and exec_input["database_name"] in agent_config.services.datasources:
                     agent_config.current_datasource = exec_input["database_name"]
                 else:
-                    agent_config.current_datasource = "california_schools"
+                    agent_config.current_datasource = "bird_sqlite"
 
                 # Create node instance for testing
                 node = Node.new_instance(

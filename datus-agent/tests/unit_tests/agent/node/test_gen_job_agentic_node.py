@@ -111,8 +111,7 @@ class TestGenJobAgenticNodeInit:
     def test_default_max_turns(self, real_agent_config, mock_llm_create):  # audit-noqa
         from datus.agent.node.gen_job_agentic_node import GenJobAgenticNode
 
-        # 40 turns (absorbed from migration subagent) — cross-DB flows need more turns.
-        check_max_turns(GenJobAgenticNode, real_agent_config, 40)
+        check_max_turns(GenJobAgenticNode, real_agent_config, 50)
 
     def test_uses_dynamic_db_func_tool(self, real_agent_config, mock_llm_create):  # audit-noqa
         """gen_job should use create_dynamic for multi-connector support."""
@@ -120,17 +119,19 @@ class TestGenJobAgenticNodeInit:
 
         check_dynamic_db_func_tool(GenJobAgenticNode, real_agent_config)
 
-    def test_tool_category_map_lumps_db_write_helpers_under_db_tools(self, real_agent_config, mock_llm_create):
-        """``_tool_category_map`` must keep ``execute_write`` / ``execute_ddl`` /
-        ``transfer_query_result`` in ``db_tools`` so profile ASK rules fire."""
+    def test_tool_registry_keeps_db_write_helpers_under_db_tools(self, real_agent_config, mock_llm_create):
+        """``execute_write`` / ``execute_ddl`` / ``transfer_query_result`` must
+        stay in ``db_tools`` so profile ASK rules fire. They are mounted as
+        method-level wrappers, so the registry must cover the full
+        ``DBFuncTool.all_tools_name()`` surface, not just ``available_tools()``."""
         from datus.agent.node.gen_job_agentic_node import GenJobAgenticNode
 
         node = GenJobAgenticNode(agent_config=real_agent_config, execution_mode="workflow")
-        mapping = node._tool_category_map()
-        db_names = {t.name for t in mapping.get("db_tools", [])}
-        assert "execute_ddl" in db_names
-        assert "execute_write" in db_names
-        assert "transfer_query_result" in db_names
+        node._populate_tool_registry()
+        registry = node.tool_registry.to_dict()
+        assert registry.get("execute_ddl") == "db_tools"
+        assert registry.get("execute_write") == "db_tools"
+        assert registry.get("transfer_query_result") == "db_tools"
 
     def test_system_prompt_requires_explicit_authorization_for_replacement(self, real_agent_config, mock_llm_create):
         """gen_job inherits gen-table behavior and must not overwrite in workflow mode by default."""

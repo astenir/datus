@@ -19,6 +19,7 @@ from datus.schemas.artifact_manifest import ARTIFACT_SLUG_RE
 from datus.tools.func_tool.context_search import ContextSearchTools
 from datus.tools.func_tool.database import DBFuncTool
 from datus.tools.func_tool.filesystem_tools import FilesystemFuncTool
+from datus.tools.func_tool.memory_tools import MemoryFuncTool
 from datus.tools.func_tool.platform_doc_search import PlatformDocSearchTool
 from datus.tools.func_tool.reference_template_tools import ReferenceTemplateTools
 from datus.tools.func_tool.semantic_tools import SemanticTools
@@ -38,6 +39,7 @@ VALID_TOOL_METHODS: dict[str, set[str]] = {
     "reference_template_tools": set(ReferenceTemplateTools.all_tools_name()),
     "date_parsing_tools": {"parse_temporal_expressions"},
     "filesystem_tools": set(FilesystemFuncTool.all_tools_name()),
+    "memory_tools": set(MemoryFuncTool.all_tools_name()),
     "platform_doc_tools": set(PlatformDocSearchTool.all_tools_name()),
 }
 
@@ -73,7 +75,7 @@ _ASK_AGENT_FILESYSTEM_READ_ONLY: tuple[str, ...] = ("glob", "grep", "read_file")
 # truth: each agent type returns exactly the categories the editor should
 # surface, and the frontend can render whatever it receives.
 _TOOL_CATEGORIES_BY_AGENT_TYPE: dict[str, tuple[str, ...]] = {
-    "chat": _USER_FACING_TOOL_CATEGORIES,
+    "chat": _USER_FACING_TOOL_CATEGORIES + ("memory_tools",),
     "gen_sql": (
         "db_tools",
         "semantic_tools",
@@ -86,6 +88,7 @@ _TOOL_CATEGORIES_BY_AGENT_TYPE: dict[str, tuple[str, ...]] = {
         "date_parsing_tools",
         "reference_template_tools",
     ),
+    "ask_metrics": _USER_FACING_TOOL_CATEGORIES,
     "ask_report": (
         "db_tools",
         "semantic_tools",
@@ -108,12 +111,10 @@ _TOOL_CATEGORIES_BY_AGENT_TYPE: dict[str, tuple[str, ...]] = {
 def _build_tool_types(agent_type: str) -> dict[str, dict[str, list[str]]]:
     """Compose the ``tool_types`` block returned by ``GET /agent/use_tools``
     for ``agent_type``. Categories are restricted to the per-type whitelist
-    in :data:`_TOOL_CATEGORIES_BY_AGENT_TYPE`; for ``ask_*`` agents,
+    in :data:`_TOOL_CATEGORIES_BY_AGENT_TYPE`; for artifact ``ask_*`` agents,
     ``filesystem_tools`` is further restricted to the read-only subset so
     the editor picker never surfaces ``write_file`` / ``edit_file`` as
-    selectable options. ``_validate_tools_for_agent_type`` reads back from
-    the same block, so the per-type catalog stays the single allowlist for
-    both the picker and the write-path validator.
+    selectable options.
     """
     is_ask_agent = agent_type in {"ask_report", "ask_dashboard"}
     tool_types: dict[str, dict[str, list[str]]] = {}
@@ -137,6 +138,7 @@ SUBAGENT_TOOL_REFERENCE: dict[str, dict[str, Any]] = {
             "reference_template_tools.*",
             "date_parsing_tools.*",
             "filesystem_tools.*",
+            "memory_tools.*",
             "platform_doc_tools.*",
         ],
         "tool_types": _build_tool_types("chat"),
@@ -156,6 +158,18 @@ SUBAGENT_TOOL_REFERENCE: dict[str, dict[str, Any]] = {
         ],
         "tool_types": _build_tool_types("gen_report"),
     },
+    "ask_metrics": {
+        "default_tools": [
+            "context_search_tools.search_metrics",
+            "context_search_tools.get_metrics",
+            "semantic_tools.list_metrics",
+            "semantic_tools.get_dimensions",
+            "semantic_tools.query_metrics",
+            "semantic_tools.attribution_analyze",
+            "context_search_tools.list_subject_tree",
+        ],
+        "tool_types": _build_tool_types("ask_metrics"),
+    },
     # ask_report / ask_dashboard: read-only follow-up consultant for a single
     # visual artifact. Default tools cover data exploration (db_tools read
     # methods, semantic / context_search / reference_template) plus the
@@ -169,7 +183,6 @@ SUBAGENT_TOOL_REFERENCE: dict[str, dict[str, Any]] = {
             "db_tools.list_tables",
             "db_tools.describe_table",
             "db_tools.search_table",
-            "db_tools.get_table_ddl",
             "db_tools.read_query",
             "semantic_tools.*",
             "context_search_tools.*",
@@ -188,7 +201,6 @@ SUBAGENT_TOOL_REFERENCE: dict[str, dict[str, Any]] = {
             "db_tools.list_tables",
             "db_tools.describe_table",
             "db_tools.search_table",
-            "db_tools.get_table_ddl",
             "db_tools.read_query",
             "semantic_tools.*",
             "context_search_tools.*",
@@ -284,10 +296,9 @@ def _strip_leading_slashes(value: Any) -> list[str]:
 
 
 # Keys inside ``scoped_context`` that hold subject-tree path entries. The API's
-# flat ``subjects`` array is the union of all three; the runtime stores them
-# split because each store (metrics, reference SQL, ext_knowledge) owns its own
-# scope filter.
-_SUBJECT_BUCKET_KEYS: tuple[str, ...] = ("metrics", "sqls", "ext_knowledge")
+# flat ``subjects`` array is the union of both stores; the runtime stores them
+# split because each store (metrics, reference SQL) owns its own scope filter.
+_SUBJECT_BUCKET_KEYS: tuple[str, ...] = ("metrics", "sqls")
 
 
 def _classify_subject_paths(
@@ -295,21 +306,21 @@ def _classify_subject_paths(
     subject_paths: list[str],
     datasource_id: Optional[str] = None,
 ) -> dict[str, list[str]]:
-    """Bucket subject paths into ``metrics`` / ``sqls`` / ``ext_knowledge``.
+    """Bucket subject paths into ``metrics`` / ``sqls``.
 
     The API surfaces a single ``subjects`` array — dot-separated paths like
     ``Commerce.Orders.Average_Order_Value.average_gross_order_value`` — that's
     the merged union of all entries the editor's subject-tree exposes
     (Metrics, Reference SQLs, Knowledge — see
     ``ExplorerService.get_subject_list``). The runtime expects them split:
-    ``ScopedContext.metrics`` / ``.sqls`` / ``.ext_knowledge`` each drive an
+    ``ScopedContext.metrics`` / ``.sqls`` each drive an
     independent scope filter.
 
     For every input path:
 
     1. Split via ``split_reference_path`` (handles quoted segments).
     2. Resolve the parent subject node via ``SubjectTreeStore.get_node_by_path``.
-    3. Probe the metric / reference-sql / ext-knowledge stores for an entry
+    3. Probe the metric / reference-sql stores for an entry
        named ``parts[-1]`` under that node.
     4. Bucket on the first store that owns the name.
 
@@ -324,7 +335,6 @@ def _classify_subject_paths(
         return buckets
 
     try:
-        from datus.storage.ext_knowledge.store import ExtKnowledgeRAG
         from datus.storage.metric.store import MetricRAG
         from datus.storage.reference_sql.store import ReferenceSqlRAG
         from datus.storage.registry import get_subject_tree_store
@@ -345,10 +355,9 @@ def _classify_subject_paths(
         return buckets
 
     try:
-        subject_tree = get_subject_tree_store(project=agent_config.project_name)
+        subject_tree = get_subject_tree_store(project=agent_config.project_name, datasource_id=ds)
         metric_storage = MetricRAG(agent_config, datasource_id=ds).storage
         sql_storage = ReferenceSqlRAG(agent_config, datasource_id=ds).reference_sql_storage
-        knowledge_storage = ExtKnowledgeRAG(agent_config, datasource_id=ds).store
     except Exception:
         logger.warning("Subject classification storage init failed — routing all subjects to 'metrics'", exc_info=True)
         buckets["metrics"] = list(subject_paths)
@@ -357,7 +366,6 @@ def _classify_subject_paths(
     probes: tuple[tuple[str, Any], ...] = (
         ("metrics", metric_storage),
         ("sqls", sql_storage),
-        ("ext_knowledge", knowledge_storage),
     )
 
     for path in subject_paths:
@@ -391,7 +399,7 @@ def _classify_subject_paths(
 
 
 def _merge_subjects_from_scoped_context(scoped_ctx: Optional[dict]) -> list[str]:
-    """Flatten ``metrics`` / ``sqls`` / ``ext_knowledge`` back into one list.
+    """Flatten ``metrics`` / ``sqls`` back into one list.
 
     Inverse of :func:`_classify_subject_paths`. Stored entries are returned
     verbatim (canonical dot-separated form), with duplicates dropped while
@@ -422,7 +430,7 @@ def _build_scoped_context(
     edits, an explicit ``request.scoped_context`` for inputs that send one).
 
     ``ScopedContext`` (``datus/schemas/agent_models.py``) only defines
-    ``datasource`` / ``tables`` / ``metrics`` / ``sqls`` / ``ext_knowledge``;
+    ``datasource`` / ``tables`` / ``metrics`` / ``sqls``;
     the API's ``catalogs`` array is the editor's name for the same scope as
     runtime ``tables`` (catalog/database/schema/table identifiers consumed by
     ``ScopedFilterBuilder.build_table_filter``), so this helper writes
@@ -436,9 +444,9 @@ def _build_scoped_context(
     ``None`` leaves the existing value intact.
 
     ``subject_buckets`` (pre-classified by :func:`_classify_subject_paths`)
-    are written to the runtime-visible ``metrics`` / ``sqls`` /
-    ``ext_knowledge`` keys; passing a non-``None`` ``subject_buckets``
-    rewrites all three bucket keys (an empty bucket clears its key), so the
+    are written to the runtime-visible ``metrics`` / ``sqls`` keys;
+    passing a non-``None`` ``subject_buckets`` rewrites both bucket keys
+    (an empty bucket clears its key), so the
     API contract is "the caller's ``subjects`` list is the new full scope."
 
     Returns ``None`` when the merged dict would be empty.
@@ -536,16 +544,14 @@ def _validate_tools(tools: list[str]) -> list[str]:
 
 
 def _validate_tools_for_agent_type(tools: list[str], agent_type: str) -> list[str]:
-    """For ``ask_*`` agents, reject any tool pattern outside the read-only
-    catalog. Returns the offending patterns; an empty list means OK.
+    """Reject tool patterns outside a type-specific catalog.
+
+    Returns the offending patterns; an empty list means OK.
 
     The general :func:`_validate_tools` only confirms patterns are
-    syntactically valid (category / method exists). ``ask_*`` agents have
-    an additional contract — they must never mutate the artifact they're
-    bound to — so we enforce a per-type allowlist matching the
-    ``tool_types`` catalog returned by ``GET /agent/use_tools``. This
-    blocks ``filesystem_tools.write_file`` / ``edit_file`` and any wildcard
-    that would expand reach beyond the documented read-only set.
+    syntactically valid (category / method exists). Artifact ask agents also
+    have a narrower read-only filesystem contract, so enforce that allowlist
+    matching the ``tool_types`` catalog returned by ``GET /agent/use_tools``.
     """
     if agent_type not in {"ask_report", "ask_dashboard"}:
         return []
@@ -760,8 +766,8 @@ class AgentService:
 
         # The API ``catalogs`` field maps to ``scoped_context.tables`` (the
         # runtime-honored key consumed by ``ScopedFilterBuilder.build_table_filter``).
-        # ``subjects`` is recomposed from the three runtime buckets
-        # (``metrics`` / ``sqls`` / ``ext_knowledge``) — the inverse of the
+        # ``subjects`` is recomposed from the runtime buckets
+        # (``metrics`` / ``sqls``) — the inverse of the
         # save-side classification. Stored dot-form (wizard convention) is
         # converted to the API's slash-form on the way out.
         scoped_ctx = agent.get("scoped_context") if isinstance(agent.get("scoped_context"), dict) else {}
@@ -816,6 +822,7 @@ class AgentService:
     # Map sub-agent type to builtin prompt template base name
     _TYPE_TO_TEMPLATE = {
         "gen_sql": "gen_sql_system",
+        "ask_metrics": "ask_metrics_system",
         "gen_report": "gen_report_system",
         "ask_report": "ask_report_system",
         "ask_dashboard": "ask_dashboard_system",
@@ -1082,8 +1089,8 @@ class AgentService:
         # The API ``catalogs`` field maps to ``scoped_context.tables`` — that's
         # the runtime-honored key consumed by
         # ``ScopedFilterBuilder.build_table_filter``. ``subjects`` is *classified*
-        # (via the metric / reference-sql / ext-knowledge stores) and split
-        # across the runtime-visible ``metrics`` / ``sqls`` / ``ext_knowledge``
+        # (via the metric / reference-sql stores) and split
+        # across the runtime-visible ``metrics`` / ``sqls``
         # keys, since ``ScopedContext`` has no flat ``subjects`` field. Editing
         # any scope-related field also rewrites ``scoped_context.datasource`` to
         # the active datasource so ``SubAgentConfig.is_in_datasource`` agrees
@@ -1111,7 +1118,7 @@ class AgentService:
             # ``agent_config.current_datasource`` is unset but the agent
             # already has a saved binding under ``scoped_context.datasource``,
             # the classifier must use the saved DS to look up entries in the
-            # right metric / sql / ext_knowledge stores. Otherwise it would
+            # right metric / sql stores. Otherwise it would
             # fall back to "no datasource → all metrics" and silently
             # mis-bucket subjects against a binding that's about to be
             # re-persisted by ``_build_scoped_context``.

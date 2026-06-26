@@ -120,7 +120,7 @@ class TestDBFuncTool:
         tools = db_func_tool.available_tools()
 
         # Should have base tools plus dialect-specific tools
-        expected_tool_count = 4  # list_tables, describe_table, read_query, get_table_ddl
+        expected_tool_count = 3  # list_tables, describe_table, read_query
         if connector_registry.support_database(mock_connector.dialect):
             expected_tool_count += 1
         if connector_registry.support_schema(mock_connector.dialect):
@@ -130,7 +130,7 @@ class TestDBFuncTool:
 
         # Verify tool names
         tool_names = {tool.name for tool in tools}
-        expected_base_tools = {"list_tables", "describe_table", "read_query", "get_table_ddl"}
+        expected_base_tools = {"list_tables", "describe_table", "read_query"}
 
         assert expected_base_tools.issubset(tool_names)
         # Tool presence must exactly match dialect dispatch — no silent branch skipping.
@@ -753,7 +753,7 @@ class TestDBFuncTool:
         tool = DBFuncTool(connector)
         tools_by_name = {item.name: item for item in tool.available_tools()}
 
-        for tool_name in ("list_databases", "list_schemas", "list_tables", "describe_table", "get_table_ddl"):
+        for tool_name in ("list_databases", "list_schemas", "list_tables", "describe_table"):
             assert "catalog" not in tools_by_name[tool_name].params_json_schema.get("properties", {})
 
     def test_snowflake_catalog_argument_aliases_to_database_for_describe_table(self):
@@ -1221,7 +1221,7 @@ class TestDBFuncToolEdgeCases:
             tool = DBFuncTool(mock_connector)
             tools = tool.available_tools()
 
-            expected_tool_count = 4
+            expected_tool_count = 3  # list_tables, describe_table, read_query
             if connector_registry.support_database(dialect):
                 expected_tool_count += 1
             if connector_registry.support_schema(dialect):
@@ -1443,7 +1443,7 @@ class TestDBFuncToolMultiConnector:
         mock_connector.database_name = "db1"
         mock_connector.catalog_name = ""
         mock_connector.schema_name = ""
-        mock_db_manager.first_conn.return_value = mock_connector
+        mock_db_manager.get_conn.return_value = mock_connector
 
         tool = DBFuncTool(
             mock_db_manager,
@@ -1457,7 +1457,8 @@ class TestDBFuncToolMultiConnector:
         assert tool._default_datasource == "db1"
         assert tool._connector_cache_size == 4
         assert tool._primary_connector is mock_connector
-        mock_db_manager.first_conn.assert_called_once_with("db1")
+        # Primary connector bound to (default datasource, default database="").
+        mock_db_manager.get_conn.assert_called_once_with("db1", "")
 
     def test_multi_connector_requires_agent_config(self):
         """Test that multi-connector mode requires agent_config parameter."""
@@ -1478,7 +1479,7 @@ class TestDBFuncToolMultiConnector:
         mock_connector.database_name = "db1"
         mock_connector.catalog_name = ""
         mock_connector.schema_name = ""
-        mock_db_manager.first_conn.return_value = mock_connector
+        mock_db_manager.get_conn.return_value = mock_connector
 
         tool = DBFuncTool(
             mock_db_manager,
@@ -1502,7 +1503,7 @@ class TestDBFuncToolMultiConnector:
         mock_connector.database_name = "SNOWFLAKE_SAMPLE_DATA"
         mock_connector.catalog_name = ""
         mock_connector.schema_name = "TPCDS_SF10TCL"
-        mock_db_manager.first_conn.return_value = mock_connector
+        mock_db_manager.get_conn.return_value = mock_connector
 
         mock_config = Mock()
         mock_config.active_model.return_value.model = "gpt-5.4"
@@ -1520,7 +1521,6 @@ class TestDBFuncToolMultiConnector:
 
         schema = tool.to_function_tool(tool.list_tables).params_json_schema
         assert "catalog" in schema.get("properties", {})
-        mock_db_manager.get_conn.assert_not_called()
 
     def test_mixed_dialect_available_tools_use_all_configured_dialects(self):
         """Publish discovery tools when any configured datasource supports them."""
@@ -1535,7 +1535,7 @@ class TestDBFuncToolMultiConnector:
         mock_connector.database_name = "local"
         mock_connector.catalog_name = ""
         mock_connector.schema_name = ""
-        mock_db_manager.first_conn.return_value = mock_connector
+        mock_db_manager.get_conn.return_value = mock_connector
 
         mock_config = Mock()
         mock_config.active_model.return_value.model = "gpt-5.4"
@@ -1554,7 +1554,6 @@ class TestDBFuncToolMultiConnector:
         tool_names = {available_tool.name for available_tool in tool.available_tools()}
         assert "list_databases" in tool_names
         assert "list_schemas" in tool_names
-        mock_db_manager.get_conn.assert_not_called()
 
     def test_get_connector_cache_hit(self, mock_agent_config):
         """Test that _get_connector uses cache for repeated calls."""
@@ -1572,8 +1571,8 @@ class TestDBFuncToolMultiConnector:
         mock_connector2.database_name = "db2"
 
         mock_db_manager.first_conn.return_value = mock_connector1
-        mock_db_manager.get_conn.side_effect = lambda datasource, db: (
-            mock_connector2 if db == "db2" else mock_connector1
+        mock_db_manager.get_conn.side_effect = lambda datasource, db="": (
+            mock_connector2 if datasource == "db2" else mock_connector1
         )
 
         tool = DBFuncTool(
@@ -1581,6 +1580,8 @@ class TestDBFuncToolMultiConnector:
             agent_config=mock_agent_config,
             default_datasource="db1",
         )
+        # Ignore the construction-time get_conn (primary connector).
+        mock_db_manager.get_conn.reset_mock()
 
         # First call should fetch from db_manager
         conn1 = tool._get_connector("db2")
@@ -1608,7 +1609,7 @@ class TestDBFuncToolMultiConnector:
 
         connectors = {f"db{i}": make_connector(f"db{i}") for i in range(5)}
         mock_db_manager.first_conn.return_value = connectors["db0"]
-        mock_db_manager.get_conn.side_effect = lambda datasource, db: connectors.get(db, connectors["db0"])
+        mock_db_manager.get_conn.side_effect = lambda datasource, db="": connectors.get(datasource, connectors["db0"])
 
         # Update agent_config to have more databases
         mock_agent_config.current_db_configs.return_value = {f"db{i}": {} for i in range(5)}
@@ -1620,22 +1621,23 @@ class TestDBFuncToolMultiConnector:
             connector_cache_size=3,  # Small cache for testing
         )
 
+        # Cache is keyed by (datasource, database); per-call overrides use database="".
         # Fill cache: db1, db2, db3
         tool._get_connector("db1")
         tool._get_connector("db2")
         tool._get_connector("db3")
         assert len(tool._connector_cache) == 3
-        assert list(tool._connector_cache.keys()) == ["db1", "db2", "db3"]
+        assert list(tool._connector_cache.keys()) == [("db1", ""), ("db2", ""), ("db3", "")]
 
         # Access db1 again (moves to end)
         tool._get_connector("db1")
-        assert list(tool._connector_cache.keys()) == ["db2", "db3", "db1"]
+        assert list(tool._connector_cache.keys()) == [("db2", ""), ("db3", ""), ("db1", "")]
 
         # Add db4, should evict db2 (least recently used)
         tool._get_connector("db4")
         assert len(tool._connector_cache) == 3
-        assert "db2" not in tool._connector_cache
-        assert list(tool._connector_cache.keys()) == ["db3", "db1", "db4"]
+        assert ("db2", "") not in tool._connector_cache
+        assert list(tool._connector_cache.keys()) == [("db3", ""), ("db1", ""), ("db4", "")]
 
     def test_list_tables_uses_correct_connector(self, mock_agent_config):
         """Test that list_tables uses connector for the specified database."""
@@ -1696,8 +1698,8 @@ class TestDBFuncToolMultiConnector:
         result = tool.read_query("SELECT * FROM test", datasource="db2")
 
         assert result.success == 1
-        # In cross-datasource mode, db_name is used as both datasource and logic_name
-        mock_db_manager.get_conn.assert_called_with("db2", "db2")
+        # Routing is by datasource key only (one connection per datasource).
+        mock_db_manager.get_conn.assert_called_with("db2", "")
         mock_connector.execute_query.assert_called_once()
 
 

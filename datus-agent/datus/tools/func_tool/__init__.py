@@ -11,6 +11,8 @@ from datus.tools.func_tool.date_parsing_tools import DateParsingTools
 from datus.tools.func_tool.filesystem_tools import FilesystemFuncTool, filesystem_function_tools
 from datus.tools.func_tool.generation_tools import GenerationTools
 from datus.tools.func_tool.memory_filesystem_tools import MemoryFilesystemFuncTool
+from datus.tools.func_tool.memory_tools import MemoryFuncTool
+from datus.tools.func_tool.orchestrator_tools import OrchestratorIssueTools
 from datus.tools.func_tool.plan_tools import PlanTool, SessionTodoStorage
 from datus.tools.func_tool.platform_doc_search import PlatformDocSearchTool
 from datus.tools.func_tool.report_artifact_tools import ReportArtifactTools, ReportFilesystemFuncTool
@@ -33,6 +35,7 @@ __all__ = [
     "filesystem_function_tools",
     "FilesystemFuncTool",
     "MemoryFilesystemFuncTool",
+    "MemoryFuncTool",
     "ReportFilesystemFuncTool",
     "ReportArtifactTools",
     "DashboardFilesystemFuncTool",
@@ -41,6 +44,7 @@ __all__ = [
     "SemanticDiscoveryTools",
     "PlatformDocSearchTool",
     "SubAgentTaskTool",
+    "OrchestratorIssueTools",
 ]
 
 try:

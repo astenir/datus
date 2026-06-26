@@ -767,13 +767,14 @@ class TestInitOtherThreeLevelSchema:
 
 class TestInitLocalSchema:
     def _make_real_agent_config(self, db_type, db_name="mydb"):
-        """Build agent_config with a real DbConfig so isinstance(db_config, DbConfig) works."""
+        """Build agent_config with a real DbConfig (one per datasource)."""
         from datus.configuration.agent_config import DbConfig
 
         db_config = DbConfig(type=db_type, database=db_name)
         agent_config = MagicMock()
         agent_config.current_datasource = "test_ns"
-        agent_config.datasource_configs = {"test_ns": {db_name: db_config}}
+        agent_config.datasource_configs = {"test_ns": db_config}
+        agent_config.list_databases.return_value = [db_name]
         return agent_config, db_config
 
     def test_sqlite_dispatched(self):
@@ -815,92 +816,67 @@ class TestInitLocalSchema:
         mock_init_other.assert_called_once()
         mock_store.after_init.assert_called_once()
 
-    def test_multiple_db_configs_iterates_all(self):
+    def test_sqlite_dispatches_each_database_from_list(self):
+        """A datasource serving multiple databases dispatches one init per database."""
         from datus.storage.schema_metadata.local_init import init_local_schema
 
         mock_store = MagicMock()
-        agent_config = MagicMock()
-        agent_config.current_datasource = "test_ns"
+        agent_config, _ = self._make_real_agent_config(db_type=DBType.SQLITE, db_name="db1")
+        agent_config.list_databases.return_value = ["db1", "db2", "db3"]
+        db_manager, _ = _make_db_manager()
 
-        db_config_a = MagicMock()
-        db_config_a.type = DBType.SQLITE
-        db_config_b = MagicMock()
-        db_config_b.type = DBType.SQLITE
-        # Multiple db configs
-        agent_config.datasource_configs = {"test_ns": {"db_a": db_config_a, "db_b": db_config_b}}
-        db_manager, conn = _make_db_manager()
-
-        with (
-            patch("datus.storage.schema_metadata.local_init.init_sqlite_schema") as mock_init_sqlite,
-            patch(
-                "datus.storage.schema_metadata.local_init.exists_table_value",
-                return_value=({}, set()),
-            ),
-        ):
+        with patch("datus.storage.schema_metadata.local_init.init_sqlite_schema") as mock_init_sqlite:
             init_local_schema(mock_store, agent_config, db_manager)
 
-        assert mock_init_sqlite.call_count == 2
+        assert mock_init_sqlite.call_count == 3
+        dispatched = [call.kwargs["database"] for call in mock_init_sqlite.call_args_list]
+        assert dispatched == ["db1", "db2", "db3"]
         mock_store.after_init.assert_called_once()
 
-    def test_multiple_db_with_filter_skips_others(self):
+    def test_sqlite_respects_init_database_name_filter(self):
+        """init_database_name restricts dispatch to the matching database only."""
         from datus.storage.schema_metadata.local_init import init_local_schema
 
         mock_store = MagicMock()
-        agent_config = MagicMock()
-        agent_config.current_datasource = "test_ns"
+        agent_config, _ = self._make_real_agent_config(db_type=DBType.SQLITE, db_name="db1")
+        agent_config.list_databases.return_value = ["db1", "db2", "db3"]
+        db_manager, _ = _make_db_manager()
 
-        db_config_a = MagicMock()
-        db_config_a.type = DBType.SQLITE
-        db_config_b = MagicMock()
-        db_config_b.type = DBType.SQLITE
-        agent_config.datasource_configs = {"test_ns": {"db_a": db_config_a, "db_b": db_config_b}}
-        db_manager, conn = _make_db_manager()
+        with patch("datus.storage.schema_metadata.local_init.init_sqlite_schema") as mock_init_sqlite:
+            init_local_schema(mock_store, agent_config, db_manager, init_database_name="db2")
 
-        with (
-            patch("datus.storage.schema_metadata.local_init.init_sqlite_schema") as mock_init_sqlite,
-            patch(
-                "datus.storage.schema_metadata.local_init.exists_table_value",
-                return_value=({}, set()),
-            ),
-        ):
-            init_local_schema(mock_store, agent_config, db_manager, init_database_name="db_a")  # only process db_a
+        mock_init_sqlite.assert_called_once()
+        assert mock_init_sqlite.call_args.kwargs["database"] == "db2"
 
-        # Only db_a should be initialized
-        assert mock_init_sqlite.call_count == 1
-
-    def test_empty_multiple_db_configs_returns_early(self):
+    def test_duckdb_does_not_pass_database_filter_as_schema_name(self):
+        """init_database_name must not leak into DuckDB's schema_name argument."""
         from datus.storage.schema_metadata.local_init import init_local_schema
 
         mock_store = MagicMock()
-        agent_config = MagicMock()
-        agent_config.current_datasource = "test_ns"
-        agent_config.datasource_configs = {"test_ns": {}}  # empty
-        db_manager = MagicMock()
+        agent_config, _ = self._make_real_agent_config(db_type=DBType.DUCKDB, db_name="db1")
+        agent_config.list_databases.return_value = ["db1", "db2"]
+        db_manager, _ = _make_db_manager()
 
-        # Should return early without error and without calling after_init
-        init_local_schema(mock_store, agent_config, db_manager)
+        with patch("datus.storage.schema_metadata.local_init.init_duckdb_schema") as mock_init_duckdb:
+            init_local_schema(mock_store, agent_config, db_manager, init_database_name="db2")
 
-        mock_store.after_init.assert_not_called()
+        mock_init_duckdb.assert_called_once()
+        assert mock_init_duckdb.call_args.kwargs["database_name"] == "db2"
+        assert mock_init_duckdb.call_args.kwargs["schema_name"] == ""
 
-    def test_unsupported_db_type_in_multi_warns(self):
+    def test_empty_database_list_skips_dispatch(self):
+        """A datasource resolving to zero databases skips schema init without raising."""
         from datus.storage.schema_metadata.local_init import init_local_schema
 
         mock_store = MagicMock()
-        agent_config = MagicMock()
-        agent_config.current_datasource = "test_ns"
+        agent_config, db_config = self._make_real_agent_config(db_type=DBType.SQLITE, db_name="")
+        agent_config.list_databases.return_value = []
+        db_manager, _ = _make_db_manager()
 
-        db_config = MagicMock()
-        db_config.type = "oracle"  # not SQLITE or DUCKDB in multi-db mode
-        agent_config.datasource_configs = {"test_ns": {"oradb": db_config}}
-        db_manager = MagicMock()
-
-        # Should not raise, just log warning
-        with patch(
-            "datus.storage.schema_metadata.local_init.exists_table_value",
-            return_value=({}, set()),
-        ):
+        with patch("datus.storage.schema_metadata.local_init.init_sqlite_schema") as mock_init_sqlite:
             init_local_schema(mock_store, agent_config, db_manager)
 
+        mock_init_sqlite.assert_not_called()
         mock_store.after_init.assert_called_once()
 
 

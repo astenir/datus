@@ -113,11 +113,18 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: |
+            uv.lock
+            pyproject.toml
 
       - name: Install dependencies
         run: |
-          uv sync
-          uv pip install --upgrade --no-cache-dir \
+          uv sync --locked
+          # No --upgrade: keep the locked framework packages; adapters only add
+          # their own missing deps instead of bumping fastapi/starlette/etc.
+          uv pip install --no-cache-dir \
             --reinstall-package datus-semantic-core \
             --reinstall-package datus-semantic-metricflow \
             --reinstall-package datus-snowflake \
@@ -319,7 +326,6 @@ jobs:
             schema_value.lance
             metrics.lance
             reference_sql.lance
-            ext_knowledge.lance
             reference_template.lance
           )
 
@@ -363,7 +369,6 @@ jobs:
             schema_value.lance
             metrics.lance
             reference_sql.lance
-            ext_knowledge.lance
             reference_template.lance
           )
           for dataset in "${required_datasets[@]}"; do
@@ -425,6 +430,32 @@ jobs:
             nightly-trace-references.jsonl
             nightly-trace-summary.jsonl
             nightly-process-diagnostics.json
+          retention-days: 7
+
+      - name: Check documented coverage gaps
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Rollout step 2 (see docs/superpowers/specs/2026-06-20-nightly-coverage-gap-detection-design.md):
+          # runs in --dry-run, so it only writes the digest artifact and makes no
+          # GitHub issue changes. To enable per-flow issue sync, create the
+          # `coverage-gap` label once and drop the --dry-run flag below.
+          uv run python ci/harness/check_nightly_coverage.py \
+            --coverage-map ci/harness/coverage-map.yml \
+            --nightly-manifest nightly-manifest.json \
+            --output coverage-gap-report.md \
+            --repo "${{ github.repository }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            --dry-run
+
+      - name: Upload coverage gap report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-gap-report-${{ github.run_number }}
+          path: coverage-gap-report.md
           retention-days: 7
 
       - name: Send Feishu notification

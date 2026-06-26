@@ -64,6 +64,24 @@ class TestArgumentParser:
             args = ap.parse_args()
         assert args.resume == "sess_123"
 
+    def test_parse_args_orchestrator_tools(self):
+        ap = ArgumentParser()
+        with patch.object(sys, "argv", ["datus", "--datasource", "ns1", "--print", "hello", "--orchestrator-tools"]):
+            args = ap.parse_args()
+        assert args.orchestrator_tools is True
+
+    def test_parse_args_plan_mode(self):
+        ap = ArgumentParser()
+        with patch.object(sys, "argv", ["datus", "--datasource", "ns1", "--print", "hello", "--plan-mode"]):
+            args = ap.parse_args()
+        assert args.plan_mode is True
+
+    def test_parse_args_plan_mode_default_off(self):
+        ap = ArgumentParser()
+        with patch.object(sys, "argv", ["datus", "--datasource", "ns1", "--print", "hello"]):
+            args = ap.parse_args()
+        assert args.plan_mode is False
+
     def test_parse_args_web(self):
         ap = ArgumentParser()
         with patch.object(sys, "argv", ["datus", "--datasource", "ns1", "--web"]):
@@ -95,7 +113,7 @@ class TestApplicationRun:
             patch("datus.cli.main.configure_logging"),
             patch.object(app, "_ensure_project_config"),
             patch.object(app, "_resolve_default_datasource", return_value=""),
-            patch("datus.cli.main.DatusCLI", return_value=mock_cli) as mock_cli_cls,
+            patch("datus.cli.repl.DatusCLI", return_value=mock_cli) as mock_cli_cls,
         ):
             app.run()
         mock_cli_cls.assert_called_once_with(mock_args)
@@ -111,7 +129,7 @@ class TestApplicationRun:
             patch.object(app.arg_parser, "parse_args", return_value=mock_args),
             patch("datus.cli.main.configure_logging"),
             patch.object(app, "_resolve_default_datasource", return_value=""),
-            patch("datus.cli.main.DatusCLI") as mock_cli_cls,
+            patch("datus.cli.repl.DatusCLI") as mock_cli_cls,
         ):
             app.run()
         mock_cli_cls.assert_not_called()
@@ -128,7 +146,7 @@ class TestApplicationRun:
             patch.object(app.arg_parser, "parse_args", return_value=mock_args),
             patch("datus.cli.main.configure_logging"),
             patch.object(app, "_ensure_project_config"),
-            patch("datus.cli.main.DatusCLI") as mock_cli_cls,
+            patch("datus.cli.repl.DatusCLI") as mock_cli_cls,
         ):
             app.run()
         mock_cli_cls.assert_called_once_with(mock_args)
@@ -138,6 +156,49 @@ class TestApplicationRun:
         app = Application()
         mock_args = SimpleNamespace(
             debug=False, datasource="ns1", print_mode=None, web=False, resume=None, proxy_tools="*", config=None
+        )
+        with (
+            patch.object(app.arg_parser, "parse_args", return_value=mock_args),
+            patch("datus.cli.main.configure_logging"),
+            patch.object(app, "_ensure_project_config"),
+        ):
+            with pytest.raises(SystemExit):
+                app.run()
+
+    def test_orchestrator_tools_without_print_mode_errors(self):
+        """Verify that --orchestrator-tools without --print raises SystemExit."""
+        app = Application()
+        mock_args = SimpleNamespace(
+            debug=False,
+            datasource="ns1",
+            print_mode=None,
+            web=False,
+            resume=None,
+            proxy_tools=None,
+            orchestrator_tools=True,
+            config=None,
+        )
+        with (
+            patch.object(app.arg_parser, "parse_args", return_value=mock_args),
+            patch("datus.cli.main.configure_logging"),
+            patch.object(app, "_ensure_project_config"),
+        ):
+            with pytest.raises(SystemExit):
+                app.run()
+
+    def test_plan_mode_without_print_mode_errors(self):
+        """Verify that --plan-mode without --print raises SystemExit."""
+        app = Application()
+        mock_args = SimpleNamespace(
+            debug=False,
+            datasource="ns1",
+            print_mode=None,
+            web=False,
+            resume=None,
+            proxy_tools=None,
+            orchestrator_tools=False,
+            plan_mode=True,
+            config=None,
         )
         with (
             patch.object(app.arg_parser, "parse_args", return_value=mock_args),
@@ -181,7 +242,7 @@ class TestApplicationRun:
             patch.object(app.arg_parser, "parse_args", return_value=mock_args),
             patch("datus.cli.main.configure_logging"),
             patch.object(app, "_ensure_project_config") as mock_ensure,
-            patch("datus.cli.main.DatusCLI", return_value=mock_cli) as MockCLI,
+            patch("datus.cli.repl.DatusCLI", return_value=mock_cli) as MockCLI,
         ):
             app.run()
         mock_ensure.assert_called_once_with(mock_args)

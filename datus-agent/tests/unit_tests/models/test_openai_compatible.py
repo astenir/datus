@@ -134,6 +134,20 @@ class TestClassifyOpenAICompatibleError:
         assert code == ErrorCode.MODEL_AUTHENTICATION_ERROR
         assert retryable is False
 
+    def test_ssl_cert_error_detected_and_not_retryable(self):
+        # The litellm SSL message contains "internal" (InternalServerError) and would
+        # otherwise be misclassified as retryable MODEL_API_ERROR — SSL must win first.
+        err = MagicMock(spec=APIError)
+        err.__str__ = lambda self: (
+            "litellm.InternalServerError: AnthropicException - Cannot connect to host "
+            "ai.staging.example:443 ssl:True [SSLCertVerificationError: [SSL: "
+            "CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate "
+            "in certificate chain]"
+        )
+        code, retryable = classify_openai_compatible_error(err)
+        assert code == ErrorCode.MODEL_SSL_CERT_ERROR
+        assert retryable is False
+
     def test_403_returns_permission_error(self):
         err = MagicMock(spec=APIError)
         err.__str__ = lambda self: "403 forbidden"
@@ -1101,13 +1115,6 @@ class TestFormatToolResultFromDict:
     def test_describe_table_columns(self):
         data = {"success": 1, "result": {"columns": [{"name": "c"}] * 8}}
         assert self.model._format_tool_result_from_dict(data, tool_name="describe_table") == "8 cols"
-
-    def test_get_table_ddl_identifier(self):
-        data = {
-            "success": 1,
-            "result": {"identifier": "public.orders", "table_name": "orders", "definition": "CREATE TABLE ..."},
-        }
-        assert self.model._format_tool_result_from_dict(data, tool_name="get_table_ddl") == "DDL: public.orders"
 
     def test_load_skill_metadata_name(self):
         # Compact format: "+<skill_name>" clipped to SUMMARY_TEXT_MAX_CHARS.

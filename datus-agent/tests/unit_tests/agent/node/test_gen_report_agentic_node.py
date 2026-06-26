@@ -116,7 +116,7 @@ class TestGenReportAgenticNodeInit:
         assert node.max_turns == 5
 
     def test_report_max_turns_default(self, real_agent_config, mock_llm_create):
-        """Test default max_turns is 30 when node_name not in agentic_nodes."""
+        """Test default max_turns is 50 when node_name not in agentic_nodes."""
         from datus.agent.node.gen_report_agentic_node import GenReportAgenticNode
 
         node = GenReportAgenticNode(
@@ -127,7 +127,7 @@ class TestGenReportAgenticNodeInit:
             node_name="nonexistent_report_node",  # Not in agentic_nodes
         )
 
-        assert node.max_turns == 30
+        assert node.max_turns == 50
 
     def test_report_node_name_configurable(self, real_agent_config, mock_llm_create):
         """Test that node_name is configurable and affects get_node_name()."""
@@ -561,13 +561,14 @@ class TestExtractReportFromResponse:
 
 class TestBuildEnhancedMessage:
     def test_includes_dialect_block_from_agent_config(self, real_agent_config, mock_llm_create):
-        """``db_type`` from agent_config drives the dialect block even without input-side ctx."""
+        """The dialect surfaces even without input-side ctx (merged datasource reminder)."""
         node = _make_node(real_agent_config, mock_llm_create)
         user_input = GenReportNodeInput(user_message="Analyze revenue")
         result = node._build_enhanced_message(user_input)
         assert "Analyze revenue" in result
-        # Dialect comes from agent_config.db_type
-        assert "Dialect" in result
+        # Dialect rides in the per-turn datasource reminder line
+        assert "dialect:" in result
+        assert "Current datasource:" in result
 
     def test_with_database_context_builds_structured_message(self, real_agent_config, mock_llm_create):
         node = _make_node(real_agent_config, mock_llm_create)

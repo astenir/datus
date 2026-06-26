@@ -7,7 +7,7 @@ import os
 import re
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from datus.configuration.node_type import NodeType
 from datus.observability.config import ObservabilityConfig
@@ -231,7 +231,6 @@ class DbConfig:
     private_key_file: str = field(default="", init=True)
     private_key_file_pwd: str = field(default="", init=True)
     catalog: str = field(default="", init=True)
-    logic_name: str = field(default="", init=True)  # Logical name for the database entry
     default: bool = field(default=False, init=True)  # Whether this is the default database
     extra: Optional[Dict] = field(default=None, init=True)  # Adapter-specific fields stored here
 
@@ -265,7 +264,6 @@ class DbConfig:
         db_config = cls(**params)
         if db_config.type in (DBType.SQLITE, DBType.DUCKDB):
             db_config.database = file_stem_from_uri(db_config.uri)
-        db_config.logic_name = kwargs.get("name")
         return db_config
 
 
@@ -340,6 +338,12 @@ class ModelConfig:
     top_p: Optional[float] = None  # Some models like kimi-k2.5 require top_p=0.95
     auth_type: str = "api_key"  # "api_key" | "oauth" | "subscription"
     use_native_api: bool = False  # Use native Anthropic client instead of LiteLLM
+    # SSL/TLS verification for this model's endpoint. Mirrors httpx/litellm `verify`:
+    #   True  -> verify against system/certifi CAs (default)
+    #   False -> disable verification (discouraged; MITM-exposed)
+    #   str   -> path to a CA bundle (PEM) to additionally trust (e.g. a private gateway CA)
+    # When set, takes priority over the SSL_VERIFY / SSL_CERT_FILE environment variables.
+    ssl_verify: Optional[Union[bool, str]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -376,8 +380,11 @@ class BenchmarkConfig:
     question_file: str = ""  # The corresponding task file can be csv/json/json
     question_key: str = ""  # The key corresponding to question
     question_id_key: str = ""  # If empty, use the line number
-    db_key: str | None = None  # The key corresponding to database name
-    ext_knowledge_key: str | None = None  # The key corresponding to external knowledge
+    datasource_key: str | None = None  # The key corresponding to Datus datasource routing name
+    catalog_key: str | None = None  # The key corresponding to SQL catalog name
+    database_key: str | None = None  # The key corresponding to SQL database name
+    schema_key: str | None = None  # The key corresponding to SQL schema name
+    ext_knowledge_key: str | None = None  # The key for the question's supplementary description (e.g. evidence)
     use_tables_key: str | None = None  # The key corresponding to the table to be used
 
     gold_sql_key: str | None = None  # The key corresponding to gold sql
@@ -392,6 +399,13 @@ class BenchmarkConfig:
     @staticmethod
     def filter_kwargs(cls, kwargs: dict) -> "BenchmarkConfig":
         valid_fields = {f.name for f in fields(cls)}
+        unknown = set(kwargs) - valid_fields
+        if unknown:
+            logger.warning(
+                "Ignoring unknown benchmark config key(s): %s. Note: 'db_key' was split into "
+                "'datasource_key'/'database_key'/'catalog_key'/'schema_key'; update your config accordingly.",
+                ", ".join(sorted(unknown)),
+            )
         return cls(**{k: v for k, v in kwargs.items() if k in valid_fields})
 
     def validate(self):
@@ -583,13 +597,13 @@ logger = get_logger(__name__)
 DEFAULT_REFLECTION_NODES = {
     StrategyType.SCHEMA_LINKING.lower(): [
         NodeType.TYPE_SCHEMA_LINKING,
-        NodeType.TYPE_GENERATE_SQL,
+        NodeType.TYPE_GEN_SQL,
         NodeType.TYPE_EXECUTE_SQL,
         NodeType.TYPE_REFLECT,
     ],
     StrategyType.DOC_SEARCH.lower(): [
         NodeType.TYPE_DOC_SEARCH,
-        NodeType.TYPE_GENERATE_SQL,
+        NodeType.TYPE_GEN_SQL,
         NodeType.TYPE_EXECUTE_SQL,
         NodeType.TYPE_REFLECT,
     ],
@@ -623,7 +637,6 @@ def _parse_single_file_db(db_config: Dict[str, Any], dialect: str) -> DbConfig:
         uri=uri,
         database=db_name,
         schema=db_config.get("schema", ""),
-        logic_name=login_name,
         extra=extra or None,
     )
 
@@ -898,6 +911,14 @@ class AgentConfig:
         # Initialize unified permission system
         self.permissions_config = self._init_permissions_config(kwargs.get("permissions", {}))
 
+        # SQL policies are enforced at the DB tool boundary. The config
+        # is static, while the request-scoped principal is attached later by
+        # API/gateway callers to the per-request AgentConfig copy.
+        from datus.tools.sql_policy import SqlPolicyConfig
+
+        self.sql_policy_config = SqlPolicyConfig.from_dict(kwargs.get("sql_policy", {}))
+        self.principal: Dict[str, Any] = {}
+
         # Initialize skills configuration
         self.skills_config = self._init_skills_config(kwargs.get("skills", {}))
 
@@ -1037,13 +1058,9 @@ class AgentConfig:
         return self.export_config.get("max_lines", 1000)
 
     @property
-    def datasource_configs(self) -> Dict[str, Dict[str, DbConfig]]:
-        """Wraps services.datasources for DBManager consumption.
-
-        Each datasource entry becomes its own group with a single db inside,
-        so DBManager only initializes one connection per datasource key.
-        """
-        return {db_name: {db_name: db_config} for db_name, db_config in self.services.datasources.items()}
+    def datasource_configs(self) -> Dict[str, DbConfig]:
+        """Datasource configs for DBManager consumption: one DbConfig per datasource key."""
+        return dict(self.services.datasources)
 
     def _init_services_config(self, datasources_config: Dict[str, Any]):
         """Parse services.datasources section into ServicesConfig.datasources."""
@@ -1062,48 +1079,39 @@ class AgentConfig:
             if db_type in (DBType.SQLITE, DBType.DUCKDB):
                 if "path_pattern" in db_config_dict:
                     path_pattern = resolve_env(str(db_config_dict["path_pattern"]))
-                    self._parse_glob_pattern_flat(db_name, path_pattern, db_type)
+                    self._parse_glob_pattern(
+                        db_name, path_pattern, db_type, is_default, db_config_dict.get("database", "")
+                    )
                 elif "uri" in db_config_dict:
                     db_config = _parse_single_file_db(db_config_dict, db_type)
-                    db_config.logic_name = db_name
                     db_config.default = is_default
                     self.services.datasources[db_name] = db_config
             else:
                 db_config = DbConfig.filter_kwargs(DbConfig, db_config_dict)
-                db_config.logic_name = db_name
                 db_config.default = is_default
                 self.services.datasources[db_name] = db_config
 
-    def _parse_glob_pattern_flat(self, base_name: str, path_pattern: str, db_type: str):
-        """Parse glob pattern and register each matched file as an independent database entry."""
-        any_db_path = False
-        logic_names = set()
-        for db_path in get_files_from_glob_pattern(path_pattern, db_type):
-            uri = db_path["uri"]
-            database_name = db_path["name"]
-            file_path = uri[len(f"{db_type}:///") :]
-            if not os.path.exists(file_path):
-                continue
-            any_db_path = True
-            entry_name = db_path["logic_name"]
-            if entry_name in logic_names:
-                logger.warning(f"Duplicate logical names are detected and will be skipped: {db_path}")
-                continue
-            logic_names.add(entry_name)
-            child_config = DbConfig(
-                type=db_type,
-                uri=uri,
-                database=database_name,
-                schema="",
-                logic_name=entry_name,
-            )
-            self.services.datasources[entry_name] = child_config
+    def _parse_glob_pattern(
+        self, base_name: str, path_pattern: str, db_type: str, is_default: bool = False, default_database: str = ""
+    ):
+        """Register ONE multi-database datasource backed by a glob ``path_pattern``.
 
-        if not any_db_path:
+        The matched files are this datasource's databases, enumerated at runtime from the
+        pattern (see ``list_databases``). ``default_database`` optionally names the default db.
+        """
+        if not get_files_from_glob_pattern(path_pattern, db_type):
             logger.warning(
                 f"No available database files found for '{base_name}', path_pattern: `{path_pattern}`. "
                 f"Skipping this entry. Ensure the path exists or remove it from agent.yml."
             )
+            return
+        self.services.datasources[base_name] = DbConfig(
+            type=db_type,
+            path_pattern=path_pattern,
+            database=default_database,
+            schema="",
+            default=is_default,
+        )
 
     def _init_permissions_config(self, permissions_raw: Dict[str, Any]):
         """Initialize unified permission configuration.
@@ -1212,6 +1220,21 @@ class AgentConfig:
     def current_db_configs(self) -> Dict[str, DbConfig]:
         """Returns all datasource configs."""
         return self.services.datasources
+
+    def list_databases(self, datasource: str = "") -> List[str]:
+        """Config-known physical databases of a datasource.
+
+        For a glob (``path_pattern``) datasource these are the matched files (one db per file);
+        for a single-file/server datasource it's the configured ``database`` (may be empty).
+        Server-side database enumeration beyond config is done via the connector, not here.
+        """
+        ds = datasource or self._current_datasource
+        cfg = self.services.datasources.get(ds)
+        if cfg is None:
+            return []
+        if cfg.path_pattern:
+            return [p["name"] for p in get_files_from_glob_pattern(cfg.path_pattern, cfg.type)]
+        return [cfg.database] if cfg.database else []
 
     def default_scheduler_service(self) -> Optional[str]:
         defaults = [name for name, cfg in self.scheduler_services.items() if cfg.get("default")]
@@ -1545,7 +1568,7 @@ class AgentConfig:
                 question_file="spider2-snow.jsonl",
                 question_id_key="instance_id",
                 question_key="instruction",
-                db_key="db_id",
+                database_key="db_id",
                 ext_knowledge_key="",
                 gold_sql_path="evaluation_suite/gold/sql",
                 gold_result_path="evaluation_suite/gold/exec_result",
@@ -1555,7 +1578,7 @@ class AgentConfig:
                 question_file="dev.json",
                 question_id_key="question_id",
                 question_key="question",
-                db_key="db_id",
+                database_key="db_id",
                 ext_knowledge_key="evidence",
                 gold_sql_path="dev.json",
                 gold_sql_key="SQL",
@@ -1690,7 +1713,7 @@ class AgentConfig:
             return self._current_datasource, datasources[self._current_datasource].type
         if len(datasources) == 1:
             cfg = list(datasources.values())[0]
-            return cfg.logic_name or db_name, cfg.type
+            return next(iter(datasources)), cfg.type
         raise DatusException(
             code=ErrorCode.COMMON_UNSUPPORTED,
             message=f"Datasource '{db_name}' not found. Available: {list(datasources.keys())}",
@@ -2248,9 +2271,7 @@ def _db_config_to_semantic_adapter_config(db_config: Optional[DbConfig]) -> Opti
     semantic_db_config = {
         key: str(value)
         for key, value in raw.items()
-        if value is not None
-        and value != ""
-        and key not in ("extra", "logic_name", "path_pattern", "catalog", "default")
+        if value is not None and value != "" and key not in ("extra", "path_pattern", "catalog", "default")
     }
     # Merge connector-specific `extra` fields without overwriting explicit top-level keys
     if isinstance(extra, dict):
@@ -2395,6 +2416,29 @@ def load_model_config(data: dict) -> ModelConfig:
         top_p=float(top_p) if top_p is not None else None,
         auth_type=data.get("auth_type", "api_key"),
         use_native_api=data.get("use_native_api", False),
+        ssl_verify=_load_ssl_verify(data),
+    )
+
+
+def _load_ssl_verify(data: dict) -> Optional[Union[bool, str]]:
+    """Resolve and type-check the optional ``ssl_verify`` model field.
+
+    Fails fast on invalid types (anything other than bool / str) rather than
+    silently dropping the value, so a misconfigured endpoint surfaces at load
+    time instead of as a confusing TLS error later.
+    """
+    if "ssl_verify" not in data:
+        return None
+    value = resolve_env(data["ssl_verify"])
+    if value is None or isinstance(value, (bool, str)):
+        return value
+    raise DatusException(
+        ErrorCode.COMMON_FIELD_INVALID,
+        message_args={
+            "field_name": "ssl_verify",
+            "except_values": "bool or str (true/false or a CA bundle path)",
+            "your_value": type(value).__name__,
+        },
     )
 
 

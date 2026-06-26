@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from datus.tools.func_tool import metric_queryability
 from datus.tools.func_tool.base import FuncToolResult, normalize_null
 from datus.tools.func_tool.generation_evidence import GenerationEvidence
 from datus.tools.func_tool.metric_queryability import extract_metric_queryability_contracts
@@ -82,6 +83,71 @@ class TestGenerationEvidence:
 
         assert evidence.has_required_queryability_dry_runs(["revenue_total"]) is True
 
+    def test_queryability_contract_skips_unrelated_metric_scope(self):
+        evidence = GenerationEvidence()
+        evidence.set_metric_queryability_contracts(
+            [
+                {
+                    "source": "sql_1",
+                    "metric_hints": ["activity_count"],
+                    "dimension_hints": ["start_month"],
+                    "time_group_hints": [
+                        {
+                            "alias": "start_month",
+                            "base_expr": "start_date",
+                            "grain": "month",
+                        }
+                    ],
+                }
+            ]
+        )
+
+        assert evidence.has_required_queryability_dry_runs(["avg_sr_value"]) is True
+
+    def test_queryability_contract_accepts_split_grouped_dry_runs_for_source_metrics(self):
+        contract = {
+            "source": "sql_1",
+            "metric_hints": ["discounted_revenue", "shipped_quantity"],
+            "dimension_hints": ["return_flag"],
+            "dimension_expr_hints": [
+                {
+                    "alias": "return_flag",
+                    "expr": "L_RETURNFLAG",
+                    "column": "L_RETURNFLAG",
+                }
+            ],
+        }
+        result = FuncToolResult(success=1, result={"metadata": {"sql": "SELECT 1"}})
+
+        evidence = GenerationEvidence()
+        evidence.set_metric_queryability_contracts([contract])
+        evidence.record_metric_dry_run(["discounted_revenue"], result, dimensions=["l_returnflag"])
+        evidence.record_metric_dry_run(["shipped_quantity"], result, dimensions=["l_returnflag"])
+
+        assert evidence.has_required_queryability_dry_runs(["discounted_revenue", "shipped_quantity"]) is True
+
+    def test_queryability_contract_rejects_split_dry_runs_when_one_metric_lacks_dimensions(self):
+        contract = {
+            "source": "sql_1",
+            "metric_hints": ["discounted_revenue", "shipped_quantity"],
+            "dimension_hints": ["return_flag"],
+            "dimension_expr_hints": [
+                {
+                    "alias": "return_flag",
+                    "expr": "L_RETURNFLAG",
+                    "column": "L_RETURNFLAG",
+                }
+            ],
+        }
+        result = FuncToolResult(success=1, result={"metadata": {"sql": "SELECT 1"}})
+
+        evidence = GenerationEvidence()
+        evidence.set_metric_queryability_contracts([contract])
+        evidence.record_metric_dry_run(["discounted_revenue"], result, dimensions=["l_returnflag"])
+        evidence.record_metric_dry_run(["shipped_quantity"], result)
+
+        assert evidence.has_required_queryability_dry_runs(["discounted_revenue", "shipped_quantity"]) is False
+
     def test_queryability_contract_rejects_partial_dimension_token_match(self):
         evidence = GenerationEvidence()
         evidence.set_metric_queryability_contracts(
@@ -101,6 +167,109 @@ class TestGenerationEvidence:
         )
 
         assert evidence.has_required_queryability_dry_runs(["revenue_total"]) is False
+
+    def test_queryability_contract_accepts_dimension_alias_with_base_column_dimension(self):
+        contract = {
+            "source": "sql_1",
+            "metric_hints": ["shipped_revenue"],
+            "dimension_hints": ["supplier_nation"],
+            "dimension_expr_hints": [
+                {
+                    "alias": "supplier_nation",
+                    "expr": "n.n_name",
+                    "column": "n_name",
+                }
+            ],
+        }
+
+        evidence = GenerationEvidence()
+        evidence.set_metric_queryability_contracts([contract])
+        evidence.record_metric_dry_run(
+            ["shipped_revenue"],
+            FuncToolResult(success=1, result={"metadata": {"sql": "SELECT 1"}}),
+            dimensions=["n_name"],
+        )
+
+        assert evidence.has_required_queryability_dry_runs(["shipped_revenue"]) is True
+
+        evidence = GenerationEvidence()
+        evidence.set_metric_queryability_contracts([contract])
+        evidence.record_metric_dry_run(
+            ["shipped_revenue"],
+            FuncToolResult(success=1, result={"metadata": {"sql": "SELECT 1"}}),
+            dimensions=["nation_name"],
+        )
+
+        assert evidence.has_required_queryability_dry_runs(["shipped_revenue"]) is False
+
+    def test_queryability_contract_accepts_dimension_alias_from_dry_run_sql_expression(self):
+        contract = {
+            "source": "sql_1",
+            "metric_hints": ["shipped_revenue"],
+            "dimension_hints": ["supplier_nation"],
+            "dimension_expr_hints": [
+                {
+                    "alias": "supplier_nation",
+                    "expr": "n.n_name",
+                    "column": "n_name",
+                }
+            ],
+        }
+
+        evidence = GenerationEvidence()
+        evidence.set_metric_queryability_contracts([contract])
+        evidence.record_metric_dry_run(
+            ["shipped_revenue"],
+            FuncToolResult(
+                success=1,
+                result={
+                    "metadata": {
+                        "sql": (
+                            "SELECT n.n_name AS nation_name, SUM(l.l_extendedprice) AS shipped_revenue "
+                            "FROM lineitem l JOIN nation n ON l.nation_key = n.n_nationkey GROUP BY n.n_name"
+                        )
+                    }
+                },
+            ),
+            dimensions=["nation_name"],
+        )
+
+        assert evidence.has_required_queryability_dry_runs(["shipped_revenue"]) is True
+
+    def test_queryability_contract_rejects_dimension_expression_only_in_join_condition(self):
+        contract = {
+            "source": "sql_1",
+            "metric_hints": ["shipped_revenue"],
+            "dimension_hints": ["supplier_nation"],
+            "dimension_expr_hints": [
+                {
+                    "alias": "supplier_nation",
+                    "expr": "n.n_name",
+                    "column": "n_name",
+                }
+            ],
+        }
+
+        evidence = GenerationEvidence()
+        evidence.set_metric_queryability_contracts([contract])
+        evidence.record_metric_dry_run(
+            ["shipped_revenue"],
+            FuncToolResult(
+                success=1,
+                result={
+                    "metadata": {
+                        "sql": (
+                            "SELECT s.s_name AS supplier_name, SUM(l.l_extendedprice) AS shipped_revenue "
+                            "FROM lineitem l JOIN supplier s ON l.l_suppkey = s.s_suppkey "
+                            "JOIN nation n ON s.s_comment = n.n_name GROUP BY s.s_name"
+                        )
+                    }
+                },
+            ),
+            dimensions=["supplier_name"],
+        )
+
+        assert evidence.has_required_queryability_dry_runs(["shipped_revenue"]) is False
 
     def test_queryability_contract_time_hint_requires_metric_time_dimension_and_grain(self):
         result = FuncToolResult(success=1, result={"metadata": {"sql": "SELECT 1"}})
@@ -152,6 +321,174 @@ class TestGenerationEvidence:
 
         assert evidence.has_required_queryability_dry_runs(["order_count"]) is True
 
+    def test_queryability_contract_accepts_date_trunc_alias_with_base_time_dimension(self):
+        result = FuncToolResult(
+            success=1,
+            result={
+                "metadata": {
+                    "sql": (
+                        "SELECT metric_time__month, SUM(discounted_revenue) AS discounted_revenue "
+                        "FROM (SELECT DATE_TRUNC('month', L_SHIPDATE) AS metric_time__month, "
+                        "L_EXTENDEDPRICE * (1 - L_DISCOUNT) AS discounted_revenue FROM lineitem) "
+                        "GROUP BY metric_time__month"
+                    )
+                }
+            },
+        )
+        contract = {
+            "source": "sql_1",
+            "metric_hints": ["discounted_revenue", "shipped_quantity"],
+            "dimension_hints": ["ship_month"],
+            "time_group_hints": [
+                {
+                    "alias": "ship_month",
+                    "base_expr": "L_SHIPDATE",
+                    "grain": "month",
+                }
+            ],
+        }
+
+        evidence = GenerationEvidence()
+        evidence.set_metric_queryability_contracts([contract])
+        evidence.record_metric_dry_run(
+            ["discounted_revenue", "shipped_quantity"],
+            result,
+            dimensions=["l_shipdate"],
+            time_granularity="month",
+        )
+
+        assert evidence.has_required_queryability_dry_runs(["discounted_revenue", "shipped_quantity"]) is True
+
+        evidence = GenerationEvidence()
+        evidence.set_metric_queryability_contracts([contract])
+        evidence.record_metric_dry_run(
+            ["discounted_revenue", "shipped_quantity"],
+            result,
+            dimensions=["l_shipdate"],
+            time_granularity="day",
+        )
+
+        assert evidence.has_required_queryability_dry_runs(["discounted_revenue", "shipped_quantity"]) is False
+
+    def test_queryability_contract_rejects_time_alias_without_base_time_evidence(self):
+        contract = {
+            "source": "sql_1",
+            "metric_hints": ["discounted_revenue"],
+            "dimension_hints": ["ship_month"],
+            "time_group_hints": [
+                {
+                    "alias": "ship_month",
+                    "base_expr": "L_SHIPDATE",
+                    "grain": "month",
+                }
+            ],
+        }
+
+        evidence = GenerationEvidence()
+        evidence.set_metric_queryability_contracts([contract])
+        evidence.record_metric_dry_run(
+            ["discounted_revenue"],
+            FuncToolResult(
+                success=1,
+                result={
+                    "metadata": {
+                        "sql": (
+                            "SELECT ship_month, SUM(discounted_revenue) AS discounted_revenue "
+                            "FROM metrics GROUP BY ship_month"
+                        )
+                    }
+                },
+            ),
+            dimensions=["ship_month"],
+            time_granularity="month",
+        )
+
+        assert evidence.has_required_queryability_dry_runs(["discounted_revenue"]) is False
+
+    def test_queryability_contract_accepts_metric_time_dimension_only_when_sql_uses_source_time_column(self):
+        contract = {
+            "source": "sql_1",
+            "metric_hints": ["discounted_revenue"],
+            "dimension_hints": ["ship_month"],
+            "time_group_hints": [
+                {
+                    "alias": "ship_month",
+                    "base_expr": "L_SHIPDATE",
+                    "grain": "month",
+                }
+            ],
+        }
+
+        evidence = GenerationEvidence()
+        evidence.set_metric_queryability_contracts([contract])
+        evidence.record_metric_dry_run(
+            ["discounted_revenue"],
+            FuncToolResult(
+                success=1,
+                result={
+                    "metadata": {
+                        "sql": (
+                            "SELECT metric_time__month, SUM(discounted_revenue) AS discounted_revenue "
+                            "FROM (SELECT DATE_TRUNC('month', lineitem.L_SHIPDATE) AS metric_time__month, "
+                            "L_EXTENDEDPRICE AS discounted_revenue FROM lineitem) GROUP BY metric_time__month"
+                        )
+                    }
+                },
+            ),
+            dimensions=["metric_time__month"],
+            time_granularity="month",
+        )
+
+        assert evidence.has_required_queryability_dry_runs(["discounted_revenue"]) is True
+
+        evidence = GenerationEvidence()
+        evidence.set_metric_queryability_contracts([contract])
+        evidence.record_metric_dry_run(
+            ["discounted_revenue"],
+            FuncToolResult(
+                success=1,
+                result={
+                    "metadata": {
+                        "sql": (
+                            "SELECT metric_time__month, SUM(discounted_revenue) AS discounted_revenue "
+                            "FROM (SELECT DATE_TRUNC('month', O_ORDERDATE) AS metric_time__month, "
+                            "O_TOTALPRICE AS discounted_revenue FROM orders) GROUP BY metric_time__month"
+                        )
+                    }
+                },
+            ),
+            dimensions=["metric_time__month"],
+            time_granularity="month",
+        )
+
+        assert evidence.has_required_queryability_dry_runs(["discounted_revenue"]) is False
+
+    def test_queryability_contract_accepts_generic_date_trunc_alias_with_unqualified_time_dimension(self):
+        result = FuncToolResult(success=1, result={"metadata": {}})
+        contract = {
+            "source": "sql_1",
+            "metric_hints": ["revenue"],
+            "dimension_hints": ["created_week"],
+            "time_group_hints": [
+                {
+                    "alias": "created_week",
+                    "base_expr": "o.created_at",
+                    "grain": "week",
+                }
+            ],
+        }
+
+        evidence = GenerationEvidence()
+        evidence.set_metric_queryability_contracts([contract])
+        evidence.record_metric_dry_run(
+            ["revenue"],
+            result,
+            dimensions=["created_at"],
+            time_granularity="week",
+        )
+
+        assert evidence.has_required_queryability_dry_runs(["revenue"]) is True
+
     def test_extracts_grouped_metric_queryability_contract_from_sql(self):
         contracts = extract_metric_queryability_contracts(
             """
@@ -168,6 +505,13 @@ class TestGenerationEvidence:
             {
                 "source": "sql_1",
                 "dimension_hints": ["supplier_nation"],
+                "dimension_expr_hints": [
+                    {
+                        "alias": "supplier_nation",
+                        "expr": "n.n_name",
+                        "column": "n_name",
+                    }
+                ],
                 "metric_hints": ["shipped_revenue"],
                 "sql": (
                     "SELECT n.n_name AS supplier_nation, SUM(l.l_extendedprice) AS shipped_revenue\n"
@@ -194,6 +538,13 @@ class TestGenerationEvidence:
             {
                 "source": "sql_1",
                 "dimension_hints": ["customer_segment"],
+                "dimension_expr_hints": [
+                    {
+                        "alias": "customer_segment",
+                        "expr": "customer_segment",
+                        "column": "customer_segment",
+                    }
+                ],
                 "metric_hints": ["revenue_total"],
                 "sql": (
                     "SELECT customer_segment, SUM(revenue) AS revenue_total\n"
@@ -202,6 +553,69 @@ class TestGenerationEvidence:
                 ),
             }
         ]
+
+    def test_parse_sql_candidates_attempts_advertised_dialects(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import sqlglot
+
+        calls: list[str | None] = []
+
+        class FakeParsed:
+            def __init__(self, read_dialect: str | None) -> None:
+                self.read_dialect = read_dialect
+
+            def sql(self, dialect: str | None = None) -> str:
+                return f"SELECT {self.read_dialect or 'default'}"
+
+        def fake_parse_one(sql: str, read: str | None = None) -> FakeParsed:
+            calls.append(read)
+            return FakeParsed(read)
+
+        monkeypatch.setattr(sqlglot, "parse_one", fake_parse_one)
+
+        list(metric_queryability._parse_sql_candidates("SELECT 1"))
+
+        assert {"mysql", "postgres", "sqlite", "starrocks"}.issubset(set(calls))
+        assert calls.count("postgres") >= 2
+        assert None in calls
+
+    def test_extracts_contracts_from_multiple_labeled_sql_blocks_without_semicolons(self):
+        contracts = extract_metric_queryability_contracts(
+            """
+            Analyze the following SQL queries and extract core metrics:
+
+            Query 1:
+            Question: q1
+            SQL:
+            SELECT a AS x, SUM(b) AS m FROM t GROUP BY a
+
+            ---
+
+            Query 2:
+            Question: q2
+            SQL:
+            SELECT c AS y, SUM(d) AS n FROM u GROUP BY c
+            """
+        )
+
+        assert len(contracts) == 2
+        assert contracts[0]["dimension_hints"] == ["x"]
+        assert contracts[0]["metric_hints"] == ["m"]
+        assert contracts[1]["dimension_hints"] == ["y"]
+        assert contracts[1]["metric_hints"] == ["n"]
+
+    def test_extracts_contracts_from_success_story_csv_text(self):
+        contracts = extract_metric_queryability_contracts(
+            """question,sql
+"q1","SELECT a AS x, SUM(b) AS m FROM t GROUP BY a"
+"q2","SELECT c AS y, SUM(d) AS n FROM u GROUP BY c"
+"""
+        )
+
+        assert len(contracts) == 2
+        assert contracts[0]["dimension_hints"] == ["x"]
+        assert contracts[0]["metric_hints"] == ["m"]
+        assert contracts[1]["dimension_hints"] == ["y"]
+        assert contracts[1]["metric_hints"] == ["n"]
 
     def test_extracts_contract_from_final_select_not_grouped_cte(self):
         contracts = extract_metric_queryability_contracts(
@@ -220,8 +634,87 @@ class TestGenerationEvidence:
         assert len(contracts) == 1
         assert contracts[0]["source"] == "sql_1"
         assert contracts[0]["dimension_hints"] == ["customer_segment"]
+        assert contracts[0]["dimension_expr_hints"] == [
+            {
+                "alias": "customer_segment",
+                "expr": "customer_segment",
+                "column": "customer_segment",
+            }
+        ]
         assert contracts[0]["metric_hints"] == ["revenue_total"]
         assert contracts[0]["sql"].startswith("WITH daily AS")
+
+    def test_extracts_date_trunc_grouped_metric_queryability_contract(self):
+        contracts = extract_metric_queryability_contracts(
+            """
+            SQL:
+            SELECT DATE_TRUNC('MONTH', L_SHIPDATE) AS ship_month,
+                   SUM(L_EXTENDEDPRICE * (1 - L_DISCOUNT)) AS discounted_revenue,
+                   SUM(L_QUANTITY) AS shipped_quantity
+            FROM LINEITEM
+            GROUP BY 1;
+            """
+        )
+
+        assert len(contracts) == 1
+        assert contracts[0]["dimension_hints"] == ["ship_month"]
+        assert contracts[0]["metric_hints"] == ["discounted_revenue", "shipped_quantity"]
+        assert contracts[0]["time_group_hints"] == [
+            {
+                "alias": "ship_month",
+                "base_expr": "L_SHIPDATE",
+                "grain": "month",
+            }
+        ]
+
+    def test_extracts_generic_date_trunc_group_by_alias_and_expression_contracts(self):
+        contracts = extract_metric_queryability_contracts(
+            """
+            SELECT DATE_TRUNC('WEEK', o.created_at) AS created_week,
+                   SUM(o.amount) AS revenue
+            FROM orders o
+            GROUP BY created_week;
+
+            SELECT DATE_TRUNC('QUARTER', events.event_ts) AS event_quarter,
+                   COUNT(*) AS event_count
+            FROM events
+            GROUP BY DATE_TRUNC('QUARTER', events.event_ts);
+
+            SELECT DATE_TRUNC(created_at, MONTH) AS created_month,
+                   SUM(amount) AS order_revenue
+            FROM orders
+            GROUP BY created_month;
+            """
+        )
+
+        assert len(contracts) == 3
+        assert contracts[0]["dimension_hints"] == ["created_week"]
+        assert contracts[0]["metric_hints"] == ["revenue"]
+        assert contracts[0]["time_group_hints"] == [
+            {
+                "alias": "created_week",
+                "base_expr": "o.created_at",
+                "grain": "week",
+            }
+        ]
+        assert contracts[1]["dimension_hints"] == ["event_quarter"]
+        assert contracts[1]["metric_hints"] == ["event_count"]
+        assert contracts[1]["time_group_hints"] == [
+            {
+                "alias": "event_quarter",
+                "base_expr": "events.event_ts",
+                "grain": "quarter",
+            }
+        ]
+        assert contracts[2]["dimension_hints"] == ["created_month"]
+        assert contracts[2]["metric_hints"] == ["order_revenue"]
+        assert contracts[2]["time_group_hints"] == [
+            {
+                "alias": "created_month",
+                "base_expr": "created_at",
+                "grain": "month",
+            }
+        ]
 
     def test_ignores_nested_group_when_final_select_is_ungrouped(self):
         contracts = extract_metric_queryability_contracts(
@@ -324,6 +817,7 @@ class TestQueryMetricsCompression:
         assert "columns" in result_dict
         assert "data" in result_dict
         assert "metadata" in result_dict
+        assert result_dict["result_id"] == result_dict["metadata"]["_full_result_cache_key"]
 
         # Verify data is now a compressed dict (not raw list)
         compressed_data = result_dict["data"]
@@ -337,7 +831,11 @@ class TestQueryMetricsCompression:
 
         # Verify metadata is preserved
         assert result_dict["columns"] == ["date", "revenue", "orders"]
-        assert result_dict["metadata"] == {"execution_time": 0.5}
+        assert result_dict["metadata"]["execution_time"] == 0.5
+        assert result_dict["metadata"]["_full_result_cache_key"]
+        assert result_dict["metadata"]["_full_result_cached"] is True
+        assert result_dict["metadata"]["_full_result_row_count"] == 2
+        assert "complete uncompressed query result is cached" in result_dict["metadata"]["_full_result_note"]
 
     def test_query_metrics_small_data_not_compressed(self, semantic_tools):
         """Test that small data within token threshold is not compressed."""
@@ -374,6 +872,62 @@ class TestQueryMetricsCompression:
         assert compressed_data["original_rows"] == 50
         assert compressed_data["is_compressed"] is True
         assert compressed_data["compression_type"] in ("rows", "rows_and_columns")
+
+        cache_key = result.result["metadata"]["_full_result_cache_key"]
+        assert result.result["result_id"] == cache_key
+        cached_result = semantic_tools.get_cached_query_metrics_result(cache_key)
+        assert cached_result["row_count"] == 50
+        assert result.result["metadata"]["_full_result_row_count"] == 50
+        assert "10,1000" in cached_result["csv"]
+        assert "49,4900" in cached_result["csv"]
+        assert "..." not in cached_result["csv"]
+
+    def test_query_metrics_full_result_cache_is_bounded(self, semantic_tools):
+        semantic_tools.MAX_QUERY_METRICS_RESULT_CACHE_SIZE = 2
+
+        first = semantic_tools._cache_query_metrics_result(["id"], [{"id": 1}])
+        second = semantic_tools._cache_query_metrics_result(["id"], [{"id": 2}])
+        third = semantic_tools._cache_query_metrics_result(["id"], [{"id": 3}])
+
+        assert semantic_tools.get_cached_query_metrics_result(first) is None
+        assert semantic_tools.get_cached_query_metrics_result(second)["row_count"] == 1
+        assert semantic_tools.get_cached_query_metrics_result(third)["row_count"] == 1
+
+    def test_query_metrics_result_cache_helpers_handle_supported_data_shapes(self, semantic_tools):
+        class NumRows:
+            num_rows = "7"
+
+        class BadNumRows:
+            num_rows = "bad"
+
+        class ShapeRows:
+            shape = (3, 2)
+
+        class BadShapeRows:
+            shape = ()
+
+        class CsvLike:
+            def to_csv(self, index=False):
+                assert index is False
+                return "x\n1\n"
+
+        class ToPandasLike:
+            def to_pandas(self):
+                return CsvLike()
+
+        assert semantic_tools._query_data_row_count(None) == 0
+        assert semantic_tools._query_data_row_count(NumRows()) == 7
+        assert semantic_tools._query_data_row_count(BadNumRows()) == 0
+        assert semantic_tools._query_data_row_count(ShapeRows()) == 3
+        assert semantic_tools._query_data_row_count(BadShapeRows()) == 0
+        assert semantic_tools._query_data_row_count(1) == 0
+
+        assert semantic_tools._query_data_to_csv(["x"], None) == ""
+        assert semantic_tools._query_data_to_csv(["x"], ToPandasLike()) == "x\n1\n"
+        assert semantic_tools._query_data_to_csv(["x"], [{"x": 1}, (2,), 3]) == "x\r\n1\r\n2\r\n3\r\n"
+        assert semantic_tools._cache_query_metrics_result(["x"], None) is None
+        with patch.object(semantic_tools, "_query_data_to_csv", return_value=""):
+            assert semantic_tools._cache_query_metrics_result(["x"], [{"x": 1}]) is None
 
     def test_query_metrics_empty_data(self, semantic_tools):
         """Test query_metrics with empty result set."""
@@ -537,7 +1091,9 @@ class TestQueryMetricsCompression:
             )
 
         assert result.result["columns"] == ["metric_time__day", "revenue", "cost"]
-        assert result.result["metadata"] == {"sql": "SELECT ...", "row_count": 1}
+        assert result.result["metadata"]["sql"] == "SELECT ..."
+        assert result.result["metadata"]["row_count"] == 1
+        assert result.result["metadata"]["_full_result_cache_key"]
 
     def test_query_metrics_dry_run_records_generation_evidence(self, semantic_tools):
         """Successful dry-run evidence gates metric publishing."""
@@ -565,13 +1121,13 @@ class TestQueryMetricsCompression:
 
         assert result.success == 1
         assert evidence.metric_dry_run_passed is True
-        assert evidence.metric_dry_run_queries == [
-            {
-                "metrics": ["revenue"],
-                "dimensions": ["customer_segment"],
-                "time_granularity": "month",
-            }
-        ]
+        assert len(evidence.metric_dry_run_queries) == 1
+        dry_run = evidence.metric_dry_run_queries[0]
+        assert dry_run["metrics"] == ["revenue"]
+        assert dry_run["dimensions"] == ["customer_segment"]
+        assert dry_run["time_granularity"] == "month"
+        assert dry_run["time_granularity_explicit"] is True
+        assert dry_run["sql"] == "SELECT SUM(revenue) AS revenue FROM orders"
         assert evidence.metric_sqls == {"revenue": "SELECT SUM(revenue) AS revenue FROM orders"}
 
     def test_query_metrics_non_dry_run_does_not_record_publish_evidence(self, semantic_tools):
@@ -736,13 +1292,13 @@ class TestAllToolsName:
 
 
 class TestAvailableTools:
-    def test_no_adapter_returns_three_tools(self, semantic_tools_ext):
+    def test_no_adapter_returns_no_tools(self, semantic_tools_ext):
         with patch("datus.tools.func_tool.semantic_tools.trans_to_function_tool") as mock_trans:
             mock_trans.side_effect = lambda f: Mock(name=f.__name__)
             tools = semantic_tools_ext.available_tools()
-        assert len(tools) == 3
+        assert tools == []
 
-    def test_default_metricflow_adapter_exposes_validate_tool(self):
+    def test_default_metricflow_adapter_load_failure_returns_no_tools(self):
         with (
             patch("datus.tools.func_tool.semantic_tools.SemanticModelRAG"),
             patch("datus.tools.func_tool.semantic_tools.MetricRAG"),
@@ -770,7 +1326,7 @@ class TestAvailableTools:
                 tools = tool.available_tools()
 
         names = [tool.name for tool in tools]
-        assert "validate_semantic" in names
+        assert names == []
 
     def test_with_adapter_adds_validate_and_attribution_tools(self):
         with (
@@ -790,7 +1346,7 @@ class TestAvailableTools:
         # 3 base + validate_semantic + attribution_analyze (both enabled when adapter is set)
         assert len(tools) == 5
 
-    def test_configured_adapter_load_failure_still_exposes_validate(self):
+    def test_configured_adapter_load_failure_exposes_no_tools(self):
         with (
             patch("datus.tools.func_tool.semantic_tools.SemanticModelRAG"),
             patch("datus.tools.func_tool.semantic_tools.MetricRAG"),
@@ -818,7 +1374,7 @@ class TestAvailableTools:
                 tools = tool.available_tools()
 
             names = [tool.name for tool in tools]
-            assert "validate_semantic" in names
+            assert names == []
             assert "attribution_analyze" not in names
 
             result = tool.validate_semantic()
@@ -827,21 +1383,30 @@ class TestAvailableTools:
 
 
 class TestListMetrics:
-    def test_success_from_storage(self, semantic_tools_ext):
-        semantic_tools_ext.metric_rag.search_all_metrics.return_value = [
-            {
-                "name": "orders",
-                "description": "Order count",
-                "metric_type": "count",
-                "dimensions": [],
-                "base_measures": [],
-                "unit": None,
-                "format": None,
-                "subject_path": ["Sales"],
-            }
-        ]
-
+    def test_no_adapter_returns_error(self, semantic_tools_ext):
         result = semantic_tools_ext.list_metrics()
+
+        assert result.success == 0
+        assert "semantic adapter" in result.error.lower()
+
+    def test_success_from_adapter(self, semantic_tools_with_adapter):
+        tool, mock_adapter = semantic_tools_with_adapter
+        mock_metric = Mock()
+        mock_metric.name = "orders"
+        mock_metric.description = "Order count"
+        mock_metric.type = "count"
+        mock_metric.dimensions = []
+        mock_metric.measures = []
+        mock_metric.unit = None
+        mock_metric.format = None
+        mock_metric.path = ["Sales"]
+        mock_metric.metadata = {
+            "inputs": [{"name": "orders", "offset_window": "1 month"}],
+            "non_serializable": object(),
+        }
+
+        with patch("datus.tools.func_tool.semantic_tools._run_async", return_value=[mock_metric]):
+            result = tool.list_metrics()
 
         assert result.success == 1
         envelope = result.result
@@ -855,136 +1420,79 @@ class TestListMetrics:
                 "unit": None,
                 "format": None,
                 "path": ["Sales"],
+                "metadata": {"inputs": [{"name": "orders", "offset_window": "1 month"}]},
             }
         ]
-        assert envelope["total"] == 1
+        assert envelope["total"] is None
         assert envelope["has_more"] is False
         assert envelope["extra"] is None
+        mock_adapter.list_metrics.assert_called_once_with(path=None, limit=100, offset=0)
         # Contract: list_metrics MUST NOT carry compressor artefacts anymore.
         assert "compressed_data" not in envelope
         assert "original_rows" not in envelope
 
-    def test_empty_storage_no_adapter_returns_empty_envelope(self, semantic_tools_ext):
-        semantic_tools_ext.metric_rag.search_all_metrics.return_value = []
+    def test_passes_path_and_pagination_to_adapter(self, semantic_tools_with_adapter):
+        tool, mock_adapter = semantic_tools_with_adapter
+        metrics = []
+        for name in ("m1", "m2", "m3"):
+            metric = Mock()
+            metric.name = name
+            metric.description = ""
+            metric.type = ""
+            metric.dimensions = []
+            metric.measures = []
+            metric.unit = None
+            metric.format = None
+            metric.path = ["Finance"]
+            metrics.append(metric)
 
-        result = semantic_tools_ext.list_metrics()
-
-        assert result.success == 1
-        envelope = result.result
-        assert envelope["items"] == []
-        assert envelope["total"] == 0
-        assert envelope["has_more"] is False
-        assert envelope["extra"] is None
-
-    def test_path_filter_applied(self, semantic_tools_ext):
-        semantic_tools_ext.metric_rag.search_all_metrics.return_value = [
-            {
-                "name": "m1",
-                "subject_path": ["Finance"],
-                "description": "",
-                "metric_type": "",
-                "dimensions": [],
-                "base_measures": [],
-                "unit": None,
-                "format": None,
-            },
-            {
-                "name": "m2",
-                "subject_path": ["Sales"],
-                "description": "",
-                "metric_type": "",
-                "dimensions": [],
-                "base_measures": [],
-                "unit": None,
-                "format": None,
-            },
-        ]
-
-        result = semantic_tools_ext.list_metrics(path=["Finance"])
+        with patch("datus.tools.func_tool.semantic_tools._run_async", return_value=metrics):
+            result = tool.list_metrics(path=["Finance"], limit=3, offset=2)
 
         assert result.success == 1
         envelope = result.result
-        names = [row["name"] for row in envelope["items"]]
-        assert names == ["m1"]
-        assert envelope["total"] == 1
-        assert envelope["has_more"] is False
-
-    def test_pagination(self, semantic_tools_ext):
-        metrics = [
-            {
-                "name": f"m{i}",
-                "subject_path": [],
-                "description": "",
-                "metric_type": "",
-                "dimensions": [],
-                "base_measures": [],
-                "unit": None,
-                "format": None,
-            }
-            for i in range(10)
-        ]
-        semantic_tools_ext.metric_rag.search_all_metrics.return_value = metrics
-
-        result = semantic_tools_ext.list_metrics(limit=3, offset=2)
-
-        assert result.success == 1
-        envelope = result.result
-        assert [row["name"] for row in envelope["items"]] == ["m2", "m3", "m4"]
-        assert envelope["total"] == 10
+        assert [row["name"] for row in envelope["items"]] == ["m1", "m2", "m3"]
+        assert envelope["total"] is None
         assert envelope["has_more"] is True
         assert envelope["extra"] == {"next_offset": 5}
+        mock_adapter.list_metrics.assert_called_once_with(path=["Finance"], limit=3, offset=2)
 
-    def test_pagination_last_page(self, semantic_tools_ext):
-        metrics = [
-            {
-                "name": f"m{i}",
-                "subject_path": [],
-                "description": "",
-                "metric_type": "",
-                "dimensions": [],
-                "base_measures": [],
-                "unit": None,
-                "format": None,
-            }
-            for i in range(5)
-        ]
-        semantic_tools_ext.metric_rag.search_all_metrics.return_value = metrics
+    def test_drops_null_path_placeholders(self, semantic_tools_with_adapter):
+        tool, mock_adapter = semantic_tools_with_adapter
 
-        result = semantic_tools_ext.list_metrics(limit=3, offset=3)
+        with patch("datus.tools.func_tool.semantic_tools._run_async", return_value=[]):
+            result = tool.list_metrics(path=[None, "", "null"], limit=50, offset=0)
 
         assert result.success == 1
-        envelope = result.result
-        assert [row["name"] for row in envelope["items"]] == ["m3", "m4"]
-        assert envelope["total"] == 5
-        assert envelope["has_more"] is False
-        assert envelope["extra"] is None
+        mock_adapter.list_metrics.assert_called_once_with(path=None, limit=50, offset=0)
 
-    def test_falls_back_to_adapter(self, semantic_tools_with_adapter):
-        tool, mock_adapter = semantic_tools_with_adapter
-        tool.metric_rag.search_all_metrics.return_value = []
-
+    def test_ignores_non_dict_metric_metadata(self, semantic_tools_with_adapter):
+        tool, _ = semantic_tools_with_adapter
         mock_metric = Mock()
-        mock_metric.name = "revenue"
-        mock_metric.description = "Revenue metric"
+        mock_metric.name = "orders"
+        mock_metric.description = ""
+        mock_metric.type = "count"
+        mock_metric.dimensions = []
+        mock_metric.measures = []
+        mock_metric.unit = None
+        mock_metric.format = None
+        mock_metric.path = ["Sales"]
+        mock_metric.metadata = "not a metadata dict"
+
         with patch("datus.tools.func_tool.semantic_tools._run_async", return_value=[mock_metric]):
             result = tool.list_metrics()
 
         assert result.success == 1
-        envelope = result.result
-        assert len(envelope["items"]) == 1
-        assert envelope["items"][0]["name"] == "revenue"
-        # Adapter path has no upstream total — envelope signals unknown via None.
-        assert envelope["total"] is None
-        # has_more heuristic: len(items) == limit (1) < default limit (100) → False.
-        assert envelope["has_more"] is False
+        assert result.result["items"][0]["metadata"] == {}
 
-    def test_exception_returns_failure(self, semantic_tools_ext):
-        semantic_tools_ext.metric_rag.search_all_metrics.side_effect = Exception("db error")
+    def test_exception_returns_failure(self, semantic_tools_with_adapter):
+        tool, _ = semantic_tools_with_adapter
 
-        result = semantic_tools_ext.list_metrics()
+        with patch("datus.tools.func_tool.semantic_tools._run_async", side_effect=Exception("adapter error")):
+            result = tool.list_metrics()
 
         assert result.success == 0
-        assert "db error" in result.error
+        assert "adapter error" in result.error
 
 
 class TestGetDimensions:
@@ -999,44 +1507,28 @@ class TestGetDimensions:
         assert envelope["total"] == 2
         assert envelope["has_more"] is False
 
-    def test_no_adapter_from_storage(self, semantic_tools_ext):
-        semantic_tools_ext.metric_rag.search_all_metrics.return_value = [
-            {"name": "revenue", "dimensions": ["date", "channel"]}
-        ]
-
+    def test_no_adapter_returns_error(self, semantic_tools_ext):
         result = semantic_tools_ext.get_dimensions("revenue")
 
-        assert result.success == 1
-        envelope = result.result
-        assert envelope["items"] == [{"name": "date"}, {"name": "channel"}]
-        assert envelope["total"] == 2
-
-    def test_no_adapter_metric_not_found(self, semantic_tools_ext):
-        semantic_tools_ext.metric_rag.search_all_metrics.return_value = []
-
-        result = semantic_tools_ext.get_dimensions("nonexistent")
-
         assert result.success == 0
-        assert "not found" in result.error
-        # Even the error path returns an envelope shape, keeping the
-        # consumer contract uniform.
-        assert result.result == {"items": [], "total": 0, "has_more": False, "extra": None}
+        assert "semantic adapter" in result.error.lower()
 
-    def test_with_path_filter(self, semantic_tools_ext):
-        mock_storage = Mock()
-        semantic_tools_ext.metric_rag.storage = mock_storage
-        mock_storage.search_all_metrics.return_value = [{"name": "revenue", "dimensions": ["date"]}]
+    def test_with_path_passes_to_adapter(self, semantic_tools_with_adapter):
+        tool, mock_adapter = semantic_tools_with_adapter
 
-        result = semantic_tools_ext.get_dimensions("revenue", path=["Finance"])
+        with patch("datus.tools.func_tool.semantic_tools._run_async", return_value=["date"]):
+            result = tool.get_dimensions("revenue", path=["Finance"])
 
         assert result.success == 1
         envelope = result.result
         assert envelope["items"] == [{"name": "date"}]
+        mock_adapter.get_dimensions.assert_called_once_with(metric_name="revenue", path=["Finance"])
 
-    def test_exception_returns_failure(self, semantic_tools_ext):
-        semantic_tools_ext.metric_rag.search_all_metrics.side_effect = Exception("conn error")
+    def test_exception_returns_failure(self, semantic_tools_with_adapter):
+        tool, _ = semantic_tools_with_adapter
 
-        result = semantic_tools_ext.get_dimensions("revenue")
+        with patch("datus.tools.func_tool.semantic_tools._run_async", side_effect=Exception("conn error")):
+            result = tool.get_dimensions("revenue")
 
         assert result.success == 0
         assert "conn error" in result.error
@@ -1222,7 +1714,7 @@ class TestAttributionAnalyze:
             current_end="2024-01-14",
         )
         assert result.success == 0
-        assert "Attribution tool not available" in result.error
+        assert "semantic adapter" in result.error.lower()
 
     def test_success_with_dict_anomaly_context(self, semantic_tools_with_adapter):
         tool, mock_adapter = semantic_tools_with_adapter
@@ -1310,7 +1802,6 @@ class TestExtractDbConfig:
             "private_key_file": "/tmp/rsa_key.p8",
             "private_key_file_pwd": 1234,
             "extra": "skip",
-            "logic_name": "skip",
             "path_pattern": "skip",
             "catalog": "skip",
         }
@@ -1325,7 +1816,6 @@ class TestExtractDbConfig:
         assert result["private_key_file"] == "/tmp/rsa_key.p8"
         assert result["private_key_file_pwd"] == "1234"
         assert "extra" not in result
-        assert "logic_name" not in result
         assert "path_pattern" not in result
         assert "catalog" not in result
 
@@ -1372,7 +1862,7 @@ class TestCompressorModelName:
             tool = SemanticTools(agent_config=config)
             assert tool.compressor.model_name == "deepseek/deepseek-chat"
 
-    def test_list_metrics_returns_envelope_without_compressor(self, semantic_tools_ext):
+    def test_list_metrics_returns_envelope_without_compressor(self, semantic_tools_with_adapter):
         """list_metrics returns the canonical FuncToolListResult envelope.
 
         Regression: list_metrics used to wrap rows in DataCompressor output
@@ -1380,19 +1870,21 @@ class TestCompressorModelName:
         After the envelope migration it returns ``{items, total, has_more,
         extra}`` with NO compressor artefacts — list_* never compresses.
         """
-        semantic_tools_ext.metric_rag.search_all_metrics.return_value = [
-            {
-                "name": "orders",
-                "description": "",
-                "metric_type": "count",
-                "dimensions": [],
-                "base_measures": [],
-                "unit": None,
-                "format": None,
-                "subject_path": [],
-            }
-        ]
-        result = semantic_tools_ext.list_metrics()
+        tool, _ = semantic_tools_with_adapter
+        mock_metric = Mock()
+        mock_metric.name = "orders"
+        mock_metric.description = ""
+        mock_metric.type = "count"
+        mock_metric.dimensions = []
+        mock_metric.measures = []
+        mock_metric.unit = None
+        mock_metric.format = None
+        mock_metric.path = []
+        mock_metric.metadata = {}
+
+        with patch("datus.tools.func_tool.semantic_tools._run_async", return_value=[mock_metric]):
+            result = tool.list_metrics()
+
         assert result.success == 1
         envelope = result.result
         assert set(envelope.keys()) == {"items", "total", "has_more", "extra"}

@@ -13,6 +13,17 @@ from datus.configuration.node_type import NodeType
 from datus.schemas.subworkflow_node_models import SubworkflowInput, SubworkflowResult
 
 
+def test_generate_workflow_lazy_wrapper_delegates_to_plan():
+    from datus.agent.node import subworkflow_node
+
+    expected = object()
+    with patch("datus.agent.plan.generate_workflow", return_value=expected) as generate:
+        result = subworkflow_node.generate_workflow("task", plan_type="fixed")
+
+    assert result is expected
+    generate.assert_called_once_with("task", plan_type="fixed")
+
+
 def make_agent_config(has_workflow=True, workflow_name="my_wf"):
     cfg = MagicMock()
     cfg.datasource_configs = {}
@@ -129,7 +140,7 @@ class TestSubworkflowNodeExecute:
 
         action_node = MagicMock()
         action_node.id = "action_1"
-        action_node.type = NodeType.TYPE_GENERATE_SQL
+        action_node.type = NodeType.TYPE_GEN_SQL
         action_node.description = "Generate SQL"
         action_node.status = "completed"
         action_node.result = MagicMock(success=True)
@@ -165,7 +176,7 @@ class TestSubworkflowNodeExecute:
 
         action_node = MagicMock()
         action_node.id = "fail_node"
-        action_node.type = NodeType.TYPE_GENERATE_SQL
+        action_node.type = NodeType.TYPE_GEN_SQL
         action_node.description = "Fail"
         action_node.status = "failed"
         action_node.result = MagicMock(success=False, error="child failed")
@@ -195,7 +206,7 @@ class TestSubworkflowNodeExecute:
 
         action_node = MagicMock()
         action_node.id = "loop_node"
-        action_node.type = NodeType.TYPE_GENERATE_SQL
+        action_node.type = NodeType.TYPE_GEN_SQL
         action_node.description = "Looping"
         action_node.status = "completed"
         action_node.result = MagicMock(success=True)
@@ -227,7 +238,7 @@ class TestSubworkflowNodeExecute:
 
         action_node = MagicMock()
         action_node.id = "exc_node"
-        action_node.type = NodeType.TYPE_GENERATE_SQL
+        action_node.type = NodeType.TYPE_GEN_SQL
         action_node.description = "Crash"
         action_node._initialize = MagicMock(side_effect=RuntimeError("crash!"))
 
@@ -259,7 +270,7 @@ class TestSubworkflowNodeExecute:
 
         action_node = MagicMock()
         action_node.id = "action"
-        action_node.type = NodeType.TYPE_GENERATE_SQL
+        action_node.type = NodeType.TYPE_GEN_SQL
         action_node.description = "Action"
         action_node.status = "completed"
         action_node.result = MagicMock(success=True)
@@ -289,7 +300,7 @@ class TestSubworkflowNodeApplyNodeParams:
         node = make_node(
             SubworkflowInput(
                 workflow_name="wf",
-                node_params={"generate_sql": {"max_context_length": 100}},
+                node_params={"gen_sql": {"max_context_length": 100}},
             )
         )
         workflow = MagicMock()
@@ -299,7 +310,7 @@ class TestSubworkflowNodeApplyNodeParams:
             max_context_length = 8000
 
         fake_child = MagicMock()
-        fake_child.type = "generate_sql"
+        fake_child.type = "gen_sql"
         fake_child.id = "gen_1"
         fake_child.input = FakeInput()
         workflow.nodes.values.return_value = [fake_child]
@@ -311,7 +322,7 @@ class TestSubworkflowNodeApplyNodeParams:
         node = make_node(
             SubworkflowInput(
                 workflow_name="wf",
-                node_params={"generate_sql": {"nonexistent_param": "value"}},
+                node_params={"gen_sql": {"nonexistent_param": "value"}},
             )
         )
         workflow = MagicMock()
@@ -320,7 +331,7 @@ class TestSubworkflowNodeApplyNodeParams:
             pass
 
         fake_child = MagicMock()
-        fake_child.type = "generate_sql"
+        fake_child.type = "gen_sql"
         fake_child.input = FakeInput()
         workflow.nodes.values.return_value = [fake_child]
 
@@ -347,12 +358,12 @@ class TestSubworkflowNodeApplyConfigParams:
             max_context_length = 8000
 
         mock_child = MagicMock()
-        mock_child.type = "generate_sql"
+        mock_child.type = "gen_sql"
         mock_child.id = "gen_1"
         mock_child.input = FakeInput()
         workflow.nodes.values.return_value = [mock_child]
 
-        node._apply_config_params(workflow, {"generate_sql": {"model": "gpt-4", "max_context_length": 1000}})
+        node._apply_config_params(workflow, {"gen_sql": {"model": "gpt-4", "max_context_length": 1000}})
         assert mock_child.model == "gpt-4"
         assert mock_child.input.max_context_length == 1000
 

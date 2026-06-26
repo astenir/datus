@@ -5,6 +5,7 @@
 """Unit tests for datus.storage.metric.metric_init."""
 
 from enum import Enum
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -13,12 +14,21 @@ from datus.storage.metric.metric_init import (
     BIZ_NAME,
     DEFAULT_METRICS_BATCH_SIZE,
     _action_status_value,
+    _annotate_offset_identity_candidates,
+    _build_candidate_plan,
+    _ensure_offset_derived_metrics,
     _extract_metric_artifact_ids,
     _generate_metrics_batch,
+    _is_offset_derived_candidate,
+    _missing_offset_derived_candidates,
+    _offset_grain,
+    _offset_identity_alias_candidates,
     _source_provenance_from_row,
     _sync_metric_provenance,
+    _unique_metric_catalog_by_name,
     init_semantic_yaml_metrics,
 )
+from datus.tools.func_tool.base import FuncToolResult
 
 # ---------------------------------------------------------------------------
 # _action_status_value
@@ -309,7 +319,7 @@ class TestInitSuccessStoryMetricsAsync:
 
         assert success is True
         assert error == ""
-        assert result == {"response": "done"}
+        assert result == {"response": "done", "metrics_count": 0, "final_metrics_count": 0}
 
     @pytest.mark.asyncio
     async def test_batch_flow_allows_recoverable_tool_failure(self):
@@ -360,7 +370,7 @@ class TestInitSuccessStoryMetricsAsync:
 
         assert success is True
         assert error == ""
-        assert result == {"response": "done"}
+        assert result == {"response": "done", "metrics_count": 0, "final_metrics_count": 0}
 
 
 # ---------------------------------------------------------------------------
@@ -506,13 +516,13 @@ class TestInitSuccessStoryMetricsAsyncOverwriteTruncate:
             )
 
         assert success is True
-        rag_factory.assert_called_once_with(mock_config)
+        rag_factory.assert_any_call(mock_config)
         fake_rag_instance.truncate.assert_called_once_with()
         mock_exists.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_incremental_does_not_call_truncate(self):
-        """build_mode='incremental' must not call truncate; it consults exists_metrics instead."""
+        """build_mode='incremental' must not call truncate."""
         from unittest.mock import patch
 
         import pandas as pd
@@ -561,7 +571,7 @@ class TestInitSuccessStoryMetricsAsyncOverwriteTruncate:
 
         assert success is True
         fake_rag_instance.truncate.assert_not_called()
-        mock_exists.assert_called_once()
+        mock_exists.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -672,7 +682,7 @@ class TestMetricProvenanceHelpers:
 @pytest.mark.ci
 class TestDefaultMetricsBatchSize:
     def test_default_batch_size(self):
-        assert DEFAULT_METRICS_BATCH_SIZE == 1
+        assert DEFAULT_METRICS_BATCH_SIZE == 5
 
 
 # ---------------------------------------------------------------------------
@@ -1084,7 +1094,7 @@ class TestBatchSplitting:
             )
 
         assert ok is True
-        assert result == {"metrics": ["m0"]}
+        assert result == {"metrics": ["m0"], "metrics_count": 0, "final_metrics_count": 0}
 
     @pytest.mark.asyncio
     async def test_batch_size_parameter_passed_through_sync(self):
@@ -1096,3 +1106,747 @@ class TestBatchSplitting:
         sig = inspect.signature(init_success_story_metrics)
         assert "batch_size" in sig.parameters
         assert sig.parameters["batch_size"].default == DEFAULT_METRICS_BATCH_SIZE
+
+
+class TestBatchHasNoMetricCandidates:
+    """Tests for _batch_has_no_metric_candidates early-skip logic."""
+
+    def test_returns_false_when_plan_unavailable(self):
+        from datus.storage.metric.metric_init import _batch_has_no_metric_candidates
+
+        assert _batch_has_no_metric_candidates({}) is False
+        assert _batch_has_no_metric_candidates({"available": False}) is False
+        assert _batch_has_no_metric_candidates(None) is False
+
+    def test_returns_false_when_direct_candidates_exist(self):
+        from datus.storage.metric.metric_init import _batch_has_no_metric_candidates
+
+        plan = {
+            "available": True,
+            "direct_metric_candidates": [{"name": "revenue"}],
+            "non_metric_evidence": [{"name": "detail_query"}],
+        }
+        assert _batch_has_no_metric_candidates(plan) is False
+
+    def test_returns_false_when_derived_candidates_exist(self):
+        from datus.storage.metric.metric_init import _batch_has_no_metric_candidates
+
+        plan = {
+            "available": True,
+            "derived_metric_candidates": [{"name": "mom_delta"}],
+            "non_metric_evidence": [{"name": "detail_query"}],
+        }
+        assert _batch_has_no_metric_candidates(plan) is False
+
+    def test_returns_false_when_llm_review_candidates_exist(self):
+        from datus.storage.metric.metric_init import _batch_has_no_metric_candidates
+
+        plan = {
+            "available": True,
+            "llm_review_candidates": [
+                {
+                    "name": "price_per_quantity",
+                    "candidate_classification": "llm_review_candidate",
+                    "equivalence": "lifted",
+                }
+            ],
+            "non_metric_evidence": [{"name": "detail_query"}],
+        }
+        assert _batch_has_no_metric_candidates(plan) is False
+
+    def test_returns_true_when_only_non_metric_evidence(self):
+        from datus.storage.metric.metric_init import _batch_has_no_metric_candidates
+
+        plan = {
+            "available": True,
+            "direct_metric_candidates": [],
+            "derived_metric_candidates": [],
+            "non_metric_evidence": [{"name": "row_number_query"}],
+        }
+        assert _batch_has_no_metric_candidates(plan) is True
+
+    def test_returns_true_when_only_identity_references(self):
+        from datus.storage.metric.metric_init import _batch_has_no_metric_candidates
+
+        plan = {
+            "available": True,
+            "identity_metric_references": [{"name": "activity_count"}],
+        }
+        assert _batch_has_no_metric_candidates(plan) is True
+
+    def test_returns_true_when_only_derived_datasource_recommendations(self):
+        from datus.storage.metric.metric_init import _batch_has_no_metric_candidates
+
+        plan = {
+            "available": True,
+            "derived_datasource_recommendations": [{"sql_query": "SELECT ..."}],
+        }
+        assert _batch_has_no_metric_candidates(plan) is True
+
+    def test_returns_false_when_no_evidence_at_all(self):
+        """Available plan with zero candidates AND zero evidence should NOT skip."""
+        from datus.storage.metric.metric_init import _batch_has_no_metric_candidates
+
+        plan = {"available": True}
+        assert _batch_has_no_metric_candidates(plan) is False
+
+
+@pytest.mark.ci
+class TestOffsetCandidateHelpers:
+    def test_offset_grain_and_candidate_shape_guards(self):
+        assert _offset_grain(None) is None
+        assert _offset_grain("1 centuries") is None
+        assert _offset_grain("1 months") == "month"
+        assert (
+            _is_offset_derived_candidate({"metric_type": "simple", "inputs": [{"offset_window": "1 month"}]}) is False
+        )
+        assert _is_offset_derived_candidate({"metric_type": "derived", "inputs": []}) is False
+
+    def test_identity_alias_guards(self):
+        assert _offset_identity_alias_candidates({"inputs": []}) == []
+        assert (
+            _offset_identity_alias_candidates(
+                {
+                    "name": "previous_month_activity_count",
+                    "expression": "previous_month_activity_count",
+                    "inputs": [{"name": "activity_count", "alias": "", "offset_window": "1 month"}],
+                }
+            )
+            == []
+        )
+        assert (
+            _offset_identity_alias_candidates(
+                {
+                    "name": "activity_count_previous_month",
+                    "expression": "activity_count_previous_month",
+                    "inputs": [
+                        {"name": "activity_count", "alias": "activity_count_previous_month", "offset_window": "1 month"}
+                    ],
+                }
+            )
+            == []
+        )
+
+    def test_unique_metric_catalog_by_name(self):
+        unique, ambiguous = _unique_metric_catalog_by_name(
+            [
+                "not-dict",
+                {"name": "activity_count"},
+                {"name": "activity_count"},
+                {"name": "order_count"},
+            ]
+        )
+        assert unique == {"order_count": {"name": "order_count"}}
+        assert ambiguous == {"activity_count"}
+
+
+@pytest.mark.ci
+class TestSourceNames:
+    """Tests for _source_names helper."""
+
+    def test_empty_value_returns_empty_set(self):
+        from datus.storage.metric.metric_init import _source_names
+
+        assert _source_names("") == set()
+        assert _source_names(None) == set()
+        assert _source_names([]) == set()
+
+    def test_list_of_strings(self):
+        from datus.storage.metric.metric_init import _source_names
+
+        assert _source_names(["sql_1", "sql_2"]) == {"sql_1", "sql_2"}
+
+    def test_tuple_of_strings(self):
+        from datus.storage.metric.metric_init import _source_names
+
+        assert _source_names(("sql_1", "sql_2")) == {"sql_1", "sql_2"}
+
+    def test_set_of_strings(self):
+        from datus.storage.metric.metric_init import _source_names
+
+        assert _source_names({"sql_1"}) == {"sql_1"}
+
+    def test_comma_separated_string(self):
+        from datus.storage.metric.metric_init import _source_names
+
+        assert _source_names("sql_1, sql_2") == {"sql_1", "sql_2"}
+
+    def test_single_string(self):
+        from datus.storage.metric.metric_init import _source_names
+
+        assert _source_names("sql_1") == {"sql_1"}
+
+
+@pytest.mark.ci
+class TestSourceScopedItems:
+    """Tests for _source_scoped_items helper."""
+
+    def test_non_list_returns_empty(self):
+        from datus.storage.metric.metric_init import _source_scoped_items
+
+        assert _source_scoped_items(None, {"sql_1"}) == []
+        assert _source_scoped_items("not_a_list", {"sql_1"}) == []
+
+    def test_non_dict_items_skipped(self):
+        from datus.storage.metric.metric_init import _source_scoped_items
+
+        assert _source_scoped_items(["not_dict", 42], {"sql_1"}) == []
+
+    def test_item_without_source_always_included(self):
+        from datus.storage.metric.metric_init import _source_scoped_items
+
+        item = {"name": "m1"}
+        result = _source_scoped_items([item], {"sql_1"})
+        assert item in result
+
+    def test_item_with_matching_source_included(self):
+        from datus.storage.metric.metric_init import _source_scoped_items
+
+        item = {"name": "m1", "source_sql_name": "sql_1"}
+        result = _source_scoped_items([item], {"sql_1"})
+        assert item in result
+
+    def test_item_with_non_matching_source_excluded(self):
+        from datus.storage.metric.metric_init import _source_scoped_items
+
+        item = {"name": "m1", "source_sql_name": "sql_99"}
+        result = _source_scoped_items([item], {"sql_1"})
+        assert result == []
+
+    def test_uses_source_key_as_fallback(self):
+        from datus.storage.metric.metric_init import _source_scoped_items
+
+        item = {"name": "m1", "source": "sql_1"}
+        result = _source_scoped_items([item], {"sql_1"})
+        assert item in result
+
+
+@pytest.mark.ci
+class TestNormalizedScalar:
+    """Tests for _normalized_scalar helper."""
+
+    def test_strips_and_lowercases(self):
+        from datus.storage.metric.metric_init import _normalized_scalar
+
+        assert _normalized_scalar("  MeasureProxy  ") == "measureproxy"
+
+    def test_none_returns_empty(self):
+        from datus.storage.metric.metric_init import _normalized_scalar
+
+        assert _normalized_scalar(None) == ""
+
+    def test_empty_string(self):
+        from datus.storage.metric.metric_init import _normalized_scalar
+
+        assert _normalized_scalar("") == ""
+
+
+@pytest.mark.ci
+class TestNormalizedMetricType:
+    """Tests for _normalized_metric_type helper."""
+
+    def test_simple_mapped_to_measure_proxy(self):
+        from datus.storage.metric.metric_init import _normalized_metric_type
+
+        assert _normalized_metric_type("simple") == "measure_proxy"
+
+    def test_other_types_unchanged(self):
+        from datus.storage.metric.metric_init import _normalized_metric_type
+
+        assert _normalized_metric_type("ratio") == "ratio"
+        assert _normalized_metric_type("derived") == "derived"
+
+    def test_none_returns_empty(self):
+        from datus.storage.metric.metric_init import _normalized_metric_type
+
+        assert _normalized_metric_type(None) == ""
+
+
+@pytest.mark.ci
+class TestNormalizedMeasureNames:
+    """Tests for _normalized_measure_names helper."""
+
+    def test_non_list_returns_empty(self):
+        from datus.storage.metric.metric_init import _normalized_measure_names
+
+        assert _normalized_measure_names(None) == set()
+        assert _normalized_measure_names("not_a_list") == set()
+
+    def test_list_of_strings(self):
+        from datus.storage.metric.metric_init import _normalized_measure_names
+
+        assert _normalized_measure_names(["Revenue", "Cost"]) == {"revenue", "cost"}
+
+    def test_list_of_dicts_with_name_key(self):
+        from datus.storage.metric.metric_init import _normalized_measure_names
+
+        result = _normalized_measure_names([{"name": "Revenue"}, {"name": "Cost"}])
+        assert result == {"revenue", "cost"}
+
+    def test_list_of_dicts_with_measure_key(self):
+        from datus.storage.metric.metric_init import _normalized_measure_names
+
+        result = _normalized_measure_names([{"measure": "Revenue"}])
+        assert result == {"revenue"}
+
+    def test_ignores_non_string_non_dict_items(self):
+        from datus.storage.metric.metric_init import _normalized_measure_names
+
+        result = _normalized_measure_names([42, None, "revenue"])
+        assert result == {"revenue"}
+
+
+@pytest.mark.ci
+class TestCandidateHasDefinitionEvidence:
+    """Tests for _candidate_has_definition_evidence helper."""
+
+    def test_empty_candidate_returns_false(self):
+        from datus.storage.metric.metric_init import _candidate_has_definition_evidence
+
+        assert _candidate_has_definition_evidence({}) is False
+
+    def test_candidate_with_metric_type(self):
+        from datus.storage.metric.metric_init import _candidate_has_definition_evidence
+
+        assert _candidate_has_definition_evidence({"metric_type": "measure_proxy"}) is True
+
+    def test_candidate_with_semantic_model(self):
+        from datus.storage.metric.metric_init import _candidate_has_definition_evidence
+
+        assert _candidate_has_definition_evidence({"semantic_model": "orders"}) is True
+
+    def test_candidate_with_base_measures(self):
+        from datus.storage.metric.metric_init import _candidate_has_definition_evidence
+
+        assert _candidate_has_definition_evidence({"base_measures": ["order_count"]}) is True
+
+    def test_candidate_with_referenced_metrics(self):
+        from datus.storage.metric.metric_init import _candidate_has_definition_evidence
+
+        assert _candidate_has_definition_evidence({"referenced_metrics": ["revenue"]}) is True
+
+
+@pytest.mark.ci
+class TestCandidateMatchesExistingMetric:
+    """Tests for _candidate_matches_existing_metric helper."""
+
+    def test_no_definition_evidence_returns_false(self):
+        from datus.storage.metric.metric_init import _candidate_matches_existing_metric
+
+        assert _candidate_matches_existing_metric({}, {"name": "revenue", "type": "measure_proxy"}) is False
+
+    def test_matching_type_and_measures(self):
+        from datus.storage.metric.metric_init import _candidate_matches_existing_metric
+
+        candidate = {"metric_type": "measure_proxy", "base_measures": ["revenue_total"]}
+        existing = {"type": "measure_proxy", "base_measures": ["revenue_total"]}
+        assert _candidate_matches_existing_metric(candidate, existing) is True
+
+    def test_mismatched_metric_type_returns_false(self):
+        from datus.storage.metric.metric_init import _candidate_matches_existing_metric
+
+        candidate = {"metric_type": "ratio", "base_measures": ["a", "b"]}
+        existing = {"type": "measure_proxy", "base_measures": ["a"]}
+        assert _candidate_matches_existing_metric(candidate, existing) is False
+
+    def test_mismatched_semantic_model_returns_false(self):
+        from datus.storage.metric.metric_init import _candidate_matches_existing_metric
+
+        candidate = {"metric_type": "measure_proxy", "semantic_model_name": "orders"}
+        existing = {"type": "measure_proxy", "semantic_model_name": "customers"}
+        assert _candidate_matches_existing_metric(candidate, existing) is False
+
+    def test_mismatched_base_measures_returns_false(self):
+        from datus.storage.metric.metric_init import _candidate_matches_existing_metric
+
+        candidate = {"metric_type": "measure_proxy", "base_measures": ["revenue"]}
+        existing = {"type": "measure_proxy", "base_measures": ["cost"]}
+        assert _candidate_matches_existing_metric(candidate, existing) is False
+
+    def test_simple_type_normalized_to_measure_proxy(self):
+        from datus.storage.metric.metric_init import _candidate_matches_existing_metric
+
+        candidate = {"metric_type": "simple", "base_measures": ["revenue"]}
+        existing = {"type": "measure_proxy", "base_measures": ["revenue"]}
+        assert _candidate_matches_existing_metric(candidate, existing) is True
+
+
+@pytest.mark.ci
+class TestAllCandidateMetricsSatisfied:
+    """Tests for _all_candidate_metrics_satisfied helper."""
+
+    def test_empty_candidates_returns_false(self):
+        from datus.storage.metric.metric_init import _all_candidate_metrics_satisfied
+
+        assert _all_candidate_metrics_satisfied({}, []) is False
+
+    def test_candidate_not_in_existing_returns_false(self):
+        from datus.storage.metric.metric_init import _all_candidate_metrics_satisfied
+
+        plan = {"direct_metric_candidates": [{"name": "new_metric", "metric_type": "measure_proxy"}]}
+        assert _all_candidate_metrics_satisfied(plan, []) is False
+
+    def test_all_candidates_satisfied(self):
+        from datus.storage.metric.metric_init import _all_candidate_metrics_satisfied
+
+        plan = {
+            "direct_metric_candidates": [
+                {"name": "revenue_total", "metric_type": "measure_proxy", "base_measures": ["revenue"]}
+            ]
+        }
+        existing = [{"name": "revenue_total", "type": "measure_proxy", "base_measures": ["revenue"]}]
+        assert _all_candidate_metrics_satisfied(plan, existing) is True
+
+    def test_one_unsatisfied_returns_false(self):
+        from datus.storage.metric.metric_init import _all_candidate_metrics_satisfied
+
+        plan = {
+            "direct_metric_candidates": [
+                {"name": "revenue_total", "metric_type": "measure_proxy", "base_measures": ["revenue"]},
+                {"name": "new_metric", "metric_type": "measure_proxy", "base_measures": ["something"]},
+            ]
+        }
+        existing = [{"name": "revenue_total", "type": "measure_proxy", "base_measures": ["revenue"]}]
+        assert _all_candidate_metrics_satisfied(plan, existing) is False
+
+
+# ---------------------------------------------------------------------------
+# Offset derived candidate expansion (format-agnostic LLM path)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.ci
+class TestExpandOffsetIdentityCandidates:
+    def _identity_candidate(self):
+        return {
+            "name": "previous_month_activity_count",
+            "metric_type": "derived",
+            "expression": "previous_month_activity_count",
+            "source_sql_name": "sql_25",
+            "inputs": [
+                {
+                    "name": "activity_count",
+                    "alias": "previous_month_activity_count",
+                    "offset_window": "1 month",
+                }
+            ],
+        }
+
+    def _delta_candidate(self):
+        return {
+            "name": "activity_count_mom_delta",
+            "metric_type": "derived",
+            "expression": "activity_count - previous_month_activity_count",
+            "source_sql_name": "sql_25",
+            "inputs": [
+                {"name": "activity_count"},
+                {
+                    "name": "activity_count",
+                    "alias": "previous_month_activity_count",
+                    "offset_window": "1 month",
+                },
+            ],
+        }
+
+    def test_annotates_identity_candidate_with_equivalent_names(self):
+        annotated = _annotate_offset_identity_candidates([self._identity_candidate(), self._delta_candidate()])
+
+        names = [candidate["name"] for candidate in annotated]
+        assert names == [
+            "previous_month_activity_count",
+            "activity_count_mom_delta",
+        ]
+        identity = annotated[0]
+        assert identity["equivalent_names"] == ["activity_count_previous_month"]
+        assert identity["expression"] == "previous_month_activity_count"
+        assert identity["source_sql_name"] == "sql_25"
+        assert "equivalent_names" not in annotated[1]
+
+    def test_preserves_non_offset_items(self):
+        simple = {"name": "activity_count", "metric_type": "simple", "inputs": []}
+        annotated = _annotate_offset_identity_candidates(["not-a-dict", simple, self._identity_candidate()])
+
+        names = [candidate["name"] for candidate in annotated if isinstance(candidate, dict)]
+        assert names == [
+            "activity_count",
+            "previous_month_activity_count",
+        ]
+        assert "equivalent_names" not in annotated[1]
+        assert "not-a-dict" in annotated
+
+    def test_build_candidate_plan_applies_expansion(self, monkeypatch):
+        class FakeDiscovery:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def analyze_metric_candidates_from_history(self, **kwargs):
+                return FuncToolResult(
+                    result={
+                        "derived_metric_candidates": [
+                            {
+                                "name": "previous_month_activity_count",
+                                "metric_type": "derived",
+                                "expression": "previous_month_activity_count",
+                                "inputs": [
+                                    {
+                                        "name": "activity_count",
+                                        "alias": "previous_month_activity_count",
+                                        "offset_window": "1 month",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                )
+
+        monkeypatch.setattr(
+            "datus.tools.func_tool.semantic_discovery_tools.SemanticDiscoveryTools",
+            FakeDiscovery,
+        )
+        monkeypatch.setattr(
+            "datus.storage.metric.metric_init._build_sql_to_table_lineage",
+            lambda sql_entries, agent_config: [],
+        )
+
+        plan = _build_candidate_plan(
+            [{"name": "sql_25", "sql": "SELECT 1", "question": "q"}],
+            "[]",
+            SimpleNamespace(),
+        )
+
+        candidates = plan["derived_metric_candidates"]
+        assert [candidate["name"] for candidate in candidates] == ["previous_month_activity_count"]
+        assert candidates[0]["equivalent_names"] == ["activity_count_previous_month"]
+
+
+# ---------------------------------------------------------------------------
+# Offset derived completeness check + retry
+# ---------------------------------------------------------------------------
+
+
+def _offset_plan():
+    return {
+        "available": True,
+        "derived_metric_candidates": [
+            {
+                "name": "previous_month_activity_count",
+                "metric_type": "derived",
+                "expression": "previous_month_activity_count",
+                "source_sql_name": "sql_25",
+                "inputs": [
+                    {
+                        "name": "activity_count",
+                        "alias": "previous_month_activity_count",
+                        "offset_window": "1 month",
+                    }
+                ],
+            },
+            {
+                "name": "activity_count_mom_delta",
+                "metric_type": "derived",
+                "expression": "activity_count - previous_month_activity_count",
+                "source_sql_name": "sql_25",
+                "inputs": [
+                    {"name": "activity_count"},
+                    {
+                        "name": "activity_count",
+                        "alias": "previous_month_activity_count",
+                        "offset_window": "1 month",
+                    },
+                ],
+            },
+        ],
+    }
+
+
+@pytest.mark.ci
+class TestMissingOffsetDerivedCandidates:
+    def test_detects_missing_when_inputs_exist(self):
+        catalog = [{"name": "activity_count", "type": "measure_proxy"}]
+        missing = _missing_offset_derived_candidates(_offset_plan(), catalog)
+        assert [candidate["name"] for candidate in missing] == [
+            "previous_month_activity_count",
+            "activity_count_mom_delta",
+        ]
+
+    def test_empty_when_all_candidates_exist(self):
+        catalog = [
+            {"name": "activity_count", "type": "measure_proxy"},
+            {"name": "previous_month_activity_count", "type": "derived"},
+            {"name": "activity_count_mom_delta", "type": "derived"},
+        ]
+        assert _missing_offset_derived_candidates(_offset_plan(), catalog) == []
+
+    def test_skips_ambiguous_and_unresolved_inputs(self):
+        ambiguous_catalog = [
+            {"name": "activity_count", "type": "measure_proxy", "subject_path": ["a"]},
+            {"name": "activity_count", "type": "measure_proxy", "subject_path": ["b"]},
+        ]
+        assert _missing_offset_derived_candidates(_offset_plan(), ambiguous_catalog) == []
+        assert _missing_offset_derived_candidates(_offset_plan(), []) == []
+        assert _missing_offset_derived_candidates({"available": False}, []) == []
+
+    def test_identity_candidate_satisfied_by_any_equivalent_name(self):
+        plan = _offset_plan()
+        plan["derived_metric_candidates"] = _annotate_offset_identity_candidates(plan["derived_metric_candidates"])
+
+        catalog_canonical_name = [
+            {"name": "activity_count", "type": "measure_proxy"},
+            {"name": "activity_count_previous_month", "type": "derived"},
+            {"name": "activity_count_mom_delta", "type": "derived"},
+        ]
+        assert _missing_offset_derived_candidates(plan, catalog_canonical_name) == []
+
+        catalog_original_alias = [
+            {"name": "activity_count", "type": "measure_proxy"},
+            {"name": "previous_month_activity_count", "type": "derived"},
+            {"name": "activity_count_mom_delta", "type": "derived"},
+        ]
+        assert _missing_offset_derived_candidates(plan, catalog_original_alias) == []
+
+    def test_identity_candidate_reported_once_when_fully_missing(self):
+        plan = _offset_plan()
+        plan["derived_metric_candidates"] = _annotate_offset_identity_candidates(plan["derived_metric_candidates"])
+
+        catalog = [{"name": "activity_count", "type": "measure_proxy"}]
+        missing_names = [candidate["name"] for candidate in _missing_offset_derived_candidates(plan, catalog)]
+        assert missing_names == ["previous_month_activity_count", "activity_count_mom_delta"]
+
+
+@pytest.mark.ci
+class TestEnsureOffsetDerivedMetrics:
+    def _records(self):
+        return [
+            {
+                "source_sql_name": "sql_25",
+                "query": "Query 25:\nQuestion: q\nSQL:\nSELECT 1",
+                "source": {"source_id": "seed:24"},
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_retries_missing_candidates_once(self, monkeypatch):
+        catalogs = iter(
+            [
+                [{"name": "activity_count", "type": "measure_proxy"}],
+                [
+                    {"name": "activity_count", "type": "measure_proxy"},
+                    {"name": "previous_month_activity_count", "type": "derived"},
+                    {"name": "activity_count_previous_month", "type": "derived"},
+                    {"name": "activity_count_mom_delta", "type": "derived"},
+                ],
+            ]
+        )
+        monkeypatch.setattr(
+            "datus.storage.metric.metric_init._build_existing_metric_catalog",
+            lambda agent_config: next(catalogs),
+        )
+        batch_calls = {}
+
+        async def fake_generate(batch_queries, batch_idx, *args, **kwargs):
+            batch_calls["queries"] = batch_queries
+            batch_calls["batch_idx"] = batch_idx
+            batch_calls["extra_instructions"] = args[2] if len(args) > 2 else kwargs.get("extra_instructions")
+            return True, "", {"processed_queries": len(batch_queries)}
+
+        monkeypatch.setattr("datus.storage.metric.metric_init._generate_metrics_batch", fake_generate)
+        monkeypatch.setattr(
+            "datus.storage.metric.metric_init._sync_metric_provenance",
+            lambda agent_config, artifact_ids, source_entries: 0,
+        )
+        monkeypatch.setattr(
+            "datus.storage.metric.metric_init._metric_ids_in_storage",
+            lambda agent_config: set(),
+        )
+
+        result = await _ensure_offset_derived_metrics(
+            candidate_plan=_offset_plan(),
+            agent_config=SimpleNamespace(),
+            subject_tree=None,
+            extra_instructions=None,
+            event_helper=None,
+            action_callback=None,
+            all_query_records=self._records(),
+            total_batches=3,
+        )
+
+        assert result["retried"] is True
+        assert result["missing"] == []
+        assert sorted(result["generated"]) == [
+            "activity_count_mom_delta",
+            "previous_month_activity_count",
+        ]
+        assert batch_calls["batch_idx"] == 3
+        assert batch_calls["queries"] == ["Query 25:\nQuestion: q\nSQL:\nSELECT 1"]
+        instructions = batch_calls["extra_instructions"] or ""
+        assert "previous_month_activity_count" in instructions
+        assert "activity_count_mom_delta" in instructions
+
+    @pytest.mark.asyncio
+    async def test_no_retry_when_complete(self, monkeypatch):
+        monkeypatch.setattr(
+            "datus.storage.metric.metric_init._build_existing_metric_catalog",
+            lambda agent_config: [
+                {"name": "activity_count", "type": "measure_proxy"},
+                {"name": "previous_month_activity_count", "type": "derived"},
+                {"name": "activity_count_previous_month", "type": "derived"},
+                {"name": "activity_count_mom_delta", "type": "derived"},
+            ],
+        )
+
+        async def unexpected_generate(*args, **kwargs):
+            raise AssertionError("retry batch must not run when candidates are satisfied")
+
+        monkeypatch.setattr("datus.storage.metric.metric_init._generate_metrics_batch", unexpected_generate)
+
+        result = await _ensure_offset_derived_metrics(
+            candidate_plan=_offset_plan(),
+            agent_config=SimpleNamespace(),
+            subject_tree=None,
+            extra_instructions=None,
+            event_helper=None,
+            action_callback=None,
+            all_query_records=self._records(),
+            total_batches=3,
+        )
+
+        assert result == {"generated": [], "missing": [], "retried": False}
+
+    @pytest.mark.asyncio
+    async def test_reports_unresolved_after_retry(self, monkeypatch):
+        catalog = [{"name": "activity_count", "type": "measure_proxy"}]
+        monkeypatch.setattr(
+            "datus.storage.metric.metric_init._build_existing_metric_catalog",
+            lambda agent_config: list(catalog),
+        )
+
+        async def fake_generate(*args, **kwargs):
+            return False, "llm failed", None
+
+        monkeypatch.setattr("datus.storage.metric.metric_init._generate_metrics_batch", fake_generate)
+        monkeypatch.setattr(
+            "datus.storage.metric.metric_init._sync_metric_provenance",
+            lambda agent_config, artifact_ids, source_entries: 0,
+        )
+        monkeypatch.setattr(
+            "datus.storage.metric.metric_init._metric_ids_in_storage",
+            lambda agent_config: set(),
+        )
+
+        result = await _ensure_offset_derived_metrics(
+            candidate_plan=_offset_plan(),
+            agent_config=SimpleNamespace(),
+            subject_tree=None,
+            extra_instructions=None,
+            event_helper=None,
+            action_callback=None,
+            all_query_records=self._records(),
+            total_batches=3,
+        )
+
+        assert result["retried"] is True
+        assert result["generated"] == []
+        assert sorted(result["missing"]) == [
+            "activity_count_mom_delta",
+            "previous_month_activity_count",
+        ]

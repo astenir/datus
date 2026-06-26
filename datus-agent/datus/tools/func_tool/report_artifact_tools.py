@@ -294,6 +294,8 @@ class ReportArtifactTools:
        subagent stops on its first success.
     """
 
+    permission_category: str = "artifact_tools"
+
     def __init__(
         self,
         *,
@@ -590,7 +592,7 @@ class ReportArtifactTools:
                 you don't have a hypothesis, skip the query — placeholder
                 hypotheses pollute the analysis layer.
             uses: Optional ``{"metrics": [{"path": [...], "name": "..."}],
-                "reference_sql": [...], "ext_knowledge": [...]}``. Each
+                "reference_sql": [...]}``. Each
                 bucket lists subject-library assets this query draws on,
                 identified by their ``path`` + ``name`` pair (the same two
                 fields ``list_metrics`` / ``search_metrics`` /

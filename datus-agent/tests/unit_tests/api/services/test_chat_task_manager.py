@@ -893,14 +893,6 @@ class TestCreateNode:
         node = manager._create_node(real_agent_config, "gen_metrics", "test-session")
         assert isinstance(node, GenMetricsAgenticNode)
 
-    def test_create_gen_ext_knowledge_node(self, real_agent_config, mock_llm_create):
-        """_create_node creates GenExtKnowledgeAgenticNode for gen_ext_knowledge."""
-        from datus.agent.node.gen_ext_knowledge_agentic_node import GenExtKnowledgeAgenticNode
-
-        manager = ChatTaskManager()
-        node = manager._create_node(real_agent_config, "gen_ext_knowledge", "test-session")
-        assert isinstance(node, GenExtKnowledgeAgenticNode)
-
     def test_create_gen_report_node(self, real_agent_config, mock_llm_create):
         """gen_report must land on GenReportAgenticNode (regression: previously fell back to GenSQL)."""
         from datus.agent.node.gen_report_agentic_node import GenReportAgenticNode
@@ -954,6 +946,23 @@ class TestCreateNode:
         manager = ChatTaskManager()
         node = manager._create_node(real_agent_config, "my_report_agent", "test-session")
         assert isinstance(node, GenReportAgenticNode)
+        assert not isinstance(node, GenSQLAgenticNode)
+
+    def test_custom_agent_type_ask_metrics(self, real_agent_config, mock_llm_create):
+        """API-created type=ask_metrics agents must instantiate AskMetricsAgenticNode."""
+        from datus.agent.node.ask_metrics_agentic_node import AskMetricsAgenticNode
+        from datus.agent.node.gen_sql_agentic_node import GenSQLAgenticNode
+
+        real_agent_config.agentic_nodes["my_metric_agent"] = {
+            "system_prompt": "my_metric_agent",
+            "type": "ask_metrics",
+            "tools": "semantic_tools.query_metrics",
+            "max_turns": 5,
+        }
+
+        manager = ChatTaskManager()
+        node = manager._create_node(real_agent_config, "my_metric_agent", "test-session")
+        assert isinstance(node, AskMetricsAgenticNode)
         assert not isinstance(node, GenSQLAgenticNode)
 
     def test_custom_agent_no_node_class_falls_back_to_gen_sql(self, real_agent_config, mock_llm_create):
@@ -1028,15 +1037,6 @@ class TestCreateNodeInput:
         node = manager._create_node(real_agent_config, "gen_metrics", "test")
         result = manager._create_node_input("generate metrics", node, [], [], [])
         assert isinstance(result, SemanticNodeInput)
-
-    def test_ext_knowledge_node_input(self, real_agent_config, mock_llm_create):
-        """_create_node_input for GenExtKnowledgeAgenticNode returns ExtKnowledgeNodeInput."""
-        from datus.schemas.ext_knowledge_agentic_node_models import ExtKnowledgeNodeInput
-
-        manager = ChatTaskManager()
-        node = manager._create_node(real_agent_config, "gen_ext_knowledge", "test")
-        result = manager._create_node_input("extract knowledge", node, [], [], [])
-        assert isinstance(result, ExtKnowledgeNodeInput)
 
     def test_sql_summary_node_input(self, real_agent_config, mock_llm_create):
         """_create_node_input for SqlSummaryAgenticNode returns SqlSummaryNodeInput."""
@@ -1707,3 +1707,49 @@ class TestStartChatRemoteSourceHardening:
         assert cfg.filesystem_strict is True
         assert cfg.bash_tool_enabled is True
         assert cfg._client_source is None
+
+
+class TestStartChatDatasourceOverride:
+    """A per-request ``datasource`` (e.g. an IM channel override) switches the
+    connection profile without leaking into the physical ``database`` slot."""
+
+    @pytest.mark.asyncio
+    async def test_request_datasource_switches_current_datasource(self, real_agent_config, monkeypatch):
+        import copy as _copy
+
+        from datus.api.models.cli_models import StreamChatInput
+
+        # Inject a second datasource so the switch is observable (not a no-op).
+        sources = real_agent_config.services.datasources
+        sources["analytics"] = _copy.deepcopy(sources["california_schools"])
+        assert real_agent_config.current_datasource == "california_schools"
+
+        captured = {}
+
+        async def fake_run_loop(self, task, agent_config, request, **kwargs):
+            captured["agent_config"] = agent_config
+
+        monkeypatch.setattr(ChatTaskManager, "_run_loop", fake_run_loop)
+        manager = ChatTaskManager()
+        request = StreamChatInput(message="hi", session_id="ds-override", datasource="analytics")
+        task = await manager.start_chat(real_agent_config, request)
+        await task.asyncio_task
+
+        cfg = captured["agent_config"]
+        # The cloned config switched datasource; the datasource name never landed in database
+        # (database, if filled by _fill_database_context, is the resolved physical db name).
+        assert cfg.current_datasource == "analytics"
+        assert request.database != "analytics"
+        # Original config untouched because start_chat deep-copies.
+        assert real_agent_config.current_datasource == "california_schools"
+
+    @pytest.mark.asyncio
+    async def test_invalid_request_datasource_raises(self, real_agent_config, monkeypatch):
+        from datus.api.models.cli_models import StreamChatInput
+        from datus.utils.exceptions import DatusException
+
+        monkeypatch.setattr(ChatTaskManager, "_run_loop", lambda *a, **k: None)
+        manager = ChatTaskManager()
+        request = StreamChatInput(message="hi", session_id="ds-invalid", datasource="nonexistent")
+        with pytest.raises(DatusException):
+            await manager.start_chat(real_agent_config, request)

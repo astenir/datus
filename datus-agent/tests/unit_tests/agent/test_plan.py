@@ -121,18 +121,64 @@ class TestCreateSingleNode:
             # TYPE_CHAT may not be registered in Node.new_instance factory for workflow
             pass
 
-    def test_agentic_node_maps_to_gensql_via_config(self):
-        """When agentic_nodes contains a name, it normalizes to TYPE_GENSQL."""
+    def test_agentic_node_maps_to_gen_sql_via_config(self):
+        """When agentic_nodes contains a name, it normalizes to TYPE_GEN_SQL."""
         cfg = _mock_config(agentic_nodes={"myagent": {}})
         assert "myagent" in cfg.agentic_nodes
-        # Verify the normalization logic: agentic_nodes key -> TYPE_GENSQL
+        # Verify the normalization logic: agentic_nodes key -> TYPE_GEN_SQL
         task = _sql_task()
-        try:
+        fake_node = MagicMock()
+        fake_node.type = NodeType.TYPE_GEN_SQL
+        with patch("datus.agent.plan.Node.new_instance", return_value=fake_node) as new_instance:
             node = _create_single_node("myagent", "node_agent", task, cfg)
-            assert node.type == NodeType.TYPE_GENSQL
-        except Exception:
-            # TYPE_GENSQL node creation may fail without full DB setup
-            pass
+        assert node.type == NodeType.TYPE_GEN_SQL
+        new_instance.assert_called_once()
+        call_kwargs = new_instance.call_args.kwargs
+        assert call_kwargs["node_type"] == NodeType.TYPE_GEN_SQL
+        assert call_kwargs["node_name"] == "myagent"
+
+    def test_agentic_node_with_node_type_ask_metrics(self):
+        """When agentic_nodes has node_type=ask_metrics, it creates an ask_metrics node."""
+        cfg = _mock_config(agentic_nodes={"my_ask_metrics": {"node_type": "ask_metrics"}})
+        task = _sql_task(task="how many activities?")
+        fake_node = MagicMock()
+        fake_node.type = NodeType.TYPE_ASK_METRICS
+        with patch("datus.agent.plan.Node.new_instance", return_value=fake_node) as new_instance:
+            node = _create_single_node("my_ask_metrics", "node_am", task, cfg)
+        assert node.type == NodeType.TYPE_ASK_METRICS
+        new_instance.assert_called_once()
+        call_kwargs = new_instance.call_args.kwargs
+        assert call_kwargs["node_type"] == NodeType.TYPE_ASK_METRICS
+        assert call_kwargs["node_name"] == "my_ask_metrics"
+        input_data = call_kwargs["input_data"]
+        from datus.schemas.ask_metrics_agentic_node_models import AskMetricsNodeInput
+
+        assert isinstance(input_data, AskMetricsNodeInput)
+        assert input_data.user_message == "how many activities?"
+
+    def test_agentic_node_ask_metrics_passes_reference_date(self):
+        """When sql_task has current_date, it is passed as reference_date to AskMetricsNodeInput."""
+        cfg = _mock_config(agentic_nodes={"my_am": {"node_type": "ask_metrics"}})
+        task = _sql_task(task="activity count in June")
+        task.current_date = "2025-06-01"
+        fake_node = MagicMock()
+        fake_node.type = NodeType.TYPE_ASK_METRICS
+        with patch("datus.agent.plan.Node.new_instance", return_value=fake_node) as new_instance:
+            _create_single_node("my_am", "node_am", task, cfg)
+        input_data = new_instance.call_args.kwargs["input_data"]
+        assert input_data.reference_date == "2025-06-01"
+
+    def test_agentic_node_with_invalid_node_type_falls_back_to_gen_sql(self):
+        """When agentic_nodes has an invalid node_type, it falls back to gen_sql."""
+        cfg = _mock_config(agentic_nodes={"my_node": {"node_type": "nonexistent_type"}})
+        task = _sql_task()
+        fake_node = MagicMock()
+        fake_node.type = NodeType.TYPE_GEN_SQL
+        with patch("datus.agent.plan.Node.new_instance", return_value=fake_node) as new_instance:
+            node = _create_single_node("my_node", "node_x", task, cfg)
+        assert node.type == NodeType.TYPE_GEN_SQL
+        call_kwargs = new_instance.call_args.kwargs
+        assert call_kwargs["node_type"] == NodeType.TYPE_GEN_SQL
 
     def test_schema_linking_creates_schema_linking_input(self):
         task = _sql_task()
@@ -260,7 +306,7 @@ class TestGenerateWorkflow:
         assert [wf.nodes[node_id].type for node_id in wf.node_order] == [
             NodeType.TYPE_BEGIN,
             NodeType.TYPE_SCHEMA_LINKING,
-            NodeType.TYPE_GENERATE_SQL,
+            NodeType.TYPE_GEN_SQL,
             NodeType.TYPE_EXECUTE_SQL,
             NodeType.TYPE_REFLECT,
             NodeType.TYPE_OUTPUT,
@@ -310,5 +356,5 @@ class TestGenerateWorkflow:
                 generate_workflow(task, plan_type="bad_plan", agent_config=cfg)
         assert (
             str(exc_info.value) == "Invalid plan type 'bad_plan'. Available builtin workflows: ['reflection', 'fixed', "
-            "'empty', 'dynamic', 'metric_to_sql', 'chat_agentic', 'gensql_agentic'], custom workflows: ['c1']"
+            "'empty', 'dynamic', 'metric_to_sql', 'chat_agentic', 'gen_sql_agentic'], custom workflows: ['c1']"
         )

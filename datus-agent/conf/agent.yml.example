@@ -7,7 +7,7 @@ agent:
   #       backends use a ``{project_name}/`` subdirectory, a future Postgres
   #       backend could use a schema name instead)
   #   * ~/.datus/{conf,logs,template,run,...}    — global, shared across projects
-  #   * {cwd}/subject/{semantic_models,sql_summaries,ext_knowledge}/ — project KB
+  #   * {cwd}/subject/{semantic_models,sql_summaries}/ — project KB
   #   * {cwd}/.datus/skills/                     — project-level skills (optional)
   #
   # ``project_name`` is derived from the current working directory (``/`` → ``-``)
@@ -25,8 +25,8 @@ agent:
   #   slash command in the CLI can then switch between any model exposed by
   #   that provider without rewriting YAML. Supported providers (keys) are
   #   shipped in ``conf/providers.yml``: openai, claude, claude_subscription,
-  #   codex, deepseek, kimi, qwen, gemini, glm, minimax, alibaba_coding,
-  #   bigmodel_coding, zai_coding, minimax_coding, kimi_coding.
+  #   codex, deepseek, kimi, qwen, gemini, glm, minimax, openrouter,
+  #   alibaba_coding, bigmodel_coding, zai_coding, minimax_coding, kimi_coding.
   #
   # - ``agent.models.<name>`` (legacy / custom)
   #   Retained for self-hosted or private-deployment models — hand-edit this
@@ -101,11 +101,6 @@ agent:
   nodes:
     schema_linking:
       matching_rate: fast
-    generate_sql:
-      max_table_schemas_length: 4000
-      max_data_details_length: 2000
-      max_context_length: 8000
-      max_value_length: 500
     reasoning:
       prompt_version: "1.0" # It can be unconfigured, and the latest version is used by default
       max_table_schemas_length: 4000
@@ -138,7 +133,6 @@ agent:
   #       question_file: dev.json # Relative path to the benchmark question file, can be csv/json/json
   #       question_id_key: question_id # The question id, use the line number when empty; The default value is question_id
   #       db_key: db_id # The key corresponding to database name; By default, the database of datasources will be taken.
-  #       ext_knowledge_key: evidence # Optional, the key corresponding to external knowledge
   #       use_tables_key: tables # Optional: specify which tables to use
 
   #       # Below is the configuration of the baseline answer to evaluate，if evaluation is not required, you do not need to configure it.
@@ -257,21 +251,18 @@ agent:
     reference_sql:
       model_name: all-MiniLM-L6-v2
       dim_size: 384
-    ext_knowledge:
-      model_name: all-MiniLM-L6-v2
-      dim_size: 384
 
   workflow:
     plan: planA
 
     planA:
       - schema_linking
-      - generate_sql
+      - gen_sql
       - output
 
     planB:
       - schema_linking
-      - generate_sql
+      - gen_sql
       - execute_sql
       - reflect
       - output
@@ -279,12 +270,12 @@ agent:
   reflection_nodes:
     schema_linking:
       - schema_linking
-      - generate_sql
+      - gen_sql
       - execute_sql
       - reflect
     doc_search:
       - doc_search
-      - generate_sql
+      - gen_sql
       - execute_sql
       - reflect
     simple_regenerate:
@@ -302,7 +293,7 @@ agent:
     bird_para:
       - schema_linking
       - parallel:
-        - generate_sql
+        - gen_sql
         - reasoning
       - selection
       - execute_sql
@@ -324,7 +315,7 @@ agent:
 
     subworkflow1:
       - search_metrics
-      - generate_sql
+      - gen_sql
 
     subworkflow2:
       - search_metrics
@@ -351,7 +342,7 @@ agent:
     subworkflow1:
       steps:
       - search_metrics
-      - generate_sql
+      - gen_sql
       config: multi/agent1.yaml
 
     subworkflow2:
@@ -399,6 +390,12 @@ agent:
 
     gen_sql_summary:
       model: deepseek_v3
+      max_turns: 30
+
+    gen_sql:
+      model: deepseek_v3
+      system_prompt: gen_sql
+      tools: db_tools.*, context_search_tools.*
       max_turns: 30
 
     gen_table:
