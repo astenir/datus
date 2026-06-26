@@ -3,6 +3,7 @@ Service for handling CLI Command operations.
 """
 
 import asyncio
+import re
 import threading
 import time
 import uuid
@@ -35,6 +36,7 @@ from datus.schemas.action_history import (
 from datus.tools.db_tools import db_manager as db_manager_module
 from datus.tools.db_tools.db_manager import DBManager
 from datus.tools.func_tool.database import DBFuncTool
+from datus.utils.constants import SQLType
 from datus.utils.exceptions import DatusException
 from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso
@@ -121,6 +123,12 @@ def _schema_qualified_dialect(dialect: str) -> bool:
 
 def _catalog_qualified_dialect(dialect: str) -> bool:
     return (dialect or "").strip().lower() in {"starrocks"}
+
+
+_SHOW_NAMESPACE_RE = re.compile(
+    r"^\s*SHOW\s+(?:FULL\s+)?(?P<kind>TABLES|VIEWS|DATABASES|SCHEMAS)\s+(?:FROM|IN)\s+(?P<target>[^\s;]+)",
+    flags=re.IGNORECASE,
+)
 
 
 class CLIService:
@@ -381,12 +389,19 @@ class CLIService:
         scoped_tables = CLIService._scoped_table_patterns(agent_config, guard._field_order)
         guard._scoped_patterns = guard._load_scoped_patterns(scoped_tables)
 
-        validation_error, _ = guard._validate_read_sql(sql, connector)
+        validation_error, sql_type = guard._validate_read_sql(sql, connector)
         if validation_error:
             return Result(
                 success=False,
                 errorCode=ErrorCode.SQL_EXECUTION_ERROR,
                 errorMessage=validation_error.error,
+            )
+        metadata_denial = CLIService._metadata_scope_denial(sql, sql_type, connector, agent_config, guard)
+        if metadata_denial:
+            return Result(
+                success=False,
+                errorCode=ErrorCode.SQL_EXECUTION_ERROR,
+                errorMessage=metadata_denial,
             )
 
         datasource = str(guard.principal.get("datasource") or getattr(agent_config, "current_datasource", "") or "")
@@ -402,14 +417,73 @@ class CLIService:
                 errorCode=ErrorCode.SQL_EXECUTION_ERROR,
                 errorMessage=str(exc),
             )
-        validation_error, _ = guard._validate_read_sql(rewritten_sql, connector)
+        validation_error, rewritten_sql_type = guard._validate_read_sql(rewritten_sql, connector)
         if validation_error:
             return Result(
                 success=False,
                 errorCode=ErrorCode.SQL_EXECUTION_ERROR,
                 errorMessage=validation_error.error,
             )
+        metadata_denial = CLIService._metadata_scope_denial(
+            rewritten_sql,
+            rewritten_sql_type,
+            connector,
+            agent_config,
+            guard,
+        )
+        if metadata_denial:
+            return Result(
+                success=False,
+                errorCode=ErrorCode.SQL_EXECUTION_ERROR,
+                errorMessage=metadata_denial,
+            )
         return rewritten_sql
+
+    @staticmethod
+    def _metadata_scope_denial(
+        sql: str,
+        sql_type: SQLType,
+        connector,
+        agent_config: Optional[AgentConfig],
+        guard: DBFuncTool,
+    ) -> Optional[str]:
+        if sql_type != SQLType.METADATA_SHOW:
+            return None
+        _datasource, grant = CLIService._current_datasource_grant(agent_config)
+        if not isinstance(grant, dict):
+            return None
+        scoped_keys = ("catalogs", "databases", "schemas", "tables")
+        if not any(_scope_patterns(grant, key) is not None for key in scoped_keys):
+            return None
+
+        from datus.utils.sql_utils import _first_statement, extract_table_names
+
+        dialect = getattr(connector, "dialect", "") or ""
+        if extract_table_names(sql, dialect=dialect, ignore_empty=True):
+            return None
+
+        statement = _first_statement(sql).strip()
+        target = CLIService._metadata_namespace_target(statement)
+        if not target:
+            return "Metadata SQL requires an authorized target under scoped datasource grants."
+
+        coordinate = guard._build_table_coordinate(raw_name=target)
+        if guard._table_matches_scope(coordinate):
+            return None
+        return f"Metadata SQL target is outside scoped context: {target}"
+
+    @staticmethod
+    def _metadata_namespace_target(statement: str) -> str:
+        match = _SHOW_NAMESPACE_RE.match(statement)
+        if not match:
+            return ""
+        target = match.group("target").strip().strip(";")
+        if not target:
+            return ""
+        kind = match.group("kind").strip().upper()
+        if kind in {"DATABASES", "SCHEMAS"}:
+            return f"{target}.*.*"
+        return f"{target}.*"
 
     @staticmethod
     def _database_grant_denial(agent_config: Optional[AgentConfig], database_name: Optional[str]) -> Optional[str]:
