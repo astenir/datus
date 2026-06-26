@@ -86,10 +86,13 @@ async def run_dashboard_query(
         svc.agent_config,
         operation="dashboard.query",
     )
+    selected_datasource = projection.principal.get("datasource") or getattr(projection.config, "current_datasource", None)
 
     async def _project_query_config(datasource: str | None) -> AgentConfig:
+        nonlocal selected_datasource
         if not datasource:
             return projection.config
+        selected_datasource = datasource
         datasource_projection = await project_request_config(
             ctx,
             svc.agent_config,
@@ -109,7 +112,7 @@ async def run_dashboard_query(
         agent_config=projection.config,
         agent_config_projector=_project_query_config,
     )
-    await _audit_dashboard_query(ctx, body, result)
+    await _audit_dashboard_query(ctx, body, result, selected_datasource=str(selected_datasource) if selected_datasource else None)
     return result
 
 
@@ -117,13 +120,15 @@ async def _audit_dashboard_query(
     ctx: AppContext,
     body: DashboardQueryRequest,
     result: Result[SqlQueryResultEnvelope],
+    *,
+    selected_datasource: str | None,
 ) -> None:
     data = result.data if result.success else None
     error_code = str(result.errorCode) if not result.success and result.errorCode is not None else None
     metadata = {
         "query_slug": body.query_slug,
         "published_version": body.published_version,
-        "datasource": getattr(data, "datasource", None),
+        "datasource": getattr(data, "datasource", None) or selected_datasource,
         "row_count": getattr(data, "row_count", None),
         "error_code": error_code,
     }

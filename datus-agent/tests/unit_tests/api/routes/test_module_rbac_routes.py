@@ -768,7 +768,68 @@ def test_dashboard_query_audits_sanitized_failure(monkeypatch):
     assert event.resource_id == "sales_overview"
     assert event.decision == "deny"
     assert event.reason == "QUERY_EXECUTION_FAILED"
-    assert event.metadata == {"query_slug": "summary", "error_code": "QUERY_EXECUTION_FAILED"}
+    assert event.metadata == {
+        "query_slug": "summary",
+        "datasource": "default",
+        "error_code": "QUERY_EXECUTION_FAILED",
+    }
+
+
+def test_dashboard_query_audits_template_datasource_on_failure(monkeypatch, tmp_path: Path):
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        _enterprise_extensions(DatasourceGrantConfigProjector(), audit_sink=audit_sink),
+    )
+    _write_dashboard_query_fixture(tmp_path, datasource="hr")
+    agent_config = _datasource_agent_config(current_datasource="finance")
+    agent_config.project_root = str(tmp_path)
+    svc = SimpleNamespace(
+        agent_config=agent_config,
+        dashboard=DashboardService(agent_config=agent_config),
+    )
+
+    class _FailingDBFuncTool:
+        def __init__(self, *, agent_config, sub_agent_name):
+            self.agent_config = agent_config
+            self.sub_agent_name = sub_agent_name
+
+        def _get_connector(self, datasource):
+            raise RuntimeError(f"connector unavailable for {datasource}")
+
+    import datus.tools.func_tool as func_tool_mod
+
+    monkeypatch.setattr(func_tool_mod, "DBFuncTool", _FailingDBFuncTool)
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.dashboard.query"},
+        datasource_grants={
+            "finance": {"effect": "allow", "allow_sql": True},
+            "hr": {"effect": "allow", "allow_sql": True},
+        },
+    )
+
+    with _client(dashboard_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/dashboard/query",
+            json={"dashboard_slug": "sales_overview", "query_slug": "summary", "params": {}},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert response.json()["errorCode"] == "DATASOURCE_UNAVAILABLE"
+    event = audit_sink.events[-1]
+    assert event.action == "dashboard.query"
+    assert event.resource_id == "sales_overview"
+    assert event.decision == "deny"
+    assert event.reason == "DATASOURCE_UNAVAILABLE"
+    assert event.metadata == {
+        "query_slug": "summary",
+        "datasource": "hr",
+        "error_code": "DATASOURCE_UNAVAILABLE",
+    }
 
 
 def test_dashboard_query_uses_projected_datasource_config(monkeypatch):
