@@ -6,6 +6,7 @@ hook integration in ``datus.api.routes.chat_routes.stream_chat``."""
 
 import asyncio
 import json
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -29,7 +30,9 @@ def _clear_hooks_after_test():
 
 def _mock_svc_with_nodes(nodes=None):
     svc = MagicMock()
-    svc.agent_config.agentic_nodes = nodes or {}
+    svc.agent_config = SimpleNamespace(agentic_nodes=nodes or {}, principal={}, sql_policy_config=None)
+    svc.task_manager.get_task.return_value = None
+    svc.chat.session_exists.return_value = True
     return svc
 
 

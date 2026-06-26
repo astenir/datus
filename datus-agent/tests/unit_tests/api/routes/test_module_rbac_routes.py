@@ -3,6 +3,7 @@
 
 """HTTP-level module RBAC coverage for enterprise route dependencies."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -26,13 +27,14 @@ from datus.api.models.report_models import ReportDetail
 from datus.api.routes import chat_routes, cli_routes, dashboard_routes, database_routes, report_routes
 from datus.api.services.cli_service import CLIService, _SQLTaskRecord
 from datus.schemas.artifact_manifest import ArtifactManifest
+from datus_enterprise.config_projection import DatasourceGrantConfigProjector
 
 
-def _enterprise_extensions() -> EnterpriseExtensions:
+def _enterprise_extensions(config_projector=None) -> EnterpriseExtensions:
     return EnterpriseExtensions(
         enabled=True,
         authorization_provider=LocalAuthorizationProvider(),
-        config_projector=PassthroughConfigProjector(),
+        config_projector=config_projector or PassthroughConfigProjector(),
         session_owner_store=InMemorySessionOwnerStore(),
         audit_sink=NoopAuditSink(),
     )
@@ -119,6 +121,40 @@ def test_chat_routes_allow_module_chat(monkeypatch):
     assert response.status_code == 200
     assert response.json()["success"] is True
     svc.chat.list_sessions.assert_called_once_with(user_id="u1", subagent_id=None)
+
+
+def test_chat_stream_denies_unauthorized_datasource_before_task_start(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
+    svc = MagicMock()
+    svc.agent_config = SimpleNamespace(
+        services=SimpleNamespace(
+            datasources={
+                "finance": SimpleNamespace(type="sqlite"),
+                "hr": SimpleNamespace(type="sqlite"),
+            },
+            default_datasource=None,
+        ),
+        current_datasource="finance",
+        principal={},
+    )
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.chat"},
+        datasource_grants={"finance": {"effect": "allow", "allow_sql": True}},
+    )
+
+    with _client(chat_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/chat/stream",
+            json={"message": "query hr", "datasource": "hr"},
+        )
+
+    assert response.status_code == 200
+    assert "event: error" in response.text
+    assert "DATASOURCE_ACCESS_DENIED" in response.text
+    assert "Datasource 'hr' is not authorized for this request." in response.text
+    svc.chat.stream_chat.assert_not_called()
 
 
 @pytest.mark.parametrize(
