@@ -7,6 +7,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from typing import Dict, Optional
 
 from datus.api.models.base_models import Result
@@ -31,7 +32,7 @@ from datus.schemas.action_history import (
     ActionRole,
     ActionStatus,
 )
-from datus.tools.db_tools.db_manager import DBManager
+from datus.tools.db_tools.db_manager import DBManager, db_manager_instance
 from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso
 
@@ -42,6 +43,17 @@ logger = get_logger(__name__)
 class _SQLTaskRecord:
     task: asyncio.Task
     owner_user_id: Optional[str]
+
+
+def _scope_patterns(grant: dict, scope_key: str) -> list[str] | None:
+    if scope_key not in grant or grant.get(scope_key) is None:
+        return None
+    raw_patterns = grant[scope_key]
+    if isinstance(raw_patterns, str):
+        raw_patterns = [part.strip() for part in raw_patterns.split(",")]
+    if not isinstance(raw_patterns, (list, tuple, set)):
+        return []
+    return [str(pattern).strip() for pattern in raw_patterns if str(pattern).strip()]
 
 
 class CLIService:
@@ -114,12 +126,21 @@ class CLIService:
     ) -> Result[ExecuteSQLData]:
         """Synchronous SQL execution logic (runs in a thread)."""
         try:
-            connector, _current_db_name = self._execution_connector(agent_config)
+            connector, current_db_name = self._execution_connector(agent_config)
             if not connector:
                 return Result(
                     success=False,
                     errorCode=ErrorCode.DATABASE_CONNECTION_ERROR,
                     errorMessage="No database connection available",
+                )
+
+            effective_database = request.database_name or current_db_name
+            denial = self._database_grant_denial(agent_config, effective_database)
+            if denial:
+                return Result(
+                    success=False,
+                    errorCode=ErrorCode.SQL_EXECUTION_ERROR,
+                    errorMessage=denial,
                 )
 
             # Switch to the requested database/catalog context before executing.
@@ -249,10 +270,38 @@ class CLIService:
     def _execution_connector(self, agent_config: Optional[AgentConfig] = None):
         if agent_config is None:
             return self.current_db_connector, self.current_db_name
-        db_manager = DBManager(agent_config.datasource_configs)
+        db_manager = db_manager_instance(agent_config.datasource_configs)
         datasource = getattr(agent_config, "current_datasource", "") or ""
         db_name, connector = db_manager.first_conn_with_name(datasource)
         return connector, db_name
+
+    @staticmethod
+    def _database_grant_denial(agent_config: Optional[AgentConfig], database_name: Optional[str]) -> Optional[str]:
+        if agent_config is None:
+            return None
+        principal = getattr(agent_config, "principal", {}) or {}
+        if not isinstance(principal, dict):
+            return None
+        datasource_grants = principal.get("datasource_grants")
+        if not isinstance(datasource_grants, dict) or not datasource_grants:
+            return None
+
+        datasource = str(principal.get("datasource") or getattr(agent_config, "current_datasource", "") or "")
+        grant = datasource_grants.get(datasource)
+        if grant is True:
+            return None
+        if not isinstance(grant, dict):
+            return f"Datasource '{datasource}' is not authorized for this request."
+
+        patterns = _scope_patterns(grant, "databases")
+        if patterns is None:
+            return None
+        requested_database = (database_name or "").strip()
+        if not requested_database:
+            return None
+        if patterns and any(fnmatchcase(requested_database, pattern) for pattern in patterns):
+            return None
+        return f"Requested database '{requested_database}' is not authorized for datasource '{datasource}'."
 
     async def execute_sql(
         self,

@@ -178,17 +178,22 @@ class TestCLIServiceExecuteSQL:
         seen = {}
 
         class FakeDBManager:
-            def __init__(self, datasource_configs):
-                seen["datasource_configs"] = datasource_configs
-
             def first_conn_with_name(self, datasource):
                 seen["datasource"] = datasource
                 return "finance_db", connector
 
-        monkeypatch.setattr("datus.api.services.cli_service.DBManager", FakeDBManager)
+        def fake_db_manager_instance(datasource_configs):
+            seen["datasource_configs"] = datasource_configs
+            return FakeDBManager()
+
+        monkeypatch.setattr("datus.api.services.cli_service.db_manager_instance", fake_db_manager_instance)
         projected_config = SimpleNamespace(
             datasource_configs={"finance": object()},
             current_datasource="finance",
+            principal={
+                "datasource": "finance",
+                "datasource_grants": {"finance": {"effect": "allow", "databases": ["finance_db"]}},
+            },
         )
         svc = CLIService(agent_config=None, chat_service=None)
 
@@ -201,6 +206,46 @@ class TestCLIServiceExecuteSQL:
         assert result.success is True
         assert seen == {"datasource_configs": projected_config.datasource_configs, "datasource": "finance"}
         assert connector.switch_calls == [("prod", "finance_db")]
+        assert svc._sql_tasks == {}
+
+    @pytest.mark.asyncio
+    async def test_execute_sql_rejects_ungranted_resolved_default_database(self, monkeypatch):
+        """Database grants apply to the resolved default database when request omits it."""
+
+        class FakeConnector:
+            def __init__(self):
+                self.executed = False
+
+            def execute(self, input_params, result_format):
+                self.executed = True
+                return SimpleNamespace(success=True, sql_return="1", row_count=1)
+
+        connector = FakeConnector()
+
+        class FakeDBManager:
+            def first_conn_with_name(self, datasource):
+                return "hr", connector
+
+        monkeypatch.setattr("datus.api.services.cli_service.db_manager_instance", lambda _configs: FakeDBManager())
+        projected_config = SimpleNamespace(
+            datasource_configs={"finance": object()},
+            current_datasource="finance",
+            principal={
+                "datasource": "finance",
+                "datasource_grants": {"finance": {"effect": "allow", "databases": ["finance"]}},
+            },
+        )
+        svc = CLIService(agent_config=None, chat_service=None)
+
+        result = await svc.execute_sql(
+            ExecuteSQLInput(sql_query="SELECT 1", result_format="json"),
+            user_id="u1",
+            agent_config=projected_config,
+        )
+
+        assert result.success is False
+        assert result.errorMessage == "Requested database 'hr' is not authorized for datasource 'finance'."
+        assert connector.executed is False
         assert svc._sql_tasks == {}
 
 
