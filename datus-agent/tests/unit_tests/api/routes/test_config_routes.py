@@ -7,7 +7,18 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
 
+from datus.api import deps
+from datus.api.auth.context import AppContext
+from datus.api.enterprise.defaults import (
+    InMemorySessionOwnerStore,
+    LocalAuthorizationProvider,
+    NoopAuditSink,
+    PassthroughConfigProjector,
+)
+from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.routes import config_routes
 from datus.api.routes.config_routes import (
     ProbeDatasourceRequest,
@@ -109,6 +120,16 @@ def _ctx(project_id="proj_a"):
     return SimpleNamespace(project_id=project_id)
 
 
+def _enterprise_extensions(enabled=True):
+    return EnterpriseExtensions(
+        enabled=enabled,
+        authorization_provider=LocalAuthorizationProvider(),
+        config_projector=PassthroughConfigProjector(),
+        session_owner_store=InMemorySessionOwnerStore(),
+        audit_sink=NoopAuditSink(),
+    )
+
+
 @pytest.mark.asyncio
 async def test_update_datasources_replaces_services_datasources(patched_cm, patched_cache):
     patched_cm.data = {"services": {"datasources": {"old": {"type": "duckdb"}}, "other": "keep"}}
@@ -130,6 +151,19 @@ async def test_update_datasources_replaces_services_datasources(patched_cm, patc
     assert patched_cm.data["services"]["other"] == "keep"
     assert patched_cm.save_count == 1
     patched_cache.evict.assert_awaited_once_with("proj_a")
+
+
+@pytest.mark.asyncio
+async def test_update_datasources_evicts_enterprise_cache_key(monkeypatch, patched_cm, patched_cache):
+    monkeypatch.setattr(config_routes.deps, "_enterprise_extensions", _enterprise_extensions(enabled=True))
+
+    await update_datasources_endpoint(
+        UpdateDatasourcesRequest(datasources={"db_a": {"type": "duckdb"}}),
+        svc=MagicMock(),
+        ctx=_ctx("proj_a"),
+    )
+
+    patched_cache.evict.assert_awaited_once_with("enterprise:proj_a")
 
 
 @pytest.mark.asyncio
@@ -179,6 +213,16 @@ async def test_update_models_replaces_models_and_target(patched_cm, patched_cach
     assert patched_cm.data["target"] == "new"
     assert patched_cm.save_count == 1
     patched_cache.evict.assert_awaited_once_with("proj_b")
+
+
+@pytest.mark.asyncio
+async def test_update_models_evicts_enterprise_cache_key(monkeypatch, patched_cm, patched_cache):
+    monkeypatch.setattr(config_routes.deps, "_enterprise_extensions", _enterprise_extensions(enabled=True))
+    patched_cm.data = {"models": {"m1": {"type": "openai"}}, "target": "m1"}
+
+    await update_models_endpoint(UpdateModelsRequest(target="m1"), svc=MagicMock(), ctx=_ctx("proj_b"))
+
+    patched_cache.evict.assert_awaited_once_with("enterprise:proj_b")
 
 
 @pytest.mark.asyncio
@@ -268,6 +312,31 @@ async def test_update_datasources_uses_default_project_when_missing(patched_cm, 
     )
 
     patched_cache.evict.assert_awaited_once_with("default")
+
+
+def test_update_config_http_requires_config_edit_permission(monkeypatch, patched_cm):
+    app = FastAPI()
+    app.include_router(config_routes.router)
+    ctx = AppContext(user_id="u1", project_id="proj_a", permissions={"module.chat"})
+    svc = MagicMock()
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return svc
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    monkeypatch.setattr(config_routes.deps, "_enterprise_extensions", _enterprise_extensions(enabled=True))
+
+    with TestClient(app) as client:
+        datasources_response = client.put("/api/v1/config/datasources", json={"datasources": {}})
+        models_response = client.put(
+            "/api/v1/config/models",
+            json={"models": {"m1": {"type": "openai", "model": "gpt-test"}}, "target": "m1"},
+        )
+
+    assert datasources_response.status_code == 403
+    assert models_response.status_code == 403
+    assert patched_cm.save_count == 0
 
 
 @pytest.mark.asyncio

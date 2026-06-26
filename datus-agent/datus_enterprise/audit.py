@@ -1,9 +1,4 @@
-"""Audit hook abstractions for enterprise routes.
-
-The default implementation is intentionally no-op so local/open-source mode
-keeps its current behavior. Production enterprise deployments should replace
-this module-level sink with a durable implementation.
-"""
+"""Audit helpers for downstream enterprise routes."""
 
 from __future__ import annotations
 
@@ -11,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from datus.api.auth.context import AppContext
+from datus.api.enterprise.models import AuditEvent as CoreAuditEvent
 
 
 @dataclass(frozen=True)
@@ -25,21 +21,19 @@ class AuditEvent:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
-class NoopAuditSink:
-    """Local-compatible audit sink."""
-
-    async def record(self, ctx: AppContext, event: AuditEvent) -> None:  # noqa: ARG002
-        return None
-
-
-_audit_sink: NoopAuditSink = NoopAuditSink()
-
-
-def get_audit_sink() -> NoopAuditSink:
-    return _audit_sink
-
-
 async def audit_decision(ctx: AppContext, event: AuditEvent) -> None:
     """Record an authorization or mutation decision."""
 
-    await get_audit_sink().record(ctx, event)
+    from datus.api.enterprise.deps import get_audit_sink
+
+    await get_audit_sink().write(
+        CoreAuditEvent(
+            user_id=ctx.user_id,
+            action=event.action,
+            resource_type=event.resource_type,
+            resource_id=event.resource_id,
+            decision=event.decision,
+            reason=event.reason,
+            metadata=dict(event.metadata),
+        )
+    )

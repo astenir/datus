@@ -2,7 +2,11 @@ import pytest
 from fastapi import HTTPException
 from starlette.datastructures import State
 
+from datus.api import deps
 from datus.api.auth.context import AppContext
+from datus.api.enterprise.defaults import InMemorySessionOwnerStore, PassthroughConfigProjector
+from datus.api.enterprise.loader import EnterpriseExtensions
+from datus.api.enterprise.models import AccessDecision
 from datus_enterprise.authorization import authorize, require_module
 
 
@@ -36,3 +40,48 @@ async def test_require_module_raises_403_for_missing_permission():
         await dependency(request)
 
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_require_module_uses_authorization_provider_for_identity_only_context(monkeypatch):
+    class FakeAuthorizationProvider:
+        async def check(self, ctx, action, resource):
+            return AccessDecision(allowed=action == "module.config.edit", reason=f"checked {ctx.user_id}")
+
+        async def allowed_datasources(self, ctx):  # noqa: ARG002
+            return {}
+
+    class CollectingAuditSink:
+        def __init__(self):
+            self.events = []
+
+        async def write(self, event):
+            self.events.append(event)
+
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=FakeAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=audit_sink,
+        ),
+    )
+
+    request = type("Request", (), {})()
+    request.state = State()
+    request.state.app_context = AppContext(user_id="u1")
+
+    allowed_dependency = require_module("module.config.edit")
+    denied_dependency = require_module("module.admin.users")
+
+    assert await allowed_dependency(request) == request.state.app_context
+    with pytest.raises(HTTPException) as exc:
+        await denied_dependency(request)
+
+    assert exc.value.status_code == 403
+    assert audit_sink.events[-1].user_id == "u1"
+    assert audit_sink.events[-1].action == "module.admin.users"

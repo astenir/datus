@@ -84,6 +84,45 @@ async def test_set_project_default_datasource_evicts_enterprise_cache_key(monkey
     cache.evict.assert_awaited_once_with("enterprise:proj_a")
 
 
+@pytest.mark.asyncio
+async def test_set_project_default_datasource_audits_through_enterprise_sink(monkeypatch):
+    class CollectingAuditSink:
+        def __init__(self):
+            self.events = []
+
+        async def write(self, event):
+            self.events.append(event)
+
+    audit_sink = CollectingAuditSink()
+    cache = MagicMock()
+    cache.evict = AsyncMock()
+    monkeypatch.setattr(admin_datasource_routes.deps, "_service_cache", cache)
+    monkeypatch.setattr(
+        admin_datasource_routes.deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=audit_sink,
+        ),
+    )
+    monkeypatch.setattr(admin_datasource_routes, "load_project_override", lambda: ProjectOverride(project_name="p"))
+    monkeypatch.setattr(admin_datasource_routes, "save_project_override", lambda override: None)
+
+    await admin_datasource_routes.set_project_default_datasource_endpoint(
+        SetDefaultDatasourceRequest(name="db_b"),
+        _svc(),
+        AppContext(user_id="u1", project_id="proj_a", permissions={"module.config.edit"}),
+    )
+
+    assert audit_sink.events[-1].user_id == "u1"
+    assert audit_sink.events[-1].action == "module.config.edit"
+    assert audit_sink.events[-1].resource_id == "db_b"
+    assert audit_sink.events[-1].decision == "allow"
+
+
 def test_set_project_default_datasource_http_uses_app_context_dependency(monkeypatch):
     """HTTP route should authorize from request.state, not a query parameter named ctx."""
 

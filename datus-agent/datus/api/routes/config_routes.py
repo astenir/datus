@@ -6,13 +6,15 @@ and supported provider/database type listings.
 """
 
 import asyncio
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Dict, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from datus.api import deps
-from datus.api.deps import AppContextDep, ServiceDep
+from datus.api.auth.context import AppContext
+from datus.api.deps import ServiceDep
+from datus.api.enterprise.deps import require_module
 from datus.api.models.base_models import Result
 from datus.configuration.agent_config import _SAFE_NAME_RE, DbConfig, load_model_config
 from datus.configuration.agent_config_loader import configuration_manager
@@ -23,6 +25,8 @@ from datus.utils.loggings import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["configuration"])
+
+ConfigEditCtx = Annotated[AppContext, Depends(require_module("module.config.edit"))]
 
 
 class UpdateDatasourcesRequest(BaseModel):
@@ -108,11 +112,8 @@ def _validate_keys(entries: Dict[str, Any], kind: str) -> None:
 
 async def _evict_current_project(project_id: str) -> None:
     """Drop the cached DatusService so the next request reloads from YAML."""
-    cache = deps._service_cache
-    if cache is None:
-        return
     try:
-        await cache.evict(project_id)
+        await deps.evict_datus_service(project_id)
     except Exception:
         logger.exception(f"Failed to evict service cache for project {project_id}")
 
@@ -156,7 +157,7 @@ async def get_agent_config_endpoint(
 async def update_datasources_endpoint(
     body: UpdateDatasourcesRequest,
     svc: ServiceDep,  # noqa: ARG001  # populates request.state.app_context; must resolve before AppContextDep
-    ctx: AppContextDep,
+    ctx: ConfigEditCtx,
 ) -> Result[dict]:
     """Full-replace `services.datasources` with the provided datasources."""
     _validate_keys(body.datasources, kind="datasource")
@@ -180,7 +181,7 @@ async def update_datasources_endpoint(
 async def update_models_endpoint(
     body: UpdateModelsRequest,
     svc: ServiceDep,  # noqa: ARG001
-    ctx: AppContextDep,
+    ctx: ConfigEditCtx,
 ) -> Result[dict]:
     """Optional full-replace `models`, optional update `target`. One must be set."""
     if body.models is None and body.target is None:
