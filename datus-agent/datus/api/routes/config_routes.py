@@ -63,12 +63,6 @@ class ProbeDatasourceRequest(BaseModel):
     type: str
 
 
-class SwitchDatasourceRequest(BaseModel):
-    """Request body for switching the active datasource."""
-
-    name: str
-
-
 def _probe_llm_sync(payload: Dict[str, Any]) -> None:
     """Build a one-shot LLM client from a raw dict and send a tiny probe."""
     model_cfg = load_model_config(payload)
@@ -175,43 +169,6 @@ async def update_datasources_endpoint(
     await _evict_current_project(ctx.project_id or "default")
 
     return Result(success=True, data={"updated": True})
-
-
-@router.post(
-    "/config/datasources/switch",
-    response_model=Result[dict],
-    summary="Switch Active Datasource",
-    description="Change the active datasource by name. Persists to .datus/config.yml and evicts the service cache.",
-)
-async def switch_datasource_endpoint(
-    body: SwitchDatasourceRequest,
-    svc: ServiceDep,  # noqa: ARG001
-    ctx: AppContextDep,
-) -> Result[dict]:
-    """Switch the active datasource.
-
-    Validates that ``name`` exists in ``services.datasources``, persists
-    the choice to ``./.datus/config.yml`` as ``default_datasource``, and
-    evicts the cached ``DatusService`` so subsequent requests reload with
-    the new datasource.
-    """
-    config = svc.agent_config
-    if body.name not in config.services.datasources:
-        raise DatusException(
-            ErrorCode.COMMON_FIELD_INVALID,
-            message=f"Datasource '{body.name}' not found in services.datasources.",
-        )
-
-    # Persist to .datus/config.yml
-    from datus.configuration.project_config import ProjectOverride, load_project_override, save_project_override
-
-    current = load_project_override() or ProjectOverride()
-    current.default_datasource = body.name
-    save_project_override(current)
-
-    await _evict_current_project(ctx.project_id or "default")
-
-    return Result(success=True, data={"current_datasource": body.name})
 
 
 @router.put(
