@@ -8,7 +8,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Sequence
 
 from datus.api.models.base_models import Result
 from datus.api.models.cli_models import (
@@ -57,6 +57,45 @@ def _scope_patterns(grant: dict, scope_key: str) -> list[str] | None:
     if not isinstance(raw_patterns, (list, tuple, set)):
         return []
     return [str(pattern).strip() for pattern in raw_patterns if str(pattern).strip()]
+
+
+def _compose_scope_tokens(
+    field_order: Optional[Sequence[str]],
+    *,
+    databases: Optional[list[str]] = None,
+    schemas: Optional[list[str]] = None,
+    tables: Optional[list[str]] = None,
+) -> list[str]:
+    ordered_fields = list(field_order or ("database", "schema", "table"))
+    if "table" not in ordered_fields:
+        ordered_fields.append("table")
+
+    constrained_fields = [
+        field
+        for field, values in (("database", databases), ("schema", schemas), ("table", tables))
+        if values is not None and field in ordered_fields
+    ]
+    if not constrained_fields:
+        return ["*"]
+
+    start_index = min(ordered_fields.index(field) for field in constrained_fields)
+    scoped_fields = ordered_fields[start_index:]
+    database_values = databases if databases is not None and "database" in scoped_fields else [None]
+    schema_values = schemas if schemas is not None and "schema" in scoped_fields else [None]
+    table_values = tables if tables is not None else ["*"]
+
+    tokens: list[str] = []
+    for database in database_values:
+        for schema in schema_values:
+            for table in table_values:
+                values = {
+                    "database": database,
+                    "schema": schema,
+                    "table": table,
+                }
+                parts = [values.get(field) or "*" for field in scoped_fields]
+                tokens.append(".".join(parts))
+    return tokens
 
 
 class CLIService:
@@ -147,17 +186,13 @@ class CLIService:
                         errorMessage=denial,
                     )
 
+                # Switch to the requested database/catalog context before executing.
+                if request.database_name:
+                    self._switch_connector_database(connector, request.database_name)
+
                 sql_query = self._authorize_read_sql(request.sql_query, connector, agent_config)
                 if isinstance(sql_query, Result):
                     return sql_query
-
-                # Switch to the requested database/catalog context before executing.
-                if request.database_name:
-                    catalog = getattr(connector, "catalog_name", "") or ""
-                    connector.switch_context(
-                        catalog_name=catalog,
-                        database_name=request.database_name,
-                    )
 
                 # Create action for SQL execution (local to avoid cross-request state)
                 actions = ActionHistoryManager()
@@ -294,6 +329,18 @@ class CLIService:
         return db_manager, db_manager.close
 
     @staticmethod
+    def _switch_connector_database(connector, database_name: str) -> None:
+        catalog = getattr(connector, "catalog_name", "") or ""
+        connector.switch_context(
+            catalog_name=catalog,
+            database_name=database_name,
+        )
+        try:
+            connector.database_name = database_name
+        except Exception:
+            pass
+
+    @staticmethod
     def _authorize_read_sql(sql: str, connector, agent_config: Optional[AgentConfig]) -> str | Result[ExecuteSQLData]:
         guard = object.__new__(DBFuncTool)
         guard._primary_connector = connector
@@ -301,8 +348,8 @@ class CLIService:
         principal = getattr(agent_config, "principal", {}) if agent_config is not None else {}
         guard.principal = dict(principal) if isinstance(principal, dict) else {}
         guard.sub_agent_name = None
-        guard._field_order = guard._determine_field_order()
-        scoped_tables = CLIService._scoped_table_patterns(agent_config)
+        guard._field_order = CLIService._field_order_for_grant(guard._determine_field_order(), agent_config)
+        scoped_tables = CLIService._scoped_table_patterns(agent_config, guard._field_order)
         guard._scoped_patterns = guard._load_scoped_patterns(scoped_tables)
 
         validation_error, _ = guard._validate_read_sql(sql, connector)
@@ -356,25 +403,60 @@ class CLIService:
         return f"Requested database '{requested_database}' is not authorized for datasource '{datasource}'."
 
     @staticmethod
-    def _scoped_table_patterns(agent_config: Optional[AgentConfig]) -> Optional[list[str]]:
+    def _field_order_for_grant(field_order: Sequence[str], agent_config: Optional[AgentConfig]) -> Sequence[str]:
+        order = list(field_order)
+        _datasource, grant = CLIService._current_datasource_grant(agent_config)
+        if not isinstance(grant, dict):
+            return order
+
+        if _scope_patterns(grant, "databases") is not None and "database" not in order:
+            table_index = order.index("table") if "table" in order else len(order)
+            order.insert(table_index, "database")
+        if _scope_patterns(grant, "schemas") is not None and "schema" not in order:
+            table_index = order.index("table") if "table" in order else len(order)
+            order.insert(table_index, "schema")
+        return order
+
+    @staticmethod
+    def _scoped_table_patterns(
+        agent_config: Optional[AgentConfig],
+        field_order: Optional[Sequence[str]] = None,
+    ) -> Optional[list[str]]:
         _datasource, grant = CLIService._current_datasource_grant(agent_config)
         if not isinstance(grant, dict):
             return None
 
         table_patterns = _scope_patterns(grant, "tables")
-        if table_patterns is not None:
-            return table_patterns or ["__NO_TABLES_ALLOWED__"]
-
         schema_patterns = _scope_patterns(grant, "schemas")
         database_patterns = _scope_patterns(grant, "databases")
+        if table_patterns is not None:
+            if not table_patterns:
+                return ["__NO_TABLES_ALLOWED__"]
+            if database_patterns == []:
+                return ["__NO_DATABASES_ALLOWED__"]
+            if schema_patterns == []:
+                return ["__NO_SCHEMAS_ALLOWED__"]
+            return _compose_scope_tokens(
+                field_order,
+                databases=database_patterns,
+                schemas=schema_patterns,
+                tables=table_patterns,
+            )
+
         if schema_patterns is not None:
             if not schema_patterns:
                 return ["__NO_SCHEMAS_ALLOWED__"]
-            if database_patterns:
-                return [f"{database}.{schema}.*" for database in database_patterns for schema in schema_patterns]
-            return [f"{schema}.*" for schema in schema_patterns]
+            if database_patterns == []:
+                return ["__NO_DATABASES_ALLOWED__"]
+            return _compose_scope_tokens(
+                field_order,
+                databases=database_patterns,
+                schemas=schema_patterns,
+            )
         if database_patterns is not None:
-            return [f"{database}.*" for database in database_patterns] or ["__NO_DATABASES_ALLOWED__"]
+            if not database_patterns:
+                return ["__NO_DATABASES_ALLOWED__"]
+            return _compose_scope_tokens(field_order, databases=database_patterns)
         return None
 
     @staticmethod

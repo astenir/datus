@@ -404,6 +404,117 @@ class TestCLIServiceExecuteSQL:
         assert connector.executed is False
 
     @pytest.mark.asyncio
+    async def test_execute_sql_table_grant_preserves_database_scope(self, monkeypatch):
+        """Table grants narrow database grants instead of replacing them."""
+
+        class FakeConnector:
+            dialect = "postgresql"
+            catalog_name = ""
+            database_name = "finance"
+            schema_name = "public"
+
+            def __init__(self):
+                self.executed = False
+
+            def execute(self, input_params, result_format):
+                self.executed = True
+                return SimpleNamespace(success=True, sql_return="1", row_count=1)
+
+        connector = FakeConnector()
+
+        class FakeDBManager:
+            def __init__(self, datasource_configs):
+                self.datasource_configs = datasource_configs
+
+            def first_conn_with_name(self, datasource):
+                return "finance", connector
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("datus.api.services.cli_service.DBManager", FakeDBManager)
+        projected_config = SimpleNamespace(
+            datasource_configs={"finance": object()},
+            current_datasource="finance",
+            principal={
+                "datasource": "finance",
+                "datasource_grants": {
+                    "finance": {
+                        "effect": "allow",
+                        "databases": ["finance"],
+                        "tables": ["orders"],
+                    }
+                },
+            },
+        )
+        svc = CLIService(agent_config=None, chat_service=None)
+
+        result = await svc.execute_sql(
+            ExecuteSQLInput(sql_query="SELECT * FROM otherdb.public.orders", result_format="json"),
+            user_id="u1",
+            agent_config=projected_config,
+        )
+
+        assert result.success is False
+        assert "outside scoped context" in result.errorMessage
+        assert connector.executed is False
+
+    @pytest.mark.asyncio
+    async def test_execute_sql_validates_with_requested_database_context(self, monkeypatch):
+        """An explicit database_name is visible to scope validation before execution."""
+
+        class FakeConnector:
+            dialect = "postgresql"
+            catalog_name = ""
+            database_name = "finance_a"
+            schema_name = "public"
+
+            def __init__(self):
+                self.executed_sql = None
+                self.switch_calls = []
+
+            def switch_context(self, catalog_name, database_name):
+                self.switch_calls.append((catalog_name, database_name))
+                self.database_name = database_name
+
+            def execute(self, input_params, result_format):
+                self.executed_sql = input_params["sql_query"]
+                return SimpleNamespace(success=True, sql_return="1", row_count=1)
+
+        connector = FakeConnector()
+
+        class FakeDBManager:
+            def __init__(self, datasource_configs):
+                self.datasource_configs = datasource_configs
+
+            def first_conn_with_name(self, datasource):
+                return "finance_a", connector
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("datus.api.services.cli_service.DBManager", FakeDBManager)
+        projected_config = SimpleNamespace(
+            datasource_configs={"finance": object()},
+            current_datasource="finance",
+            principal={
+                "datasource": "finance",
+                "datasource_grants": {"finance": {"effect": "allow", "databases": ["finance_b"]}},
+            },
+        )
+        svc = CLIService(agent_config=None, chat_service=None)
+
+        result = await svc.execute_sql(
+            ExecuteSQLInput(sql_query="SELECT * FROM orders", result_format="json", database_name="finance_b"),
+            user_id="u1",
+            agent_config=projected_config,
+        )
+
+        assert result.success is True
+        assert connector.switch_calls == [("", "finance_b")]
+        assert connector.executed_sql == "SELECT * FROM orders"
+
+    @pytest.mark.asyncio
     async def test_execute_sql_applies_sql_policy_denial(self, monkeypatch):
         """Direct SQL uses the configured SQL policy before connector execution."""
 
