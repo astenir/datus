@@ -1002,7 +1002,8 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 
 - 已新增可配置的 `DatasourceGrantProjector`，支持按 `AppContext.datasource_grants` 生成请求级 `AgentConfig` clone、过滤未授权 datasource、选择授权默认 datasource，并向 principal 注入 `user_id`、`datasource`、`allowed_datasources` 和 `datasource_grants`。
 - `/api/v1/chat/stream` 已通过统一 config projection 校验 `request.datasource`，未授权 datasource 以 SSE error 返回，并使用 projection clone 启动 chat task，避免污染缓存的 `DatusService.agent_config`。
-- catalog list 过滤、dashboard/report/direct SQL projection、表级 grant 到 SQL policy principal 的映射仍未完成，继续按阶段 4/5 后续子阶段推进。
+- `/api/v1/catalog/list` 已接入 datasource-level projection：显式请求未授权 datasource 返回 403，未指定 datasource 时使用授权后的默认 datasource。
+- catalog table/schema 细粒度过滤、dashboard/report/direct SQL projection、表级 grant 到 SQL policy principal 的映射仍未完成，继续按阶段 4/5 后续子阶段推进。
 
 验收：
 
