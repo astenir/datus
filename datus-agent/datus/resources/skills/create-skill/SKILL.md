@@ -148,3 +148,4 @@ agentic_nodes:
 ### Marketplace
 
 Publish after creation: `.skill publish <skill-name>`
+

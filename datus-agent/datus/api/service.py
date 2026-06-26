@@ -294,20 +294,32 @@ class DatusAPIService:
             )
 
     async def health_check(self) -> HealthResponse:
-        """Return a lightweight liveness response.
+        """Perform health check on the service."""
+        try:
+            # Check default agent if available
+            database_status = {}
+            llm_status = "unknown"
 
-        This endpoint must not call external systems. It is used by browsers,
-        proxies, and service monitors, so running DB or LLM probes here can
-        block the event loop and make an otherwise alive API stop responding.
-        Connectivity probes belong in explicit diagnostic endpoints.
-        """
-        database_status: Dict[str, str] = {}
-        if self.agent_config and self.agent_config.current_datasource:
-            database_status[self.agent_config.current_datasource] = "not_checked"
+            if self.agent_config:
+                # Create a temporary agent for health check using service configuration
+                temp_agent = Agent(self.args, self.agent_config)
 
-        return HealthResponse(
-            status="healthy", version="1.0.0", database_status=database_status, llm_status="not_checked"
-        )
+                # Check database connectivity
+                db_check = temp_agent.check_db()
+                database_status[self.agent_config.current_datasource] = db_check.get("status", "unknown")
+
+                # Check LLM connectivity
+                llm_check = temp_agent.probe_llm()
+                llm_status = llm_check.get("status", "unknown")
+
+            return HealthResponse(
+                status="healthy", version="1.0.0", database_status=database_status, llm_status=llm_status
+            )
+        except Exception as e:
+            logger.error(f"Health check failed: {e}")
+            return HealthResponse(
+                status="unhealthy", version="1.0.0", database_status={"error": str(e)}, llm_status="error"
+            )
 
 
 # Global service instance - will be initialized with command line args

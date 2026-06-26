@@ -36,11 +36,6 @@ before_reflection_*.yaml
 /benchmark/semantic_layer/gold
 /benchmark/semantic_layer/semantic_models
 /dist
-/node_modules
-/frontend/dist
-/frontend/node_modules
-/frontend/
-*.tsbuildinfo
 *.egg-info
 .claude
 /.omc
@@ -75,4 +70,3 @@ conf/agent.yml.bak
 build/
 .datus/
 /build_scripts/cache/
-.tmp/
