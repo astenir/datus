@@ -3,22 +3,19 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import dataclasses
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, Optional, Tuple, Union
 
 from datus_db_core import BaseSqlConnector, ConnectionConfig, DatusDbException, connector_registry
 from sqlalchemy.engine.url import URL, make_url
 
 from datus.configuration.agent_config import DbConfig
 from datus.tools.db_tools.config import DuckDBConfig, SQLiteConfig
-from datus.tools.db_tools.restricted_connector import RestrictedSqlConnector, _normalize_allowed_tables
 from datus.utils.constants import DBType
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus.utils.path_utils import get_files_from_glob_pattern
 
 logger = get_logger(__name__)
-
-_DATUS_DATASOURCE_EXTRA_FIELDS = {"allowed_databases", "allowed_schemas", "allowed_tables"}
 
 
 def _auto_install_adapter(db_type: str) -> None:
@@ -176,7 +173,7 @@ def _port_or_none(port_value: Optional[Union[str, int]]) -> Optional[int]:
 def get_connection(
     connections: Union[BaseSqlConnector, Dict[str, BaseSqlConnector]], name: str = ""
 ) -> BaseSqlConnector:
-    if isinstance(connections, (BaseSqlConnector, RestrictedSqlConnector)):
+    if isinstance(connections, BaseSqlConnector):
         return connections
     if len(connections) == 1:
         return next(iter(connections.values()))
@@ -299,26 +296,7 @@ class DBManager:
         db_type = _normalize_dialect_name(db_config.type)
         if not connector_registry.is_registered(db_type):
             _auto_install_adapter(db_type)
-        conn = connector_registry.create_connector(db_config.type, connection_config)
-        allowed_databases, allowed_schemas, allowed_tables = self._resolve_allowed_context(db_config)
-        if allowed_databases or allowed_schemas or allowed_tables:
-            conn = RestrictedSqlConnector(
-                conn,
-                allowed_tables=allowed_tables,
-                allowed_databases=allowed_databases,
-                allowed_schemas=allowed_schemas,
-            )
-        return conn
-
-    @staticmethod
-    def _resolve_allowed_context(db_config: DbConfig) -> Tuple[List[str], List[str], List[str]]:
-        """Return datasource-level database/schema/table allowlists from config."""
-        extra = db_config.extra or {}
-        return (
-            _normalize_allowed_tables(extra.get("allowed_databases")),
-            _normalize_allowed_tables(extra.get("allowed_schemas")),
-            _normalize_allowed_tables(extra.get("allowed_tables")),
-        )
+        return connector_registry.create_connector(db_config.type, connection_config)
 
     def _db_config_to_connection_config(self, db_config: DbConfig) -> Union[ConnectionConfig, dict]:
         """Convert DbConfig to appropriate ConnectionConfig subclass or dict.
@@ -378,7 +356,7 @@ class DBManager:
 
             # Remove None and empty string values, and internal fields
             # Keep False, 0, and empty containers to allow explicit configuration
-            excluded_fields = ["type", "path_pattern", "logic_name", "default", "extra"]
+            excluded_fields = ["type", "path_pattern", "default", "extra"]
 
             filtered_config = {
                 k: v
@@ -388,9 +366,7 @@ class DBManager:
 
             # Expand extra field to include adapter-specific config
             if db_config.extra:
-                filtered_config.update(
-                    {k: v for k, v in db_config.extra.items() if k not in _DATUS_DATASOURCE_EXTRA_FIELDS}
-                )
+                filtered_config.update(db_config.extra)
 
             # Convert port to int if present
             if "port" in filtered_config:
