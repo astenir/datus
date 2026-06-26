@@ -13,12 +13,13 @@ asyncio.Task so that client disconnects do not cancel the computation.
 import asyncio
 from typing import TYPE_CHECKING, Annotated, Any, AsyncGenerator, Optional
 
-from fastapi import APIRouter, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import StreamingResponse
 
+from datus.api.auth.context import AppContext
 from datus.api.constants import BUILTIN_SUBAGENTS
-from datus.api.deps import AppContextDep, ServiceDep
-from datus.api.enterprise.deps import authorize_session_access, delete_session_owner
+from datus.api.deps import ServiceDep
+from datus.api.enterprise.deps import authorize_session_access, delete_session_owner, require_module
 from datus.api.hooks import (
     ChatHooks,
     ChatPostUsageContext,
@@ -54,10 +55,10 @@ from datus.utils.time_utils import now_utc_iso
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
-    from datus.api.auth.context import AppContext
     from datus.api.services.datus_service import DatusService
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
+ChatModuleCtx = Annotated[AppContext, Depends(require_module("module.chat"))]
 
 # Timeout for JuiceFS FUSE operations: os.listdir + sqlite3.connect per session file.
 # Slightly above fuse_meta_op's 10 s default to give directory scans extra headroom.
@@ -160,7 +161,7 @@ def _principal_path_exists(principal: dict[str, Any], path: str) -> bool:
 async def stream_chat(
     request: StreamChatInput,
     svc: ServiceDep,
-    ctx: AppContextDep,
+    ctx: ChatModuleCtx,
     http_request: Request,
 ):
     sub_agent_id = request.subagent_id
@@ -233,7 +234,7 @@ async def stream_chat(
 async def stream_chat_feedback(
     request: FeedbackChatInput,
     svc: ServiceDep,
-    ctx: AppContextDep,
+    ctx: ChatModuleCtx,
 ):
     rendered_message = build_reaction_feedback_prompt(
         reaction_emoji=request.reaction_emoji,
@@ -290,7 +291,7 @@ async def stream_chat_feedback(
 async def resume_chat(
     request: ResumeChatInput,
     svc: ServiceDep,
-    ctx: AppContextDep,
+    ctx: ChatModuleCtx,
 ):
     access = await authorize_session_access(svc, ctx, request.session_id, action="resume")
     if access.error:
@@ -324,7 +325,7 @@ async def resume_chat(
 async def stop_chat(
     request: StopChatInput,
     svc: ServiceDep,
-    ctx: AppContextDep,
+    ctx: ChatModuleCtx,
 ) -> Result[dict]:
     access = await authorize_session_access(svc, ctx, request.session_id, action="stop")
     if access.error:
@@ -352,7 +353,7 @@ async def stop_chat(
 async def compact_chat_session(
     session_id: Annotated[str, Path(description="Session ID to compact")],
     svc: ServiceDep,
-    ctx: AppContextDep,
+    ctx: ChatModuleCtx,
 ) -> Result[CompactSessionData]:
     access = await authorize_session_access(svc, ctx, session_id, action="compact", require_existing_session=True)
     if access.error:
@@ -372,7 +373,7 @@ async def compact_chat_session(
 )
 async def list_sessions(
     svc: ServiceDep,
-    ctx: AppContextDep,
+    ctx: ChatModuleCtx,
     subagent_id: Optional[str] = Query(
         default=None,
         description="Filter by subagent id; 'chat' selects the default chat agent",
@@ -398,7 +399,7 @@ async def list_sessions(
 async def delete_session(
     session_id: Annotated[str, Path(description="Session ID to delete")],
     svc: ServiceDep,
-    ctx: AppContextDep,
+    ctx: ChatModuleCtx,
 ) -> Result[ChatSessionData]:
     access = await authorize_session_access(svc, ctx, session_id, action="delete", require_existing_session=True)
     if access.error:
@@ -428,7 +429,7 @@ async def delete_session(
 )
 async def get_chat_history(
     svc: ServiceDep,
-    ctx: AppContextDep,
+    ctx: ChatModuleCtx,
     session_id: str = Query(..., description="Session ID to retrieve history for"),
 ) -> Result[ChatHistoryData]:
     access = await authorize_session_access(svc, ctx, session_id, action="history", require_existing_session=True)
@@ -457,7 +458,7 @@ async def get_chat_history(
 async def submit_user_interaction(
     request: UserInteractionInput,
     svc: ServiceDep,
-    ctx: AppContextDep,
+    ctx: ChatModuleCtx,
 ) -> Result[dict]:
     access = await authorize_session_access(svc, ctx, request.session_id, action="user_interaction")
     if access.error:
@@ -512,7 +513,7 @@ async def submit_user_interaction(
 async def insert_message(
     request: InsertMessageInput,
     svc: ServiceDep,
-    ctx: AppContextDep,
+    ctx: ChatModuleCtx,
 ) -> Result[InsertMessageData]:
     access = await authorize_session_access(svc, ctx, request.session_id, action="insert")
     if access.error:
@@ -562,7 +563,7 @@ async def insert_message(
 async def submit_tool_result(
     request: ToolResultInput,
     svc: ServiceDep,
-    ctx: AppContextDep,
+    ctx: ChatModuleCtx,
 ) -> Result[ToolResultData]:
     """Receive tool execution result from frontend."""
     if request.session_id:

@@ -9,6 +9,7 @@ from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
+from datus.api.auth.context import AppContext
 from datus.api.models.base_models import Result
 from datus.api.models.database_models import DatabaseInfo, DatabasesData, ListDatabasesData, ListDatabasesInput
 from datus.api.routes.database_routes import _DB_IO_TIMEOUT, list_catalogs
@@ -53,6 +54,7 @@ async def _call(
     """Call list_catalogs with explicit defaults to bypass FastAPI Query() object resolution."""
     return await list_catalogs(
         svc,
+        AppContext(permissions={"module.datasource_catalog"}),
         datasource_id=datasource_id,
         catalog_name=catalog_name,
         database_name=database_name,

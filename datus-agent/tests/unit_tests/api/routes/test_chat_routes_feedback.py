@@ -16,6 +16,8 @@ from datus.tools.sql_policy import SqlPolicyConfig
 
 def _build_svc():
     svc = MagicMock()
+    svc.task_manager.get_task.return_value = None
+    svc.chat.session_exists.return_value = True
 
     async def _empty_stream(*args, **kwargs):
         if False:

@@ -3,11 +3,13 @@ API routes for Database Management endpoints.
 """
 
 import asyncio
-from typing import Optional
+from typing import Annotated, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
+from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
+from datus.api.enterprise.deps import require_module
 from datus.api.models.base_models import Result
 from datus.api.models.database_models import (
     DatabasesData,
@@ -16,6 +18,7 @@ from datus.api.models.database_models import (
 )
 
 router = APIRouter(prefix="/api/v1", tags=["databases"])
+CatalogModuleCtx = Annotated[AppContext, Depends(require_module("module.datasource_catalog"))]
 
 # Timeout for datasource network I/O (test_connection, get_databases, get_schemas,
 # get_tables). Matches the adapter-level timeout_seconds=30 so the connector gets
@@ -38,6 +41,7 @@ INCLUDE_SYS_SCHEMAS_QUERY = Query(False, description="Include system schemas")
 )
 async def list_catalogs(
     svc: ServiceDep,
+    _ctx: CatalogModuleCtx,
     datasource_id: Optional[str] = DATASOURCE_QUERY,
     catalog_name: Optional[str] = CATALOG_NAME_QUERY,
     database_name: Optional[str] = DATABASE_NAME_QUERY,

@@ -284,6 +284,16 @@ MVP 中 `datasource_grants` 采用每个 `(subject_type, subject_id, datasource_
 
 当前阶段 2 主包接线已覆盖上述 chat/session 路径。后续继续扩展时，不要绕过 `SessionOwnerStore` 和 route owner helper；多 worker 或滚动发布场景应使用共享 metadata store 替换默认 SQLite/内存骨架，并明确 sticky session 或 SSE event buffer 外部化策略。
 
+### Module RBAC
+
+当前阶段 3 前半部分主包接线已覆盖：
+
+- chat route：统一使用 `module.chat`。
+- datasource catalog route：`/api/v1/catalog/list` 使用 `module.datasource_catalog`。
+- direct SQL executor route：`/api/v1/sql/execute` 和 `/api/v1/sql/stop_execute` 使用 `module.sql_executor`。
+
+后续继续阶段 3 时，应继续使用 `require_module()` dependency 接 report/dashboard、KB、MCP、config/admin routes，并在 subagent dispatch 前叠加对应模块权限。不要把 report/dashboard 的 query 权限合并进 `module.chat`；自然语言入口只能证明用户可用 chat，不能自动证明用户可实时查询报表或仪表盘。
+
 ### SQL 与数据安全
 
 不要把 catalog 过滤当成执行安全。

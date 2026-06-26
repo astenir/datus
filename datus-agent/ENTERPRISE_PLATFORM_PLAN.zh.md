@@ -965,6 +965,13 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - 接入 chat、catalog、report、dashboard、KB、MCP、config/admin routes。
 - subagent dispatch 前校验对应模块权限。
 
+当前阶段 3 前半部分主包接线状态：
+
+- `chat` route 已接入 `module.chat`，覆盖 stream、feedback、resume、stop、session list/history/delete/compact、user interaction、insert 和 tool result。
+- datasource catalog route 已接入 `module.datasource_catalog`，覆盖当前 `/api/v1/catalog/list`。
+- 直接 SQL executor route 已接入 `module.sql_executor`，覆盖 `/api/v1/sql/execute` 和 `/api/v1/sql/stop_execute`。
+- report、dashboard、KB、MCP、config/admin 的阶段 3 后半部分仍按本节目标推进；本次没有接入 report/dashboard，也没有引入 datasource grant、请求级 config projection 或 SQL policy direct SQL 兜底。
+
 验收：
 
 - 无 `module.report.view` 不能访问 report list/html/detail。
