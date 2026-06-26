@@ -656,6 +656,10 @@ class TestCLIServiceExecuteSQL:
             ("SHOW CREATE TABLE other_catalog.finance.orders", False),
             ("SHOW INDEX FROM default_catalog.finance.orders", True),
             ("SHOW INDEX FROM other_catalog.finance.orders", False),
+            ("SHOW INDEX FROM orders FROM finance", True),
+            ("SHOW INDEX FROM orders FROM other_db", False),
+            ("SHOW KEYS FROM orders IN other_db", False),
+            ("SHOW COLUMNS FROM orders FROM other_db", False),
             ("SHOW TABLES", False),
         ],
     )

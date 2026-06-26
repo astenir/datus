@@ -130,7 +130,8 @@ _SHOW_NAMESPACE_RE = re.compile(
     flags=re.IGNORECASE,
 )
 _SHOW_TABLE_TARGET_RE = re.compile(
-    r"^\s*SHOW\s+(?:FULL\s+)?(?:COLUMNS|FIELDS|INDEX|INDEXES|KEYS)\s+(?:FROM|IN)\s+(?P<target>[^\s;]+)",
+    r"^\s*SHOW\s+(?:FULL\s+)?(?:COLUMNS|FIELDS|INDEX|INDEXES|KEYS)\s+"
+    r"(?:FROM|IN)\s+(?P<target>[^\s;]+)(?:\s+(?:FROM|IN)\s+(?P<namespace>[^\s;]+))?",
     flags=re.IGNORECASE,
 )
 _SHOW_CREATE_TARGET_RE = re.compile(
@@ -482,10 +483,17 @@ class CLIService:
 
     @staticmethod
     def _metadata_scope_target(statement: str) -> str:
-        for table_target_pattern in (_SHOW_CREATE_TARGET_RE, _SHOW_TABLE_TARGET_RE):
-            match = table_target_pattern.match(statement)
-            if match:
-                return match.group("target").strip().strip(";")
+        match = _SHOW_CREATE_TARGET_RE.match(statement)
+        if match:
+            return match.group("target").strip().strip(";")
+
+        match = _SHOW_TABLE_TARGET_RE.match(statement)
+        if match:
+            target = match.group("target").strip().strip(";")
+            namespace = (match.group("namespace") or "").strip().strip(";")
+            if namespace:
+                return f"{namespace}.{target}"
+            return target
 
         match = _SHOW_NAMESPACE_RE.match(statement)
         if not match:
