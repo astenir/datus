@@ -31,6 +31,49 @@ class SetDefaultDatasourceRequest(BaseModel):
     name: str
 
 
+class AdminDatasourceSummary(BaseModel):
+    """Sanitized datasource summary for admin selection UIs."""
+
+    name: str
+    type: str | None = None
+    is_default: bool = False
+
+
+@router.get(
+    "/admin/datasources",
+    response_model=Result[list[AdminDatasourceSummary]],
+    summary="List Admin Datasources",
+    description="Admin-only datasource key list. Connection details and secrets are never returned.",
+)
+async def list_admin_datasources_endpoint(
+    svc: ServiceDep,
+    ctx: AdminDatasourcesCtx,
+) -> Result[list[AdminDatasourceSummary]]:
+    """Return sanitized configured datasource identifiers for admin workflows."""
+
+    datasources = getattr(svc.agent_config.services, "datasources", {}) or {}
+    default_datasource = _default_datasource_name(svc)
+    items = [
+        AdminDatasourceSummary(
+            name=name,
+            type=_datasource_type(config),
+            is_default=name == default_datasource,
+        )
+        for name, config in sorted(datasources.items())
+    ]
+    await audit_decision(
+        ctx,
+        AuditEvent(
+            action="module.admin.datasources",
+            resource_type="datasource",
+            resource_id=None,
+            decision="allow",
+            metadata={"operation": "list_admin_datasources", "count": len(items)},
+        ),
+    )
+    return Result(success=True, data=items)
+
+
 @router.put(
     "/admin/datasource-default",
     response_model=Result[dict],
@@ -84,3 +127,19 @@ async def _evict_current_project(project_id: str) -> None:
         await deps.evict_datus_service(project_id)
     except Exception:
         logger.exception(f"Failed to evict service cache for project {project_id}")
+
+
+def _default_datasource_name(svc: ServiceDep) -> str | None:
+    current = getattr(svc.agent_config, "current_datasource", None)
+    if current:
+        return str(current)
+    default = getattr(svc.agent_config.services, "default_datasource", None)
+    return str(default) if default else None
+
+
+def _datasource_type(config) -> str | None:
+    if isinstance(config, dict):
+        value = config.get("type")
+    else:
+        value = getattr(config, "type", None)
+    return str(value) if value is not None else None

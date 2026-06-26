@@ -22,8 +22,96 @@ from datus_enterprise.api.admin_datasource_routes import SetDefaultDatasourceReq
 
 
 def _svc():
-    agent_config = SimpleNamespace(services=SimpleNamespace(datasources={"db_a": object(), "db_b": object()}))
+    agent_config = SimpleNamespace(
+        current_datasource="db_b",
+        services=SimpleNamespace(
+            default_datasource="db_a",
+            datasources={
+                "db_a": SimpleNamespace(type="sqlite", password="secret-a"),
+                "db_b": {"type": "duckdb", "password": "secret-b"},
+            },
+        ),
+    )
     return SimpleNamespace(agent_config=agent_config)
+
+
+def test_list_admin_datasources_returns_sanitized_summaries_and_audits(monkeypatch):
+    class CollectingAuditSink:
+        def __init__(self):
+            self.events = []
+
+        async def write(self, event):
+            self.events.append(event)
+
+    audit_sink = CollectingAuditSink()
+    ctx = AppContext(user_id="u1", project_id="proj_a", permissions={"module.admin.datasources"})
+    app = FastAPI()
+    app.include_router(admin_datasource_routes.router)
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return _svc()
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    monkeypatch.setattr(
+        admin_datasource_routes.deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=audit_sink,
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/admin/datasources")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"] == [
+        {"name": "db_a", "type": "sqlite", "is_default": False},
+        {"name": "db_b", "type": "duckdb", "is_default": True},
+    ]
+    assert "secret" not in response.text
+    event = audit_sink.events[-1]
+    assert event.user_id == "u1"
+    assert event.action == "module.admin.datasources"
+    assert event.resource_type == "datasource"
+    assert event.resource_id is None
+    assert event.decision == "allow"
+    assert event.metadata == {"operation": "list_admin_datasources", "count": 2}
+
+
+def test_list_admin_datasources_rejects_without_admin_datasources(monkeypatch):
+    ctx = AppContext(project_id="proj_a", permissions={"module.config.view"})
+    app = FastAPI()
+    app.include_router(admin_datasource_routes.router)
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return _svc()
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    monkeypatch.setattr(
+        admin_datasource_routes.deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/admin/datasources")
+
+    assert response.status_code == 403
+    assert "module.admin.datasources" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -221,4 +309,4 @@ async def test_set_project_default_datasource_rejects_unknown(monkeypatch):
 def test_admin_datasource_routes_do_not_register_legacy_switch_path():
     route_paths = {route.path for route in admin_datasource_routes.router.routes if isinstance(route, APIRoute)}
 
-    assert route_paths == {"/api/v1/admin/datasource-default"}
+    assert route_paths == {"/api/v1/admin/datasource-default", "/api/v1/admin/datasources"}
