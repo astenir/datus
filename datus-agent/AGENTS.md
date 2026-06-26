@@ -10,6 +10,15 @@ Datus Agent is an AI-powered data-analysis agent for NL to SQL workflows, multi-
 - Package manager: `uv`.
 - License: Apache-2.0.
 
+## Enterprise Platform Plan
+
+This downstream fork has a productization target documented in:
+
+- `ENTERPRISE_PLATFORM_PLAN.zh.md`: enterprise internal platform development plan, focused on single-tenant enterprise deployment, multi-user access, RBAC, datasource authorization, execution safety, audit, API organization, and high-availability evolution. Do not add `tenant_id` as a baseline metadata dimension; model one enterprise scope with users, roles, departments/projects, datasource grants, and artifact ACLs.
+- `ENTERPRISE_AI_DEVELOPMENT_GUIDE.zh.md`: implementation standard for future AI agents and developers working on the enterprise platform plan.
+
+For enterprise-related work, read both files before changing code. Keep route logic thin: authenticate, authorize through shared dependencies, project request-scoped config, execute through services, and audit security decisions. Do not scatter hard-coded role checks in routes, do not treat frontend hiding or `scoped_context` as a complete security boundary, and do not mutate shared `DatusService.agent_config` with user-specific authorization state. Assume one enterprise scope with many employees; model departments, projects, and roles through permissions and datasource grants.
+
 ## Downstream Git Model
 
 - Treat `main` as the stable downstream branch for this fork, not as a mirror of `upstream/main`.
