@@ -599,7 +599,7 @@ async def test_run_query_returns_result_when_sql_policy_raises(monkeypatch, tmp_
 
     assert result.success is False
     assert result.errorCode == "QUERY_EXECUTION_FAILED"
-    assert result.errorMessage == "policy backend down"
+    assert result.errorMessage == "SQL authorization failed"
     assert "sql" not in captured
 
 

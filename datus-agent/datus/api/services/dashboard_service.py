@@ -637,7 +637,7 @@ class DashboardService:
             return Result(
                 success=False,
                 errorCode="QUERY_EXECUTION_FAILED",
-                errorMessage=str(exc),
+                errorMessage="SQL authorization failed",
             )
         if not isinstance(authorized_sql, str):
             return Result(
