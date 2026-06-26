@@ -296,8 +296,9 @@ MVP 中 `datasource_grants` 采用每个 `(subject_type, subject_id, datasource_
 - config route：`/api/v1/config/agent` 使用 `module.config.view`，配置更新和连接探测接口使用 `module.config.edit`。
 - KB route：KB bootstrap、platform docs bootstrap 和 cancel 接口使用 `module.kb`。
 - MCP route：MCP server/tool/filter 的列表、管理和调用接口使用 `module.mcp`。
+- admin datasource route：`/api/v1/admin/datasource-default` 使用 `module.admin.datasources`。
 
-后续继续阶段 3 时，应继续使用 `require_module()` dependency 接 admin routes，并在 subagent dispatch 前叠加对应模块权限。不要把 report/dashboard 的 query 权限合并进 `module.chat`；自然语言入口只能证明用户可用 chat，不能自动证明用户可实时查询报表或仪表盘。report/dashboard 当前只完成模块入口权限；artifact ACL、datasource grant、请求级 config projection、SQL policy 和审计兜底仍属于阶段 4/5/6。
+后续继续阶段 3 时，应继续使用 `require_module()` dependency 接其余 admin routes，并在 subagent dispatch 前叠加对应模块权限。不要把 report/dashboard 的 query 权限合并进 `module.chat`；自然语言入口只能证明用户可用 chat，不能自动证明用户可实时查询报表或仪表盘。report/dashboard 当前只完成模块入口权限；artifact ACL、datasource grant、请求级 config projection、SQL policy 和审计兜底仍属于阶段 4/5/6。
 
 ### SQL 与数据安全
 

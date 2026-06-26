@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["enterprise-datasources"])
 
 
-ConfigEditCtx = Annotated[AppContext, Depends(require_module("module.config.edit"))]
+AdminDatasourcesCtx = Annotated[AppContext, Depends(require_module("module.admin.datasources"))]
 
 
 class SetDefaultDatasourceRequest(BaseModel):
@@ -40,7 +40,7 @@ class SetDefaultDatasourceRequest(BaseModel):
 async def set_project_default_datasource_endpoint(
     body: SetDefaultDatasourceRequest,
     svc: ServiceDep,
-    ctx: ConfigEditCtx,
+    ctx: AdminDatasourcesCtx,
 ) -> Result[dict]:
     """Persist ``default_datasource`` to ``./.datus/config.yml``."""
 
@@ -48,7 +48,7 @@ async def set_project_default_datasource_endpoint(
         await audit_decision(
             ctx,
             AuditEvent(
-                action="module.config.edit",
+                action="module.admin.datasources",
                 resource_type="datasource",
                 resource_id=body.name,
                 decision="deny",
@@ -68,7 +68,7 @@ async def set_project_default_datasource_endpoint(
     await audit_decision(
         ctx,
         AuditEvent(
-            action="module.config.edit",
+            action="module.admin.datasources",
             resource_type="datasource",
             resource_id=body.name,
             decision="allow",

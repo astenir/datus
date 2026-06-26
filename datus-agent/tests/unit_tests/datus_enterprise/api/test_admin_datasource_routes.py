@@ -114,11 +114,11 @@ async def test_set_project_default_datasource_audits_through_enterprise_sink(mon
     await admin_datasource_routes.set_project_default_datasource_endpoint(
         SetDefaultDatasourceRequest(name="db_b"),
         _svc(),
-        AppContext(user_id="u1", project_id="proj_a", permissions={"module.config.edit"}),
+        AppContext(user_id="u1", project_id="proj_a", permissions={"module.admin.datasources"}),
     )
 
     assert audit_sink.events[-1].user_id == "u1"
-    assert audit_sink.events[-1].action == "module.config.edit"
+    assert audit_sink.events[-1].action == "module.admin.datasources"
     assert audit_sink.events[-1].resource_id == "db_b"
     assert audit_sink.events[-1].decision == "allow"
 
@@ -129,7 +129,7 @@ def test_set_project_default_datasource_http_uses_app_context_dependency(monkeyp
     saved = {}
     cache = MagicMock()
     cache.evict = AsyncMock()
-    ctx = AppContext(project_id="proj_a", permissions={"module.config.edit"})
+    ctx = AppContext(project_id="proj_a", permissions={"module.admin.datasources"})
     app = FastAPI()
     app.include_router(admin_datasource_routes.router)
 
@@ -162,6 +162,44 @@ def test_set_project_default_datasource_http_uses_app_context_dependency(monkeyp
     assert response.json()["success"] is True
     assert saved["o"].default_datasource == "db_b"
     cache.evict.assert_awaited_once_with("proj_a")
+
+
+def test_set_project_default_datasource_http_rejects_config_edit_without_admin_datasources(monkeypatch):
+    saved = {}
+    cache = MagicMock()
+    cache.evict = AsyncMock()
+    ctx = AppContext(project_id="proj_a", permissions={"module.config.edit"})
+    app = FastAPI()
+    app.include_router(admin_datasource_routes.router)
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return _svc()
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    monkeypatch.setattr(admin_datasource_routes.deps, "_service_cache", cache)
+    monkeypatch.setattr(
+        admin_datasource_routes.deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+        ),
+    )
+    monkeypatch.setattr(
+        admin_datasource_routes, "save_project_override", lambda override: saved.setdefault("o", override)
+    )
+
+    with TestClient(app) as client:
+        response = client.put("/api/v1/admin/datasource-default", json={"name": "db_b"})
+
+    assert response.status_code == 403
+    assert "module.admin.datasources" in response.json()["detail"]
+    assert saved == {}
+    cache.evict.assert_not_awaited()
 
 
 @pytest.mark.asyncio
