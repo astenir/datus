@@ -86,7 +86,9 @@ async def run_dashboard_query(
         svc.agent_config,
         operation="dashboard.query",
     )
-    selected_datasource = projection.principal.get("datasource") or getattr(projection.config, "current_datasource", None)
+    selected_datasource = projection.principal.get("datasource") or getattr(
+        projection.config, "current_datasource", None
+    )
 
     async def _project_query_config(datasource: str | None) -> AgentConfig:
         nonlocal selected_datasource
@@ -112,7 +114,9 @@ async def run_dashboard_query(
         agent_config=projection.config,
         agent_config_projector=_project_query_config,
     )
-    await _audit_dashboard_query(ctx, body, result, selected_datasource=str(selected_datasource) if selected_datasource else None)
+    await _audit_dashboard_query(
+        ctx, body, result, selected_datasource=str(selected_datasource) if selected_datasource else None
+    )
     return result
 
 
