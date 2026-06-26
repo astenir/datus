@@ -973,7 +973,9 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - report detail route 已接入 `module.report.view`，覆盖当前 `/api/v1/report/detail`。
 - dashboard detail/query route 已分别接入 `module.dashboard.view` 和 `module.dashboard.query`，覆盖当前 `/api/v1/dashboard/detail` 与 `/api/v1/dashboard/query`。
 - config route 已接入 `module.config.view` 和 `module.config.edit`，覆盖 `/api/v1/config/agent`、配置更新接口和连接探测接口。
-- KB、MCP、admin 的阶段 3 后半部分仍按本节目标推进；本次没有引入 artifact ACL、datasource grant、请求级 config projection 或 SQL policy report/dashboard/direct SQL 兜底。
+- KB route 已接入 `module.kb`，覆盖 KB bootstrap、platform docs bootstrap 和对应 cancel 接口。
+- MCP route 已接入 `module.mcp`，覆盖 MCP server/tool/filter 的列表、管理和调用接口。
+- admin 的阶段 3 后半部分仍按本节目标推进；本次没有引入 artifact ACL、datasource grant、请求级 config projection 或 SQL policy report/dashboard/direct SQL 兜底。
 
 验收：
 
