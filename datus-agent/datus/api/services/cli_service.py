@@ -98,6 +98,17 @@ def _compose_scope_tokens(
     return tokens
 
 
+def _schema_qualified_dialect(dialect: str) -> bool:
+    return (dialect or "").strip().lower() in {
+        "postgres",
+        "postgresql",
+        "redshift",
+        "greenplum",
+        "snowflake",
+        "duckdb",
+    }
+
+
 class CLIService:
     """Service for handling CLI command operations."""
 
@@ -348,7 +359,11 @@ class CLIService:
         principal = getattr(agent_config, "principal", {}) if agent_config is not None else {}
         guard.principal = dict(principal) if isinstance(principal, dict) else {}
         guard.sub_agent_name = None
-        guard._field_order = CLIService._field_order_for_grant(guard._determine_field_order(), agent_config)
+        guard._field_order = CLIService._field_order_for_grant(
+            guard._determine_field_order(),
+            agent_config,
+            dialect=getattr(connector, "dialect", "") or "",
+        )
         scoped_tables = CLIService._scoped_table_patterns(agent_config, guard._field_order)
         guard._scoped_patterns = guard._load_scoped_patterns(scoped_tables)
 
@@ -403,16 +418,23 @@ class CLIService:
         return f"Requested database '{requested_database}' is not authorized for datasource '{datasource}'."
 
     @staticmethod
-    def _field_order_for_grant(field_order: Sequence[str], agent_config: Optional[AgentConfig]) -> Sequence[str]:
+    def _field_order_for_grant(
+        field_order: Sequence[str],
+        agent_config: Optional[AgentConfig],
+        *,
+        dialect: str = "",
+    ) -> Sequence[str]:
         order = list(field_order)
         _datasource, grant = CLIService._current_datasource_grant(agent_config)
         if not isinstance(grant, dict):
             return order
 
-        if _scope_patterns(grant, "databases") is not None and "database" not in order:
+        has_database_scope = _scope_patterns(grant, "databases") is not None
+        has_schema_scope = _scope_patterns(grant, "schemas") is not None
+        if has_database_scope and "database" not in order:
             table_index = order.index("table") if "table" in order else len(order)
             order.insert(table_index, "database")
-        if _scope_patterns(grant, "schemas") is not None and "schema" not in order:
+        if (has_schema_scope or (has_database_scope and _schema_qualified_dialect(dialect))) and "schema" not in order:
             table_index = order.index("table") if "table" in order else len(order)
             order.insert(table_index, "schema")
         return order
