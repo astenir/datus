@@ -82,6 +82,21 @@ async def test_datasource_grant_projector_denies_when_operation_flag_disallows_s
 
 
 @pytest.mark.asyncio
+async def test_datasource_grant_projector_denies_requested_schema_outside_scope():
+    result = await DatasourceGrantConfigProjector().project(
+        ProjectionInput(
+            ctx=AppContext(datasource_grants={"finance": {"effect": "allow", "schemas": ["mart"]}}),
+            base_config=_agent_config(),
+            operation="catalog.list",
+            requested_datasource="finance",
+            requested_schema="private",
+        )
+    )
+
+    assert result.denied_reason == "Requested schema 'private' is not authorized for datasource 'finance'."
+
+
+@pytest.mark.asyncio
 async def test_datasource_grant_projector_selects_authorized_default_without_mutating_base():
     base_config = _agent_config(current_datasource="hr")
 

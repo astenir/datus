@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
+from fnmatch import fnmatchcase
 from typing import Any, Dict, Optional
 
 from datus.api.auth.context import AppContext
@@ -68,6 +69,19 @@ class DatasourceGrantConfigProjector:
                     datasource_grants=allowed_grants,
                     denied_reason="No authorized datasource is available for this request.",
                 )
+
+        denied_reason = _requested_scope_denial(
+            allowed_grants[selected_datasource],
+            request,
+            selected_datasource=selected_datasource,
+        )
+        if denied_reason:
+            return ProjectionResult(
+                config=projected,
+                principal=dict(request.ctx.principal or {}),
+                datasource_grants=allowed_grants,
+                denied_reason=denied_reason,
+            )
 
         projected.services.datasources = {
             key: value for key, value in configured_datasources.items() if key in allowed_grants
@@ -156,6 +170,47 @@ def _grant_allows_operation(grant: dict[str, Any], operation: str) -> bool:
     if not operation.startswith("catalog.") and grant.get("allow_sql") is False:
         return False
     return True
+
+
+def _requested_scope_denial(
+    grant: dict[str, Any],
+    request: ProjectionInput,
+    *,
+    selected_datasource: str,
+) -> str | None:
+    checks = [
+        ("catalogs", "catalog", request.requested_catalog),
+        ("databases", "database", request.requested_database),
+        ("schemas", "schema", request.requested_schema),
+    ]
+    for scope_key, label, value in checks:
+        if _scope_allows(grant, scope_key, value):
+            continue
+        return f"Requested {label} '{value}' is not authorized for datasource '{selected_datasource}'."
+    return None
+
+
+def _scope_allows(grant: dict[str, Any], scope_key: str, value: str | None) -> bool:
+    patterns = _scope_patterns(grant, scope_key)
+    if patterns is None:
+        return True
+    requested_value = (value or "").strip()
+    if not requested_value:
+        return True
+    if not patterns:
+        return False
+    return any(fnmatchcase(requested_value, pattern) for pattern in patterns)
+
+
+def _scope_patterns(grant: dict[str, Any], scope_key: str) -> list[str] | None:
+    if scope_key not in grant or grant.get(scope_key) is None:
+        return None
+    raw_patterns = grant[scope_key]
+    if isinstance(raw_patterns, str):
+        raw_patterns = [part.strip() for part in raw_patterns.split(",")]
+    if not isinstance(raw_patterns, (list, tuple, set)):
+        return []
+    return [str(pattern).strip() for pattern in raw_patterns if str(pattern).strip()]
 
 
 def _select_default_datasource(agent_config: AgentConfig, allowed_grants: dict[str, Any]) -> str | None:
