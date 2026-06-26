@@ -286,19 +286,20 @@ MVP 中 `datasource_grants` 采用每个 `(subject_type, subject_id, datasource_
 
 ### Module RBAC
 
-当前阶段 3 前半部分主包接线已覆盖：
+当前阶段 3 主包接线已覆盖：
 
 - chat route：统一使用 `module.chat`。
+- chat subagent dispatch：`gen_sql` 使用 `module.sql_executor`，report 类 subagent 使用 `module.report.query`，dashboard 类 subagent 使用 `module.dashboard.query`。
 - datasource catalog route：`/api/v1/catalog/list` 使用 `module.datasource_catalog`。
 - direct SQL executor route：`/api/v1/sql/execute` 和 `/api/v1/sql/stop_execute` 使用 `module.sql_executor`。
-- report detail route：`/api/v1/report/detail` 使用 `module.report.view`。
-- dashboard detail/query route：`/api/v1/dashboard/detail` 使用 `module.dashboard.view`，`/api/v1/dashboard/query` 使用 `module.dashboard.query`。
+- report route：`/api/v1/report/detail`、`/api/v1/reports`、`/api/v1/reports/{slug}` 和 `/api/v1/reports/{slug}/html` 使用 `module.report.view`。
+- dashboard route：`/api/v1/dashboard/detail`、`/api/v1/dashboards`、`/api/v1/dashboards/{slug}` 和 `/api/v1/dashboards/{slug}/html` 使用 `module.dashboard.view`，`/api/v1/dashboard/query` 使用 `module.dashboard.query`。
 - config route：`/api/v1/config/agent` 使用 `module.config.view`，配置更新和连接探测接口使用 `module.config.edit`。
 - KB route：KB bootstrap、platform docs bootstrap 和 cancel 接口使用 `module.kb`。
 - MCP route：MCP server/tool/filter 的列表、管理和调用接口使用 `module.mcp`。
 - admin datasource route：`/api/v1/admin/datasource-default` 使用 `module.admin.datasources`。
 
-后续继续阶段 3 时，应继续使用 `require_module()` dependency 接其余 admin routes，并在 subagent dispatch 前叠加对应模块权限。不要把 report/dashboard 的 query 权限合并进 `module.chat`；自然语言入口只能证明用户可用 chat，不能自动证明用户可实时查询报表或仪表盘。report/dashboard 当前只完成模块入口权限；artifact ACL、datasource grant、请求级 config projection、SQL policy 和审计兜底仍属于阶段 4/5/6。
+后续新增 route 时应继续使用 `require_module()` dependency 接入模块权限；其余 admin users/roles/datasource grants/sessions/artifacts/audit/quotas/secrets API 属于阶段 6。不要把 report/dashboard 的 query 权限合并进 `module.chat`；自然语言入口只能证明用户可用 chat，不能自动证明用户可实时查询报表或仪表盘。report/dashboard 当前只完成模块入口权限和 artifact view ACL；datasource grant、请求级 config projection、SQL policy 和执行审计兜底仍属于阶段 4/5/6。
 
 ### SQL 与数据安全
 
