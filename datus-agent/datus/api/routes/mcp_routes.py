@@ -2,11 +2,13 @@
 API routes for MCP (Model Context Protocol) endpoints.
 """
 
-from typing import Any, Dict, Optional
+from typing import Annotated, Any, Dict, Optional
 
-from fastapi import APIRouter, Path, Query
+from fastapi import APIRouter, Depends, Path, Query
 
+from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
+from datus.api.enterprise.deps import require_module
 from datus.api.models.base_models import Result
 from datus.api.models.mcp_models import (
     AddServerInput,
@@ -15,6 +17,7 @@ from datus.api.models.mcp_models import (
 )
 
 router = APIRouter(prefix="/api/v1/mcp", tags=["mcp"])
+McpModuleCtx = Annotated[AppContext, Depends(require_module("module.mcp"))]
 
 # Pre-configured parameters to avoid definition-time evaluation in defaults
 SERVER_TYPE_QUERY = Query(None, description="Filter by server type (stdio, sse, http)")
@@ -33,6 +36,7 @@ APPLY_FILTER_QUERY = Query(True, description="Whether to apply tool filtering")
 )
 async def list_servers(
     svc: ServiceDep,
+    _ctx: McpModuleCtx,
     server_type: Optional[str] = SERVER_TYPE_QUERY,
 ) -> Result[Dict[str, Any]]:
     """List all MCP servers."""
@@ -48,6 +52,7 @@ async def list_servers(
 async def add_server(
     server_config: AddServerInput,
     svc: ServiceDep,
+    _ctx: McpModuleCtx,
 ) -> Result[Dict[str, Any]]:
     """Add a new MCP server."""
     return svc.mcp.add_server(server_config)
@@ -61,6 +66,7 @@ async def add_server(
 )
 async def remove_server(
     svc: ServiceDep,
+    _ctx: McpModuleCtx,
     server_name: str = REMOVE_SERVER_NAME_PATH,
 ) -> Result[Dict[str, Any]]:
     """Remove an MCP server."""
@@ -75,6 +81,7 @@ async def remove_server(
 )
 async def check_connectivity(
     svc: ServiceDep,
+    _ctx: McpModuleCtx,
     server_name: str = SERVER_NAME_CHECK_PATH,
 ) -> Result[Dict[str, Any]]:
     """Check server connectivity status."""
@@ -89,6 +96,7 @@ async def check_connectivity(
 )
 async def list_tools(
     svc: ServiceDep,
+    _ctx: McpModuleCtx,
     server_name: str = SERVER_NAME_PATH,
     apply_filter: bool = APPLY_FILTER_QUERY,
 ) -> Result[Dict[str, Any]]:
@@ -105,6 +113,7 @@ async def list_tools(
 async def call_tool(
     request: CallToolInput,
     svc: ServiceDep,
+    _ctx: McpModuleCtx,
     server_name: str = SERVER_NAME_PATH,
     tool_name: str = TOOL_NAME_PATH,
 ) -> Result[Dict[str, Any]]:
@@ -120,6 +129,7 @@ async def call_tool(
 )
 async def get_tool_filter(
     svc: ServiceDep,
+    _ctx: McpModuleCtx,
     server_name: str = SERVER_NAME_PATH,
 ) -> Result[Dict[str, Any]]:
     """Get tool filter configuration."""
@@ -135,6 +145,7 @@ async def get_tool_filter(
 async def set_tool_filter(
     filter_config: ToolFilterInput,
     svc: ServiceDep,
+    _ctx: McpModuleCtx,
     server_name: str = SERVER_NAME_PATH,
 ) -> Result[Dict[str, Any]]:
     """Set tool filter configuration."""
@@ -149,6 +160,7 @@ async def set_tool_filter(
 )
 async def remove_tool_filter(
     svc: ServiceDep,
+    _ctx: McpModuleCtx,
     server_name: str = SERVER_NAME_PATH,
 ) -> Result[Dict[str, Any]]:
     """Remove tool filter configuration."""

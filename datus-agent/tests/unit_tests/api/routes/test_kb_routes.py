@@ -6,9 +6,18 @@ All external dependencies are mocked. Zero API keys, zero network access require
 from unittest.mock import MagicMock, patch
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
+from datus.api import deps
+from datus.api.auth.context import AppContext
+from datus.api.enterprise.defaults import (
+    InMemorySessionOwnerStore,
+    LocalAuthorizationProvider,
+    NoopAuditSink,
+    PassthroughConfigProjector,
+)
+from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.models.kb_models import BootstrapKbEvent
 from datus.api.routes.kb_routes import router
 from datus.utils.exceptions import DatusException, ErrorCode
@@ -29,6 +38,16 @@ def mock_datus_service():
     return svc
 
 
+def _enterprise_extensions() -> EnterpriseExtensions:
+    return EnterpriseExtensions(
+        enabled=True,
+        authorization_provider=LocalAuthorizationProvider(),
+        config_projector=PassthroughConfigProjector(),
+        session_owner_store=InMemorySessionOwnerStore(),
+        audit_sink=NoopAuditSink(),
+    )
+
+
 @pytest.fixture
 def client(mock_datus_service):
     """Create a TestClient with mocked dependencies."""
@@ -36,9 +55,26 @@ def client(mock_datus_service):
 
     app = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[get_datus_service] = lambda: mock_datus_service
+
+    async def override_service(request: Request):
+        request.state.app_context = AppContext(user_id="u1", project_id="proj")
+        return mock_datus_service
+
+    app.dependency_overrides[get_datus_service] = override_service
     with TestClient(app) as c:
         yield c
+
+
+def _client_with_context(mock_datus_service, ctx: AppContext):
+    app = FastAPI()
+    app.include_router(router)
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return mock_datus_service
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    return TestClient(app, raise_server_exceptions=False)
 
 
 def _make_kb_events():
@@ -57,6 +93,30 @@ def _make_kb_events():
             timestamp="2025-01-01T00:00:01",
         ),
     ]
+
+
+@pytest.mark.parametrize(
+    ("path", "json_body"),
+    [
+        ("/api/v1/kb/bootstrap", {"components": ["metadata"]}),
+        ("/api/v1/kb/bootstrap/stream-1/cancel", None),
+        ("/api/v1/kb/bootstrap-docs", {"platform": "snowflake"}),
+        ("/api/v1/kb/bootstrap-docs/stream-1/cancel", None),
+    ],
+)
+def test_kb_routes_require_module_kb(monkeypatch, mock_datus_service, path, json_body):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    with _client_with_context(mock_datus_service, ctx) as test_client:
+        if json_body is None:
+            response = test_client.post(path)
+        else:
+            response = test_client.post(path, json=json_body)
+
+    assert response.status_code == 403
+    mock_datus_service.kb.bootstrap_stream.assert_not_called()
+    mock_datus_service.kb.bootstrap_doc_stream.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

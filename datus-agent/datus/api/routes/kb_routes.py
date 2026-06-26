@@ -3,11 +3,14 @@
 import json
 import os
 import uuid
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path
 from fastapi.responses import StreamingResponse
 
+from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
+from datus.api.enterprise.deps import require_module
 from datus.api.models.base_models import Result
 from datus.api.models.kb_models import BootstrapDocInput, BootstrapKbInput
 from datus.api.utils.path_utils import safe_resolve
@@ -19,6 +22,7 @@ from datus.api.utils.stream_cancellation import (
 from datus.utils.exceptions import DatusException
 
 router = APIRouter(prefix="/api/v1/kb", tags=["knowledge-base"])
+KbModuleCtx = Annotated[AppContext, Depends(require_module("module.kb"))]
 
 
 @router.post(
@@ -29,6 +33,7 @@ router = APIRouter(prefix="/api/v1/kb", tags=["knowledge-base"])
 async def bootstrap_kb(
     request: BootstrapKbInput,
     svc: ServiceDep,
+    _ctx: KbModuleCtx,
 ):
     """Start KB bootstrap with SSE progress streaming."""
     stream_id = str(uuid.uuid4())
@@ -71,6 +76,7 @@ async def bootstrap_kb(
 )
 async def cancel_bootstrap(
     svc: ServiceDep,  # noqa: ARG001 — triggers auth
+    _ctx: KbModuleCtx,
     stream_id: str = Path(..., description="Stream ID to cancel"),
 ):
     """Cancel a running bootstrap stream."""
@@ -102,6 +108,7 @@ def _validate_paths(request: BootstrapKbInput, project_root: str) -> None:
 async def bootstrap_docs(
     request: BootstrapDocInput,
     svc: ServiceDep,
+    _ctx: KbModuleCtx,
 ):
     """Start platform doc bootstrap with SSE progress streaming."""
     stream_id = str(uuid.uuid4())
@@ -155,6 +162,7 @@ async def bootstrap_docs(
 )
 async def cancel_doc_bootstrap(
     svc: ServiceDep,  # noqa: ARG001 — triggers auth
+    _ctx: KbModuleCtx,
     stream_id: str = Path(..., description="Stream ID to cancel"),
 ):
     """Cancel a running platform doc bootstrap stream."""
