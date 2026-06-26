@@ -98,6 +98,7 @@ def _patch_executor(monkeypatch, *, captured: dict) -> None:
 
     class _FakeDBFuncTool:
         def __init__(self, *, agent_config, sub_agent_name):
+            captured["agent_config"] = agent_config
             captured["sub_agent_name"] = sub_agent_name
 
         def _get_connector(self, datasource):
@@ -394,6 +395,27 @@ async def test_run_query_without_published_version_uses_local_template(monkeypat
     # so the connector picks the same datasource binding the LLM saved.
     assert captured["sub_agent_name"] == "gen_visual_dashboard"
     assert captured["datasource"] == "warehouse"
+
+
+@pytest.mark.asyncio
+async def test_run_query_uses_request_scoped_agent_config(monkeypatch, tmp_path: Path):
+    """A projected per-request config must be used for datasource resolution."""
+    _write_dashboard(tmp_path)
+    captured: dict = {}
+    _patch_executor(monkeypatch, captured=captured)
+    shared_config = MagicMock(name="shared_config")
+    projected_config = MagicMock(name="projected_config")
+
+    result = await DashboardService(agent_config=shared_config).run_query(
+        project_files_root=tmp_path,
+        dashboard_slug="demo",
+        query_slug="by_region",
+        params={"region": "APAC"},
+        agent_config=projected_config,
+    )
+
+    assert result.success is True
+    assert captured["agent_config"] is projected_config
 
 
 @pytest.mark.asyncio

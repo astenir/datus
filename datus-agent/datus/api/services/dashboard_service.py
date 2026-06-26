@@ -518,6 +518,7 @@ class DashboardService:
         params: Dict[str, Any],
         published_version: Optional[int] = None,
         published_template_loader: Optional[PublishedTemplateLoader] = None,
+        agent_config: Optional[AgentConfig] = None,
     ) -> Result[SqlQueryResultEnvelope]:
         """Render + execute a dashboard query template.
 
@@ -611,7 +612,8 @@ class DashboardService:
             return Result(success=False, errorCode="QUERY_EXECUTION_FAILED", errorMessage=str(exc))
 
         try:
-            db_tool = func_tool_mod.DBFuncTool(agent_config=self.agent_config, sub_agent_name="gen_visual_dashboard")
+            execution_config = agent_config or self.agent_config
+            db_tool = func_tool_mod.DBFuncTool(agent_config=execution_config, sub_agent_name="gen_visual_dashboard")
             connector = db_tool._get_connector(meta.datasource or None)
         except Exception as exc:
             logger.exception("Failed to resolve datasource for %s/%s: %s", dashboard_slug, query_slug, exc)

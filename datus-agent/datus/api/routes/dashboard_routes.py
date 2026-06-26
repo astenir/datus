@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, Query
 
 from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
-from datus.api.enterprise.deps import require_module
+from datus.api.enterprise.deps import project_request_config, require_module
 from datus.api.models.base_models import Result
 from datus.api.models.dashboard_models import (
     DashboardDetail,
@@ -79,6 +79,11 @@ async def run_dashboard_query(
     ctx: DashboardQueryModuleCtx,
 ) -> Result[SqlQueryResultEnvelope]:
     await require_artifact_access(ctx, artifact_type="dashboard", slug=body.dashboard_slug, action="query")
+    projection = await project_request_config(
+        ctx,
+        svc.agent_config,
+        operation="dashboard.query",
+    )
     return await svc.dashboard.run_query(
         project_files_root=_project_files_root(svc),
         dashboard_slug=body.dashboard_slug,
@@ -87,4 +92,5 @@ async def run_dashboard_query(
         published_version=body.published_version,
         # Agent-only deployment: no Postgres-backed version snapshots, so no loader.
         published_template_loader=None,
+        agent_config=projection.config,
     )

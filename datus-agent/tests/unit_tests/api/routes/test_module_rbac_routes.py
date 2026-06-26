@@ -684,6 +684,7 @@ def test_dashboard_query_requires_module_dashboard_query(monkeypatch):
 def test_dashboard_query_allows_module_dashboard_query(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()
+    svc.agent_config = _datasource_agent_config()
     svc.agent_config.project_root = "/tmp/project"
     svc.dashboard.run_query = AsyncMock(
         return_value=Result[SqlQueryResultEnvelope](success=True, data=_dashboard_query_result())
@@ -702,6 +703,61 @@ def test_dashboard_query_allows_module_dashboard_query(monkeypatch):
     assert svc.dashboard.run_query.await_args.kwargs["dashboard_slug"] == "sales_overview"
     assert svc.dashboard.run_query.await_args.kwargs["query_slug"] == "summary"
     assert svc.dashboard.run_query.await_args.kwargs["params"] == {"region": "east"}
+    assert svc.dashboard.run_query.await_args.kwargs["agent_config"].current_datasource == "default"
+
+
+def test_dashboard_query_uses_projected_datasource_config(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config(current_datasource="hr")
+    svc.agent_config.project_root = "/tmp/project"
+    svc.dashboard.run_query = AsyncMock(
+        return_value=Result[SqlQueryResultEnvelope](success=True, data=_dashboard_query_result())
+    )
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.dashboard.query"},
+        datasource_grants={"finance": {"effect": "allow", "allow_sql": True}},
+    )
+
+    with _client(dashboard_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/dashboard/query",
+            json={"dashboard_slug": "sales_overview", "query_slug": "summary", "params": {}},
+        )
+
+    assert response.status_code == 200
+    projected_config = svc.dashboard.run_query.await_args.kwargs["agent_config"]
+    assert projected_config.current_datasource == "finance"
+    assert set(projected_config.services.datasources) == {"finance"}
+    assert projected_config.principal["datasource"] == "finance"
+
+
+def test_dashboard_query_rejects_missing_datasource_grant(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config(current_datasource="finance")
+    svc.agent_config.project_root = "/tmp/project"
+    svc.dashboard.run_query = AsyncMock(
+        return_value=Result[SqlQueryResultEnvelope](success=True, data=_dashboard_query_result())
+    )
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.dashboard.query"},
+        datasource_grants={},
+    )
+
+    with _client(dashboard_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/dashboard/query",
+            json={"dashboard_slug": "sales_overview", "query_slug": "summary", "params": {}},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "No datasource grant available."
+    svc.dashboard.run_query.assert_not_awaited()
 
 
 def test_dashboard_query_rejects_artifact_acl_denial(monkeypatch):
