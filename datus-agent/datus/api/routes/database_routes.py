@@ -104,6 +104,8 @@ def _prune_databases_for_datasource_grant(
         return []
     if str(grant.get("effect", "allow")).strip().lower() != "allow":
         return []
+    if grant.get("allow_catalog") is False:
+        return []
 
     visible_databases: list[DatabaseInfo] = []
     for database in databases:
@@ -114,10 +116,14 @@ def _prune_databases_for_datasource_grant(
         if not _scope_allows(grant, "schemas", database.schema_name):
             continue
 
+        table_patterns = _scope_patterns(grant, "tables")
         tables = _filter_tables_for_grant(database, grant)
-        if _scope_patterns(grant, "tables") is not None and not tables:
+        if table_patterns is not None and not tables:
             continue
-        visible_databases.append(database.model_copy(update={"tables": tables, "tables_count": len(tables or [])}))
+        update = {"tables": tables}
+        if table_patterns is not None and tables is not None:
+            update["tables_count"] = len(tables)
+        visible_databases.append(database.model_copy(update=update))
     return visible_databases
 
 

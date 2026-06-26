@@ -366,6 +366,32 @@ def test_datasource_catalog_uses_projected_default_datasource(monkeypatch):
     assert request.datasource_id == "finance"
 
 
+def test_datasource_catalog_rejects_unauthorized_requested_schema_before_query(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config(current_datasource="finance")
+    svc.datasource.current_datasource = "finance"
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.datasource_catalog"},
+        datasource_grants={
+            "finance": {
+                "effect": "allow",
+                "allow_catalog": True,
+                "schemas": ["mart"],
+            }
+        },
+    )
+
+    with _client(database_routes.router, ctx, svc) as client:
+        response = client.get("/api/v1/catalog/list?schema_name=private")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Requested schema 'private' is not authorized for datasource 'finance'."
+    svc.datasource.list_databases.assert_not_called()
+
+
 def test_datasource_catalog_false_grant_returns_empty_catalog(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()
@@ -400,6 +426,81 @@ def test_datasource_catalog_false_grant_returns_empty_catalog(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["data"]["databases"] == []
+
+
+def test_datasource_catalog_allow_catalog_false_returns_empty_catalog(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config(current_datasource="default")
+    svc.datasource.current_datasource = "default"
+    svc.datasource.list_databases.return_value = Result[ListDatabasesData](
+        success=True,
+        data=ListDatabasesData(
+            databases=[
+                DatabaseInfo(
+                    name="main",
+                    uri="sqlite:///main.db",
+                    type="sqlite",
+                    current=True,
+                    connection_status="connected",
+                    tables=["public_table"],
+                )
+            ],
+            total_count=1,
+            current_database="main",
+        ),
+    )
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.datasource_catalog"},
+        datasource_grants={"default": {"effect": "allow", "allow_catalog": False}},
+    )
+
+    with _client(database_routes.router, ctx, svc) as client:
+        response = client.get("/api/v1/catalog/list")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["databases"] == []
+
+
+def test_datasource_catalog_preserves_unknown_table_count_without_table_scope(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config(current_datasource="default")
+    svc.datasource.current_datasource = "default"
+    svc.datasource.list_databases.return_value = Result[ListDatabasesData](
+        success=True,
+        data=ListDatabasesData(
+            databases=[
+                DatabaseInfo(
+                    name="main",
+                    uri="sqlite:///main.db",
+                    type="sqlite",
+                    current=True,
+                    connection_status="disconnected",
+                    tables_count=None,
+                    tables=None,
+                )
+            ],
+            total_count=1,
+            current_database="main",
+        ),
+    )
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.datasource_catalog"},
+        datasource_grants={"default": {"effect": "allow"}},
+    )
+
+    with _client(database_routes.router, ctx, svc) as client:
+        response = client.get("/api/v1/catalog/list")
+
+    assert response.status_code == 200
+    databases = response.json()["data"]["databases"]
+    assert len(databases) == 1
+    assert databases[0]["tables_count"] is None
 
 
 def test_datasource_catalog_prunes_tables_by_grant_scope(monkeypatch):
