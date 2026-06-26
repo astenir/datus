@@ -80,10 +80,7 @@ async def set_project_default_datasource_endpoint(
 
 
 async def _evict_current_project(project_id: str) -> None:
-    cache = deps._service_cache
-    if cache is None:
-        return
     try:
-        await cache.evict(project_id)
+        await deps.evict_datus_service(project_id)
     except Exception:
         logger.exception(f"Failed to evict service cache for project {project_id}")

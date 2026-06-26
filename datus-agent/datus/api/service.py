@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse
 from datus.agent.agent import Agent
 from datus.api.auth import load_auth_provider
 from datus.api.deps import init_deps
+from datus.api.enterprise import load_enterprise_extensions
 from datus.api.services.background_drain import drain_background_tasks
 from datus.api.services.datus_service_cache import DatusServiceCache
 from datus.configuration.agent_config_loader import load_agent_config, parse_config_path
@@ -441,7 +442,9 @@ async def lifespan(app: FastAPI):
     # Initialize plugin-based auth and service cache for new API routes
     datasource = getattr(args, "datasource", None) or os.getenv("DATUS_DATASOURCE", "default")
     api_config = getattr(service.agent_config, "api_config", {}) if service.agent_config else {}
-    auth_provider = load_auth_provider(api_config, datasource=datasource)
+    enterprise_config = getattr(service.agent_config, "enterprise_config", {}) if service.agent_config else {}
+    auth_provider = load_auth_provider(api_config, datasource=datasource, enterprise_config=enterprise_config)
+    enterprise_extensions = load_enterprise_extensions(enterprise_config)
     service_cache = DatusServiceCache(max_size=128)
     init_deps(
         auth_provider,
@@ -450,6 +453,7 @@ async def lifespan(app: FastAPI):
         default_source=getattr(args, "source", None),
         default_interactive=getattr(args, "interactive", True),
         stream_thinking=getattr(args, "stream_thinking", False),
+        enterprise_extensions=enterprise_extensions,
     )
 
     # Install a SIGUSR1 handler so operators can dump async task stacks from a

@@ -142,6 +142,14 @@ Authenticate -> Build Context -> Authorize -> Project Config -> Execute -> Audit
 
 第一阶段最小接口集为 `AuthProvider`、`AuthorizationProvider`、`ConfigProjector`、`SessionOwnerStore`、`AuditSink`。`QuotaLimiter`、`ArtifactAclStore`、`SecretProvider`、外部 policy engine 可在后续阶段拆出。
 
+当前第一阶段骨架实现状态：
+
+- 主包 `datus/api/enterprise/` 定义稳定 dataclass、Protocol、默认 local-compatible 实现、动态 loader 和 `require_module()` dependency。
+- `AppContext` 已扩展 `roles`、`permissions`、`datasource_grants`、`is_admin` 字段；本地 `NoAuthProvider` 继续留空这些字段。
+- `enterprise.enabled=true` 时，启动期必须配置生产 `api.auth_provider.class`，并显式配置 `enterprise.authorization_provider` 和 `enterprise.audit_sink`；缺失时 fail closed。`enterprise.config_projector` 的协议和 loader 已存在，但阶段 4 才接入 datasource grant/request-level projection 执行路径，阶段 1 未配置时使用 passthrough skeleton，避免把用户级 projection 缓存在 project 级 `DatusService` 中。
+- 企业模式下 `DatusService` cache key 使用 `enterprise:{project_id}`，但传入服务内部的 `project_id` 保持不带 cache 前缀的项目标识，避免污染会话、日志和下游存储语义。
+- 当前默认 `SessionOwnerStore` 只是进程内骨架，真正运行中 task owner 与磁盘 session owner 校验仍属于阶段 2。
+
 ### 核心协议形态
 
 授权接口统一接收 action 和 resource：

@@ -37,6 +37,7 @@ def mock_agent_config():
     config.current_datasource = "test_ns"
     config.rag_base_path = "/tmp/test_rag"
     config.api_config = {}
+    config.enterprise_config = {}
     return config
 
 

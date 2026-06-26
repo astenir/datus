@@ -216,6 +216,13 @@ module.admin.secrets
 
 所有模块、session、artifact、datasource 访问都应走统一授权接口或 dependency。不要在业务代码里写角色名判断。
 
+当前骨架位置：
+
+- 协议和数据结构位于 `datus/api/enterprise/`。
+- 本地兼容默认实现位于 `datus/api/enterprise/defaults.py`，缺少权限列表时允许访问；一旦 `AppContext.permissions` 或兼容的 `principal.permissions` 存在，就按稳定 permission key 或 glob 判断。
+- 生产企业模式通过 `enterprise.authorization_provider.class` 动态加载实现；`enterprise.enabled=true` 且缺失该 provider 时启动失败，不降级为 allow。
+- `enterprise.config_projector.class` 在阶段 1 只是可加载扩展点，未配置时使用 passthrough skeleton；不要在 `get_datus_service()` 中把用户级 projection 写入 project 级缓存。Datasource grant 与 request-level projection 的真实执行接入属于阶段 4。
+
 正确方向：
 
 ```python

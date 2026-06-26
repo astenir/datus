@@ -1106,7 +1106,7 @@ class TestAgentConfigServiceSelectors:
 
 
 class TestAgentConfigApiSection:
-    def _make(self, tmp_path, api=None):
+    def _make(self, tmp_path, api=None, enterprise=None):
         from datus.configuration.agent_config import AgentConfig, NodeConfig
 
         kwargs = dict(
@@ -1125,6 +1125,8 @@ class TestAgentConfigApiSection:
         )
         if api is not None:
             kwargs["api"] = api
+        if enterprise is not None:
+            kwargs["enterprise"] = enterprise
         return AgentConfig(**kwargs)
 
     def test_default_api_config_empty(self, tmp_path):
@@ -1135,6 +1137,17 @@ class TestAgentConfigApiSection:
         api = {"auth_provider": {"class": "pkg.mod.Cls", "kwargs": {"a": 1}}}
         cfg = self._make(tmp_path, api=api)
         assert cfg.api_config == api
+
+    def test_enterprise_config_parsed(self, tmp_path):
+        enterprise = {"enabled": True, "authorization_provider": {"class": "pkg.Authz"}}
+        cfg = self._make(tmp_path, enterprise=enterprise)
+        assert cfg.enterprise_config == enterprise
+
+    def test_enterprise_config_rejects_non_mapping(self, tmp_path):
+        from datus.utils.exceptions import DatusException
+
+        with pytest.raises(DatusException, match="agent.enterprise must be a mapping"):
+            self._make(tmp_path, enterprise=True)
 
 
 class TestAgentConfigKnowledgeBase:

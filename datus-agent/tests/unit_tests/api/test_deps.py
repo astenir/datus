@@ -1,5 +1,6 @@
 """Tests for datus.api.deps — dependency injection module."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -17,12 +18,14 @@ def _reset_deps():
     """Reset module-level singletons between tests."""
     deps._auth_provider = None
     deps._service_cache = None
+    deps._enterprise_extensions = None
     deps._datasource = "default"
     deps._default_source = None
     deps._default_interactive = True
     yield
     deps._auth_provider = None
     deps._service_cache = None
+    deps._enterprise_extensions = None
     deps._datasource = "default"
     deps._default_source = None
     deps._default_interactive = True
@@ -79,12 +82,41 @@ class TestInitDeps:
         assert deps._default_interactive is False
 
     def test_wires_eviction_callback(self):
-        """init_deps wires auth_provider.on_evict to cache.evict."""
+        """init_deps wires auth_provider.on_evict through mode-aware eviction."""
         mock_auth = MagicMock()
         mock_cache = MagicMock(spec=DatusServiceCache)
+        mock_cache.evict = AsyncMock()
 
         init_deps(mock_auth, mock_cache)
-        mock_auth.on_evict.assert_called_once_with(mock_cache.evict)
+        callback = mock_auth.on_evict.call_args.args[0]
+        asyncio.run(callback("proj/a"))
+        mock_cache.evict.assert_awaited_once_with("proj_a")
+
+    def test_wires_enterprise_eviction_callback_with_enterprise_cache_key(self):
+        """Enterprise mode evicts enterprise-prefixed service cache entries."""
+        from datus.api.enterprise.defaults import (
+            InMemorySessionOwnerStore,
+            LocalAuthorizationProvider,
+            NoopAuditSink,
+            PassthroughConfigProjector,
+        )
+        from datus.api.enterprise.loader import EnterpriseExtensions
+
+        mock_auth = MagicMock()
+        mock_cache = MagicMock(spec=DatusServiceCache)
+        extensions = EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+        )
+
+        init_deps(mock_auth, mock_cache, enterprise_extensions=extensions)
+
+        callback = mock_auth.on_evict.call_args.args[0]
+        asyncio.run(callback("proj/a"))
+        mock_cache.evict.assert_awaited_once_with("enterprise:proj_a")
 
 
 @pytest.mark.asyncio
@@ -136,6 +168,95 @@ class TestGetDatusService:
         call_args = mock_cache.get_or_create.call_args
         assert call_args[0][0] == "proj-1"
         assert call_args.kwargs["expected_fingerprint"] == "fp-xyz"
+
+    async def test_enterprise_cache_key_is_prefixed_but_service_project_id_is_plain(self):
+        """Enterprise cache isolation does not leak the cache prefix into DatusService.project_id."""
+        from unittest.mock import patch
+
+        from datus.api.enterprise.defaults import (
+            InMemorySessionOwnerStore,
+            LocalAuthorizationProvider,
+            NoopAuditSink,
+            PassthroughConfigProjector,
+        )
+        from datus.api.enterprise.loader import EnterpriseExtensions
+
+        mock_auth = MagicMock()
+        ctx = AppContext(
+            user_id="user-1",
+            project_id="proj-1",
+            config=MagicMock(),
+            roles=["analyst"],
+            permissions={"module.chat"},
+        )
+        mock_auth.authenticate = AsyncMock(return_value=ctx)
+
+        mock_cache = MagicMock(spec=DatusServiceCache)
+        captured = {}
+
+        async def fake_get_or_create(key, factory, expected_fingerprint=None):
+            captured["key"] = key
+            captured["svc"] = await factory()
+            return captured["svc"]
+
+        mock_cache.get_or_create = AsyncMock(side_effect=fake_get_or_create)
+        deps._auth_provider = mock_auth
+        deps._service_cache = mock_cache
+        deps._enterprise_extensions = EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+        )
+
+        request = MagicMock()
+        request.state = MagicMock()
+
+        with (
+            patch("datus.api.deps.DatusService.compute_fingerprint", return_value="fp"),
+            patch("datus.api.deps.DatusService") as mock_svc_cls,
+        ):
+            mock_svc_cls.compute_fingerprint = MagicMock(return_value="fp")
+            mock_svc_cls.return_value = MagicMock()
+            await get_datus_service(request)
+
+        assert captured["key"] == "enterprise:proj-1"
+        assert mock_svc_cls.call_args.kwargs["project_id"] == "proj-1"
+
+    async def test_enterprise_context_missing_user_fails_closed(self):
+        """Enterprise mode rejects unauthenticated request context before service lookup."""
+        from datus.api.enterprise.defaults import (
+            InMemorySessionOwnerStore,
+            LocalAuthorizationProvider,
+            NoopAuditSink,
+            PassthroughConfigProjector,
+        )
+        from datus.api.enterprise.loader import EnterpriseExtensions
+
+        mock_auth = MagicMock()
+        mock_auth.authenticate = AsyncMock(return_value=AppContext(roles=["analyst"], permissions={"module.chat"}))
+        mock_cache = MagicMock(spec=DatusServiceCache)
+        mock_cache.get_or_create = AsyncMock()
+        deps._auth_provider = mock_auth
+        deps._service_cache = mock_cache
+        deps._enterprise_extensions = EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+        )
+
+        request = MagicMock()
+        request.state = MagicMock()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_datus_service(request)
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.detail == "AUTH_REQUIRED"
+        mock_cache.get_or_create.assert_not_called()
 
     async def test_auth_validation_error_returns_bad_request(self):
         """Auth-provider request validation errors are API 400s, not internal errors."""

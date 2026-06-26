@@ -1,11 +1,13 @@
 """FastAPI dependency injection — plugin-based auth + DatusService cache."""
 
+import re
 from typing import Annotated, Optional
 
 from fastapi import Depends, HTTPException, Request
 
 from datus.api.auth.context import AppContext
 from datus.api.auth.provider import AuthProvider
+from datus.api.enterprise.loader import EnterpriseExtensions, load_enterprise_extensions
 from datus.api.services.datus_service import DatusService
 from datus.api.services.datus_service_cache import DatusServiceCache
 from datus.configuration.agent_config_loader import load_agent_config
@@ -17,12 +19,14 @@ logger = get_logger(__name__)
 # Module-level singletons (set during lifespan via init_deps)
 _auth_provider: Optional[AuthProvider] = None
 _service_cache: Optional[DatusServiceCache] = None
+_enterprise_extensions: Optional[EnterpriseExtensions] = None
 _datasource: str = "default"
 _default_source: Optional[str] = None
 _default_interactive: bool = True
 _stream_thinking: bool = False
 
 _DEFAULT_PROJECT_KEY = "default"
+_SAFE_CACHE_SEGMENT_RE = re.compile(r"[^A-Za-z0-9_.\-]")
 
 
 def init_deps(
@@ -32,20 +36,52 @@ def init_deps(
     default_source: Optional[str] = None,
     default_interactive: bool = True,
     stream_thinking: bool = False,
+    enterprise_extensions: Optional[EnterpriseExtensions] = None,
 ) -> None:
     """Initialize global auth provider and service cache.
 
     Called from main.py lifespan to inject dependencies.
     """
-    global _auth_provider, _service_cache, _datasource, _default_source, _default_interactive, _stream_thinking
+    global _auth_provider, _service_cache, _enterprise_extensions
+    global _datasource, _default_source, _default_interactive, _stream_thinking
     _auth_provider = auth_provider
     _service_cache = cache
+    _enterprise_extensions = enterprise_extensions or load_enterprise_extensions(None)
     _datasource = datasource
     _default_source = default_source
     _default_interactive = default_interactive
     _stream_thinking = stream_thinking
     # Wire eviction callback: auth config changes trigger cache eviction
-    auth_provider.on_evict(cache.evict)
+    auth_provider.on_evict(evict_datus_service)
+
+
+def get_enterprise_extensions() -> EnterpriseExtensions:
+    """Return loaded enterprise extension providers."""
+
+    return _enterprise_extensions or load_enterprise_extensions(None)
+
+
+def service_cache_key(project_id: str | None, *, enterprise_enabled: bool) -> str:
+    """Return the DatusService cache key for local or enterprise mode."""
+
+    project = _safe_cache_segment(project_id or _DEFAULT_PROJECT_KEY)
+    if enterprise_enabled:
+        return f"enterprise:{project}"
+    return project
+
+
+def _safe_cache_segment(value: str) -> str:
+    candidate = _SAFE_CACHE_SEGMENT_RE.sub("_", value.strip())
+    return candidate or _DEFAULT_PROJECT_KEY
+
+
+async def evict_datus_service(project_id: str | None) -> None:
+    """Evict the current-mode DatusService cache entry for ``project_id``."""
+
+    if _service_cache is None:
+        return
+    enterprise_enabled = get_enterprise_extensions().enabled
+    await _service_cache.evict(service_cache_key(project_id, enterprise_enabled=enterprise_enabled))
 
 
 async def get_datus_service(request: Request) -> DatusService:
@@ -66,9 +102,13 @@ async def get_datus_service(request: Request) -> DatusService:
     except DatusException as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     request.state.app_context = ctx
+    enterprise_extensions = get_enterprise_extensions()
+    if enterprise_extensions.enabled:
+        _validate_enterprise_context(ctx)
 
     expected_fp = DatusService.compute_fingerprint(ctx.config) if ctx.config is not None else None
-    cache_key = ctx.project_id or _DEFAULT_PROJECT_KEY
+    project_id = _safe_cache_segment(ctx.project_id or _DEFAULT_PROJECT_KEY)
+    cache_key = service_cache_key(project_id, enterprise_enabled=enterprise_extensions.enabled)
 
     async def _factory() -> DatusService:
         # Load config on-demand if not provided by auth provider
@@ -82,13 +122,20 @@ async def get_datus_service(request: Request) -> DatusService:
 
         return DatusService(
             agent_config=agent_config,
-            project_id=cache_key,
+            project_id=project_id,
             default_source=_default_source,
             default_interactive=_default_interactive,
             stream_thinking=_stream_thinking,
         )
 
     return await _service_cache.get_or_create(cache_key, _factory, expected_fingerprint=expected_fp)
+
+
+def _validate_enterprise_context(ctx: AppContext) -> None:
+    if not ctx.user_id:
+        raise HTTPException(status_code=401, detail="AUTH_REQUIRED")
+    if not ctx.roles and not ctx.permissions:
+        raise HTTPException(status_code=403, detail="PERMISSION_DENIED: RBAC context missing")
 
 
 def get_app_context(request: Request) -> AppContext:
