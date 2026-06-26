@@ -3,6 +3,8 @@
 
 """HTTP-level module RBAC coverage for enterprise route dependencies."""
 
+import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -26,6 +28,7 @@ from datus.api.models.database_models import DatabaseInfo, DatabasesData, ListDa
 from datus.api.models.report_models import ReportDetail
 from datus.api.routes import chat_routes, cli_routes, dashboard_routes, database_routes, report_routes
 from datus.api.services.cli_service import CLIService, _SQLTaskRecord
+from datus.api.services.dashboard_service import DashboardService
 from datus.schemas.artifact_manifest import ArtifactManifest
 from datus_enterprise.config_projection import DatasourceGrantConfigProjector
 
@@ -93,6 +96,27 @@ def _dashboard_query_result() -> SqlQueryResultEnvelope:
         columns=[],
         rows=[],
         sql="SELECT 1",
+    )
+
+
+def _write_dashboard_query_fixture(project_files_root: Path, *, datasource: str) -> None:
+    queries_dir = project_files_root / "dashboards" / "sales_overview" / "queries"
+    queries_dir.mkdir(parents=True)
+    (queries_dir / "summary.sql.j2").write_text("SELECT 1 AS value;\n", encoding="utf-8")
+    (queries_dir / "summary.params.json").write_text(
+        json.dumps(
+            {
+                "slug": "summary",
+                "description": "Summary",
+                "datasource": datasource,
+                "params": [],
+                "columns": [{"name": "value", "type": "number"}],
+                "sample_params": {},
+                "sample_row_count": 1,
+                "saved_at": "2026-06-27T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
     )
 
 
@@ -704,6 +728,7 @@ def test_dashboard_query_allows_module_dashboard_query(monkeypatch):
     assert svc.dashboard.run_query.await_args.kwargs["query_slug"] == "summary"
     assert svc.dashboard.run_query.await_args.kwargs["params"] == {"region": "east"}
     assert svc.dashboard.run_query.await_args.kwargs["agent_config"].current_datasource == "default"
+    assert callable(svc.dashboard.run_query.await_args.kwargs["agent_config_projector"])
 
 
 def test_dashboard_query_uses_projected_datasource_config(monkeypatch):
@@ -732,6 +757,7 @@ def test_dashboard_query_uses_projected_datasource_config(monkeypatch):
     assert projected_config.current_datasource == "finance"
     assert set(projected_config.services.datasources) == {"finance"}
     assert projected_config.principal["datasource"] == "finance"
+    assert callable(svc.dashboard.run_query.await_args.kwargs["agent_config_projector"])
 
 
 def test_dashboard_query_rejects_missing_datasource_grant(monkeypatch):
@@ -758,6 +784,42 @@ def test_dashboard_query_rejects_missing_datasource_grant(monkeypatch):
     assert response.status_code == 403
     assert response.json()["detail"] == "No datasource grant available."
     svc.dashboard.run_query.assert_not_awaited()
+
+
+def test_dashboard_query_rejects_template_datasource_without_grant(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
+    _write_dashboard_query_fixture(tmp_path, datasource="hr")
+    agent_config = _datasource_agent_config(current_datasource="finance")
+    agent_config.project_root = str(tmp_path)
+    svc = SimpleNamespace(
+        agent_config=agent_config,
+        dashboard=DashboardService(agent_config=agent_config),
+    )
+    db_calls = []
+
+    class _UnexpectedDBFuncTool:
+        def __init__(self, *, agent_config, sub_agent_name):
+            db_calls.append((agent_config, sub_agent_name))
+
+    import datus.tools.func_tool as func_tool_mod
+
+    monkeypatch.setattr(func_tool_mod, "DBFuncTool", _UnexpectedDBFuncTool)
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.dashboard.query"},
+        datasource_grants={"finance": {"effect": "allow", "allow_sql": True}},
+    )
+
+    with _client(dashboard_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/dashboard/query",
+            json={"dashboard_slug": "sales_overview", "query_slug": "summary", "params": {}},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Datasource 'hr' is not authorized for this request."
+    assert db_calls == []
 
 
 def test_dashboard_query_rejects_artifact_acl_denial(monkeypatch):

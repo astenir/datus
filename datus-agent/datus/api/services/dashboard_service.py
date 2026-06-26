@@ -68,6 +68,7 @@ _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 PublishedTemplateLoader = Callable[[int], Awaitable[Result[Tuple[str, str]]]]
+DashboardQueryConfigProjector = Callable[[str | None], Awaitable[AgentConfig]]
 
 
 def _resolve_dashboard_dir(project_files_root: Path, dashboard_slug: str) -> Optional[Path]:
@@ -519,6 +520,7 @@ class DashboardService:
         published_version: Optional[int] = None,
         published_template_loader: Optional[PublishedTemplateLoader] = None,
         agent_config: Optional[AgentConfig] = None,
+        agent_config_projector: Optional[DashboardQueryConfigProjector] = None,
     ) -> Result[SqlQueryResultEnvelope]:
         """Render + execute a dashboard query template.
 
@@ -584,6 +586,10 @@ class DashboardService:
                 errorMessage=f"queries/{query_slug}.params.json is corrupt: {exc}",
             )
 
+        execution_config = agent_config or self.agent_config
+        if agent_config_projector is not None:
+            execution_config = await agent_config_projector(meta.datasource or None)
+
         try:
             coerced = _validate_params(meta.params, params)
         except ValueError as exc:
@@ -612,7 +618,6 @@ class DashboardService:
             return Result(success=False, errorCode="QUERY_EXECUTION_FAILED", errorMessage=str(exc))
 
         try:
-            execution_config = agent_config or self.agent_config
             db_tool = func_tool_mod.DBFuncTool(agent_config=execution_config, sub_agent_name="gen_visual_dashboard")
             connector = db_tool._get_connector(meta.datasource or None)
         except Exception as exc:

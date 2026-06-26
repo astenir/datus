@@ -419,6 +419,35 @@ async def test_run_query_uses_request_scoped_agent_config(monkeypatch, tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_run_query_projects_config_for_template_datasource(monkeypatch, tmp_path: Path):
+    """The datasource saved in .params.json drives request-scoped projection."""
+    _write_dashboard(tmp_path)
+    captured: dict = {}
+    _patch_executor(monkeypatch, captured=captured)
+    shared_config = MagicMock(name="shared_config")
+    projected_config = MagicMock(name="projected_config")
+    requested_datasources: list[str | None] = []
+
+    async def _project_config(datasource: str | None):
+        requested_datasources.append(datasource)
+        return projected_config
+
+    result = await DashboardService(agent_config=shared_config).run_query(
+        project_files_root=tmp_path,
+        dashboard_slug="demo",
+        query_slug="by_region",
+        params={"region": "APAC"},
+        agent_config=shared_config,
+        agent_config_projector=_project_config,
+    )
+
+    assert result.success is True
+    assert requested_datasources == ["warehouse"]
+    assert captured["agent_config"] is projected_config
+    assert captured["datasource"] == "warehouse"
+
+
+@pytest.mark.asyncio
 async def test_run_query_rejects_invalid_query_slug(tmp_path: Path):
     """Defence-in-depth: the slug regex guard fires before any I/O so a
     crafted slug can't reach the filesystem walker."""

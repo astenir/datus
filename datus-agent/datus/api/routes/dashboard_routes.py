@@ -27,6 +27,7 @@ from datus.api.models.dashboard_models import (
     DashboardQueryRequest,
     SqlQueryResultEnvelope,
 )
+from datus.configuration.agent_config import AgentConfig
 from datus_enterprise.artifact_acl import require_artifact_access
 
 router = APIRouter(prefix="/api/v1", tags=["dashboard"])
@@ -84,6 +85,18 @@ async def run_dashboard_query(
         svc.agent_config,
         operation="dashboard.query",
     )
+
+    async def _project_query_config(datasource: str | None) -> AgentConfig:
+        if not datasource:
+            return projection.config
+        datasource_projection = await project_request_config(
+            ctx,
+            svc.agent_config,
+            operation="dashboard.query",
+            requested_datasource=datasource,
+        )
+        return datasource_projection.config
+
     return await svc.dashboard.run_query(
         project_files_root=_project_files_root(svc),
         dashboard_slug=body.dashboard_slug,
@@ -93,4 +106,5 @@ async def run_dashboard_query(
         # Agent-only deployment: no Postgres-backed version snapshots, so no loader.
         published_template_loader=None,
         agent_config=projection.config,
+        agent_config_projector=_project_query_config,
     )
