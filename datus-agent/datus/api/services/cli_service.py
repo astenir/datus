@@ -106,10 +106,16 @@ class CLIService:
         with self._sql_tasks_lock:
             self._sql_tasks.pop(task_id, None)
 
-    def _execute_sql_sync(self, request: ExecuteSQLInput, task_id: str) -> Result[ExecuteSQLData]:
+    def _execute_sql_sync(
+        self,
+        request: ExecuteSQLInput,
+        task_id: str,
+        agent_config: Optional[AgentConfig] = None,
+    ) -> Result[ExecuteSQLData]:
         """Synchronous SQL execution logic (runs in a thread)."""
         try:
-            if not self.current_db_connector:
+            connector, _current_db_name = self._execution_connector(agent_config)
+            if not connector:
                 return Result(
                     success=False,
                     errorCode=ErrorCode.DATABASE_CONNECTION_ERROR,
@@ -118,8 +124,8 @@ class CLIService:
 
             # Switch to the requested database/catalog context before executing.
             if request.database_name:
-                catalog = getattr(self.current_db_connector, "catalog_name", "") or ""
-                self.current_db_connector.switch_context(
+                catalog = getattr(connector, "catalog_name", "") or ""
+                connector.switch_context(
                     catalog_name=catalog,
                     database_name=request.database_name,
                 )
@@ -141,7 +147,7 @@ class CLIService:
 
             # Execute the query
             start_time = time.time()
-            result = self.current_db_connector.execute(
+            result = connector.execute(
                 input_params={"sql_query": request.sql_query},
                 result_format=request.result_format,
             )
@@ -240,7 +246,20 @@ class CLIService:
                 errorMessage=str(e),
             )
 
-    async def execute_sql(self, request: ExecuteSQLInput, user_id: Optional[str] = None) -> Result[ExecuteSQLData]:
+    def _execution_connector(self, agent_config: Optional[AgentConfig] = None):
+        if agent_config is None:
+            return self.current_db_connector, self.current_db_name
+        db_manager = DBManager(agent_config.datasource_configs)
+        datasource = getattr(agent_config, "current_datasource", "") or ""
+        db_name, connector = db_manager.first_conn_with_name(datasource)
+        return connector, db_name
+
+    async def execute_sql(
+        self,
+        request: ExecuteSQLInput,
+        user_id: Optional[str] = None,
+        agent_config: Optional[AgentConfig] = None,
+    ) -> Result[ExecuteSQLData]:
         """Execute SQL query asynchronously with cancellation support.
 
         If ``request.execute_task_id`` is provided, it is used as-is and returned
@@ -251,7 +270,7 @@ class CLIService:
 
         async def _run() -> Result[ExecuteSQLData]:
             try:
-                return await asyncio.to_thread(self._execute_sql_sync, request, task_id)
+                return await asyncio.to_thread(self._execute_sql_sync, request, task_id, agent_config)
             except asyncio.CancelledError:
                 logger.info(f"SQL execution task cancelled: {task_id}")
                 return Result(

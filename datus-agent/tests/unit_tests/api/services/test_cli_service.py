@@ -2,6 +2,7 @@
 
 import asyncio
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -154,6 +155,53 @@ class TestCLIServiceExecuteSQL:
         result = await cli_svc.execute_sql(request)
         assert result.success is True
         assert result.data.sql_query == "SELECT COUNT(*) FROM schools"
+
+    @pytest.mark.asyncio
+    async def test_execute_sql_uses_projected_agent_config(self, monkeypatch):
+        """Request-scoped config can route direct SQL without replacing shared task tracking."""
+
+        class FakeConnector:
+            catalog_name = "prod"
+
+            def __init__(self):
+                self.switch_calls = []
+
+            def switch_context(self, catalog_name, database_name):
+                self.switch_calls.append((catalog_name, database_name))
+
+            def execute(self, input_params, result_format):
+                assert input_params == {"sql_query": "SELECT 1"}
+                assert result_format == "json"
+                return SimpleNamespace(success=True, sql_return="1", row_count=1)
+
+        connector = FakeConnector()
+        seen = {}
+
+        class FakeDBManager:
+            def __init__(self, datasource_configs):
+                seen["datasource_configs"] = datasource_configs
+
+            def first_conn_with_name(self, datasource):
+                seen["datasource"] = datasource
+                return "finance_db", connector
+
+        monkeypatch.setattr("datus.api.services.cli_service.DBManager", FakeDBManager)
+        projected_config = SimpleNamespace(
+            datasource_configs={"finance": object()},
+            current_datasource="finance",
+        )
+        svc = CLIService(agent_config=None, chat_service=None)
+
+        result = await svc.execute_sql(
+            ExecuteSQLInput(sql_query="SELECT 1", result_format="json", database_name="finance_db"),
+            user_id="u1",
+            agent_config=projected_config,
+        )
+
+        assert result.success is True
+        assert seen == {"datasource_configs": projected_config.datasource_configs, "datasource": "finance"}
+        assert connector.switch_calls == [("prod", "finance_db")]
+        assert svc._sql_tasks == {}
 
 
 class TestCLIServiceStopExecuteSQL:
