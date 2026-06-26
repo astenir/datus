@@ -99,6 +99,9 @@ def _compose_scope_tokens(
 
 
 def _schema_qualified_dialect(dialect: str) -> bool:
+    # Keep this aligned with extract_table_names(..., ignore_empty=True): these
+    # dialects can emit two-part schema.table names while the active database
+    # still comes from the connector context.
     return (dialect or "").strip().lower() in {
         "postgres",
         "postgresql",
@@ -106,6 +109,10 @@ def _schema_qualified_dialect(dialect: str) -> bool:
         "greenplum",
         "snowflake",
         "duckdb",
+        "oracle",
+        "mssql",
+        "sqlserver",
+        "starrocks",
     }
 
 

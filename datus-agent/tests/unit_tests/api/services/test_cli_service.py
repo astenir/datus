@@ -460,16 +460,31 @@ class TestCLIServiceExecuteSQL:
         assert connector.executed is False
 
     @pytest.mark.asyncio
-    async def test_execute_sql_database_grant_allows_schema_qualified_table(self, monkeypatch):
+    @pytest.mark.parametrize(
+        ("dialect", "sql_query"),
+        [
+            ("postgresql", "SELECT * FROM public.orders"),
+            ("oracle", "SELECT * FROM HR.ORDERS"),
+            ("sqlserver", "SELECT * FROM dbo.orders"),
+            ("mssql", "SELECT * FROM dbo.orders"),
+            ("starrocks", "SELECT * FROM public.orders"),
+        ],
+    )
+    async def test_execute_sql_database_grant_allows_schema_qualified_table(
+        self,
+        monkeypatch,
+        dialect,
+        sql_query,
+    ):
         """Database grants allow schema-qualified SQL inside the active database."""
 
         class FakeConnector:
-            dialect = "postgresql"
             catalog_name = ""
             database_name = "finance"
             schema_name = "public"
 
             def __init__(self):
+                self.dialect = dialect
                 self.executed_sql = None
 
             def execute(self, input_params, result_format):
@@ -500,13 +515,13 @@ class TestCLIServiceExecuteSQL:
         svc = CLIService(agent_config=None, chat_service=None)
 
         result = await svc.execute_sql(
-            ExecuteSQLInput(sql_query="SELECT * FROM public.orders", result_format="json"),
+            ExecuteSQLInput(sql_query=sql_query, result_format="json"),
             user_id="u1",
             agent_config=projected_config,
         )
 
         assert result.success is True
-        assert connector.executed_sql == "SELECT * FROM public.orders"
+        assert connector.executed_sql == sql_query
 
     @pytest.mark.asyncio
     async def test_execute_sql_validates_with_requested_database_context(self, monkeypatch):
