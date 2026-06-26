@@ -56,7 +56,7 @@ async def test_get_agent_config_returns_datasources_flat():
         },
     )
 
-    result = await get_agent_config_endpoint(svc)
+    result = await get_agent_config_endpoint(svc, _ctx=_ctx())
 
     assert result.success is True
     assert result.data["datasources"] == {
@@ -74,7 +74,7 @@ async def test_get_agent_config_skips_none_config():
     real_cfg = {"type": "duckdb"}
     svc = _mock_svc(datasources={"empty": None, "real": real_cfg})
 
-    result = await get_agent_config_endpoint(svc)
+    result = await get_agent_config_endpoint(svc, _ctx=_ctx())
 
     assert result.data["datasources"] == {"real": real_cfg}
 
@@ -83,7 +83,7 @@ async def test_get_agent_config_skips_none_config():
 async def test_get_agent_config_handles_empty_datasources():
     svc = _mock_svc(datasources={})
 
-    result = await get_agent_config_endpoint(svc)
+    result = await get_agent_config_endpoint(svc, _ctx=_ctx())
 
     assert result.data["datasources"] == {}
 
@@ -339,6 +339,102 @@ def test_update_config_http_requires_config_edit_permission(monkeypatch, patched
     assert patched_cm.save_count == 0
 
 
+def test_get_config_http_requires_config_view_permission(monkeypatch):
+    app = FastAPI()
+    app.include_router(config_routes.router)
+    ctx = AppContext(user_id="u1", project_id="proj_a", permissions={"module.chat"})
+    svc = _mock_svc(datasources={})
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return svc
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    monkeypatch.setattr(config_routes.deps, "_enterprise_extensions", _enterprise_extensions(enabled=True))
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/config/agent")
+
+    assert response.status_code == 403
+
+
+def test_get_config_http_allows_config_view_permission(monkeypatch):
+    app = FastAPI()
+    app.include_router(config_routes.router)
+    ctx = AppContext(user_id="u1", project_id="proj_a", permissions={"module.config.view"})
+    svc = _mock_svc(datasources={"db_a": {"type": "duckdb"}}, target="m1", models={"m1": {"type": "openai"}})
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return svc
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    monkeypatch.setattr(config_routes.deps, "_enterprise_extensions", _enterprise_extensions(enabled=True))
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/config/agent")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert response.json()["data"]["datasources"] == {"db_a": {"type": "duckdb"}}
+
+
+def test_config_probe_http_requires_config_edit_permission(monkeypatch):
+    app = FastAPI()
+    app.include_router(config_routes.router)
+    ctx = AppContext(user_id="u1", project_id="proj_a", permissions={"module.config.view"})
+    svc = MagicMock()
+    model_probe = MagicMock()
+    datasource_probe = MagicMock()
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return svc
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    monkeypatch.setattr(config_routes.deps, "_enterprise_extensions", _enterprise_extensions(enabled=True))
+    monkeypatch.setattr(config_routes, "_probe_llm_sync", model_probe)
+    monkeypatch.setattr(config_routes, "_probe_datasource_sync", datasource_probe)
+
+    with TestClient(app) as client:
+        model_response = client.post("/api/v1/config/models/test", json={"type": "openai", "model": "gpt-test"})
+        datasource_response = client.post("/api/v1/config/datasources/test", json={"type": "duckdb"})
+
+    assert model_response.status_code == 403
+    assert datasource_response.status_code == 403
+    model_probe.assert_not_called()
+    datasource_probe.assert_not_called()
+
+
+def test_config_probe_http_allows_config_edit_permission(monkeypatch):
+    app = FastAPI()
+    app.include_router(config_routes.router)
+    ctx = AppContext(user_id="u1", project_id="proj_a", permissions={"module.config.edit"})
+    svc = MagicMock()
+    model_probe = MagicMock()
+    datasource_probe = MagicMock()
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return svc
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    monkeypatch.setattr(config_routes.deps, "_enterprise_extensions", _enterprise_extensions(enabled=True))
+    monkeypatch.setattr(config_routes, "_probe_llm_sync", model_probe)
+    monkeypatch.setattr(config_routes, "_probe_datasource_sync", datasource_probe)
+
+    with TestClient(app) as client:
+        model_response = client.post("/api/v1/config/models/test", json={"type": "openai", "model": "gpt-test"})
+        datasource_response = client.post("/api/v1/config/datasources/test", json={"type": "duckdb"})
+
+    assert model_response.status_code == 200
+    assert datasource_response.status_code == 200
+    assert model_response.json()["data"] == {"ok": True}
+    assert datasource_response.json()["data"] == {"ok": True}
+    model_probe.assert_called_once()
+    datasource_probe.assert_called_once()
+
+
 @pytest.mark.asyncio
 async def test_test_model_connectivity_ok(monkeypatch):
     """Successful LLM probe returns ok=True and forwards the payload unchanged."""
@@ -350,7 +446,7 @@ async def test_test_model_connectivity_ok(monkeypatch):
     monkeypatch.setattr(config_routes, "_probe_llm_sync", fake_probe)
 
     body = ProbeModelRequest(type="openai", model="gpt-4o", api_key="sk-xxx", base_url="https://api.openai.com/v1")
-    result = await probe_model_connectivity_endpoint(body, svc=MagicMock())
+    result = await probe_model_connectivity_endpoint(body, svc=MagicMock(), _ctx=_ctx())
 
     assert result.success is True
     assert result.data == {"ok": True}
@@ -368,7 +464,7 @@ async def test_test_model_connectivity_reports_error_message(monkeypatch):
     monkeypatch.setattr(config_routes, "_probe_llm_sync", fake_probe)
 
     body = ProbeModelRequest(type="openai", model="gpt-4o", api_key="bad")
-    result = await probe_model_connectivity_endpoint(body, svc=MagicMock())
+    result = await probe_model_connectivity_endpoint(body, svc=MagicMock(), _ctx=_ctx())
 
     assert result.success is True
     assert result.data["ok"] is False
@@ -386,7 +482,7 @@ async def test_test_model_connectivity_passes_extra_fields(monkeypatch):
     monkeypatch.setattr(config_routes, "_probe_llm_sync", fake_probe)
 
     body = ProbeModelRequest.model_validate({"type": "openai", "model": "gpt-4o", "api_key": "k", "vendor": "openai"})
-    await probe_model_connectivity_endpoint(body, svc=MagicMock())
+    await probe_model_connectivity_endpoint(body, svc=MagicMock(), _ctx=_ctx())
 
     assert captured["payload"].get("vendor") == "openai"
 
@@ -402,7 +498,7 @@ async def test_test_datasource_connectivity_ok(monkeypatch):
     monkeypatch.setattr(config_routes, "_probe_datasource_sync", fake_probe)
 
     body = ProbeDatasourceRequest.model_validate({"type": "duckdb", "uri": "/tmp/test.duckdb"})
-    result = await probe_datasource_connectivity_endpoint(body, svc=MagicMock())
+    result = await probe_datasource_connectivity_endpoint(body, svc=MagicMock(), _ctx=_ctx())
 
     assert result.data == {"ok": True}
     assert captured["payload"]["type"] == "duckdb"
@@ -419,7 +515,7 @@ async def test_test_datasource_connectivity_reports_error_message(monkeypatch):
     monkeypatch.setattr(config_routes, "_probe_datasource_sync", fake_probe)
 
     body = ProbeDatasourceRequest.model_validate({"type": "starrocks", "host": "unreachable", "port": "9999"})
-    result = await probe_datasource_connectivity_endpoint(body, svc=MagicMock())
+    result = await probe_datasource_connectivity_endpoint(body, svc=MagicMock(), _ctx=_ctx())
 
     assert result.data["ok"] is False
     assert "connection refused" in result.data["message"]

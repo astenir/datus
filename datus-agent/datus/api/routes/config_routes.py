@@ -26,6 +26,7 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["configuration"])
 
+ConfigViewCtx = Annotated[AppContext, Depends(require_module("module.config.view"))]
 ConfigEditCtx = Annotated[AppContext, Depends(require_module("module.config.edit"))]
 
 
@@ -126,6 +127,7 @@ async def _evict_current_project(project_id: str) -> None:
 )
 async def get_agent_config_endpoint(
     svc: ServiceDep,
+    _ctx: ConfigViewCtx,
 ) -> Result[dict]:
     """Return the project's loaded AgentConfig summary."""
     config = svc.agent_config
@@ -223,6 +225,7 @@ async def update_models_endpoint(
 async def probe_model_connectivity_endpoint(
     body: ProbeModelRequest,
     svc: ServiceDep,  # noqa: ARG001
+    _ctx: ConfigEditCtx,
 ) -> Result[dict]:
     """Return `{ok: True}` if the probe succeeds, else `{ok: False, message: ...}`."""
     payload = body.model_dump()
@@ -243,6 +246,7 @@ async def probe_model_connectivity_endpoint(
 async def probe_datasource_connectivity_endpoint(
     body: ProbeDatasourceRequest,
     svc: ServiceDep,  # noqa: ARG001
+    _ctx: ConfigEditCtx,
 ) -> Result[dict]:
     """Return `{ok: True}` if the probe succeeds, else `{ok: False, message: ...}`."""
     payload = body.model_dump()
