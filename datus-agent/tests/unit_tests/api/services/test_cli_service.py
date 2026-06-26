@@ -467,7 +467,6 @@ class TestCLIServiceExecuteSQL:
             ("oracle", "SELECT * FROM HR.ORDERS"),
             ("sqlserver", "SELECT * FROM dbo.orders"),
             ("mssql", "SELECT * FROM dbo.orders"),
-            ("starrocks", "SELECT * FROM public.orders"),
         ],
     )
     async def test_execute_sql_database_grant_allows_schema_qualified_table(
@@ -522,6 +521,56 @@ class TestCLIServiceExecuteSQL:
 
         assert result.success is True
         assert connector.executed_sql == sql_query
+
+    @pytest.mark.asyncio
+    async def test_execute_sql_starrocks_database_grant_rejects_other_database(self, monkeypatch):
+        """StarRocks two-part names are database.table, not schema.table."""
+
+        class FakeConnector:
+            dialect = "starrocks"
+            catalog_name = "default_catalog"
+            database_name = "finance"
+            schema_name = ""
+
+            def __init__(self):
+                self.executed = False
+
+            def execute(self, input_params, result_format):
+                self.executed = True
+                return SimpleNamespace(success=True, sql_return="1", row_count=1)
+
+        connector = FakeConnector()
+
+        class FakeDBManager:
+            def __init__(self, datasource_configs):
+                self.datasource_configs = datasource_configs
+
+            def first_conn_with_name(self, datasource):
+                return "finance", connector
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("datus.api.services.cli_service.DBManager", FakeDBManager)
+        projected_config = SimpleNamespace(
+            datasource_configs={"starrocks_ds": object()},
+            current_datasource="starrocks_ds",
+            principal={
+                "datasource": "starrocks_ds",
+                "datasource_grants": {"starrocks_ds": {"effect": "allow", "databases": ["finance"]}},
+            },
+        )
+        svc = CLIService(agent_config=None, chat_service=None)
+
+        result = await svc.execute_sql(
+            ExecuteSQLInput(sql_query="SELECT * FROM public.orders", result_format="json"),
+            user_id="u1",
+            agent_config=projected_config,
+        )
+
+        assert result.success is False
+        assert "outside scoped context" in result.errorMessage
+        assert connector.executed is False
 
     @pytest.mark.asyncio
     async def test_execute_sql_validates_with_requested_database_context(self, monkeypatch):

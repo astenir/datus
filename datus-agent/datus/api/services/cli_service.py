@@ -112,7 +112,6 @@ def _schema_qualified_dialect(dialect: str) -> bool:
         "oracle",
         "mssql",
         "sqlserver",
-        "starrocks",
     }
 
 
