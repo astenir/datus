@@ -7,11 +7,15 @@ and a project-scoped ChatTaskManager into a single cached instance.
 import dataclasses
 import hashlib
 import json
+from typing import TYPE_CHECKING
 
 from datus.configuration.agent_config import AgentConfig
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from datus.api.enterprise.protocols import SessionOwnerStore
 
 
 class DatusService:
@@ -29,10 +33,12 @@ class DatusService:
         default_source: "str | None" = None,
         default_interactive: bool = True,
         stream_thinking: bool = False,
+        session_owner_store: "SessionOwnerStore | None" = None,
     ):
         self._agent_config = agent_config
         self._project_id = project_id
         self._config_fingerprint = self.compute_fingerprint(agent_config)
+        self._session_owner_store = session_owner_store
 
         # ChatTaskManager — project-scoped (not process-level singleton)
         from datus.api.services.chat_task_manager import ChatTaskManager
@@ -41,6 +47,8 @@ class DatusService:
             default_source=default_source,
             default_interactive=default_interactive,
             stream_thinking=stream_thinking,
+            project_id=project_id,
+            session_owner_store=session_owner_store,
         )
 
         # Lazy service slots

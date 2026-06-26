@@ -1,7 +1,7 @@
 import pytest
 
 from datus.api.auth.context import AppContext
-from datus.api.enterprise.defaults import LocalAuthorizationProvider
+from datus.api.enterprise.defaults import InMemorySessionOwnerStore, LocalAuthorizationProvider, SqliteSessionOwnerStore
 from datus.api.enterprise.models import ResourceRef
 
 
@@ -25,3 +25,35 @@ async def test_local_authorization_keeps_principal_permissions_compatibility():
     decision = await provider.check(ctx, "module.report.view", ResourceRef(type="report"))
 
     assert decision.allowed is True
+
+
+@pytest.mark.asyncio
+async def test_in_memory_session_owner_store_supports_delete_and_user_listing():
+    store = InMemorySessionOwnerStore()
+
+    await store.set_owner("project", "s1", "alice")
+    await store.set_owner("project", "s2", "alice")
+    await store.set_owner("project", "s3", "bob")
+    await store.delete_owner("project", "s1")
+
+    assert await store.get_owner("project", "s1") is None
+    assert await store.get_owner("project", "s2") == "alice"
+    assert await store.list_session_ids("project", "alice") == ["s2"]
+
+
+@pytest.mark.asyncio
+async def test_sqlite_session_owner_store_persists_session_owners(tmp_path):
+    db_path = tmp_path / "session_owners.db"
+    store = SqliteSessionOwnerStore(str(db_path))
+
+    await store.set_owner("project", "s1", "alice@example.com")
+    await store.set_owner("project", "s2", "alice@example.com")
+    await store.set_owner("project", "s1", "bob@example.com")
+
+    reopened = SqliteSessionOwnerStore(str(db_path))
+    assert await reopened.get_owner("project", "s1") == "bob@example.com"
+    assert await reopened.get_owner("project", "s2") == "alice@example.com"
+    assert await reopened.list_session_ids("project", "alice@example.com") == ["s2"]
+
+    await reopened.delete_owner("project", "s2")
+    assert await reopened.get_owner("project", "s2") is None

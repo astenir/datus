@@ -31,7 +31,7 @@ from datus.api.services.chat_task_manager import (
     _should_skip_duplicate_assistant_message,
 )
 from datus.configuration.agent_config import AgentConfig
-from datus.models.session_manager import SessionManager, session_matches_agent
+from datus.models.session_manager import SessionManager, session_matches_agent, session_scope_from_user_id
 from datus.schemas.action_history import ActionRole, ActionStatus
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
@@ -46,7 +46,12 @@ class ChatService:
     Owned by DatusService. Session management methods read from disk.
     """
 
-    def __init__(self, agent_config: AgentConfig, task_manager=None, project_id: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        agent_config: AgentConfig,
+        task_manager=None,
+        project_id: Optional[str] = None,
+    ) -> None:
         self.agent_config = agent_config
         self._task_manager = task_manager
 
@@ -92,7 +97,7 @@ class ChatService:
 
     def session_exists(self, session_id: str, user_id: Optional[str] = None) -> bool:
         """Check if a session exists on disk."""
-        session_mgr = SessionManager(session_dir=self._session_dir, scope=user_id)
+        session_mgr = SessionManager(session_dir=self._session_dir, scope=session_scope_from_user_id(user_id))
         return session_mgr.session_exists(session_id)
 
     def list_sessions(
@@ -108,7 +113,7 @@ class ChatService:
         (including legacy prefix-less sessions).
         """
         try:
-            session_mgr = SessionManager(session_dir=self._session_dir, scope=user_id)
+            session_mgr = SessionManager(session_dir=self._session_dir, scope=session_scope_from_user_id(user_id))
             all_ids = session_mgr.list_sessions()
             if subagent_id is not None:
                 all_ids = [sid for sid in all_ids if session_matches_agent(sid, subagent_id)]
@@ -152,7 +157,7 @@ class ChatService:
     def delete_session(self, session_id: str, user_id: Optional[str] = None) -> Result[ChatSessionData]:
         """Delete a session from disk."""
         try:
-            session_mgr = SessionManager(session_dir=self._session_dir, scope=user_id)
+            session_mgr = SessionManager(session_dir=self._session_dir, scope=session_scope_from_user_id(user_id))
             if session_mgr.session_exists(session_id):
                 session_mgr.delete_session(session_id)
 
@@ -186,7 +191,7 @@ class ChatService:
                 input_data=None,
                 agent_config=self.agent_config,
                 tools=None,
-                scope=user_id,
+                scope=session_scope_from_user_id(user_id),
                 session_id=session_id,
             )
 
@@ -235,7 +240,7 @@ class ChatService:
         """Get chat history messages for a session."""
         try:
             # Use SessionManager to get messages from SQLite
-            session_manager = SessionManager(session_dir=self._session_dir, scope=user_id)
+            session_manager = SessionManager(session_dir=self._session_dir, scope=session_scope_from_user_id(user_id))
             raw_messages = session_manager.get_session_messages(session_id)
 
             if not raw_messages:

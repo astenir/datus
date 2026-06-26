@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, NamedTuple, Optional
+
 from fastapi import Depends, HTTPException, Request
 
 from datus.api.auth.context import AppContext
 from datus.api.enterprise.models import AuditEvent, ResourceRef
+from datus.api.models.base_models import Result
+
+if TYPE_CHECKING:
+    from datus.api.services.datus_service import DatusService
 
 
 def get_authorization_provider():
@@ -23,6 +29,100 @@ def get_audit_sink():
 async def authorize(ctx: AppContext, *, action: str, resource: ResourceRef | None = None):
     provider = get_authorization_provider()
     return await provider.check(ctx, action, resource or ResourceRef(type="module"))
+
+
+class SessionAccess(NamedTuple):
+    """Resolved session access decision for route handlers."""
+
+    error: Optional[Result[dict]]
+    user_id: str | None
+
+
+async def authorize_session_access(
+    svc: "DatusService",
+    ctx: AppContext,
+    session_id: str,
+    *,
+    action: str,
+    require_existing_session: bool = False,
+) -> SessionAccess:
+    """Return the disk-scope owner user id when ``ctx`` can access a session."""
+
+    if not ctx.user_id:
+        return SessionAccess(error=None, user_id=None)
+
+    from datus.api.deps import get_enterprise_extensions
+
+    extensions = get_enterprise_extensions()
+    owner = None
+    task = svc.task_manager.get_task(session_id)
+    if task is not None:
+        owner = getattr(task, "owner_user_id", None)
+        if owner is None and extensions.enabled:
+            await _audit_session_deny(ctx, session_id, action, "session owner missing")
+            return SessionAccess(error=_session_error("SESSION_FORBIDDEN", "Session access denied"), user_id=None)
+
+    if owner is None:
+        owner = await extensions.session_owner_store.get_owner(svc.project_id, session_id)
+
+    if owner is None:
+        owns_scoped_session = svc.chat.session_exists(session_id, user_id=ctx.user_id)
+        if owns_scoped_session:
+            await extensions.session_owner_store.set_owner(svc.project_id, session_id, ctx.user_id)
+            return SessionAccess(error=None, user_id=ctx.user_id)
+        if require_existing_session and extensions.enabled:
+            return SessionAccess(error=_session_error("RESOURCE_NOT_FOUND", "Session not found"), user_id=None)
+        return SessionAccess(error=None, user_id=ctx.user_id)
+
+    if owner == ctx.user_id:
+        return SessionAccess(error=None, user_id=ctx.user_id)
+
+    if await _can_administer_sessions(ctx, session_id):
+        return SessionAccess(error=None, user_id=owner)
+
+    await _audit_session_deny(ctx, session_id, action, "session owner mismatch")
+    return SessionAccess(error=_session_error("SESSION_FORBIDDEN", "Session access denied"), user_id=None)
+
+
+async def delete_session_owner(svc: "DatusService", session_id: str) -> None:
+    """Delete session owner metadata for a removed session."""
+
+    from datus.api.deps import get_enterprise_extensions
+
+    await get_enterprise_extensions().session_owner_store.delete_owner(svc.project_id, session_id)
+
+
+async def _can_administer_sessions(ctx: AppContext, session_id: str) -> bool:
+    from datus.api.deps import get_enterprise_extensions
+
+    extensions = get_enterprise_extensions()
+    principal = getattr(ctx, "principal", None) or {}
+    has_explicit_permissions = bool(ctx.permissions or principal.get("permissions"))
+    if not extensions.enabled and not has_explicit_permissions:
+        return False
+    decision = await authorize(
+        ctx,
+        action="module.admin.sessions",
+        resource=ResourceRef(type="session", id=session_id),
+    )
+    return decision.allowed
+
+
+async def _audit_session_deny(ctx: AppContext, session_id: str, action: str, reason: str) -> None:
+    await get_audit_sink().write(
+        AuditEvent(
+            user_id=ctx.user_id,
+            action=f"session.{action}",
+            resource_type="session",
+            resource_id=session_id,
+            decision="deny",
+            reason=reason,
+        )
+    )
+
+
+def _session_error(error_code: str, message: str) -> Result[dict]:
+    return Result[dict](success=False, errorCode=error_code, errorMessage=message)
 
 
 def require_module(permission_key: str):

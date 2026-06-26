@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import os
+import sqlite3
 from fnmatch import fnmatchcase
 from typing import Any
 
@@ -64,6 +66,100 @@ class InMemorySessionOwnerStore:
 
     async def get_owner(self, project_id: str, session_id: str) -> str | None:
         return self._owners.get((project_id, session_id))
+
+    async def delete_owner(self, project_id: str, session_id: str) -> None:
+        self._owners.pop((project_id, session_id), None)
+
+    async def list_session_ids(self, project_id: str, user_id: str) -> list[str]:
+        return [
+            session_id
+            for (stored_project, session_id), owner in self._owners.items()
+            if stored_project == project_id and owner == user_id
+        ]
+
+
+class SqliteSessionOwnerStore:
+    """SQLite-backed ``session_owners`` metadata index.
+
+    This is a small default implementation for single-node deployments and
+    tests. Enterprise deployments can replace it with Postgres/Redis-backed
+    metadata through ``enterprise.session_owner_store.class``.
+    """
+
+    def __init__(self, db_path: str) -> None:
+        self._db_path = db_path
+        parent = os.path.dirname(os.path.abspath(db_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        self._ensure_schema()
+
+    async def set_owner(self, project_id: str, session_id: str, user_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO session_owners (project_id, session_id, user_id, created_at, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(project_id, session_id) DO UPDATE SET
+                    user_id = excluded.user_id,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (project_id, session_id, user_id),
+            )
+            conn.commit()
+
+    async def get_owner(self, project_id: str, session_id: str) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT user_id FROM session_owners WHERE project_id = ? AND session_id = ?",
+                (project_id, session_id),
+            ).fetchone()
+        return str(row[0]) if row else None
+
+    async def delete_owner(self, project_id: str, session_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM session_owners WHERE project_id = ? AND session_id = ?",
+                (project_id, session_id),
+            )
+            conn.commit()
+
+    async def list_session_ids(self, project_id: str, user_id: str) -> list[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT session_id
+                FROM session_owners
+                WHERE project_id = ? AND user_id = ?
+                ORDER BY updated_at DESC, session_id ASC
+                """,
+                (project_id, user_id),
+            ).fetchall()
+        return [str(row[0]) for row in rows]
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self._db_path, timeout=5.0)
+
+    def _ensure_schema(self) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS session_owners (
+                    project_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    user_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (project_id, session_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_session_owners_user
+                ON session_owners (project_id, user_id, updated_at)
+                """
+            )
+            conn.commit()
 
 
 class NoopAuditSink:

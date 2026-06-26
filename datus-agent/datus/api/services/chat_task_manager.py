@@ -11,7 +11,7 @@ import asyncio
 import copy
 import uuid
 from datetime import datetime
-from typing import Any, AsyncGenerator, Dict, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Literal, Optional
 
 from datus.agent.node.agentic_node import AgenticNode
 from datus.api.models.cli_models import (
@@ -30,6 +30,7 @@ from datus.api.models.cli_models import (
 from datus.api.services.action_sse_converter import action_to_sse_event
 from datus.cli.autocomplete import AtReferenceCompleter
 from datus.configuration.agent_config import AgentConfig
+from datus.models.session_manager import session_scope_from_user_id
 from datus.schemas.action_history import ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.node_models import Metric, ReferenceSql, TableSchema
 from datus.tools.proxy.proxy_tool import apply_proxy_tools
@@ -39,6 +40,9 @@ from datus.utils.time_utils import now_utc_iso
 from datus.utils.trace_context import build_chat_trace_context, reset_trace_context, set_trace_context
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    from datus.api.enterprise.protocols import SessionOwnerStore
 
 HEARTBEAT_INTERVAL = 10  # seconds
 
@@ -258,9 +262,10 @@ def _fill_database_context(
 class ChatTask:
     """Represents a single running agentic loop."""
 
-    def __init__(self, session_id: str, asyncio_task: asyncio.Task):
+    def __init__(self, session_id: str, asyncio_task: asyncio.Task, owner_user_id: Optional[str] = None):
         self.session_id = session_id
         self.asyncio_task = asyncio_task
+        self.owner_user_id = owner_user_id
         self.node: Optional[AgenticNode] = None
         self.events: list[SSEEvent] = []
         self.status: str = "running"  # running | completed | error | cancelled
@@ -284,12 +289,16 @@ class ChatTaskManager:
         default_source: Optional[str] = None,
         default_interactive: bool = True,
         stream_thinking: bool = False,
+        project_id: str = "default",
+        session_owner_store: Optional["SessionOwnerStore"] = None,
     ) -> None:
         self._tasks: Dict[str, ChatTask] = {}
         self._completed_tasks: Dict[str, ChatTask] = {}
         self._default_source = default_source
         self._default_interactive = default_interactive
         self._stream_thinking = stream_thinking
+        self._project_id = project_id
+        self._session_owner_store = session_owner_store
 
     # ------------------------------------------------------------------
     # Public API
@@ -359,8 +368,10 @@ class ChatTaskManager:
             raise ValueError(f"A task is already running for session {session_id}")
 
         # Placeholder — asyncio_task set immediately after
-        task = ChatTask(session_id=session_id, asyncio_task=None)  # type: ignore[arg-type]
+        task = ChatTask(session_id=session_id, asyncio_task=None, owner_user_id=user_id)  # type: ignore[arg-type]
         self._tasks[session_id] = task
+        if user_id and self._session_owner_store is not None:
+            await self._session_owner_store.set_owner(self._project_id, session_id, user_id)
 
         asyncio_task = asyncio.create_task(
             self._run_loop(
@@ -507,7 +518,7 @@ class ChatTaskManager:
                     base_dir = getattr(agent_config, "session_dir", None) or str(
                         get_path_manager(agent_config=agent_config).sessions_dir
                     )
-                    sm = SessionManager(session_dir=base_dir, scope=user_id)
+                    sm = SessionManager(session_dir=base_dir, scope=session_scope_from_user_id(user_id))
                     feedback_session_id = sm.copy_session(request.source_session_id, "feedback")
 
                 return self._create_node(
@@ -804,7 +815,7 @@ class ChatTaskManager:
         return create_interactive_node(
             subagent_name=node_name,
             agent_config=agent_config,
-            scope=user_id,
+            scope=session_scope_from_user_id(user_id),
             execution_mode=execution_mode,
             node_id=node_id,
             session_id=session_id if session_id is not None else node_id,

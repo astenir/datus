@@ -282,6 +282,8 @@ MVP 中 `datasource_grants` 采用每个 `(subject_type, subject_id, datasource_
 
 管理员跨用户操作必须要求 `module.admin.sessions`，且只能在当前企业上下文内。
 
+当前阶段 2 主包接线已覆盖上述 chat/session 路径。后续继续扩展时，不要绕过 `SessionOwnerStore` 和 route owner helper；多 worker 或滚动发布场景应使用共享 metadata store 替换默认 SQLite/内存骨架，并明确 sticky session 或 SSE event buffer 外部化策略。
+
 ### SQL 与数据安全
 
 不要把 catalog 过滤当成执行安全。

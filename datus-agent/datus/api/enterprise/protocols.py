@@ -42,6 +42,14 @@ class SessionOwnerStore(Protocol):
         """Return the recorded session owner, if any."""
         ...
 
+    async def delete_owner(self, project_id: str, session_id: str) -> None:
+        """Remove owner metadata for a deleted session."""
+        ...
+
+    async def list_session_ids(self, project_id: str, user_id: str) -> list[str]:
+        """Return session ids recorded for ``user_id`` in ``project_id``."""
+        ...
+
 
 @runtime_checkable
 class AuditSink(Protocol):

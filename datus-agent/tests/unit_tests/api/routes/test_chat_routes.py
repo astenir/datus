@@ -5,12 +5,14 @@
 """Unit tests for datus/api/routes/chat_routes.py — submit_user_interaction endpoint."""
 
 import json
+from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
+from datus.api.enterprise.models import AccessDecision
 from datus.api.models.base_models import Result
 from datus.api.models.cli_models import (
     ChatHistoryData,
@@ -55,6 +57,14 @@ def _mock_task(broker_submit_return=True):
     return task
 
 
+def _mock_ctx(user_id=None, permissions=None):
+    ctx = MagicMock()
+    ctx.user_id = user_id
+    ctx.permissions = permissions or set()
+    ctx.principal = {}
+    return ctx
+
+
 class TestSubmitUserInteractionConversion:
     """``submit_user_interaction`` forwards ``List[List[str]]`` to the broker unchanged.
 
@@ -70,7 +80,7 @@ class TestSubmitUserInteractionConversion:
         svc = _mock_svc(task=task)
         request = UserInteractionInput(session_id="s1", interaction_key="k1", input=[["2"]])
 
-        result = await submit_user_interaction(request, svc)
+        result = await submit_user_interaction(request, svc, _mock_ctx())
 
         task.node.interaction_broker.submit.assert_called_once_with("k1", [["2"]])
         assert result.success is True
@@ -82,7 +92,7 @@ class TestSubmitUserInteractionConversion:
         svc = _mock_svc(task=task)
         request = UserInteractionInput(session_id="s1", interaction_key="k1", input=[["1", "3"]])
 
-        result = await submit_user_interaction(request, svc)
+        result = await submit_user_interaction(request, svc, _mock_ctx())
 
         task.node.interaction_broker.submit.assert_called_once_with("k1", [["1", "3"]])
         assert result.success is True
@@ -94,7 +104,7 @@ class TestSubmitUserInteractionConversion:
         svc = _mock_svc(task=task)
         request = UserInteractionInput(session_id="s1", interaction_key="k1", input=[["2"], ["1", "3"]])
 
-        result = await submit_user_interaction(request, svc)
+        result = await submit_user_interaction(request, svc, _mock_ctx())
 
         task.node.interaction_broker.submit.assert_called_once_with("k1", [["2"], ["1", "3"]])
         assert result.success is True
@@ -106,7 +116,7 @@ class TestSubmitUserInteractionConversion:
         svc = _mock_svc(task=task)
         request = UserInteractionInput(session_id="s1", interaction_key="k1", input=[["a"], ["b"]])
 
-        await submit_user_interaction(request, svc)
+        await submit_user_interaction(request, svc, _mock_ctx())
 
         task.node.interaction_broker.submit.assert_called_once_with("k1", [["a"], ["b"]])
 
@@ -116,7 +126,7 @@ class TestSubmitUserInteractionConversion:
         svc = _mock_svc(task=None)
         request = UserInteractionInput(session_id="s1", interaction_key="k1", input=[["1"]])
 
-        result = await submit_user_interaction(request, svc)
+        result = await submit_user_interaction(request, svc, _mock_ctx())
 
         assert result.success is False
         assert result.errorCode == "SESSION_NOT_FOUND"
@@ -129,7 +139,7 @@ class TestSubmitUserInteractionConversion:
         svc = _mock_svc(task=task)
         request = UserInteractionInput(session_id="s1", interaction_key="k1", input=[["1"]])
 
-        result = await submit_user_interaction(request, svc)
+        result = await submit_user_interaction(request, svc, _mock_ctx())
 
         assert result.success is False
         assert result.errorCode == "BROKER_NOT_FOUND"
@@ -141,7 +151,7 @@ class TestSubmitUserInteractionConversion:
         svc = _mock_svc(task=task)
         request = UserInteractionInput(session_id="s1", interaction_key="k1", input=[["1"]])
 
-        result = await submit_user_interaction(request, svc)
+        result = await submit_user_interaction(request, svc, _mock_ctx())
 
         assert result.success is False
 
@@ -427,7 +437,7 @@ class TestInsertMessageEndpoint:
         task = self._make_task_with_queue()
         svc = _mock_svc(task=task)
 
-        result = await insert_message(self._make_request("hello"), svc)
+        result = await insert_message(self._make_request("hello"), svc, _mock_ctx())
 
         assert result.success is True
         assert result.data.session_id == "s1"
@@ -441,8 +451,8 @@ class TestInsertMessageEndpoint:
         task = self._make_task_with_queue()
         svc = _mock_svc(task=task)
 
-        await insert_message(self._make_request("first"), svc)
-        result = await insert_message(self._make_request("second"), svc)
+        await insert_message(self._make_request("first"), svc, _mock_ctx())
+        result = await insert_message(self._make_request("second"), svc, _mock_ctx())
 
         assert result.success is True
         assert result.data.queued_count == 2
@@ -454,7 +464,7 @@ class TestInsertMessageEndpoint:
 
         svc = _mock_svc(task=None)
 
-        result = await insert_message(self._make_request("anything"), svc)
+        result = await insert_message(self._make_request("anything"), svc, _mock_ctx())
 
         assert result.success is False
         assert result.errorCode == "SESSION_NOT_RUNNING"
@@ -467,7 +477,7 @@ class TestInsertMessageEndpoint:
         task.node = None
         svc = _mock_svc(task=task)
 
-        result = await insert_message(self._make_request("anything"), svc)
+        result = await insert_message(self._make_request("anything"), svc, _mock_ctx())
 
         assert result.success is False
         assert result.errorCode == "SESSION_NOT_RUNNING"
@@ -479,7 +489,7 @@ class TestInsertMessageEndpoint:
         task = self._make_task_with_queue()
         svc = _mock_svc(task=task)
 
-        result = await insert_message(self._make_request("   \t  "), svc)
+        result = await insert_message(self._make_request("   \t  "), svc, _mock_ctx())
 
         assert result.success is False
         assert result.errorCode == "INVALID_INPUT"
@@ -497,7 +507,7 @@ class TestInsertMessageEndpoint:
         task.node.pending_input_queue = None
         svc = _mock_svc(task=task)
 
-        result = await insert_message(self._make_request("hello"), svc)
+        result = await insert_message(self._make_request("hello"), svc, _mock_ctx())
 
         assert result.success is False
         assert result.errorCode == "QUEUE_UNAVAILABLE"
@@ -509,10 +519,77 @@ class TestInsertMessageEndpoint:
         task = self._make_task_with_queue()
         svc = _mock_svc(task=task)
 
-        await insert_message(self._make_request("  padded  "), svc)
+        await insert_message(self._make_request("  padded  "), svc, _mock_ctx())
 
         # Stripped form lands in the queue.
         assert task.node.pending_input_queue.snapshot() == ["padded"]
+
+
+class TestSessionOwnerAccess:
+    """Owner checks for chat session runtime endpoints."""
+
+    @staticmethod
+    def _patch_owner_extensions(monkeypatch, owner_store, *, enabled=False):
+        import datus.api.deps as api_deps
+        import datus.api.enterprise.deps as enterprise_deps
+
+        extensions = SimpleNamespace(enabled=enabled, session_owner_store=owner_store)
+        monkeypatch.setattr(api_deps, "get_enterprise_extensions", lambda: extensions)
+        monkeypatch.setattr(enterprise_deps, "get_audit_sink", lambda: SimpleNamespace(write=AsyncMock()))
+
+    @pytest.mark.asyncio
+    async def test_insert_denies_non_owner_without_admin_permission(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+        from datus.api.routes.chat_routes import insert_message
+
+        owner_store = InMemorySessionOwnerStore()
+        await owner_store.set_owner("project-1", "s1", "alice")
+        self._patch_owner_extensions(monkeypatch, owner_store)
+        monkeypatch.setattr(
+            "datus.api.enterprise.deps.authorize",
+            AsyncMock(return_value=AccessDecision(allowed=False, reason="missing admin permission")),
+        )
+        task = TestInsertMessageEndpoint._make_task_with_queue()
+        task.owner_user_id = "alice"
+        svc = _mock_svc(task=task)
+        svc.project_id = "project-1"
+        svc.chat.session_exists.return_value = False
+
+        result = await insert_message(
+            TestInsertMessageEndpoint._make_request("hello"),
+            svc,
+            _mock_ctx(user_id="bob"),
+        )
+
+        assert result.success is False
+        assert result.errorCode == "SESSION_FORBIDDEN"
+        assert task.node.pending_input_queue.snapshot() == []
+
+    @pytest.mark.asyncio
+    async def test_insert_allows_admin_session_permission_for_non_owner(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+        from datus.api.routes.chat_routes import insert_message
+
+        owner_store = InMemorySessionOwnerStore()
+        await owner_store.set_owner("project-1", "s1", "alice")
+        self._patch_owner_extensions(monkeypatch, owner_store)
+        monkeypatch.setattr(
+            "datus.api.enterprise.deps.authorize",
+            AsyncMock(return_value=AccessDecision(allowed=True, reason="admin session permission")),
+        )
+        task = TestInsertMessageEndpoint._make_task_with_queue()
+        task.owner_user_id = "alice"
+        svc = _mock_svc(task=task)
+        svc.project_id = "project-1"
+
+        result = await insert_message(
+            TestInsertMessageEndpoint._make_request("hello"),
+            svc,
+            _mock_ctx(user_id="bob", permissions={"module.admin.sessions"}),
+        )
+
+        assert result.success is True
+        assert task.node.pending_input_queue.snapshot() == ["hello"]
 
 
 # ===========================================================================
@@ -589,10 +666,11 @@ class TestDeleteSession:
     @pytest.mark.asyncio
     async def test_success_returns_service_result(self):
         svc = MagicMock()
-        ctx = MagicMock()
-        ctx.user_id = "user1"
+        ctx = _mock_ctx(user_id="user1")
         expected = Result[ChatSessionData](success=True, data=ChatSessionData(sessions=[], total_count=0))
         svc.chat.delete_session.return_value = expected
+        svc.chat.session_exists.return_value = True
+        svc.task_manager.get_task.return_value = None
 
         result = await delete_session("session123", svc, ctx)
 
@@ -601,10 +679,37 @@ class TestDeleteSession:
         svc.chat.delete_session.assert_called_once_with("session123", user_id="user1")
 
     @pytest.mark.asyncio
+    async def test_admin_delete_uses_target_owner_scope(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+
+        owner_store = InMemorySessionOwnerStore()
+        await owner_store.set_owner("project-1", "session123", "alice")
+        TestSessionOwnerAccess._patch_owner_extensions(monkeypatch, owner_store)
+        monkeypatch.setattr(
+            "datus.api.enterprise.deps.authorize",
+            AsyncMock(return_value=AccessDecision(allowed=True, reason="admin session permission")),
+        )
+        svc = MagicMock()
+        svc.project_id = "project-1"
+        svc.task_manager.get_task.return_value = None
+        expected = Result[ChatSessionData](success=True, data=ChatSessionData(sessions=[], total_count=0))
+        svc.chat.delete_session.return_value = expected
+
+        result = await delete_session(
+            "session123",
+            svc,
+            _mock_ctx(user_id="bob", permissions={"module.admin.sessions"}),
+        )
+
+        assert result.success is True
+        svc.chat.delete_session.assert_called_once_with("session123", user_id="alice")
+
+    @pytest.mark.asyncio
     async def test_timeout_returns_request_timeout_error(self):
         svc = MagicMock()
-        ctx = MagicMock()
-        ctx.user_id = "user1"
+        ctx = _mock_ctx(user_id="user1")
+        svc.chat.session_exists.return_value = True
+        svc.task_manager.get_task.return_value = None
 
         with patch("datus.api.routes.chat_routes.asyncio.wait_for", side_effect=_timeout_wait_for) as mock_wf:
             result = await delete_session("session123", svc, ctx)
@@ -617,8 +722,9 @@ class TestDeleteSession:
     @pytest.mark.asyncio
     async def test_timeout_result_type_is_result(self):
         svc = MagicMock()
-        ctx = MagicMock()
-        ctx.user_id = "u1"
+        ctx = _mock_ctx(user_id="u1")
+        svc.chat.session_exists.return_value = True
+        svc.task_manager.get_task.return_value = None
 
         with patch("datus.api.routes.chat_routes.asyncio.wait_for", side_effect=_timeout_wait_for) as mock_wf:
             result = await delete_session("sid", svc, ctx)
@@ -639,10 +745,11 @@ class TestGetChatHistory:
     @pytest.mark.asyncio
     async def test_success_returns_service_result(self):
         svc = MagicMock()
-        ctx = MagicMock()
-        ctx.user_id = "user1"
+        ctx = _mock_ctx(user_id="user1")
         expected = Result[ChatHistoryData](success=True, data=ChatHistoryData(messages=[]))
         svc.chat.get_history.return_value = expected
+        svc.chat.session_exists.return_value = True
+        svc.task_manager.get_task.return_value = None
 
         result = await get_chat_history(svc, ctx, session_id="sess1")
 
@@ -653,8 +760,9 @@ class TestGetChatHistory:
     @pytest.mark.asyncio
     async def test_timeout_returns_request_timeout_error(self):
         svc = MagicMock()
-        ctx = MagicMock()
-        ctx.user_id = "user1"
+        ctx = _mock_ctx(user_id="user1")
+        svc.chat.session_exists.return_value = True
+        svc.task_manager.get_task.return_value = None
 
         with patch("datus.api.routes.chat_routes.asyncio.wait_for", side_effect=_timeout_wait_for) as mock_wf:
             result = await get_chat_history(svc, ctx, session_id="sess1")
@@ -667,8 +775,9 @@ class TestGetChatHistory:
     @pytest.mark.asyncio
     async def test_timeout_result_type_is_result(self):
         svc = MagicMock()
-        ctx = MagicMock()
-        ctx.user_id = "u1"
+        ctx = _mock_ctx(user_id="u1")
+        svc.chat.session_exists.return_value = True
+        svc.task_manager.get_task.return_value = None
 
         with patch("datus.api.routes.chat_routes.asyncio.wait_for", side_effect=_timeout_wait_for) as mock_wf:
             result = await get_chat_history(svc, ctx, session_id="s1")

@@ -148,7 +148,7 @@ Authenticate -> Build Context -> Authorize -> Project Config -> Execute -> Audit
 - `AppContext` 已扩展 `roles`、`permissions`、`datasource_grants`、`is_admin` 字段；本地 `NoAuthProvider` 继续留空这些字段。
 - `enterprise.enabled=true` 时，启动期必须配置生产 `api.auth_provider.class`，并显式配置 `enterprise.authorization_provider` 和 `enterprise.audit_sink`；缺失时 fail closed。`enterprise.config_projector` 的协议和 loader 已存在，但阶段 4 才接入 datasource grant/request-level projection 执行路径，阶段 1 未配置时使用 passthrough skeleton，避免把用户级 projection 缓存在 project 级 `DatusService` 中。
 - 企业模式下 `DatusService` cache key 使用 `enterprise:{project_id}`，但传入服务内部的 `project_id` 保持不带 cache 前缀的项目标识，避免污染会话、日志和下游存储语义。
-- 当前默认 `SessionOwnerStore` 只是进程内骨架，真正运行中 task owner 与磁盘 session owner 校验仍属于阶段 2。
+- `SessionOwnerStore` 协议已覆盖 owner 写入、查询、删除和按用户列出 session；默认提供进程内实现和 SQLite `session_owners` 骨架。chat 运行中 task、磁盘 session scope 和 session owner 校验已进入阶段 2 接线，长期多 worker 状态外部化仍需后续阶段推进。
 
 ### 核心协议形态
 
@@ -942,6 +942,13 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - `resume`、`stop`、`user_interaction`、`insert`、`tool_result` 校验 owner。
 - session scope 使用 `user_id`。
 - 增加 `session_owners` 记录。
+
+当前接线状态：
+
+- `ChatTask.owner_user_id` 记录 raw owner，`ChatTaskManager.start_chat()` 写入 `SessionOwnerStore`。
+- API 磁盘 session 读写使用由 `user_id` 生成的安全 scope，避免把外部身份直接拼入路径。
+- `chat/resume`、`chat/stop`、`chat/user_interaction`、`chat/insert`、`chat/tool_result`、`chat/history`、`chat/sessions/{session_id}` delete/compact 已接 owner 校验。
+- 默认 SQLite `session_owners` 仍是单节点骨架；企业生产多 worker 应替换为 Postgres 等共享 metadata store，并继续满足 sticky session 或事件缓冲外部化要求。
 
 验收：
 

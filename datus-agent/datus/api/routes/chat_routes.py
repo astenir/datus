@@ -18,6 +18,7 @@ from fastapi.responses import StreamingResponse
 
 from datus.api.constants import BUILTIN_SUBAGENTS
 from datus.api.deps import AppContextDep, ServiceDep
+from datus.api.enterprise.deps import authorize_session_access, delete_session_owner
 from datus.api.hooks import (
     ChatHooks,
     ChatPostUsageContext,
@@ -259,7 +260,12 @@ async def stream_chat_feedback(
 async def resume_chat(
     request: ResumeChatInput,
     svc: ServiceDep,
+    ctx: AppContextDep,
 ):
+    access = await authorize_session_access(svc, ctx, request.session_id, action="resume")
+    if access.error:
+        return access.error
+
     task_manager = svc.task_manager
     task = task_manager.get_task(request.session_id)
     if task is None:
@@ -288,7 +294,12 @@ async def resume_chat(
 async def stop_chat(
     request: StopChatInput,
     svc: ServiceDep,
+    ctx: AppContextDep,
 ) -> Result[dict]:
+    access = await authorize_session_access(svc, ctx, request.session_id, action="stop")
+    if access.error:
+        return access.error
+
     stopped = await svc.task_manager.stop_task(request.session_id)
     if stopped:
         return Result[dict](success=True, data={"session_id": request.session_id, "stopped": True})
@@ -313,7 +324,10 @@ async def compact_chat_session(
     svc: ServiceDep,
     ctx: AppContextDep,
 ) -> Result[CompactSessionData]:
-    return await svc.chat.compact_session(CompactSessionInput(session_id=session_id), user_id=ctx.user_id)
+    access = await authorize_session_access(svc, ctx, session_id, action="compact", require_existing_session=True)
+    if access.error:
+        return access.error
+    return await svc.chat.compact_session(CompactSessionInput(session_id=session_id), user_id=access.user_id)
 
 
 @router.get(
@@ -356,11 +370,17 @@ async def delete_session(
     svc: ServiceDep,
     ctx: AppContextDep,
 ) -> Result[ChatSessionData]:
+    access = await authorize_session_access(svc, ctx, session_id, action="delete", require_existing_session=True)
+    if access.error:
+        return access.error
     try:
-        return await asyncio.wait_for(
-            asyncio.to_thread(svc.chat.delete_session, session_id, user_id=ctx.user_id),
+        result = await asyncio.wait_for(
+            asyncio.to_thread(svc.chat.delete_session, session_id, user_id=access.user_id),
             timeout=_FUSE_IO_TIMEOUT,
         )
+        if result.success:
+            await delete_session_owner(svc, session_id)
+        return result
     except TimeoutError:
         return Result[ChatSessionData](
             success=False, errorCode="REQUEST_TIMEOUT", errorMessage="Session delete timed out"
@@ -381,9 +401,12 @@ async def get_chat_history(
     ctx: AppContextDep,
     session_id: str = Query(..., description="Session ID to retrieve history for"),
 ) -> Result[ChatHistoryData]:
+    access = await authorize_session_access(svc, ctx, session_id, action="history", require_existing_session=True)
+    if access.error:
+        return access.error
     try:
         return await asyncio.wait_for(
-            asyncio.to_thread(svc.chat.get_history, session_id, user_id=ctx.user_id),
+            asyncio.to_thread(svc.chat.get_history, session_id, user_id=access.user_id),
             timeout=_FUSE_IO_TIMEOUT,
         )
     except TimeoutError:
@@ -404,7 +427,12 @@ async def get_chat_history(
 async def submit_user_interaction(
     request: UserInteractionInput,
     svc: ServiceDep,
+    ctx: AppContextDep,
 ) -> Result[dict]:
+    access = await authorize_session_access(svc, ctx, request.session_id, action="user_interaction")
+    if access.error:
+        return access.error
+
     task_manager = svc.task_manager
     task = task_manager.get_task(request.session_id)
     if task is None or task.node is None:
@@ -454,7 +482,12 @@ async def submit_user_interaction(
 async def insert_message(
     request: InsertMessageInput,
     svc: ServiceDep,
+    ctx: AppContextDep,
 ) -> Result[InsertMessageData]:
+    access = await authorize_session_access(svc, ctx, request.session_id, action="insert")
+    if access.error:
+        return access.error
+
     task_manager = svc.task_manager
     task = task_manager.get_task(request.session_id)
     if task is None or task.node is None:
@@ -499,8 +532,14 @@ async def insert_message(
 async def submit_tool_result(
     request: ToolResultInput,
     svc: ServiceDep,
+    ctx: AppContextDep,
 ) -> Result[ToolResultData]:
     """Receive tool execution result from frontend."""
+    if request.session_id:
+        access = await authorize_session_access(svc, ctx, request.session_id, action="tool_result")
+        if access.error:
+            return access.error
+
     task_manager = svc.task_manager
     task = task_manager.get_task(request.session_id) if request.session_id else None
     if not task or not task.node:
@@ -515,9 +554,6 @@ async def submit_tool_result(
         success=True,
         data=ToolResultData(call_tool_id=request.call_tool_id, status="received"),
     )
-
-
-# ========== Helpers ==========
 
 
 def _sse_headers() -> dict:

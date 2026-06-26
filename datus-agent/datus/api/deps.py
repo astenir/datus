@@ -126,6 +126,7 @@ async def get_datus_service(request: Request) -> DatusService:
             default_source=_default_source,
             default_interactive=_default_interactive,
             stream_thinking=_stream_thinking,
+            session_owner_store=enterprise_extensions.session_owner_store,
         )
 
     return await _service_cache.get_or_create(cache_key, _factory, expected_fingerprint=expected_fp)

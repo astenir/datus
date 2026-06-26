@@ -5,6 +5,7 @@
 """Session management wrapper for LLM models using OpenAI Agents Python session approach."""
 
 import ast
+import hashlib
 import json
 import os
 import re
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
 
 
 DEFAULT_CHAT_AGENT = "chat"
+_SAFE_SCOPE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def extract_agent_from_session_id(session_id: str) -> str:
@@ -53,6 +55,27 @@ def session_matches_agent(session_id: str, agent_name: Optional[str]) -> bool:
     """
     target = agent_name or DEFAULT_CHAT_AGENT
     return extract_agent_from_session_id(session_id) == target
+
+
+def session_scope_from_user_id(user_id: Optional[str]) -> Optional[str]:
+    """Return a filesystem-safe session scope for an authenticated user id.
+
+    ``SessionManager.scope`` is a path segment, while enterprise user ids may
+    be emails, UUID URNs, or IdP subjects. Keep already-safe ids readable and
+    hash anything else to avoid path traversal and accidental directory splits.
+    """
+    if user_id is None:
+        return None
+    raw = str(user_id).strip()
+    if not raw:
+        return None
+    if _SAFE_SCOPE_RE.fullmatch(raw):
+        return raw
+    normalized = re.sub(r"[^A-Za-z0-9_-]+", "_", raw).strip("_")
+    if not normalized:
+        normalized = "user"
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+    return f"{normalized[:48]}_{digest}"
 
 
 class SessionManager:
@@ -95,7 +118,7 @@ class SessionManager:
         # Apply scope subdirectory only when explicitly provided
         if scope and scope.strip():
             resolved_scope = scope.strip()
-            if not re.fullmatch(r"[A-Za-z0-9_-]+", resolved_scope):
+            if not _SAFE_SCOPE_RE.fullmatch(resolved_scope):
                 raise DatusException(
                     ErrorCode.COMMON_VALIDATION_FAILED,
                     message=f"Invalid scope: {resolved_scope!r}. "

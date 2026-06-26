@@ -630,6 +630,25 @@ class TestChatTaskManagerBehavior:
 class TestStartChat:
     """Tests for start_chat — background task creation."""
 
+    async def test_start_chat_records_task_owner(self, real_agent_config, monkeypatch):
+        """start_chat stores raw owner metadata before the background loop runs."""
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+        from datus.api.models.cli_models import StreamChatInput
+
+        async def fake_run_loop(self, task, agent_config, request, **kwargs):
+            task.status = "completed"
+
+        monkeypatch.setattr(ChatTaskManager, "_run_loop", fake_run_loop)
+        owner_store = InMemorySessionOwnerStore()
+        manager = ChatTaskManager(project_id="project-1", session_owner_store=owner_store)
+        request = StreamChatInput(message="hello", session_id="owned-session")
+
+        task = await manager.start_chat(real_agent_config, request, user_id="alice@example.com")
+        await task.asyncio_task
+
+        assert task.owner_user_id == "alice@example.com"
+        assert await owner_store.get_owner("project-1", "owned-session") == "alice@example.com"
+
     async def test_start_chat_creates_task(self, real_agent_config, mock_llm_create):
         """start_chat creates a ChatTask and returns it."""
         from datus.api.models.cli_models import StreamChatInput

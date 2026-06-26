@@ -5,8 +5,15 @@ from datus.api.enterprise.defaults import (
     LocalAuthorizationProvider,
     NoopAuditSink,
     PassthroughConfigProjector,
+    SqliteSessionOwnerStore,
 )
-from datus.api.enterprise.deps import authorize, require_module
+from datus.api.enterprise.deps import (
+    SessionAccess,
+    authorize,
+    authorize_session_access,
+    delete_session_owner,
+    require_module,
+)
 from datus.api.enterprise.loader import EnterpriseExtensions, load_enterprise_extensions
 from datus.api.enterprise.models import (
     AccessDecision,
@@ -37,7 +44,11 @@ __all__ = [
     "ProjectionResult",
     "ResourceRef",
     "SessionOwnerStore",
+    "SessionAccess",
+    "SqliteSessionOwnerStore",
     "authorize",
+    "authorize_session_access",
+    "delete_session_owner",
     "load_enterprise_extensions",
     "require_module",
 ]
