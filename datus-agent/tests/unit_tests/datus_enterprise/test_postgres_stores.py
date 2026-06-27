@@ -9,6 +9,7 @@ import pytest
 from datus.api.enterprise.models import AuditEvent
 from datus.utils.exceptions import DatusException
 from datus_enterprise.postgres_stores import (
+    PgArtifactAclStore,
     PgAuditSink,
     PgEnterpriseDatasourceGrantStore,
     PgEnterpriseQuotaStore,
@@ -67,6 +68,7 @@ class FakeConnection:
         self.user_roles = {}
         self.grants = {}
         self.sessions = {}
+        self.artifact_acls = {}
         self.audit_logs = []
         self.quotas = {}
         self.usage = {}
@@ -208,6 +210,21 @@ class FakeConnection:
             return self.grants.get((args[0], args[1], args[2]))
         if "FROM session_owners" in normalized and "SELECT user_id" in normalized:
             return self.sessions.get((args[0], args[1]))
+        if "INSERT INTO enterprise_artifact_acls" in normalized:
+            artifact_type, slug, acl_json = args
+            existing = self.artifact_acls.get((artifact_type, slug), {})
+            row = Row(
+                artifact_type=artifact_type,
+                slug=slug,
+                acl_json=acl_json,
+                created_at=existing.get("created_at", NOW),
+                updated_at=NOW,
+            )
+            self.artifact_acls[(artifact_type, slug)] = row
+            return Row(acl_json=acl_json)
+        if "FROM enterprise_artifact_acls" in normalized and "WHERE artifact_type" in normalized:
+            row = self.artifact_acls.get((args[0], args[1]))
+            return Row(acl_json=row["acl_json"]) if row else None
         if "INSERT INTO enterprise_quotas" in normalized:
             subject_type, subject_id, resource, limit_value, window_seconds, enabled = args
             existing = self.quotas.get((subject_type, subject_id, resource), {})
@@ -421,6 +438,63 @@ async def test_pg_session_owner_store_set_get_list_and_delete(fake_pg):
 
     await store.delete_owner("enterprise", "s1")
     assert await store.get_owner("enterprise", "s1") is None
+
+
+@pytest.mark.asyncio
+async def test_pg_artifact_acl_store_round_trips_nested_acl_and_missing_semantics(fake_pg):
+    store = PgArtifactAclStore(dsn="postgresql://metadata")
+    acl = {
+        "owner_user_id": "alice",
+        "visibility": "role",
+        "allowed_roles": ["analyst"],
+        "datasources": ["finance"],
+        "public": False,
+        "effect": "allow",
+        "scope": {
+            "users": ["alice", "bob"],
+            "roles": ["analyst"],
+            "resources": {"dashboards": ["ops"]},
+        },
+    }
+
+    stored = await store.put_acl(artifact_type="dashboard", slug="ops", acl=acl)
+
+    assert stored == acl
+    assert await store.get_acl(artifact_type="dashboard", slug="ops") == acl
+    with pytest.raises(KeyError):
+        await store.get_acl(artifact_type="dashboard", slug="missing")
+
+
+@pytest.mark.asyncio
+async def test_pg_artifact_acl_store_upsert_preserves_created_at_and_parameterizes_values(fake_pg):
+    store = PgArtifactAclStore(dsn="postgresql://metadata")
+    created_at = datetime(2025, 12, 31, tzinfo=timezone.utc)
+    fake_pg.artifact_acls[("report", "sales")] = Row(
+        artifact_type="report",
+        slug="sales",
+        acl_json={"owner_user_id": "old", "visibility": "private"},
+        created_at=created_at,
+        updated_at=created_at,
+    )
+
+    updated = await store.put_acl(
+        artifact_type="report",
+        slug="sales",
+        acl={"owner_user_id": "alice", "visibility": "enterprise"},
+    )
+
+    row = fake_pg.artifact_acls[("report", "sales")]
+    assert updated == {"owner_user_id": "alice", "visibility": "enterprise"}
+    assert row["created_at"] == created_at
+    assert row["updated_at"] == NOW
+
+    fetchrow_queries = [entry for entry in fake_pg.queries if entry[0] == "fetchrow"]
+    upsert_query, upsert_args = fetchrow_queries[-1][1], fetchrow_queries[-1][2]
+    assert "$1" in upsert_query and "$2" in upsert_query and "$3::jsonb" in upsert_query
+    assert "report" not in upsert_query
+    assert "sales" not in upsert_query
+    assert "alice" not in upsert_query
+    assert upsert_args[:2] == ("report", "sales")
 
 
 @pytest.mark.asyncio

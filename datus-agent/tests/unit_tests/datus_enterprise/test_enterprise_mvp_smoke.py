@@ -267,6 +267,7 @@ def test_enterprise_mvp_config_keeps_sqlite_metadata_fallback():
     assert enterprise["session_owner_store"]["class"] == "datus.api.enterprise.defaults:SqliteSessionOwnerStore"
     assert enterprise["audit_sink"]["class"] == "datus.api.enterprise.defaults:SqliteAuditSink"
     assert enterprise["quota_store"]["class"] == "datus.api.enterprise.defaults:InMemoryEnterpriseQuotaStore"
+    assert "artifact_acl_store" not in enterprise
 
 
 def test_enterprise_pg_config_loads_postgres_metadata_providers():
@@ -278,6 +279,7 @@ def test_enterprise_pg_config_loads_postgres_metadata_providers():
         "role_store",
         "datasource_grant_store",
         "session_owner_store",
+        "artifact_acl_store",
         "audit_sink",
         "quota_store",
         "secret_store",
@@ -291,6 +293,7 @@ def test_enterprise_pg_config_loads_postgres_metadata_providers():
     assert extensions.role_store.__class__.__name__ == "PgEnterpriseRoleStore"
     assert extensions.datasource_grant_store.__class__.__name__ == "PgEnterpriseDatasourceGrantStore"
     assert extensions.session_owner_store.__class__.__name__ == "PgSessionOwnerStore"
+    assert extensions.artifact_acl_store.__class__.__name__ == "PgArtifactAclStore"
     assert extensions.audit_sink.__class__.__name__ == "PgAuditSink"
     assert extensions.quota_store.__class__.__name__ == "PgEnterpriseQuotaStore"
     assert extensions.secret_store.__class__.__name__ == "PgEnterpriseSecretStore"

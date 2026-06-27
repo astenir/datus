@@ -109,6 +109,43 @@ async def test_report_list_filters_through_enterprise_acl(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_report_list_uses_configured_acl_store_without_principal_fallback(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "report", "visible")
+    store = MemoryArtifactAclStore(
+        {
+            ("report", "visible"): {
+                "owner_user_id": "owner-1",
+                "visibility": "private",
+                "allowed_roles": [],
+                "datasources": [],
+            }
+        }
+    )
+    ctx = AppContext(
+        user_id="viewer-1",
+        permissions={"module.report.view"},
+        principal={"artifact_acl": {"report": ["visible"]}},
+    )
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+            artifact_acl_store=store,
+        ),
+    )
+
+    result = await artifact_routes.list_reports(_svc(tmp_path), ctx)
+
+    assert result.success is True
+    assert result.data == []
+
+
+@pytest.mark.asyncio
 async def test_dashboard_list_filters_through_enterprise_acl(tmp_path: Path):
     _write_manifest(tmp_path, "dashboard", "visible")
     _write_manifest(tmp_path, "dashboard", "hidden")

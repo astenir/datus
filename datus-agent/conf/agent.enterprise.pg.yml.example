@@ -57,6 +57,11 @@ enterprise:
     kwargs:
       dsn: ${DATUS_ENTERPRISE_PG_DSN}
 
+  artifact_acl_store:
+    class: datus_enterprise.postgres_stores:PgArtifactAclStore
+    kwargs:
+      dsn: ${DATUS_ENTERPRISE_PG_DSN}
+
   audit_sink:
     class: datus_enterprise.postgres_stores:PgAuditSink
     kwargs:

@@ -490,6 +490,42 @@ class PgSessionOwnerStore(_PgStoreBase):
         return [_session_owner_record(row) for row in rows]
 
 
+class PgArtifactAclStore(_PgStoreBase):
+    """PostgreSQL-backed artifact ACL metadata store."""
+
+    async def get_acl(self, *, artifact_type: str, slug: str) -> dict[str, Any]:
+        row = await self._fetchrow(
+            """
+            SELECT acl_json
+            FROM enterprise_artifact_acls
+            WHERE artifact_type = $1 AND slug = $2
+            """,
+            artifact_type,
+            slug,
+        )
+        if row is None:
+            raise KeyError((artifact_type, slug))
+        return _artifact_acl_record(row)
+
+    async def put_acl(self, *, artifact_type: str, slug: str, acl: dict[str, Any]) -> dict[str, Any]:
+        row = await self._fetchrow(
+            """
+            INSERT INTO enterprise_artifact_acls (artifact_type, slug, acl_json, created_at, updated_at)
+            VALUES ($1, $2, $3::jsonb, now(), now())
+            ON CONFLICT(artifact_type, slug) DO UPDATE SET
+                acl_json = excluded.acl_json,
+                updated_at = now()
+            RETURNING acl_json
+            """,
+            artifact_type,
+            slug,
+            json.dumps(acl, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+        )
+        if row is None:
+            raise DatusException(ErrorCode.COMMON_UNKNOWN, message="Failed to persist artifact ACL.")
+        return _artifact_acl_record(row)
+
+
 class PgAuditSink(_PgStoreBase):
     """PostgreSQL-backed audit sink and query reader."""
 
@@ -1002,6 +1038,10 @@ def _audit_event(row: Any) -> AuditEvent:
     )
 
 
+def _artifact_acl_record(row: Any) -> dict[str, Any]:
+    return _load_jsonb(row["acl_json"])
+
+
 def _quota_record(row: Any) -> dict[str, Any]:
     return {
         "subject_type": str(row["subject_type"]),
@@ -1128,6 +1168,18 @@ CREATE TABLE IF NOT EXISTS session_owners (
 
 CREATE INDEX IF NOT EXISTS idx_session_owners_user
 ON session_owners (project_id, user_id, updated_at);
+
+CREATE TABLE IF NOT EXISTS enterprise_artifact_acls (
+    artifact_type text NOT NULL,
+    slug text NOT NULL,
+    acl_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (artifact_type, slug)
+);
+
+CREATE INDEX IF NOT EXISTS idx_enterprise_artifact_acls_type_updated
+ON enterprise_artifact_acls (artifact_type, updated_at);
 
 CREATE TABLE IF NOT EXISTS enterprise_audit_logs (
     id bigserial PRIMARY KEY,
