@@ -294,7 +294,7 @@ class ChatTaskManager:
     ) -> None:
         self._tasks: Dict[str, ChatTask] = {}
         self._completed_tasks: Dict[str, ChatTask] = {}
-        self._discarded_sessions: set[str] = set()
+        self._discarded_task_ids: set[int] = set()
         self._default_source = default_source
         self._default_interactive = default_interactive
         self._stream_thinking = stream_thinking
@@ -365,7 +365,6 @@ class ChatTaskManager:
         session_id = request.session_id or f"{safe_name}_session_{str(uuid.uuid4())[:8]}"
         SessionManager._validate_session_id(session_id)
         request.session_id = session_id
-        self._discarded_sessions.discard(session_id)
 
         if session_id in self._tasks:
             raise ValueError(f"A task is already running for session {session_id}")
@@ -439,8 +438,9 @@ class ChatTaskManager:
     async def discard_task_snapshot(self, session_id: str, *, wait: bool = False, timeout: float = 5.0) -> bool:
         """Remove active/completed task metadata for a deleted session."""
 
-        self._discarded_sessions.add(session_id)
         active_task = self._tasks.get(session_id)
+        if active_task is not None:
+            self._discarded_task_ids.add(id(active_task))
         had_task = active_task is not None or session_id in self._completed_tasks
 
         if wait and active_task is not None and active_task.asyncio_task is not None:
@@ -454,7 +454,8 @@ class ChatTaskManager:
             except Exception:
                 logger.debug("Deleted session task finished with an error: %s", session_id, exc_info=True)
 
-        self._tasks.pop(session_id, None)
+        if self._tasks.get(session_id) is active_task:
+            self._tasks.pop(session_id, None)
         self._completed_tasks.pop(session_id, None)
         return had_task
 
@@ -793,14 +794,7 @@ class ChatTaskManager:
                 reset_trace_context(trace_token)
             async with task.condition:
                 task.condition.notify_all()
-            self._tasks.pop(session_id, None)
-            if session_id in self._discarded_sessions:
-                self._completed_tasks.pop(session_id, None)
-                self._discarded_sessions.discard(session_id)
-            else:
-                # Keep completed task for resume within TTL
-                self._completed_tasks[session_id] = task
-                self._purge_expired_completed()
+            self._release_task_slot(session_id, task)
 
     async def _push_event(self, task: ChatTask, event: SSEEvent) -> None:
         """Append an event to the task buffer and notify consumers."""
@@ -817,6 +811,25 @@ class ChatTaskManager:
         ]
         for sid in expired:
             self._completed_tasks.pop(sid, None)
+
+    def _release_task_slot(self, session_id: str, task: ChatTask) -> None:
+        """Release task tracking only when this task still owns the slot."""
+
+        owns_active_slot = self._tasks.get(session_id) is task
+        if owns_active_slot:
+            self._tasks.pop(session_id, None)
+
+        task_was_discarded = id(task) in self._discarded_task_ids
+        if task_was_discarded:
+            self._discarded_task_ids.discard(id(task))
+            if self._completed_tasks.get(session_id) is task:
+                self._completed_tasks.pop(session_id, None)
+            return
+
+        if owns_active_slot:
+            # Keep completed task for resume within TTL.
+            self._completed_tasks[session_id] = task
+            self._purge_expired_completed()
 
     def _task_snapshot(self, task: ChatTask) -> dict[str, Any]:
         return {
