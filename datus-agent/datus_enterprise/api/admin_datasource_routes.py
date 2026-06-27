@@ -43,7 +43,7 @@ class AdminDatasourceSummary(BaseModel):
 class UpsertDatasourceGrantRequest(BaseModel):
     """Datasource grant metadata mutation."""
 
-    effect: str = "allow"
+    effect: Any = "allow"
     scope: Any = Field(default_factory=dict)
 
 

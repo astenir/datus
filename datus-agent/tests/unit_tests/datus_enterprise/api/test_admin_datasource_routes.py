@@ -248,6 +248,18 @@ def test_admin_datasource_grants_validate_subject_datasource_and_scope(monkeypat
             "/api/v1/admin/datasource-grants/user/alice/db_a",
             json={"effect": "maybe", "scope": {}},
         )
+        numeric_effect_response = client.put(
+            "/api/v1/admin/datasource-grants/user/alice/db_a",
+            json={"effect": 1, "scope": {}},
+        )
+        null_effect_response = client.put(
+            "/api/v1/admin/datasource-grants/user/alice/db_a",
+            json={"effect": None, "scope": {}},
+        )
+        list_effect_response = client.put(
+            "/api/v1/admin/datasource-grants/user/alice/db_a",
+            json={"effect": ["allow"], "scope": {}},
+        )
 
     assert invalid_subject_response.json()["errorCode"] == "DATASOURCE_GRANT_SUBJECT_INVALID"
     assert missing_user_response.json()["errorCode"] == "RESOURCE_NOT_FOUND"
@@ -258,8 +270,14 @@ def test_admin_datasource_grants_validate_subject_datasource_and_scope(monkeypat
     assert non_mapping_scope_response.json()["errorCode"] == "DATASOURCE_GRANT_SCOPE_INVALID"
     assert invalid_effect_response.status_code == 200
     assert invalid_effect_response.json()["errorCode"] == "DATASOURCE_GRANT_EFFECT_INVALID"
+    for response in (numeric_effect_response, null_effect_response, list_effect_response):
+        assert response.status_code == 200
+        assert response.json()["errorCode"] == "DATASOURCE_GRANT_EFFECT_INVALID"
     assert awaitable_list_grants(grant_store) == []
-    assert [event.decision for event in audit_sink.events[-7:]] == [
+    assert [event.decision for event in audit_sink.events[-10:]] == [
+        "deny",
+        "deny",
+        "deny",
         "deny",
         "deny",
         "deny",

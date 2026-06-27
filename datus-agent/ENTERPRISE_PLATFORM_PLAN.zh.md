@@ -146,7 +146,7 @@ Authenticate -> Build Context -> Authorize -> Project Config -> Execute -> Audit
 
 - 主包 `datus/api/enterprise/` 定义稳定 dataclass、Protocol、默认 local-compatible 实现、动态 loader 和 `require_module()` dependency。
 - `AppContext` 已扩展 `roles`、`permissions`、`datasource_grants`、`is_admin` 字段；本地 `NoAuthProvider` 继续留空这些字段。
-- `enterprise.enabled=true` 时，启动期必须配置生产 `api.auth_provider.class`，并显式配置 `enterprise.authorization_provider` 和 `enterprise.audit_sink`；缺失时 fail closed。`enterprise.config_projector` 的协议和 loader 已存在，但阶段 4 才接入 datasource grant/request-level projection 执行路径，阶段 1 未配置时使用 passthrough skeleton，避免把用户级 projection 缓存在 project 级 `DatusService` 中。
+- `enterprise.enabled=true` 时，启动期必须配置生产 `api.auth_provider.class`，并显式配置 `enterprise.authorization_provider`、`enterprise.datasource_grant_store` 和 `enterprise.audit_sink`；缺失时 fail closed。`enterprise.config_projector` 的协议和 loader 已存在，但阶段 4 才接入 datasource grant/request-level projection 执行路径，阶段 1 未配置时使用 passthrough skeleton，避免把用户级 projection 缓存在 project 级 `DatusService` 中。
 - 企业模式下 `DatusService` cache key 使用 `enterprise:{project_id}`，但传入服务内部的 `project_id` 保持不带 cache 前缀的项目标识，避免污染会话、日志和下游存储语义。
 - `SessionOwnerStore` 协议已覆盖 owner 写入、查询、删除和按用户列出 session；默认提供进程内实现和 SQLite `session_owners` 骨架。chat 运行中 task、磁盘 session scope 和 session owner 校验已进入阶段 2 接线，长期多 worker 状态外部化仍需后续阶段推进。
 
@@ -242,6 +242,10 @@ api:
 enterprise:
   authorization_provider:
     class: datus_enterprise.rbac.service:RbacAuthorizationProvider
+  datasource_grant_store:
+    class: datus.api.enterprise.defaults:SqliteEnterpriseDatasourceGrantStore
+    kwargs:
+      db_path: .datus/enterprise.db
   config_projector:
     class: datus_enterprise.projection:DatasourceGrantProjector
   audit_sink:
