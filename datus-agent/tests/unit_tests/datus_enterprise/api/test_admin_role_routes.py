@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 from types import SimpleNamespace
 
@@ -15,6 +16,7 @@ from datus.api.enterprise.defaults import (
     PassthroughConfigProjector,
 )
 from datus.api.enterprise.loader import EnterpriseExtensions
+from datus.api.service import create_app
 from datus_enterprise.api import admin_role_routes
 
 
@@ -200,6 +202,16 @@ def test_admin_role_routes_register_expected_paths():
     app = FastAPI()
     app.include_router(admin_role_routes.router)
     paths = {route.path for route in app.routes}
+
+    assert "/api/v1/admin/roles" in paths
+    assert "/api/v1/admin/roles/{role_id}" in paths
+    assert "/api/v1/admin/roles/{role_id}/permissions" in paths
+
+
+def test_create_app_registers_admin_role_routes():
+    args = argparse.Namespace(config="", datasource="default", output_dir="./output", log_level="INFO")
+    app = create_app(args)
+    paths = {route.path for route in app.routes if hasattr(route, "path")}
 
     assert "/api/v1/admin/roles" in paths
     assert "/api/v1/admin/roles/{role_id}" in paths

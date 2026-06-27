@@ -978,7 +978,8 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - KB route 已接入 `module.kb`，覆盖 KB bootstrap、platform docs bootstrap 和对应 cancel 接口。
 - MCP route 已接入 `module.mcp`，覆盖 MCP server/tool/filter 的列表、管理和调用接口。
 - 当前已注册的 datasource admin route `/api/v1/admin/datasource-default` 已接入 `module.admin.datasources`，用于项目级默认数据源管理。
-- 其余 admin users/roles/datasource grants/sessions/artifacts/audit/quotas/secrets API 仍按阶段 6 推进；本阶段没有引入 datasource grant、请求级 config projection 或 SQL policy report/dashboard/direct SQL 兜底。
+- 当前已注册的 user/role admin route 已分别接入 `module.admin.users` 和 `module.admin.roles`，用于阶段 6 的用户状态、role metadata 和 role permission set 管理。
+- 其余 admin datasource grants/sessions/artifacts/audit/quotas/secrets API 仍按阶段 6 推进；本阶段没有引入 datasource grant、请求级 config projection 或 SQL policy report/dashboard/direct SQL 兜底。
 
 验收：
 
