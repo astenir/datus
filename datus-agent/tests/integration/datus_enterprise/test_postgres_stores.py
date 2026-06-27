@@ -108,26 +108,33 @@ async def test_enterprise_postgres_metadata_stores_smoke() -> None:
             "schemas": ["public"],
             "tables": ["public.accounts"],
         }
-        assert await grant_store.get_grant(
-            subject_type="user",
-            subject_id=user_id,
-            datasource_key=datasource_key,
-        ) == grant
+        assert (
+            await grant_store.get_grant(
+                subject_type="user",
+                subject_id=user_id,
+                datasource_key=datasource_key,
+            )
+            == grant
+        )
         assert await grant_store.list_grants(subject_type="user", subject_id=user_id) == [grant]
-        assert await grant_store.delete_grant(
-            subject_type="user",
-            subject_id=user_id,
-            datasource_key=datasource_key,
-        ) is True
+        assert (
+            await grant_store.delete_grant(
+                subject_type="user",
+                subject_id=user_id,
+                datasource_key=datasource_key,
+            )
+            is True
+        )
         assert await grant_store.list_grants(subject_type="user", subject_id=user_id) == []
 
         await session_store.set_owner(project_id, session_id, user_id)
         await session_store.set_owner(project_id, second_session_id, user_id)
         assert await session_store.get_owner(project_id, session_id) == user_id
         assert set(await session_store.list_session_ids(project_id, user_id)) == {session_id, second_session_id}
-        assert {
-            record["session_id"] for record in await session_store.list_sessions(project_id, user_id)
-        } == {session_id, second_session_id}
+        assert {record["session_id"] for record in await session_store.list_sessions(project_id, user_id)} == {
+            session_id,
+            second_session_id,
+        }
         await session_store.delete_owner(project_id, session_id)
         assert await session_store.get_owner(project_id, session_id) is None
 

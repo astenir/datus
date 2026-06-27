@@ -25,7 +25,7 @@ class _PgStoreBase:
         dsn: str,
         *,
         min_size: int = 1,
-        max_size: int = 10,
+        max_size: int = 2,
         command_timeout: float | None = 30.0,
     ) -> None:
         if not str(dsn or "").strip():

@@ -242,11 +242,7 @@ class FakeConnection:
             return row
         if "FROM enterprise_quota_usage" in normalized and "FOR UPDATE" in normalized:
             subject_type, subject_id, resource = args[:3]
-            candidates = [
-                row
-                for key, row in self.usage.items()
-                if key[:3] == (subject_type, subject_id, resource)
-            ]
+            candidates = [row for key, row in self.usage.items() if key[:3] == (subject_type, subject_id, resource)]
             return sorted(candidates, key=lambda row: row["window_start"], reverse=True)[0] if candidates else None
         if "INSERT INTO enterprise_quota_usage" in normalized:
             subject_type, subject_id, resource, window_start, amount = args
@@ -298,7 +294,9 @@ class FakeConnection:
         if "FROM enterprise_user_roles" in normalized and "WHERE role_id" in normalized:
             return [Row(user_id=user_id) for user_id, roles in sorted(self.user_roles.items()) if args[0] in roles]
         if "FROM enterprise_datasource_grants" in normalized:
-            return self._filtered(self.grants.values(), ("subject_type", "subject_id", "datasource_key"), normalized, args)
+            return self._filtered(
+                self.grants.values(), ("subject_type", "subject_id", "datasource_key"), normalized, args
+            )
         if "SELECT session_id FROM session_owners" in normalized:
             return [
                 Row(session_id=row["session_id"])
@@ -312,7 +310,9 @@ class FakeConnection:
             return sorted(rows, key=lambda row: row["session_id"])
         if "FROM enterprise_audit_logs" in normalized:
             rows = list(self.audit_logs)
-            rows = self._filtered(rows, ("user_id", "action", "resource_type", "resource_id", "decision"), normalized, args[:-1])
+            rows = self._filtered(
+                rows, ("user_id", "action", "resource_type", "resource_id", "decision"), normalized, args[:-1]
+            )
             return sorted(rows, key=lambda row: row["id"], reverse=True)[: args[-1]]
         if "FROM enterprise_quotas" in normalized and "FOR UPDATE" in normalized:
             resource, subject_types, subject_ids = args
@@ -372,6 +372,8 @@ async def test_pg_user_store_upsert_list_get_and_disable(fake_pg):
     created = await store.upsert_user(user_id="alice", display_name="Alice", email="a@example.com")
     assert created["enabled"] is True
     assert fake_pg.pool_kwargs["dsn"] == "postgresql://metadata"
+    assert fake_pg.pool_kwargs["min_size"] == 1
+    assert fake_pg.pool_kwargs["max_size"] == 2
 
     assert await store.get_user("alice") == created
     assert [user["user_id"] for user in await store.list_users(enabled=True)] == ["alice"]

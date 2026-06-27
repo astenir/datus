@@ -4,6 +4,11 @@
 # deployments. This file only moves enterprise platform metadata stores to
 # PostgreSQL; normal business datasource, model, RAG/vector, and chat-session
 # body-history configuration remains in the regular agent.yml/runtime paths.
+#
+# Each PG metadata store owns one asyncpg pool. With the eight stores below and
+# max_size=2, each API process can open up to 16 metadata DB connections before
+# accounting for other PostgreSQL clients. Adjust these pool sizes together with
+# the number of uvicorn workers/pods and the database max_connections setting.
 
 api:
   auth_provider:
@@ -41,41 +46,57 @@ enterprise:
     class: datus_enterprise.postgres_stores:PgEnterpriseUserStore
     kwargs:
       dsn: ${DATUS_ENTERPRISE_PG_DSN}
+      min_size: 1
+      max_size: 2
 
   role_store:
     class: datus_enterprise.postgres_stores:PgEnterpriseRoleStore
     kwargs:
       dsn: ${DATUS_ENTERPRISE_PG_DSN}
+      min_size: 1
+      max_size: 2
 
   datasource_grant_store:
     class: datus_enterprise.postgres_stores:PgEnterpriseDatasourceGrantStore
     kwargs:
       dsn: ${DATUS_ENTERPRISE_PG_DSN}
+      min_size: 1
+      max_size: 2
 
   session_owner_store:
     class: datus_enterprise.postgres_stores:PgSessionOwnerStore
     kwargs:
       dsn: ${DATUS_ENTERPRISE_PG_DSN}
+      min_size: 1
+      max_size: 2
 
   artifact_acl_store:
     class: datus_enterprise.postgres_stores:PgArtifactAclStore
     kwargs:
       dsn: ${DATUS_ENTERPRISE_PG_DSN}
+      min_size: 1
+      max_size: 2
 
   audit_sink:
     class: datus_enterprise.postgres_stores:PgAuditSink
     kwargs:
       dsn: ${DATUS_ENTERPRISE_PG_DSN}
+      min_size: 1
+      max_size: 2
 
   quota_store:
     class: datus_enterprise.postgres_stores:PgEnterpriseQuotaStore
     kwargs:
       dsn: ${DATUS_ENTERPRISE_PG_DSN}
+      min_size: 1
+      max_size: 2
 
   secret_store:
     class: datus_enterprise.postgres_stores:PgEnterpriseSecretStore
     kwargs:
       dsn: ${DATUS_ENTERPRISE_PG_DSN}
+      min_size: 1
+      max_size: 2
 
 # Optional SQL policy. Configure a concrete provider when datasource grants
 # must be enforced by SQL rewrite/deny logic in addition to route projection.

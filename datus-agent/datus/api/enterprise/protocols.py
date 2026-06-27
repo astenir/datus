@@ -200,14 +200,19 @@ class EnterpriseQuotaStore(Protocol):
 
 @runtime_checkable
 class EnterpriseSecretStore(Protocol):
-    """Persist and query enterprise secret references, never secret values."""
+    """Persist and query internal enterprise secret reference metadata, never secret values.
+
+    Store records may include raw external secret references such as environment
+    variable names or vault paths. API routes and audit events must convert
+    these records to redaction-safe summaries before returning or logging them.
+    """
 
     async def list_secrets(self, *, prefix: str | None = None) -> list[dict[str, Any]]:
-        """Return redaction-safe secret reference records."""
+        """Return internal secret reference records filtered by optional prefix."""
         ...
 
     async def get_secret(self, name: str) -> dict[str, Any] | None:
-        """Return one secret reference record, if present."""
+        """Return one internal secret reference record, if present."""
         ...
 
     async def put_secret(
@@ -219,7 +224,7 @@ class EnterpriseSecretStore(Protocol):
         description: str | None = None,
         enabled: bool = True,
     ) -> dict[str, Any]:
-        """Create or replace one secret reference record."""
+        """Create or replace one internal secret reference record."""
         ...
 
     async def delete_secret(self, name: str) -> bool:

@@ -381,8 +381,10 @@ SQL 不是唯一执行风险。以下能力也必须进入 `Authenticate -> Buil
 - 滚动发布期间，新旧代码对 session owner、artifact ACL、audit schema 和 permission key 的兼容性必须有测试或迁移说明。
 - 当前 `datus_enterprise.postgres_stores` 只通过 `_SCHEMA_SQL` 执行 `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` 做最小 bootstrap；不要把它当作生产 schema migration 工具。
 - 修改 PG metadata schema 时，必须说明是否需要人工 DDL 或后续 migration runner，不能在应用启动路径中加入破坏性 DDL、隐式回填或不可回滚的数据修复。
+- 每个 PG metadata store 当前独立持有 asyncpg pool；修改 PG 配置样例或默认池大小时，必须按 `store 数量 * max_size * API 进程数` 说明生产连接数预算，避免多 worker/多 pod 部署压满 PostgreSQL `max_connections`。
 - 真实 Postgres 测试必须 gated，默认跳过；测试数据必须有唯一前缀并清理自己写入的行，不得依赖或破坏共享库已有内容。
 - 生产备份恢复说明必须区分 enterprise metadata、chat 正文历史、RAG/vector、项目 `subject/` 文件、artifact bundle/export 文件和业务 datasource；不要把 PG metadata store 覆盖范围扩大成全平台状态迁移。
+- secret reference store 是内部 metadata store，可以保存原始外部 reference，但不得保存 secret 明文；任何 admin API 响应、审计 metadata、日志或导出都必须使用 `ref_hint` 等脱敏摘要，不得直接暴露 store 返回的 raw reference。
 
 ## 测试标准
 

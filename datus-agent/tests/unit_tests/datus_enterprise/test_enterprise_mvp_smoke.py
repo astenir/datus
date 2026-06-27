@@ -285,6 +285,8 @@ def test_enterprise_pg_config_loads_postgres_metadata_providers():
         "secret_store",
     ):
         enterprise[key]["kwargs"]["dsn"] = "postgresql://metadata"
+        assert enterprise[key]["kwargs"]["min_size"] == 1
+        assert enterprise[key]["kwargs"]["max_size"] == 2
 
     extensions = load_enterprise_extensions(enterprise)
 
