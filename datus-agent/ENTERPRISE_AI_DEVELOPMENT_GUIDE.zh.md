@@ -72,7 +72,7 @@
 - `enterprise.enabled=true` 时必须启用生产 auth provider、RBAC store、AuthorizationProvider、ConfigProjector 和 AuditSink，缺任一关键接线都必须 fail closed 或在启动时失败。
 - 生产企业模式不得信任裸 `X-Datus-User-Id`、前端传入的 roles、permissions、principal 或企业上下文字段。
 - 企业开关不引入 `tenant_id`，也不允许把企业上下文当作业务 API 参数由客户端提交。
-- 当前已有 `datus_enterprise.auth_provider.SignedHeaderAuthProvider` 作为阶段 1 生产认证初版：只信任带 HMAC-SHA256 签名和时间戳的反向代理身份 header；直接 OIDC/JWKS 校验 provider、JWKS cache 和 key rotation 仍是后续切片。
+- MVP 身份方案优先适配当前企业环境：网关不可改时，实现 Bearer access token + userinfo `AuthProvider`，由 Datus 调企业用户信息接口换取身份；网关可改时可使用 `datus_enterprise.auth_provider.SignedHeaderAuthProvider`，只信任带 HMAC-SHA256 签名和时间戳的反向代理身份 header；直接 OIDC/JWKS 校验 provider、JWKS cache 和 key rotation 仍是后续切片。
 
 ## 架构约束
 
@@ -90,8 +90,9 @@
 
 优先放在企业包：
 
-- JWT/OIDC provider 具体实现。
 - 反向代理签名 header provider 具体实现。
+- Bearer access token + userinfo provider 具体实现。
+- JWT/OIDC provider 具体实现（MVP 后续扩展，不作为当前阶段默认身份方案）。
 - RBAC store/service。
 - datasource grant 合并逻辑。
 - admin API。

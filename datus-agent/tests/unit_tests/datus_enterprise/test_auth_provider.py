@@ -5,11 +5,13 @@ from __future__ import annotations
 import time
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
 from datus.api.constants import HEADER_PRINCIPAL, HEADER_USER_ID
-from datus_enterprise.auth_provider import SignedHeaderAuthProvider
+from datus_enterprise import auth_provider
+from datus_enterprise.auth_provider import SignedHeaderAuthProvider, UserInfoBearerAuthProvider
 
 
 def _request(provider: SignedHeaderAuthProvider, headers: dict[str, str], *, path: str = "/api/v1/me") -> MagicMock:
@@ -113,3 +115,171 @@ async def test_signed_header_auth_provider_loads_secret_from_env(monkeypatch: py
     ctx = await provider.authenticate(request)
 
     assert ctx.user_id == "alice"
+
+
+def _bearer_request(token: str | None = "token-1") -> MagicMock:
+    request = MagicMock()
+    request.headers = {}
+    if token is not None:
+        request.headers["Authorization"] = f"Bearer {token}"
+    return request
+
+
+def _patch_async_client(monkeypatch: pytest.MonkeyPatch, handler) -> None:
+    transport = httpx.MockTransport(handler)
+    original_async_client = httpx.AsyncClient
+
+    def _factory(*args, **kwargs):
+        kwargs["transport"] = transport
+        return original_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(auth_provider.httpx, "AsyncClient", _factory)
+
+
+@pytest.mark.asyncio
+async def test_userinfo_bearer_auth_provider_builds_app_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert str(request.url) == "https://sso.example.internal/api/userinfo"
+        assert request.headers["Authorization"] == "Bearer token-1"
+        assert request.headers["Content-Type"] == "application/x-www-form-urlencoded"
+        return httpx.Response(
+            200,
+            json={
+                "userId": 698,
+                "username": "x_liuyanping",
+                "realname": "刘延平",
+                "email": "x_liuyanping@phfund.com.cn",
+                "mobilePhone": "",
+                "fixedPhone": "",
+                "company": "",
+                "department": "fund",
+                "title": "analyst",
+                "userStatus": "正常",
+                "sortNumber": "0",
+                "permissionList": [None],
+            },
+        )
+
+    _patch_async_client(monkeypatch, handler)
+    provider = UserInfoBearerAuthProvider(userinfo_url="https://sso.example.internal/api/userinfo")
+
+    ctx = await provider.authenticate(_bearer_request())
+
+    assert ctx.user_id == "x_liuyanping"
+    assert ctx.project_id is None
+    assert ctx.roles == []
+    assert ctx.permissions == set()
+    assert ctx.is_admin is False
+    assert ctx.principal["user_id"] == "x_liuyanping"
+    assert ctx.principal["external_user_id"] == "698"
+    assert ctx.principal["display_name"] == "刘延平"
+    assert ctx.principal["email"] == "x_liuyanping@phfund.com.cn"
+    assert ctx.principal["department"] == "fund"
+    assert "permissionList" not in ctx.principal
+
+
+@pytest.mark.asyncio
+async def test_userinfo_bearer_auth_provider_requires_bearer_header() -> None:
+    provider = UserInfoBearerAuthProvider(userinfo_url="https://sso.example.internal/api/userinfo")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await provider.authenticate(_bearer_request(token=None))
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "AUTH_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_userinfo_bearer_auth_provider_rejects_bad_bearer_format() -> None:
+    provider = UserInfoBearerAuthProvider(userinfo_url="https://sso.example.internal/api/userinfo")
+    request = MagicMock()
+    request.headers = {"Authorization": "token-1"}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await provider.authenticate(request)
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "AUTH_TOKEN_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_userinfo_bearer_auth_provider_rejects_userinfo_401(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_async_client(monkeypatch, lambda _request: httpx.Response(401, json={"error": "unauthorized"}))
+    provider = UserInfoBearerAuthProvider(userinfo_url="https://sso.example.internal/api/userinfo")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await provider.authenticate(_bearer_request())
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "AUTH_TOKEN_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_userinfo_bearer_auth_provider_rejects_missing_user_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_async_client(monkeypatch, lambda _request: httpx.Response(200, json={"realname": "刘延平"}))
+    provider = UserInfoBearerAuthProvider(userinfo_url="https://sso.example.internal/api/userinfo")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await provider.authenticate(_bearer_request())
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "AUTH_REQUIRED"
+
+
+@pytest.mark.asyncio
+async def test_userinfo_bearer_auth_provider_rejects_invalid_user_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_async_client(monkeypatch, lambda _request: httpx.Response(200, json={"username": "bad user"}))
+    provider = UserInfoBearerAuthProvider(userinfo_url="https://sso.example.internal/api/userinfo")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await provider.authenticate(_bearer_request())
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "AUTH_USER_INVALID"
+
+
+@pytest.mark.asyncio
+async def test_userinfo_bearer_auth_provider_rejects_disallowed_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_async_client(
+        monkeypatch,
+        lambda _request: httpx.Response(200, json={"username": "x_liuyanping", "userStatus": "停用"}),
+    )
+    provider = UserInfoBearerAuthProvider(userinfo_url="https://sso.example.internal/api/userinfo")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await provider.authenticate(_bearer_request())
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "AUTH_USER_DISABLED"
+
+
+@pytest.mark.asyncio
+async def test_userinfo_bearer_auth_provider_maps_configured_user_id_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_async_client(monkeypatch, lambda _request: httpx.Response(200, json={"userId": 698, "userStatus": "正常"}))
+    provider = UserInfoBearerAuthProvider(
+        userinfo_url="https://sso.example.internal/api/userinfo",
+        user_id_field="userId",
+    )
+
+    ctx = await provider.authenticate(_bearer_request())
+
+    assert ctx.user_id == "698"
+    assert ctx.principal["external_user_id"] == "698"
+
+
+@pytest.mark.asyncio
+async def test_userinfo_bearer_auth_provider_fails_closed_on_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.TimeoutException("slow", request=request)
+
+    _patch_async_client(monkeypatch, handler)
+    provider = UserInfoBearerAuthProvider(userinfo_url="https://sso.example.internal/api/userinfo")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await provider.authenticate(_bearer_request())
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.detail == "AUTH_USERINFO_TIMEOUT"

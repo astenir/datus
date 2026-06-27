@@ -132,7 +132,7 @@ Authenticate -> Build Context -> Authorize -> Project Config -> Execute -> Audit
 
 | 接口 | 职责 | 默认实现 | 企业实现 |
 | --- | --- | --- | --- |
-| `AuthProvider` | 认证请求并构造 `AppContext` | `NoAuthProvider` | 企业 SSO/JWT/OIDC/反向代理/API token provider |
+| `AuthProvider` | 认证请求并构造 `AppContext` | `NoAuthProvider` | MVP 支持两种最小企业接入：网关可改时用反向代理签名 header provider；网关不可改时由 Datus 用 Bearer access token 调企业用户信息接口 |
 | `AuthorizationProvider` | 判断模块、资源、session、artifact 是否可访问 | 本地 allow | RBAC/ABAC/临时授权/审批状态 |
 | `ConfigProjector` | 生成请求级 `AgentConfig` clone、过滤 datasource、注入 principal | 返回原配置 clone | datasource grant、tool deny、SQL policy principal |
 | `SessionOwnerStore` | 记录和查询 session/task owner | 内存或 SQLite 兼容 | Postgres metadata |
@@ -235,10 +235,13 @@ class AuditSink(Protocol):
 ```yaml
 api:
   auth_provider:
-    class: datus_enterprise.auth_provider:JwtAuthProvider
+    class: datus_enterprise.auth_provider:UserInfoBearerAuthProvider
     kwargs:
-      issuer: https://idp.example.com
-      audience: datus
+      userinfo_url: https://sso.example.internal/api/userinfo
+      timeout_seconds: 3
+      user_id_field: user_id
+      email_field: email
+      display_name_field: name
 
 enterprise:
   authorization_provider:
@@ -314,29 +317,42 @@ class AppContext:
 
 ## 认证设计
 
-### MVP：企业 SSO/JWT/OIDC provider
+### MVP：企业 access token + userinfo provider
 
-实现一个生产用 `AuthProvider`：
+如果企业网关/反向代理可改，推荐让网关完成 SSO/JWT/OIDC 校验，并使用 `datus_enterprise.auth_provider.SignedHeaderAuthProvider` 向 Datus 传递签名身份 header。
 
-- 从 `Authorization: Bearer <token>` 读取 token。
-- 校验签名、issuer、audience、过期时间。
-- 从 claims 读取 `user_id`、可选 `external_id`、部门或组织属性。
-- 从 RBAC store 重新加载用户状态、角色、权限、数据源授权。
-- 构造 `AppContext`。
-- 用户被禁用、生产认证接线缺失或系统处于停用维护状态时返回 401/403 或 fail closed。
+如果网关不可改，MVP 身份方案改为 Datus 自己校验 `Authorization: Bearer <access_token>`，用该 token 调企业用户信息接口，拿到稳定用户身份后构造 `AppContext`。建议新增 `datus_enterprise.auth_provider.UserInfoBearerAuthProvider`：
 
-token 只作为身份凭证。除非 token 是由同一后端短期签发且有明确版本校验，否则不应完全信任 token 内 permissions。
+- 从 `Authorization: Bearer <access_token>` 读取 access token。
+- 调用企业用户信息接口，例如 `/userinfo`、`/current-user` 或内部 IAM 用户详情接口。
+- 从用户信息响应中映射 `user_id`、email、display name、department、employee id 等字段。
+- 不直接信任请求体、前端传入的 roles、permissions 或 datasource grants。
+- 从 Datus 自己的 RBAC store 重新加载用户状态、角色、权限、数据源授权。
+- 用户被禁用、access token 无效、用户信息接口失败、生产认证接线缺失或系统处于停用维护状态时返回 401/403 或 fail closed。
+- access token、用户信息接口响应原文和任何 secret 不得写入 session、trace、tool result、prompt、audit 明文字段或错误信息。
 
-当前已先实现反向代理签名身份 provider：`datus_enterprise.auth_provider.SignedHeaderAuthProvider`。它适用于由企业网关完成 SSO/JWT/OIDC 校验的部署形态，Datus 只接收带 HMAC 签名和时间戳的身份 header，并在后端重建 `AppContext`。它不是完整 OIDC/JWKS provider；Datus 后端直接校验 JWT/JWKS、key rotation、issuer/audience/kid 校验和 JWKS cache 仍属于后续切片。
+用户信息接口只负责“这个人是谁”。Datus 内部模块权限、数据源授权和 artifact ACL 仍由 Datus metadata store 决定，避免把企业 IAM 返回字段直接当作 Datus 授权事实。
+
+网关可改时的签名 header 方案仍作为推荐部署形态之一：
+
+- 网关负责读取和校验用户登录态、OIDC/JWT、企业 SSO 或其他内部身份凭证。
+- 网关向 Datus 注入 `X-Datus-User-Id`、可选 `X-Datus-Project-Id`、roles、permissions、principal、email、display name 等 header。
+- 网关必须用共享密钥对 method、path、timestamp 和身份 header 做 HMAC-SHA256 签名，并传入 `X-Datus-Timestamp` 和 `X-Datus-Signature`。
+- Datus 后端校验签名、时间窗口和安全 ID 后构造 `AppContext`。
+
+无论采用哪种方案，生产环境都必须保证裸 `X-Datus-User-Id`、未签名 roles、permissions、principal 一律不能作为生产身份依据。若使用网关签名 header 方案，还必须保证 Datus API 不能被公网或普通客户端绕过网关直连；推荐用内网安全组、mTLS、Ingress allowlist 或 sidecar 网络策略收口。
+
+直接在 Datus 后端校验 JWT/JWKS、key rotation、issuer/audience/kid 校验和 JWKS cache 不进入 MVP，作为后续身份 provider 扩展。
 
 ### 生产部署形态
 
-支持两种常见形态：
+MVP 支持前两种形态，第三种作为后续扩展：
 
 | 形态 | 说明 | 风险控制 |
 | --- | --- | --- |
-| OIDC/JWKS | Datus 后端直接校验 JWT/JWKS | 校验 issuer/audience/kid/exp，缓存 JWKS，处理 key rotation。 |
+| Bearer access token + userinfo | Datus 从请求读取 access token，并调用企业用户信息接口换取用户身份 | access token 不落日志；用户信息接口失败时 fail closed；Datus RBAC store 仍是授权事实来源。 |
 | 反向代理身份 | 网关完成 SSO 和 token 校验，Datus 只信任网关注入的签名 header | header 必须有 HMAC/签名或 mTLS 边界，禁止公网直接访问后端。 |
+| OIDC/JWKS | Datus 后端直接校验 JWT/JWKS | 后续 provider；需要校验 issuer/audience/kid/exp，缓存 JWKS，处理 key rotation。 |
 
 后续企业能力可增加 SAML、SCIM、服务账号/API token、MFA/IP allowlist、IdP group 到 Datus role 映射。
 
@@ -936,7 +952,7 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 
 目标：
 
-- 实现生产 `AuthProvider`；当前已完成反向代理签名 header provider 初版，直接 OIDC/JWKS provider 后续补齐。
+- 实现生产 `AuthProvider`；网关不可改时 MVP 使用 Bearer access token + userinfo provider，网关可改时可使用反向代理签名 header provider，直接 OIDC/JWKS provider 后续补齐。
 - 扩展 `AppContext`。
 - 从 RBAC store 加载 roles、permissions、datasource grants。
 - `DatusServiceCache` 使用 enterprise-aware key。
@@ -1152,7 +1168,7 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 
 第一版不需要完整管理后台，建议最小范围：
 
-1. JWT/OIDC `AuthProvider`。
+1. Bearer access token + userinfo `AuthProvider`，或企业网关/反向代理签名 header `AuthProvider`。
 2. `user_id/roles/permissions/datasource_grants` 上下文。
 3. enterprise-aware `DatusServiceCache`。
 4. 用户级 session scope 和运行中 chat task owner 校验。
@@ -1229,7 +1245,7 @@ Browser / Client
 
 如果目标是企业内部员工使用，建议企业内网 MVP 定义为：
 
-1. OIDC/JWT 登录。
+1. 企业登录后返回 access token；Datus 用 access token 调用户信息接口获取身份，或在网关可改时由网关注入签名身份 header。
 2. 用户、角色、权限、数据源 grant 存储。
 3. 企业级 `DatusService` 隔离。
 4. 用户级会话和运行中 task 隔离。

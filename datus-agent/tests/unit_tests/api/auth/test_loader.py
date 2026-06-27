@@ -80,6 +80,21 @@ def test_enterprise_enabled_loads_signed_header_provider():
     assert provider.__class__.__name__ == "SignedHeaderAuthProvider"
 
 
+def test_enterprise_enabled_loads_userinfo_bearer_provider():
+    provider = load_auth_provider(
+        {
+            "auth_provider": {
+                "class": "datus_enterprise.auth_provider.UserInfoBearerAuthProvider",
+                "kwargs": {"userinfo_url": "https://sso.example.internal/api/userinfo"},
+            }
+        },
+        datasource="default",
+        enterprise_config={"enabled": True},
+    )
+
+    assert provider.__class__.__name__ == "UserInfoBearerAuthProvider"
+
+
 def test_load_custom_with_kwargs(fake_module):
     cfg = {
         "auth_provider": {
