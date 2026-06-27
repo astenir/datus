@@ -103,6 +103,9 @@ class _QuotaStore:
     async def list_usage(self, *, subject_type=None, subject_id=None, resource=None):
         return []
 
+    async def consume_quota(self, *, subjects, resource, amount=1):
+        return {"allowed": True, "usage": []}
+
 
 class _SecretStore:
     async def list_secrets(self, *, prefix=None):

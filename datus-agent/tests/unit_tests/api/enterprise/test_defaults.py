@@ -248,7 +248,25 @@ async def test_in_memory_quota_store_upserts_filters_and_lists_usage():
         for quota in await store.list_quotas(subject_type="user")
     ] == [("user", "alice", "llm.tokens")]
     assert len(await store.list_quotas()) == 2
-    assert await store.list_usage(subject_type="user", subject_id="alice", resource="llm.tokens") == []
+
+    allow = await store.consume_quota(
+        subjects=[{"subject_type": "role", "subject_id": "analyst"}],
+        resource="sql.query",
+        amount=40,
+    )
+    deny = await store.consume_quota(
+        subjects=[{"subject_type": "role", "subject_id": "analyst"}],
+        resource="sql.query",
+        amount=70,
+    )
+    usage = await store.list_usage(subject_type="role", subject_id="analyst", resource="sql.query")
+
+    assert allow["allowed"] is True
+    assert deny["allowed"] is False
+    assert deny["used"] == 40
+    assert deny["limit"] == 100
+    assert usage[0]["used"] == 40
+    assert usage[0]["window_seconds"] == 3600
 
 
 @pytest.mark.asyncio

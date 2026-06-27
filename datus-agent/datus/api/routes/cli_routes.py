@@ -22,6 +22,7 @@ from datus.api.models.cli_models import (
     StopExecuteSQLInput,
 )
 from datus_enterprise.audit import AuditEvent, audit_decision
+from datus_enterprise.quota import consume_enterprise_quota
 
 router = APIRouter(prefix="/api/v1", tags=["cli"])
 SqlExecutorModuleCtx = Annotated[AppContext, Depends(require_module("module.sql_executor"))]
@@ -48,6 +49,17 @@ async def execute_sql(
         operation="sql.execute",
         requested_database=request.database_name,
     )
+    datasource = projection.principal.get("datasource") or getattr(projection.config, "current_datasource", None)
+    quota_error = await consume_enterprise_quota(
+        ctx,
+        resource="sql.execute",
+        amount=1,
+        resource_type="datasource",
+        resource_id=str(datasource) if datasource else None,
+        metadata={"operation": "sql.execute", "result_format": request.result_format},
+    )
+    if quota_error is not None:
+        return quota_error
     result = await svc.cli.execute_sql(request, user_id=ctx.user_id, agent_config=projection.config)
     await _audit_sql_execute(ctx, request, projection, result)
     return result
@@ -132,7 +144,9 @@ async def _require_datasource_catalog_for_internal_command(ctx: AppContext, comm
     )
 
 
-async def _audit_sql_execute(ctx: AppContext, request: ExecuteSQLInput, projection, result: Result[ExecuteSQLData]) -> None:
+async def _audit_sql_execute(
+    ctx: AppContext, request: ExecuteSQLInput, projection, result: Result[ExecuteSQLData]
+) -> None:
     datasource = projection.principal.get("datasource") or getattr(projection.config, "current_datasource", None)
     data = result.data if result.success else None
     error_code = str(result.errorCode) if not result.success and result.errorCode is not None else None

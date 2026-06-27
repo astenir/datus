@@ -3,6 +3,7 @@
 
 """HTTP-level module RBAC coverage for enterprise route dependencies."""
 
+import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ from fastapi.testclient import TestClient
 from datus.api import deps
 from datus.api.auth.context import AppContext
 from datus.api.enterprise.defaults import (
+    InMemoryEnterpriseQuotaStore,
     InMemorySessionOwnerStore,
     LocalAuthorizationProvider,
     NoopAuditSink,
@@ -32,6 +34,8 @@ from datus.api.services.dashboard_service import DashboardService
 from datus.schemas.artifact_manifest import ArtifactManifest
 from datus_enterprise.config_projection import DatasourceGrantConfigProjector
 
+_UNSET = object()
+
 
 class CollectingAuditSink:
     def __init__(self):
@@ -41,13 +45,16 @@ class CollectingAuditSink:
         self.events.append(event)
 
 
-def _enterprise_extensions(config_projector=None, audit_sink=None) -> EnterpriseExtensions:
+def _enterprise_extensions(config_projector=None, audit_sink=None, quota_store=_UNSET) -> EnterpriseExtensions:
+    if quota_store is _UNSET:
+        quota_store = InMemoryEnterpriseQuotaStore()
     return EnterpriseExtensions(
         enabled=True,
         authorization_provider=LocalAuthorizationProvider(),
         config_projector=config_projector or PassthroughConfigProjector(),
         session_owner_store=InMemorySessionOwnerStore(),
         audit_sink=audit_sink or NoopAuditSink(),
+        quota_store=quota_store,
     )
 
 
@@ -997,6 +1004,116 @@ def test_sql_execute_routes_allow_module_sql_executor(monkeypatch):
     svc.cli.execute_sql.assert_awaited_once()
     assert svc.cli.execute_sql.await_args.kwargs["user_id"] == "u1"
     assert svc.cli.execute_sql.await_args.kwargs["agent_config"].current_datasource == "default"
+
+
+def test_sql_execute_returns_unavailable_without_quota_store(monkeypatch):
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(audit_sink=audit_sink, quota_store=None))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config()
+    svc.cli.execute_sql = AsyncMock()
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.sql_executor"})
+
+    with _client(cli_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/sql/execute", json={"sql_query": "SELECT 1", "result_format": "json"})
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert response.json()["errorCode"] == "QUOTA_STORE_UNAVAILABLE"
+    svc.cli.execute_sql.assert_not_awaited()
+    event = audit_sink.events[-1]
+    assert event.action == "quota.consume"
+    assert event.decision == "deny"
+    assert event.reason == "quota store unavailable"
+
+
+def test_sql_execute_rejects_quota_exceeded_before_execution(monkeypatch):
+    quota_store = InMemoryEnterpriseQuotaStore()
+    asyncio.run(
+        quota_store.put_quota(
+            subject_type="user",
+            subject_id="u1",
+            resource="sql.execute",
+            limit=1,
+            window_seconds=3600,
+        )
+    )
+    asyncio.run(
+        quota_store.consume_quota(
+            subjects=[{"subject_type": "user", "subject_id": "u1"}],
+            resource="sql.execute",
+        )
+    )
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        _enterprise_extensions(audit_sink=audit_sink, quota_store=quota_store),
+    )
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config()
+    svc.cli.execute_sql = AsyncMock()
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.sql_executor"})
+
+    with _client(cli_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/sql/execute", json={"sql_query": "SELECT 1", "result_format": "json"})
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert response.json()["errorCode"] == "QUOTA_EXCEEDED"
+    svc.cli.execute_sql.assert_not_awaited()
+    event = audit_sink.events[-1]
+    assert event.action == "quota.consume"
+    assert event.decision == "deny"
+    assert event.reason == "quota exceeded"
+    assert event.metadata["resource"] == "sql.execute"
+    assert event.metadata["used"] == 1
+
+
+def test_sql_execute_consumes_quota_before_successful_execution(monkeypatch):
+    quota_store = InMemoryEnterpriseQuotaStore()
+    asyncio.run(
+        quota_store.put_quota(
+            subject_type="user",
+            subject_id="u1",
+            resource="sql.execute",
+            limit=2,
+            window_seconds=3600,
+        )
+    )
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        _enterprise_extensions(audit_sink=audit_sink, quota_store=quota_store),
+    )
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config()
+    svc.cli.execute_sql = AsyncMock(
+        return_value=Result[ExecuteSQLData](
+            success=True,
+            data=ExecuteSQLData(
+                execute_task_id="task-1",
+                sql_query="SELECT 1",
+                result_format="json",
+                execution_time=0.01,
+                executed_at="2026-06-27T00:00:00Z",
+            ),
+        )
+    )
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.sql_executor"})
+
+    with _client(cli_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/sql/execute", json={"sql_query": "SELECT 1", "result_format": "json"})
+
+    usage = asyncio.run(quota_store.list_usage(subject_type="user", subject_id="u1", resource="sql.execute"))
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert usage[0]["used"] == 1
+    assert [event.action for event in audit_sink.events[-2:]] == ["quota.consume", "sql.execute"]
+    assert audit_sink.events[-2].decision == "allow"
+    svc.cli.execute_sql.assert_awaited_once()
 
 
 def test_sql_execute_audits_sanitized_result(monkeypatch):

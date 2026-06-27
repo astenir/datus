@@ -632,6 +632,68 @@ class InMemoryEnterpriseQuotaStore:
         ]
         return sorted(usage, key=lambda record: (record["subject_type"], record["subject_id"], record["resource"]))
 
+    async def consume_quota(
+        self,
+        *,
+        subjects: list[dict[str, str]],
+        resource: str,
+        amount: int = 1,
+    ) -> dict[str, Any]:
+        """Check and consume all enabled quotas matching ``subjects`` and ``resource``."""
+
+        if amount <= 0:
+            raise DatusException(ErrorCode.COMMON_FIELD_INVALID, message="Quota consume amount must be positive.")
+        normalized_subjects = _normalized_quota_subjects(subjects)
+        now = datetime.now(timezone.utc).replace(microsecond=0)
+        applicable: list[tuple[dict[str, Any], dict[str, Any]]] = []
+
+        for subject in normalized_subjects:
+            quota = self._quotas.get((subject["subject_type"], subject["subject_id"], resource))
+            if quota is None or not bool(quota.get("enabled", True)):
+                continue
+            usage = self._current_usage_for_quota(quota, now)
+            if int(usage["used"]) + amount > int(quota["limit"]):
+                return {
+                    "allowed": False,
+                    "reason": "quota exceeded",
+                    "subject_type": quota["subject_type"],
+                    "subject_id": quota["subject_id"],
+                    "resource": quota["resource"],
+                    "limit": int(quota["limit"]),
+                    "used": int(usage["used"]),
+                    "remaining": max(int(quota["limit"]) - int(usage["used"]), 0),
+                    "window_start": usage["window_start"],
+                    "window_seconds": int(quota["window_seconds"]),
+                }
+            applicable.append((quota, usage))
+
+        updated_usage = []
+        for quota, usage in applicable:
+            usage["used"] = int(usage["used"]) + amount
+            usage["updated_at"] = now.isoformat()
+            self._usage[(quota["subject_type"], quota["subject_id"], quota["resource"])] = usage
+            updated_usage.append(copy.deepcopy(usage))
+
+        return {"allowed": True, "usage": updated_usage}
+
+    def _current_usage_for_quota(self, quota: dict[str, Any], now: datetime) -> dict[str, Any]:
+        key = (quota["subject_type"], quota["subject_id"], quota["resource"])
+        usage = self._usage.get(key)
+        if usage is not None:
+            window_start = _parse_datetime(usage.get("window_start"))
+            if window_start is not None and (now - window_start).total_seconds() < int(quota["window_seconds"]):
+                return copy.deepcopy(usage)
+        now_text = now.isoformat()
+        return {
+            "subject_type": quota["subject_type"],
+            "subject_id": quota["subject_id"],
+            "resource": quota["resource"],
+            "used": 0,
+            "window_start": now_text,
+            "window_seconds": int(quota["window_seconds"]),
+            "updated_at": now_text,
+        }
+
 
 class InMemoryEnterpriseSecretStore:
     """Process-local secret reference store for tests and local mode."""
@@ -1123,6 +1185,36 @@ def _quota_filter_matches(
     if resource is not None and record.get("resource") != resource:
         return False
     return True
+
+
+def _normalized_quota_subjects(subjects: list[dict[str, str]]) -> list[dict[str, str]]:
+    normalized = []
+    seen: set[tuple[str, str]] = set()
+    for subject in subjects:
+        if not isinstance(subject, dict):
+            continue
+        subject_type = str(subject.get("subject_type") or "").strip()
+        subject_id = str(subject.get("subject_id") or "").strip()
+        if subject_type not in {"global", "role", "user"} or not subject_id:
+            continue
+        key = (subject_type, subject_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append({"subject_type": subject_type, "subject_id": subject_id})
+    return normalized
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _datasource_grant_record_from_row(row) -> dict[str, Any]:

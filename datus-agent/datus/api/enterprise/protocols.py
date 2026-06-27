@@ -187,6 +187,16 @@ class EnterpriseQuotaStore(Protocol):
         """Return usage counters filtered by optional fields."""
         ...
 
+    async def consume_quota(
+        self,
+        *,
+        subjects: list[dict[str, str]],
+        resource: str,
+        amount: int = 1,
+    ) -> dict[str, Any]:
+        """Atomically check and consume quota for all matching subjects."""
+        ...
+
 
 @runtime_checkable
 class EnterpriseSecretStore(Protocol):
