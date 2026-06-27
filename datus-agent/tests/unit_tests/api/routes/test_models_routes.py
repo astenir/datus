@@ -9,7 +9,18 @@ from typing import Any, Dict, Iterable, Optional
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
 
+from datus.api import deps
+from datus.api.auth.context import AppContext
+from datus.api.enterprise.defaults import (
+    InMemorySessionOwnerStore,
+    LocalAuthorizationProvider,
+    NoopAuditSink,
+    PassthroughConfigProjector,
+)
+from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.routes import models_routes
 from datus.api.routes.models_routes import list_models
 from datus.configuration.agent_config import ModelConfig
@@ -73,6 +84,60 @@ def _basic_catalog() -> Dict[str, Any]:
             "deepseek-chat": {"context_length": 65535, "max_tokens": 8192},
         },
     }
+
+
+def _install_extensions(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+        ),
+    )
+
+
+def _client(ctx: AppContext, svc: MagicMock) -> TestClient:
+    app = FastAPI()
+    app.include_router(models_routes.router)
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return svc
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    return TestClient(app)
+
+
+def test_models_route_requires_config_view(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_extensions(monkeypatch)
+    svc = _make_svc(catalog=_basic_catalog(), available={"openai"})
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    with _client(ctx, svc) as client:
+        response = client.get("/api/v1/models")
+
+    assert response.status_code == 403
+    assert "module.config.view" in response.json()["detail"]
+
+
+def test_models_route_allows_config_view(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_extensions(monkeypatch)
+    monkeypatch.setattr(models_routes, "load_cached_model_details", lambda: None)
+    monkeypatch.setattr(models_routes, "load_cache_fetched_at", lambda: None)
+    svc = _make_svc(catalog=_basic_catalog(), available={"openai"})
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.config.view"})
+
+    with _client(ctx, svc) as client:
+        response = client.get("/api/v1/models")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"]["providers"] == ["openai"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

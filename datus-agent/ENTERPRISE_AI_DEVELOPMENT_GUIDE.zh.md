@@ -298,7 +298,7 @@ MVP 中 `datasource_grants` 采用每个 `(subject_type, subject_id, datasource_
 - direct SQL executor route：`/api/v1/sql/execute` 和 `/api/v1/sql/stop_execute` 使用 `module.sql_executor`。
 - report route：`/api/v1/report/detail`、`/api/v1/reports`、`/api/v1/reports/{slug}` 和 `/api/v1/reports/{slug}/html` 使用 `module.report.view`。
 - dashboard route：`/api/v1/dashboard/detail`、`/api/v1/dashboards`、`/api/v1/dashboards/{slug}` 和 `/api/v1/dashboards/{slug}/html` 使用 `module.dashboard.view`，`/api/v1/dashboard/query` 使用 `module.dashboard.query`。
-- config route：`/api/v1/config/agent` 使用 `module.config.view`，配置更新和连接探测接口使用 `module.config.edit`。
+- config/model route：`/api/v1/config/agent` 和 `/api/v1/models` 使用 `module.config.view`，配置更新和连接探测接口使用 `module.config.edit`。
 - KB route：KB bootstrap、platform docs bootstrap 和 cancel 接口使用 `module.kb`。
 - MCP route：MCP server/tool/filter 的列表、管理和调用接口使用 `module.mcp`。
 - admin datasource route：`/api/v1/admin/datasources`、`/api/v1/admin/datasource-default` 和 `/api/v1/admin/datasource-grants` 使用 `module.admin.datasources`，datasource grant admin upsert 只管理 metadata store，不自动把 grant 合并进当前请求 `AppContext.datasource_grants`；`enterprise.enabled=true` 时必须显式配置 `enterprise.datasource_grant_store.class`，不能静默使用进程内默认 store。
