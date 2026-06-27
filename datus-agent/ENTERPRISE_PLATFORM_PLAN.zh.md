@@ -476,6 +476,7 @@ GET    /api/v1/admin/roles/{role_id}
 PUT    /api/v1/admin/roles/{role_id}
 DELETE /api/v1/admin/roles/{role_id}
 PUT    /api/v1/admin/roles/{role_id}/permissions
+GET    /api/v1/admin/users/{user_id}/roles
 PUT    /api/v1/admin/users/{user_id}/roles
 
 GET    /api/v1/admin/datasource-grants
@@ -1048,9 +1049,9 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - 已注册 `/api/v1/admin/users`、`/api/v1/admin/users/{user_id}`、`/api/v1/admin/users/{user_id}/disable` 和 `/api/v1/admin/users/{user_id}/enable`，统一要求 `module.admin.users`，企业上下文只来自认证后的 `AppContext`，不从路径或请求体传入。
 - 用户管理接口返回稳定 `Result` 错误码：`USER_ID_INVALID`、`RESOURCE_NOT_FOUND`、`USER_LIST_FAILED`、`USER_READ_FAILED`、`USER_UPSERT_FAILED`、`USER_UPDATE_FAILED`；管理 allow/deny 使用 `module.admin.users` 写入审计，metadata 只包含脱敏的新旧摘要。
 - `enterprise.enabled=true` 的新请求会检查用户状态：缺少 `user_id` 返回 `AUTH_REQUIRED`，已存在且被禁用的用户返回 `USER_DISABLED`，用户状态存储不可用时返回 `USER_STATUS_UNAVAILABLE` 并审计 deny。未录入用户仍允许通过，以兼容已有 identity-only auth provider；完整角色、权限和 datasource grant 绑定继续作为后续阶段 6 子任务推进。
-- 已新增 `EnterpriseRoleStore` 协议，以及本地兼容的内存实现和单节点 SQLite `enterprise_roles` / `enterprise_role_permissions` 骨架；企业模式下可通过 `enterprise.role_store.class` 替换为生产 metadata store。
-- 已注册 `/api/v1/admin/roles`、`/api/v1/admin/roles/{role_id}` 和 `/api/v1/admin/roles/{role_id}/permissions`，统一要求 `module.admin.roles`；本切片只管理 role metadata 与 permission set，不做用户-role 绑定，也不把新权限自动合并进当前请求的 `AppContext`。
-- 角色管理接口返回稳定 `Result` 错误码：`ROLE_ID_INVALID`、`ROLE_NAME_INVALID`、`ROLE_PERMISSION_INVALID`、`RESOURCE_NOT_FOUND`、`ROLE_LIST_FAILED`、`ROLE_READ_FAILED`、`ROLE_UPSERT_FAILED`、`ROLE_UPDATE_FAILED`、`ROLE_DELETE_FAILED`、`ROLE_DELETE_FORBIDDEN`；管理 allow/deny 使用 `module.admin.roles` 写入审计，metadata 只包含脱敏的新旧摘要。
+- 已新增 `EnterpriseRoleStore` 协议，以及本地兼容的内存实现和单节点 SQLite `enterprise_roles` / `enterprise_role_permissions` / `enterprise_user_roles` 骨架；企业模式下可通过 `enterprise.role_store.class` 替换为生产 metadata store。
+- 已注册 `/api/v1/admin/roles`、`/api/v1/admin/roles/{role_id}`、`/api/v1/admin/roles/{role_id}/permissions` 和 `/api/v1/admin/users/{user_id}/roles`，统一要求 `module.admin.roles`；当前切片管理 role metadata、permission set 与用户-role 绑定，但还不把 metadata store 中的新权限自动合并进当前请求的 `AppContext`。
+- 角色管理接口返回稳定 `Result` 错误码：`ROLE_ID_INVALID`、`ROLE_NAME_INVALID`、`ROLE_PERMISSION_INVALID`、`USER_ID_INVALID`、`RESOURCE_NOT_FOUND`、`ROLE_LIST_FAILED`、`ROLE_READ_FAILED`、`ROLE_UPSERT_FAILED`、`ROLE_UPDATE_FAILED`、`ROLE_DELETE_FAILED`、`ROLE_DELETE_FORBIDDEN`、`ROLE_BINDINGS_READ_FAILED`、`USER_READ_FAILED`、`USER_ROLES_READ_FAILED`、`USER_ROLES_UPDATE_FAILED`；管理 allow/deny 使用 `module.admin.roles` 写入审计，metadata 只包含脱敏的新旧摘要。
 
 验收：
 

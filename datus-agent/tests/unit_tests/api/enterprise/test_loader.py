@@ -65,6 +65,15 @@ class _RoleStore:
     async def set_role_permissions(self, role_id, permissions):
         return None
 
+    async def list_user_roles(self, user_id):
+        return []
+
+    async def set_user_roles(self, user_id, role_ids):
+        return []
+
+    async def list_role_users(self, role_id):
+        return []
+
     async def delete_role(self, role_id):
         return False
 

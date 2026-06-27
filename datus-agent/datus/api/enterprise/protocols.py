@@ -86,6 +86,18 @@ class EnterpriseRoleStore(Protocol):
         """Replace a role permission set."""
         ...
 
+    async def list_user_roles(self, user_id: str) -> list[str]:
+        """Return role ids assigned to one user."""
+        ...
+
+    async def set_user_roles(self, user_id: str, role_ids: list[str]) -> list[str]:
+        """Replace role ids assigned to one user."""
+        ...
+
+    async def list_role_users(self, role_id: str) -> list[str]:
+        """Return user ids assigned to one role."""
+        ...
+
     async def delete_role(self, role_id: str) -> bool:
         """Delete one role record and its permission set."""
         ...

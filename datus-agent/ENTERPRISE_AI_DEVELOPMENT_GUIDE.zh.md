@@ -300,7 +300,7 @@ MVP 中 `datasource_grants` 采用每个 `(subject_type, subject_id, datasource_
 - MCP route：MCP server/tool/filter 的列表、管理和调用接口使用 `module.mcp`。
 - admin datasource route：`/api/v1/admin/datasource-default` 使用 `module.admin.datasources`。
 - admin user route：`/api/v1/admin/users`、`/api/v1/admin/users/{user_id}`、`/api/v1/admin/users/{user_id}/disable` 和 `/api/v1/admin/users/{user_id}/enable` 使用 `module.admin.users`，用户管理变更写入脱敏审计摘要；企业模式新请求会基于 `EnterpriseUserStore` 拒绝已禁用用户。
-- admin role route：`/api/v1/admin/roles`、`/api/v1/admin/roles/{role_id}` 和 `/api/v1/admin/roles/{role_id}/permissions` 使用 `module.admin.roles`，role metadata 和 permission set 变更写入脱敏审计摘要；用户-role 绑定仍属于后续阶段 6 子任务。
+- admin role route：`/api/v1/admin/roles`、`/api/v1/admin/roles/{role_id}`、`/api/v1/admin/roles/{role_id}/permissions` 和 `/api/v1/admin/users/{user_id}/roles` 使用 `module.admin.roles`，role metadata、permission set 和用户-role 绑定变更写入脱敏审计摘要；metadata store 中的绑定还不会自动合并进当前请求的 `AppContext`。
 
 后续新增 route 时应继续使用 `require_module()` dependency 接入模块权限；其余 admin datasource grants/sessions/artifacts/audit/quotas/secrets API 属于阶段 6。不要把 report/dashboard 的 query 权限合并进 `module.chat`；自然语言入口只能证明用户可用 chat，不能自动证明用户可实时查询报表或仪表盘。当前已先将可配置 datasource grant projection 接入 `/api/v1/chat/stream`、`/api/v1/chat/feedback`、`/api/v1/catalog/list` 和 `/api/v1/sql/execute`，用于校验请求 datasource/database、过滤请求级 `AgentConfig` clone、按 catalog/database/schema/table scope 裁剪目录结果并注入 principal；`/api/v1/sql/execute` 还会在执行前复用 grant scope 和 SQL policy principal 校验手写 SQL。report/dashboard projection 和执行审计兜底仍属于阶段 4/5/6 后续子阶段。
 

@@ -1,3 +1,6 @@
+import asyncio
+import sqlite3
+
 import pytest
 
 from datus.api.auth.context import AppContext
@@ -11,6 +14,7 @@ from datus.api.enterprise.defaults import (
     SqliteSessionOwnerStore,
 )
 from datus.api.enterprise.models import ResourceRef
+from datus.utils.exceptions import DatusException
 
 
 @pytest.mark.asyncio
@@ -116,6 +120,35 @@ async def test_in_memory_enterprise_role_store_supports_permissions_and_delete()
 
 
 @pytest.mark.asyncio
+async def test_in_memory_enterprise_role_store_supports_user_role_bindings():
+    store = InMemoryEnterpriseRoleStore()
+    await store.upsert_role(role_id="analyst", name="Analyst")
+    await store.upsert_role(role_id="viewer", name="Viewer")
+
+    assigned = await store.set_user_roles("alice", ["viewer", "analyst", "viewer"])
+
+    assert assigned == ["analyst", "viewer"]
+    assert await store.list_user_roles("alice") == ["analyst", "viewer"]
+    assert await store.list_role_users("viewer") == ["alice"]
+    assert await store.delete_role("viewer") is False
+
+    assert await store.set_user_roles("alice", []) == []
+    assert await store.list_user_roles("alice") == []
+    assert await store.delete_role("viewer") is True
+
+
+@pytest.mark.asyncio
+async def test_in_memory_enterprise_role_store_rejects_missing_user_role_binding():
+    store = InMemoryEnterpriseRoleStore()
+    await store.upsert_role(role_id="analyst", name="Analyst")
+
+    with pytest.raises(DatusException, match="Role not found: missing"):
+        await store.set_user_roles("alice", ["analyst", "missing"])
+
+    assert await store.list_user_roles("alice") == []
+
+
+@pytest.mark.asyncio
 async def test_sqlite_session_owner_store_persists_session_owners(tmp_path):
     db_path = tmp_path / "session_owners.db"
     store = SqliteSessionOwnerStore(str(db_path))
@@ -194,3 +227,85 @@ async def test_sqlite_enterprise_role_store_persists_roles_and_permissions(tmp_p
     assert await reopened.delete_role("analyst") is True
     assert await reopened.get_role("analyst") is None
     assert await reopened.delete_role("missing") is False
+
+
+@pytest.mark.asyncio
+async def test_sqlite_enterprise_role_store_persists_user_role_bindings(tmp_path):
+    db_path = tmp_path / "enterprise_roles.db"
+    store = SqliteEnterpriseRoleStore(str(db_path))
+    await store.upsert_role(role_id="analyst", name="Analyst")
+    await store.upsert_role(role_id="viewer", name="Viewer")
+
+    await store.set_user_roles("alice", ["viewer", "analyst", "viewer"])
+
+    reopened = SqliteEnterpriseRoleStore(str(db_path))
+    assert await reopened.list_user_roles("alice") == ["analyst", "viewer"]
+    assert await reopened.list_role_users("analyst") == ["alice"]
+    assert await reopened.delete_role("analyst") is False
+
+    assert await reopened.set_user_roles("alice", ["viewer"]) == ["viewer"]
+    assert await reopened.list_user_roles("alice") == ["viewer"]
+    assert await reopened.list_role_users("analyst") == []
+    assert await reopened.delete_role("analyst") is True
+
+
+@pytest.mark.asyncio
+async def test_sqlite_enterprise_role_store_rejects_missing_user_role_binding(tmp_path):
+    db_path = tmp_path / "enterprise_roles.db"
+    store = SqliteEnterpriseRoleStore(str(db_path))
+    await store.upsert_role(role_id="analyst", name="Analyst")
+
+    with pytest.raises(DatusException, match="Role not found: missing"):
+        await store.set_user_roles("alice", ["analyst", "missing"])
+
+    reopened = SqliteEnterpriseRoleStore(str(db_path))
+    assert await reopened.list_user_roles("alice") == []
+
+
+def test_sqlite_enterprise_role_delete_blocks_concurrent_user_role_insert(tmp_path):
+    class TracedDeleteStore(SqliteEnterpriseRoleStore):
+        def __init__(self, db_path: str, competing_store: SqliteEnterpriseRoleStore) -> None:
+            self.competing_error = None
+            self._triggered_competing_insert = False
+            self._competing_store = competing_store
+            super().__init__(db_path)
+
+        def _connect(self):
+            conn = sqlite3.connect(self._db_path, timeout=0.01)
+            conn.set_trace_callback(self._on_sql)
+            return conn
+
+        def _on_sql(self, statement: str) -> None:
+            if self._triggered_competing_insert or "FROM enterprise_user_roles" not in statement:
+                return
+            self._triggered_competing_insert = True
+            try:
+                with sqlite3.connect(self._db_path, timeout=0.01) as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    conn.execute("DELETE FROM enterprise_user_roles WHERE user_id = ?", ("alice",))
+                    conn.execute(
+                        """
+                        INSERT INTO enterprise_user_roles (user_id, role_id, created_at)
+                        VALUES (?, ?, CURRENT_TIMESTAMP)
+                        """,
+                        ("alice", "analyst"),
+                    )
+                    conn.commit()
+            except Exception as exc:
+                self.competing_error = exc
+
+    db_path = tmp_path / "enterprise_roles.db"
+    setup_store = SqliteEnterpriseRoleStore(str(db_path))
+    competing_store = SqliteEnterpriseRoleStore(str(db_path))
+    delete_store = TracedDeleteStore(str(db_path), competing_store)
+    asyncio.run(setup_store.upsert_role(role_id="analyst", name="Analyst"))
+
+    deleted = asyncio.run(delete_store.delete_role("analyst"))
+
+    reopened = SqliteEnterpriseRoleStore(str(db_path))
+    assert deleted is True
+    assert delete_store._triggered_competing_insert is True
+    assert isinstance(delete_store.competing_error, sqlite3.OperationalError)
+    assert asyncio.run(reopened.get_role("analyst")) is None
+    assert asyncio.run(reopened.list_user_roles("alice")) == []
+    assert asyncio.run(reopened.list_role_users("analyst")) == []
