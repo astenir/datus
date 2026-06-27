@@ -151,6 +151,11 @@ This file is the durable project rulebook for Codex work in this repository.
 
 ## Auth and Permission Rules
 
+- The current local enterprise backend auth mode is `UserInfoBearerAuthProvider`, as documented in `../datus-agent/LOCAL_ENTERPRISE_BACKEND_TESTING.zh.md`.
+- Frontend requests to protected Datus APIs must authenticate with `Authorization: Bearer <token>`.
+- For local enterprise frontend development, use dev Bearer tokens such as `dev-alice-token`, `dev-bob-token`, `dev-charlie-token`, or `disabled-token` only as local test credentials. Do not commit real tokens.
+- In `UserInfoBearerAuthProvider` mode, `AUTH_REQUIRED` usually means the request did not include a Bearer token. Do not treat `X-Datus-User-Id` alone as authentication.
+- `SignedHeaderAuthProvider` is a separate gateway/proxy simulation mode. Browser code must not calculate or store signed `X-Datus-*` headers or HMAC secrets; if that mode is explicitly used, a server-side proxy/BFF must inject those headers.
 - Frontend permission checks are for UX gating only; backend remains the security boundary.
 - Do not assume hidden UI means the operation is authorized.
 - Permission-related UI must be based on `usePermission` or typed permission helpers, not hardcoded username checks.
@@ -294,6 +299,7 @@ This file is the durable project rulebook for Codex work in this repository.
 
 - Keep API calls in `src/lib/api/**`.
 - Keep request/auth/base-url behavior in `src/lib/request.ts`, `src/composables/useConnection.ts`, and `src/composables/useAuth.ts`.
+- Keep Bearer-token injection centralized in `src/lib/request.ts`, `src/composables/useAuth.ts`, or a clearly named auth helper. Components and individual API helpers must not hand-roll ad hoc `Authorization` header logic.
 - Preserve support for `VITE_DATUS_API_TARGET`.
 - The Vite dev server should proxy `/api` and `/health` to `VITE_DATUS_API_TARGET`, defaulting to `http://localhost:8000`.
 - Do not expose UI for backend routes that are not actually present.
@@ -308,6 +314,7 @@ This file is the durable project rulebook for Codex work in this repository.
 - Generated `src/types/openapi.ts` is a contract artifact. Do not edit it manually; update it through `npm run api:types` or `npm run api:sync`.
 - The OpenAPI type generation intentionally strips generated JSDoc comments through `scripts/strip-openapi-comments.mjs` so project no-`any` scans are not polluted by prose in backend descriptions.
 - Use `npm run api:smoke` after changing API helpers, request normalization, backend config handling, datasource switching, or OpenAPI-generated types.
+- `npm run api:smoke` must use the active backend auth mode. For local `UserInfoBearerAuthProvider` testing, provide a Bearer token through a local-only environment variable or helper; do not rely on `X-Datus-User-Id`.
 - `npm run api:smoke` must not print secrets. Keep its output limited to route status, current datasource, result state, and redacted payload shape.
 - If OpenAPI and the live backend behavior disagree, document the mismatch in the relevant API helper or test, add a focused regression test, and prefer a backend schema/normalization fix over duplicating ad hoc frontend guesses.
 - API helper request shape tests should live near `src/lib/api.test.ts` or the composable test that owns the normalization path.

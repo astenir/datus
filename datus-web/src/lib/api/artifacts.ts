@@ -3,16 +3,16 @@ import type { ArtifactManifest, DashboardDetail, ReportDetail, VisualizationResu
 
 export const dashboardApi = {
   list(baseUrl: string): Promise<ArtifactManifest[] | null> {
-    return apiResult(baseUrl, "/api/v1/dashboard/list");
+    return apiResult(baseUrl, "/api/v1/dashboards");
   },
 
   detail(baseUrl: string, slug: string): Promise<DashboardDetail | null> {
-    return apiResult(baseUrl, `/api/v1/dashboard/detail?slug=${encodeURIComponent(slug)}`);
+    return apiResult(baseUrl, `/api/v1/dashboards/${encodeURIComponent(slug)}`);
   },
 
   htmlUrl(baseUrl: string, slug: string): string {
     const base = baseUrl.replace(/\/+$/, "");
-    return `${base}/api/v1/dashboard/html?slug=${encodeURIComponent(slug)}`;
+    return `${base}/api/v1/dashboards/${encodeURIComponent(slug)}/html`;
   },
 
   query(baseUrl: string, dashboardSlug: string, querySlug: string, params?: Record<string, unknown>): Promise<unknown> {
@@ -22,16 +22,16 @@ export const dashboardApi = {
 
 export const reportApi = {
   list(baseUrl: string): Promise<ArtifactManifest[] | null> {
-    return apiResult(baseUrl, "/api/v1/report/list");
+    return apiResult(baseUrl, "/api/v1/reports");
   },
 
   detail(baseUrl: string, slug: string): Promise<ReportDetail | null> {
-    return apiResult(baseUrl, `/api/v1/report/detail?slug=${encodeURIComponent(slug)}`);
+    return apiResult(baseUrl, `/api/v1/reports/${encodeURIComponent(slug)}`);
   },
 
   htmlUrl(baseUrl: string, slug: string): string {
     const base = baseUrl.replace(/\/+$/, "");
-    return `${base}/api/v1/report/html?slug=${encodeURIComponent(slug)}`;
+    return `${base}/api/v1/reports/${encodeURIComponent(slug)}/html`;
   },
 };
 

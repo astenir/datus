@@ -19,10 +19,10 @@ describe("request helpers", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ ok: true }));
     setApiBaseResolver(() => "https://api.example.test/");
 
-    await get("/api/v1/permissions/me");
+    await get("/api/v1/me");
 
     expect(fetch).toHaveBeenCalledWith(
-      "https://api.example.test/api/v1/permissions/me",
+      "https://api.example.test/api/v1/me",
       expect.objectContaining({ method: "GET" }),
     );
   });

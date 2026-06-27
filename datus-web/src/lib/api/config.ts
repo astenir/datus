@@ -26,7 +26,8 @@ export const configApi = {
   },
 
   switchDatasource(baseUrl: string, name: string): Promise<{ current_datasource: string } | null> {
-    return apiResult(baseUrl, "/api/v1/config/datasources/switch", jsonBody({ name }));
+    return apiResult(baseUrl, "/api/v1/admin/datasource-default", putBody({ name }))
+      .then((result) => result === null ? null : { current_datasource: name });
   },
 };
 

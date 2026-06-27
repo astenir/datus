@@ -26,12 +26,38 @@ export interface UserPermissions {
   user_id: string;
   features: string[];      // 功能权限代码数组
   datasources: string[];   // 数据源名称数组
+  permissions: string[];
+  datasource_grants: Record<string, unknown>;
+  is_admin: boolean;
 }
+
+type MeSummaryPayload = {
+  user_id?: string | null;
+  permissions?: string[];
+  datasource_grants?: Record<string, unknown>;
+  features?: Record<string, boolean>;
+  is_admin?: boolean;
+};
 
 // 权限数据缓存
 const permissions = ref<UserPermissions | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
+
+function normalizeMeSummary(payload: MeSummaryPayload | null | undefined): UserPermissions | null {
+  if (!payload) return null;
+
+  const featureEntries = Object.entries(payload.features ?? {});
+  const datasourceGrants = payload.datasource_grants ?? {};
+  return {
+    user_id: payload.user_id ?? "",
+    features: featureEntries.filter(([, enabled]) => enabled).map(([feature]) => feature),
+    datasources: Object.keys(datasourceGrants).filter((datasource) => Boolean(datasourceGrants[datasource])),
+    permissions: payload.permissions ?? [],
+    datasource_grants: datasourceGrants,
+    is_admin: payload.is_admin === true,
+  };
+}
 
 /**
  * 权限管理 Composable
@@ -45,9 +71,9 @@ export function usePermission() {
     error.value = null;
 
     try {
-      const result = await get<ApiResponse<UserPermissions>>("/api/v1/permissions/me");
+      const result = await get<ApiResponse<MeSummaryPayload>>("/api/v1/me");
 
-      permissions.value = result?.data || null;
+      permissions.value = normalizeMeSummary(result?.data);
       return permissions.value;
     } catch (err) {
       console.error("获取权限失败:", err);
@@ -76,8 +102,7 @@ export function usePermission() {
   function hasDatasourcePermission(datasourceName: string): boolean {
     if (!permissions.value) return false;
 
-    // admin 用户（datasources 为空）拥有所有数据源权限
-    if (permissions.value.user_id === "admin" && permissions.value.datasources.length === 0) {
+    if (permissions.value.is_admin) {
       return true;
     }
 
@@ -90,7 +115,7 @@ export function usePermission() {
    */
   function isAdmin(): boolean {
     if (!permissions.value) return false;
-    return permissions.value.user_id === "admin";
+    return permissions.value.is_admin;
   }
 
   /**

@@ -1,5 +1,5 @@
 import { shallowRef } from "vue";
-import { setCurrentUser, request, post } from "@/lib/request";
+import { setCurrentUser, request } from "@/lib/request";
 import { usePermission } from "@/composables/usePermission";
 
 // 权限
@@ -224,13 +224,6 @@ export function useAuth() {
    * 登出
    */
   async function logout(): Promise<void> {
-    try {
-      // 调用后端登出接口
-      await post("/api/v1/auth/logout");
-    } catch (error) {
-      console.error("登出请求失败:", error);
-    }
-
     // 清除前端缓存
     sessionStorage.removeItem("datus_permission_cache");
     localStorage.clear();

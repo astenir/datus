@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { chatApi, configApi, mcpApi, sqlApi, subjectApi } from "./api";
+import { chatApi, configApi, dashboardApi, mcpApi, reportApi, sqlApi, subjectApi } from "./api";
 
 function mockJsonResponse(payload: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(payload), {
@@ -72,6 +72,39 @@ describe("api client", () => {
       result_format: "json",
       execute_task_id: "task-1",
     });
+  });
+
+  it("uses current artifact collection routes", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockJsonResponse({ success: true, data: [] }))
+      .mockResolvedValueOnce(mockJsonResponse({ success: true, data: [] }));
+
+    await dashboardApi.list("http://localhost:8000/");
+    await reportApi.list("http://localhost:8000/");
+
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/dashboards");
+    expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe("http://localhost:8000/api/v1/reports");
+    expect(dashboardApi.htmlUrl("http://localhost:8000/", "fund_overview")).toBe(
+      "http://localhost:8000/api/v1/dashboards/fund_overview/html",
+    );
+    expect(reportApi.htmlUrl("http://localhost:8000/", "fund_report")).toBe(
+      "http://localhost:8000/api/v1/reports/fund_report/html",
+    );
+  });
+
+  it("switches datasource through the project default datasource endpoint", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ success: true, data: {} }));
+
+    const result = await configApi.switchDatasource("http://localhost:8000", "fund");
+
+    expect(result).toEqual({ current_datasource: "fund" });
+    expect(fetch).toHaveBeenCalledWith(
+      "http://localhost:8000/api/v1/admin/datasource-default",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ name: "fund" }),
+      }),
+    );
   });
 
   it("sends session ids when submitting frontend tool results", async () => {
