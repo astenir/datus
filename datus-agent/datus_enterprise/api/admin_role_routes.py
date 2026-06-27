@@ -37,6 +37,12 @@ class SetRolePermissionsRequest(BaseModel):
     permissions: list[str] = Field(default_factory=list, max_length=MAX_PERMISSION_KEYS)
 
 
+class SetUserRolesRequest(BaseModel):
+    """Enterprise user-role membership mutation."""
+
+    role_ids: list[str] = Field(default_factory=list, max_length=MAX_PERMISSION_KEYS)
+
+
 class AdminRoleSummary(BaseModel):
     """Sanitized enterprise role metadata."""
 
@@ -47,6 +53,13 @@ class AdminRoleSummary(BaseModel):
     built_in: bool = False
     created_at: str | None = None
     updated_at: str | None = None
+
+
+class AdminUserRolesSummary(BaseModel):
+    """Sanitized enterprise user-role membership."""
+
+    user_id: str
+    role_ids: list[str] = Field(default_factory=list)
 
 
 @router.get("/admin/roles", response_model=Result[list[AdminRoleSummary]], summary="List Admin Roles")
@@ -253,6 +266,136 @@ async def set_admin_role_permissions(
     return Result(success=True, data=summary)
 
 
+@router.get(
+    "/admin/users/{user_id}/roles",
+    response_model=Result[AdminUserRolesSummary],
+    summary="Get Admin User Roles",
+)
+async def get_admin_user_roles(user_id: str, ctx: AdminRolesCtx) -> Result[AdminUserRolesSummary]:
+    """Return role ids assigned to one enterprise user."""
+
+    invalid = _validate_user_id(user_id)
+    if invalid is not None:
+        await _audit_user_roles_mutation(
+            ctx, user_id=user_id, operation="get_admin_user_roles", decision="deny", reason=invalid
+        )
+        return _role_error("USER_ID_INVALID", invalid)
+
+    user = await _load_user_for_roles(ctx, user_id, operation="get_admin_user_roles")
+    if isinstance(user, Result):
+        return user
+
+    try:
+        role_ids = await deps.get_enterprise_extensions().role_store.list_user_roles(user_id)
+    except Exception:
+        await _audit_user_roles_mutation(
+            ctx,
+            user_id=user_id,
+            operation="get_admin_user_roles",
+            decision="deny",
+            reason="user roles read failed",
+        )
+        return _role_error("USER_ROLES_READ_FAILED", "User roles read failed.")
+
+    summary = AdminUserRolesSummary(user_id=user_id, role_ids=role_ids)
+    await _audit_user_roles_mutation(
+        ctx,
+        user_id=user_id,
+        operation="get_admin_user_roles",
+        decision="allow",
+        old_summary=_user_roles_summary_for_audit(summary),
+    )
+    return Result(success=True, data=summary)
+
+
+@router.put(
+    "/admin/users/{user_id}/roles",
+    response_model=Result[AdminUserRolesSummary],
+    summary="Set Admin User Roles",
+)
+async def set_admin_user_roles(
+    user_id: str,
+    body: SetUserRolesRequest,
+    ctx: AdminRolesCtx,
+) -> Result[AdminUserRolesSummary]:
+    """Replace role ids assigned to one enterprise user."""
+
+    invalid = _validate_user_id(user_id) or _validate_role_ids(body.role_ids)
+    if invalid is not None:
+        await _audit_user_roles_mutation(
+            ctx, user_id=user_id, operation="set_admin_user_roles", decision="deny", reason=invalid
+        )
+        return _role_error(_user_roles_validation_error_code(invalid), invalid)
+
+    user = await _load_user_for_roles(ctx, user_id, operation="set_admin_user_roles")
+    if isinstance(user, Result):
+        return user
+
+    store = deps.get_enterprise_extensions().role_store
+    normalized_role_ids = _normalized_role_ids(body.role_ids)
+    try:
+        before = await store.list_user_roles(user_id)
+    except Exception:
+        await _audit_user_roles_mutation(
+            ctx,
+            user_id=user_id,
+            operation="set_admin_user_roles",
+            decision="deny",
+            reason="user roles read failed",
+        )
+        return _role_error("USER_ROLES_READ_FAILED", "User roles read failed.")
+
+    for role_id in normalized_role_ids:
+        try:
+            role = await store.get_role(role_id)
+        except Exception:
+            await _audit_user_roles_mutation(
+                ctx,
+                user_id=user_id,
+                operation="set_admin_user_roles",
+                decision="deny",
+                reason="role read failed",
+                old_summary={"user_id": user_id, "role_ids": before},
+                metadata={"role_id": role_id},
+            )
+            return _role_error("ROLE_READ_FAILED", "Role read failed.")
+        if role is None:
+            await _audit_user_roles_mutation(
+                ctx,
+                user_id=user_id,
+                operation="set_admin_user_roles",
+                decision="deny",
+                reason="role not found",
+                old_summary={"user_id": user_id, "role_ids": before},
+                metadata={"role_id": role_id},
+            )
+            return _role_error("RESOURCE_NOT_FOUND", f"Role not found: {role_id}.")
+
+    try:
+        role_ids = await store.set_user_roles(user_id, normalized_role_ids)
+    except Exception:
+        await _audit_user_roles_mutation(
+            ctx,
+            user_id=user_id,
+            operation="set_admin_user_roles",
+            decision="deny",
+            reason="user roles update failed",
+            old_summary={"user_id": user_id, "role_ids": before},
+        )
+        return _role_error("USER_ROLES_UPDATE_FAILED", "User roles update failed.")
+
+    summary = AdminUserRolesSummary(user_id=user_id, role_ids=role_ids)
+    await _audit_user_roles_mutation(
+        ctx,
+        user_id=user_id,
+        operation="set_admin_user_roles",
+        decision="allow",
+        old_summary={"user_id": user_id, "role_ids": before},
+        new_summary=_user_roles_summary_for_audit(summary),
+    )
+    return Result(success=True, data=summary)
+
+
 @router.delete("/admin/roles/{role_id}", response_model=Result[dict], summary="Delete Admin Role")
 async def delete_admin_role(role_id: str, ctx: AdminRolesCtx) -> Result[dict]:
     """Delete one enterprise role record and its permission set."""
@@ -295,6 +438,30 @@ async def delete_admin_role(role_id: str, ctx: AdminRolesCtx) -> Result[dict]:
         return _role_error("ROLE_DELETE_FORBIDDEN", "Built-in role cannot be deleted.")
 
     try:
+        assigned_users = await store.list_role_users(role_id)
+    except Exception:
+        await _audit_role_mutation(
+            ctx,
+            role_id=role_id,
+            operation="delete_admin_role",
+            decision="deny",
+            reason="role bindings read failed",
+            old_summary=_summary_for_audit(_summary_from_record(before)),
+        )
+        return _role_error("ROLE_BINDINGS_READ_FAILED", "Role bindings read failed.")
+    if assigned_users:
+        await _audit_role_mutation(
+            ctx,
+            role_id=role_id,
+            operation="delete_admin_role",
+            decision="deny",
+            reason="role has assigned users",
+            old_summary=_summary_for_audit(_summary_from_record(before)),
+            metadata={"assigned_user_count": len(assigned_users), "assigned_user_ids": assigned_users[:10]},
+        )
+        return _role_error("ROLE_DELETE_FORBIDDEN", "Role has assigned users.")
+
+    try:
         deleted = await store.delete_role(role_id)
     except Exception:
         await _audit_role_mutation(
@@ -325,6 +492,30 @@ async def delete_admin_role(role_id: str, ctx: AdminRolesCtx) -> Result[dict]:
         new_summary={"deleted": True},
     )
     return Result(success=True, data={"role_id": role_id, "deleted": True})
+
+
+async def _load_user_for_roles(ctx: AppContext, user_id: str, *, operation: str) -> dict[str, Any] | Result[Any]:
+    try:
+        user = await deps.get_enterprise_extensions().user_store.get_user(user_id)
+    except Exception:
+        await _audit_user_roles_mutation(
+            ctx,
+            user_id=user_id,
+            operation=operation,
+            decision="deny",
+            reason="user read failed",
+        )
+        return _role_error("USER_READ_FAILED", "User read failed.")
+    if user is None:
+        await _audit_user_roles_mutation(
+            ctx,
+            user_id=user_id,
+            operation=operation,
+            decision="deny",
+            reason="user not found",
+        )
+        return _role_error("RESOURCE_NOT_FOUND", "User not found.")
+    return user
 
 
 async def _audit_role_mutation(
@@ -358,6 +549,37 @@ async def _audit_role_mutation(
     )
 
 
+async def _audit_user_roles_mutation(
+    ctx: AppContext,
+    *,
+    user_id: str | None,
+    operation: str,
+    decision: str,
+    reason: str | None = None,
+    old_summary: dict[str, Any] | None = None,
+    new_summary: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    audit_metadata = {"operation": operation}
+    if old_summary is not None:
+        audit_metadata["old"] = old_summary
+    if new_summary is not None:
+        audit_metadata["new"] = new_summary
+    if metadata:
+        audit_metadata.update(metadata)
+    await audit_decision(
+        ctx,
+        AuditEvent(
+            action="module.admin.roles",
+            resource_type="user_roles",
+            resource_id=user_id,
+            decision=decision,
+            reason=reason,
+            metadata=audit_metadata,
+        ),
+    )
+
+
 def _summary_from_record(record: dict[str, Any]) -> AdminRoleSummary:
     return AdminRoleSummary(
         role_id=str(record["role_id"]),
@@ -380,10 +602,33 @@ def _summary_for_audit(summary: AdminRoleSummary) -> dict[str, Any]:
     }
 
 
+def _user_roles_summary_for_audit(summary: AdminUserRolesSummary) -> dict[str, Any]:
+    return {"user_id": summary.user_id, "role_ids": list(summary.role_ids)}
+
+
+def _validate_user_id(user_id: str) -> str | None:
+    candidate = user_id.strip()
+    if candidate != user_id or not candidate or not USER_ID_PATTERN.fullmatch(user_id):
+        return "Invalid user_id. Only letters, digits, underscore and hyphen are allowed."
+    return None
+
+
 def _validate_role_id(role_id: str) -> str | None:
     candidate = role_id.strip()
     if candidate != role_id or not candidate or not USER_ID_PATTERN.fullmatch(role_id):
         return "Invalid role_id. Only letters, digits, underscore and hyphen are allowed."
+    return None
+
+
+def _validate_role_ids(role_ids: list[str]) -> str | None:
+    if len(role_ids) > MAX_PERMISSION_KEYS:
+        return f"User role set cannot contain more than {MAX_PERMISSION_KEYS} role ids."
+    for role_id in role_ids:
+        if not isinstance(role_id, str):
+            return "Role ids must be strings."
+        invalid = _validate_role_id(role_id)
+        if invalid is not None:
+            return invalid
     return None
 
 
@@ -418,8 +663,18 @@ def _validation_error_code(message: str) -> str:
     return "ROLE_PERMISSION_INVALID"
 
 
+def _user_roles_validation_error_code(message: str) -> str:
+    if "user_id" in message:
+        return "USER_ID_INVALID"
+    return "ROLE_ID_INVALID"
+
+
 def _normalized_permissions(permissions: list[str]) -> list[str]:
     return sorted({permission.strip() for permission in permissions if permission.strip()})
+
+
+def _normalized_role_ids(role_ids: list[str]) -> list[str]:
+    return sorted({role_id.strip() for role_id in role_ids if role_id.strip()})
 
 
 def _required_str(value: str) -> str:

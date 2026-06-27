@@ -223,6 +223,7 @@ class InMemoryEnterpriseRoleStore:
 
     def __init__(self) -> None:
         self._roles: dict[str, dict[str, Any]] = {}
+        self._user_roles: dict[str, set[str]] = {}
 
     async def list_roles(self) -> list[dict[str, Any]]:
         roles = [_copy_role_record(record) for record in self._roles.values()]
@@ -266,7 +267,23 @@ class InMemoryEnterpriseRoleStore:
         self._roles[role_id] = record
         return _copy_role_record(record)
 
+    async def list_user_roles(self, user_id: str) -> list[str]:
+        return sorted(self._user_roles.get(user_id, set()))
+
+    async def set_user_roles(self, user_id: str, role_ids: list[str]) -> list[str]:
+        normalized = _normalized_role_ids(role_ids)
+        if normalized:
+            self._user_roles[user_id] = set(normalized)
+        else:
+            self._user_roles.pop(user_id, None)
+        return normalized
+
+    async def list_role_users(self, role_id: str) -> list[str]:
+        return sorted(user_id for user_id, role_ids in self._user_roles.items() if role_id in role_ids)
+
     async def delete_role(self, role_id: str) -> bool:
+        if await self.list_role_users(role_id):
+            return False
         return self._roles.pop(role_id, None) is not None
 
 
@@ -354,10 +371,56 @@ class SqliteEnterpriseRoleStore:
 
     async def delete_role(self, role_id: str) -> bool:
         with self._connect() as conn:
+            assigned = conn.execute(
+                "SELECT 1 FROM enterprise_user_roles WHERE role_id = ? LIMIT 1",
+                (role_id,),
+            ).fetchone()
+            if assigned:
+                return False
             conn.execute("DELETE FROM enterprise_role_permissions WHERE role_id = ?", (role_id,))
             cursor = conn.execute("DELETE FROM enterprise_roles WHERE role_id = ?", (role_id,))
             conn.commit()
         return cursor.rowcount > 0
+
+    async def list_user_roles(self, user_id: str) -> list[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT role_id
+                FROM enterprise_user_roles
+                WHERE user_id = ?
+                ORDER BY role_id ASC
+                """,
+                (user_id,),
+            ).fetchall()
+        return [str(row[0]) for row in rows]
+
+    async def set_user_roles(self, user_id: str, role_ids: list[str]) -> list[str]:
+        normalized = _normalized_role_ids(role_ids)
+        with self._connect() as conn:
+            conn.execute("DELETE FROM enterprise_user_roles WHERE user_id = ?", (user_id,))
+            conn.executemany(
+                """
+                INSERT INTO enterprise_user_roles (user_id, role_id, created_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                """,
+                [(user_id, role_id) for role_id in normalized],
+            )
+            conn.commit()
+        return normalized
+
+    async def list_role_users(self, role_id: str) -> list[str]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT user_id
+                FROM enterprise_user_roles
+                WHERE role_id = ?
+                ORDER BY user_id ASC
+                """,
+                (role_id,),
+            ).fetchall()
+        return [str(row[0]) for row in rows]
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_path, timeout=5.0)
@@ -383,6 +446,22 @@ class SqliteEnterpriseRoleStore:
                     permission_key TEXT NOT NULL,
                     PRIMARY KEY (role_id, permission_key)
                 )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS enterprise_user_roles (
+                    user_id TEXT NOT NULL,
+                    role_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, role_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_enterprise_user_roles_role
+                ON enterprise_user_roles (role_id, user_id)
                 """
             )
             conn.commit()
@@ -646,7 +725,16 @@ def _replace_role_permissions(conn: sqlite3.Connection, role_id: str, permission
 def _normalized_permissions(permissions: Any) -> list[str]:
     if not isinstance(permissions, list):
         return []
-    normalized = {permission.strip() for permission in permissions if isinstance(permission, str) and permission.strip()}
+    normalized = {
+        permission.strip() for permission in permissions if isinstance(permission, str) and permission.strip()
+    }
+    return sorted(normalized)
+
+
+def _normalized_role_ids(role_ids: Any) -> list[str]:
+    if not isinstance(role_ids, list):
+        return []
+    normalized = {role_id.strip() for role_id in role_ids if isinstance(role_id, str) and role_id.strip()}
     return sorted(normalized)
 
 

@@ -116,6 +116,24 @@ async def test_in_memory_enterprise_role_store_supports_permissions_and_delete()
 
 
 @pytest.mark.asyncio
+async def test_in_memory_enterprise_role_store_supports_user_role_bindings():
+    store = InMemoryEnterpriseRoleStore()
+    await store.upsert_role(role_id="analyst", name="Analyst")
+    await store.upsert_role(role_id="viewer", name="Viewer")
+
+    assigned = await store.set_user_roles("alice", ["viewer", "analyst", "viewer"])
+
+    assert assigned == ["analyst", "viewer"]
+    assert await store.list_user_roles("alice") == ["analyst", "viewer"]
+    assert await store.list_role_users("viewer") == ["alice"]
+    assert await store.delete_role("viewer") is False
+
+    assert await store.set_user_roles("alice", []) == []
+    assert await store.list_user_roles("alice") == []
+    assert await store.delete_role("viewer") is True
+
+
+@pytest.mark.asyncio
 async def test_sqlite_session_owner_store_persists_session_owners(tmp_path):
     db_path = tmp_path / "session_owners.db"
     store = SqliteSessionOwnerStore(str(db_path))
@@ -194,3 +212,23 @@ async def test_sqlite_enterprise_role_store_persists_roles_and_permissions(tmp_p
     assert await reopened.delete_role("analyst") is True
     assert await reopened.get_role("analyst") is None
     assert await reopened.delete_role("missing") is False
+
+
+@pytest.mark.asyncio
+async def test_sqlite_enterprise_role_store_persists_user_role_bindings(tmp_path):
+    db_path = tmp_path / "enterprise_roles.db"
+    store = SqliteEnterpriseRoleStore(str(db_path))
+    await store.upsert_role(role_id="analyst", name="Analyst")
+    await store.upsert_role(role_id="viewer", name="Viewer")
+
+    await store.set_user_roles("alice", ["viewer", "analyst", "viewer"])
+
+    reopened = SqliteEnterpriseRoleStore(str(db_path))
+    assert await reopened.list_user_roles("alice") == ["analyst", "viewer"]
+    assert await reopened.list_role_users("analyst") == ["alice"]
+    assert await reopened.delete_role("analyst") is False
+
+    assert await reopened.set_user_roles("alice", ["viewer"]) == ["viewer"]
+    assert await reopened.list_user_roles("alice") == ["viewer"]
+    assert await reopened.list_role_users("analyst") == []
+    assert await reopened.delete_role("analyst") is True

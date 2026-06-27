@@ -28,7 +28,7 @@ class CollectingAuditSink:
         self.events.append(event)
 
 
-def _install_extensions(monkeypatch, role_store, audit_sink=None):
+def _install_extensions(monkeypatch, role_store, audit_sink=None, user_store=None):
     monkeypatch.setattr(
         admin_role_routes.deps,
         "_enterprise_extensions",
@@ -38,7 +38,7 @@ def _install_extensions(monkeypatch, role_store, audit_sink=None):
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
             audit_sink=audit_sink or NoopAuditSink(),
-            user_store=InMemoryEnterpriseUserStore(),
+            user_store=user_store or InMemoryEnterpriseUserStore(),
             role_store=role_store,
         ),
     )
@@ -139,6 +139,80 @@ def test_admin_role_permissions_and_delete(monkeypatch):
     assert audit_sink.events[-2].metadata["operation"] == "delete_admin_role"
 
 
+def test_admin_user_roles_get_put_and_audit_sanitized(monkeypatch):
+    role_store = InMemoryEnterpriseRoleStore()
+    user_store = InMemoryEnterpriseUserStore()
+    audit_sink = CollectingAuditSink()
+    _install_extensions(monkeypatch, role_store, audit_sink, user_store)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.roles"})
+    asyncio.run(user_store.upsert_user(user_id="alice", display_name="Alice"))
+    asyncio.run(role_store.upsert_role(role_id="analyst", name="Analyst"))
+    asyncio.run(role_store.upsert_role(role_id="viewer", name="Viewer"))
+
+    with _client(ctx) as client:
+        put_response = client.put(
+            "/api/v1/admin/users/alice/roles",
+            json={"role_ids": ["viewer", "analyst", "viewer"]},
+        )
+        get_response = client.get("/api/v1/admin/users/alice/roles")
+
+    assert put_response.status_code == 200
+    assert put_response.json()["success"] is True
+    assert put_response.json()["data"] == {"user_id": "alice", "role_ids": ["analyst", "viewer"]}
+    assert get_response.json()["data"] == {"user_id": "alice", "role_ids": ["analyst", "viewer"]}
+    assert audit_sink.events[-2].action == "module.admin.roles"
+    assert audit_sink.events[-2].resource_type == "user_roles"
+    assert audit_sink.events[-2].resource_id == "alice"
+    assert audit_sink.events[-2].decision == "allow"
+    assert audit_sink.events[-2].metadata["operation"] == "set_admin_user_roles"
+    assert audit_sink.events[-2].metadata["old"] == {"user_id": "alice", "role_ids": []}
+    assert audit_sink.events[-2].metadata["new"] == {"user_id": "alice", "role_ids": ["analyst", "viewer"]}
+
+
+def test_admin_user_roles_rejects_missing_user_or_role(monkeypatch):
+    role_store = InMemoryEnterpriseRoleStore()
+    user_store = InMemoryEnterpriseUserStore()
+    audit_sink = CollectingAuditSink()
+    _install_extensions(monkeypatch, role_store, audit_sink, user_store)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.roles"})
+    asyncio.run(user_store.upsert_user(user_id="alice", display_name="Alice"))
+
+    with _client(ctx) as client:
+        missing_user_response = client.get("/api/v1/admin/users/missing/roles")
+        missing_role_response = client.put("/api/v1/admin/users/alice/roles", json={"role_ids": ["missing"]})
+        invalid_user_response = client.put("/api/v1/admin/users/bad.id/roles", json={"role_ids": []})
+        invalid_role_response = client.put("/api/v1/admin/users/alice/roles", json={"role_ids": ["bad.id"]})
+
+    assert missing_user_response.json()["success"] is False
+    assert missing_user_response.json()["errorCode"] == "RESOURCE_NOT_FOUND"
+    assert missing_role_response.json()["success"] is False
+    assert missing_role_response.json()["errorCode"] == "RESOURCE_NOT_FOUND"
+    assert invalid_user_response.json()["errorCode"] == "USER_ID_INVALID"
+    assert invalid_role_response.json()["errorCode"] == "ROLE_ID_INVALID"
+    assert audit_sink.events[-1].decision == "deny"
+
+
+def test_admin_role_delete_rejects_assigned_role(monkeypatch):
+    role_store = InMemoryEnterpriseRoleStore()
+    user_store = InMemoryEnterpriseUserStore()
+    audit_sink = CollectingAuditSink()
+    _install_extensions(monkeypatch, role_store, audit_sink, user_store)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.roles"})
+    asyncio.run(user_store.upsert_user(user_id="alice", display_name="Alice"))
+    asyncio.run(role_store.upsert_role(role_id="analyst", name="Analyst"))
+    asyncio.run(role_store.set_user_roles("alice", ["analyst"]))
+
+    with _client(ctx) as client:
+        response = client.delete("/api/v1/admin/roles/analyst")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert response.json()["errorCode"] == "ROLE_DELETE_FORBIDDEN"
+    assert audit_sink.events[-1].decision == "deny"
+    assert audit_sink.events[-1].reason == "role has assigned users"
+    assert audit_sink.events[-1].metadata["assigned_user_count"] == 1
+
+
 def test_admin_role_missing_invalid_and_permission_validation(monkeypatch):
     audit_sink = CollectingAuditSink()
     _install_extensions(monkeypatch, InMemoryEnterpriseRoleStore(), audit_sink)
@@ -206,6 +280,7 @@ def test_admin_role_routes_register_expected_paths():
     assert "/api/v1/admin/roles" in paths
     assert "/api/v1/admin/roles/{role_id}" in paths
     assert "/api/v1/admin/roles/{role_id}/permissions" in paths
+    assert "/api/v1/admin/users/{user_id}/roles" in paths
 
 
 def test_create_app_registers_admin_role_routes():
@@ -216,3 +291,4 @@ def test_create_app_registers_admin_role_routes():
     assert "/api/v1/admin/roles" in paths
     assert "/api/v1/admin/roles/{role_id}" in paths
     assert "/api/v1/admin/roles/{role_id}/permissions" in paths
+    assert "/api/v1/admin/users/{user_id}/roles" in paths
