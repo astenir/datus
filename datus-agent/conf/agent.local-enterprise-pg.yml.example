@@ -1,0 +1,156 @@
+# Local enterprise PostgreSQL test configuration.
+#
+# This is a complete agent.yml-style config for local API testing without an
+# enterprise gateway. It uses SignedHeaderAuthProvider so local scripts can
+# generate trusted identity headers, while enterprise metadata stores use
+# PostgreSQL through DATUS_ENTERPRISE_PG_DSN.
+#
+# Required environment variables:
+#   DATUS_ENTERPRISE_HEADER_SECRET
+#   DATUS_ENTERPRISE_PG_DSN
+# Optional for chat/embedding paths:
+#   DEEPSEEK_API_KEY
+#   SILICONFLOW_API_KEY
+#   CCKS_FUND_DB_PASSWORD
+#
+# Example:
+#   cp conf/agent.local-enterprise-pg.yml.example conf/agent.local-enterprise-pg.yml
+#   uv run datus-api --config conf/agent.local-enterprise-pg.yml --datasource ccks_fund --port 8000 --reload
+
+agent:
+  home: /home/astenir/Code/personal/datus/datus-data
+  project_root: /home/astenir/Code/personal/datus/datus-project
+  target_provider: deepseek
+  target_model: deepseek-v4-flash
+
+  api:
+    auth_provider:
+      class: datus_enterprise.auth_provider:SignedHeaderAuthProvider
+      kwargs:
+        secret_env: DATUS_ENTERPRISE_HEADER_SECRET
+        default_project_id: enterprise
+        max_skew_seconds: 300
+
+  enterprise:
+    enabled: true
+
+    authorization_provider:
+      class: datus.api.enterprise.defaults:LocalAuthorizationProvider
+
+    config_projector:
+      class: datus_enterprise.projection:DatasourceGrantProjector
+
+    user_store:
+      class: datus_enterprise.postgres_stores:PgEnterpriseUserStore
+      kwargs: &enterprise_pg
+        dsn: ${DATUS_ENTERPRISE_PG_DSN}
+        min_size: 1
+        max_size: 1
+
+    role_store:
+      class: datus_enterprise.postgres_stores:PgEnterpriseRoleStore
+      kwargs: *enterprise_pg
+
+    datasource_grant_store:
+      class: datus_enterprise.postgres_stores:PgEnterpriseDatasourceGrantStore
+      kwargs: *enterprise_pg
+
+    session_owner_store:
+      class: datus_enterprise.postgres_stores:PgSessionOwnerStore
+      kwargs: *enterprise_pg
+
+    session_body_store:
+      class: datus_enterprise.postgres_session_store:PgSessionBodyStore
+      kwargs: *enterprise_pg
+
+    artifact_acl_store:
+      class: datus_enterprise.postgres_stores:PgArtifactAclStore
+      kwargs: *enterprise_pg
+
+    audit_sink:
+      class: datus_enterprise.postgres_stores:PgAuditSink
+      kwargs: *enterprise_pg
+
+    quota_store:
+      class: datus_enterprise.postgres_stores:PgEnterpriseQuotaStore
+      kwargs: *enterprise_pg
+
+    secret_store:
+      class: datus_enterprise.postgres_stores:PgEnterpriseSecretStore
+      kwargs: *enterprise_pg
+
+  # Keep this disabled for basic local RBAC / datasource grant smoke tests.
+  # Turn it on only when intentionally testing SQL-policy enforcement.
+  sql_policy:
+    enabled: false
+
+  providers:
+    deepseek:
+      api_key: ${DEEPSEEK_API_KEY}
+      base_url: https://api.deepseek.com
+
+  models:
+    qwen-ebd:
+      type: openai
+      model: Qwen/Qwen3-Embedding-0.6B
+      base_url: https://api.siliconflow.cn/v1
+      api_key: ${SILICONFLOW_API_KEY}
+
+  nodes:
+    schema_linking:
+      matching_rate: fast
+    reasoning:
+      max_table_schemas_length: 4000
+      max_data_details_length: 2000
+      max_context_length: 8000
+      max_value_length: 500
+    output:
+      check_result: true
+    chat:
+      workspace_root: sql2
+      max_turns: 25
+
+  services:
+    datasources:
+      ccks_fund:
+        type: postgresql
+        host: 127.0.0.1
+        port: "5433"
+        username: datus
+        password: ${CCKS_FUND_DB_PASSWORD:-datus}
+        database: ccks_fund
+        schema: public
+        sslmode: prefer
+        timeout_seconds: 30
+        default: true
+
+      california_schools:
+        type: sqlite
+        uri: sqlite:////home/astenir/.datus/benchmark/california_schools/california_schools.sqlite
+        default: false
+
+    semantic_layer:
+      metricflow:
+        type: metricflow
+    bi_platforms: {}
+    schedulers: {}
+
+  storage:
+    embedding_device_type: cpu
+    database: &local_embedding
+      registry_name: openai
+      model_name: Qwen/Qwen3-Embedding-0.6B
+      dim_size: 1024
+      batch_size: 10
+      target_model: qwen-ebd
+    document: *local_embedding
+    metric: *local_embedding
+    semantic_model: *local_embedding
+    reference_sql: *local_embedding
+
+  workflow:
+    plan: planA
+    planA:
+      - schema_linking
+      - gen_sql
+      - output
