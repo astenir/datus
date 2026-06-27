@@ -811,10 +811,10 @@ class PgEnterpriseSecretStore(_PgStoreBase):
                 """
                 SELECT name, provider, reference, description, enabled, created_at, updated_at
                 FROM enterprise_secrets
-                WHERE name LIKE $1
+                WHERE name LIKE $1 ESCAPE '\\'
                 ORDER BY name ASC
                 """,
-                f"{prefix}%",
+                _like_prefix_pattern(prefix),
             )
         return [_secret_record(row) for row in rows]
 
@@ -974,6 +974,11 @@ def _load_jsonb(value: Any) -> dict[str, Any]:
             return {}
         return loaded if isinstance(loaded, dict) else {}
     return {}
+
+
+def _like_prefix_pattern(prefix: str) -> str:
+    escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"{escaped}%"
 
 
 def _normalized_quota_subjects(subjects: list[dict[str, str]]) -> list[dict[str, str]]:

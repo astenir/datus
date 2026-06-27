@@ -329,7 +329,7 @@ class FakeConnection:
         if "FROM enterprise_secrets" in normalized:
             rows = list(self.secrets.values())
             if "WHERE name LIKE" in normalized:
-                prefix = args[0].removesuffix("%")
+                prefix = _unescape_like_prefix(args[0])
                 rows = [row for row in rows if row["name"].startswith(prefix)]
             return sorted(rows, key=lambda row: row["name"])
         raise AssertionError(f"Unhandled fetch: {normalized}")
@@ -590,3 +590,36 @@ async def test_pg_secret_store_crud_and_prefix_listing(fake_pg):
         "datasource/warehouse/password"
     ]
     assert await store.delete_secret("datasource/warehouse/password") is True
+
+
+@pytest.mark.asyncio
+async def test_pg_secret_store_prefix_escapes_sql_like_wildcards(fake_pg):
+    store = PgEnterpriseSecretStore(dsn="postgresql://metadata")
+
+    await store.put_secret(name="datasource_prod/password", provider="env", reference="PROD_PASSWORD")
+    await store.put_secret(name="datasourceXprod/password", provider="env", reference="WRONG_PASSWORD")
+
+    names = [secret["name"] for secret in await store.list_secrets(prefix="datasource_")]
+
+    assert names == ["datasource_prod/password"]
+    fetch_queries = [entry for entry in fake_pg.queries if entry[0] == "fetch"]
+    query, args = fetch_queries[-1][1], fetch_queries[-1][2]
+    assert "ESCAPE" in query
+    assert args == ("datasource\\_%",)
+
+
+def _unescape_like_prefix(pattern: str) -> str:
+    raw_prefix = pattern.removesuffix("%")
+    chars = []
+    escaped = False
+    for char in raw_prefix:
+        if escaped:
+            chars.append(char)
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        else:
+            chars.append(char)
+    if escaped:
+        chars.append("\\")
+    return "".join(chars)
