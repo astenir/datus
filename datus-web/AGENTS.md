@@ -29,12 +29,17 @@ This file is the durable project rulebook for Codex work in this repository.
 
 - Use the local shadcn-vue wrappers under `src/components/ui/**` for interface primitives.
 - Import all base UI primitives from `@/components/ui/...`; do not hand-roll native styled controls when a local UI primitive exists.
-- Use AI Elements under `src/components/ai-elements/**` for chat-oriented surfaces:
+- Prefer AI Elements Vue under `src/components/ai-elements/**` whenever a feature is chat-like, agent-like, generated-content-heavy, or centered on model/tool execution. Use these primitives before building custom equivalents for:
   - conversation layout
   - messages
   - prompt input
   - reasoning blocks
   - tool call/result blocks
+  - user interaction requests
+  - suggestions and confirmations
+  - sources, citations, code blocks, artifacts, queues, tasks, terminals, and other AI execution displays
+- For Datus-specific backend payloads, compose AI Elements from `src/features/**` adapters instead of editing generated AI Elements internals.
+- Non-chat operational CRUD/admin/config screens should still use shadcn-vue primitives first, but should use AI Elements when displaying AI-generated plans, tool execution, generated code/SQL, artifacts, or conversational context.
 - Do not introduce a parallel component system.
 - Do not add broad project CSS files for migrated old styles.
 - Keep global styling in `src/style.css` limited to Tailwind/shadcn-vue theme tokens, resets, and app-wide primitives.
@@ -217,6 +222,7 @@ This file is the durable project rulebook for Codex work in this repository.
 - Treat imported/generated primitive source as read-only by default.
 - Do not edit `src/components/ui/**` or `src/components/ai-elements/**` merely to enforce business UI preferences, Tailwind cleanup, or migration-specific constraints.
 - Do not make feature-specific changes inside primitive components.
+- Before hand-rolling an AI-oriented display component, check whether an installed AI Elements primitive already covers the interaction or can be composed from `src/features/**`.
 - If a primitive must change, get explicit user approval, document why the change is shared infrastructure, and verify all current usages.
 - Primitive changes are allowed without broad refactoring only for build blockers, reproducible runtime crashes, accessibility defects in shared primitives, or project-level wrapper compatibility fixes.
 - Primitive changes are not allowed merely to make scans return zero findings, to satisfy one feature's visual preference, or to replace registry implementation details with local style preferences.
