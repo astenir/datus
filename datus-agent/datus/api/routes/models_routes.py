@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from datus.api.deps import ServiceDep
 from datus.api.enterprise.deps import require_module
@@ -18,6 +18,7 @@ from datus.api.models.base_models import Result
 from datus.api.models.config_models import ModelInfo, ModelPricing, ModelsData
 from datus.cli.provider_model_catalog import load_cache_fetched_at, load_cached_model_details
 from datus.utils.loggings import get_logger
+from datus_enterprise.model_policy import filter_allowed_models, is_model_ref_allowed
 
 logger = get_logger(__name__)
 
@@ -126,7 +127,7 @@ def _resolve_current_model(
     description="Return models for providers with credentials configured in agent.yml.",
     dependencies=[Depends(require_module("module.config.view"))],
 )
-async def list_models(svc: ServiceDep) -> Result[ModelsData]:
+async def list_models(svc: ServiceDep, request: Request = None) -> Result[ModelsData]:
     """Return every model exposed by providers the current project has credentials for.
 
     Data priority per-model:
@@ -196,7 +197,13 @@ async def list_models(svc: ServiceDep) -> Result[ModelsData]:
         if any(m.provider == "custom" for m in models):
             seen_providers.append("custom")
 
+    ctx = getattr(getattr(request, "state", None), "app_context", None) if request is not None else None
     current_model = _resolve_current_model(agent_config, models)
+    models = filter_allowed_models(ctx, models)
+    if current_model and not is_model_ref_allowed(ctx, current_model):
+        current_model = None
+    filtered_provider_set = {model.provider for model in models}
+    seen_providers = [provider for provider in seen_providers if provider in filtered_provider_set]
 
     return Result(
         success=True,

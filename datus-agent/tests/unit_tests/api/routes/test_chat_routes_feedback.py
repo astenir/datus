@@ -139,6 +139,32 @@ async def test_feedback_endpoint_denies_unauthorized_datasource_before_task_star
     svc.chat.stream_chat.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_feedback_endpoint_denies_unauthorized_model_before_task_start():
+    svc = _build_svc()
+    svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
+    ctx = _build_ctx()
+    ctx.principal = {"model_policy": {"allowed_models": ["openai/gpt-4.1"]}}
+    request = FeedbackChatInput(
+        source_session_id="chat_session_abc",
+        reaction_emoji="thumbsup",
+        reference_msg="Here is your SQL result",
+        model="deepseek/deepseek-chat",
+    )
+
+    response = await stream_chat_feedback(request, svc, ctx)
+    chunks = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+    assert len(chunks) == 1
+    assert "event: error" in chunks[0]
+    payload = json.loads(next(line for line in chunks[0].splitlines() if line.startswith("data: "))[len("data: ") :])
+    assert payload["error_type"] == "MODEL_FORBIDDEN"
+    assert "deepseek/deepseek-chat" in payload["error"]
+    svc.chat.stream_chat.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "field",
     ["source_session_id", "reaction_emoji", "reference_msg"],

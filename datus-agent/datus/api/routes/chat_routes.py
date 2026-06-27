@@ -61,6 +61,7 @@ from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso
 from datus_enterprise.artifact_acl import require_artifact_access
 from datus_enterprise.audit import AuditEvent, audit_decision
+from datus_enterprise.model_policy import is_model_ref_allowed
 from datus_enterprise.quota import consume_enterprise_quota
 
 logger = get_logger(__name__)
@@ -263,6 +264,54 @@ async def _consume_chat_request_quota(
     )
 
 
+async def _enforce_chat_model_policy(
+    ctx: AppContext,
+    request: StreamChatInput,
+    *,
+    agent_config: Any,
+    operation: str,
+) -> Optional[ChatPreCheckOutcome]:
+    model_ref = request.model or _active_model_ref(agent_config)
+    if is_model_ref_allowed(ctx, model_ref):
+        return None
+
+    await audit_decision(
+        ctx,
+        AuditEvent(
+            action="model.select",
+            resource_type="model",
+            resource_id=model_ref,
+            decision="deny",
+            reason="MODEL_FORBIDDEN",
+            metadata={
+                "operation": operation,
+                "session_id": request.session_id,
+                "subagent_id": request.subagent_id,
+                "requested_model": request.model,
+            },
+        ),
+    )
+    return ChatPreCheckOutcome(
+        allow=False,
+        error=f"Model '{model_ref}' is not authorized for this request.",
+        error_type="MODEL_FORBIDDEN",
+    )
+
+
+def _active_model_ref(agent_config: Any) -> Optional[str]:
+    provider = getattr(agent_config, "_target_provider", None)
+    model = getattr(agent_config, "_target_model", None)
+    if isinstance(provider, str) and provider and isinstance(model, str) and model:
+        return f"{provider}/{model}"
+
+    target = getattr(agent_config, "target", None)
+    custom_models = getattr(agent_config, "models", None)
+    if isinstance(target, str) and target and isinstance(custom_models, dict) and target in custom_models:
+        return f"custom/{target}"
+
+    return None
+
+
 def _required_principal_paths(raw: Any) -> list[str]:
     paths: set[str] = set()
 
@@ -379,6 +428,16 @@ async def stream_chat(
         await _audit_chat_sql_policy_denial(ctx, request, sql_policy_denial, operation="chat.stream")
         return StreamingResponse(
             _emit_pre_check_denial(request, sql_policy_denial),
+            media_type="text/event-stream",
+            headers=_sse_headers(),
+        )
+
+    model_denial = await _enforce_chat_model_policy(
+        ctx, request, agent_config=projection.config, operation="chat.stream"
+    )
+    if model_denial:
+        return StreamingResponse(
+            _emit_pre_check_denial(request, model_denial),
             media_type="text/event-stream",
             headers=_sse_headers(),
         )
@@ -511,6 +570,19 @@ async def stream_chat_feedback(
         await _audit_chat_sql_policy_denial(ctx, stream_input, sql_policy_denial, operation="chat.feedback")
         return StreamingResponse(
             _emit_pre_check_denial(stream_input, sql_policy_denial),
+            media_type="text/event-stream",
+            headers=_sse_headers(),
+        )
+
+    model_denial = await _enforce_chat_model_policy(
+        ctx,
+        stream_input,
+        agent_config=projection.config,
+        operation="chat.feedback",
+    )
+    if model_denial:
+        return StreamingResponse(
+            _emit_pre_check_denial(stream_input, model_denial),
             media_type="text/event-stream",
             headers=_sse_headers(),
         )

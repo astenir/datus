@@ -530,6 +530,74 @@ class TestStreamChatSqlPolicyPreCheck:
         svc.chat.stream_chat.assert_not_called()
 
 
+class TestStreamChatModelPolicy:
+    """Enterprise model policy must stop unauthorized model selection before task start."""
+
+    @pytest.mark.asyncio
+    async def test_requested_model_denied_returns_sse_error(self):
+        svc = _mock_svc_with_nodes()
+        svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
+        ctx = _mock_ctx(user_id="alice")
+        ctx.principal = {"model_policy": {"allowed_models": ["openai/gpt-4.1"]}}
+        request = StreamChatInput(message="hi", model="claude/claude-sonnet-4-5")
+
+        response = await stream_chat(request, svc, ctx, MagicMock())
+
+        chunks = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+        assert len(chunks) == 1
+        assert "event: error" in chunks[0]
+        payload = json.loads(
+            next(line for line in chunks[0].splitlines() if line.startswith("data: "))[len("data: ") :]
+        )
+        assert payload["error_type"] == "MODEL_FORBIDDEN"
+        assert "claude/claude-sonnet-4-5" in payload["error"]
+        svc.chat.stream_chat.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_default_model_denied_returns_sse_error(self):
+        svc = _mock_svc_with_nodes()
+        svc.agent_config._target_provider = "openai"
+        svc.agent_config._target_model = "gpt-4o"
+        svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
+        ctx = _mock_ctx(user_id="alice")
+        ctx.principal = {"model_policy": {"allowed_models": ["openai/gpt-4.1"]}}
+        request = StreamChatInput(message="hi")
+
+        response = await stream_chat(request, svc, ctx, MagicMock())
+
+        chunks = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+        payload = json.loads(
+            next(line for line in chunks[0].splitlines() if line.startswith("data: "))[len("data: ") :]
+        )
+        assert payload["error_type"] == "MODEL_FORBIDDEN"
+        assert "openai/gpt-4o" in payload["error"]
+        svc.chat.stream_chat.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_allowed_model_reaches_service(self):
+        async def empty_stream(*_args, **_kwargs):
+            if False:
+                yield
+
+        svc = _mock_svc_with_nodes()
+        svc.chat.stream_chat = MagicMock(return_value=empty_stream())
+        ctx = _mock_ctx(user_id="alice")
+        ctx.principal = {"model_policy": {"allowed_model_patterns": ["openai/gpt-4*"]}}
+        request = StreamChatInput(message="hi", model="openai/gpt-4.1")
+
+        response = await stream_chat(request, svc, ctx, MagicMock())
+        async for _ in response.body_iterator:
+            pass
+
+        svc.chat.stream_chat.assert_called_once()
+
+
 @pytest.mark.acceptance
 class TestChatRouteAcceptance:
     """Deterministic Chat API entrance coverage for built-in subagent routing."""

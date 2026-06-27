@@ -140,6 +140,37 @@ def test_models_route_allows_config_view(monkeypatch: pytest.MonkeyPatch) -> Non
     assert body["data"]["providers"] == ["openai"]
 
 
+def test_models_route_filters_with_enterprise_model_policy(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_extensions(monkeypatch)
+    monkeypatch.setattr(models_routes, "load_cached_model_details", lambda: None)
+    monkeypatch.setattr(models_routes, "load_cache_fetched_at", lambda: None)
+    svc = _make_svc(
+        catalog=_basic_catalog(),
+        available={"openai", "claude"},
+        custom_models={"local-safe": _custom_model("local-safe-model")},
+        target_provider="openai",
+        target_model="gpt-4o",
+    )
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.config.view"},
+        principal={"model_policy": {"allowed_models": ["openai/gpt-4.1", "custom/local-safe"]}},
+    )
+
+    with _client(ctx, svc) as client:
+        response = client.get("/api/v1/models")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"]["current_model"] is None
+    assert body["data"]["providers"] == ["openai", "custom"]
+    assert [(item["provider"], item["id"]) for item in body["data"]["models"]] == [
+        ("openai", "gpt-4.1"),
+        ("custom", "local-safe"),
+    ]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Provider scoping: only configured providers appear
 # ─────────────────────────────────────────────────────────────────────────────
