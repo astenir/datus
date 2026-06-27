@@ -315,6 +315,55 @@ def test_put_admin_artifact_acl_creates_first_acl_for_existing_artifact(monkeypa
     assert audit_sink.events[-1].metadata["old_acl"] == {}
 
 
+def test_put_admin_artifact_acl_changes_runtime_report_visibility(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "report", "sales")
+    audit_sink = CollectingAuditSink()
+    store = MemoryArtifactAclStore()
+    ctx_holder = {"ctx": AppContext(user_id="admin", permissions={"module.admin.artifacts"})}
+    app = FastAPI()
+    app.include_router(artifact_routes.router)
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx_holder["ctx"]
+        return _svc(tmp_path)
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=audit_sink,
+            artifact_acl_store=store,
+        ),
+    )
+
+    with TestClient(app) as client:
+        put_response = client.put(
+            "/api/v1/admin/artifacts/report/sales/acl",
+            json={
+                "owner_user_id": "owner-1",
+                "visibility": "private",
+                "allowed_roles": [],
+                "datasources": [],
+            },
+        )
+        assert put_response.json()["success"] is True
+
+        ctx_holder["ctx"] = AppContext(user_id="viewer-1", permissions={"module.report.view"})
+        viewer_response = client.get("/api/v1/reports")
+        assert viewer_response.json()["success"] is True
+        assert viewer_response.json()["data"] == []
+
+        ctx_holder["ctx"] = AppContext(user_id="owner-1", permissions={"module.report.view"})
+        owner_response = client.get("/api/v1/reports")
+        assert owner_response.json()["success"] is True
+        assert [item["slug"] for item in owner_response.json()["data"]] == ["sales"]
+
+
 def test_put_admin_artifact_acl_rejects_missing_artifact_before_store_write(monkeypatch, tmp_path: Path):
     audit_sink = CollectingAuditSink()
     store = MemoryArtifactAclStore()
