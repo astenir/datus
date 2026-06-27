@@ -3,7 +3,11 @@ import types
 
 import pytest
 
-from datus.api.enterprise.defaults import InMemoryEnterpriseUserStore, PassthroughConfigProjector
+from datus.api.enterprise.defaults import (
+    InMemoryEnterpriseRoleStore,
+    InMemoryEnterpriseUserStore,
+    PassthroughConfigProjector,
+)
 from datus.api.enterprise.loader import load_enterprise_extensions
 from datus.utils.exceptions import DatusException
 
@@ -38,6 +42,31 @@ class _UserStore:
 
     async def set_user_enabled(self, user_id, enabled):
         return None
+
+
+class _RoleStore:
+    async def list_roles(self):
+        return []
+
+    async def get_role(self, role_id):
+        return None
+
+    async def upsert_role(
+        self,
+        *,
+        role_id,
+        name,
+        description=None,
+        permissions=None,
+        built_in=False,
+    ):
+        return {}
+
+    async def set_role_permissions(self, role_id, permissions):
+        return None
+
+    async def delete_role(self, role_id):
+        return False
 
 
 class _ArtifactAclStore:
@@ -75,6 +104,7 @@ def fake_module():
     mod.Projector = _Projector
     mod.Audit = _Audit
     mod.UserStore = _UserStore
+    mod.RoleStore = _RoleStore
     mod.ArtifactAclStore = _ArtifactAclStore
     mod.LegacyOwnerStore = _LegacyOwnerStore
     mod.OwnerStore = _OwnerStore
@@ -90,6 +120,7 @@ def test_disabled_enterprise_loads_local_defaults():
     assert extensions.authorization_provider is not None
     assert extensions.config_projector is not None
     assert isinstance(extensions.user_store, InMemoryEnterpriseUserStore)
+    assert isinstance(extensions.role_store, InMemoryEnterpriseRoleStore)
     assert extensions.session_owner_store is not None
     assert extensions.audit_sink is not None
     assert extensions.artifact_acl_store is None
@@ -112,6 +143,7 @@ def test_enabled_enterprise_uses_passthrough_projector_when_projection_not_confi
     assert extensions.enabled is True
     assert isinstance(extensions.config_projector, PassthroughConfigProjector)
     assert isinstance(extensions.user_store, InMemoryEnterpriseUserStore)
+    assert isinstance(extensions.role_store, InMemoryEnterpriseRoleStore)
     assert extensions.artifact_acl_store is None
 
 
@@ -122,6 +154,7 @@ def test_enabled_enterprise_loads_configured_core_providers(fake_module):
             "authorization_provider": {"class": f"{fake_module}.Authz"},
             "config_projector": {"class": f"{fake_module}.Projector"},
             "user_store": {"class": f"{fake_module}.UserStore"},
+            "role_store": {"class": f"{fake_module}.RoleStore"},
             "artifact_acl_store": {"class": f"{fake_module}.ArtifactAclStore"},
             "audit_sink": {"class": f"{fake_module}.Audit"},
             "session_owner_store": {"class": f"{fake_module}.OwnerStore"},
@@ -132,6 +165,7 @@ def test_enabled_enterprise_loads_configured_core_providers(fake_module):
     assert isinstance(extensions.authorization_provider, _Authz)
     assert isinstance(extensions.config_projector, _Projector)
     assert isinstance(extensions.user_store, _UserStore)
+    assert isinstance(extensions.role_store, _RoleStore)
     assert isinstance(extensions.audit_sink, _Audit)
     assert isinstance(extensions.artifact_acl_store, _ArtifactAclStore)
     assert isinstance(extensions.session_owner_store, _OwnerStore)

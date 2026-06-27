@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, TypeVar
 
 from datus.api.enterprise.defaults import (
+    InMemoryEnterpriseRoleStore,
     InMemoryEnterpriseUserStore,
     InMemorySessionOwnerStore,
     LocalAuthorizationProvider,
@@ -18,6 +19,7 @@ from datus.api.enterprise.protocols import (
     AuditSink,
     AuthorizationProvider,
     ConfigProjector,
+    EnterpriseRoleStore,
     EnterpriseUserStore,
     SessionOwnerStore,
 )
@@ -40,6 +42,7 @@ class EnterpriseExtensions:
     audit_sink: AuditSink
     artifact_acl_store: ArtifactAclStore | None = None
     user_store: EnterpriseUserStore = field(default_factory=InMemoryEnterpriseUserStore)
+    role_store: EnterpriseRoleStore = field(default_factory=InMemoryEnterpriseRoleStore)
 
 
 def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> EnterpriseExtensions:
@@ -69,6 +72,7 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
             audit_sink=NoopAuditSink(),
             artifact_acl_store=None,
             user_store=InMemoryEnterpriseUserStore(),
+            role_store=InMemoryEnterpriseRoleStore(),
         )
 
     authorization_provider = _load_required_component(
@@ -88,6 +92,12 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         "user_store",
         EnterpriseUserStore,
         InMemoryEnterpriseUserStore(),
+    )
+    role_store = _load_optional_component(
+        raw,
+        "role_store",
+        EnterpriseRoleStore,
+        InMemoryEnterpriseRoleStore(),
     )
     session_owner_store = _load_optional_component(
         raw,
@@ -110,6 +120,7 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         audit_sink=audit_sink,
         artifact_acl_store=artifact_acl_store,
         user_store=user_store,
+        role_store=role_store,
     )
 
 

@@ -218,6 +218,176 @@ class SqliteEnterpriseUserStore:
             conn.commit()
 
 
+class InMemoryEnterpriseRoleStore:
+    """Process-local enterprise role metadata store for tests and local mode."""
+
+    def __init__(self) -> None:
+        self._roles: dict[str, dict[str, Any]] = {}
+
+    async def list_roles(self) -> list[dict[str, Any]]:
+        roles = [_copy_role_record(record) for record in self._roles.values()]
+        return sorted(roles, key=lambda record: str(record["role_id"]))
+
+    async def get_role(self, role_id: str) -> dict[str, Any] | None:
+        record = self._roles.get(role_id)
+        return _copy_role_record(record) if record is not None else None
+
+    async def upsert_role(
+        self,
+        *,
+        role_id: str,
+        name: str,
+        description: str | None = None,
+        permissions: list[str] | None = None,
+        built_in: bool = False,
+    ) -> dict[str, Any]:
+        existing = self._roles.get(role_id)
+        now = _sqlite_now()
+        created_at = str(existing.get("created_at")) if existing else now
+        record = {
+            "role_id": role_id,
+            "name": name,
+            "description": description,
+            "permissions": _normalized_permissions(permissions or []),
+            "built_in": bool(built_in),
+            "created_at": created_at,
+            "updated_at": now,
+        }
+        self._roles[role_id] = record
+        return _copy_role_record(record)
+
+    async def set_role_permissions(self, role_id: str, permissions: list[str]) -> dict[str, Any] | None:
+        record = self._roles.get(role_id)
+        if record is None:
+            return None
+        record = dict(record)
+        record["permissions"] = _normalized_permissions(permissions)
+        record["updated_at"] = _sqlite_now()
+        self._roles[role_id] = record
+        return _copy_role_record(record)
+
+    async def delete_role(self, role_id: str) -> bool:
+        return self._roles.pop(role_id, None) is not None
+
+
+class SqliteEnterpriseRoleStore:
+    """SQLite-backed enterprise role metadata store for single-node deployments."""
+
+    def __init__(self, db_path: str) -> None:
+        self._db_path = db_path
+        parent = os.path.dirname(os.path.abspath(db_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        self._ensure_schema()
+
+    async def list_roles(self) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT role_id, name, description, built_in, created_at, updated_at
+                FROM enterprise_roles
+                ORDER BY role_id ASC
+                """
+            ).fetchall()
+            return [_role_record_from_row(conn, row) for row in rows]
+
+    async def get_role(self, role_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT role_id, name, description, built_in, created_at, updated_at
+                FROM enterprise_roles
+                WHERE role_id = ?
+                """,
+                (role_id,),
+            ).fetchone()
+            return _role_record_from_row(conn, row) if row else None
+
+    async def upsert_role(
+        self,
+        *,
+        role_id: str,
+        name: str,
+        description: str | None = None,
+        permissions: list[str] | None = None,
+        built_in: bool = False,
+    ) -> dict[str, Any]:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO enterprise_roles (role_id, name, description, built_in, created_at, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(role_id) DO UPDATE SET
+                    name = excluded.name,
+                    description = excluded.description,
+                    built_in = excluded.built_in,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (role_id, name, description, 1 if built_in else 0),
+            )
+            _replace_role_permissions(conn, role_id, permissions or [])
+            conn.commit()
+        record = await self.get_role(role_id)
+        if record is None:
+            raise DatusException(ErrorCode.COMMON_UNKNOWN, message="Failed to persist enterprise role.")
+        return record
+
+    async def set_role_permissions(self, role_id: str, permissions: list[str]) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            exists = conn.execute(
+                "SELECT 1 FROM enterprise_roles WHERE role_id = ?",
+                (role_id,),
+            ).fetchone()
+            if not exists:
+                return None
+            _replace_role_permissions(conn, role_id, permissions)
+            conn.execute(
+                """
+                UPDATE enterprise_roles
+                SET updated_at = CURRENT_TIMESTAMP
+                WHERE role_id = ?
+                """,
+                (role_id,),
+            )
+            conn.commit()
+        return await self.get_role(role_id)
+
+    async def delete_role(self, role_id: str) -> bool:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM enterprise_role_permissions WHERE role_id = ?", (role_id,))
+            cursor = conn.execute("DELETE FROM enterprise_roles WHERE role_id = ?", (role_id,))
+            conn.commit()
+        return cursor.rowcount > 0
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self._db_path, timeout=5.0)
+
+    def _ensure_schema(self) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS enterprise_roles (
+                    role_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    built_in INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS enterprise_role_permissions (
+                    role_id TEXT NOT NULL,
+                    permission_key TEXT NOT NULL,
+                    PRIMARY KEY (role_id, permission_key)
+                )
+                """
+            )
+            conn.commit()
+
+
 class InMemorySessionOwnerStore:
     """Process-local session owner store for tests and local mode."""
 
@@ -423,6 +593,61 @@ def _user_record_from_row(row) -> dict[str, Any]:
         "created_at": _optional_str(row[4]),
         "updated_at": _optional_str(row[5]),
     }
+
+
+def _copy_role_record(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "role_id": str(record["role_id"]),
+        "name": str(record["name"]),
+        "description": _optional_str(record.get("description")),
+        "permissions": _normalized_permissions(record.get("permissions") or []),
+        "built_in": bool(record.get("built_in")),
+        "created_at": _optional_str(record.get("created_at")),
+        "updated_at": _optional_str(record.get("updated_at")),
+    }
+
+
+def _role_record_from_row(conn: sqlite3.Connection, row) -> dict[str, Any]:
+    return {
+        "role_id": str(row[0]),
+        "name": str(row[1]),
+        "description": _optional_str(row[2]),
+        "permissions": _role_permissions(conn, str(row[0])),
+        "built_in": bool(row[3]),
+        "created_at": _optional_str(row[4]),
+        "updated_at": _optional_str(row[5]),
+    }
+
+
+def _role_permissions(conn: sqlite3.Connection, role_id: str) -> list[str]:
+    rows = conn.execute(
+        """
+        SELECT permission_key
+        FROM enterprise_role_permissions
+        WHERE role_id = ?
+        ORDER BY permission_key ASC
+        """,
+        (role_id,),
+    ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
+def _replace_role_permissions(conn: sqlite3.Connection, role_id: str, permissions: list[str]) -> None:
+    conn.execute("DELETE FROM enterprise_role_permissions WHERE role_id = ?", (role_id,))
+    conn.executemany(
+        """
+        INSERT INTO enterprise_role_permissions (role_id, permission_key)
+        VALUES (?, ?)
+        """,
+        [(role_id, permission) for permission in _normalized_permissions(permissions)],
+    )
+
+
+def _normalized_permissions(permissions: Any) -> list[str]:
+    if not isinstance(permissions, list):
+        return []
+    normalized = {permission.strip() for permission in permissions if isinstance(permission, str) and permission.strip()}
+    return sorted(normalized)
 
 
 def _optional_str(value: Any) -> str | None:
