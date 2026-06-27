@@ -263,6 +263,8 @@ MVP 中 `datasource_grants` 采用每个 `(subject_type, subject_id, datasource_
 
 - role grants 先合并，user grants 后合并。
 - 显式 `deny` 优先于 `allow`。
+- 当前单条 flattened grant 不能表达复杂 OR 条件；role allow 合并必须保留已有 scope 维度、同维度 pattern 做并集，跨维度按执行层 AND 语义保守生效。
+- user grant 对没有 role grant 的 datasource 可作为直接授权加入；对已有 datasource grant 只做 scope 收窄或显式拒绝，不能扩大该 datasource 的有效授权。
 - 宽范围 allow 与窄范围 deny 同时命中时，窄范围 deny 生效。
 - 宽范围 deny 与窄范围 allow 同时命中时，除非 `scope_json` 明确支持例外白名单，否则 deny 生效。
 - 保存 grant 前校验 subject、datasource key、scope schema 和 effect；语义不明确时拒绝保存并写审计。

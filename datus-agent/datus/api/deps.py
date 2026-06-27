@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import re
+from fnmatch import fnmatchcase
 from typing import Annotated, Any, Optional
 
 from fastapi import Depends, HTTPException, Request
@@ -188,11 +189,11 @@ async def _refresh_enterprise_context(ctx: AppContext, enterprise_extensions: En
 
     try:
         stored_role_ids = await enterprise_extensions.role_store.list_user_roles(ctx.user_id or "")
-        role_ids = _merge_string_lists([*ctx.roles, *stored_role_ids])
+        role_ids = _merge_string_lists(stored_role_ids)
         role_permissions: set[str] = set()
         for role_id in role_ids:
             role = await enterprise_extensions.role_store.get_role(role_id)
-            if role is None and role_id in stored_role_ids:
+            if role is None:
                 await _audit_enterprise_context_deny(
                     ctx,
                     enterprise_extensions,
@@ -215,15 +216,12 @@ async def _refresh_enterprise_context(ctx: AppContext, enterprise_extensions: En
         raise HTTPException(status_code=403, detail="DATASOURCE_GRANTS_UNAVAILABLE") from e
 
     ctx.roles = role_ids
-    ctx.permissions = set(ctx.permissions or set()).union(role_permissions)
+    ctx.permissions = role_permissions
     ctx.datasource_grants = datasource_grants
     ctx.principal = dict(ctx.principal or {})
-    if ctx.roles:
-        ctx.principal["roles"] = list(ctx.roles)
-    if ctx.permissions:
-        ctx.principal["permissions"] = sorted(ctx.permissions)
-    if ctx.datasource_grants:
-        ctx.principal["datasource_grants"] = copy.deepcopy(ctx.datasource_grants)
+    ctx.principal["roles"] = list(ctx.roles)
+    ctx.principal["permissions"] = sorted(ctx.permissions)
+    ctx.principal["datasource_grants"] = copy.deepcopy(ctx.datasource_grants)
 
 
 async def _merged_datasource_grants(
@@ -231,25 +229,25 @@ async def _merged_datasource_grants(
     role_ids: list[str],
     enterprise_extensions: EnterpriseExtensions,
 ) -> dict[str, Any]:
-    grants: dict[str, Any] = copy.deepcopy(ctx.datasource_grants or {})
+    grants: dict[str, Any] = {}
     for role_id in role_ids:
         records = await enterprise_extensions.datasource_grant_store.list_grants(
             subject_type="role",
             subject_id=role_id,
         )
         for record in records:
-            _merge_grant_record(grants, record)
+            _merge_grant_record(grants, record, mode="union")
 
     records = await enterprise_extensions.datasource_grant_store.list_grants(
         subject_type="user",
         subject_id=ctx.user_id,
     )
     for record in records:
-        _merge_grant_record(grants, record)
+        _merge_grant_record(grants, record, mode="narrow")
     return grants
 
 
-def _merge_grant_record(grants: dict[str, Any], record: dict[str, Any]) -> None:
+def _merge_grant_record(grants: dict[str, Any], record: dict[str, Any], *, mode: str = "union") -> None:
     datasource_key = str(record.get("datasource_key") or "").strip()
     if not datasource_key:
         return
@@ -260,7 +258,73 @@ def _merge_grant_record(grants: dict[str, Any], record: dict[str, Any]) -> None:
     if _grant_effect(existing) == "deny" or effect == "deny":
         grants[datasource_key] = {"effect": "deny"}
         return
-    grants[datasource_key] = merged
+    if not isinstance(existing, dict):
+        grants[datasource_key] = merged
+        return
+    if mode == "narrow":
+        grants[datasource_key] = _intersect_allow_grants(existing, merged)
+        return
+    grants[datasource_key] = _union_allow_grants(existing, merged)
+
+
+def _union_allow_grants(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    merged = {"effect": "allow"}
+    for key in ("allow_catalog", "allow_sql"):
+        merged[key] = _grant_bool_allows(left, key) or _grant_bool_allows(right, key)
+    for key in ("catalogs", "databases", "schemas", "tables"):
+        patterns = _union_scope_patterns(left.get(key), right.get(key))
+        if patterns is not None:
+            merged[key] = patterns
+    return merged
+
+
+def _intersect_allow_grants(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    merged = {"effect": "allow"}
+    for key in ("allow_catalog", "allow_sql"):
+        merged[key] = _grant_bool_allows(left, key) and _grant_bool_allows(right, key)
+    for key in ("catalogs", "databases", "schemas", "tables"):
+        patterns = _intersect_scope_patterns(left.get(key), right.get(key))
+        if patterns is not None:
+            merged[key] = patterns
+    return merged
+
+
+def _grant_bool_allows(grant: dict[str, Any], key: str) -> bool:
+    return grant.get(key) is not False
+
+
+def _union_scope_patterns(left: Any, right: Any) -> list[str] | None:
+    left_patterns = _scope_pattern_list(left)
+    right_patterns = _scope_pattern_list(right)
+    if left_patterns is None:
+        return right_patterns
+    if right_patterns is None:
+        return left_patterns
+    return sorted({*left_patterns, *right_patterns})
+
+
+def _intersect_scope_patterns(left: Any, right: Any) -> list[str] | None:
+    left_patterns = _scope_pattern_list(left)
+    right_patterns = _scope_pattern_list(right)
+    if left_patterns is None:
+        return right_patterns
+    if right_patterns is None:
+        return left_patterns
+    return sorted(
+        {
+            pattern
+            for pattern in right_patterns
+            if any(existing == "*" or fnmatchcase(pattern, existing) for existing in left_patterns)
+        }
+    )
+
+
+def _scope_pattern_list(raw: Any) -> list[str] | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, (list, tuple, set)):
+        return []
+    return [str(item).strip() for item in raw if str(item).strip()]
 
 
 def _grant_effect(grant: Any) -> str | None:

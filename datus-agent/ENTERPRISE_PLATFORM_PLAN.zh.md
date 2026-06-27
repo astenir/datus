@@ -645,7 +645,7 @@ def require_module(permission: str):
 合并规则：
 
 1. 角色 grant 提供基础授权。
-2. 用户 grant 可增加或收窄授权。
+2. 用户 grant 对未授权数据源可增加直接授权；对已有 role grant 只能收窄或显式拒绝。
 3. `deny` 优先级高于 `allow`。
 4. 没有 grant 时默认不可见、不可用。
 5. 管理员可以配置为默认全量，但仍建议通过显式 grant 表达，便于审计。
@@ -655,7 +655,8 @@ MVP 数据模型采用**每个主体和数据源一条 grant**：`(subject_type,
 冲突与写入规则：
 
 - admin API 对同一 `(subject_type, subject_id, datasource_key)` 使用 upsert，不插入重复 grant。
-- role grants 先合并，user grants 后合并；用户级授权可以进一步收窄或显式拒绝。
+- role grants 先合并，user grants 后合并；当前单条 flattened grant 不能表达复杂 OR 条件，因此 role allow 合并保留已有 scope 维度、同维度 pattern 做并集，跨维度按执行层的 AND 语义保守生效。
+- user grant 对没有 role grant 的 datasource 可作为直接授权加入；对已有 datasource grant 只做 scope 收窄或显式拒绝，不能扩大该 datasource 的有效授权。
 - 显式 `deny` 永远优先于 `allow`。
 - 宽范围 allow 与窄范围 deny 同时命中时，窄范围 deny 生效。
 - 宽范围 deny 与窄范围 allow 同时命中时，除非 `scope_json` 明确支持例外白名单，否则 deny 生效。
