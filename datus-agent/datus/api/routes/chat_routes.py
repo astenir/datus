@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Annotated, Any, AsyncGenerator, Optional
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import StreamingResponse
 
+from datus.api import deps as api_deps
 from datus.api.auth.context import AppContext
 from datus.api.constants import BUILTIN_SUBAGENTS
 from datus.api.deps import ServiceDep
@@ -708,14 +709,42 @@ async def list_sessions(
     ),
 ) -> Result[ChatSessionData]:
     try:
-        return await asyncio.wait_for(
+        result = await asyncio.wait_for(
             asyncio.to_thread(svc.chat.list_sessions, user_id=ctx.user_id, subagent_id=subagent_id),
             timeout=_FUSE_IO_TIMEOUT,
         )
+        return await _filter_session_list_by_owner_store(svc, ctx, result)
     except TimeoutError:
         return Result[ChatSessionData](
             success=False, errorCode="REQUEST_TIMEOUT", errorMessage="Session list timed out"
         )
+
+
+async def _filter_session_list_by_owner_store(
+    svc: ServiceDep,
+    ctx: AppContext,
+    result: Result[ChatSessionData],
+) -> Result[ChatSessionData]:
+    """In PG body-store mode, owner metadata remains the list authorization index."""
+
+    if not result.success or result.data is None or not ctx.user_id:
+        return result
+
+    extensions = api_deps.get_enterprise_extensions()
+    if not extensions.enabled or extensions.session_body_store is None:
+        return result
+
+    try:
+        owner_session_ids = set(await extensions.session_owner_store.list_session_ids(svc.project_id, ctx.user_id))
+    except Exception:
+        return Result[ChatSessionData](
+            success=False,
+            errorCode="SESSION_LIST_FAILED",
+            errorMessage="Session owner index unavailable.",
+        )
+
+    sessions = [item for item in result.data.sessions if item.session_id in owner_session_ids]
+    return Result[ChatSessionData](success=True, data=ChatSessionData(sessions=sessions, total_count=len(sessions)))
 
 
 @router.delete(

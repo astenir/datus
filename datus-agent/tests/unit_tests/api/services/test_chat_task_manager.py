@@ -1590,6 +1590,28 @@ class TestStartChatLanguageOverride:
         await task.asyncio_task
         assert captured["agent_config"].language == "zh"
 
+    @pytest.mark.asyncio
+    async def test_session_body_store_is_added_only_to_cloned_config(self, real_agent_config, monkeypatch):
+        from datus.api.models.cli_models import StreamChatInput
+
+        captured = {}
+
+        async def fake_run_loop(self, task, agent_config, request, **kwargs):
+            captured["agent_config"] = agent_config
+
+        body_store = object()
+        monkeypatch.setattr(ChatTaskManager, "_run_loop", fake_run_loop)
+        manager = ChatTaskManager(project_id="enterprise", session_body_store=body_store)
+        request = StreamChatInput(message="hi")
+
+        task = await manager.start_chat(real_agent_config, request)
+        await task.asyncio_task
+
+        assert captured["agent_config"]._session_body_store is body_store
+        assert captured["agent_config"]._session_project_id == "enterprise"
+        assert getattr(real_agent_config, "_session_body_store", None) is None
+        assert getattr(real_agent_config, "_session_project_id", None) is None
+
 
 class TestStartChatModelOverride:
     """``ChatInput.model`` (format ``provider/model_id``) must override the

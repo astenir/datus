@@ -17,6 +17,7 @@ from datus.api.models.base_models import Result
 from datus.api.models.cli_models import (
     ChatHistoryData,
     ChatSessionData,
+    ChatSessionItemInfo,
     FeedbackChatInput,
     SSEEndData,
     SSEEvent,
@@ -75,7 +76,7 @@ class CollectingAuditSink:
         self.events.append(event)
 
 
-def _patch_owner_extensions(monkeypatch, owner_store, *, enabled=False):
+def _patch_owner_extensions(monkeypatch, owner_store, *, enabled=False, session_body_store=None):
     import datus.api.deps as api_deps
     import datus.api.enterprise.deps as enterprise_deps
     from datus.api.enterprise.defaults import PassthroughConfigProjector
@@ -83,6 +84,7 @@ def _patch_owner_extensions(monkeypatch, owner_store, *, enabled=False):
     extensions = SimpleNamespace(
         enabled=enabled,
         session_owner_store=owner_store,
+        session_body_store=session_body_store,
         config_projector=PassthroughConfigProjector(),
     )
     monkeypatch.setattr(api_deps, "get_enterprise_extensions", lambda: extensions)
@@ -900,6 +902,41 @@ class TestListSessions:
         assert result.data is None
         mock_wf.assert_called_once_with(ANY, timeout=_FUSE_IO_TIMEOUT)
 
+    @pytest.mark.asyncio
+    async def test_pg_body_store_list_filters_orphan_sessions_without_owner_index(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+
+        owner_store = InMemorySessionOwnerStore()
+        await owner_store.set_owner("project-1", "owned", "alice")
+        _patch_owner_extensions(monkeypatch, owner_store, enabled=True, session_body_store=object())
+        svc = MagicMock()
+        svc.project_id = "project-1"
+        ctx = _mock_ctx(user_id="alice")
+        svc.chat.list_sessions.return_value = Result[ChatSessionData](
+            success=True,
+            data=ChatSessionData(
+                sessions=[
+                    ChatSessionItemInfo(
+                        session_id="owned",
+                        created_at="2026-01-01T00:00:00Z",
+                        last_updated="2026-01-01T00:00:00Z",
+                    ),
+                    ChatSessionItemInfo(
+                        session_id="orphan",
+                        created_at="2026-01-01T00:00:00Z",
+                        last_updated="2026-01-01T00:00:00Z",
+                    ),
+                ],
+                total_count=2,
+            ),
+        )
+
+        result = await list_sessions(svc, ctx, subagent_id=None)
+
+        assert result.success is True
+        assert [item.session_id for item in result.data.sessions] == ["owned"]
+        assert result.data.total_count == 1
+
 
 # ===========================================================================
 # DELETE /api/v1/chat/sessions/{session_id} — delete_session with FUSE timeout
@@ -949,6 +986,24 @@ class TestDeleteSession:
 
         assert result.success is True
         svc.chat.delete_session.assert_called_once_with("session123", user_id="alice")
+
+    @pytest.mark.asyncio
+    async def test_pg_body_store_delete_denies_when_owner_index_missing(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+
+        owner_store = InMemorySessionOwnerStore()
+        _patch_owner_extensions(monkeypatch, owner_store, enabled=True, session_body_store=object())
+        svc = MagicMock()
+        svc.project_id = "project-1"
+        svc.task_manager.get_task.return_value = None
+        svc.chat.session_exists.return_value = True
+
+        result = await delete_session("orphan", svc, _mock_ctx(user_id="alice"))
+
+        assert result.success is False
+        assert result.errorCode == "RESOURCE_NOT_FOUND"
+        svc.chat.delete_session.assert_not_called()
+        assert await owner_store.get_owner("project-1", "orphan") is None
 
     @pytest.mark.asyncio
     async def test_timeout_returns_request_timeout_error(self):
@@ -1002,6 +1057,24 @@ class TestGetChatHistory:
         assert result.success is True
         assert result is expected
         svc.chat.get_history.assert_called_once_with("sess1", user_id="user1")
+
+    @pytest.mark.asyncio
+    async def test_pg_body_store_history_denies_when_owner_index_missing(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+
+        owner_store = InMemorySessionOwnerStore()
+        _patch_owner_extensions(monkeypatch, owner_store, enabled=True, session_body_store=object())
+        svc = MagicMock()
+        svc.project_id = "project-1"
+        svc.task_manager.get_task.return_value = None
+        svc.chat.session_exists.return_value = True
+
+        result = await get_chat_history(svc, _mock_ctx(user_id="alice"), session_id="orphan")
+
+        assert result.success is False
+        assert result.errorCode == "RESOURCE_NOT_FOUND"
+        svc.chat.get_history.assert_not_called()
+        assert await owner_store.get_owner("project-1", "orphan") is None
 
     @pytest.mark.asyncio
     async def test_timeout_returns_request_timeout_error(self):

@@ -381,6 +381,7 @@ SQL 不是唯一执行风险。以下能力也必须进入 `Authenticate -> Buil
 - 滚动发布期间，新旧代码对 session owner、artifact ACL、audit schema 和 permission key 的兼容性必须有测试或迁移说明。
 - 当前 `datus_enterprise.postgres_stores` 只通过 `_SCHEMA_SQL` 执行 `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` 做最小 bootstrap；不要把它当作生产 schema migration 工具。
 - `enterprise.session_body_store` 只负责聊天正文/状态 backend，包括 messages/items、message structure、turn usage、running turn usage 和 system-prompt snapshot。它不得替代 `SessionOwnerStore`，不得把 owner/index metadata 当成正文存储，也不得因为正文存在就授予访问权。
+- 启用 PG session body backend 时，不得用正文表存在性自动补写 owner metadata；普通用户 session list 必须按 `SessionOwnerStore` 过滤，history/delete/resume/feedback 等指定 session 的路径必须在 owner 缺失或不一致时返回统一不可见错误。
 - 修改 session backend 时必须保持默认本地 `AdvancedSQLiteSession` SQLite 行为不变；PG backend 必须通过显式配置启用。不要在应用启动路径自动扫描、导入或迁移历史 `.db` 文件。
 - session body 表不允许引入 `tenant_id` baseline 维度；隔离维度使用 `project_id`、安全化后的 user scope、`session_id` 和 `SessionOwnerStore` 关系。
 - 修改 PG metadata schema 时，必须说明是否需要人工 DDL 或后续 migration runner，不能在应用启动路径中加入破坏性 DDL、隐式回填或不可回滚的数据修复。
@@ -405,6 +406,7 @@ SQL 不是唯一执行风险。以下能力也必须进入 `Authenticate -> Buil
 - NoAuthProvider 本地兼容行为不被改坏。
 - 默认 SQLite session 行为不被改坏；显式启用 session body PG backend 后，新建、追加、读取、列出、删除、copy/history/running usage/system prompt snapshot 行为与 `AdvancedSQLiteSession` 兼容。
 - owner store 与正文 store 不一致时 fail closed 或返回统一资源不可见错误，不能因为正文存在绕过 owner 校验。
+- PG body backend 下的 orphan body session 必须有 route 层回归测试，覆盖 list 不显示、history/delete 不调用正文读取或删除服务。
 - invalid `session_id` 和 user scope 不能导致路径穿越或跨 scope 读取；PG backend 同样必须覆盖这些输入。
 - `enterprise.enabled=true` 但生产 auth/RBAC/authorization/config projection 缺失时 fail closed。
 - 禁用用户的新请求、resume 和实时 query 被拒绝。

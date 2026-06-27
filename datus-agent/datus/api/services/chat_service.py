@@ -6,6 +6,7 @@ for the actual agentic loop execution. Session management methods
 read from disk each time (no in-memory state).
 """
 
+import copy
 import uuid
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Optional
 
@@ -197,7 +198,7 @@ class ChatService:
                 description="Temporary node for compaction",
                 node_type="chat",
                 input_data=None,
-                agent_config=self.agent_config,
+                agent_config=self._agent_config_for_session_body_store(),
                 tools=None,
                 scope=session_scope_from_user_id(user_id),
                 session_id=session_id,
@@ -333,3 +334,12 @@ class ChatService:
             project_id=self._project_id,
             body_store=self._session_body_store,
         )
+
+    def _agent_config_for_session_body_store(self) -> AgentConfig:
+        if self._session_body_store is None:
+            return self.agent_config
+
+        agent_config = copy.copy(self.agent_config)
+        agent_config._session_body_store = self._session_body_store
+        agent_config._session_project_id = self._project_id
+        return agent_config

@@ -53,6 +53,17 @@ class TestDatusServiceInit:
         assert svc._mcp is None
         assert svc._kb is None
 
+    def test_session_body_store_does_not_mutate_shared_config(self, real_agent_config):
+        """Session backend wiring is project-scoped, not stored on shared AgentConfig."""
+        body_store = object()
+
+        svc = DatusService(agent_config=real_agent_config, project_id="p1", session_body_store=body_store)
+
+        assert getattr(real_agent_config, "_session_body_store", None) is None
+        assert getattr(real_agent_config, "_session_project_id", None) is None
+        assert svc.task_manager._session_body_store is body_store
+        assert svc.chat._session_body_store is body_store
+
 
 class TestDatusServiceLazyProperties:
     """Tests for lazy service property initialization."""

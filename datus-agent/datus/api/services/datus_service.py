@@ -41,9 +41,6 @@ class DatusService:
         self._config_fingerprint = self.compute_fingerprint(agent_config)
         self._session_owner_store = session_owner_store
         self._session_body_store = session_body_store
-        if session_body_store is not None:
-            self._agent_config._session_body_store = session_body_store
-            self._agent_config._session_project_id = project_id
 
         # ChatTaskManager — project-scoped (not process-level singleton)
         from datus.api.services.chat_task_manager import ChatTaskManager

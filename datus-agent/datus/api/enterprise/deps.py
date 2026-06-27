@@ -148,6 +148,14 @@ async def authorize_session_access(
     if owner is None:
         owns_scoped_session = svc.chat.session_exists(session_id, user_id=ctx.user_id)
         if owns_scoped_session:
+            if extensions.enabled and extensions.session_body_store is not None:
+                await _audit_session_deny(ctx, session_id, action, "session owner missing")
+                if require_existing_session:
+                    return SessionAccess(error=_session_error("RESOURCE_NOT_FOUND", "Session not found"), user_id=None)
+                return SessionAccess(
+                    error=_session_error("SESSION_FORBIDDEN", "Session access denied"),
+                    user_id=None,
+                )
             await extensions.session_owner_store.set_owner(svc.project_id, session_id, ctx.user_id)
             return SessionAccess(error=None, user_id=ctx.user_id)
         if require_existing_session and extensions.enabled:
