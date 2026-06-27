@@ -377,6 +377,7 @@ class SqliteEnterpriseRoleStore:
 
     async def delete_role(self, role_id: str) -> bool:
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
             assigned = conn.execute(
                 "SELECT 1 FROM enterprise_user_roles WHERE role_id = ? LIMIT 1",
                 (role_id,),

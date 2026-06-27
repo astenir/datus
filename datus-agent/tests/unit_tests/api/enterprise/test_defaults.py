@@ -1,3 +1,6 @@
+import asyncio
+import sqlite3
+
 import pytest
 
 from datus.api.auth.context import AppContext
@@ -257,3 +260,52 @@ async def test_sqlite_enterprise_role_store_rejects_missing_user_role_binding(tm
 
     reopened = SqliteEnterpriseRoleStore(str(db_path))
     assert await reopened.list_user_roles("alice") == []
+
+
+def test_sqlite_enterprise_role_delete_blocks_concurrent_user_role_insert(tmp_path):
+    class TracedDeleteStore(SqliteEnterpriseRoleStore):
+        def __init__(self, db_path: str, competing_store: SqliteEnterpriseRoleStore) -> None:
+            self.competing_error = None
+            self._triggered_competing_insert = False
+            self._competing_store = competing_store
+            super().__init__(db_path)
+
+        def _connect(self):
+            conn = sqlite3.connect(self._db_path, timeout=0.01)
+            conn.set_trace_callback(self._on_sql)
+            return conn
+
+        def _on_sql(self, statement: str) -> None:
+            if self._triggered_competing_insert or "FROM enterprise_user_roles" not in statement:
+                return
+            self._triggered_competing_insert = True
+            try:
+                with sqlite3.connect(self._db_path, timeout=0.01) as conn:
+                    conn.execute("BEGIN IMMEDIATE")
+                    conn.execute("DELETE FROM enterprise_user_roles WHERE user_id = ?", ("alice",))
+                    conn.execute(
+                        """
+                        INSERT INTO enterprise_user_roles (user_id, role_id, created_at)
+                        VALUES (?, ?, CURRENT_TIMESTAMP)
+                        """,
+                        ("alice", "analyst"),
+                    )
+                    conn.commit()
+            except Exception as exc:
+                self.competing_error = exc
+
+    db_path = tmp_path / "enterprise_roles.db"
+    setup_store = SqliteEnterpriseRoleStore(str(db_path))
+    competing_store = SqliteEnterpriseRoleStore(str(db_path))
+    delete_store = TracedDeleteStore(str(db_path), competing_store)
+    asyncio.run(setup_store.upsert_role(role_id="analyst", name="Analyst"))
+
+    deleted = asyncio.run(delete_store.delete_role("analyst"))
+
+    reopened = SqliteEnterpriseRoleStore(str(db_path))
+    assert deleted is True
+    assert delete_store._triggered_competing_insert is True
+    assert isinstance(delete_store.competing_error, sqlite3.OperationalError)
+    assert asyncio.run(reopened.get_role("analyst")) is None
+    assert asyncio.run(reopened.list_user_roles("alice")) == []
+    assert asyncio.run(reopened.list_role_users("analyst")) == []

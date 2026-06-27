@@ -12,6 +12,7 @@ from datus.api import deps
 from datus.api.auth.context import AppContext
 from datus.api.constants import USER_ID_PATTERN
 from datus.api.models.base_models import Result
+from datus.utils.exceptions import DatusException, ErrorCode
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
 
@@ -373,7 +374,17 @@ async def set_admin_user_roles(
 
     try:
         role_ids = await store.set_user_roles(user_id, normalized_role_ids)
-    except Exception:
+    except Exception as exc:
+        if _is_role_not_found_error(exc):
+            await _audit_user_roles_mutation(
+                ctx,
+                user_id=user_id,
+                operation="set_admin_user_roles",
+                decision="deny",
+                reason="role not found",
+                old_summary={"user_id": user_id, "role_ids": before},
+            )
+            return _role_error("RESOURCE_NOT_FOUND", "Role not found.")
         await _audit_user_roles_mutation(
             ctx,
             user_id=user_id,
@@ -701,6 +712,14 @@ def _user_roles_validation_error_code(message: str) -> str:
     if "user_id" in message:
         return "USER_ID_INVALID"
     return "ROLE_ID_INVALID"
+
+
+def _is_role_not_found_error(exc: Exception) -> bool:
+    return (
+        isinstance(exc, DatusException)
+        and exc.code == ErrorCode.COMMON_FIELD_INVALID
+        and "Role not found:" in exc.message
+    )
 
 
 def _normalized_permissions(permissions: list[str]) -> list[str]:

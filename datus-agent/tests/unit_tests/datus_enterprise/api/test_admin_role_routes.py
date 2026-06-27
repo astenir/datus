@@ -17,6 +17,7 @@ from datus.api.enterprise.defaults import (
 )
 from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.service import create_app
+from datus.utils.exceptions import DatusException, ErrorCode
 from datus_enterprise.api import admin_role_routes
 
 
@@ -190,6 +191,29 @@ def test_admin_user_roles_rejects_missing_user_or_role(monkeypatch):
     assert invalid_user_response.json()["errorCode"] == "USER_ID_INVALID"
     assert invalid_role_response.json()["errorCode"] == "ROLE_ID_INVALID"
     assert audit_sink.events[-1].decision == "deny"
+
+
+def test_admin_user_roles_translates_store_role_not_found_race(monkeypatch):
+    class RaceRoleStore(InMemoryEnterpriseRoleStore):
+        async def set_user_roles(self, user_id, role_ids):
+            raise DatusException(ErrorCode.COMMON_FIELD_INVALID, message="Role not found: analyst.")
+
+    role_store = RaceRoleStore()
+    user_store = InMemoryEnterpriseUserStore()
+    audit_sink = CollectingAuditSink()
+    _install_extensions(monkeypatch, role_store, audit_sink, user_store)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.roles"})
+    asyncio.run(user_store.upsert_user(user_id="alice", display_name="Alice"))
+    asyncio.run(role_store.upsert_role(role_id="analyst", name="Analyst"))
+
+    with _client(ctx) as client:
+        response = client.put("/api/v1/admin/users/alice/roles", json={"role_ids": ["analyst"]})
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert response.json()["errorCode"] == "RESOURCE_NOT_FOUND"
+    assert audit_sink.events[-1].decision == "deny"
+    assert audit_sink.events[-1].reason == "role not found"
 
 
 def test_admin_role_delete_rejects_assigned_role(monkeypatch):
