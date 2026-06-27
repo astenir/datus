@@ -197,6 +197,7 @@ module.admin.datasources
 module.admin.sessions
 module.admin.artifacts
 module.admin.audit
+module.admin.audit.export
 module.admin.quotas
 module.admin.secrets
 ```

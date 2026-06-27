@@ -500,7 +500,7 @@ PUT    /api/v1/admin/quotas
 GET    /api/v1/admin/usage
 ```
 
-每组管理 API 使用显式 permission，例如 `module.admin.users`、`module.admin.roles`、`module.admin.datasources`、`module.admin.sessions`、`module.admin.audit`。不要用一个硬编码超级用户绕过所有管理权限。
+每组管理 API 使用显式 permission，例如 `module.admin.users`、`module.admin.roles`、`module.admin.datasources`、`module.admin.sessions`、`module.admin.audit`、`module.admin.audit.export`。不要用一个硬编码超级用户绕过所有管理权限。
 
 ### `/system` 与 `/internal`
 
@@ -577,6 +577,7 @@ module.admin.datasources
 module.admin.sessions
 module.admin.artifacts
 module.admin.audit
+module.admin.audit.export
 ```
 
 内置角色建议：
