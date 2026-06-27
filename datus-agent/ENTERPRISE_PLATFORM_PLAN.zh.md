@@ -583,6 +583,9 @@ module.admin.sessions
 module.admin.artifacts
 module.admin.audit
 module.admin.audit.export
+module.admin.quotas
+module.admin.secrets
+module.system.status
 ```
 
 内置角色建议：
@@ -985,7 +988,7 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - MCP route 已接入 `module.mcp`，覆盖 MCP server/tool/filter 的列表、管理和调用接口。
 - 当前已注册的 datasource admin route `/api/v1/admin/datasources`、`/api/v1/admin/datasource-default` 和 `/api/v1/admin/datasource-grants` 已接入 `module.admin.datasources`，用于项目级数据源清单、默认数据源管理和 datasource grant metadata 管理。
 - 当前已注册的 user/role admin route 已分别接入 `module.admin.users` 和 `module.admin.roles`，用于阶段 6 的用户状态、role metadata 和 role permission set 管理。
-- admin sessions、artifacts ACL、audit query/export、quota metadata/usage 和 secret reference API 已进入阶段 6 接线。当前已将 user-role metadata、role permission set 和 role/user datasource grants 在企业模式新请求中合并回 `AppContext.roles`、`AppContext.permissions`、`AppContext.datasource_grants` 和 `principal`，但长期生产仍应使用共享 metadata store。direct SQL 和 dashboard query 已复用请求级 projection、grant scope、SQL policy principal 与审计；chat stream/feedback 已接入请求启动级 quota；admin audit export 已接入导出配额；report artifact 当前是预渲染静态 bundle，没有 agent-only live query endpoint。
+- admin sessions、artifacts ACL、audit query/export、quota metadata/usage 和 secret reference API 已进入阶段 6 接线；`/api/v1/system/status` 已使用 `module.system.status` 接入只读系统状态。当前已将 user-role metadata、role permission set 和 role/user datasource grants 在企业模式新请求中合并回 `AppContext.roles`、`AppContext.permissions`、`AppContext.datasource_grants` 和 `principal`，但长期生产仍应使用共享 metadata store。direct SQL 和 dashboard query 已复用请求级 projection、grant scope、SQL policy principal 与审计；chat stream/feedback 已接入请求启动级 quota；admin audit export 已接入导出配额；report artifact 当前是预渲染静态 bundle，没有 agent-only live query endpoint。
 
 验收：
 

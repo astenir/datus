@@ -521,6 +521,7 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
         ("datus_enterprise.api.admin_role_routes", "enterprise_role_admin"),
         ("datus_enterprise.api.admin_quota_routes", "enterprise_quota_admin"),
         ("datus_enterprise.api.admin_secret_routes", "enterprise_secret_admin"),
+        ("datus_enterprise.api.system_routes", "enterprise_system"),
     ]
     import importlib
 

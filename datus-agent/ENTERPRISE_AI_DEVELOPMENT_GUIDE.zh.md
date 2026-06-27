@@ -200,6 +200,7 @@ module.admin.audit
 module.admin.audit.export
 module.admin.quotas
 module.admin.secrets
+module.system.status
 ```
 
 规则：
@@ -304,7 +305,7 @@ MVP 中 `datasource_grants` 采用每个 `(subject_type, subject_id, datasource_
 - admin user route：`/api/v1/admin/users`、`/api/v1/admin/users/{user_id}`、`/api/v1/admin/users/{user_id}/disable` 和 `/api/v1/admin/users/{user_id}/enable` 使用 `module.admin.users`，用户管理变更写入脱敏审计摘要；企业模式新请求会基于 `EnterpriseUserStore` 拒绝已禁用用户。
 - admin role route：`/api/v1/admin/roles`、`/api/v1/admin/roles/{role_id}`、`/api/v1/admin/roles/{role_id}/permissions` 和 `/api/v1/admin/users/{user_id}/roles` 使用 `module.admin.roles`，role metadata、permission set 和用户-role 绑定变更写入脱敏审计摘要；企业模式新请求会从 metadata store 合并用户角色与角色权限到 `AppContext.roles` / `AppContext.permissions`。
 
-后续新增 route 时应继续使用 `require_module()` dependency 接入模块权限；admin sessions/artifacts/audit/quotas/secrets 已进入阶段 6 接线。不要把 report/dashboard 的 query 权限合并进 `module.chat`；自然语言入口只能证明用户可用 chat，不能自动证明用户可实时查询报表或仪表盘。当前已先将可配置 datasource grant projection 接入 `/api/v1/chat/stream`、`/api/v1/chat/feedback`、`/api/v1/catalog/list`、`/api/v1/sql/execute` 和 `/api/v1/dashboard/query`，用于校验请求 datasource/database、过滤请求级 `AgentConfig` clone、按 catalog/database/schema/table scope 裁剪目录结果并注入 principal；`/api/v1/sql/execute` 和 `/api/v1/dashboard/query` 会在执行前复用 grant scope 和 SQL policy principal 校验手写或保存 SQL。`/api/v1/sql/execute`、`/api/v1/dashboard/query`、`/api/v1/chat/stream`、`/api/v1/chat/feedback` 和 `/api/v1/admin/audit-logs/export` 已分别接入 `sql.execute`、`dashboard.query`、`chat.stream`、`chat.feedback` 和 `admin.audit.export` 配额消耗，企业模式缺失 quota store 或超额时必须在真正执行前拒绝并审计；chat token、模型 token、report/dashboard export 和并发类配额仍需后续切片接入。企业模式新请求也会从 user/role/datasource grant metadata store 合并 roles、permissions 和 datasource_grants；report artifact 当前是预渲染静态 bundle，没有 agent-only live query endpoint。
+后续新增 route 时应继续使用 `require_module()` dependency 接入模块权限；admin sessions/artifacts/audit/quotas/secrets 已进入阶段 6 接线，`/api/v1/system/status` 已使用 `module.system.status` 接入只读系统状态。不要把 report/dashboard 的 query 权限合并进 `module.chat`；自然语言入口只能证明用户可用 chat，不能自动证明用户可实时查询报表或仪表盘。当前已先将可配置 datasource grant projection 接入 `/api/v1/chat/stream`、`/api/v1/chat/feedback`、`/api/v1/catalog/list`、`/api/v1/sql/execute` 和 `/api/v1/dashboard/query`，用于校验请求 datasource/database、过滤请求级 `AgentConfig` clone、按 catalog/database/schema/table scope 裁剪目录结果并注入 principal；`/api/v1/sql/execute` 和 `/api/v1/dashboard/query` 会在执行前复用 grant scope 和 SQL policy principal 校验手写或保存 SQL。`/api/v1/sql/execute`、`/api/v1/dashboard/query`、`/api/v1/chat/stream`、`/api/v1/chat/feedback` 和 `/api/v1/admin/audit-logs/export` 已分别接入 `sql.execute`、`dashboard.query`、`chat.stream`、`chat.feedback` 和 `admin.audit.export` 配额消耗，企业模式缺失 quota store 或超额时必须在真正执行前拒绝并审计；chat token、模型 token、report/dashboard export 和并发类配额仍需后续切片接入。企业模式新请求也会从 user/role/datasource grant metadata store 合并 roles、permissions 和 datasource_grants；report artifact 当前是预渲染静态 bundle，没有 agent-only live query endpoint。
 
 ### SQL 与数据安全
 
