@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import yaml
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
@@ -21,7 +23,7 @@ from datus.api.enterprise.defaults import (
     LocalAuthorizationProvider,
     SqliteAuditSink,
 )
-from datus.api.enterprise.loader import EnterpriseExtensions
+from datus.api.enterprise.loader import EnterpriseExtensions, load_enterprise_extensions
 from datus.api.models.base_models import Result
 from datus.api.models.cli_models import ExecuteSQLData
 from datus.api.models.database_models import DatabaseInfo, ListDatabasesData
@@ -29,6 +31,8 @@ from datus.api.routes import cli_routes, database_routes
 from datus.utils.time_utils import now_utc_iso
 from datus_enterprise.api import admin_datasource_routes, me_routes
 from datus_enterprise.projection import DatasourceGrantProjector
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 @pytest.fixture(autouse=True)
@@ -248,3 +252,45 @@ def test_enterprise_mvp_smoke_authorizes_catalog_and_sql_through_server_stores(t
     audit_events = asyncio.run(audit_sink.query_events(limit=20))
     assert any(event.action == "module.admin.datasources" and event.decision == "allow" for event in audit_events)
     assert any(event.action == "sql.execute" and event.decision == "allow" for event in audit_events)
+
+
+def test_enterprise_mvp_config_keeps_sqlite_metadata_fallback():
+    config = yaml.safe_load((REPO_ROOT / "conf/agent.enterprise.mvp.yml.example").read_text())
+
+    enterprise = config["enterprise"]
+    assert enterprise["user_store"]["class"] == "datus.api.enterprise.defaults:SqliteEnterpriseUserStore"
+    assert enterprise["role_store"]["class"] == "datus.api.enterprise.defaults:SqliteEnterpriseRoleStore"
+    assert (
+        enterprise["datasource_grant_store"]["class"]
+        == "datus.api.enterprise.defaults:SqliteEnterpriseDatasourceGrantStore"
+    )
+    assert enterprise["session_owner_store"]["class"] == "datus.api.enterprise.defaults:SqliteSessionOwnerStore"
+    assert enterprise["audit_sink"]["class"] == "datus.api.enterprise.defaults:SqliteAuditSink"
+    assert enterprise["quota_store"]["class"] == "datus.api.enterprise.defaults:InMemoryEnterpriseQuotaStore"
+
+
+def test_enterprise_pg_config_loads_postgres_metadata_providers():
+    config = yaml.safe_load((REPO_ROOT / "conf/agent.enterprise.pg.yml.example").read_text())
+    enterprise = config["enterprise"]
+
+    for key in (
+        "user_store",
+        "role_store",
+        "datasource_grant_store",
+        "session_owner_store",
+        "audit_sink",
+        "quota_store",
+        "secret_store",
+    ):
+        enterprise[key]["kwargs"]["dsn"] = "postgresql://metadata"
+
+    extensions = load_enterprise_extensions(enterprise)
+
+    assert extensions.enabled is True
+    assert extensions.user_store.__class__.__name__ == "PgEnterpriseUserStore"
+    assert extensions.role_store.__class__.__name__ == "PgEnterpriseRoleStore"
+    assert extensions.datasource_grant_store.__class__.__name__ == "PgEnterpriseDatasourceGrantStore"
+    assert extensions.session_owner_store.__class__.__name__ == "PgSessionOwnerStore"
+    assert extensions.audit_sink.__class__.__name__ == "PgAuditSink"
+    assert extensions.quota_store.__class__.__name__ == "PgEnterpriseQuotaStore"
+    assert extensions.secret_store.__class__.__name__ == "PgEnterpriseSecretStore"

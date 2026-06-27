@@ -150,6 +150,8 @@ Authenticate -> Build Context -> Authorize -> Project Config -> Execute -> Audit
 - `enterprise.enabled=true` 时，启动期必须配置生产 `api.auth_provider.class`，并显式配置 `enterprise.authorization_provider`、`enterprise.datasource_grant_store` 和 `enterprise.audit_sink`；缺失时 fail closed。`enterprise.config_projector` 的协议和 loader 已存在，但阶段 4 才接入 datasource grant/request-level projection 执行路径，阶段 1 未配置时使用 passthrough skeleton，避免把用户级 projection 缓存在 project 级 `DatusService` 中。
 - 企业模式下 `DatusService` cache key 使用 `enterprise:{project_id}`，但传入服务内部的 `project_id` 保持不带 cache 前缀的项目标识，避免污染会话、日志和下游存储语义。
 - `SessionOwnerStore` 协议已覆盖 owner 写入、查询、删除和按用户列出 session；默认提供进程内实现和 SQLite `session_owners` 骨架。chat 运行中 task、磁盘 session scope 和 session owner 校验已进入阶段 2 接线，长期多 worker 状态外部化仍需后续阶段推进。
+- 已新增 PostgreSQL-backed enterprise metadata stores，可通过 `enterprise.*.class` loader 配置启用，覆盖 user、role、datasource grant、session owner、audit、quota 和 secret reference metadata。生产多 worker/HA 建议使用 `conf/agent.enterprise.pg.yml.example`，SQLite MVP 配置仅适合本地单节点或试点。
+- 本次 PG 化只覆盖企业平台自身 metadata store，不迁移 `AdvancedSQLiteSession` 聊天正文历史、LanceDB/RAG vector backend、`subject/semantic_models`、`subject/sql_summaries` 或业务 datasource 查询配置。
 
 ### 核心协议形态
 
@@ -253,7 +255,7 @@ enterprise:
   config_projector:
     class: datus_enterprise.projection:DatasourceGrantProjector
   audit_sink:
-    class: datus_enterprise.audit:PostgresAuditSink
+    class: datus_enterprise.postgres_stores:PgAuditSink
   quota_limiter:
     class: datus_enterprise.quota:RedisQuotaLimiter
 ```
@@ -832,6 +834,13 @@ chat 请求投影流程：
 
 MVP 可先用 SQLite，生产建议 Postgres。基础表不带 `tenant_id` 维度；企业上下文来自部署配置，不作为每张 metadata 表的分区字段。
 
+当前已提供两套配置样例：
+
+- `conf/agent.enterprise.mvp.yml.example`：保留 SQLite / in-memory metadata store，适合本地单节点 MVP。该配置不会把企业 metadata 共享到多 worker，quota 默认仍是进程内 store。
+- `conf/agent.enterprise.pg.yml.example`：通过 `datus_enterprise.postgres_stores:*` provider 将 enterprise user、role、datasource grant、session owner、audit、quota 和 secret reference metadata 放入 PostgreSQL，适合作为生产多 worker/HA 的基础配置。
+
+这两套配置都不改变业务 datasource 查询逻辑，也不改变 RAG/vector、chat session 正文历史或项目文件系统内容的存储位置。
+
 ```sql
 CREATE TABLE users (
   id TEXT PRIMARY KEY,
@@ -1084,7 +1093,7 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - 已新增 `EnterpriseDatasourceGrantStore` 协议，以及本地兼容的内存实现和单节点 SQLite `enterprise_datasource_grants` 骨架；`enterprise.enabled=true` 时必须显式配置 `enterprise.datasource_grant_store.class`，避免管理 API 写入进程内临时授权状态。
 - 已注册 `/api/v1/admin/datasource-grants` 和 `/api/v1/admin/datasource-grants/{subject_type}/{subject_id}/{datasource_key}`，统一要求 `module.admin.datasources`；当前切片管理 `user` / `role` datasource grant metadata，写入前校验 subject 和 datasource，使用 upsert 保证同一 `(subject_type, subject_id, datasource_key)` 只有一条 grant。role grant 先合并、user grant 后合并，任一 deny 都覆盖 allow；合并后的结果会在后续新请求中进入 `AppContext.datasource_grants` 和 `principal.datasource_grants`。
 - 数据源授权管理接口返回稳定 `Result` 错误码：`DATASOURCE_GRANT_FILTER_INVALID`、`DATASOURCE_GRANT_ID_INVALID`、`DATASOURCE_GRANT_SUBJECT_INVALID`、`DATASOURCE_GRANT_DATASOURCE_INVALID`、`DATASOURCE_GRANT_EFFECT_INVALID`、`DATASOURCE_GRANT_SCOPE_INVALID`、`DATASOURCE_NOT_FOUND`、`RESOURCE_NOT_FOUND`、`USER_READ_FAILED`、`ROLE_READ_FAILED`、`DATASOURCE_GRANT_LIST_FAILED`、`DATASOURCE_GRANT_READ_FAILED`、`DATASOURCE_GRANT_UPSERT_FAILED`、`DATASOURCE_GRANT_DELETE_FAILED`；管理 allow/deny 使用 `module.admin.datasources` 写入审计，metadata 只包含脱敏的新旧摘要和 scope pattern，不记录 datasource 连接配置或 secret。
-- 已新增 `EnterpriseQuotaStore` 协议，以及本地兼容的进程内 `InMemoryEnterpriseQuotaStore`；企业模式下可通过 `enterprise.quota_store.class` 替换为生产 quota/usage metadata store。当前已将直接 SQL 执行、dashboard 实时查询、chat stream、feedback 和 admin audit export 入口分别接入 `sql.execute`、`dashboard.query`、`chat.stream`、`chat.feedback` 和 `admin.audit.export` 配额消耗，缺少 quota store、quota 检查失败或超额都会在执行前返回稳定错误并写入 audit；chat provider/model allowlist 已有服务端 principal 初版，但 chat token、模型 token、report/dashboard export 和并发类配额仍按后续切片接入。
+- 已新增 `EnterpriseQuotaStore` 协议，以及本地兼容的进程内 `InMemoryEnterpriseQuotaStore`；企业模式下可通过 `enterprise.quota_store.class` 替换为生产 quota/usage metadata store。当前已将直接 SQL 执行、dashboard 实时查询、chat stream、feedback 和 admin audit export 入口分别接入 `sql.execute`、`dashboard.query`、`chat.stream`、`chat.feedback` 和 `admin.audit.export` 配额消耗，缺少 quota store、quota 检查失败或超额都会在执行前返回稳定错误并写入 audit；chat provider/model allowlist 已有服务端 principal 初版，但 chat token、模型 token、report/dashboard export 和并发类配额仍按后续切片接入。`datus_enterprise.postgres_stores.PgEnterpriseQuotaStore` 使用 PostgreSQL transaction 和行级锁保护 quota 扣减路径，避免无锁先查后写导致并发超用。
 - 已注册 `/api/v1/admin/quotas` 和 `/api/v1/admin/usage`，统一要求 `module.admin.quotas`；quota upsert 校验 `subject_type`、`subject_id`、`resource`、`limit`、`window_seconds` 和 `enabled`，审计只写 quota 摘要，不记录执行结果或敏感配置。
 - quota 管理接口返回稳定 `Result` 错误码：`QUOTA_FILTER_INVALID`、`QUOTA_STORE_UNAVAILABLE`、`QUOTA_LIST_FAILED`、`QUOTA_UPSERT_FAILED`、`USAGE_LIST_FAILED`、`QUOTA_SUBJECT_INVALID`、`QUOTA_RESOURCE_INVALID`、`QUOTA_LIMIT_INVALID`、`QUOTA_WINDOW_INVALID`、`QUOTA_ENABLED_INVALID`。
 - 已新增单节点 `SqliteAuditSink`，实现 `AuditSink.write()` 和 admin audit 路由使用的 `query_events()`；企业 MVP 可用 SQLite 真实落审计，生产多 worker/HA 部署仍应替换为 Postgres、SIEM 或其他集中审计 sink。
@@ -1092,6 +1101,7 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - 已注册 `/api/v1/admin/secrets` 和 `/api/v1/admin/secrets/{name}`，统一要求 `module.admin.secrets`；secret upsert 只保存 `provider`、`reference`、描述和启用状态，响应与审计只返回 `ref_hint`，不回显完整 reference，更不接收或返回 secret value。
 - secret 管理接口返回稳定 `Result` 错误码：`SECRET_FILTER_INVALID`、`SECRET_STORE_UNAVAILABLE`、`SECRET_LIST_FAILED`、`SECRET_NAME_INVALID`、`SECRET_PROVIDER_INVALID`、`SECRET_REFERENCE_INVALID`、`SECRET_DESCRIPTION_INVALID`、`SECRET_ENABLED_INVALID`、`SECRET_READ_FAILED`、`SECRET_UPSERT_FAILED`、`SECRET_DELETE_FAILED`、`RESOURCE_NOT_FOUND`。
 - 企业 MVP 配置样例已放在 `conf/agent.enterprise.mvp.yml.example`，覆盖生产 `AuthProvider`、RBAC/role/user/datasource grant stores、request-level config projector、session owner store、SQLite audit sink 和单进程 quota store。
+- 企业 PG metadata 配置样例已放在 `conf/agent.enterprise.pg.yml.example`，覆盖 RBAC/user/role/datasource grant/session owner/audit/quota/secret reference。它是生产多 worker/HA 的推荐起点；SQLite MVP 配置继续作为本地单节点 fallback。
 - `enterprise.enabled=true` 时，旧版 `/auth/token`、`/workflows/run` 和 `/workflows/feedback` 入口返回 `ENTERPRISE_LEGACY_API_DISABLED`，避免旧 client-credential workflow API 绕过 `/api/v1` 的企业身份、授权、投影和审计链路。
 
 验收：
@@ -1167,7 +1177,7 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 | admin 过度授权 | admin 也使用显式 permission，不用硬编码超级用户。 |
 | SQL policy 只覆盖部分 read path | dashboard/report/direct SQL 路径都要接入同一执行层。 |
 | datasource grant 只表达表级 | 先作为 MVP，列级权限和脱敏进入后续企业治理阶段。 |
-| SQLite metadata 扩展受限 | MVP 可用 SQLite，企业试点建议直接 Postgres。 |
+| SQLite metadata 扩展受限 | MVP 可用 SQLite，本地单节点 fallback 继续保留；企业试点、多 worker 和 HA 建议直接使用 `conf/agent.enterprise.pg.yml.example`。 |
 
 ## 最小可交付 MVP
 
@@ -1211,7 +1221,7 @@ Browser / Client
   -> API Gateway / Ingress
   -> Datus API Pods
   -> Redis: rate limit, task events, locks, short-lived cache
-  -> Postgres: enterprise context, rbac, session index, audit, artifact metadata
+  -> Postgres: enterprise context, rbac, datasource grants, session owner index, audit, quota, secret references, artifact metadata
   -> Object Storage: artifacts, exports, large traces
   -> Vector Store: enterprise/project/user/role-isolated KB indexes
   -> Data Sources

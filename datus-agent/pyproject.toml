@@ -36,6 +36,7 @@ dependencies = [
     "httpx[socks]==0.27.2",
     "tantivy>=0.22.2",
     "aiohttp>=3.11.16",
+    "asyncpg>=0.29,<1.0",
     "xlsxwriter>=3.2.2",
     "openai-agents[litellm]==0.7.0",
     "openinference-instrumentation-openai-agents>=1.0.0",

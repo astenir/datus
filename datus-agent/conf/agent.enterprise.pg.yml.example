@@ -1,0 +1,81 @@
+# Enterprise PostgreSQL metadata configuration overlay.
+#
+# Copy the relevant sections into agent.yml for production-like enterprise
+# deployments. This file only moves enterprise platform metadata stores to
+# PostgreSQL; normal business datasource, model, RAG/vector, and chat-session
+# body-history configuration remains in the regular agent.yml/runtime paths.
+
+api:
+  auth_provider:
+    # Use this provider when the enterprise gateway cannot inject signed
+    # identity headers. Datus validates the bearer token by calling userinfo.
+    class: datus_enterprise.auth_provider:UserInfoBearerAuthProvider
+    kwargs:
+      userinfo_url: ${DATUS_ENTERPRISE_USERINFO_URL}
+      timeout_seconds: 3.0
+      user_id_field: username
+      external_user_id_field: userId
+      email_field: email
+      display_name_field: realname
+      status_field: userStatus
+      allowed_statuses: ["正常"]
+      default_project_id: enterprise
+
+    # If the enterprise gateway can be changed, prefer signed headers instead:
+    #
+    # class: datus_enterprise.auth_provider:SignedHeaderAuthProvider
+    # kwargs:
+    #   secret_env: DATUS_ENTERPRISE_HEADER_SECRET
+    #   default_project_id: enterprise
+
+enterprise:
+  enabled: true
+
+  authorization_provider:
+    class: datus.api.enterprise.defaults:LocalAuthorizationProvider
+
+  config_projector:
+    class: datus_enterprise.projection:DatasourceGrantProjector
+
+  user_store:
+    class: datus_enterprise.postgres_stores:PgEnterpriseUserStore
+    kwargs:
+      dsn: ${DATUS_ENTERPRISE_PG_DSN}
+
+  role_store:
+    class: datus_enterprise.postgres_stores:PgEnterpriseRoleStore
+    kwargs:
+      dsn: ${DATUS_ENTERPRISE_PG_DSN}
+
+  datasource_grant_store:
+    class: datus_enterprise.postgres_stores:PgEnterpriseDatasourceGrantStore
+    kwargs:
+      dsn: ${DATUS_ENTERPRISE_PG_DSN}
+
+  session_owner_store:
+    class: datus_enterprise.postgres_stores:PgSessionOwnerStore
+    kwargs:
+      dsn: ${DATUS_ENTERPRISE_PG_DSN}
+
+  audit_sink:
+    class: datus_enterprise.postgres_stores:PgAuditSink
+    kwargs:
+      dsn: ${DATUS_ENTERPRISE_PG_DSN}
+
+  quota_store:
+    class: datus_enterprise.postgres_stores:PgEnterpriseQuotaStore
+    kwargs:
+      dsn: ${DATUS_ENTERPRISE_PG_DSN}
+
+  secret_store:
+    class: datus_enterprise.postgres_stores:PgEnterpriseSecretStore
+    kwargs:
+      dsn: ${DATUS_ENTERPRISE_PG_DSN}
+
+# Optional SQL policy. Configure a concrete provider when datasource grants
+# must be enforced by SQL rewrite/deny logic in addition to route projection.
+#
+# agent:
+#   sql_policy:
+#     enabled: true
+#     provider: your_package.sql_policy:YourSqlPolicyProvider
