@@ -65,6 +65,21 @@ def test_enterprise_enabled_rejects_explicit_no_auth_provider():
         )
 
 
+def test_enterprise_enabled_loads_signed_header_provider():
+    provider = load_auth_provider(
+        {
+            "auth_provider": {
+                "class": "datus_enterprise.auth_provider.SignedHeaderAuthProvider",
+                "kwargs": {"secret": "test-secret"},
+            }
+        },
+        datasource="default",
+        enterprise_config={"enabled": True},
+    )
+
+    assert provider.__class__.__name__ == "SignedHeaderAuthProvider"
+
+
 def test_load_custom_with_kwargs(fake_module):
     cfg = {
         "auth_provider": {

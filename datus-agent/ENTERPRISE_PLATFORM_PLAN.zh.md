@@ -145,6 +145,7 @@ Authenticate -> Build Context -> Authorize -> Project Config -> Execute -> Audit
 当前第一阶段骨架实现状态：
 
 - 主包 `datus/api/enterprise/` 定义稳定 dataclass、Protocol、默认 local-compatible 实现、动态 loader 和 `require_module()` dependency。
+- 企业包 `datus_enterprise.auth_provider.SignedHeaderAuthProvider` 已提供生产反向代理签名 header 身份 provider 初版：网关完成 SSO/JWT/OIDC 校验后，用 HMAC-SHA256 签名 `user_id`、project、roles、permissions 和 principal 等 header，Datus 后端校验签名、时间戳和安全 ID 后构造 `AppContext`，不信任裸 `X-Datus-User-Id`。
 - `AppContext` 已扩展 `roles`、`permissions`、`datasource_grants`、`is_admin` 字段；本地 `NoAuthProvider` 继续留空这些字段。
 - `enterprise.enabled=true` 时，启动期必须配置生产 `api.auth_provider.class`，并显式配置 `enterprise.authorization_provider`、`enterprise.datasource_grant_store` 和 `enterprise.audit_sink`；缺失时 fail closed。`enterprise.config_projector` 的协议和 loader 已存在，但阶段 4 才接入 datasource grant/request-level projection 执行路径，阶段 1 未配置时使用 passthrough skeleton，避免把用户级 projection 缓存在 project 级 `DatusService` 中。
 - 企业模式下 `DatusService` cache key 使用 `enterprise:{project_id}`，但传入服务内部的 `project_id` 保持不带 cache 前缀的项目标识，避免污染会话、日志和下游存储语义。
@@ -325,6 +326,8 @@ class AppContext:
 - 用户被禁用、生产认证接线缺失或系统处于停用维护状态时返回 401/403 或 fail closed。
 
 token 只作为身份凭证。除非 token 是由同一后端短期签发且有明确版本校验，否则不应完全信任 token 内 permissions。
+
+当前已先实现反向代理签名身份 provider：`datus_enterprise.auth_provider.SignedHeaderAuthProvider`。它适用于由企业网关完成 SSO/JWT/OIDC 校验的部署形态，Datus 只接收带 HMAC 签名和时间戳的身份 header，并在后端重建 `AppContext`。它不是完整 OIDC/JWKS provider；Datus 后端直接校验 JWT/JWKS、key rotation、issuer/audience/kid 校验和 JWKS cache 仍属于后续切片。
 
 ### 生产部署形态
 
@@ -933,7 +936,7 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 
 目标：
 
-- 实现 JWT/OIDC `AuthProvider`。
+- 实现生产 `AuthProvider`；当前已完成反向代理签名 header provider 初版，直接 OIDC/JWKS provider 后续补齐。
 - 扩展 `AppContext`。
 - 从 RBAC store 加载 roles、permissions、datasource grants。
 - `DatusServiceCache` 使用 enterprise-aware key。
