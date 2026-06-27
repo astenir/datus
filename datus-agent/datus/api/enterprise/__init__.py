@@ -38,6 +38,7 @@ from datus.api.enterprise.protocols import (
     EnterpriseDatasourceGrantStore,
     EnterpriseRoleStore,
     EnterpriseUserStore,
+    SessionBodyStore,
     SessionOwnerStore,
 )
 
@@ -65,6 +66,7 @@ __all__ = [
     "ResourceRef",
     "SessionOwnerStore",
     "SessionAccess",
+    "SessionBodyStore",
     "SqliteAuditSink",
     "SqliteEnterpriseDatasourceGrantStore",
     "SqliteEnterpriseRoleStore",

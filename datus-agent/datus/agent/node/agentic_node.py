@@ -374,10 +374,12 @@ class AgenticNode(Node):
         if getattr(self, "_session_manager", None) is None:
             import os
 
-            from datus.models.session_manager import SessionManager
+            from datus.models.session_manager import SessionManager, session_scope_from_user_id
 
             cfg = getattr(self, "agent_config", None)
             base_dir = getattr(cfg, "session_dir", None) if cfg is not None else None
+            body_store = getattr(cfg, "_session_body_store", None) if cfg is not None else None
+            project_id = getattr(cfg, "_session_project_id", None) if cfg is not None else None
             if not base_dir:
                 from datus.utils.path_manager import get_path_manager
 
@@ -386,11 +388,33 @@ class AgenticNode(Node):
             session_subdir = getattr(self, "session_subdir", None)
 
             if session_subdir:
+                if body_store is not None:
+                    scope_parts = [part for part in (user_scope, session_scope_from_user_id(session_subdir)) if part]
+                    self._session_manager = SessionManager(
+                        session_dir=base_dir,
+                        scope="__".join(scope_parts) or None,
+                        agent_config=cfg,
+                        project_id=project_id,
+                        body_store=body_store,
+                    )
+                    return self._session_manager
                 scoped_dir = SessionManager(session_dir=base_dir, scope=user_scope).session_dir
                 nested_dir = os.path.join(scoped_dir, session_subdir)
-                self._session_manager = SessionManager(session_dir=nested_dir, scope=None)
+                self._session_manager = SessionManager(
+                    session_dir=nested_dir,
+                    scope=None,
+                    agent_config=cfg,
+                    project_id=project_id,
+                    body_store=body_store,
+                )
             else:
-                self._session_manager = SessionManager(session_dir=base_dir, scope=user_scope)
+                self._session_manager = SessionManager(
+                    session_dir=base_dir,
+                    scope=user_scope,
+                    agent_config=cfg,
+                    project_id=project_id,
+                    body_store=body_store,
+                )
         return self._session_manager
 
     @property

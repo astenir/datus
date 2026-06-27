@@ -26,6 +26,7 @@ from datus.api.enterprise.protocols import (
     EnterpriseRoleStore,
     EnterpriseSecretStore,
     EnterpriseUserStore,
+    SessionBodyStore,
     SessionOwnerStore,
 )
 from datus.utils.exceptions import DatusException, ErrorCode
@@ -45,6 +46,7 @@ class EnterpriseExtensions:
     config_projector: ConfigProjector
     session_owner_store: SessionOwnerStore
     audit_sink: AuditSink
+    session_body_store: SessionBodyStore | None = None
     artifact_acl_store: ArtifactAclStore | None = None
     quota_store: EnterpriseQuotaStore | None = None
     secret_store: EnterpriseSecretStore | None = None
@@ -61,6 +63,7 @@ class EnterpriseExtensions:
             self.authorization_provider,
             self.config_projector,
             self.session_owner_store,
+            self.session_body_store,
             self.audit_sink,
             self.artifact_acl_store,
             self.quota_store,
@@ -110,6 +113,7 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
             authorization_provider=LocalAuthorizationProvider(),
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
+            session_body_store=None,
             audit_sink=NoopAuditSink(),
             artifact_acl_store=None,
             quota_store=None,
@@ -154,6 +158,12 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         SessionOwnerStore,
         InMemorySessionOwnerStore(),
     )
+    session_body_store = _load_optional_component(
+        raw,
+        "session_body_store",
+        SessionBodyStore,
+        None,
+    )
     artifact_acl_store = _load_optional_component(
         raw,
         "artifact_acl_store",
@@ -178,6 +188,7 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         authorization_provider=authorization_provider,
         config_projector=config_projector,
         session_owner_store=session_owner_store,
+        session_body_store=session_body_store,
         audit_sink=audit_sink,
         artifact_acl_store=artifact_acl_store,
         quota_store=quota_store,

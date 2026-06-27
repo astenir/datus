@@ -42,7 +42,7 @@ from datus.utils.trace_context import build_chat_trace_context, reset_trace_cont
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
-    from datus.api.enterprise.protocols import SessionOwnerStore
+    from datus.api.enterprise.protocols import SessionBodyStore, SessionOwnerStore
 
 HEARTBEAT_INTERVAL = 10  # seconds
 
@@ -291,6 +291,7 @@ class ChatTaskManager:
         stream_thinking: bool = False,
         project_id: str = "default",
         session_owner_store: Optional["SessionOwnerStore"] = None,
+        session_body_store: Optional["SessionBodyStore"] = None,
     ) -> None:
         self._tasks: Dict[str, ChatTask] = {}
         self._completed_tasks: Dict[str, ChatTask] = {}
@@ -300,6 +301,7 @@ class ChatTaskManager:
         self._stream_thinking = stream_thinking
         self._project_id = project_id
         self._session_owner_store = session_owner_store
+        self._session_body_store = session_body_store
 
     # ------------------------------------------------------------------
     # Public API
@@ -319,6 +321,9 @@ class ChatTaskManager:
         """
         # Clone config to avoid cross-request mutation of shared AgentConfig
         agent_config = copy.deepcopy(agent_config)
+        if self._session_body_store is not None:
+            agent_config._session_body_store = self._session_body_store
+            agent_config._session_project_id = self._project_id
         agent_config.principal = dict(principal or {})
         # API surface has no interactive broker to confirm EXTERNAL file
         # access, so force filesystem strict mode — every node constructed
@@ -568,7 +573,13 @@ class ChatTaskManager:
                     base_dir = getattr(agent_config, "session_dir", None) or str(
                         get_path_manager(agent_config=agent_config).sessions_dir
                     )
-                    sm = SessionManager(session_dir=base_dir, scope=session_scope_from_user_id(user_id))
+                    sm = SessionManager(
+                        session_dir=base_dir,
+                        scope=session_scope_from_user_id(user_id),
+                        agent_config=agent_config,
+                        project_id=self._project_id,
+                        body_store=self._session_body_store,
+                    )
                     feedback_session_id = sm.copy_session(request.source_session_id, "feedback")
 
                 return self._create_node(

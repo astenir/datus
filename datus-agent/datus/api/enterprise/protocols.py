@@ -258,6 +258,108 @@ class SessionOwnerStore(Protocol):
 
 
 @runtime_checkable
+class SessionBodyStore(Protocol):
+    """Persist chat session body/history outside the local SQLite files.
+
+    This is intentionally separate from :class:`SessionOwnerStore`: owner
+    metadata remains the authorization/index surface, while this store owns
+    the AdvancedSQLiteSession-compatible body rows.
+    """
+
+    def open_session(self, *, project_id: str, scope: str | None, session_id: str) -> Any:
+        """Return an AdvancedSQLiteSession-compatible session object."""
+        ...
+
+    async def session_exists(self, *, project_id: str, scope: str | None, session_id: str) -> bool:
+        """Return whether a session has persisted body rows."""
+        ...
+
+    async def list_session_ids(
+        self,
+        *,
+        project_id: str,
+        scope: str | None,
+        limit: int | None = None,
+        sort_by_modified: bool = False,
+    ) -> list[str]:
+        """Return session ids for one project/scope."""
+        ...
+
+    async def get_session_info(self, *, project_id: str, scope: str | None, session_id: str) -> dict[str, Any]:
+        """Return summary metadata for one session body."""
+        ...
+
+    async def delete_session(self, *, project_id: str, scope: str | None, session_id: str) -> None:
+        """Delete one session body."""
+        ...
+
+    async def copy_session(
+        self,
+        *,
+        project_id: str,
+        scope: str | None,
+        source_session_id: str,
+        target_session_id: str,
+    ) -> None:
+        """Copy one session body into a new session id."""
+        ...
+
+    async def get_session_messages(
+        self, *, project_id: str, scope: str | None, session_id: str
+    ) -> list[dict[str, Any]]:
+        """Return raw message rows for API history rendering."""
+        ...
+
+    async def get_detailed_usage(self, *, project_id: str, scope: str | None, session_id: str) -> dict[str, Any]:
+        """Return persisted turn usage plus any running-turn snapshot."""
+        ...
+
+    async def upsert_running_turn_usage(
+        self,
+        *,
+        project_id: str,
+        scope: str | None,
+        session_id: str,
+        user_turn_number: int,
+        cumulative: dict[str, Any],
+        context_length: int,
+    ) -> None:
+        """Persist the in-progress turn usage snapshot."""
+        ...
+
+    async def get_running_turn_usage(
+        self, *, project_id: str, scope: str | None, session_id: str
+    ) -> dict[str, Any] | None:
+        """Return the running-turn usage snapshot."""
+        ...
+
+    async def clear_running_turn_usage(self, *, project_id: str, scope: str | None, session_id: str) -> None:
+        """Remove the running-turn usage snapshot."""
+        ...
+
+    async def save_system_prompt_snapshot(
+        self,
+        *,
+        project_id: str,
+        scope: str | None,
+        session_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        """Persist a system-prompt snapshot payload."""
+        ...
+
+    async def load_system_prompt_snapshot(
+        self, *, project_id: str, scope: str | None, session_id: str
+    ) -> dict[str, Any] | None:
+        """Load a system-prompt snapshot payload."""
+        ...
+
+    async def delete_system_prompt_snapshot(self, *, project_id: str, scope: str | None, session_id: str) -> None:
+        """Delete a system-prompt snapshot payload."""
+        ...
+
+
+@runtime_checkable
 class ArtifactAclStore(Protocol):
     """Optional artifact ACL persistence interface for admin APIs."""
 

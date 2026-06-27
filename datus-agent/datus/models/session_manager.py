@@ -28,6 +28,7 @@ from datus.utils.time_utils import to_utc_iso
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
+    from datus.api.enterprise.protocols import SessionBodyStore
     from datus.utils.path_manager import DatusPathManager
 
 
@@ -78,6 +79,21 @@ def session_scope_from_user_id(user_id: Optional[str]) -> Optional[str]:
     return f"{normalized[:48]}_{digest}"
 
 
+def _project_id_from_config(agent_config: Optional[Any]) -> str:
+    if agent_config is not None:
+        project_id = getattr(agent_config, "_session_project_id", None)
+        if project_id:
+            return str(project_id)
+        path_manager = getattr(agent_config, "path_manager", None)
+        project_name = getattr(path_manager, "project_name", None)
+        if project_name:
+            return str(project_name)
+        configured = getattr(agent_config, "project_name", None)
+        if configured:
+            return str(configured)
+    return "default"
+
+
 class SessionManager:
     """
     Manages sessions for multi-turn conversations across LLM models.
@@ -93,6 +109,8 @@ class SessionManager:
         *,
         path_manager: Optional["DatusPathManager"] = None,
         agent_config: Optional[Any] = None,
+        project_id: Optional[str] = None,
+        body_store: Optional["SessionBodyStore"] = None,
     ):
         """
         Initialize the session manager.
@@ -126,7 +144,10 @@ class SessionManager:
                 )
             self.session_dir = os.path.join(self.session_dir, resolved_scope)
         os.makedirs(self.session_dir, exist_ok=True)
-        self._sessions: Dict[str, AdvancedSQLiteSession] = {}
+        self.project_id = project_id or _project_id_from_config(agent_config)
+        self._body_store = body_store
+        self._scope = scope.strip() if scope and scope.strip() else None
+        self._sessions: Dict[str, Any] = {}
 
     # Shared pattern for validating session IDs.
     # Allows alphanumerics, hyphens, underscores, and dots.
@@ -158,6 +179,14 @@ class SessionManager:
         """
         self._validate_session_id(session_id)
         if session_id not in self._sessions:
+            if self._body_store is not None:
+                session = self._body_store.open_session(
+                    project_id=self.project_id,
+                    scope=self._scope,
+                    session_id=session_id,
+                )
+                self._sessions[session_id] = session
+                return session
             db_path = os.path.join(self.session_dir, f"{session_id}.db")
             session = AdvancedSQLiteSession(
                 session_id=session_id,
@@ -168,6 +197,9 @@ class SessionManager:
             return session
 
         return self._sessions[session_id]
+
+    def _store_kwargs(self, session_id: str) -> Dict[str, Any]:
+        return {"project_id": self.project_id, "scope": self._scope, "session_id": session_id}
 
     def create_session(self, session_id: str) -> AdvancedSQLiteSession:
         """
@@ -227,8 +259,11 @@ class SessionManager:
         truncated snapshot. A disk failure only logs a warning — the caller
         already holds the freshly built prompt for this turn.
         """
-        path = self._snapshot_path(session_id)
         payload: Dict[str, Any] = {"schema_version": self._SNAPSHOT_SCHEMA_VERSION, "prompt": prompt, **meta}
+        if self._body_store is not None:
+            run_async(self._body_store.save_system_prompt_snapshot(**self._store_kwargs(session_id), payload=payload))
+            return
+        path = self._snapshot_path(session_id)
         tmp_path = f"{path}.tmp"
         try:
             with open(tmp_path, "w", encoding="utf-8") as f:
@@ -251,6 +286,13 @@ class SessionManager:
         transparently rebuilds and overwrites. Meta comparison is the
         caller's job — the full payload is returned for that purpose.
         """
+        if self._body_store is not None:
+            payload = run_async(self._body_store.load_system_prompt_snapshot(**self._store_kwargs(session_id)))
+            if not isinstance(payload, dict) or payload.get("schema_version") != self._SNAPSHOT_SCHEMA_VERSION:
+                return None
+            if not isinstance(payload.get("prompt"), str):
+                return None
+            return payload
         path = self._snapshot_path(session_id)
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -268,6 +310,9 @@ class SessionManager:
 
     def delete_system_prompt_snapshot(self, session_id: str) -> None:
         """Delete the snapshot file (best-effort, idempotent)."""
+        if self._body_store is not None:
+            run_async(self._body_store.delete_system_prompt_snapshot(**self._store_kwargs(session_id)))
+            return
         path = self._snapshot_path(session_id)
         try:
             os.remove(path)
@@ -287,6 +332,11 @@ class SessionManager:
         self._validate_session_id(session_id)
         # Remove from in-memory cache if present
         self._sessions.pop(session_id, None)
+
+        if self._body_store is not None:
+            run_async(self._body_store.delete_session(**self._store_kwargs(session_id)))
+            logger.debug(f"Deleted session from body store: {session_id}")
+            return
 
         # Delete the database file and SQLite WAL/SHM files if they exist on disk
         db_path = os.path.join(self.session_dir, f"{session_id}.db")
@@ -337,6 +387,22 @@ class SessionManager:
         """
         self._validate_session_id(source_session_id)
         new_session_id = f"{target_node_name}_session_{uuid.uuid4().hex[:8]}"
+        if self._body_store is not None:
+            if self.session_exists(source_session_id):
+                run_async(
+                    self._body_store.copy_session(
+                        project_id=self.project_id,
+                        scope=self._scope,
+                        source_session_id=source_session_id,
+                        target_session_id=new_session_id,
+                    )
+                )
+                self._sessions[new_session_id] = self._body_store.open_session(
+                    project_id=self.project_id,
+                    scope=self._scope,
+                    session_id=new_session_id,
+                )
+            return new_session_id
 
         source_db_path = os.path.join(self.session_dir, f"{source_session_id}.db")
         if not os.path.exists(source_db_path):
@@ -613,6 +679,16 @@ class SessionManager:
         Returns:
             List of session IDs sorted by modification time (newest first) if sort_by_modified is True
         """
+        if self._body_store is not None:
+            return run_async(
+                self._body_store.list_session_ids(
+                    project_id=self.project_id,
+                    scope=self._scope,
+                    limit=limit,
+                    sort_by_modified=sort_by_modified,
+                )
+            )
+
         # Check for existing database files
         session_ids = []
         if os.path.exists(self.session_dir):
@@ -659,6 +735,8 @@ class SessionManager:
             True if session exists and has data, False otherwise
         """
         self._validate_session_id(session_id)
+        if self._body_store is not None:
+            return bool(run_async(self._body_store.session_exists(**self._store_kwargs(session_id))))
         # Check if database file exists first (avoid listing all sessions)
         db_path = os.path.join(self.session_dir, f"{session_id}.db")
         if not os.path.exists(db_path):
@@ -703,6 +781,8 @@ class SessionManager:
             Dictionary with session information including timestamps, file size, etc.
         """
         self._validate_session_id(session_id)
+        if self._body_store is not None:
+            return run_async(self._body_store.get_session_info(**self._store_kwargs(session_id)))
         db_path = os.path.join(self.session_dir, f"{session_id}.db")
 
         # Check if database file exists first
@@ -866,6 +946,8 @@ class SessionManager:
         persisted turns from the in-flight delta.
         """
         self._validate_session_id(session_id)
+        if self._body_store is not None:
+            return run_async(self._body_store.get_detailed_usage(**self._store_kwargs(session_id)))
         db_path = os.path.join(self.session_dir, f"{session_id}.db")
         empty_result = {
             "total": {"requests": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cached_tokens": 0},
@@ -973,6 +1055,16 @@ class SessionManager:
         ``session_id`` — only the latest snapshot is retained.
         """
         self._validate_session_id(session_id)
+        if self._body_store is not None:
+            run_async(
+                self._body_store.upsert_running_turn_usage(
+                    **self._store_kwargs(session_id),
+                    user_turn_number=user_turn_number,
+                    cumulative=cumulative,
+                    context_length=context_length,
+                )
+            )
+            return
         db_path = os.path.join(self.session_dir, f"{session_id}.db")
         # The session DB is created by AdvancedSQLiteSession on first use; if
         # it does not exist yet (early hook fires before any SDK write), skip
@@ -1002,6 +1094,8 @@ class SessionManager:
     def get_running_turn_usage(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Return the in-progress turn snapshot, or ``None`` when absent."""
         self._validate_session_id(session_id)
+        if self._body_store is not None:
+            return run_async(self._body_store.get_running_turn_usage(**self._store_kwargs(session_id)))
         db_path = os.path.join(self.session_dir, f"{session_id}.db")
         return self._read_running_turn_usage(db_path)
 
@@ -1010,6 +1104,9 @@ class SessionManager:
         ``store_run_usage`` commits the persisted ``turn_usage`` row so we
         don't double-count the turn."""
         self._validate_session_id(session_id)
+        if self._body_store is not None:
+            run_async(self._body_store.clear_running_turn_usage(**self._store_kwargs(session_id)))
+            return
         db_path = os.path.join(self.session_dir, f"{session_id}.db")
         if not os.path.exists(db_path):
             return
@@ -1116,239 +1213,233 @@ class SessionManager:
             logger.warning(f"Invalid session_id format (potential path traversal): {session_id}")
             return messages
 
-        # Build path with pathlib and resolve to absolute path
-        sessions_dir = Path(self.session_dir)
-        db_path = (sessions_dir / f"{session_id}.db").resolve()
-
-        # Ensure resolved path is within sessions directory
         try:
-            db_path.relative_to(sessions_dir.resolve())
-        except ValueError:
-            logger.warning(f"Session path outside of sessions directory (path traversal attempt): {db_path}")
-            return messages
+            if self._body_store is not None:
+                body_rows = run_async(self._body_store.get_session_messages(**self._store_kwargs(session_id)))
+                message_rows = [(row["message_data"], row["created_at"]) for row in body_rows]
+            else:
+                # Build path with pathlib and resolve to absolute path
+                sessions_dir = Path(self.session_dir)
+                db_path = (sessions_dir / f"{session_id}.db").resolve()
 
-        if not db_path.exists():
-            logger.warning(f"Session database not found: {db_path}")
-            return messages
+                # Ensure resolved path is within sessions directory
+                try:
+                    db_path.relative_to(sessions_dir.resolve())
+                except ValueError:
+                    logger.warning(f"Session path outside of sessions directory (path traversal attempt): {db_path}")
+                    return messages
 
-        try:
-            with sqlite3.connect(str(db_path)) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    SELECT message_data, created_at
-                    FROM agent_messages
-                    WHERE session_id = ?
-                    ORDER BY created_at, id
-                    """,
-                    (session_id,),
-                )
+                if not db_path.exists():
+                    logger.warning(f"Session database not found: {db_path}")
+                    return messages
 
-                # Aggregate consecutive assistant messages
-                current_assistant_group = None
-                assistant_progress = []
-                current_actions = []  # Collect ActionHistory objects for detailed view
+                with sqlite3.connect(str(db_path)) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        """
+                        SELECT message_data, created_at
+                        FROM agent_messages
+                        WHERE session_id = ?
+                        ORDER BY created_at, id
+                        """,
+                        (session_id,),
+                    )
+                    message_rows = cursor.fetchall()
 
-                for message_data, created_at in cursor.fetchall():
-                    # Normalize SQLite naive UTC timestamp for outward-facing fields.
-                    created_at_iso = to_utc_iso(created_at)
-                    try:
-                        message_json = json.loads(message_data)
-                        role = message_json.get("role", "")
-                        msg_type = message_json.get("type", "")
+            # Aggregate consecutive assistant messages
+            current_assistant_group = None
+            assistant_progress = []
+            current_actions = []  # Collect ActionHistory objects for detailed view
 
-                        # Handle user messages
-                        if role == "user":
-                            # Before adding user message, flush any pending assistant group
-                            if current_assistant_group:
-                                final_action = self._parse_final_output(current_actions, current_assistant_group)
-                                if final_action:
-                                    current_actions.append(final_action)
+            for message_data, created_at in message_rows:
+                # Normalize SQLite naive UTC timestamp for outward-facing fields.
+                created_at_iso = to_utc_iso(created_at)
+                try:
+                    message_json = json.loads(message_data)
+                    role = message_json.get("role", "")
+                    msg_type = message_json.get("type", "")
 
-                                # Add collected actions and progress to the assistant group
-                                if current_actions:
-                                    current_assistant_group["actions"] = current_actions.copy()
-                                if assistant_progress:
-                                    current_assistant_group["progress_messages"] = assistant_progress.copy()
+                    # Handle user messages
+                    if role == "user":
+                        # Before adding user message, flush any pending assistant group
+                        if current_assistant_group:
+                            final_action = self._parse_final_output(current_actions, current_assistant_group)
+                            if final_action:
+                                current_actions.append(final_action)
 
-                                messages.append(current_assistant_group)
-                                current_assistant_group = None
-                                assistant_progress = []
-                                current_actions = []
-
-                            # Add user message (extract original user input from structured content)
-                            content = extract_user_input(message_json.get("content", ""))
-                            messages.append(
-                                {
-                                    "role": "user",
-                                    "content": content,
-                                    "timestamp": created_at_iso,
-                                    "created_at": created_at_iso,
-                                }
-                            )
-                            continue
-
-                        # Handle function calls (tool calls)
-                        if msg_type == "function_call":
-                            tool_name = message_json.get("name", "unknown")
-                            arguments = message_json.get("arguments", "{}")
-
-                            # Initialize assistant group if needed
-                            if not current_assistant_group:
-                                current_assistant_group = {
-                                    "role": "assistant",
-                                    "content": "",
-                                    "timestamp": created_at_iso,
-                                    "created_at": created_at_iso,
-                                }
-
-                            # Parse arguments
-                            try:
-                                args_dict = json.loads(arguments) if arguments else {}
-                                args_str = str(args_dict)[:60]
-                                assistant_progress.append(f"✓ Tool call: {tool_name}({args_str})")
-                            except (json.JSONDecodeError, ValueError, TypeError):
-                                args_dict = {}
-                                assistant_progress.append(f"✓ Tool call: {tool_name}")
-
-                            # Create ActionHistory for tool call (use original call_id from SDK)
-                            action = ActionHistory(
-                                action_id=message_json.get("call_id", str(uuid.uuid4())),
-                                role=ActionRole.TOOL,
-                                messages=f"Tool call: {tool_name}",
-                                action_type=tool_name,
-                                input={"function_name": tool_name, "arguments": arguments},
-                                output=None,  # Will be filled by next function_call_output
-                                status=ActionStatus.PROCESSING,
-                                start_time=datetime.fromisoformat(created_at) if created_at else datetime.now(),
-                            )
-                            current_actions.append(action)
-                            continue
-
-                        # Handle function outputs (tool results)
-                        if msg_type == "function_call_output":
-                            # Create a new SUCCESS action for the tool output
+                            # Add collected actions and progress to the assistant group
                             if current_actions:
-                                # Pair with the matching PROCESSING call by call_id so that
-                                # interleaved tool calls (multiple function_call messages
-                                # before any output) are matched correctly on resume.
-                                output_call_id = message_json.get("call_id")
-                                last_action = None
-                                if output_call_id:
-                                    for candidate in reversed(current_actions):
-                                        if (
-                                            candidate.action_id == output_call_id
-                                            and candidate.status == ActionStatus.PROCESSING
-                                        ):
-                                            last_action = candidate
-                                            break
-                                if last_action is None:
-                                    last_action = current_actions[-1]
+                                current_assistant_group["actions"] = current_actions.copy()
+                            if assistant_progress:
+                                current_assistant_group["progress_messages"] = assistant_progress.copy()
 
-                                # Extract output directly from message_json
-                                output_text = message_json.get("output", "")
+                            messages.append(current_assistant_group)
+                            current_assistant_group = None
+                            assistant_progress = []
+                            current_actions = []
 
-                                # Try to parse as Python literal (the output is stored as string repr of dict)
-                                output_data = {}
-                                if output_text:
-                                    try:
-                                        # Try ast.literal_eval first (safer than eval)
-                                        output_data = ast.literal_eval(output_text)
-                                    except (ValueError, SyntaxError):
-                                        # If that fails, try json.loads
-                                        try:
-                                            output_data = json.loads(output_text)
-                                        except json.JSONDecodeError:
-                                            # Last resort: store as string
-                                            output_data = {"result": output_text}
-
-                                # Create a new SUCCESS action, prefix with "complete_" like openai_compatible.py
-                                call_id = message_json.get("call_id", last_action.action_id)
-                                success_action = ActionHistory(
-                                    action_id="complete_" + call_id,
-                                    role=ActionRole.TOOL,
-                                    messages=f"Tool result: {last_action.action_type}",
-                                    action_type=last_action.action_type,
-                                    input=last_action.input,
-                                    output=output_data,
-                                    status=ActionStatus.SUCCESS,
-                                    start_time=last_action.start_time,
-                                    end_time=datetime.fromisoformat(created_at) if created_at else datetime.now(),
-                                )
-                                current_actions.append(success_action)
-                            continue
-
-                        # Handle assistant messages (thinking and final output)
-                        if role == "assistant":
-                            # Assistant message - aggregate consecutive ones
-                            content_array = message_json.get("content", [])
-
-                            for item in content_array:
-                                if not isinstance(item, dict):
-                                    continue
-
-                                item_type = item.get("type", "")
-                                text = item.get("text", "")
-
-                                # Accept both OpenAI-style ``output_text`` and
-                                # Anthropic-style ``text`` blocks. ClaudeModel's
-                                # native OAuth path persists assistant turns as
-                                # ``[{"type": "text", "text": ...}]`` (Anthropic's
-                                # wire format, needed so ``session.get_items()``
-                                # replays back into the API verbatim). Without
-                                # ``"text"`` here, Claude assistant turns are
-                                # silently skipped on resume — no group gets
-                                # initialised, no content lands in ``messages``,
-                                # and the user sees only their own input.
-                                if item_type in ("output_text", "text") and text:
-                                    # Initialize assistant group if needed
-                                    if not current_assistant_group:
-                                        current_assistant_group = {
-                                            "role": "assistant",
-                                            "content": "",
-                                            "timestamp": created_at_iso,
-                                            "created_at": created_at_iso,
-                                        }
-
-                                    # Add to progress
-                                    assistant_progress.append(f"💭Thinking: {text}")
-
-                                    # Create ActionHistory for thinking (use response_id from provider)
-                                    response_id = message_json.get("provider_data", {}).get(
-                                        "response_id", message_json.get("id", str(uuid.uuid4()))
-                                    )
-                                    thinking_action = ActionHistory(
-                                        action_id=response_id,
-                                        role=ActionRole.ASSISTANT,
-                                        messages=text,
-                                        action_type="thinking",
-                                        input=None,
-                                        output={"raw_output": text},
-                                        status=ActionStatus.SUCCESS,
-                                        start_time=(
-                                            datetime.fromisoformat(created_at) if created_at else datetime.now()
-                                        ),
-                                        end_time=(datetime.fromisoformat(created_at) if created_at else datetime.now()),
-                                    )
-                                    current_actions.append(thinking_action)
-
-                    except (json.JSONDecodeError, TypeError) as e:
-                        logger.debug(f"Skipping malformed message: {e}")
+                        # Add user message (extract original user input from structured content)
+                        content = extract_user_input(message_json.get("content", ""))
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": content,
+                                "timestamp": created_at_iso,
+                                "created_at": created_at_iso,
+                            }
+                        )
                         continue
 
-                # Flush any remaining assistant group
-                if current_assistant_group:
-                    final_action = self._parse_final_output(current_actions, current_assistant_group)
-                    if final_action:
-                        current_actions.append(final_action)
+                    # Handle function calls (tool calls)
+                    if msg_type == "function_call":
+                        tool_name = message_json.get("name", "unknown")
+                        arguments = message_json.get("arguments", "{}")
 
-                    if not current_assistant_group.get("content"):
-                        current_assistant_group["content"] = "Processing completed"
-                    if assistant_progress:
-                        current_assistant_group["progress_messages"] = assistant_progress
-                    if current_actions:
-                        current_assistant_group["actions"] = current_actions.copy()
-                    messages.append(current_assistant_group)
+                        # Initialize assistant group if needed
+                        if not current_assistant_group:
+                            current_assistant_group = {
+                                "role": "assistant",
+                                "content": "",
+                                "timestamp": created_at_iso,
+                                "created_at": created_at_iso,
+                            }
+
+                        # Parse arguments
+                        try:
+                            args_dict = json.loads(arguments) if arguments else {}
+                            args_str = str(args_dict)[:60]
+                            assistant_progress.append(f"✓ Tool call: {tool_name}({args_str})")
+                        except (json.JSONDecodeError, ValueError, TypeError):
+                            assistant_progress.append(f"✓ Tool call: {tool_name}")
+
+                        # Create ActionHistory for tool call (use original call_id from SDK)
+                        action = ActionHistory(
+                            action_id=message_json.get("call_id", str(uuid.uuid4())),
+                            role=ActionRole.TOOL,
+                            messages=f"Tool call: {tool_name}",
+                            action_type=tool_name,
+                            input={"function_name": tool_name, "arguments": arguments},
+                            output=None,  # Will be filled by next function_call_output
+                            status=ActionStatus.PROCESSING,
+                            start_time=datetime.fromisoformat(str(created_at)) if created_at else datetime.now(),
+                        )
+                        current_actions.append(action)
+                        continue
+
+                    # Handle function outputs (tool results)
+                    if msg_type == "function_call_output":
+                        # Create a new SUCCESS action for the tool output
+                        if current_actions:
+                            # Pair with the matching PROCESSING call by call_id so that
+                            # interleaved tool calls are matched correctly on resume.
+                            output_call_id = message_json.get("call_id")
+                            last_action = None
+                            if output_call_id:
+                                for candidate in reversed(current_actions):
+                                    if (
+                                        candidate.action_id == output_call_id
+                                        and candidate.status == ActionStatus.PROCESSING
+                                    ):
+                                        last_action = candidate
+                                        break
+                            if last_action is None:
+                                last_action = current_actions[-1]
+
+                            # Extract output directly from message_json
+                            output_text = message_json.get("output", "")
+
+                            # Try to parse as Python literal (the output is stored as string repr of dict)
+                            output_data = {}
+                            if output_text:
+                                try:
+                                    # Try ast.literal_eval first (safer than eval)
+                                    output_data = ast.literal_eval(output_text)
+                                except (ValueError, SyntaxError):
+                                    # If that fails, try json.loads
+                                    try:
+                                        output_data = json.loads(output_text)
+                                    except json.JSONDecodeError:
+                                        # Last resort: store as string
+                                        output_data = {"result": output_text}
+
+                            # Create a new SUCCESS action, prefix with "complete_" like openai_compatible.py
+                            call_id = message_json.get("call_id", last_action.action_id)
+                            success_action = ActionHistory(
+                                action_id="complete_" + call_id,
+                                role=ActionRole.TOOL,
+                                messages=f"Tool result: {last_action.action_type}",
+                                action_type=last_action.action_type,
+                                input=last_action.input,
+                                output=output_data,
+                                status=ActionStatus.SUCCESS,
+                                start_time=last_action.start_time,
+                                end_time=datetime.fromisoformat(str(created_at)) if created_at else datetime.now(),
+                            )
+                            current_actions.append(success_action)
+                        continue
+
+                    # Handle assistant messages (thinking and final output)
+                    if role == "assistant":
+                        # Assistant message - aggregate consecutive ones
+                        content_array = message_json.get("content", [])
+
+                        for item in content_array:
+                            if not isinstance(item, dict):
+                                continue
+
+                            item_type = item.get("type", "")
+                            text = item.get("text", "")
+
+                            # Accept both OpenAI-style ``output_text`` and Anthropic-style ``text`` blocks.
+                            if item_type in ("output_text", "text") and text:
+                                # Initialize assistant group if needed
+                                if not current_assistant_group:
+                                    current_assistant_group = {
+                                        "role": "assistant",
+                                        "content": "",
+                                        "timestamp": created_at_iso,
+                                        "created_at": created_at_iso,
+                                    }
+
+                                # Add to progress
+                                assistant_progress.append(f"💭Thinking: {text}")
+
+                                # Create ActionHistory for thinking (use response_id from provider)
+                                response_id = message_json.get("provider_data", {}).get(
+                                    "response_id", message_json.get("id", str(uuid.uuid4()))
+                                )
+                                thinking_action = ActionHistory(
+                                    action_id=response_id,
+                                    role=ActionRole.ASSISTANT,
+                                    messages=text,
+                                    action_type="thinking",
+                                    input=None,
+                                    output={"raw_output": text},
+                                    status=ActionStatus.SUCCESS,
+                                    start_time=datetime.fromisoformat(str(created_at))
+                                    if created_at
+                                    else datetime.now(),
+                                    end_time=datetime.fromisoformat(str(created_at)) if created_at else datetime.now(),
+                                )
+                                current_actions.append(thinking_action)
+
+                except (json.JSONDecodeError, TypeError) as e:
+                    logger.debug(f"Skipping malformed message: {e}")
+                    continue
+
+            # Flush any remaining assistant group
+            if current_assistant_group:
+                final_action = self._parse_final_output(current_actions, current_assistant_group)
+                if final_action:
+                    current_actions.append(final_action)
+
+                if not current_assistant_group.get("content"):
+                    current_assistant_group["content"] = "Processing completed"
+                if assistant_progress:
+                    current_assistant_group["progress_messages"] = assistant_progress
+                if current_actions:
+                    current_assistant_group["actions"] = current_actions.copy()
+                messages.append(current_assistant_group)
 
         except Exception as e:
             logger.exception(f"Failed to load session messages for {session_id}: {e}")

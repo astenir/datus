@@ -11,6 +11,7 @@ Uses _ConcreteAgenticNode (minimal concrete subclass) and patches LLM + sessions
 
 import asyncio
 import os
+from types import SimpleNamespace
 from typing import AsyncGenerator, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -357,6 +358,27 @@ class TestUpdateContextAgenticNode:
 
 
 class TestClearSession:
+    def test_session_manager_body_store_subagent_scope_includes_parent_session(self, tmp_path):
+        from datus.models.session_manager import session_scope_from_user_id
+
+        body_store = object()
+        agent_config = SimpleNamespace(
+            session_dir=str(tmp_path / "sessions"),
+            _session_body_store=body_store,
+            _session_project_id="enterprise",
+        )
+        node = _make_node(
+            agent_config=agent_config,
+            scope="alice",
+            session_subdir="chat.session_parent",
+        )
+
+        session_manager = node.session_manager
+
+        assert session_manager._body_store is body_store
+        assert session_manager.project_id == "enterprise"
+        assert session_manager._scope == f"alice__{session_scope_from_user_id('chat.session_parent')}"
+
     def test_clear_session(self):
         node = _make_node()
         node.session_id = "real_session_1"

@@ -2,13 +2,15 @@
 #
 # Copy the relevant sections into agent.yml for production-like enterprise
 # deployments. This file only moves enterprise platform metadata stores to
-# PostgreSQL; normal business datasource, model, RAG/vector, and chat-session
-# body-history configuration remains in the regular agent.yml/runtime paths.
+# PostgreSQL; normal business datasource, model, RAG/vector, and project
+# subject/ or artifact bundle files remain in the regular agent.yml/runtime
+# paths.
 #
-# Each PG metadata store owns one asyncpg pool. With the eight stores below and
-# max_size=2, each API process can open up to 16 metadata DB connections before
-# accounting for other PostgreSQL clients. Adjust these pool sizes together with
-# the number of uvicorn workers/pods and the database max_connections setting.
+# Each PG metadata/body store owns one asyncpg pool. With the eight metadata
+# stores below plus the optional session_body_store and max_size=2, each API
+# process can open up to 18 enterprise PostgreSQL connections before accounting
+# for business datasources or operational clients. Adjust these pool sizes
+# together with uvicorn worker/pod count and PostgreSQL max_connections.
 
 api:
   auth_provider:
@@ -65,6 +67,20 @@ enterprise:
 
   session_owner_store:
     class: datus_enterprise.postgres_stores:PgSessionOwnerStore
+    kwargs:
+      dsn: ${DATUS_ENTERPRISE_PG_DSN}
+      min_size: 1
+      max_size: 2
+
+  # Optional but recommended for enterprise multi-worker deployments. This
+  # moves chat session body/history/state out of local AdvancedSQLiteSession
+  # .db files and into PostgreSQL. It is separate from session_owner_store:
+  # session_owner_store is the authorization/index metadata table, while this
+  # store persists messages/items, message structure, turn usage, running usage,
+  # and system-prompt snapshots for new sessions. It does not migrate old .db
+  # files automatically.
+  session_body_store:
+    class: datus_enterprise.postgres_session_store:PgSessionBodyStore
     kwargs:
       dsn: ${DATUS_ENTERPRISE_PG_DSN}
       min_size: 1
