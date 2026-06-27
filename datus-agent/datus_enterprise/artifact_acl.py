@@ -129,8 +129,8 @@ def _acl_allows(ctx: AppContext, raw_acl: Any) -> bool:
 
 
 def _has_permission(ctx: AppContext, permission_key: str) -> bool:
-    if _matches_permission(permission_key, ctx.permissions):
-        return True
+    if ctx.permissions:
+        return _matches_permission(permission_key, ctx.permissions)
     principal_permissions = ctx.principal.get("permissions")
     return _matches_permission(permission_key, _string_set(principal_permissions))
 

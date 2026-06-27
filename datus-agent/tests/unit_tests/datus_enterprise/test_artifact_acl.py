@@ -112,3 +112,43 @@ async def test_require_artifact_access_uses_configured_acl_store(monkeypatch):
         slug="private_ops",
         action="query",
     )
+
+
+@pytest.mark.asyncio
+async def test_require_artifact_access_does_not_trust_principal_admin_when_permissions_present(monkeypatch):
+    store = MemoryArtifactAclStore(
+        {
+            ("report", "private_sales"): {
+                "owner_user_id": "owner-1",
+                "visibility": "private",
+                "allowed_roles": [],
+                "datasources": [],
+            }
+        }
+    )
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+            artifact_acl_store=store,
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await require_artifact_access(
+            AppContext(
+                user_id="viewer-1",
+                permissions={"module.report.view"},
+                principal={"permissions": ["module.admin.artifacts"]},
+            ),
+            artifact_type="report",
+            slug="private_sales",
+            action="view",
+        )
+
+    assert exc.value.status_code == 404
