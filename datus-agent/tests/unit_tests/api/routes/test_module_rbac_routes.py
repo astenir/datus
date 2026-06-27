@@ -746,13 +746,22 @@ def test_dashboard_query_allows_module_dashboard_query(monkeypatch):
     assert callable(svc.dashboard.run_query.await_args.kwargs["agent_config_projector"])
 
 
-def test_dashboard_query_returns_unavailable_without_quota_store(monkeypatch):
+def test_dashboard_query_returns_unavailable_without_quota_store(monkeypatch, tmp_path: Path):
     audit_sink = CollectingAuditSink()
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(audit_sink=audit_sink, quota_store=None))
-    svc = MagicMock()
-    svc.agent_config = _datasource_agent_config()
-    svc.agent_config.project_root = "/tmp/project"
-    svc.dashboard.run_query = AsyncMock()
+    _write_dashboard_query_fixture(tmp_path, datasource="default")
+    agent_config = _datasource_agent_config()
+    agent_config.project_root = str(tmp_path)
+    svc = SimpleNamespace(agent_config=agent_config, dashboard=DashboardService(agent_config=agent_config))
+    db_calls = []
+
+    class _UnexpectedDBFuncTool:
+        def __init__(self, *, agent_config, sub_agent_name):
+            db_calls.append((agent_config, sub_agent_name))
+
+    import datus.tools.func_tool as func_tool_mod
+
+    monkeypatch.setattr(func_tool_mod, "DBFuncTool", _UnexpectedDBFuncTool)
     ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.dashboard.query"})
 
     with _client(dashboard_routes.router, ctx, svc) as client:
@@ -764,16 +773,17 @@ def test_dashboard_query_returns_unavailable_without_quota_store(monkeypatch):
     assert response.status_code == 200
     assert response.json()["success"] is False
     assert response.json()["errorCode"] == "QUOTA_STORE_UNAVAILABLE"
-    svc.dashboard.run_query.assert_not_awaited()
-    event = audit_sink.events[-1]
+    assert db_calls == []
+    event = next(event for event in audit_sink.events if event.action == "quota.consume")
     assert event.action == "quota.consume"
     assert event.resource_type == "dashboard"
     assert event.resource_id == "sales_overview"
     assert event.decision == "deny"
     assert event.reason == "quota store unavailable"
+    assert audit_sink.events[-1].action == "dashboard.query"
 
 
-def test_dashboard_query_rejects_quota_exceeded_before_execution(monkeypatch):
+def test_dashboard_query_rejects_quota_exceeded_before_execution(monkeypatch, tmp_path: Path):
     quota_store = InMemoryEnterpriseQuotaStore()
     asyncio.run(
         quota_store.put_quota(
@@ -796,10 +806,19 @@ def test_dashboard_query_rejects_quota_exceeded_before_execution(monkeypatch):
         "_enterprise_extensions",
         _enterprise_extensions(audit_sink=audit_sink, quota_store=quota_store),
     )
-    svc = MagicMock()
-    svc.agent_config = _datasource_agent_config()
-    svc.agent_config.project_root = "/tmp/project"
-    svc.dashboard.run_query = AsyncMock()
+    _write_dashboard_query_fixture(tmp_path, datasource="default")
+    agent_config = _datasource_agent_config()
+    agent_config.project_root = str(tmp_path)
+    svc = SimpleNamespace(agent_config=agent_config, dashboard=DashboardService(agent_config=agent_config))
+    db_calls = []
+
+    class _UnexpectedDBFuncTool:
+        def __init__(self, *, agent_config, sub_agent_name):
+            db_calls.append((agent_config, sub_agent_name))
+
+    import datus.tools.func_tool as func_tool_mod
+
+    monkeypatch.setattr(func_tool_mod, "DBFuncTool", _UnexpectedDBFuncTool)
     ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.dashboard.query"})
 
     with _client(dashboard_routes.router, ctx, svc) as client:
@@ -811,16 +830,17 @@ def test_dashboard_query_rejects_quota_exceeded_before_execution(monkeypatch):
     assert response.status_code == 200
     assert response.json()["success"] is False
     assert response.json()["errorCode"] == "QUOTA_EXCEEDED"
-    svc.dashboard.run_query.assert_not_awaited()
-    event = audit_sink.events[-1]
+    assert db_calls == []
+    event = next(event for event in audit_sink.events if event.action == "quota.consume")
     assert event.action == "quota.consume"
     assert event.decision == "deny"
     assert event.reason == "quota exceeded"
     assert event.metadata["resource"] == "dashboard.query"
     assert event.metadata["used"] == 1
+    assert audit_sink.events[-1].action == "dashboard.query"
 
 
-def test_dashboard_query_consumes_quota_before_successful_execution(monkeypatch):
+def test_dashboard_query_consumes_quota_before_successful_execution(monkeypatch, tmp_path: Path):
     quota_store = InMemoryEnterpriseQuotaStore()
     asyncio.run(
         quota_store.put_quota(
@@ -837,12 +857,29 @@ def test_dashboard_query_consumes_quota_before_successful_execution(monkeypatch)
         "_enterprise_extensions",
         _enterprise_extensions(audit_sink=audit_sink, quota_store=quota_store),
     )
-    svc = MagicMock()
-    svc.agent_config = _datasource_agent_config()
-    svc.agent_config.project_root = "/tmp/project"
-    svc.dashboard.run_query = AsyncMock(
-        return_value=Result[SqlQueryResultEnvelope](success=True, data=_dashboard_query_result())
-    )
+    _write_dashboard_query_fixture(tmp_path, datasource="default")
+    agent_config = _datasource_agent_config()
+    agent_config.project_root = str(tmp_path)
+    svc = SimpleNamespace(agent_config=agent_config, dashboard=DashboardService(agent_config=agent_config))
+    executed_sql = []
+
+    class _Connector:
+        def execute_query(self, sql, result_format):
+            executed_sql.append((sql, result_format))
+            return SimpleNamespace(success=True, sql_return=[{"value": 1}])
+
+    class _DBFuncTool:
+        def __init__(self, *, agent_config, sub_agent_name):
+            self.agent_config = agent_config
+            self.sub_agent_name = sub_agent_name
+
+        def _get_connector(self, datasource):
+            return _Connector()
+
+    import datus.tools.func_tool as func_tool_mod
+
+    monkeypatch.setattr(func_tool_mod, "DBFuncTool", _DBFuncTool)
+    monkeypatch.setattr(CLIService, "_authorize_read_sql", staticmethod(lambda sql, connector, agent_config: sql))
     ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.dashboard.query"})
 
     with _client(dashboard_routes.router, ctx, svc) as client:
@@ -858,7 +895,56 @@ def test_dashboard_query_consumes_quota_before_successful_execution(monkeypatch)
     assert usage[0]["used"] == 1
     assert [event.action for event in audit_sink.events[-2:]] == ["quota.consume", "dashboard.query"]
     assert audit_sink.events[-2].decision == "allow"
-    svc.dashboard.run_query.assert_awaited_once()
+    assert [(sql.strip(), result_format) for sql, result_format in executed_sql] == [("SELECT 1 AS value;", "list")]
+
+
+def test_dashboard_query_invalid_params_do_not_consume_quota(monkeypatch, tmp_path: Path):
+    quota_store = InMemoryEnterpriseQuotaStore()
+    asyncio.run(
+        quota_store.put_quota(
+            subject_type="user",
+            subject_id="u1",
+            resource="dashboard.query",
+            limit=2,
+            window_seconds=3600,
+        )
+    )
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        _enterprise_extensions(audit_sink=audit_sink, quota_store=quota_store),
+    )
+    _write_dashboard_query_fixture(tmp_path, datasource="default")
+    agent_config = _datasource_agent_config()
+    agent_config.project_root = str(tmp_path)
+    svc = SimpleNamespace(agent_config=agent_config, dashboard=DashboardService(agent_config=agent_config))
+    db_calls = []
+
+    class _UnexpectedDBFuncTool:
+        def __init__(self, *, agent_config, sub_agent_name):
+            db_calls.append((agent_config, sub_agent_name))
+
+    import datus.tools.func_tool as func_tool_mod
+
+    monkeypatch.setattr(func_tool_mod, "DBFuncTool", _UnexpectedDBFuncTool)
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.dashboard.query"})
+
+    with _client(dashboard_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/dashboard/query",
+            json={"dashboard_slug": "sales_overview", "query_slug": "summary", "params": {"unknown": "x"}},
+        )
+
+    usage = asyncio.run(quota_store.list_usage(subject_type="user", subject_id="u1", resource="dashboard.query"))
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert response.json()["errorCode"] == "INVALID_PARAMS"
+    assert usage == []
+    assert db_calls == []
+    assert "quota.consume" not in [event.action for event in audit_sink.events]
+    assert audit_sink.events[-1].action == "dashboard.query"
 
 
 def test_dashboard_query_audits_sanitized_failure(monkeypatch):
@@ -1010,7 +1096,21 @@ def test_dashboard_query_rejects_missing_datasource_grant(monkeypatch):
 
 
 def test_dashboard_query_rejects_template_datasource_without_grant(monkeypatch, tmp_path: Path):
-    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
+    quota_store = InMemoryEnterpriseQuotaStore()
+    asyncio.run(
+        quota_store.put_quota(
+            subject_type="user",
+            subject_id="u1",
+            resource="dashboard.query",
+            limit=2,
+            window_seconds=3600,
+        )
+    )
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        _enterprise_extensions(DatasourceGrantConfigProjector(), quota_store=quota_store),
+    )
     _write_dashboard_query_fixture(tmp_path, datasource="hr")
     agent_config = _datasource_agent_config(current_datasource="finance")
     agent_config.project_root = str(tmp_path)
@@ -1042,6 +1142,8 @@ def test_dashboard_query_rejects_template_datasource_without_grant(monkeypatch, 
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Datasource 'hr' is not authorized for this request."
+    usage = asyncio.run(quota_store.list_usage(subject_type="user", subject_id="u1", resource="dashboard.query"))
+    assert usage == []
     assert db_calls == []
 
 

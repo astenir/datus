@@ -69,6 +69,7 @@ _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 PublishedTemplateLoader = Callable[[int], Awaitable[Result[Tuple[str, str]]]]
 DashboardQueryConfigProjector = Callable[[str | None], Awaitable[AgentConfig]]
+DashboardQueryBeforeExecute = Callable[[], Awaitable[Result | None]]
 
 
 def _resolve_dashboard_dir(project_files_root: Path, dashboard_slug: str) -> Optional[Path]:
@@ -521,6 +522,7 @@ class DashboardService:
         published_template_loader: Optional[PublishedTemplateLoader] = None,
         agent_config: Optional[AgentConfig] = None,
         agent_config_projector: Optional[DashboardQueryConfigProjector] = None,
+        before_execute: Optional[DashboardQueryBeforeExecute] = None,
     ) -> Result[SqlQueryResultEnvelope]:
         """Render + execute a dashboard query template.
 
@@ -608,6 +610,11 @@ class DashboardService:
                 errorCode="TEMPLATE_RENDER_ERROR",
                 errorMessage=str(exc),
             )
+
+        if before_execute is not None:
+            before_execute_result = await before_execute()
+            if before_execute_result is not None:
+                return before_execute_result
 
         # Late import + module attribute lookup so unit tests can monkeypatch
         # ``DBFuncTool`` without ripping out the bound symbol.

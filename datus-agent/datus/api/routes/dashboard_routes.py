@@ -90,16 +90,6 @@ async def run_dashboard_query(
     selected_datasource = projection.principal.get("datasource") or getattr(
         projection.config, "current_datasource", None
     )
-    quota_error = await consume_enterprise_quota(
-        ctx,
-        resource="dashboard.query",
-        amount=1,
-        resource_type="dashboard",
-        resource_id=body.dashboard_slug,
-        metadata={"operation": "dashboard.query", "query_slug": body.query_slug},
-    )
-    if quota_error is not None:
-        return quota_error
 
     async def _project_query_config(datasource: str | None) -> AgentConfig:
         nonlocal selected_datasource
@@ -114,6 +104,20 @@ async def run_dashboard_query(
         )
         return datasource_projection.config
 
+    async def _consume_query_quota() -> Result | None:
+        return await consume_enterprise_quota(
+            ctx,
+            resource="dashboard.query",
+            amount=1,
+            resource_type="dashboard",
+            resource_id=body.dashboard_slug,
+            metadata={
+                "operation": "dashboard.query",
+                "query_slug": body.query_slug,
+                "datasource": str(selected_datasource) if selected_datasource else None,
+            },
+        )
+
     result = await svc.dashboard.run_query(
         project_files_root=_project_files_root(svc),
         dashboard_slug=body.dashboard_slug,
@@ -124,6 +128,7 @@ async def run_dashboard_query(
         published_template_loader=None,
         agent_config=projection.config,
         agent_config_projector=_project_query_config,
+        before_execute=_consume_query_quota,
     )
     await _audit_dashboard_query(
         ctx, body, result, selected_datasource=str(selected_datasource) if selected_datasource else None
