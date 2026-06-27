@@ -746,6 +746,121 @@ def test_dashboard_query_allows_module_dashboard_query(monkeypatch):
     assert callable(svc.dashboard.run_query.await_args.kwargs["agent_config_projector"])
 
 
+def test_dashboard_query_returns_unavailable_without_quota_store(monkeypatch):
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(audit_sink=audit_sink, quota_store=None))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config()
+    svc.agent_config.project_root = "/tmp/project"
+    svc.dashboard.run_query = AsyncMock()
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.dashboard.query"})
+
+    with _client(dashboard_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/dashboard/query",
+            json={"dashboard_slug": "sales_overview", "query_slug": "summary", "params": {}},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert response.json()["errorCode"] == "QUOTA_STORE_UNAVAILABLE"
+    svc.dashboard.run_query.assert_not_awaited()
+    event = audit_sink.events[-1]
+    assert event.action == "quota.consume"
+    assert event.resource_type == "dashboard"
+    assert event.resource_id == "sales_overview"
+    assert event.decision == "deny"
+    assert event.reason == "quota store unavailable"
+
+
+def test_dashboard_query_rejects_quota_exceeded_before_execution(monkeypatch):
+    quota_store = InMemoryEnterpriseQuotaStore()
+    asyncio.run(
+        quota_store.put_quota(
+            subject_type="user",
+            subject_id="u1",
+            resource="dashboard.query",
+            limit=1,
+            window_seconds=3600,
+        )
+    )
+    asyncio.run(
+        quota_store.consume_quota(
+            subjects=[{"subject_type": "user", "subject_id": "u1"}],
+            resource="dashboard.query",
+        )
+    )
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        _enterprise_extensions(audit_sink=audit_sink, quota_store=quota_store),
+    )
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config()
+    svc.agent_config.project_root = "/tmp/project"
+    svc.dashboard.run_query = AsyncMock()
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.dashboard.query"})
+
+    with _client(dashboard_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/dashboard/query",
+            json={"dashboard_slug": "sales_overview", "query_slug": "summary", "params": {}},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert response.json()["errorCode"] == "QUOTA_EXCEEDED"
+    svc.dashboard.run_query.assert_not_awaited()
+    event = audit_sink.events[-1]
+    assert event.action == "quota.consume"
+    assert event.decision == "deny"
+    assert event.reason == "quota exceeded"
+    assert event.metadata["resource"] == "dashboard.query"
+    assert event.metadata["used"] == 1
+
+
+def test_dashboard_query_consumes_quota_before_successful_execution(monkeypatch):
+    quota_store = InMemoryEnterpriseQuotaStore()
+    asyncio.run(
+        quota_store.put_quota(
+            subject_type="user",
+            subject_id="u1",
+            resource="dashboard.query",
+            limit=2,
+            window_seconds=3600,
+        )
+    )
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        _enterprise_extensions(audit_sink=audit_sink, quota_store=quota_store),
+    )
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config()
+    svc.agent_config.project_root = "/tmp/project"
+    svc.dashboard.run_query = AsyncMock(
+        return_value=Result[SqlQueryResultEnvelope](success=True, data=_dashboard_query_result())
+    )
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.dashboard.query"})
+
+    with _client(dashboard_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/dashboard/query",
+            json={"dashboard_slug": "sales_overview", "query_slug": "summary", "params": {}},
+        )
+
+    usage = asyncio.run(quota_store.list_usage(subject_type="user", subject_id="u1", resource="dashboard.query"))
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert usage[0]["used"] == 1
+    assert [event.action for event in audit_sink.events[-2:]] == ["quota.consume", "dashboard.query"]
+    assert audit_sink.events[-2].decision == "allow"
+    svc.dashboard.run_query.assert_awaited_once()
+
+
 def test_dashboard_query_audits_sanitized_failure(monkeypatch):
     audit_sink = CollectingAuditSink()
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(audit_sink=audit_sink))

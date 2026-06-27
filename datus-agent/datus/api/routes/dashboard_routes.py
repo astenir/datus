@@ -30,6 +30,7 @@ from datus.api.models.dashboard_models import (
 from datus.configuration.agent_config import AgentConfig
 from datus_enterprise.artifact_acl import require_artifact_access
 from datus_enterprise.audit import AuditEvent, audit_decision
+from datus_enterprise.quota import consume_enterprise_quota
 
 router = APIRouter(prefix="/api/v1", tags=["dashboard"])
 DashboardViewModuleCtx = Annotated[AppContext, Depends(require_module("module.dashboard.view"))]
@@ -89,6 +90,16 @@ async def run_dashboard_query(
     selected_datasource = projection.principal.get("datasource") or getattr(
         projection.config, "current_datasource", None
     )
+    quota_error = await consume_enterprise_quota(
+        ctx,
+        resource="dashboard.query",
+        amount=1,
+        resource_type="dashboard",
+        resource_id=body.dashboard_slug,
+        metadata={"operation": "dashboard.query", "query_slug": body.query_slug},
+    )
+    if quota_error is not None:
+        return quota_error
 
     async def _project_query_config(datasource: str | None) -> AgentConfig:
         nonlocal selected_datasource
