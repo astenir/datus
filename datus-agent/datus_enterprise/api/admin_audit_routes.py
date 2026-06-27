@@ -18,6 +18,7 @@ from datus.api.models.base_models import Result
 from datus.utils.csv_utils import sanitize_csv_field
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
+from datus_enterprise.quota import consume_enterprise_quota
 
 router = APIRouter(prefix="/api/v1", tags=["enterprise-audit"])
 
@@ -79,6 +80,25 @@ async def export_audit_logs(
     decision: str | None = None,
 ) -> Response | Result[dict]:
     """Export matching audit logs as a CSV file when the audit sink supports queries."""
+
+    quota_error = await consume_enterprise_quota(
+        ctx,
+        resource="admin.audit.export",
+        amount=1,
+        resource_type="audit_log",
+        resource_id=None,
+        metadata={
+            "operation": "export_audit_logs",
+            "limit": limit,
+            "user_id": user_id,
+            "action": action,
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "decision": decision,
+        },
+    )
+    if quota_error is not None:
+        return quota_error
 
     events, error = await _query_audit_events(
         ctx,

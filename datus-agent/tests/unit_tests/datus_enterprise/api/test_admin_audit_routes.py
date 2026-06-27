@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import csv
 from io import StringIO
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ from fastapi.testclient import TestClient
 from datus.api import deps
 from datus.api.auth.context import AppContext
 from datus.api.enterprise.defaults import (
+    InMemoryEnterpriseQuotaStore,
     InMemorySessionOwnerStore,
     LocalAuthorizationProvider,
     NoopAuditSink,
@@ -61,16 +63,17 @@ class QueryableAuditSink(CollectingAuditSink):
         return self.source_events
 
 
-def _install_extensions(monkeypatch, audit_sink):
+def _install_extensions(monkeypatch, audit_sink, *, enabled=False, quota_store=None):
     monkeypatch.setattr(
         deps,
         "_enterprise_extensions",
         EnterpriseExtensions(
-            enabled=False,
+            enabled=enabled,
             authorization_provider=LocalAuthorizationProvider(),
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
             audit_sink=audit_sink,
+            quota_store=quota_store,
         ),
     )
 
@@ -240,6 +243,100 @@ def test_admin_audit_log_export_returns_csv_and_audits(monkeypatch):
     assert event.resource_id is None
     assert event.decision == "allow"
     assert event.metadata == {"operation": "export_audit_logs", "count": 1}
+
+
+def test_admin_audit_log_export_returns_unavailable_without_quota_store(monkeypatch):
+    audit_sink = QueryableAuditSink()
+    ctx = AppContext(user_id="admin", permissions={"module.admin.audit.export"})
+    _install_extensions(monkeypatch, audit_sink, enabled=True, quota_store=None)
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/admin/audit-logs/export")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert response.json()["errorCode"] == "QUOTA_STORE_UNAVAILABLE"
+    assert audit_sink.queries == []
+    event = next(event for event in audit_sink.events if event.action == "quota.consume")
+    assert event.resource_type == "audit_log"
+    assert event.decision == "deny"
+    assert event.reason == "quota store unavailable"
+    assert event.metadata["quota_resource"] == "admin.audit.export"
+
+
+def test_admin_audit_log_export_rejects_quota_exceeded(monkeypatch):
+    quota_store = InMemoryEnterpriseQuotaStore()
+    asyncio.run(
+        quota_store.put_quota(
+            subject_type="user",
+            subject_id="admin",
+            resource="admin.audit.export",
+            limit=1,
+            window_seconds=3600,
+        )
+    )
+    asyncio.run(
+        quota_store.consume_quota(
+            subjects=[{"subject_type": "user", "subject_id": "admin"}],
+            resource="admin.audit.export",
+        )
+    )
+    audit_sink = QueryableAuditSink()
+    ctx = AppContext(user_id="admin", permissions={"module.admin.audit.export"})
+    _install_extensions(monkeypatch, audit_sink, enabled=True, quota_store=quota_store)
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/admin/audit-logs/export")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert response.json()["errorCode"] == "QUOTA_EXCEEDED"
+    assert audit_sink.queries == []
+    event = next(event for event in audit_sink.events if event.action == "quota.consume")
+    assert event.resource_type == "audit_log"
+    assert event.decision == "deny"
+    assert event.reason == "quota exceeded"
+    assert event.metadata["resource"] == "admin.audit.export"
+    assert event.metadata["used"] == 1
+
+
+def test_admin_audit_log_export_consumes_quota(monkeypatch):
+    audit_event = CoreAuditEvent(
+        user_id="u2",
+        action="chat.stream",
+        resource_type="session",
+        resource_id="s1",
+        decision="allow",
+        reason=None,
+        request_id="r1",
+        metadata={"operation": "stream"},
+    )
+    quota_store = InMemoryEnterpriseQuotaStore()
+    asyncio.run(
+        quota_store.put_quota(
+            subject_type="user",
+            subject_id="admin",
+            resource="admin.audit.export",
+            limit=2,
+            window_seconds=3600,
+        )
+    )
+    audit_sink = QueryableAuditSink([audit_event])
+    ctx = AppContext(user_id="admin", permissions={"module.admin.audit.export"})
+    _install_extensions(monkeypatch, audit_sink, enabled=True, quota_store=quota_store)
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/admin/audit-logs/export")
+
+    usage = asyncio.run(quota_store.list_usage(subject_type="user", subject_id="admin", resource="admin.audit.export"))
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert usage[0]["used"] == 1
+    event = next(event for event in audit_sink.events if event.action == "quota.consume")
+    assert event.decision == "allow"
+    assert event.metadata["quota_resource"] == "admin.audit.export"
+    assert audit_sink.events[-1].action == "module.admin.audit.export"
 
 
 def test_admin_audit_log_export_returns_unavailable_when_sink_is_write_only(monkeypatch):
