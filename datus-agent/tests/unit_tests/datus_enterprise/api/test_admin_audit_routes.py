@@ -1,4 +1,6 @@
 import argparse
+import csv
+from io import StringIO
 from types import SimpleNamespace
 
 from fastapi import FastAPI, Request
@@ -183,9 +185,87 @@ def test_admin_audit_logs_forwards_filters_returns_entries_and_audits(monkeypatc
     assert event.metadata == {"operation": "list_audit_logs", "count": 1}
 
 
+def test_admin_audit_log_export_returns_csv_and_audits(monkeypatch):
+    audit_event = CoreAuditEvent(
+        user_id="u2",
+        action="sql.execute",
+        resource_type="datasource",
+        resource_id="finance",
+        decision="deny",
+        reason="POLICY_DENIED",
+        request_id="r2",
+        metadata={"error_code": "POLICY_DENIED", "row_count": 0},
+    )
+    audit_sink = QueryableAuditSink([audit_event])
+    ctx = AppContext(user_id="admin", permissions={"module.admin.audit"})
+    _install_extensions(monkeypatch, audit_sink)
+
+    with _client(ctx) as client:
+        response = client.get(
+            "/api/v1/admin/audit-logs/export",
+            params={"limit": 10, "resource_type": "datasource", "decision": "deny"},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert response.headers["content-disposition"] == 'attachment; filename="audit-logs.csv"'
+    rows = list(csv.DictReader(StringIO(response.text)))
+    assert rows == [
+        {
+            "user_id": "u2",
+            "action": "sql.execute",
+            "resource_type": "datasource",
+            "resource_id": "finance",
+            "decision": "deny",
+            "reason": "POLICY_DENIED",
+            "request_id": "r2",
+            "metadata": '{"error_code": "POLICY_DENIED", "row_count": 0}',
+        }
+    ]
+    assert audit_sink.queries == [
+        {
+            "limit": 10,
+            "user_id": None,
+            "action": None,
+            "resource_type": "datasource",
+            "resource_id": None,
+            "decision": "deny",
+        }
+    ]
+
+    event = audit_sink.events[-1]
+    assert event.user_id == "admin"
+    assert event.action == "module.admin.audit"
+    assert event.resource_type == "audit_log"
+    assert event.resource_id is None
+    assert event.decision == "allow"
+    assert event.metadata == {"operation": "export_audit_logs", "count": 1}
+
+
+def test_admin_audit_log_export_returns_unavailable_when_sink_is_write_only(monkeypatch):
+    audit_sink = CollectingAuditSink()
+    ctx = AppContext(user_id="u1", permissions={"module.admin.audit"})
+    _install_extensions(monkeypatch, audit_sink)
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/admin/audit-logs/export")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "AUDIT_QUERY_UNAVAILABLE"
+    event = audit_sink.events[-1]
+    assert event.action == "module.admin.audit"
+    assert event.resource_type == "audit_log"
+    assert event.decision == "deny"
+    assert event.reason == "audit query unavailable"
+    assert event.metadata == {"operation": "export_audit_logs"}
+
+
 def test_enterprise_admin_audit_routes_are_registered():
     args = argparse.Namespace(config="", datasource="default", output_dir="./output", log_level="INFO")
     app = create_app(args)
     route_paths = {route.path for route in app.routes if hasattr(route, "path")}
 
     assert "/api/v1/admin/audit-logs" in route_paths
+    assert "/api/v1/admin/audit-logs/export" in route_paths
