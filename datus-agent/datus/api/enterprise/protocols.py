@@ -50,6 +50,10 @@ class SessionOwnerStore(Protocol):
         """Return session ids recorded for ``user_id`` in ``project_id``."""
         ...
 
+    async def list_sessions(self, project_id: str, user_id: str | None = None) -> list[dict[str, Any]]:
+        """Return session owner records in ``project_id``, optionally filtered by user."""
+        ...
+
 
 @runtime_checkable
 class ArtifactAclStore(Protocol):

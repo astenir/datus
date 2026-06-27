@@ -30,7 +30,7 @@ from datus.api.models.cli_models import (
 from datus.api.services.action_sse_converter import action_to_sse_event
 from datus.cli.autocomplete import AtReferenceCompleter
 from datus.configuration.agent_config import AgentConfig
-from datus.models.session_manager import session_scope_from_user_id
+from datus.models.session_manager import SessionManager, session_scope_from_user_id
 from datus.schemas.action_history import ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.node_models import Metric, ReferenceSql, TableSchema
 from datus.tools.proxy.proxy_tool import apply_proxy_tools
@@ -294,6 +294,7 @@ class ChatTaskManager:
     ) -> None:
         self._tasks: Dict[str, ChatTask] = {}
         self._completed_tasks: Dict[str, ChatTask] = {}
+        self._discarded_task_ids: set[int] = set()
         self._default_source = default_source
         self._default_interactive = default_interactive
         self._stream_thinking = stream_thinking
@@ -362,6 +363,7 @@ class ChatTaskManager:
         agent_name = sub_agent_id or "chat"
         safe_name = agent_name.replace(" ", "_")
         session_id = request.session_id or f"{safe_name}_session_{str(uuid.uuid4())[:8]}"
+        SessionManager._validate_session_id(session_id)
         request.session_id = session_id
 
         if session_id in self._tasks:
@@ -415,6 +417,50 @@ class ChatTaskManager:
 
     def get_task(self, session_id: str) -> Optional[ChatTask]:
         return self._tasks.get(session_id) or self._completed_tasks.get(session_id)
+
+    def get_task_snapshot(self, session_id: str) -> dict[str, Any] | None:
+        """Return a bounded metadata snapshot for admin/session APIs."""
+
+        task = self.get_task(session_id)
+        return self._task_snapshot(task) if task is not None else None
+
+    def list_task_snapshots(self) -> list[dict[str, Any]]:
+        """Return bounded metadata snapshots for known in-process tasks."""
+
+        snapshots = [self._task_snapshot(task) for task in self._tasks.values()]
+        snapshots.extend(
+            self._task_snapshot(task)
+            for session_id, task in self._completed_tasks.items()
+            if session_id not in self._tasks
+        )
+        return sorted(snapshots, key=lambda item: str(item.get("created_at") or ""), reverse=True)
+
+    async def discard_task_snapshot(self, session_id: str, *, wait: bool = False, timeout: float = 5.0) -> bool:
+        """Remove active/completed task metadata for a deleted session."""
+
+        active_task = self._tasks.get(session_id)
+        completed_task = self._completed_tasks.get(session_id)
+        if active_task is not None:
+            self._discarded_task_ids.add(id(active_task))
+        had_task = active_task is not None or completed_task is not None
+
+        if wait and active_task is not None and active_task.asyncio_task is not None:
+            try:
+                await asyncio.wait_for(active_task.asyncio_task, timeout=timeout)
+            except asyncio.CancelledError:
+                if not active_task.asyncio_task.cancelled():
+                    raise
+            except asyncio.TimeoutError:
+                pass
+            except Exception:
+                logger.debug("Deleted session task finished with an error: %s", session_id, exc_info=True)
+
+        if self._tasks.get(session_id) is active_task:
+            self._tasks.pop(session_id, None)
+        current_completed_task = self._completed_tasks.get(session_id)
+        if current_completed_task is active_task or current_completed_task is completed_task:
+            self._completed_tasks.pop(session_id, None)
+        return had_task
 
     async def consume_events(self, task: ChatTask, start_from: Optional[int] = None) -> AsyncGenerator[SSEEvent, None]:
         """Yield events from *task*'s buffer.
@@ -751,10 +797,7 @@ class ChatTaskManager:
                 reset_trace_context(trace_token)
             async with task.condition:
                 task.condition.notify_all()
-            self._tasks.pop(session_id, None)
-            # Keep completed task for resume within TTL
-            self._completed_tasks[session_id] = task
-            self._purge_expired_completed()
+            self._release_task_slot(session_id, task)
 
     async def _push_event(self, task: ChatTask, event: SSEEvent) -> None:
         """Append an event to the task buffer and notify consumers."""
@@ -771,6 +814,37 @@ class ChatTaskManager:
         ]
         for sid in expired:
             self._completed_tasks.pop(sid, None)
+
+    def _release_task_slot(self, session_id: str, task: ChatTask) -> None:
+        """Release task tracking only when this task still owns the slot."""
+
+        owns_active_slot = self._tasks.get(session_id) is task
+        if owns_active_slot:
+            self._tasks.pop(session_id, None)
+
+        task_was_discarded = id(task) in self._discarded_task_ids
+        if task_was_discarded:
+            self._discarded_task_ids.discard(id(task))
+            if self._completed_tasks.get(session_id) is task:
+                self._completed_tasks.pop(session_id, None)
+            return
+
+        if owns_active_slot:
+            # Keep completed task for resume within TTL.
+            self._completed_tasks[session_id] = task
+            self._purge_expired_completed()
+
+    def _task_snapshot(self, task: ChatTask) -> dict[str, Any]:
+        return {
+            "session_id": task.session_id,
+            "owner_user_id": task.owner_user_id,
+            "status": task.status,
+            "is_running": task.status == "running",
+            "created_at": task.created_at.isoformat(),
+            "event_count": len(task.events),
+            "consumer_offset": task.consumer_offset,
+            "error": task.error,
+        }
 
     # ------------------------------------------------------------------
     # Node factory

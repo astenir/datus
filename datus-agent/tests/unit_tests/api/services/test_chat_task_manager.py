@@ -625,6 +625,57 @@ class TestChatTaskManagerBehavior:
         assert result is True
         mock_asyncio_task.cancel.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_discard_timeout_finalizer_does_not_remove_reused_session(self):
+        """A discarded old task must not clean up a later task with the same session ID."""
+
+        manager = ChatTaskManager()
+        old_asyncio_task = asyncio.create_task(asyncio.sleep(10))
+        old_task = ChatTask(session_id="reuse-session", asyncio_task=old_asyncio_task)
+        manager._tasks["reuse-session"] = old_task
+
+        discarded = await manager.discard_task_snapshot("reuse-session", wait=True, timeout=0.001)
+        assert discarded is True
+        assert manager._tasks == {}
+
+        new_task = ChatTask(session_id="reuse-session", asyncio_task=MagicMock())
+        manager._tasks["reuse-session"] = new_task
+
+        old_task.status = "cancelled"
+        manager._release_task_slot("reuse-session", old_task)
+
+        assert manager._tasks["reuse-session"] is new_task
+        assert manager._completed_tasks.get("reuse-session") is not old_task
+        assert id(old_task) not in manager._discarded_task_ids
+
+        await asyncio.gather(old_asyncio_task, return_exceptions=True)
+
+    @pytest.mark.asyncio
+    async def test_discard_wait_does_not_remove_reused_completed_session(self, monkeypatch):
+        """Stale discard cleanup must not remove a newer completed task snapshot."""
+
+        from datus.api.services import chat_task_manager as ctm
+
+        manager = ChatTaskManager()
+        old_task = ChatTask(session_id="reuse-session", asyncio_task=MagicMock())
+        new_task = ChatTask(session_id="reuse-session", asyncio_task=MagicMock())
+        manager._tasks["reuse-session"] = old_task
+
+        async def fake_wait_for(awaitable, timeout):
+            manager._release_task_slot("reuse-session", old_task)
+            manager._tasks["reuse-session"] = new_task
+            manager._release_task_slot("reuse-session", new_task)
+
+        monkeypatch.setattr(ctm.asyncio, "wait_for", fake_wait_for)
+
+        discarded = await manager.discard_task_snapshot("reuse-session", wait=True, timeout=0.001)
+
+        assert discarded is True
+        assert manager._tasks == {}
+        assert manager._completed_tasks["reuse-session"] is new_task
+        assert manager._completed_tasks["reuse-session"] is not old_task
+        assert id(old_task) not in manager._discarded_task_ids
+
 
 @pytest.mark.asyncio
 class TestStartChat:
@@ -664,6 +715,20 @@ class TestStartChat:
 
         assert task.owner_user_id == "alice@example.com"
         assert await owner_store.get_owner("project-1", "owned-session") == "alice@example.com"
+
+    async def test_start_chat_rejects_invalid_session_id_before_owner_write(self, real_agent_config):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+        from datus.api.models.cli_models import StreamChatInput
+
+        owner_store = InMemorySessionOwnerStore()
+        manager = ChatTaskManager(project_id="project-1", session_owner_store=owner_store)
+        request = StreamChatInput(message="hello", session_id="bad/session")
+
+        with pytest.raises(ValueError, match="Invalid session ID"):
+            await manager.start_chat(real_agent_config, request, user_id="alice")
+
+        assert manager._tasks == {}
+        assert await owner_store.list_sessions("project-1") == []
 
     async def test_start_chat_creates_task(self, real_agent_config, mock_llm_create):
         """start_chat creates a ChatTask and returns it."""
