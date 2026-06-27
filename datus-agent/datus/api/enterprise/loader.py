@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, TypeVar
 
 from datus.api.enterprise.defaults import (
+    InMemoryEnterpriseDatasourceGrantStore,
     InMemoryEnterpriseRoleStore,
     InMemoryEnterpriseUserStore,
     InMemorySessionOwnerStore,
@@ -19,6 +20,7 @@ from datus.api.enterprise.protocols import (
     AuditSink,
     AuthorizationProvider,
     ConfigProjector,
+    EnterpriseDatasourceGrantStore,
     EnterpriseRoleStore,
     EnterpriseUserStore,
     SessionOwnerStore,
@@ -43,6 +45,9 @@ class EnterpriseExtensions:
     artifact_acl_store: ArtifactAclStore | None = None
     user_store: EnterpriseUserStore = field(default_factory=InMemoryEnterpriseUserStore)
     role_store: EnterpriseRoleStore = field(default_factory=InMemoryEnterpriseRoleStore)
+    datasource_grant_store: EnterpriseDatasourceGrantStore = field(
+        default_factory=InMemoryEnterpriseDatasourceGrantStore
+    )
 
 
 def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> EnterpriseExtensions:
@@ -73,6 +78,7 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
             artifact_acl_store=None,
             user_store=InMemoryEnterpriseUserStore(),
             role_store=InMemoryEnterpriseRoleStore(),
+            datasource_grant_store=InMemoryEnterpriseDatasourceGrantStore(),
         )
 
     authorization_provider = _load_required_component(
@@ -99,6 +105,12 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         EnterpriseRoleStore,
         InMemoryEnterpriseRoleStore(),
     )
+    datasource_grant_store = _load_optional_component(
+        raw,
+        "datasource_grant_store",
+        EnterpriseDatasourceGrantStore,
+        InMemoryEnterpriseDatasourceGrantStore(),
+    )
     session_owner_store = _load_optional_component(
         raw,
         "session_owner_store",
@@ -121,6 +133,7 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         artifact_acl_store=artifact_acl_store,
         user_store=user_store,
         role_store=role_store,
+        datasource_grant_store=datasource_grant_store,
     )
 
 

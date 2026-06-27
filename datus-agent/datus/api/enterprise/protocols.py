@@ -104,6 +104,53 @@ class EnterpriseRoleStore(Protocol):
 
 
 @runtime_checkable
+class EnterpriseDatasourceGrantStore(Protocol):
+    """Persist and query role/user datasource grants."""
+
+    async def list_grants(
+        self,
+        *,
+        subject_type: str | None = None,
+        subject_id: str | None = None,
+        datasource_key: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return datasource grant records filtered by optional fields."""
+        ...
+
+    async def get_grant(
+        self,
+        *,
+        subject_type: str,
+        subject_id: str,
+        datasource_key: str,
+    ) -> dict[str, Any] | None:
+        """Return one datasource grant record, if present."""
+        ...
+
+    async def put_grant(
+        self,
+        *,
+        subject_type: str,
+        subject_id: str,
+        datasource_key: str,
+        effect: str,
+        scope: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Create or replace one deterministic datasource grant."""
+        ...
+
+    async def delete_grant(
+        self,
+        *,
+        subject_type: str,
+        subject_id: str,
+        datasource_key: str,
+    ) -> bool:
+        """Delete one datasource grant record."""
+        ...
+
+
+@runtime_checkable
 class SessionOwnerStore(Protocol):
     """Persist and query session owner metadata."""
 

@@ -978,9 +978,9 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - config route 已接入 `module.config.view` 和 `module.config.edit`，覆盖 `/api/v1/config/agent`、配置更新接口和连接探测接口。
 - KB route 已接入 `module.kb`，覆盖 KB bootstrap、platform docs bootstrap 和对应 cancel 接口。
 - MCP route 已接入 `module.mcp`，覆盖 MCP server/tool/filter 的列表、管理和调用接口。
-- 当前已注册的 datasource admin route `/api/v1/admin/datasource-default` 已接入 `module.admin.datasources`，用于项目级默认数据源管理。
+- 当前已注册的 datasource admin route `/api/v1/admin/datasources`、`/api/v1/admin/datasource-default` 和 `/api/v1/admin/datasource-grants` 已接入 `module.admin.datasources`，用于项目级数据源清单、默认数据源管理和 datasource grant metadata 管理。
 - 当前已注册的 user/role admin route 已分别接入 `module.admin.users` 和 `module.admin.roles`，用于阶段 6 的用户状态、role metadata 和 role permission set 管理。
-- 其余 admin datasource grants/sessions/artifacts/audit/quotas/secrets API 仍按阶段 6 推进；本阶段没有引入 datasource grant、请求级 config projection 或 SQL policy report/dashboard/direct SQL 兜底。
+- 其余 admin sessions/artifacts/audit/quotas/secrets API 仍按阶段 6 推进；本阶段没有引入 metadata store 到新请求 `AppContext.datasource_grants` 的自动 reload/merge，也没有引入 SQL policy report/dashboard/direct SQL 兜底。
 
 验收：
 
@@ -1052,6 +1052,9 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - 已新增 `EnterpriseRoleStore` 协议，以及本地兼容的内存实现和单节点 SQLite `enterprise_roles` / `enterprise_role_permissions` / `enterprise_user_roles` 骨架；企业模式下可通过 `enterprise.role_store.class` 替换为生产 metadata store。
 - 已注册 `/api/v1/admin/roles`、`/api/v1/admin/roles/{role_id}`、`/api/v1/admin/roles/{role_id}/permissions` 和 `/api/v1/admin/users/{user_id}/roles`，统一要求 `module.admin.roles`；当前切片管理 role metadata、permission set 与用户-role 绑定，但还不把 metadata store 中的新权限自动合并进当前请求的 `AppContext`。
 - 角色管理接口返回稳定 `Result` 错误码：`ROLE_ID_INVALID`、`ROLE_NAME_INVALID`、`ROLE_PERMISSION_INVALID`、`USER_ID_INVALID`、`RESOURCE_NOT_FOUND`、`ROLE_LIST_FAILED`、`ROLE_READ_FAILED`、`ROLE_UPSERT_FAILED`、`ROLE_UPDATE_FAILED`、`ROLE_DELETE_FAILED`、`ROLE_DELETE_FORBIDDEN`、`ROLE_BINDINGS_READ_FAILED`、`USER_READ_FAILED`、`USER_ROLES_READ_FAILED`、`USER_ROLES_UPDATE_FAILED`；管理 allow/deny 使用 `module.admin.roles` 写入审计，metadata 只包含脱敏的新旧摘要。
+- 已新增 `EnterpriseDatasourceGrantStore` 协议，以及本地兼容的内存实现和单节点 SQLite `enterprise_datasource_grants` 骨架；企业模式下可通过 `enterprise.datasource_grant_store.class` 替换为生产 metadata store。
+- 已注册 `/api/v1/admin/datasource-grants` 和 `/api/v1/admin/datasource-grants/{subject_type}/{subject_id}/{datasource_key}`，统一要求 `module.admin.datasources`；当前切片管理 `user` / `role` datasource grant metadata，写入前校验 subject 和 datasource，使用 upsert 保证同一 `(subject_type, subject_id, datasource_key)` 只有一条 grant。该 metadata store 还不会自动合并进当前请求的 `AppContext.datasource_grants`。
+- 数据源授权管理接口返回稳定 `Result` 错误码：`DATASOURCE_GRANT_FILTER_INVALID`、`DATASOURCE_GRANT_ID_INVALID`、`DATASOURCE_GRANT_SUBJECT_INVALID`、`DATASOURCE_GRANT_DATASOURCE_INVALID`、`DATASOURCE_GRANT_SCOPE_INVALID`、`DATASOURCE_NOT_FOUND`、`RESOURCE_NOT_FOUND`、`USER_READ_FAILED`、`ROLE_READ_FAILED`、`DATASOURCE_GRANT_LIST_FAILED`、`DATASOURCE_GRANT_READ_FAILED`、`DATASOURCE_GRANT_UPSERT_FAILED`、`DATASOURCE_GRANT_DELETE_FAILED`；管理 allow/deny 使用 `module.admin.datasources` 写入审计，metadata 只包含脱敏的新旧摘要和 scope pattern，不记录 datasource 连接配置或 secret。
 
 验收：
 

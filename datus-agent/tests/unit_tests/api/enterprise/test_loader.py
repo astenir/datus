@@ -4,6 +4,7 @@ import types
 import pytest
 
 from datus.api.enterprise.defaults import (
+    InMemoryEnterpriseDatasourceGrantStore,
     InMemoryEnterpriseRoleStore,
     InMemoryEnterpriseUserStore,
     PassthroughConfigProjector,
@@ -78,6 +79,20 @@ class _RoleStore:
         return False
 
 
+class _DatasourceGrantStore:
+    async def list_grants(self, *, subject_type=None, subject_id=None, datasource_key=None):
+        return []
+
+    async def get_grant(self, *, subject_type, subject_id, datasource_key):
+        return None
+
+    async def put_grant(self, *, subject_type, subject_id, datasource_key, effect, scope=None):
+        return {}
+
+    async def delete_grant(self, *, subject_type, subject_id, datasource_key):
+        return False
+
+
 class _ArtifactAclStore:
     async def get_acl(self, *, artifact_type, slug):
         return {}
@@ -114,6 +129,7 @@ def fake_module():
     mod.Audit = _Audit
     mod.UserStore = _UserStore
     mod.RoleStore = _RoleStore
+    mod.DatasourceGrantStore = _DatasourceGrantStore
     mod.ArtifactAclStore = _ArtifactAclStore
     mod.LegacyOwnerStore = _LegacyOwnerStore
     mod.OwnerStore = _OwnerStore
@@ -130,6 +146,7 @@ def test_disabled_enterprise_loads_local_defaults():
     assert extensions.config_projector is not None
     assert isinstance(extensions.user_store, InMemoryEnterpriseUserStore)
     assert isinstance(extensions.role_store, InMemoryEnterpriseRoleStore)
+    assert isinstance(extensions.datasource_grant_store, InMemoryEnterpriseDatasourceGrantStore)
     assert extensions.session_owner_store is not None
     assert extensions.audit_sink is not None
     assert extensions.artifact_acl_store is None
@@ -153,6 +170,7 @@ def test_enabled_enterprise_uses_passthrough_projector_when_projection_not_confi
     assert isinstance(extensions.config_projector, PassthroughConfigProjector)
     assert isinstance(extensions.user_store, InMemoryEnterpriseUserStore)
     assert isinstance(extensions.role_store, InMemoryEnterpriseRoleStore)
+    assert isinstance(extensions.datasource_grant_store, InMemoryEnterpriseDatasourceGrantStore)
     assert extensions.artifact_acl_store is None
 
 
@@ -164,6 +182,7 @@ def test_enabled_enterprise_loads_configured_core_providers(fake_module):
             "config_projector": {"class": f"{fake_module}.Projector"},
             "user_store": {"class": f"{fake_module}.UserStore"},
             "role_store": {"class": f"{fake_module}.RoleStore"},
+            "datasource_grant_store": {"class": f"{fake_module}.DatasourceGrantStore"},
             "artifact_acl_store": {"class": f"{fake_module}.ArtifactAclStore"},
             "audit_sink": {"class": f"{fake_module}.Audit"},
             "session_owner_store": {"class": f"{fake_module}.OwnerStore"},
@@ -175,6 +194,7 @@ def test_enabled_enterprise_loads_configured_core_providers(fake_module):
     assert isinstance(extensions.config_projector, _Projector)
     assert isinstance(extensions.user_store, _UserStore)
     assert isinstance(extensions.role_store, _RoleStore)
+    assert isinstance(extensions.datasource_grant_store, _DatasourceGrantStore)
     assert isinstance(extensions.audit_sink, _Audit)
     assert isinstance(extensions.artifact_acl_store, _ArtifactAclStore)
     assert isinstance(extensions.session_owner_store, _OwnerStore)

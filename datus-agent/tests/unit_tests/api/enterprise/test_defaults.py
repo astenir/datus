@@ -5,10 +5,12 @@ import pytest
 
 from datus.api.auth.context import AppContext
 from datus.api.enterprise.defaults import (
+    InMemoryEnterpriseDatasourceGrantStore,
     InMemoryEnterpriseRoleStore,
     InMemoryEnterpriseUserStore,
     InMemorySessionOwnerStore,
     LocalAuthorizationProvider,
+    SqliteEnterpriseDatasourceGrantStore,
     SqliteEnterpriseRoleStore,
     SqliteEnterpriseUserStore,
     SqliteSessionOwnerStore,
@@ -146,6 +148,67 @@ async def test_in_memory_enterprise_role_store_rejects_missing_user_role_binding
         await store.set_user_roles("alice", ["analyst", "missing"])
 
     assert await store.list_user_roles("alice") == []
+
+
+@pytest.mark.asyncio
+async def test_in_memory_datasource_grant_store_upserts_filters_and_deletes():
+    store = InMemoryEnterpriseDatasourceGrantStore()
+
+    created = await store.put_grant(
+        subject_type="role",
+        subject_id="analyst",
+        datasource_key="db_a",
+        effect="allow",
+        scope={"schemas": ["public"], "tables": ["orders"]},
+    )
+    replaced = await store.put_grant(
+        subject_type="role",
+        subject_id="analyst",
+        datasource_key="db_a",
+        effect="deny",
+        scope={"allow_sql": False},
+    )
+    await store.put_grant(
+        subject_type="user",
+        subject_id="alice",
+        datasource_key="db_b",
+        effect="allow",
+        scope={},
+    )
+
+    assert created["effect"] == "allow"
+    assert replaced["effect"] == "deny"
+    assert replaced["scope"] == {"allow_sql": False}
+    assert await store.get_grant(subject_type="role", subject_id="analyst", datasource_key="db_a") == replaced
+    assert [
+        (grant["subject_type"], grant["subject_id"], grant["datasource_key"])
+        for grant in await store.list_grants(subject_type="role")
+    ] == [("role", "analyst", "db_a")]
+    assert len(await store.list_grants()) == 2
+
+    assert await store.delete_grant(subject_type="role", subject_id="analyst", datasource_key="db_a") is True
+    assert await store.delete_grant(subject_type="role", subject_id="analyst", datasource_key="db_a") is False
+
+
+@pytest.mark.asyncio
+async def test_in_memory_datasource_grant_store_rejects_invalid_effect_or_scope():
+    store = InMemoryEnterpriseDatasourceGrantStore()
+
+    with pytest.raises(DatusException, match="effect must be allow or deny"):
+        await store.put_grant(
+            subject_type="role",
+            subject_id="analyst",
+            datasource_key="db_a",
+            effect="maybe",
+        )
+    with pytest.raises(DatusException, match="scope must be a mapping"):
+        await store.put_grant(
+            subject_type="role",
+            subject_id="analyst",
+            datasource_key="db_a",
+            effect="allow",
+            scope=[],
+        )
 
 
 @pytest.mark.asyncio
@@ -309,3 +372,46 @@ def test_sqlite_enterprise_role_delete_blocks_concurrent_user_role_insert(tmp_pa
     assert asyncio.run(reopened.get_role("analyst")) is None
     assert asyncio.run(reopened.list_user_roles("alice")) == []
     assert asyncio.run(reopened.list_role_users("analyst")) == []
+
+
+@pytest.mark.asyncio
+async def test_sqlite_datasource_grant_store_persists_and_replaces_grants(tmp_path):
+    db_path = tmp_path / "enterprise_datasource_grants.db"
+    store = SqliteEnterpriseDatasourceGrantStore(str(db_path))
+
+    await store.put_grant(
+        subject_type="role",
+        subject_id="analyst",
+        datasource_key="db_a",
+        effect="allow",
+        scope={"schemas": ["public"], "tables": ["orders"]},
+    )
+    await store.put_grant(
+        subject_type="role",
+        subject_id="analyst",
+        datasource_key="db_a",
+        effect="deny",
+        scope={"allow_sql": False},
+    )
+    await store.put_grant(
+        subject_type="user",
+        subject_id="alice",
+        datasource_key="db_b",
+        effect="allow",
+        scope={"catalogs": ["main"]},
+    )
+
+    reopened = SqliteEnterpriseDatasourceGrantStore(str(db_path))
+    analyst = await reopened.get_grant(subject_type="role", subject_id="analyst", datasource_key="db_a")
+    assert analyst["effect"] == "deny"
+    assert analyst["scope"] == {"allow_sql": False}
+    assert analyst["created_at"]
+    assert analyst["updated_at"]
+    assert [
+        (grant["subject_type"], grant["subject_id"], grant["datasource_key"])
+        for grant in await reopened.list_grants(datasource_key="db_b")
+    ] == [("user", "alice", "db_b")]
+    assert len(await reopened.list_grants()) == 2
+
+    assert await reopened.delete_grant(subject_type="role", subject_id="analyst", datasource_key="db_a") is True
+    assert await reopened.get_grant(subject_type="role", subject_id="analyst", datasource_key="db_a") is None

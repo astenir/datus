@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -494,6 +495,221 @@ class SqliteEnterpriseRoleStore:
             conn.commit()
 
 
+class InMemoryEnterpriseDatasourceGrantStore:
+    """Process-local datasource grant metadata store for tests and local mode."""
+
+    def __init__(self) -> None:
+        self._grants: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    async def list_grants(
+        self,
+        *,
+        subject_type: str | None = None,
+        subject_id: str | None = None,
+        datasource_key: str | None = None,
+    ) -> list[dict[str, Any]]:
+        records = [
+            _copy_datasource_grant_record(record)
+            for record in self._grants.values()
+            if _grant_matches_filters(
+                record,
+                subject_type=subject_type,
+                subject_id=subject_id,
+                datasource_key=datasource_key,
+            )
+        ]
+        return sorted(
+            records,
+            key=lambda record: (
+                str(record["subject_type"]),
+                str(record["subject_id"]),
+                str(record["datasource_key"]),
+            ),
+        )
+
+    async def get_grant(
+        self,
+        *,
+        subject_type: str,
+        subject_id: str,
+        datasource_key: str,
+    ) -> dict[str, Any] | None:
+        record = self._grants.get((subject_type, subject_id, datasource_key))
+        return _copy_datasource_grant_record(record) if record is not None else None
+
+    async def put_grant(
+        self,
+        *,
+        subject_type: str,
+        subject_id: str,
+        datasource_key: str,
+        effect: str,
+        scope: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now = _sqlite_now()
+        key = (subject_type, subject_id, datasource_key)
+        existing = self._grants.get(key)
+        record = {
+            "subject_type": subject_type,
+            "subject_id": subject_id,
+            "datasource_key": datasource_key,
+            "effect": _normalized_grant_effect(effect),
+            "scope": _normalized_grant_scope(scope),
+            "created_at": str(existing.get("created_at")) if existing else now,
+            "updated_at": now,
+        }
+        self._grants[key] = record
+        return _copy_datasource_grant_record(record)
+
+    async def delete_grant(
+        self,
+        *,
+        subject_type: str,
+        subject_id: str,
+        datasource_key: str,
+    ) -> bool:
+        return self._grants.pop((subject_type, subject_id, datasource_key), None) is not None
+
+
+class SqliteEnterpriseDatasourceGrantStore:
+    """SQLite-backed datasource grant metadata store for single-node deployments."""
+
+    def __init__(self, db_path: str) -> None:
+        self._db_path = db_path
+        parent = os.path.dirname(os.path.abspath(db_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        self._ensure_schema()
+
+    async def list_grants(
+        self,
+        *,
+        subject_type: str | None = None,
+        subject_id: str | None = None,
+        datasource_key: str | None = None,
+    ) -> list[dict[str, Any]]:
+        where: list[str] = []
+        params: list[Any] = []
+        if subject_type is not None:
+            where.append("subject_type = ?")
+            params.append(subject_type)
+        if subject_id is not None:
+            where.append("subject_id = ?")
+            params.append(subject_id)
+        if datasource_key is not None:
+            where.append("datasource_key = ?")
+            params.append(datasource_key)
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        query = f"""
+            SELECT subject_type, subject_id, datasource_key, effect, scope_json, created_at, updated_at
+            FROM enterprise_datasource_grants
+            {where_sql}
+            ORDER BY subject_type ASC, subject_id ASC, datasource_key ASC
+            """
+        with self._connect() as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+        return [_datasource_grant_record_from_row(row) for row in rows]
+
+    async def get_grant(
+        self,
+        *,
+        subject_type: str,
+        subject_id: str,
+        datasource_key: str,
+    ) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT subject_type, subject_id, datasource_key, effect, scope_json, created_at, updated_at
+                FROM enterprise_datasource_grants
+                WHERE subject_type = ? AND subject_id = ? AND datasource_key = ?
+                """,
+                (subject_type, subject_id, datasource_key),
+            ).fetchone()
+        return _datasource_grant_record_from_row(row) if row else None
+
+    async def put_grant(
+        self,
+        *,
+        subject_type: str,
+        subject_id: str,
+        datasource_key: str,
+        effect: str,
+        scope: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        normalized_effect = _normalized_grant_effect(effect)
+        normalized_scope = _normalized_grant_scope(scope)
+        scope_json = json.dumps(normalized_scope, sort_keys=True, separators=(",", ":"))
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO enterprise_datasource_grants (
+                    subject_type, subject_id, datasource_key, effect, scope_json, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(subject_type, subject_id, datasource_key) DO UPDATE SET
+                    effect = excluded.effect,
+                    scope_json = excluded.scope_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (subject_type, subject_id, datasource_key, normalized_effect, scope_json),
+            )
+            conn.commit()
+        record = await self.get_grant(
+            subject_type=subject_type,
+            subject_id=subject_id,
+            datasource_key=datasource_key,
+        )
+        if record is None:
+            raise DatusException(ErrorCode.COMMON_UNKNOWN, message="Failed to persist datasource grant.")
+        return record
+
+    async def delete_grant(
+        self,
+        *,
+        subject_type: str,
+        subject_id: str,
+        datasource_key: str,
+    ) -> bool:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                DELETE FROM enterprise_datasource_grants
+                WHERE subject_type = ? AND subject_id = ? AND datasource_key = ?
+                """,
+                (subject_type, subject_id, datasource_key),
+            )
+            conn.commit()
+        return cursor.rowcount > 0
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self._db_path, timeout=5.0)
+
+    def _ensure_schema(self) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS enterprise_datasource_grants (
+                    subject_type TEXT NOT NULL,
+                    subject_id TEXT NOT NULL,
+                    datasource_key TEXT NOT NULL,
+                    effect TEXT NOT NULL,
+                    scope_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (subject_type, subject_id, datasource_key)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_enterprise_datasource_grants_datasource
+                ON enterprise_datasource_grants (datasource_key, subject_type, subject_id)
+                """
+            )
+            conn.commit()
+
+
 class InMemorySessionOwnerStore:
     """Process-local session owner store for tests and local mode."""
 
@@ -747,6 +963,121 @@ def _replace_role_permissions(conn: sqlite3.Connection, role_id: str, permission
         """,
         [(role_id, permission) for permission in _normalized_permissions(permissions)],
     )
+
+
+def _copy_datasource_grant_record(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "subject_type": str(record["subject_type"]),
+        "subject_id": str(record["subject_id"]),
+        "datasource_key": str(record["datasource_key"]),
+        "effect": _normalized_grant_effect(record.get("effect", "allow")),
+        "scope": copy.deepcopy(_normalized_grant_scope(record.get("scope"))),
+        "created_at": _optional_str(record.get("created_at")),
+        "updated_at": _optional_str(record.get("updated_at")),
+    }
+
+
+def _datasource_grant_record_from_row(row) -> dict[str, Any]:
+    return {
+        "subject_type": str(row[0]),
+        "subject_id": str(row[1]),
+        "datasource_key": str(row[2]),
+        "effect": _normalized_grant_effect(row[3]),
+        "scope": _load_grant_scope_json(row[4]),
+        "created_at": _optional_str(row[5]),
+        "updated_at": _optional_str(row[6]),
+    }
+
+
+def _grant_matches_filters(
+    record: dict[str, Any],
+    *,
+    subject_type: str | None,
+    subject_id: str | None,
+    datasource_key: str | None,
+) -> bool:
+    return (
+        (subject_type is None or record["subject_type"] == subject_type)
+        and (subject_id is None or record["subject_id"] == subject_id)
+        and (datasource_key is None or record["datasource_key"] == datasource_key)
+    )
+
+
+def _normalized_grant_effect(effect: Any) -> str:
+    normalized = str(effect).strip().lower()
+    if normalized not in {"allow", "deny"}:
+        raise DatusException(ErrorCode.COMMON_FIELD_INVALID, message="Datasource grant effect must be allow or deny.")
+    return normalized
+
+
+def _normalized_grant_scope(scope: Any) -> dict[str, Any]:
+    if scope is None:
+        return {}
+    if not isinstance(scope, dict):
+        raise DatusException(ErrorCode.COMMON_FIELD_INVALID, message="Datasource grant scope must be a mapping.")
+    allowed_keys = {"allow_catalog", "allow_sql", "catalogs", "databases", "schemas", "tables"}
+    unknown_keys = sorted(set(scope) - allowed_keys)
+    if unknown_keys:
+        raise DatusException(
+            ErrorCode.COMMON_FIELD_INVALID,
+            message=f"Unsupported datasource grant scope key: {unknown_keys[0]}.",
+        )
+
+    normalized: dict[str, Any] = {}
+    for key in ("allow_catalog", "allow_sql"):
+        if key not in scope:
+            continue
+        if not isinstance(scope[key], bool):
+            raise DatusException(
+                ErrorCode.COMMON_FIELD_INVALID,
+                message=f"Datasource grant scope.{key} must be a boolean.",
+            )
+        normalized[key] = scope[key]
+
+    for key in ("catalogs", "databases", "schemas", "tables"):
+        if key not in scope or scope[key] is None:
+            continue
+        values = scope[key]
+        if not isinstance(values, list):
+            raise DatusException(
+                ErrorCode.COMMON_FIELD_INVALID,
+                message=f"Datasource grant scope.{key} must be a list of strings.",
+            )
+        normalized[key] = _normalized_grant_scope_patterns(values, key)
+    return normalized
+
+
+def _normalized_grant_scope_patterns(values: list[Any], key: str) -> list[str]:
+    if len(values) > 200:
+        raise DatusException(
+            ErrorCode.COMMON_FIELD_INVALID,
+            message=f"Datasource grant scope.{key} cannot contain more than 200 patterns.",
+        )
+    normalized: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            raise DatusException(
+                ErrorCode.COMMON_FIELD_INVALID,
+                message=f"Datasource grant scope.{key} must contain only strings.",
+            )
+        candidate = value.strip()
+        if candidate != value or not candidate or len(candidate) > 256:
+            raise DatusException(
+                ErrorCode.COMMON_FIELD_INVALID,
+                message=f"Invalid datasource grant scope.{key} pattern.",
+            )
+        normalized.add(candidate)
+    return sorted(normalized)
+
+
+def _load_grant_scope_json(raw_scope: Any) -> dict[str, Any]:
+    if raw_scope in (None, ""):
+        return {}
+    try:
+        loaded = json.loads(str(raw_scope))
+    except json.JSONDecodeError as e:
+        raise DatusException(ErrorCode.COMMON_FIELD_INVALID, message="Invalid datasource grant scope JSON.") from e
+    return _normalized_grant_scope(loaded)
 
 
 def _normalized_permissions(permissions: Any) -> list[str]:
