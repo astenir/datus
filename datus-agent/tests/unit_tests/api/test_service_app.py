@@ -1,7 +1,9 @@
 """Tests for datus.api.service — FastAPI app creation and DatusAPIService."""
 
 import argparse
-from unittest.mock import patch
+import importlib
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -110,6 +112,34 @@ class TestCreateApp:
         assert token_response.json()["detail"]["errorCode"] == "ENTERPRISE_LEGACY_API_DISABLED"
         assert workflow_response.json()["detail"]["errorCode"] == "ENTERPRISE_LEGACY_API_DISABLED"
         assert feedback_response.json()["detail"]["errorCode"] == "ENTERPRISE_LEGACY_API_DISABLED"
+
+    def test_lifespan_closes_enterprise_extensions(self, monkeypatch):
+        """Application shutdown closes loaded enterprise extension providers."""
+
+        class _FakeDatusAPIService:
+            def __init__(self, args):
+                self.args = args
+                self.agent_config = SimpleNamespace(api_config={}, enterprise_config={})
+
+            async def initialize(self):
+                return None
+
+        close = AsyncMock()
+        extensions = SimpleNamespace(enabled=False, close=close)
+        service_module = importlib.import_module("datus.api.service")
+        monkeypatch.setattr(service_module, "DatusAPIService", _FakeDatusAPIService)
+        monkeypatch.setattr(service_module, "load_enterprise_extensions", lambda _config: extensions)
+
+        args = argparse.Namespace(config="", datasource="default", output_dir="./output", log_level="INFO")
+        app = create_app(args)
+
+        try:
+            with TestClient(app):
+                pass
+        finally:
+            deps._enterprise_extensions = None
+
+        close.assert_awaited_once()
 
 
 class TestDatusAPIServiceInit:

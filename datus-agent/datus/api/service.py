@@ -471,7 +471,10 @@ async def lifespan(app: FastAPI):
         try:
             await drain_background_tasks()
         finally:
-            await service_cache.shutdown()
+            try:
+                await service_cache.shutdown()
+            finally:
+                await enterprise_extensions.close()
 
 
 def create_app(agent_args: argparse.Namespace) -> FastAPI:

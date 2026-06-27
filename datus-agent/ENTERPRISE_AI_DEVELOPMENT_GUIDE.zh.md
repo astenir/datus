@@ -379,6 +379,10 @@ SQL 不是唯一执行风险。以下能力也必须进入 `Authenticate -> Buil
 - 运行中 task 在多 worker 下如果仍保存在进程内，必须明确 sticky session 要求；长期方案应把 task metadata、SSE event buffer 或长任务状态外部化。
 - Postgres/Redis/object storage/vector store 等外部状态引入时，必须说明迁移、回滚、清理、备份恢复和企业级隔离策略。
 - 滚动发布期间，新旧代码对 session owner、artifact ACL、audit schema 和 permission key 的兼容性必须有测试或迁移说明。
+- 当前 `datus_enterprise.postgres_stores` 只通过 `_SCHEMA_SQL` 执行 `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` 做最小 bootstrap；不要把它当作生产 schema migration 工具。
+- 修改 PG metadata schema 时，必须说明是否需要人工 DDL 或后续 migration runner，不能在应用启动路径中加入破坏性 DDL、隐式回填或不可回滚的数据修复。
+- 真实 Postgres 测试必须 gated，默认跳过；测试数据必须有唯一前缀并清理自己写入的行，不得依赖或破坏共享库已有内容。
+- 生产备份恢复说明必须区分 enterprise metadata、chat 正文历史、RAG/vector、项目 `subject/` 文件、artifact bundle/export 文件和业务 datasource；不要把 PG metadata store 覆盖范围扩大成全平台状态迁移。
 
 ## 测试标准
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import inspect
 from dataclasses import dataclass, field
 from typing import Any, Protocol, TypeVar
 
@@ -52,6 +53,37 @@ class EnterpriseExtensions:
     datasource_grant_store: EnterpriseDatasourceGrantStore = field(
         default_factory=InMemoryEnterpriseDatasourceGrantStore
     )
+
+    async def close(self) -> None:
+        """Close extension providers that expose a best-effort ``close`` hook."""
+        seen: set[int] = set()
+        for component in (
+            self.authorization_provider,
+            self.config_projector,
+            self.session_owner_store,
+            self.audit_sink,
+            self.artifact_acl_store,
+            self.quota_store,
+            self.secret_store,
+            self.user_store,
+            self.role_store,
+            self.datasource_grant_store,
+        ):
+            if component is None:
+                continue
+            component_id = id(component)
+            if component_id in seen:
+                continue
+            seen.add(component_id)
+            close = getattr(component, "close", None)
+            if close is None:
+                continue
+            try:
+                result = close()
+                if inspect.isawaitable(result):
+                    await result
+            except Exception:
+                logger.exception(f"Failed to close enterprise extension provider {component.__class__.__name__}")
 
 
 def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> EnterpriseExtensions:

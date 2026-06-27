@@ -1,4 +1,9 @@
-"""PostgreSQL-backed enterprise metadata stores."""
+"""PostgreSQL-backed enterprise metadata stores.
+
+The current schema bootstrap is intentionally limited to `_SCHEMA_SQL` with
+`CREATE TABLE IF NOT EXISTS`. Production migration tooling, versioning, and
+rollback workflows are a later enterprise operations slice.
+"""
 
 from __future__ import annotations
 
@@ -54,6 +59,15 @@ class _PgStoreBase:
                 command_timeout=self._command_timeout,
             )
         return self._pool
+
+    async def close(self) -> None:
+        """Close the owned asyncpg pool."""
+        pool = self._pool
+        if pool is None:
+            return
+        await pool.close()
+        self._pool = None
+        self._schema_ready = False
 
     async def _fetch(self, query: str, *args: Any) -> list[Any]:
         await self._ensure_schema()

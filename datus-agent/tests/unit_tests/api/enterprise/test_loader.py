@@ -148,6 +148,22 @@ class _OwnerStore(_LegacyOwnerStore):
         return []
 
 
+class _ClosableAudit(_Audit):
+    def __init__(self):
+        self.close_count = 0
+
+    async def close(self):
+        self.close_count += 1
+
+
+class _SyncClosable:
+    def __init__(self):
+        self.close_count = 0
+
+    def close(self):
+        self.close_count += 1
+
+
 @pytest.fixture
 def fake_module():
     mod_name = "_datus_test_fake_enterprise_mod"
@@ -261,3 +277,28 @@ def test_enabled_enterprise_rejects_owner_store_without_admin_listing(fake_modul
                 "session_owner_store": {"class": f"{fake_module}.LegacyOwnerStore"},
             }
         )
+
+
+@pytest.mark.asyncio
+async def test_enterprise_extensions_close_closes_unique_closeable_components():
+    closeable = _ClosableAudit()
+    sync_closeable = _SyncClosable()
+    extensions = load_enterprise_extensions(None)
+    extensions = type(extensions)(
+        enabled=False,
+        authorization_provider=extensions.authorization_provider,
+        config_projector=sync_closeable,
+        session_owner_store=extensions.session_owner_store,
+        audit_sink=closeable,
+        artifact_acl_store=closeable,
+        quota_store=None,
+        secret_store=None,
+        user_store=extensions.user_store,
+        role_store=extensions.role_store,
+        datasource_grant_store=extensions.datasource_grant_store,
+    )
+
+    await extensions.close()
+
+    assert closeable.close_count == 1
+    assert sync_closeable.close_count == 1
