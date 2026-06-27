@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
@@ -43,8 +43,8 @@ class AdminDatasourceSummary(BaseModel):
 class UpsertDatasourceGrantRequest(BaseModel):
     """Datasource grant metadata mutation."""
 
-    effect: Literal["allow", "deny"] = "allow"
-    scope: dict[str, Any] = Field(default_factory=dict)
+    effect: str = "allow"
+    scope: Any = Field(default_factory=dict)
 
 
 class AdminDatasourceGrantSummary(BaseModel):
@@ -232,9 +232,11 @@ async def upsert_admin_datasource_grant(
 ) -> Result[AdminDatasourceGrantSummary]:
     """Create or replace one role/user datasource grant."""
 
-    invalid = _validate_grant_identity(
-        subject_type=subject_type, subject_id=subject_id, datasource_key=datasource_key
-    ) or _validate_grant_scope(body.scope)
+    invalid = (
+        _validate_grant_identity(subject_type=subject_type, subject_id=subject_id, datasource_key=datasource_key)
+        or _validate_grant_effect(body.effect)
+        or _validate_grant_scope(body.scope)
+    )
     resource_id = _grant_resource_id(subject_type, subject_id, datasource_key)
     if invalid is not None:
         await _audit_datasource_grant(
@@ -287,7 +289,7 @@ async def upsert_admin_datasource_grant(
             subject_type=subject_type,
             subject_id=subject_id,
             datasource_key=datasource_key,
-            effect=body.effect,
+            effect=_normalized_effect(body.effect),
             scope=_normalized_scope(body.scope),
         )
     except Exception:
@@ -634,7 +636,20 @@ def _validate_grant_scope(scope: dict[str, Any]) -> str | None:
     return None
 
 
-def _normalized_scope(scope: dict[str, Any]) -> dict[str, Any]:
+def _validate_grant_effect(effect: Any) -> str | None:
+    if not isinstance(effect, str):
+        return "Datasource grant effect must be a string."
+    candidate = effect.strip().lower()
+    if candidate != effect or candidate not in {"allow", "deny"}:
+        return "Datasource grant effect must be allow or deny."
+    return None
+
+
+def _normalized_effect(effect: str) -> str:
+    return effect.strip().lower()
+
+
+def _normalized_scope(scope: Any) -> dict[str, Any]:
     if not isinstance(scope, dict):
         raise ValueError("Datasource grant scope must be a mapping.")
     allowed_keys = {"allow_catalog", "allow_sql", "catalogs", "databases", "schemas", "tables"}
@@ -686,6 +701,8 @@ def _grant_validation_error_code(message: str) -> str:
         return "DATASOURCE_GRANT_SUBJECT_INVALID"
     if "datasource_key" in message:
         return "DATASOURCE_GRANT_DATASOURCE_INVALID"
+    if "effect" in message:
+        return "DATASOURCE_GRANT_EFFECT_INVALID"
     return "DATASOURCE_GRANT_SCOPE_INVALID"
 
 

@@ -105,11 +105,10 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         EnterpriseRoleStore,
         InMemoryEnterpriseRoleStore(),
     )
-    datasource_grant_store = _load_optional_component(
+    datasource_grant_store = _load_required_component(
         raw,
         "datasource_grant_store",
         EnterpriseDatasourceGrantStore,
-        InMemoryEnterpriseDatasourceGrantStore(),
     )
     session_owner_store = _load_optional_component(
         raw,

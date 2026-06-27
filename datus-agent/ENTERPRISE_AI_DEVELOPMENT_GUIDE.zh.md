@@ -298,7 +298,7 @@ MVP 中 `datasource_grants` 采用每个 `(subject_type, subject_id, datasource_
 - config route：`/api/v1/config/agent` 使用 `module.config.view`，配置更新和连接探测接口使用 `module.config.edit`。
 - KB route：KB bootstrap、platform docs bootstrap 和 cancel 接口使用 `module.kb`。
 - MCP route：MCP server/tool/filter 的列表、管理和调用接口使用 `module.mcp`。
-- admin datasource route：`/api/v1/admin/datasources`、`/api/v1/admin/datasource-default` 和 `/api/v1/admin/datasource-grants` 使用 `module.admin.datasources`，datasource grant admin upsert 只管理 metadata store，不自动把 grant 合并进当前请求 `AppContext.datasource_grants`。
+- admin datasource route：`/api/v1/admin/datasources`、`/api/v1/admin/datasource-default` 和 `/api/v1/admin/datasource-grants` 使用 `module.admin.datasources`，datasource grant admin upsert 只管理 metadata store，不自动把 grant 合并进当前请求 `AppContext.datasource_grants`；`enterprise.enabled=true` 时必须显式配置 `enterprise.datasource_grant_store.class`，不能静默使用进程内默认 store。
 - admin user route：`/api/v1/admin/users`、`/api/v1/admin/users/{user_id}`、`/api/v1/admin/users/{user_id}/disable` 和 `/api/v1/admin/users/{user_id}/enable` 使用 `module.admin.users`，用户管理变更写入脱敏审计摘要；企业模式新请求会基于 `EnterpriseUserStore` 拒绝已禁用用户。
 - admin role route：`/api/v1/admin/roles`、`/api/v1/admin/roles/{role_id}`、`/api/v1/admin/roles/{role_id}/permissions` 和 `/api/v1/admin/users/{user_id}/roles` 使用 `module.admin.roles`，role metadata、permission set 和用户-role 绑定变更写入脱敏审计摘要；metadata store 中的绑定还不会自动合并进当前请求的 `AppContext`。
 

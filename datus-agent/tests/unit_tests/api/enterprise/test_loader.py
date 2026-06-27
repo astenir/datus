@@ -157,11 +157,23 @@ def test_enabled_enterprise_requires_core_providers():
         load_enterprise_extensions({"enabled": True})
 
 
+def test_enabled_enterprise_requires_datasource_grant_store(fake_module):
+    with pytest.raises(DatusException, match="datasource_grant_store"):
+        load_enterprise_extensions(
+            {
+                "enabled": True,
+                "authorization_provider": {"class": f"{fake_module}.Authz"},
+                "audit_sink": {"class": f"{fake_module}.Audit"},
+            }
+        )
+
+
 def test_enabled_enterprise_uses_passthrough_projector_when_projection_not_configured(fake_module):
     extensions = load_enterprise_extensions(
         {
             "enabled": True,
             "authorization_provider": {"class": f"{fake_module}.Authz"},
+            "datasource_grant_store": {"class": f"{fake_module}.DatasourceGrantStore"},
             "audit_sink": {"class": f"{fake_module}.Audit"},
         }
     )
@@ -170,7 +182,7 @@ def test_enabled_enterprise_uses_passthrough_projector_when_projection_not_confi
     assert isinstance(extensions.config_projector, PassthroughConfigProjector)
     assert isinstance(extensions.user_store, InMemoryEnterpriseUserStore)
     assert isinstance(extensions.role_store, InMemoryEnterpriseRoleStore)
-    assert isinstance(extensions.datasource_grant_store, InMemoryEnterpriseDatasourceGrantStore)
+    assert isinstance(extensions.datasource_grant_store, _DatasourceGrantStore)
     assert extensions.artifact_acl_store is None
 
 
@@ -207,6 +219,7 @@ def test_enabled_enterprise_rejects_owner_store_without_admin_listing(fake_modul
                 "enabled": True,
                 "authorization_provider": {"class": f"{fake_module}.Authz"},
                 "audit_sink": {"class": f"{fake_module}.Audit"},
+                "datasource_grant_store": {"class": f"{fake_module}.DatasourceGrantStore"},
                 "session_owner_store": {"class": f"{fake_module}.LegacyOwnerStore"},
             }
         )
