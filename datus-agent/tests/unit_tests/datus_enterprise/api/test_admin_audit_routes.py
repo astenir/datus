@@ -277,7 +277,7 @@ def test_admin_audit_log_export_rejects_without_export_permission(monkeypatch):
 
 def test_admin_audit_log_export_sanitizes_formula_prefix_cells(monkeypatch):
     audit_event = CoreAuditEvent(
-        user_id="=cmd",
+        user_id="\t=cmd",
         action="+SUM(1,1)",
         resource_type="datasource",
         resource_id="@finance",
@@ -297,7 +297,7 @@ def test_admin_audit_log_export_sanitizes_formula_prefix_cells(monkeypatch):
     rows = list(csv.DictReader(StringIO(response.text)))
     assert rows == [
         {
-            "user_id": "'=cmd",
+            "user_id": "'\t=cmd",
             "action": "'+SUM(1,1)",
             "resource_type": "datasource",
             "resource_id": "'@finance",

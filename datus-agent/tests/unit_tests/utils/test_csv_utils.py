@@ -114,6 +114,12 @@ class TestSanitizeCsvField:
     def test_prefixes_at(self):
         assert sanitize_csv_field("@import") == "'@import"
 
+    def test_prefixes_formula_after_leading_padding(self):
+        assert sanitize_csv_field("\t=SUM(A1:A3)") == "'\t=SUM(A1:A3)"
+        assert sanitize_csv_field("\r=SUM(A1:A3)") == "'\r=SUM(A1:A3)"
+        assert sanitize_csv_field("\n=SUM(A1:A3)") == "'\n=SUM(A1:A3)"
+        assert sanitize_csv_field(" =SUM(A1:A3)") == "' =SUM(A1:A3)"
+
     def test_coerces_non_string_to_string(self):
         assert sanitize_csv_field(42) == "42"
         assert sanitize_csv_field(True) == "True"

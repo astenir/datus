@@ -11,19 +11,22 @@ import pandas as pd
 from datus.utils.text_utils import clean_text
 
 _CSV_FORMULA_TRIGGERS = ("=", "+", "-", "@")
+_CSV_FORMULA_PREFIX_PADDING = " \t\r\n"
 
 
 def sanitize_csv_field(value: Optional[str]) -> Optional[str]:
     """Neutralize Excel/Sheets formula injection in CSV fields.
 
-    If the field starts with ``=``, ``+``, ``-``, or ``@``, prefix it with a
-    single quote so spreadsheet applications treat the value as text.
+    If the field starts with ``=``, ``+``, ``-``, or ``@`` after common
+    whitespace/control padding, prefix it with a single quote so spreadsheet
+    applications treat the value as text.
     """
     if value is None:
         return None
     if not isinstance(value, str):
         value = str(value)
-    if value and value[0] in _CSV_FORMULA_TRIGGERS:
+    candidate = value.lstrip(_CSV_FORMULA_PREFIX_PADDING)
+    if candidate and candidate[0] in _CSV_FORMULA_TRIGGERS:
         return "'" + value
     return value
 
