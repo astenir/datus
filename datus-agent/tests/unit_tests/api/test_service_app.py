@@ -3,6 +3,17 @@
 import argparse
 from unittest.mock import patch
 
+from fastapi.testclient import TestClient
+
+from datus.api import deps
+from datus.api.enterprise.defaults import (
+    InMemoryEnterpriseDatasourceGrantStore,
+    InMemorySessionOwnerStore,
+    LocalAuthorizationProvider,
+    NoopAuditSink,
+    PassthroughConfigProjector,
+)
+from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.service import DatusAPIService, create_app
 
 
@@ -49,6 +60,56 @@ class TestCreateApp:
         # Check that at least some v1 routes are registered
         has_api_routes = any("/api/" in p for p in route_paths)
         assert has_api_routes
+
+    def test_enterprise_mode_disables_legacy_auth_and_workflow_routes(self, monkeypatch):
+        """Enterprise mode must not expose legacy client-token workflow APIs."""
+        args = argparse.Namespace(config="", datasource="default", output_dir="./output", log_level="INFO")
+        app = create_app(args)
+
+        with TestClient(app, raise_server_exceptions=False) as client:
+            monkeypatch.setattr(
+                deps,
+                "_enterprise_extensions",
+                EnterpriseExtensions(
+                    enabled=True,
+                    authorization_provider=LocalAuthorizationProvider(),
+                    config_projector=PassthroughConfigProjector(),
+                    session_owner_store=InMemorySessionOwnerStore(),
+                    audit_sink=NoopAuditSink(),
+                    datasource_grant_store=InMemoryEnterpriseDatasourceGrantStore(),
+                ),
+            )
+            token_response = client.post(
+                "/auth/token",
+                data={
+                    "client_id": "datus_client",
+                    "client_secret": "datus_secret_key",
+                    "grant_type": "client_credentials",
+                },
+            )
+            workflow_response = client.post(
+                "/workflows/run",
+                json={
+                    "workflow": "nl2sql",
+                    "datasource": "default",
+                    "task": "List rows",
+                    "mode": "sync",
+                },
+            )
+            feedback_response = client.post(
+                "/workflows/feedback",
+                json={
+                    "task_id": "task-1",
+                    "status": "success",
+                },
+            )
+
+        assert token_response.status_code == 404
+        assert workflow_response.status_code == 404
+        assert feedback_response.status_code == 404
+        assert token_response.json()["detail"]["errorCode"] == "ENTERPRISE_LEGACY_API_DISABLED"
+        assert workflow_response.json()["detail"]["errorCode"] == "ENTERPRISE_LEGACY_API_DISABLED"
+        assert feedback_response.json()["detail"]["errorCode"] == "ENTERPRISE_LEGACY_API_DISABLED"
 
 
 class TestDatusAPIServiceInit:

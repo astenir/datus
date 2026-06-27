@@ -1087,9 +1087,12 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - 已新增 `EnterpriseQuotaStore` 协议，以及本地兼容的进程内 `InMemoryEnterpriseQuotaStore`；企业模式下可通过 `enterprise.quota_store.class` 替换为生产 quota/usage metadata store。当前已将直接 SQL 执行、dashboard 实时查询、chat stream、feedback 和 admin audit export 入口分别接入 `sql.execute`、`dashboard.query`、`chat.stream`、`chat.feedback` 和 `admin.audit.export` 配额消耗，缺少 quota store、quota 检查失败或超额都会在执行前返回稳定错误并写入 audit；chat provider/model allowlist 已有服务端 principal 初版，但 chat token、模型 token、report/dashboard export 和并发类配额仍按后续切片接入。
 - 已注册 `/api/v1/admin/quotas` 和 `/api/v1/admin/usage`，统一要求 `module.admin.quotas`；quota upsert 校验 `subject_type`、`subject_id`、`resource`、`limit`、`window_seconds` 和 `enabled`，审计只写 quota 摘要，不记录执行结果或敏感配置。
 - quota 管理接口返回稳定 `Result` 错误码：`QUOTA_FILTER_INVALID`、`QUOTA_STORE_UNAVAILABLE`、`QUOTA_LIST_FAILED`、`QUOTA_UPSERT_FAILED`、`USAGE_LIST_FAILED`、`QUOTA_SUBJECT_INVALID`、`QUOTA_RESOURCE_INVALID`、`QUOTA_LIMIT_INVALID`、`QUOTA_WINDOW_INVALID`、`QUOTA_ENABLED_INVALID`。
+- 已新增单节点 `SqliteAuditSink`，实现 `AuditSink.write()` 和 admin audit 路由使用的 `query_events()`；企业 MVP 可用 SQLite 真实落审计，生产多 worker/HA 部署仍应替换为 Postgres、SIEM 或其他集中审计 sink。
 - 已新增 `EnterpriseSecretStore` 协议，以及本地兼容的进程内 `InMemoryEnterpriseSecretStore`；企业模式下可通过 `enterprise.secret_store.class` 替换为生产 secret reference store。当前切片只管理 secret 引用 metadata，不保存 secret 明文，不把 secret reference 解析接入 datasource/model 配置路径。
 - 已注册 `/api/v1/admin/secrets` 和 `/api/v1/admin/secrets/{name}`，统一要求 `module.admin.secrets`；secret upsert 只保存 `provider`、`reference`、描述和启用状态，响应与审计只返回 `ref_hint`，不回显完整 reference，更不接收或返回 secret value。
 - secret 管理接口返回稳定 `Result` 错误码：`SECRET_FILTER_INVALID`、`SECRET_STORE_UNAVAILABLE`、`SECRET_LIST_FAILED`、`SECRET_NAME_INVALID`、`SECRET_PROVIDER_INVALID`、`SECRET_REFERENCE_INVALID`、`SECRET_DESCRIPTION_INVALID`、`SECRET_ENABLED_INVALID`、`SECRET_READ_FAILED`、`SECRET_UPSERT_FAILED`、`SECRET_DELETE_FAILED`、`RESOURCE_NOT_FOUND`。
+- 企业 MVP 配置样例已放在 `conf/agent.enterprise.mvp.yml.example`，覆盖生产 `AuthProvider`、RBAC/role/user/datasource grant stores、request-level config projector、session owner store、SQLite audit sink 和单进程 quota store。
+- `enterprise.enabled=true` 时，旧版 `/auth/token`、`/workflows/run` 和 `/workflows/feedback` 入口返回 `ENTERPRISE_LEGACY_API_DISABLED`，避免旧 client-credential workflow API 绕过 `/api/v1` 的企业身份、授权、投影和审计链路。
 
 验收：
 
@@ -1133,6 +1136,8 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - admin API 非管理员失败。
 - 禁用用户后新请求、resume 和实时 query 失败。
 - 角色、permission、datasource grant、artifact ACL 变更后新请求立即按新规则生效。
+- `tests/unit_tests/datus_enterprise/test_enterprise_mvp_smoke.py` 覆盖企业 MVP smoke：管理员写入 datasource grant，普通用户从服务端 store 刷新权限与授权，catalog 被 grant 裁剪，未授权 datasource 被拒绝，直接 SQL 使用投影后的 request-scoped config。
+- `enterprise.enabled=true` 时旧版 `/auth/token` 和 `/workflows/run` 返回 `ENTERPRISE_LEGACY_API_DISABLED`。
 
 ### 回归测试
 

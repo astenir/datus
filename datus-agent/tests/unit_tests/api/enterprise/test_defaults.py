@@ -12,12 +12,13 @@ from datus.api.enterprise.defaults import (
     InMemoryEnterpriseUserStore,
     InMemorySessionOwnerStore,
     LocalAuthorizationProvider,
+    SqliteAuditSink,
     SqliteEnterpriseDatasourceGrantStore,
     SqliteEnterpriseRoleStore,
     SqliteEnterpriseUserStore,
     SqliteSessionOwnerStore,
 )
-from datus.api.enterprise.models import ResourceRef
+from datus.api.enterprise.models import AuditEvent, ResourceRef
 from datus.utils.exceptions import DatusException
 
 
@@ -504,3 +505,38 @@ async def test_sqlite_datasource_grant_store_persists_and_replaces_grants(tmp_pa
 
     assert await reopened.delete_grant(subject_type="role", subject_id="analyst", datasource_key="db_a") is True
     assert await reopened.get_grant(subject_type="role", subject_id="analyst", datasource_key="db_a") is None
+
+
+@pytest.mark.asyncio
+async def test_sqlite_audit_sink_persists_and_filters_events(tmp_path):
+    sink = SqliteAuditSink(str(tmp_path / "enterprise_audit.db"))
+
+    await sink.write(
+        AuditEvent(
+            user_id="alice",
+            action="sql.execute",
+            resource_type="datasource",
+            resource_id="finance",
+            decision="allow",
+            metadata={"row_count": 1},
+        )
+    )
+    await sink.write(
+        AuditEvent(
+            user_id="bob",
+            action="chat.stream",
+            resource_type="chat",
+            resource_id="s1",
+            decision="deny",
+            reason="missing permission",
+        )
+    )
+
+    reopened = SqliteAuditSink(str(tmp_path / "enterprise_audit.db"))
+    all_events = await reopened.query_events(limit=10)
+    sql_events = await reopened.query_events(limit=10, user_id="alice", action="sql.execute", decision="allow")
+
+    assert [event.action for event in all_events] == ["chat.stream", "sql.execute"]
+    assert len(sql_events) == 1
+    assert sql_events[0].resource_id == "finance"
+    assert sql_events[0].metadata == {"row_count": 1}

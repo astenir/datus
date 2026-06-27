@@ -1043,6 +1043,115 @@ class NoopAuditSink:
         return None
 
 
+class SqliteAuditSink:
+    """SQLite-backed audit sink for single-node enterprise MVP deployments."""
+
+    def __init__(self, db_path: str) -> None:
+        self._db_path = db_path
+        parent = os.path.dirname(os.path.abspath(db_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        self._ensure_schema()
+
+    async def write(self, event: AuditEvent) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO enterprise_audit_logs (
+                    user_id,
+                    action,
+                    resource_type,
+                    resource_id,
+                    decision,
+                    reason,
+                    request_id,
+                    metadata_json,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    event.user_id,
+                    event.action,
+                    event.resource_type,
+                    event.resource_id,
+                    event.decision,
+                    event.reason,
+                    event.request_id,
+                    json.dumps(event.metadata, ensure_ascii=False, sort_keys=True, default=str),
+                    _sqlite_now(),
+                ),
+            )
+            conn.commit()
+
+    async def query_events(
+        self,
+        *,
+        limit: int,
+        user_id: str | None = None,
+        action: str | None = None,
+        resource_type: str | None = None,
+        resource_id: str | None = None,
+        decision: str | None = None,
+    ) -> list[AuditEvent]:
+        filters = {
+            "user_id": user_id,
+            "action": action,
+            "resource_type": resource_type,
+            "resource_id": resource_id,
+            "decision": decision,
+        }
+        where = []
+        params: list[Any] = []
+        for column, value in filters.items():
+            if value is None:
+                continue
+            where.append(f"{column} = ?")
+            params.append(value)
+
+        query = """
+            SELECT user_id, action, resource_type, resource_id, decision, reason, request_id, metadata_json
+            FROM enterprise_audit_logs
+        """
+        if where:
+            query += " WHERE " + " AND ".join(where)
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(max(1, int(limit)))
+
+        with self._connect() as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+        return [_audit_event_from_row(row) for row in rows]
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self._db_path, timeout=5.0)
+
+    def _ensure_schema(self) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS enterprise_audit_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id TEXT,
+                    action TEXT NOT NULL,
+                    resource_type TEXT NOT NULL,
+                    resource_id TEXT,
+                    decision TEXT NOT NULL,
+                    reason TEXT,
+                    request_id TEXT,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_enterprise_audit_logs_filter
+                ON enterprise_audit_logs (user_id, action, resource_type, resource_id, decision, id)
+                """
+            )
+            conn.commit()
+
+
 def _context_permissions(ctx: AppContext) -> list[str] | None:
     if ctx.permissions:
         return sorted(ctx.permissions)
@@ -1062,6 +1171,25 @@ def _matches_permission(action: str, permissions: list[str]) -> bool:
 
 def _sqlite_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _audit_event_from_row(row) -> AuditEvent:
+    metadata: dict[str, Any]
+    try:
+        raw_metadata = json.loads(row[7] or "{}")
+        metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
+    except json.JSONDecodeError:
+        metadata = {}
+    return AuditEvent(
+        user_id=_optional_str(row[0]),
+        action=str(row[1]),
+        resource_type=str(row[2]),
+        resource_id=_optional_str(row[3]),
+        decision=str(row[4]),
+        reason=_optional_str(row[5]),
+        request_id=_optional_str(row[6]),
+        metadata=metadata,
+    )
 
 
 def _copy_user_record(record: dict[str, Any]) -> dict[str, Any]:

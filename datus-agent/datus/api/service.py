@@ -11,7 +11,7 @@ from datetime import datetime
 from io import StringIO
 from typing import Any, AsyncGenerator, Dict, List
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -28,7 +28,7 @@ from datus.storage.task import TaskStore
 from datus.utils.loggings import get_logger
 
 from ..utils.json_utils import to_str
-from .legacy_auth import auth_service, get_current_client
+from .legacy_auth import auth_service
 from .legacy_models import (
     FeedbackRequest,
     FeedbackResponse,
@@ -41,11 +41,10 @@ from .legacy_models import (
 
 logger = get_logger(__name__)
 
-_form_required = Form(...)
-_form_client_id = Form(...)
-_form_client_secret = Form(...)
-_form_grant_type = Form(...)
-_depends_get_current_client = Depends(get_current_client)
+_LEGACY_ENTERPRISE_DISABLED_DETAIL = {
+    "errorCode": "ENTERPRISE_LEGACY_API_DISABLED",
+    "errorMessage": "Legacy workflow APIs are disabled when enterprise.enabled=true. Use /api/v1 routes.",
+}
 
 
 class DatusAPIService:
@@ -547,10 +546,13 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
         return await service.health_check()
 
     @app.post("/auth/token", response_model=TokenResponse, tags=["auth"])
-    async def authenticate(
-        client_id: str = _form_client_id, client_secret: str = _form_client_secret, grant_type: str = _form_grant_type
-    ) -> TokenResponse:
+    async def authenticate(request: Request) -> TokenResponse:
         """OAuth2 client credentials token endpoint."""
+        _reject_legacy_api_in_enterprise()
+        form = await request.form()
+        client_id = str(form.get("client_id") or "")
+        client_secret = str(form.get("client_secret") or "")
+        grant_type = str(form.get("grant_type") or "")
         if grant_type != "client_credentials":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid grant_type. Must be 'client_credentials'"
@@ -563,10 +565,9 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
         return TokenResponse(**token_data)
 
     @app.post("/workflows/run", tags=["workflows"])
-    async def run_workflow(
-        req: RunWorkflowRequest, request: Request, current_client: str = _depends_get_current_client
-    ):
+    async def run_workflow(req: RunWorkflowRequest, request: Request):
         """Execute a workflow based on the request parameters."""
+        current_client = _get_legacy_current_client(request)
         try:
             logger.info(f"Workflow request from client: {current_client}, mode: {req.mode}")
 
@@ -599,8 +600,9 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
             raise HTTPException(status_code=500, detail=str(e))
 
     @app.post("/workflows/feedback", response_model=FeedbackResponse, tags=["workflows"])
-    async def record_feedback(req: FeedbackRequest, current_client: str = _depends_get_current_client):
+    async def record_feedback(req: FeedbackRequest, request: Request):
         """Record user feedback for a task."""
+        current_client = _get_legacy_current_client(request)
         try:
             logger.info(f"Feedback request from client: {current_client} for task: {req.task_id}")
             return await service.record_feedback(req)
@@ -609,6 +611,45 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
             raise HTTPException(status_code=500, detail=str(e))
 
     return app
+
+
+def _reject_legacy_api_in_enterprise() -> None:
+    """Disable legacy OAuth/workflow endpoints in enterprise mode."""
+
+    from datus.api import deps
+
+    if deps.get_enterprise_extensions().enabled:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_LEGACY_ENTERPRISE_DISABLED_DETAIL)
+
+
+def _get_legacy_current_client(request: Request) -> str:
+    """Authenticate legacy workflow requests after enterprise-mode rejection."""
+
+    _reject_legacy_api_in_enterprise()
+    raw = request.headers.get("Authorization")
+    if raw is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    scheme, _, token = raw.strip().partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid authentication credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    payload = auth_service.validate_token(token.strip())
+    client_id = payload.get("client_id")
+    if not client_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return str(client_id)
 
 
 # Global app instance for uvicorn to load

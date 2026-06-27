@@ -1,0 +1,82 @@
+# Enterprise MVP configuration overlay.
+#
+# Copy the relevant sections into agent.yml for a single-node enterprise MVP.
+# This file intentionally contains only enterprise-facing settings; keep normal
+# model, datasource, and provider configuration in the regular agent.yml.
+
+api:
+  auth_provider:
+    # Use this provider when the enterprise gateway cannot inject signed
+    # identity headers. Datus validates the bearer token by calling userinfo.
+    class: datus_enterprise.auth_provider:UserInfoBearerAuthProvider
+    kwargs:
+      userinfo_url: ${DATUS_ENTERPRISE_USERINFO_URL}
+      timeout_seconds: 3.0
+      user_id_field: username
+      external_user_id_field: userId
+      email_field: email
+      display_name_field: realname
+      status_field: userStatus
+      allowed_statuses: ["正常"]
+      default_project_id: enterprise
+
+    # If the enterprise gateway can be changed, prefer signed headers instead:
+    #
+    # class: datus_enterprise.auth_provider:SignedHeaderAuthProvider
+    # kwargs:
+    #   secret_env: DATUS_ENTERPRISE_HEADER_SECRET
+    #   default_project_id: enterprise
+
+enterprise:
+  enabled: true
+
+  # LocalAuthorizationProvider is permission-key based. In enterprise mode,
+  # permissions are refreshed from role_store, not trusted from the browser.
+  authorization_provider:
+    class: datus.api.enterprise.defaults:LocalAuthorizationProvider
+
+  # Applies datasource grants to a request-scoped AgentConfig clone.
+  config_projector:
+    class: datus_enterprise.projection:DatasourceGrantProjector
+
+  # Single-node metadata stores. They may share one SQLite file because each
+  # store owns separate tables. Replace these with Postgres-backed providers
+  # before multi-worker or HA deployment.
+  user_store:
+    class: datus.api.enterprise.defaults:SqliteEnterpriseUserStore
+    kwargs:
+      db_path: .datus/enterprise.db
+
+  role_store:
+    class: datus.api.enterprise.defaults:SqliteEnterpriseRoleStore
+    kwargs:
+      db_path: .datus/enterprise.db
+
+  datasource_grant_store:
+    class: datus.api.enterprise.defaults:SqliteEnterpriseDatasourceGrantStore
+    kwargs:
+      db_path: .datus/enterprise.db
+
+  session_owner_store:
+    class: datus.api.enterprise.defaults:SqliteSessionOwnerStore
+    kwargs:
+      db_path: .datus/enterprise.db
+
+  audit_sink:
+    class: datus.api.enterprise.defaults:SqliteAuditSink
+    kwargs:
+      db_path: .datus/enterprise.db
+
+  # Optional single-process quota metadata. Replace with a shared store for
+  # multi-worker deployments; omit it only when quota-protected endpoints should
+  # fail closed with QUOTA_STORE_UNAVAILABLE.
+  quota_store:
+    class: datus.api.enterprise.defaults:InMemoryEnterpriseQuotaStore
+
+# Optional SQL policy. Configure a concrete provider when datasource grants
+# must be enforced by SQL rewrite/deny logic in addition to route projection.
+#
+# agent:
+#   sql_policy:
+#     enabled: true
+#     provider: your_package.sql_policy:YourSqlPolicyProvider
