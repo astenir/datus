@@ -26,6 +26,14 @@ class _Audit:
         return None
 
 
+class _ArtifactAclStore:
+    async def get_acl(self, *, artifact_type, slug):
+        return {}
+
+    async def put_acl(self, *, artifact_type, slug, acl):
+        return acl
+
+
 @pytest.fixture
 def fake_module():
     mod_name = "_datus_test_fake_enterprise_mod"
@@ -33,6 +41,7 @@ def fake_module():
     mod.Authz = _Authz
     mod.Projector = _Projector
     mod.Audit = _Audit
+    mod.ArtifactAclStore = _ArtifactAclStore
     sys.modules[mod_name] = mod
     yield mod_name
     sys.modules.pop(mod_name, None)
@@ -46,6 +55,7 @@ def test_disabled_enterprise_loads_local_defaults():
     assert extensions.config_projector is not None
     assert extensions.session_owner_store is not None
     assert extensions.audit_sink is not None
+    assert extensions.artifact_acl_store is None
 
 
 def test_enabled_enterprise_requires_core_providers():
@@ -64,6 +74,7 @@ def test_enabled_enterprise_uses_passthrough_projector_when_projection_not_confi
 
     assert extensions.enabled is True
     assert isinstance(extensions.config_projector, PassthroughConfigProjector)
+    assert extensions.artifact_acl_store is None
 
 
 def test_enabled_enterprise_loads_configured_core_providers(fake_module):
@@ -72,6 +83,7 @@ def test_enabled_enterprise_loads_configured_core_providers(fake_module):
             "enabled": True,
             "authorization_provider": {"class": f"{fake_module}.Authz"},
             "config_projector": {"class": f"{fake_module}.Projector"},
+            "artifact_acl_store": {"class": f"{fake_module}.ArtifactAclStore"},
             "audit_sink": {"class": f"{fake_module}.Audit"},
         }
     )
@@ -80,3 +92,4 @@ def test_enabled_enterprise_loads_configured_core_providers(fake_module):
     assert isinstance(extensions.authorization_provider, _Authz)
     assert isinstance(extensions.config_projector, _Projector)
     assert isinstance(extensions.audit_sink, _Audit)
+    assert isinstance(extensions.artifact_acl_store, _ArtifactAclStore)

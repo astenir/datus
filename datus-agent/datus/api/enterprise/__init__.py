@@ -23,6 +23,7 @@ from datus.api.enterprise.models import (
     ResourceRef,
 )
 from datus.api.enterprise.protocols import (
+    ArtifactAclStore,
     AuditLogReader,
     AuditSink,
     AuthorizationProvider,
@@ -32,6 +33,7 @@ from datus.api.enterprise.protocols import (
 
 __all__ = [
     "AccessDecision",
+    "ArtifactAclStore",
     "AuditEvent",
     "AuditLogReader",
     "AuditSink",

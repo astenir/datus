@@ -52,6 +52,19 @@ class SessionOwnerStore(Protocol):
 
 
 @runtime_checkable
+class ArtifactAclStore(Protocol):
+    """Optional artifact ACL persistence interface for admin APIs."""
+
+    async def get_acl(self, *, artifact_type: str, slug: str) -> dict[str, Any]:
+        """Return the ACL metadata for one artifact."""
+        ...
+
+    async def put_acl(self, *, artifact_type: str, slug: str, acl: dict[str, Any]) -> dict[str, Any]:
+        """Persist and return the ACL metadata for one artifact."""
+        ...
+
+
+@runtime_checkable
 class AuditSink(Protocol):
     """Write security audit events."""
 

@@ -26,6 +26,12 @@ def get_audit_sink():
     return get_enterprise_extensions().audit_sink
 
 
+def get_artifact_acl_store():
+    from datus.api.deps import get_enterprise_extensions
+
+    return get_enterprise_extensions().artifact_acl_store
+
+
 def get_config_projector():
     from datus.api.deps import get_enterprise_extensions
 
