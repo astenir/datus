@@ -416,6 +416,23 @@ class ChatTaskManager:
     def get_task(self, session_id: str) -> Optional[ChatTask]:
         return self._tasks.get(session_id) or self._completed_tasks.get(session_id)
 
+    def get_task_snapshot(self, session_id: str) -> dict[str, Any] | None:
+        """Return a bounded metadata snapshot for admin/session APIs."""
+
+        task = self.get_task(session_id)
+        return self._task_snapshot(task) if task is not None else None
+
+    def list_task_snapshots(self) -> list[dict[str, Any]]:
+        """Return bounded metadata snapshots for known in-process tasks."""
+
+        snapshots = [self._task_snapshot(task) for task in self._tasks.values()]
+        snapshots.extend(
+            self._task_snapshot(task)
+            for session_id, task in self._completed_tasks.items()
+            if session_id not in self._tasks
+        )
+        return sorted(snapshots, key=lambda item: str(item.get("created_at") or ""), reverse=True)
+
     async def consume_events(self, task: ChatTask, start_from: Optional[int] = None) -> AsyncGenerator[SSEEvent, None]:
         """Yield events from *task*'s buffer.
 
@@ -771,6 +788,18 @@ class ChatTaskManager:
         ]
         for sid in expired:
             self._completed_tasks.pop(sid, None)
+
+    def _task_snapshot(self, task: ChatTask) -> dict[str, Any]:
+        return {
+            "session_id": task.session_id,
+            "owner_user_id": task.owner_user_id,
+            "status": task.status,
+            "is_running": task.status == "running",
+            "created_at": task.created_at.isoformat(),
+            "event_count": len(task.events),
+            "consumer_offset": task.consumer_offset,
+            "error": task.error,
+        }
 
     # ------------------------------------------------------------------
     # Node factory

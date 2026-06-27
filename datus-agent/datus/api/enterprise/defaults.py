@@ -77,6 +77,22 @@ class InMemorySessionOwnerStore:
             if stored_project == project_id and owner == user_id
         ]
 
+    async def list_sessions(self, project_id: str, user_id: str | None = None) -> list[dict[str, Any]]:
+        """Return owner metadata for admin session management."""
+
+        records = [
+            {
+                "project_id": stored_project,
+                "session_id": session_id,
+                "user_id": owner,
+                "created_at": None,
+                "updated_at": None,
+            }
+            for (stored_project, session_id), owner in self._owners.items()
+            if stored_project == project_id and (user_id is None or owner == user_id)
+        ]
+        return sorted(records, key=lambda record: (str(record["user_id"]), str(record["session_id"])))
+
 
 class SqliteSessionOwnerStore:
     """SQLite-backed ``session_owners`` metadata index.
@@ -135,6 +151,40 @@ class SqliteSessionOwnerStore:
                 (project_id, user_id),
             ).fetchall()
         return [str(row[0]) for row in rows]
+
+    async def list_sessions(self, project_id: str, user_id: str | None = None) -> list[dict[str, Any]]:
+        """Return owner metadata for admin session management."""
+
+        params: tuple[str, ...]
+        if user_id is None:
+            query = """
+                SELECT project_id, session_id, user_id, created_at, updated_at
+                FROM session_owners
+                WHERE project_id = ?
+                ORDER BY updated_at DESC, session_id ASC
+                """
+            params = (project_id,)
+        else:
+            query = """
+                SELECT project_id, session_id, user_id, created_at, updated_at
+                FROM session_owners
+                WHERE project_id = ? AND user_id = ?
+                ORDER BY updated_at DESC, session_id ASC
+                """
+            params = (project_id, user_id)
+
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [
+            {
+                "project_id": str(row[0]),
+                "session_id": str(row[1]),
+                "user_id": str(row[2]),
+                "created_at": row[3],
+                "updated_at": row[4],
+            }
+            for row in rows
+        ]
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self._db_path, timeout=5.0)
