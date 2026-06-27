@@ -15,12 +15,14 @@ from datus.api.auth.context import AppContext
 from datus.api.enterprise.deps import get_audit_sink
 from datus.api.enterprise.models import AuditEvent as CoreAuditEvent
 from datus.api.models.base_models import Result
+from datus.utils.csv_utils import sanitize_csv_field
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
 
 router = APIRouter(prefix="/api/v1", tags=["enterprise-audit"])
 
 AdminAuditCtx = Annotated[AppContext, Depends(require_module("module.admin.audit"))]
+AdminAuditExportCtx = Annotated[AppContext, Depends(require_module("module.admin.audit.export"))]
 
 
 class AuditLogEntry(BaseModel):
@@ -68,7 +70,7 @@ async def list_audit_logs(
 
 @router.get("/admin/audit-logs/export", response_model=None, summary="Export Audit Logs")
 async def export_audit_logs(
-    ctx: AdminAuditCtx,
+    ctx: AdminAuditExportCtx,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     user_id: str | None = None,
     action: str | None = None,
@@ -81,6 +83,7 @@ async def export_audit_logs(
     events, error = await _query_audit_events(
         ctx,
         operation="export_audit_logs",
+        audit_action="module.admin.audit.export",
         limit=limit,
         user_id=user_id,
         action=action,
@@ -91,7 +94,14 @@ async def export_audit_logs(
     if error is not None:
         return error
 
-    await _audit_query(ctx, operation="export_audit_logs", decision="allow", reason=None, count=len(events))
+    await _audit_query(
+        ctx,
+        operation="export_audit_logs",
+        action="module.admin.audit.export",
+        decision="allow",
+        reason=None,
+        count=len(events),
+    )
     return Response(
         content=_events_to_csv(events),
         media_type="text/csv; charset=utf-8",
@@ -103,6 +113,7 @@ async def _query_audit_events(
     ctx: AppContext,
     *,
     operation: str,
+    audit_action: str = "module.admin.audit",
     limit: int,
     user_id: str | None,
     action: str | None,
@@ -113,7 +124,14 @@ async def _query_audit_events(
     sink = get_audit_sink()
     query_events = getattr(sink, "query_events", None)
     if not callable(query_events):
-        await _audit_query(ctx, operation=operation, decision="deny", reason="audit query unavailable", count=None)
+        await _audit_query(
+            ctx,
+            operation=operation,
+            action=audit_action,
+            decision="deny",
+            reason="audit query unavailable",
+            count=None,
+        )
         return [], Result(
             success=False,
             errorCode="AUDIT_QUERY_UNAVAILABLE",
@@ -130,7 +148,14 @@ async def _query_audit_events(
             decision=decision,
         )
     except Exception:
-        await _audit_query(ctx, operation=operation, decision="deny", reason="audit query failed", count=None)
+        await _audit_query(
+            ctx,
+            operation=operation,
+            action=audit_action,
+            decision="deny",
+            reason="audit query failed",
+            count=None,
+        )
         return [], Result(
             success=False,
             errorCode="AUDIT_QUERY_FAILED",
@@ -141,7 +166,13 @@ async def _query_audit_events(
 
 
 async def _audit_query(
-    ctx: AppContext, *, operation: str, decision: str, reason: str | None, count: int | None
+    ctx: AppContext,
+    *,
+    operation: str,
+    action: str = "module.admin.audit",
+    decision: str,
+    reason: str | None,
+    count: int | None,
 ) -> None:
     metadata = {"operation": operation}
     if count is not None:
@@ -149,7 +180,7 @@ async def _audit_query(
     await audit_decision(
         ctx,
         AuditEvent(
-            action="module.admin.audit",
+            action=action,
             resource_type="audit_log",
             resource_id=None,
             decision=decision,
@@ -191,14 +222,18 @@ def _events_to_csv(events: list[CoreAuditEvent]) -> str:
     for event in events:
         writer.writerow(
             {
-                "user_id": event.user_id,
-                "action": event.action,
-                "resource_type": event.resource_type,
-                "resource_id": event.resource_id,
-                "decision": event.decision,
-                "reason": event.reason,
-                "request_id": event.request_id,
-                "metadata": json.dumps(event.metadata, sort_keys=True, ensure_ascii=False, default=str),
+                "user_id": _csv_cell(event.user_id),
+                "action": _csv_cell(event.action),
+                "resource_type": _csv_cell(event.resource_type),
+                "resource_id": _csv_cell(event.resource_id),
+                "decision": _csv_cell(event.decision),
+                "reason": _csv_cell(event.reason),
+                "request_id": _csv_cell(event.request_id),
+                "metadata": _csv_cell(json.dumps(event.metadata, sort_keys=True, ensure_ascii=False, default=str)),
             }
         )
     return output.getvalue()
+
+
+def _csv_cell(value: Any) -> str | None:
+    return sanitize_csv_field(value)

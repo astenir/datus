@@ -197,7 +197,7 @@ def test_admin_audit_log_export_returns_csv_and_audits(monkeypatch):
         metadata={"error_code": "POLICY_DENIED", "row_count": 0},
     )
     audit_sink = QueryableAuditSink([audit_event])
-    ctx = AppContext(user_id="admin", permissions={"module.admin.audit"})
+    ctx = AppContext(user_id="admin", permissions={"module.admin.audit.export"})
     _install_extensions(monkeypatch, audit_sink)
 
     with _client(ctx) as client:
@@ -235,7 +235,7 @@ def test_admin_audit_log_export_returns_csv_and_audits(monkeypatch):
 
     event = audit_sink.events[-1]
     assert event.user_id == "admin"
-    assert event.action == "module.admin.audit"
+    assert event.action == "module.admin.audit.export"
     assert event.resource_type == "audit_log"
     assert event.resource_id is None
     assert event.decision == "allow"
@@ -244,7 +244,7 @@ def test_admin_audit_log_export_returns_csv_and_audits(monkeypatch):
 
 def test_admin_audit_log_export_returns_unavailable_when_sink_is_write_only(monkeypatch):
     audit_sink = CollectingAuditSink()
-    ctx = AppContext(user_id="u1", permissions={"module.admin.audit"})
+    ctx = AppContext(user_id="u1", permissions={"module.admin.audit.export"})
     _install_extensions(monkeypatch, audit_sink)
 
     with _client(ctx) as client:
@@ -255,11 +255,58 @@ def test_admin_audit_log_export_returns_unavailable_when_sink_is_write_only(monk
     assert body["success"] is False
     assert body["errorCode"] == "AUDIT_QUERY_UNAVAILABLE"
     event = audit_sink.events[-1]
-    assert event.action == "module.admin.audit"
+    assert event.action == "module.admin.audit.export"
     assert event.resource_type == "audit_log"
     assert event.decision == "deny"
     assert event.reason == "audit query unavailable"
     assert event.metadata == {"operation": "export_audit_logs"}
+
+
+def test_admin_audit_log_export_rejects_without_export_permission(monkeypatch):
+    audit_sink = QueryableAuditSink()
+    ctx = AppContext(user_id="u1", permissions={"module.admin.audit"})
+    _install_extensions(monkeypatch, audit_sink)
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/admin/audit-logs/export")
+
+    assert response.status_code == 403
+    assert "module.admin.audit.export" in response.json()["detail"]
+    assert audit_sink.queries == []
+
+
+def test_admin_audit_log_export_sanitizes_formula_prefix_cells(monkeypatch):
+    audit_event = CoreAuditEvent(
+        user_id="=cmd",
+        action="+SUM(1,1)",
+        resource_type="datasource",
+        resource_id="@finance",
+        decision="deny",
+        reason="-POLICY_DENIED",
+        request_id=None,
+        metadata={"note": "=metadata"},
+    )
+    audit_sink = QueryableAuditSink([audit_event])
+    ctx = AppContext(user_id="admin", permissions={"module.admin.audit.export"})
+    _install_extensions(monkeypatch, audit_sink)
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/admin/audit-logs/export")
+
+    assert response.status_code == 200
+    rows = list(csv.DictReader(StringIO(response.text)))
+    assert rows == [
+        {
+            "user_id": "'=cmd",
+            "action": "'+SUM(1,1)",
+            "resource_type": "datasource",
+            "resource_id": "'@finance",
+            "decision": "deny",
+            "reason": "'-POLICY_DENIED",
+            "request_id": "",
+            "metadata": '{"note": "=metadata"}',
+        }
+    ]
 
 
 def test_enterprise_admin_audit_routes_are_registered():
