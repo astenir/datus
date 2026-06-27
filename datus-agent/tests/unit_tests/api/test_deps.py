@@ -261,6 +261,8 @@ class TestGetDatusService:
     async def test_enterprise_identity_only_context_reaches_service_cache(self):
         """Enterprise auth providers may return identity-only contexts and leave RBAC to authz dependencies."""
         from datus.api.enterprise.defaults import (
+            InMemoryEnterpriseDatasourceGrantStore,
+            InMemoryEnterpriseRoleStore,
             InMemoryEnterpriseUserStore,
             InMemorySessionOwnerStore,
             LocalAuthorizationProvider,
@@ -284,6 +286,8 @@ class TestGetDatusService:
             session_owner_store=InMemorySessionOwnerStore(),
             audit_sink=NoopAuditSink(),
             user_store=InMemoryEnterpriseUserStore(),
+            role_store=InMemoryEnterpriseRoleStore(),
+            datasource_grant_store=InMemoryEnterpriseDatasourceGrantStore(),
         )
 
         request = MagicMock()
@@ -292,6 +296,128 @@ class TestGetDatusService:
 
         assert result is mock_svc
         mock_cache.get_or_create.assert_awaited_once()
+
+    async def test_enterprise_context_refreshes_roles_permissions_and_datasource_grants(self):
+        """Enterprise metadata stores are merged into the request AppContext before route dependencies run."""
+        from datus.api.enterprise.defaults import (
+            InMemoryEnterpriseDatasourceGrantStore,
+            InMemoryEnterpriseRoleStore,
+            InMemoryEnterpriseUserStore,
+            InMemorySessionOwnerStore,
+            LocalAuthorizationProvider,
+            NoopAuditSink,
+            PassthroughConfigProjector,
+        )
+        from datus.api.enterprise.loader import EnterpriseExtensions
+
+        role_store = InMemoryEnterpriseRoleStore()
+        grant_store = InMemoryEnterpriseDatasourceGrantStore()
+        await role_store.upsert_role(role_id="analyst", name="Analyst", permissions=["module.chat"])
+        await role_store.set_user_roles("alice", ["analyst"])
+        await grant_store.put_grant(
+            subject_type="role",
+            subject_id="analyst",
+            datasource_key="finance",
+            effect="allow",
+            scope={"allow_sql": True, "tables": ["role_table"]},
+        )
+        await grant_store.put_grant(
+            subject_type="user",
+            subject_id="alice",
+            datasource_key="finance",
+            effect="allow",
+            scope={"allow_sql": True, "tables": ["user_table"]},
+        )
+        await grant_store.put_grant(
+            subject_type="user",
+            subject_id="alice",
+            datasource_key="hr",
+            effect="deny",
+            scope={},
+        )
+
+        ctx = AppContext(user_id="alice", project_id="proj-1", config=MagicMock(), permissions={"module.report.view"})
+        mock_auth = MagicMock()
+        mock_auth.authenticate = AsyncMock(return_value=ctx)
+        mock_cache = MagicMock(spec=DatusServiceCache)
+        mock_cache.get_or_create = AsyncMock(return_value=MagicMock())
+        deps._auth_provider = mock_auth
+        deps._service_cache = mock_cache
+        deps._enterprise_extensions = EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+            user_store=InMemoryEnterpriseUserStore(),
+            role_store=role_store,
+            datasource_grant_store=grant_store,
+        )
+
+        request = MagicMock()
+        request.state = MagicMock()
+        await get_datus_service(request)
+
+        assert ctx.roles == ["analyst"]
+        assert ctx.permissions == {"module.chat", "module.report.view"}
+        assert ctx.datasource_grants == {
+            "finance": {"allow_sql": True, "tables": ["user_table"], "effect": "allow"},
+            "hr": {"effect": "deny"},
+        }
+        assert ctx.principal["permissions"] == ["module.chat", "module.report.view"]
+        assert ctx.principal["datasource_grants"] == ctx.datasource_grants
+
+    async def test_enterprise_context_fails_closed_when_bound_role_is_missing(self):
+        """A stale user-role binding must not silently drop permissions in enterprise mode."""
+        from datus.api.enterprise.defaults import (
+            InMemoryEnterpriseDatasourceGrantStore,
+            InMemoryEnterpriseRoleStore,
+            InMemoryEnterpriseUserStore,
+            InMemorySessionOwnerStore,
+            LocalAuthorizationProvider,
+            PassthroughConfigProjector,
+        )
+        from datus.api.enterprise.loader import EnterpriseExtensions
+
+        class StaleRoleStore(InMemoryEnterpriseRoleStore):
+            async def list_user_roles(self, user_id):
+                return ["missing_role"]
+
+        class CollectingAuditSink:
+            def __init__(self):
+                self.events = []
+
+            async def write(self, event):
+                self.events.append(event)
+
+        audit_sink = CollectingAuditSink()
+        mock_auth = MagicMock()
+        mock_auth.authenticate = AsyncMock(return_value=AppContext(user_id="alice", project_id="proj-1"))
+        mock_cache = MagicMock(spec=DatusServiceCache)
+        mock_cache.get_or_create = AsyncMock()
+        deps._auth_provider = mock_auth
+        deps._service_cache = mock_cache
+        deps._enterprise_extensions = EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=audit_sink,
+            user_store=InMemoryEnterpriseUserStore(),
+            role_store=StaleRoleStore(),
+            datasource_grant_store=InMemoryEnterpriseDatasourceGrantStore(),
+        )
+
+        request = MagicMock()
+        request.state = MagicMock()
+        with pytest.raises(HTTPException) as exc_info:
+            await get_datus_service(request)
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "ROLE_CONTEXT_UNAVAILABLE"
+        assert audit_sink.events[-1].action == "auth.enterprise_context"
+        assert audit_sink.events[-1].reason == "role metadata missing"
+        mock_cache.get_or_create.assert_not_called()
 
     async def test_enterprise_disabled_user_fails_closed(self):
         """Enterprise mode rejects new requests for users disabled in the user store."""

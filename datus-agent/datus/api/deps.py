@@ -1,8 +1,9 @@
 """FastAPI dependency injection — plugin-based auth + DatusService cache."""
 
+import copy
 import hashlib
 import re
-from typing import Annotated, Optional
+from typing import Annotated, Any, Optional
 
 from fastapi import Depends, HTTPException, Request
 
@@ -123,6 +124,7 @@ async def get_datus_service(request: Request) -> DatusService:
     enterprise_extensions = get_enterprise_extensions()
     if enterprise_extensions.enabled:
         await _validate_enterprise_context(ctx, enterprise_extensions)
+        await _refresh_enterprise_context(ctx, enterprise_extensions)
 
     expected_fp = DatusService.compute_fingerprint(ctx.config) if ctx.config is not None else None
     project_id = _canonical_project_id(ctx.project_id)
@@ -179,6 +181,130 @@ async def _validate_enterprise_context(ctx: AppContext, enterprise_extensions: E
             )
         )
         raise HTTPException(status_code=403, detail="USER_DISABLED")
+
+
+async def _refresh_enterprise_context(ctx: AppContext, enterprise_extensions: EnterpriseExtensions) -> None:
+    """Merge request RBAC and datasource grants from enterprise metadata stores."""
+
+    try:
+        stored_role_ids = await enterprise_extensions.role_store.list_user_roles(ctx.user_id or "")
+        role_ids = _merge_string_lists([*ctx.roles, *stored_role_ids])
+        role_permissions: set[str] = set()
+        for role_id in role_ids:
+            role = await enterprise_extensions.role_store.get_role(role_id)
+            if role is None and role_id in stored_role_ids:
+                await _audit_enterprise_context_deny(
+                    ctx,
+                    enterprise_extensions,
+                    reason="role metadata missing",
+                    metadata={"role_id": role_id},
+                )
+                raise HTTPException(status_code=403, detail="ROLE_CONTEXT_UNAVAILABLE")
+            if isinstance(role, dict):
+                role_permissions.update(_string_set(role.get("permissions")))
+    except HTTPException:
+        raise
+    except Exception as e:
+        await _audit_enterprise_context_deny(ctx, enterprise_extensions, reason="role context unavailable")
+        raise HTTPException(status_code=403, detail="ROLE_CONTEXT_UNAVAILABLE") from e
+
+    try:
+        datasource_grants = await _merged_datasource_grants(ctx, role_ids, enterprise_extensions)
+    except Exception as e:
+        await _audit_enterprise_context_deny(ctx, enterprise_extensions, reason="datasource grants unavailable")
+        raise HTTPException(status_code=403, detail="DATASOURCE_GRANTS_UNAVAILABLE") from e
+
+    ctx.roles = role_ids
+    ctx.permissions = set(ctx.permissions or set()).union(role_permissions)
+    ctx.datasource_grants = datasource_grants
+    ctx.principal = dict(ctx.principal or {})
+    if ctx.roles:
+        ctx.principal["roles"] = list(ctx.roles)
+    if ctx.permissions:
+        ctx.principal["permissions"] = sorted(ctx.permissions)
+    if ctx.datasource_grants:
+        ctx.principal["datasource_grants"] = copy.deepcopy(ctx.datasource_grants)
+
+
+async def _merged_datasource_grants(
+    ctx: AppContext,
+    role_ids: list[str],
+    enterprise_extensions: EnterpriseExtensions,
+) -> dict[str, Any]:
+    grants: dict[str, Any] = copy.deepcopy(ctx.datasource_grants or {})
+    for role_id in role_ids:
+        records = await enterprise_extensions.datasource_grant_store.list_grants(
+            subject_type="role",
+            subject_id=role_id,
+        )
+        for record in records:
+            _merge_grant_record(grants, record)
+
+    records = await enterprise_extensions.datasource_grant_store.list_grants(
+        subject_type="user",
+        subject_id=ctx.user_id,
+    )
+    for record in records:
+        _merge_grant_record(grants, record)
+    return grants
+
+
+def _merge_grant_record(grants: dict[str, Any], record: dict[str, Any]) -> None:
+    datasource_key = str(record.get("datasource_key") or "").strip()
+    if not datasource_key:
+        return
+    merged = dict(record.get("scope") or {})
+    effect = str(record.get("effect") or "allow").strip().lower()
+    merged["effect"] = effect
+    existing = grants.get(datasource_key)
+    if _grant_effect(existing) == "deny" or effect == "deny":
+        grants[datasource_key] = {"effect": "deny"}
+        return
+    grants[datasource_key] = merged
+
+
+def _grant_effect(grant: Any) -> str | None:
+    if grant is True:
+        return "allow"
+    if grant is False:
+        return "deny"
+    if isinstance(grant, dict):
+        return str(grant.get("effect") or "allow").strip().lower()
+    return None
+
+
+def _merge_string_lists(values: list[Any]) -> list[str]:
+    return sorted({value.strip() for value in values if isinstance(value, str) and value.strip()})
+
+
+def _string_set(raw: Any) -> set[str]:
+    if raw is None:
+        return set()
+    if isinstance(raw, str):
+        return {raw}
+    if isinstance(raw, list):
+        return {item.strip() for item in raw if isinstance(item, str) and item.strip()}
+    return set()
+
+
+async def _audit_enterprise_context_deny(
+    ctx: AppContext,
+    enterprise_extensions: EnterpriseExtensions,
+    *,
+    reason: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    await enterprise_extensions.audit_sink.write(
+        AuditEvent(
+            user_id=ctx.user_id,
+            action="auth.enterprise_context",
+            resource_type="user",
+            resource_id=ctx.user_id,
+            decision="deny",
+            reason=reason,
+            metadata=metadata or {},
+        )
+    )
 
 
 def get_app_context(request: Request) -> AppContext:
