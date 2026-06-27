@@ -299,8 +299,9 @@ MVP 中 `datasource_grants` 采用每个 `(subject_type, subject_id, datasource_
 - KB route：KB bootstrap、platform docs bootstrap 和 cancel 接口使用 `module.kb`。
 - MCP route：MCP server/tool/filter 的列表、管理和调用接口使用 `module.mcp`。
 - admin datasource route：`/api/v1/admin/datasource-default` 使用 `module.admin.datasources`。
+- admin user route：`/api/v1/admin/users`、`/api/v1/admin/users/{user_id}`、`/api/v1/admin/users/{user_id}/disable` 和 `/api/v1/admin/users/{user_id}/enable` 使用 `module.admin.users`，用户管理变更写入脱敏审计摘要；企业模式新请求会基于 `EnterpriseUserStore` 拒绝已禁用用户。
 
-后续新增 route 时应继续使用 `require_module()` dependency 接入模块权限；其余 admin users/roles/datasource grants/sessions/artifacts/audit/quotas/secrets API 属于阶段 6。不要把 report/dashboard 的 query 权限合并进 `module.chat`；自然语言入口只能证明用户可用 chat，不能自动证明用户可实时查询报表或仪表盘。当前已先将可配置 datasource grant projection 接入 `/api/v1/chat/stream`、`/api/v1/chat/feedback`、`/api/v1/catalog/list` 和 `/api/v1/sql/execute`，用于校验请求 datasource/database、过滤请求级 `AgentConfig` clone、按 catalog/database/schema/table scope 裁剪目录结果并注入 principal；`/api/v1/sql/execute` 还会在执行前复用 grant scope 和 SQL policy principal 校验手写 SQL。report/dashboard projection 和执行审计兜底仍属于阶段 4/5/6 后续子阶段。
+后续新增 route 时应继续使用 `require_module()` dependency 接入模块权限；其余 admin roles/datasource grants/sessions/artifacts/audit/quotas/secrets API 属于阶段 6。不要把 report/dashboard 的 query 权限合并进 `module.chat`；自然语言入口只能证明用户可用 chat，不能自动证明用户可实时查询报表或仪表盘。当前已先将可配置 datasource grant projection 接入 `/api/v1/chat/stream`、`/api/v1/chat/feedback`、`/api/v1/catalog/list` 和 `/api/v1/sql/execute`，用于校验请求 datasource/database、过滤请求级 `AgentConfig` clone、按 catalog/database/schema/table scope 裁剪目录结果并注入 principal；`/api/v1/sql/execute` 还会在执行前复用 grant scope 和 SQL policy principal 校验手写 SQL。report/dashboard projection 和执行审计兜底仍属于阶段 4/5/6 后续子阶段。
 
 ### SQL 与数据安全
 

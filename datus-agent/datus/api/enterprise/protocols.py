@@ -31,6 +31,34 @@ class ConfigProjector(Protocol):
 
 
 @runtime_checkable
+class EnterpriseUserStore(Protocol):
+    """Persist and query enterprise user metadata."""
+
+    async def list_users(self, *, enabled: bool | None = None) -> list[dict[str, Any]]:
+        """Return user records, optionally filtered by enabled status."""
+        ...
+
+    async def get_user(self, user_id: str) -> dict[str, Any] | None:
+        """Return one user record, if present."""
+        ...
+
+    async def upsert_user(
+        self,
+        *,
+        user_id: str,
+        display_name: str | None = None,
+        email: str | None = None,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        """Create or update a user record."""
+        ...
+
+    async def set_user_enabled(self, user_id: str, enabled: bool) -> dict[str, Any] | None:
+        """Enable or disable a user record."""
+        ...
+
+
+@runtime_checkable
 class SessionOwnerStore(Protocol):
     """Persist and query session owner metadata."""
 

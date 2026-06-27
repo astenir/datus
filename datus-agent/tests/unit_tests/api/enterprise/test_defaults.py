@@ -1,7 +1,13 @@
 import pytest
 
 from datus.api.auth.context import AppContext
-from datus.api.enterprise.defaults import InMemorySessionOwnerStore, LocalAuthorizationProvider, SqliteSessionOwnerStore
+from datus.api.enterprise.defaults import (
+    InMemoryEnterpriseUserStore,
+    InMemorySessionOwnerStore,
+    LocalAuthorizationProvider,
+    SqliteEnterpriseUserStore,
+    SqliteSessionOwnerStore,
+)
 from datus.api.enterprise.models import ResourceRef
 
 
@@ -67,6 +73,24 @@ async def test_in_memory_session_owner_store_supports_delete_and_user_listing():
 
 
 @pytest.mark.asyncio
+async def test_in_memory_enterprise_user_store_supports_upsert_and_enabled_filter():
+    store = InMemoryEnterpriseUserStore()
+
+    alice = await store.upsert_user(user_id="alice", display_name="Alice", email="alice@example.com")
+    await store.upsert_user(user_id="bob", display_name="Bob", enabled=False)
+
+    assert alice["enabled"] is True
+    assert await store.get_user("alice") == alice
+    assert [user["user_id"] for user in await store.list_users()] == ["alice", "bob"]
+    assert [user["user_id"] for user in await store.list_users(enabled=True)] == ["alice"]
+    assert [user["user_id"] for user in await store.list_users(enabled=False)] == ["bob"]
+
+    disabled = await store.set_user_enabled("alice", False)
+    assert disabled["enabled"] is False
+    assert await store.set_user_enabled("missing", False) is None
+
+
+@pytest.mark.asyncio
 async def test_sqlite_session_owner_store_persists_session_owners(tmp_path):
     db_path = tmp_path / "session_owners.db"
     store = SqliteSessionOwnerStore(str(db_path))
@@ -92,3 +116,26 @@ async def test_sqlite_session_owner_store_persists_session_owners(tmp_path):
 
     await reopened.delete_owner("project", "s2")
     assert await reopened.get_owner("project", "s2") is None
+
+
+@pytest.mark.asyncio
+async def test_sqlite_enterprise_user_store_persists_users(tmp_path):
+    db_path = tmp_path / "enterprise_users.db"
+    store = SqliteEnterpriseUserStore(str(db_path))
+
+    await store.upsert_user(user_id="alice", display_name="Alice", email="alice@example.com")
+    await store.upsert_user(user_id="bob", display_name="Bob", enabled=False)
+    await store.upsert_user(user_id="alice", display_name="Alice A", enabled=False)
+
+    reopened = SqliteEnterpriseUserStore(str(db_path))
+    alice = await reopened.get_user("alice")
+    assert alice["display_name"] == "Alice A"
+    assert alice["email"] is None
+    assert alice["enabled"] is False
+    assert alice["created_at"]
+    assert alice["updated_at"]
+    assert [user["user_id"] for user in await reopened.list_users(enabled=False)] == ["alice", "bob"]
+
+    enabled = await reopened.set_user_enabled("alice", True)
+    assert enabled["enabled"] is True
+    assert await reopened.set_user_enabled("missing", False) is None

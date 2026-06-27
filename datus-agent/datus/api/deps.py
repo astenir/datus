@@ -9,6 +9,7 @@ from fastapi import Depends, HTTPException, Request
 from datus.api.auth.context import AppContext
 from datus.api.auth.provider import AuthProvider
 from datus.api.enterprise.loader import EnterpriseExtensions, load_enterprise_extensions
+from datus.api.enterprise.models import AuditEvent
 from datus.api.services.datus_service import DatusService
 from datus.api.services.datus_service_cache import DatusServiceCache
 from datus.configuration.agent_config_loader import load_agent_config
@@ -121,7 +122,7 @@ async def get_datus_service(request: Request) -> DatusService:
     request.state.app_context = ctx
     enterprise_extensions = get_enterprise_extensions()
     if enterprise_extensions.enabled:
-        _validate_enterprise_context(ctx)
+        await _validate_enterprise_context(ctx, enterprise_extensions)
 
     expected_fp = DatusService.compute_fingerprint(ctx.config) if ctx.config is not None else None
     project_id = _canonical_project_id(ctx.project_id)
@@ -149,9 +150,35 @@ async def get_datus_service(request: Request) -> DatusService:
     return await _service_cache.get_or_create(cache_key, _factory, expected_fingerprint=expected_fp)
 
 
-def _validate_enterprise_context(ctx: AppContext) -> None:
+async def _validate_enterprise_context(ctx: AppContext, enterprise_extensions: EnterpriseExtensions) -> None:
     if not ctx.user_id:
         raise HTTPException(status_code=401, detail="AUTH_REQUIRED")
+    try:
+        user = await enterprise_extensions.user_store.get_user(ctx.user_id)
+    except Exception as e:
+        await enterprise_extensions.audit_sink.write(
+            AuditEvent(
+                user_id=ctx.user_id,
+                action="auth.enterprise_user_status",
+                resource_type="user",
+                resource_id=ctx.user_id,
+                decision="deny",
+                reason="user status unavailable",
+            )
+        )
+        raise HTTPException(status_code=403, detail="USER_STATUS_UNAVAILABLE") from e
+    if user is not None and not bool(user.get("enabled", True)):
+        await enterprise_extensions.audit_sink.write(
+            AuditEvent(
+                user_id=ctx.user_id,
+                action="auth.enterprise_user_status",
+                resource_type="user",
+                resource_id=ctx.user_id,
+                decision="deny",
+                reason="user disabled",
+            )
+        )
+        raise HTTPException(status_code=403, detail="USER_DISABLED")
 
 
 def get_app_context(request: Request) -> AppContext:
