@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import os
 import sqlite3
+from datetime import datetime, timezone
 from fnmatch import fnmatchcase
 from typing import Any
 
@@ -53,6 +54,168 @@ class PassthroughConfigProjector:
             principal=principal,
             datasource_grants=dict(request.ctx.datasource_grants or {}),
         )
+
+
+class InMemoryEnterpriseUserStore:
+    """Process-local enterprise user metadata store for tests and local mode."""
+
+    def __init__(self) -> None:
+        self._users: dict[str, dict[str, Any]] = {}
+
+    async def list_users(self, *, enabled: bool | None = None) -> list[dict[str, Any]]:
+        users = [
+            _copy_user_record(record)
+            for record in self._users.values()
+            if enabled is None or bool(record["enabled"]) is enabled
+        ]
+        return sorted(users, key=lambda record: str(record["user_id"]))
+
+    async def get_user(self, user_id: str) -> dict[str, Any] | None:
+        record = self._users.get(user_id)
+        return _copy_user_record(record) if record is not None else None
+
+    async def upsert_user(
+        self,
+        *,
+        user_id: str,
+        display_name: str | None = None,
+        email: str | None = None,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        existing = self._users.get(user_id)
+        now = _sqlite_now()
+        created_at = str(existing.get("created_at")) if existing else now
+        record = {
+            "user_id": user_id,
+            "display_name": display_name,
+            "email": email,
+            "enabled": bool(enabled),
+            "created_at": created_at,
+            "updated_at": now,
+        }
+        self._users[user_id] = record
+        return _copy_user_record(record)
+
+    async def set_user_enabled(self, user_id: str, enabled: bool) -> dict[str, Any] | None:
+        record = self._users.get(user_id)
+        if record is None:
+            return None
+        record = dict(record)
+        record["enabled"] = bool(enabled)
+        record["updated_at"] = _sqlite_now()
+        self._users[user_id] = record
+        return _copy_user_record(record)
+
+
+class SqliteEnterpriseUserStore:
+    """SQLite-backed enterprise user metadata store for single-node deployments."""
+
+    def __init__(self, db_path: str) -> None:
+        self._db_path = db_path
+        parent = os.path.dirname(os.path.abspath(db_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        self._ensure_schema()
+
+    async def list_users(self, *, enabled: bool | None = None) -> list[dict[str, Any]]:
+        if enabled is None:
+            query = """
+                SELECT user_id, display_name, email, enabled, created_at, updated_at
+                FROM enterprise_users
+                ORDER BY user_id ASC
+                """
+            params: tuple[Any, ...] = ()
+        else:
+            query = """
+                SELECT user_id, display_name, email, enabled, created_at, updated_at
+                FROM enterprise_users
+                WHERE enabled = ?
+                ORDER BY user_id ASC
+                """
+            params = (1 if enabled else 0,)
+
+        with self._connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [_user_record_from_row(row) for row in rows]
+
+    async def get_user(self, user_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT user_id, display_name, email, enabled, created_at, updated_at
+                FROM enterprise_users
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            ).fetchone()
+        return _user_record_from_row(row) if row else None
+
+    async def upsert_user(
+        self,
+        *,
+        user_id: str,
+        display_name: str | None = None,
+        email: str | None = None,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO enterprise_users (user_id, display_name, email, enabled, created_at, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    display_name = excluded.display_name,
+                    email = excluded.email,
+                    enabled = excluded.enabled,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (user_id, display_name, email, 1 if enabled else 0),
+            )
+            conn.commit()
+        record = await self.get_user(user_id)
+        if record is None:
+            raise DatusException(ErrorCode.COMMON_UNKNOWN, message="Failed to persist enterprise user.")
+        return record
+
+    async def set_user_enabled(self, user_id: str, enabled: bool) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE enterprise_users
+                SET enabled = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE user_id = ?
+                """,
+                (1 if enabled else 0, user_id),
+            )
+            conn.commit()
+        if cursor.rowcount == 0:
+            return None
+        return await self.get_user(user_id)
+
+    def _connect(self) -> sqlite3.Connection:
+        return sqlite3.connect(self._db_path, timeout=5.0)
+
+    def _ensure_schema(self) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS enterprise_users (
+                    user_id TEXT PRIMARY KEY,
+                    display_name TEXT,
+                    email TEXT,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_enterprise_users_enabled
+                ON enterprise_users (enabled, user_id)
+                """
+            )
+            conn.commit()
 
 
 class InMemorySessionOwnerStore:
@@ -234,3 +397,36 @@ def _context_permissions(ctx: AppContext) -> list[str] | None:
 
 def _matches_permission(action: str, permissions: list[str]) -> bool:
     return any(permission == "*" or fnmatchcase(action, permission) for permission in permissions)
+
+
+def _sqlite_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _copy_user_record(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "user_id": str(record["user_id"]),
+        "display_name": _optional_str(record.get("display_name")),
+        "email": _optional_str(record.get("email")),
+        "enabled": bool(record.get("enabled")),
+        "created_at": _optional_str(record.get("created_at")),
+        "updated_at": _optional_str(record.get("updated_at")),
+    }
+
+
+def _user_record_from_row(row) -> dict[str, Any]:
+    return {
+        "user_id": str(row[0]),
+        "display_name": _optional_str(row[1]),
+        "email": _optional_str(row[2]),
+        "enabled": bool(row[3]),
+        "created_at": _optional_str(row[4]),
+        "updated_at": _optional_str(row[5]),
+    }
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    return text if text else None

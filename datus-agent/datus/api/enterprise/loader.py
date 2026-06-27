@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import importlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol, TypeVar
 
 from datus.api.enterprise.defaults import (
+    InMemoryEnterpriseUserStore,
     InMemorySessionOwnerStore,
     LocalAuthorizationProvider,
     NoopAuditSink,
@@ -17,6 +18,7 @@ from datus.api.enterprise.protocols import (
     AuditSink,
     AuthorizationProvider,
     ConfigProjector,
+    EnterpriseUserStore,
     SessionOwnerStore,
 )
 from datus.utils.exceptions import DatusException, ErrorCode
@@ -37,6 +39,7 @@ class EnterpriseExtensions:
     session_owner_store: SessionOwnerStore
     audit_sink: AuditSink
     artifact_acl_store: ArtifactAclStore | None = None
+    user_store: EnterpriseUserStore = field(default_factory=InMemoryEnterpriseUserStore)
 
 
 def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> EnterpriseExtensions:
@@ -65,6 +68,7 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
             session_owner_store=InMemorySessionOwnerStore(),
             audit_sink=NoopAuditSink(),
             artifact_acl_store=None,
+            user_store=InMemoryEnterpriseUserStore(),
         )
 
     authorization_provider = _load_required_component(
@@ -79,6 +83,12 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         PassthroughConfigProjector(),
     )
     audit_sink = _load_required_component(raw, "audit_sink", AuditSink)
+    user_store = _load_optional_component(
+        raw,
+        "user_store",
+        EnterpriseUserStore,
+        InMemoryEnterpriseUserStore(),
+    )
     session_owner_store = _load_optional_component(
         raw,
         "session_owner_store",
@@ -99,6 +109,7 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         session_owner_store=session_owner_store,
         audit_sink=audit_sink,
         artifact_acl_store=artifact_acl_store,
+        user_store=user_store,
     )
 
 

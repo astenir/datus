@@ -1041,6 +1041,13 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - 产物 ACL 管理。
 - 审计日志查询。
 
+当前接线状态：
+
+- 已新增 `EnterpriseUserStore` 协议，以及本地兼容的内存实现和单节点 SQLite `enterprise_users` 骨架；企业模式下可通过 `enterprise.user_store.class` 替换为生产 metadata store。
+- 已注册 `/api/v1/admin/users`、`/api/v1/admin/users/{user_id}`、`/api/v1/admin/users/{user_id}/disable` 和 `/api/v1/admin/users/{user_id}/enable`，统一要求 `module.admin.users`，企业上下文只来自认证后的 `AppContext`，不从路径或请求体传入。
+- 用户管理接口返回稳定 `Result` 错误码：`USER_ID_INVALID`、`RESOURCE_NOT_FOUND`、`USER_LIST_FAILED`、`USER_READ_FAILED`、`USER_UPSERT_FAILED`、`USER_UPDATE_FAILED`；管理 allow/deny 使用 `module.admin.users` 写入审计，metadata 只包含脱敏的新旧摘要。
+- `enterprise.enabled=true` 的新请求会检查用户状态：缺少 `user_id` 返回 `AUTH_REQUIRED`，已存在且被禁用的用户返回 `USER_DISABLED`，用户状态存储不可用时返回 `USER_STATUS_UNAVAILABLE` 并审计 deny。未录入用户仍允许通过，以兼容已有 identity-only auth provider；完整角色、权限和 datasource grant 绑定继续作为后续阶段 6 子任务推进。
+
 验收：
 
 - 只有具备对应 `module.admin.*` 的用户可调用管理 API。

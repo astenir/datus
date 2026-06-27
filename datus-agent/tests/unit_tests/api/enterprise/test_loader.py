@@ -3,7 +3,7 @@ import types
 
 import pytest
 
-from datus.api.enterprise.defaults import PassthroughConfigProjector
+from datus.api.enterprise.defaults import InMemoryEnterpriseUserStore, PassthroughConfigProjector
 from datus.api.enterprise.loader import load_enterprise_extensions
 from datus.utils.exceptions import DatusException
 
@@ -23,6 +23,20 @@ class _Projector:
 
 class _Audit:
     async def write(self, event):
+        return None
+
+
+class _UserStore:
+    async def list_users(self, *, enabled=None):
+        return []
+
+    async def get_user(self, user_id):
+        return None
+
+    async def upsert_user(self, *, user_id, display_name=None, email=None, enabled=True):
+        return {}
+
+    async def set_user_enabled(self, user_id, enabled):
         return None
 
 
@@ -60,6 +74,7 @@ def fake_module():
     mod.Authz = _Authz
     mod.Projector = _Projector
     mod.Audit = _Audit
+    mod.UserStore = _UserStore
     mod.ArtifactAclStore = _ArtifactAclStore
     mod.LegacyOwnerStore = _LegacyOwnerStore
     mod.OwnerStore = _OwnerStore
@@ -74,6 +89,7 @@ def test_disabled_enterprise_loads_local_defaults():
     assert extensions.enabled is False
     assert extensions.authorization_provider is not None
     assert extensions.config_projector is not None
+    assert isinstance(extensions.user_store, InMemoryEnterpriseUserStore)
     assert extensions.session_owner_store is not None
     assert extensions.audit_sink is not None
     assert extensions.artifact_acl_store is None
@@ -95,6 +111,7 @@ def test_enabled_enterprise_uses_passthrough_projector_when_projection_not_confi
 
     assert extensions.enabled is True
     assert isinstance(extensions.config_projector, PassthroughConfigProjector)
+    assert isinstance(extensions.user_store, InMemoryEnterpriseUserStore)
     assert extensions.artifact_acl_store is None
 
 
@@ -104,6 +121,7 @@ def test_enabled_enterprise_loads_configured_core_providers(fake_module):
             "enabled": True,
             "authorization_provider": {"class": f"{fake_module}.Authz"},
             "config_projector": {"class": f"{fake_module}.Projector"},
+            "user_store": {"class": f"{fake_module}.UserStore"},
             "artifact_acl_store": {"class": f"{fake_module}.ArtifactAclStore"},
             "audit_sink": {"class": f"{fake_module}.Audit"},
             "session_owner_store": {"class": f"{fake_module}.OwnerStore"},
@@ -113,6 +131,7 @@ def test_enabled_enterprise_loads_configured_core_providers(fake_module):
     assert extensions.enabled is True
     assert isinstance(extensions.authorization_provider, _Authz)
     assert isinstance(extensions.config_projector, _Projector)
+    assert isinstance(extensions.user_store, _UserStore)
     assert isinstance(extensions.audit_sink, _Audit)
     assert isinstance(extensions.artifact_acl_store, _ArtifactAclStore)
     assert isinstance(extensions.session_owner_store, _OwnerStore)
