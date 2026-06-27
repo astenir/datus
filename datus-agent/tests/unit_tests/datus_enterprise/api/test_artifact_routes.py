@@ -22,6 +22,29 @@ from datus.api.services.report_service import ReportService
 from datus_enterprise.api import artifact_routes
 
 
+class CollectingAuditSink:
+    def __init__(self):
+        self.events = []
+
+    async def write(self, event):
+        self.events.append(event)
+
+
+class MemoryArtifactAclStore:
+    def __init__(self, initial=None):
+        self.acls = dict(initial or {})
+
+    async def get_acl(self, *, artifact_type: str, slug: str):
+        key = (artifact_type, slug)
+        if key not in self.acls:
+            raise KeyError(key)
+        return dict(self.acls[key])
+
+    async def put_acl(self, *, artifact_type: str, slug: str, acl: dict):
+        self.acls[(artifact_type, slug)] = dict(acl)
+        return dict(acl)
+
+
 def _svc(tmp_path: Path):
     agent_config = SimpleNamespace(project_root=str(tmp_path))
     return SimpleNamespace(
@@ -49,6 +72,30 @@ def _write_manifest(root: Path, kind: str, slug: str) -> None:
     )
 
 
+def _client(monkeypatch, tmp_path: Path, ctx: AppContext, *, audit_sink=None, artifact_acl_store=None) -> TestClient:
+    app = FastAPI()
+    app.include_router(artifact_routes.router)
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return _svc(tmp_path)
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=audit_sink or NoopAuditSink(),
+            artifact_acl_store=artifact_acl_store,
+        ),
+    )
+    return TestClient(app)
+
+
 @pytest.mark.asyncio
 async def test_report_list_filters_through_enterprise_acl(tmp_path: Path):
     _write_manifest(tmp_path, "report", "visible")
@@ -74,13 +121,6 @@ async def test_dashboard_list_filters_through_enterprise_acl(tmp_path: Path):
 
 
 def test_admin_artifacts_lists_all_manifests_and_audits(monkeypatch, tmp_path: Path):
-    class CollectingAuditSink:
-        def __init__(self):
-            self.events = []
-
-        async def write(self, event):
-            self.events.append(event)
-
     _write_manifest(tmp_path, "report", "visible_report")
     _write_manifest(tmp_path, "report", "hidden_report")
     _write_manifest(tmp_path, "dashboard", "hidden_dashboard")
@@ -131,6 +171,177 @@ def test_admin_artifacts_lists_all_manifests_and_audits(monkeypatch, tmp_path: P
     assert event.metadata == {"operation": "list_admin_artifacts", "count": 3}
 
 
+def test_get_admin_artifact_acl_returns_unavailable_without_store(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "report", "sales")
+    audit_sink = CollectingAuditSink()
+    ctx = AppContext(user_id="u1", permissions={"module.admin.artifacts"})
+
+    with _client(monkeypatch, tmp_path, ctx, audit_sink=audit_sink) as client:
+        response = client.get("/api/v1/admin/artifacts/report/sales/acl")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "ARTIFACT_ACL_UNAVAILABLE"
+    event = audit_sink.events[-1]
+    assert event.action == "module.admin.artifacts"
+    assert event.resource_type == "artifact_acl"
+    assert event.resource_id == "report:sales"
+    assert event.decision == "deny"
+    assert event.reason == "artifact ACL store unavailable"
+    assert event.metadata == {"operation": "get_artifact_acl"}
+
+
+def test_get_admin_artifact_acl_returns_stored_acl_and_audits(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "dashboard", "ops")
+    audit_sink = CollectingAuditSink()
+    store = MemoryArtifactAclStore(
+        {
+            ("dashboard", "ops"): {
+                "owner_user_id": "owner-1",
+                "visibility": "role",
+                "allowed_roles": ["analyst"],
+                "datasources": ["finance_dw"],
+            }
+        }
+    )
+    ctx = AppContext(user_id="u1", permissions={"module.admin.artifacts"})
+
+    with _client(monkeypatch, tmp_path, ctx, audit_sink=audit_sink, artifact_acl_store=store) as client:
+        response = client.get("/api/v1/admin/artifacts/dashboard/ops/acl")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"] == {
+        "owner_user_id": "owner-1",
+        "visibility": "role",
+        "allowed_roles": ["analyst"],
+        "datasources": ["finance_dw"],
+    }
+    event = audit_sink.events[-1]
+    assert event.resource_id == "dashboard:ops"
+    assert event.decision == "allow"
+    assert event.metadata == {"operation": "get_artifact_acl"}
+
+
+def test_get_admin_artifact_acl_returns_not_found_for_missing_acl(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "report", "sales")
+    audit_sink = CollectingAuditSink()
+    store = MemoryArtifactAclStore()
+    ctx = AppContext(user_id="u1", permissions={"module.admin.artifacts"})
+
+    with _client(monkeypatch, tmp_path, ctx, audit_sink=audit_sink, artifact_acl_store=store) as client:
+        response = client.get("/api/v1/admin/artifacts/report/sales/acl")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "ARTIFACT_ACL_NOT_FOUND"
+    event = audit_sink.events[-1]
+    assert event.resource_id == "report:sales"
+    assert event.decision == "deny"
+    assert event.reason == "artifact ACL not found"
+
+
+def test_put_admin_artifact_acl_updates_store_and_audits_summary(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "report", "sales")
+    audit_sink = CollectingAuditSink()
+    store = MemoryArtifactAclStore(
+        {
+            ("report", "sales"): {
+                "owner_user_id": "old-owner",
+                "visibility": "private",
+                "allowed_roles": [],
+                "datasources": [],
+            }
+        }
+    )
+    ctx = AppContext(user_id="u1", permissions={"module.admin.artifacts"})
+    payload = {
+        "owner_user_id": "new-owner",
+        "visibility": "enterprise",
+        "allowed_roles": ["analyst", "lead"],
+        "datasources": ["finance_dw"],
+    }
+
+    with _client(monkeypatch, tmp_path, ctx, audit_sink=audit_sink, artifact_acl_store=store) as client:
+        response = client.put("/api/v1/admin/artifacts/report/sales/acl", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"] == payload
+    assert store.acls[("report", "sales")] == payload
+    event = audit_sink.events[-1]
+    assert event.resource_id == "report:sales"
+    assert event.decision == "allow"
+    assert event.metadata == {
+        "operation": "put_artifact_acl",
+        "old_acl": {
+            "owner_user_id": "old-owner",
+            "visibility": "private",
+            "allowed_roles": [],
+            "datasources": [],
+        },
+        "new_acl": {
+            "owner_user_id": "new-owner",
+            "visibility": "enterprise",
+            "allowed_roles": ["analyst", "lead"],
+            "datasources": ["finance_dw"],
+        },
+    }
+
+
+def test_put_admin_artifact_acl_creates_first_acl_for_existing_artifact(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "dashboard", "ops")
+    audit_sink = CollectingAuditSink()
+    store = MemoryArtifactAclStore()
+    ctx = AppContext(user_id="u1", permissions={"module.admin.artifacts"})
+    payload = {
+        "owner_user_id": "owner-1",
+        "visibility": "private",
+        "allowed_roles": [],
+        "datasources": [],
+    }
+
+    with _client(monkeypatch, tmp_path, ctx, audit_sink=audit_sink, artifact_acl_store=store) as client:
+        response = client.put("/api/v1/admin/artifacts/dashboard/ops/acl", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert store.acls[("dashboard", "ops")] == payload
+    assert audit_sink.events[-1].metadata["old_acl"] == {}
+
+
+def test_put_admin_artifact_acl_rejects_missing_artifact_before_store_write(monkeypatch, tmp_path: Path):
+    audit_sink = CollectingAuditSink()
+    store = MemoryArtifactAclStore()
+    ctx = AppContext(user_id="u1", permissions={"module.admin.artifacts"})
+
+    with _client(monkeypatch, tmp_path, ctx, audit_sink=audit_sink, artifact_acl_store=store) as client:
+        response = client.put(
+            "/api/v1/admin/artifacts/report/missing/acl",
+            json={
+                "owner_user_id": "owner-1",
+                "visibility": "private",
+                "allowed_roles": [],
+                "datasources": [],
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "RESOURCE_NOT_FOUND"
+    assert store.acls == {}
+    event = audit_sink.events[-1]
+    assert event.resource_id == "report:missing"
+    assert event.decision == "deny"
+    assert event.reason == "artifact not found"
+
+
 def test_admin_artifacts_rejects_without_admin_artifacts(monkeypatch, tmp_path: Path):
     ctx = AppContext(permissions={"module.report.view"})
     app = FastAPI()
@@ -166,6 +377,7 @@ def test_enterprise_artifact_routes_expose_resource_paths_only():
     route_paths = {route.path for route in app.routes if hasattr(route, "path")}
 
     assert "/api/v1/admin/artifacts" in route_paths
+    assert "/api/v1/admin/artifacts/{artifact_type}/{slug}/acl" in route_paths
     assert "/api/v1/reports" in route_paths
     assert "/api/v1/reports/{slug}/html" in route_paths
     assert "/api/v1/dashboards" in route_paths

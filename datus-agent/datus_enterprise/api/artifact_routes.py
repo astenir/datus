@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, List, Literal
+from typing import Annotated, Any, List, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import HTMLResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
+from datus.api.enterprise.deps import get_artifact_acl_store
 from datus.api.models.base_models import Result
 from datus.api.models.dashboard_models import DashboardDetail
 from datus.api.models.report_models import ReportDetail
@@ -32,6 +33,15 @@ class AdminArtifactSummary(BaseModel):
 
     artifact_type: Literal["report", "dashboard"]
     manifest: ArtifactManifest
+
+
+class ArtifactAcl(BaseModel):
+    """Admin-managed ACL metadata for a report or dashboard artifact."""
+
+    owner_user_id: str
+    visibility: Literal["private", "role", "enterprise"]
+    allowed_roles: list[str] = Field(default_factory=list)
+    datasources: list[str] = Field(default_factory=list)
 
 
 def _project_files_root(svc: ServiceDep) -> Path:
@@ -116,6 +126,146 @@ async def list_admin_artifacts(svc: ServiceDep, ctx: AdminArtifactsCtx) -> Resul
     return Result(success=True, data=items)
 
 
+@router.get(
+    "/admin/artifacts/{artifact_type}/{slug}/acl",
+    response_model=Result[ArtifactAcl],
+    summary="Get Artifact ACL",
+)
+async def get_admin_artifact_acl(
+    svc: ServiceDep,
+    ctx: AdminArtifactsCtx,
+    artifact_type: Literal["report", "dashboard"],
+    slug: str,
+) -> Result[ArtifactAcl]:
+    """Return stored ACL metadata for one managed artifact."""
+
+    artifact = await _find_artifact(svc, artifact_type=artifact_type, slug=slug)
+    if artifact is None:
+        await _audit_artifact_acl(
+            ctx,
+            operation="get_artifact_acl",
+            artifact_type=artifact_type,
+            slug=slug,
+            decision="deny",
+            reason="artifact not found",
+        )
+        return _artifact_not_found()
+
+    store = get_artifact_acl_store()
+    if store is None:
+        await _audit_artifact_acl(
+            ctx,
+            operation="get_artifact_acl",
+            artifact_type=artifact_type,
+            slug=slug,
+            decision="deny",
+            reason="artifact ACL store unavailable",
+        )
+        return _artifact_acl_unavailable()
+
+    try:
+        raw_acl = await store.get_acl(artifact_type=artifact_type, slug=slug)
+        acl = ArtifactAcl(**raw_acl)
+    except KeyError:
+        await _audit_artifact_acl(
+            ctx,
+            operation="get_artifact_acl",
+            artifact_type=artifact_type,
+            slug=slug,
+            decision="deny",
+            reason="artifact ACL not found",
+        )
+        return Result(success=False, errorCode="ARTIFACT_ACL_NOT_FOUND", errorMessage="Artifact ACL not found.")
+    except Exception:
+        await _audit_artifact_acl(
+            ctx,
+            operation="get_artifact_acl",
+            artifact_type=artifact_type,
+            slug=slug,
+            decision="deny",
+            reason="artifact ACL query failed",
+        )
+        return Result(success=False, errorCode="ARTIFACT_ACL_QUERY_FAILED", errorMessage="Artifact ACL query failed.")
+
+    await _audit_artifact_acl(
+        ctx,
+        operation="get_artifact_acl",
+        artifact_type=artifact_type,
+        slug=slug,
+        decision="allow",
+        reason=None,
+    )
+    return Result(success=True, data=acl)
+
+
+@router.put(
+    "/admin/artifacts/{artifact_type}/{slug}/acl",
+    response_model=Result[ArtifactAcl],
+    summary="Update Artifact ACL",
+)
+async def put_admin_artifact_acl(
+    acl: ArtifactAcl,
+    svc: ServiceDep,
+    ctx: AdminArtifactsCtx,
+    artifact_type: Literal["report", "dashboard"],
+    slug: str,
+) -> Result[ArtifactAcl]:
+    """Persist ACL metadata for one managed artifact."""
+
+    artifact = await _find_artifact(svc, artifact_type=artifact_type, slug=slug)
+    if artifact is None:
+        await _audit_artifact_acl(
+            ctx,
+            operation="put_artifact_acl",
+            artifact_type=artifact_type,
+            slug=slug,
+            decision="deny",
+            reason="artifact not found",
+        )
+        return _artifact_not_found()
+
+    store = get_artifact_acl_store()
+    if store is None:
+        await _audit_artifact_acl(
+            ctx,
+            operation="put_artifact_acl",
+            artifact_type=artifact_type,
+            slug=slug,
+            decision="deny",
+            reason="artifact ACL store unavailable",
+        )
+        return _artifact_acl_unavailable()
+
+    try:
+        old_acl = await _get_existing_acl(store, artifact_type=artifact_type, slug=slug)
+        stored_acl = await store.put_acl(artifact_type=artifact_type, slug=slug, acl=acl.model_dump())
+        result_acl = ArtifactAcl(**stored_acl)
+    except Exception:
+        await _audit_artifact_acl(
+            ctx,
+            operation="put_artifact_acl",
+            artifact_type=artifact_type,
+            slug=slug,
+            decision="deny",
+            reason="artifact ACL update failed",
+        )
+        return Result(success=False, errorCode="ARTIFACT_ACL_UPDATE_FAILED", errorMessage="Artifact ACL update failed.")
+
+    await _audit_artifact_acl(
+        ctx,
+        operation="put_artifact_acl",
+        artifact_type=artifact_type,
+        slug=slug,
+        decision="allow",
+        reason=None,
+        metadata={
+            "old_acl": _acl_summary(old_acl),
+            "new_acl": _acl_summary(result_acl.model_dump()),
+        },
+    )
+    return Result(success=True, data=result_acl)
+
+
 async def _render_dashboard_html(
     svc: ServiceDep,
     ctx: AppContext,
@@ -153,3 +303,92 @@ def _not_found_html(kind: str, message: str | None) -> HTMLResponse:
         "</body></html>"
     )
     return HTMLResponse(content=error_html, status_code=404)
+
+
+async def _find_artifact(
+    svc: ServiceDep,
+    *,
+    artifact_type: Literal["report", "dashboard"],
+    slug: str,
+) -> ArtifactManifest | None:
+    root = _project_files_root(svc)
+    if artifact_type == "dashboard":
+        result = await svc.dashboard.list_dashboards(project_files_root=root)
+    else:
+        result = await svc.report.list_reports(project_files_root=root)
+    if not result.success:
+        return None
+    return next((manifest for manifest in result.data or [] if manifest.slug == slug), None)
+
+
+def _artifact_not_found() -> Result[ArtifactAcl]:
+    return Result(success=False, errorCode="RESOURCE_NOT_FOUND", errorMessage="Artifact not found.")
+
+
+def _artifact_acl_unavailable() -> Result[ArtifactAcl]:
+    return Result(
+        success=False,
+        errorCode="ARTIFACT_ACL_UNAVAILABLE",
+        errorMessage="The configured enterprise extensions do not support artifact ACL management.",
+    )
+
+
+async def _get_existing_acl(store: Any, *, artifact_type: str, slug: str) -> dict[str, Any]:
+    try:
+        return await store.get_acl(artifact_type=artifact_type, slug=slug)
+    except KeyError:
+        return {}
+
+
+async def _audit_artifact_acl(
+    ctx: AppContext,
+    *,
+    operation: str,
+    artifact_type: str,
+    slug: str,
+    decision: str,
+    reason: str | None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    audit_metadata = {"operation": operation, **(metadata or {})}
+    await audit_decision(
+        ctx,
+        AuditEvent(
+            action="module.admin.artifacts",
+            resource_type="artifact_acl",
+            resource_id=f"{artifact_type}:{slug}",
+            decision=decision,
+            reason=reason,
+            metadata=audit_metadata,
+        ),
+    )
+
+
+def _acl_summary(raw_acl: Any) -> dict[str, Any]:
+    if isinstance(raw_acl, ArtifactAcl):
+        raw_acl = raw_acl.model_dump()
+    if not isinstance(raw_acl, dict):
+        return {}
+    if not raw_acl:
+        return {}
+    return {
+        "owner_user_id": _bounded_text(raw_acl.get("owner_user_id")),
+        "visibility": _bounded_text(raw_acl.get("visibility")),
+        "allowed_roles": _bounded_list(raw_acl.get("allowed_roles")),
+        "datasources": _bounded_list(raw_acl.get("datasources")),
+    }
+
+
+def _bounded_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [_bounded_text(item) for item in value[:20] if isinstance(item, str)]
+
+
+def _bounded_text(value: Any, *, max_length: int = 120) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    if len(text) <= max_length:
+        return text
+    return f"{text[:max_length]}..."

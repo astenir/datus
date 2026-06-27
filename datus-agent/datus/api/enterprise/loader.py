@@ -12,7 +12,13 @@ from datus.api.enterprise.defaults import (
     NoopAuditSink,
     PassthroughConfigProjector,
 )
-from datus.api.enterprise.protocols import AuditSink, AuthorizationProvider, ConfigProjector, SessionOwnerStore
+from datus.api.enterprise.protocols import (
+    ArtifactAclStore,
+    AuditSink,
+    AuthorizationProvider,
+    ConfigProjector,
+    SessionOwnerStore,
+)
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 
@@ -30,6 +36,7 @@ class EnterpriseExtensions:
     config_projector: ConfigProjector
     session_owner_store: SessionOwnerStore
     audit_sink: AuditSink
+    artifact_acl_store: ArtifactAclStore | None = None
 
 
 def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> EnterpriseExtensions:
@@ -57,6 +64,7 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
             audit_sink=NoopAuditSink(),
+            artifact_acl_store=None,
         )
 
     authorization_provider = _load_required_component(
@@ -77,6 +85,12 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         SessionOwnerStore,
         InMemorySessionOwnerStore(),
     )
+    artifact_acl_store = _load_optional_component(
+        raw,
+        "artifact_acl_store",
+        ArtifactAclStore,
+        None,
+    )
 
     return EnterpriseExtensions(
         enabled=True,
@@ -84,6 +98,7 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         config_projector=config_projector,
         session_owner_store=session_owner_store,
         audit_sink=audit_sink,
+        artifact_acl_store=artifact_acl_store,
     )
 
 
