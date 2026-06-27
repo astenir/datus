@@ -272,6 +272,12 @@ class InMemoryEnterpriseRoleStore:
 
     async def set_user_roles(self, user_id: str, role_ids: list[str]) -> list[str]:
         normalized = _normalized_role_ids(role_ids)
+        missing_role_ids = [role_id for role_id in normalized if role_id not in self._roles]
+        if missing_role_ids:
+            raise DatusException(
+                ErrorCode.COMMON_FIELD_INVALID,
+                message=f"Role not found: {missing_role_ids[0]}.",
+            )
         if normalized:
             self._user_roles[user_id] = set(normalized)
         else:
@@ -398,6 +404,26 @@ class SqliteEnterpriseRoleStore:
     async def set_user_roles(self, user_id: str, role_ids: list[str]) -> list[str]:
         normalized = _normalized_role_ids(role_ids)
         with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing_rows = (
+                conn.execute(
+                    f"""
+                SELECT role_id
+                FROM enterprise_roles
+                WHERE role_id IN ({",".join("?" for _ in normalized)})
+                """,
+                    tuple(normalized),
+                ).fetchall()
+                if normalized
+                else []
+            )
+            existing_role_ids = {str(row[0]) for row in existing_rows}
+            missing_role_ids = [role_id for role_id in normalized if role_id not in existing_role_ids]
+            if missing_role_ids:
+                raise DatusException(
+                    ErrorCode.COMMON_FIELD_INVALID,
+                    message=f"Role not found: {missing_role_ids[0]}.",
+                )
             conn.execute("DELETE FROM enterprise_user_roles WHERE user_id = ?", (user_id,))
             conn.executemany(
                 """

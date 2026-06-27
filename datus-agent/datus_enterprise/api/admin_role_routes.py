@@ -474,6 +474,20 @@ async def delete_admin_role(role_id: str, ctx: AdminRolesCtx) -> Result[dict]:
         )
         return _role_error("ROLE_DELETE_FAILED", "Role delete failed.")
     if not deleted:
+        assigned_users = await _list_role_users_after_delete_false(ctx, store, role_id, before)
+        if isinstance(assigned_users, Result):
+            return assigned_users
+        if assigned_users:
+            await _audit_role_mutation(
+                ctx,
+                role_id=role_id,
+                operation="delete_admin_role",
+                decision="deny",
+                reason="role has assigned users",
+                old_summary=_summary_for_audit(_summary_from_record(before)),
+                metadata={"assigned_user_count": len(assigned_users), "assigned_user_ids": assigned_users[:10]},
+            )
+            return _role_error("ROLE_DELETE_FORBIDDEN", "Role has assigned users.")
         await _audit_role_mutation(
             ctx,
             role_id=role_id,
@@ -492,6 +506,26 @@ async def delete_admin_role(role_id: str, ctx: AdminRolesCtx) -> Result[dict]:
         new_summary={"deleted": True},
     )
     return Result(success=True, data={"role_id": role_id, "deleted": True})
+
+
+async def _list_role_users_after_delete_false(
+    ctx: AppContext,
+    store: Any,
+    role_id: str,
+    before: dict[str, Any],
+) -> list[str] | Result[Any]:
+    try:
+        return await store.list_role_users(role_id)
+    except Exception:
+        await _audit_role_mutation(
+            ctx,
+            role_id=role_id,
+            operation="delete_admin_role",
+            decision="deny",
+            reason="role bindings read failed",
+            old_summary=_summary_for_audit(_summary_from_record(before)),
+        )
+        return _role_error("ROLE_BINDINGS_READ_FAILED", "Role bindings read failed.")
 
 
 async def _load_user_for_roles(ctx: AppContext, user_id: str, *, operation: str) -> dict[str, Any] | Result[Any]:

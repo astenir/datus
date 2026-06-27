@@ -11,6 +11,7 @@ from datus.api.enterprise.defaults import (
     SqliteSessionOwnerStore,
 )
 from datus.api.enterprise.models import ResourceRef
+from datus.utils.exceptions import DatusException
 
 
 @pytest.mark.asyncio
@@ -134,6 +135,17 @@ async def test_in_memory_enterprise_role_store_supports_user_role_bindings():
 
 
 @pytest.mark.asyncio
+async def test_in_memory_enterprise_role_store_rejects_missing_user_role_binding():
+    store = InMemoryEnterpriseRoleStore()
+    await store.upsert_role(role_id="analyst", name="Analyst")
+
+    with pytest.raises(DatusException, match="Role not found: missing"):
+        await store.set_user_roles("alice", ["analyst", "missing"])
+
+    assert await store.list_user_roles("alice") == []
+
+
+@pytest.mark.asyncio
 async def test_sqlite_session_owner_store_persists_session_owners(tmp_path):
     db_path = tmp_path / "session_owners.db"
     store = SqliteSessionOwnerStore(str(db_path))
@@ -232,3 +244,16 @@ async def test_sqlite_enterprise_role_store_persists_user_role_bindings(tmp_path
     assert await reopened.list_user_roles("alice") == ["viewer"]
     assert await reopened.list_role_users("analyst") == []
     assert await reopened.delete_role("analyst") is True
+
+
+@pytest.mark.asyncio
+async def test_sqlite_enterprise_role_store_rejects_missing_user_role_binding(tmp_path):
+    db_path = tmp_path / "enterprise_roles.db"
+    store = SqliteEnterpriseRoleStore(str(db_path))
+    await store.upsert_role(role_id="analyst", name="Analyst")
+
+    with pytest.raises(DatusException, match="Role not found: missing"):
+        await store.set_user_roles("alice", ["analyst", "missing"])
+
+    reopened = SqliteEnterpriseRoleStore(str(db_path))
+    assert await reopened.list_user_roles("alice") == []

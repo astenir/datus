@@ -213,6 +213,37 @@ def test_admin_role_delete_rejects_assigned_role(monkeypatch):
     assert audit_sink.events[-1].metadata["assigned_user_count"] == 1
 
 
+def test_admin_role_delete_rechecks_bindings_when_store_returns_false(monkeypatch):
+    class RaceRoleStore(InMemoryEnterpriseRoleStore):
+        def __init__(self):
+            super().__init__()
+            self._list_calls = 0
+
+        async def list_role_users(self, role_id):
+            self._list_calls += 1
+            if self._list_calls == 1:
+                return []
+            return ["alice"]
+
+        async def delete_role(self, role_id):
+            return False
+
+    role_store = RaceRoleStore()
+    audit_sink = CollectingAuditSink()
+    _install_extensions(monkeypatch, role_store, audit_sink)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.roles"})
+    asyncio.run(role_store.upsert_role(role_id="analyst", name="Analyst"))
+
+    with _client(ctx) as client:
+        response = client.delete("/api/v1/admin/roles/analyst")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert response.json()["errorCode"] == "ROLE_DELETE_FORBIDDEN"
+    assert audit_sink.events[-1].decision == "deny"
+    assert audit_sink.events[-1].reason == "role has assigned users"
+
+
 def test_admin_role_missing_invalid_and_permission_validation(monkeypatch):
     audit_sink = CollectingAuditSink()
     _install_extensions(monkeypatch, InMemoryEnterpriseRoleStore(), audit_sink)
