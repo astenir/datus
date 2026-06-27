@@ -133,6 +133,19 @@ async def stop_admin_session(
 
     stopped = await svc.task_manager.stop_task(session_id)
     after = await _resolve_session_detail(svc, session_id)
+    if not stopped:
+        await _audit_session_mutation(
+            ctx,
+            session_id=session_id,
+            operation="stop_admin_session",
+            decision="deny",
+            reason="session not running",
+            old_summary=_summary_for_audit(before),
+            new_summary=_summary_for_audit(after),
+            metadata={"stopped": False},
+        )
+        return _session_error("SESSION_NOT_RUNNING", f"Session {session_id} is not currently running")
+
     await _audit_session_mutation(
         ctx,
         session_id=session_id,
@@ -142,8 +155,6 @@ async def stop_admin_session(
         new_summary=_summary_for_audit(after),
         metadata={"stopped": stopped},
     )
-    if not stopped:
-        return _session_error("SESSION_NOT_RUNNING", f"Session {session_id} is not currently running")
     return Result(success=True, data={"session_id": session_id, "stopped": True})
 
 
@@ -173,6 +184,7 @@ async def delete_admin_session(
 
     if before.is_running:
         await svc.task_manager.stop_task(session_id)
+        await svc.task_manager.discard_task_snapshot(session_id, wait=True, timeout=_SESSION_IO_TIMEOUT)
 
     try:
         result = await asyncio.wait_for(
@@ -202,6 +214,7 @@ async def delete_admin_session(
         return Result(success=False, errorCode=result.errorCode, errorMessage=result.errorMessage)
 
     await deps.get_enterprise_extensions().session_owner_store.delete_owner(svc.project_id, session_id)
+    await svc.task_manager.discard_task_snapshot(session_id)
     await _audit_session_mutation(
         ctx,
         session_id=session_id,
@@ -330,7 +343,7 @@ async def _summary_from_record_and_task(
     session_id = str(record["session_id"])
     exists_on_disk = None
     if owner_user_id is not None:
-        exists_on_disk = await asyncio.to_thread(svc.chat.session_exists, session_id, user_id=owner_user_id)
+        exists_on_disk = await _safe_session_exists(svc, session_id, owner_user_id)
 
     return AdminSessionSummary(
         session_id=session_id,
@@ -342,6 +355,13 @@ async def _summary_from_record_and_task(
         event_count=int((task or {}).get("event_count") or 0),
         exists_on_disk=exists_on_disk,
     )
+
+
+async def _safe_session_exists(svc: ServiceDep, session_id: str, owner_user_id: str) -> bool:
+    try:
+        return bool(await asyncio.to_thread(svc.chat.session_exists, session_id, user_id=owner_user_id))
+    except Exception:
+        return False
 
 
 async def _audit_session_mutation(

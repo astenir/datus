@@ -665,6 +665,20 @@ class TestStartChat:
         assert task.owner_user_id == "alice@example.com"
         assert await owner_store.get_owner("project-1", "owned-session") == "alice@example.com"
 
+    async def test_start_chat_rejects_invalid_session_id_before_owner_write(self, real_agent_config):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+        from datus.api.models.cli_models import StreamChatInput
+
+        owner_store = InMemorySessionOwnerStore()
+        manager = ChatTaskManager(project_id="project-1", session_owner_store=owner_store)
+        request = StreamChatInput(message="hello", session_id="bad/session")
+
+        with pytest.raises(ValueError, match="Invalid session ID"):
+            await manager.start_chat(real_agent_config, request, user_id="alice")
+
+        assert manager._tasks == {}
+        assert await owner_store.list_sessions("project-1") == []
+
     async def test_start_chat_creates_task(self, real_agent_config, mock_llm_create):
         """start_chat creates a ChatTask and returns it."""
         from datus.api.models.cli_models import StreamChatInput

@@ -38,6 +38,14 @@ class DummyAsyncioTask:
         self.cancelled = True
 
 
+class CompletedAsyncioTask:
+    def done(self):
+        return True
+
+    def cancel(self):
+        return None
+
+
 class FakeChatService:
     def __init__(self, existing=None):
         self.existing = dict(existing or {})
@@ -113,6 +121,13 @@ def _add_running_task(manager, session_id, owner_user_id):
     task = ChatTask(session_id=session_id, asyncio_task=asyncio_task, owner_user_id=owner_user_id)
     manager._tasks[session_id] = task
     return task, asyncio_task
+
+
+def _add_completed_task(manager, session_id, owner_user_id):
+    task = ChatTask(session_id=session_id, asyncio_task=CompletedAsyncioTask(), owner_user_id=owner_user_id)
+    task.status = "completed"
+    manager._completed_tasks[session_id] = task
+    return task
 
 
 def test_admin_sessions_rejects_without_permission(monkeypatch):
@@ -248,6 +263,26 @@ def test_admin_session_stop_cancels_running_task_and_audits(monkeypatch):
     assert audit_sink.events[-1].metadata["stopped"] is True
 
 
+def test_admin_session_stop_not_running_audits_deny_noop(monkeypatch):
+    owner_store = InMemorySessionOwnerStore()
+    asyncio.run(owner_store.set_owner("project", "s1", "alice"))
+    audit_sink = CollectingAuditSink()
+    _install_extensions(monkeypatch, owner_store, audit_sink)
+    svc = _svc(existing={("alice", "s1"): True})
+    ctx = AppContext(user_id="operator", permissions={"module.admin.sessions"})
+
+    with _client(ctx, svc) as client:
+        response = client.post("/api/v1/admin/sessions/s1/stop")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "SESSION_NOT_RUNNING"
+    assert audit_sink.events[-1].decision == "deny"
+    assert audit_sink.events[-1].reason == "session not running"
+    assert audit_sink.events[-1].metadata["stopped"] is False
+
+
 def test_admin_session_delete_uses_recorded_owner_scope_and_removes_owner(monkeypatch):
     owner_store = InMemorySessionOwnerStore()
     asyncio.run(owner_store.set_owner("project", "s1", "alice"))
@@ -272,6 +307,44 @@ def test_admin_session_delete_uses_recorded_owner_scope_and_removes_owner(monkey
     assert audit_sink.events[-1].metadata["operation"] == "delete_admin_session"
     assert audit_sink.events[-1].metadata["old"]["owner_user_id"] == "alice"
     assert audit_sink.events[-1].metadata["new"] == {"deleted": True}
+
+
+def test_admin_session_delete_removes_completed_task_snapshot(monkeypatch):
+    owner_store = InMemorySessionOwnerStore()
+    asyncio.run(owner_store.set_owner("project", "s1", "alice"))
+    audit_sink = CollectingAuditSink()
+    _install_extensions(monkeypatch, owner_store, audit_sink)
+    svc = _svc(existing={("alice", "s1"): True})
+    _add_completed_task(svc.task_manager, "s1", "alice")
+    ctx = AppContext(user_id="operator", permissions={"module.admin.sessions"})
+
+    with _client(ctx, svc) as client:
+        delete_response = client.delete("/api/v1/admin/sessions/s1")
+        list_response = client.get("/api/v1/admin/sessions")
+        detail_response = client.get("/api/v1/admin/sessions/s1")
+
+    assert delete_response.status_code == 200
+    assert list_response.json()["data"] == []
+    assert detail_response.json()["success"] is False
+    assert detail_response.json()["errorCode"] == "RESOURCE_NOT_FOUND"
+
+
+def test_admin_sessions_list_handles_invalid_owner_record_session_id(monkeypatch):
+    owner_store = InMemorySessionOwnerStore()
+    asyncio.run(owner_store.set_owner("project", "bad/session", "alice"))
+    audit_sink = CollectingAuditSink()
+    _install_extensions(monkeypatch, owner_store, audit_sink)
+    svc = _svc(existing={})
+    ctx = AppContext(user_id="operator", permissions={"module.admin.sessions"})
+
+    with _client(ctx, svc) as client:
+        response = client.get("/api/v1/admin/sessions")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"][0]["session_id"] == "bad/session"
+    assert body["data"][0]["exists_on_disk"] is False
 
 
 def test_admin_session_routes_register_expected_paths():
