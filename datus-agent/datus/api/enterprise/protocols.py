@@ -59,6 +59,39 @@ class EnterpriseUserStore(Protocol):
 
 
 @runtime_checkable
+class EnterpriseRoleStore(Protocol):
+    """Persist and query enterprise role metadata and permission sets."""
+
+    async def list_roles(self) -> list[dict[str, Any]]:
+        """Return role records."""
+        ...
+
+    async def get_role(self, role_id: str) -> dict[str, Any] | None:
+        """Return one role record, if present."""
+        ...
+
+    async def upsert_role(
+        self,
+        *,
+        role_id: str,
+        name: str,
+        description: str | None = None,
+        permissions: list[str] | None = None,
+        built_in: bool = False,
+    ) -> dict[str, Any]:
+        """Create or update a role and its permission set."""
+        ...
+
+    async def set_role_permissions(self, role_id: str, permissions: list[str]) -> dict[str, Any] | None:
+        """Replace a role permission set."""
+        ...
+
+    async def delete_role(self, role_id: str) -> bool:
+        """Delete one role record and its permission set."""
+        ...
+
+
+@runtime_checkable
 class SessionOwnerStore(Protocol):
     """Persist and query session owner metadata."""
 

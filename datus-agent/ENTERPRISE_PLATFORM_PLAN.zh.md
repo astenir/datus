@@ -978,7 +978,8 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - KB route 已接入 `module.kb`，覆盖 KB bootstrap、platform docs bootstrap 和对应 cancel 接口。
 - MCP route 已接入 `module.mcp`，覆盖 MCP server/tool/filter 的列表、管理和调用接口。
 - 当前已注册的 datasource admin route `/api/v1/admin/datasource-default` 已接入 `module.admin.datasources`，用于项目级默认数据源管理。
-- 其余 admin users/roles/datasource grants/sessions/artifacts/audit/quotas/secrets API 仍按阶段 6 推进；本阶段没有引入 datasource grant、请求级 config projection 或 SQL policy report/dashboard/direct SQL 兜底。
+- 当前已注册的 user/role admin route 已分别接入 `module.admin.users` 和 `module.admin.roles`，用于阶段 6 的用户状态、role metadata 和 role permission set 管理。
+- 其余 admin datasource grants/sessions/artifacts/audit/quotas/secrets API 仍按阶段 6 推进；本阶段没有引入 datasource grant、请求级 config projection 或 SQL policy report/dashboard/direct SQL 兜底。
 
 验收：
 
@@ -1047,6 +1048,9 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - 已注册 `/api/v1/admin/users`、`/api/v1/admin/users/{user_id}`、`/api/v1/admin/users/{user_id}/disable` 和 `/api/v1/admin/users/{user_id}/enable`，统一要求 `module.admin.users`，企业上下文只来自认证后的 `AppContext`，不从路径或请求体传入。
 - 用户管理接口返回稳定 `Result` 错误码：`USER_ID_INVALID`、`RESOURCE_NOT_FOUND`、`USER_LIST_FAILED`、`USER_READ_FAILED`、`USER_UPSERT_FAILED`、`USER_UPDATE_FAILED`；管理 allow/deny 使用 `module.admin.users` 写入审计，metadata 只包含脱敏的新旧摘要。
 - `enterprise.enabled=true` 的新请求会检查用户状态：缺少 `user_id` 返回 `AUTH_REQUIRED`，已存在且被禁用的用户返回 `USER_DISABLED`，用户状态存储不可用时返回 `USER_STATUS_UNAVAILABLE` 并审计 deny。未录入用户仍允许通过，以兼容已有 identity-only auth provider；完整角色、权限和 datasource grant 绑定继续作为后续阶段 6 子任务推进。
+- 已新增 `EnterpriseRoleStore` 协议，以及本地兼容的内存实现和单节点 SQLite `enterprise_roles` / `enterprise_role_permissions` 骨架；企业模式下可通过 `enterprise.role_store.class` 替换为生产 metadata store。
+- 已注册 `/api/v1/admin/roles`、`/api/v1/admin/roles/{role_id}` 和 `/api/v1/admin/roles/{role_id}/permissions`，统一要求 `module.admin.roles`；本切片只管理 role metadata 与 permission set，不做用户-role 绑定，也不把新权限自动合并进当前请求的 `AppContext`。
+- 角色管理接口返回稳定 `Result` 错误码：`ROLE_ID_INVALID`、`ROLE_NAME_INVALID`、`ROLE_PERMISSION_INVALID`、`RESOURCE_NOT_FOUND`、`ROLE_LIST_FAILED`、`ROLE_READ_FAILED`、`ROLE_UPSERT_FAILED`、`ROLE_UPDATE_FAILED`、`ROLE_DELETE_FAILED`、`ROLE_DELETE_FORBIDDEN`；管理 allow/deny 使用 `module.admin.roles` 写入审计，metadata 只包含脱敏的新旧摘要。
 
 验收：
 

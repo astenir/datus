@@ -2,9 +2,11 @@ import pytest
 
 from datus.api.auth.context import AppContext
 from datus.api.enterprise.defaults import (
+    InMemoryEnterpriseRoleStore,
     InMemoryEnterpriseUserStore,
     InMemorySessionOwnerStore,
     LocalAuthorizationProvider,
+    SqliteEnterpriseRoleStore,
     SqliteEnterpriseUserStore,
     SqliteSessionOwnerStore,
 )
@@ -91,6 +93,29 @@ async def test_in_memory_enterprise_user_store_supports_upsert_and_enabled_filte
 
 
 @pytest.mark.asyncio
+async def test_in_memory_enterprise_role_store_supports_permissions_and_delete():
+    store = InMemoryEnterpriseRoleStore()
+
+    analyst = await store.upsert_role(
+        role_id="analyst",
+        name="Analyst",
+        description="Can analyze data",
+        permissions=["module.chat", "module.sql_executor", "module.chat"],
+    )
+
+    assert analyst["permissions"] == ["module.chat", "module.sql_executor"]
+    assert await store.get_role("analyst") == analyst
+    assert [role["role_id"] for role in await store.list_roles()] == ["analyst"]
+
+    updated = await store.set_role_permissions("analyst", ["module.dashboard.query"])
+    assert updated["permissions"] == ["module.dashboard.query"]
+    assert await store.set_role_permissions("missing", ["module.chat"]) is None
+
+    assert await store.delete_role("analyst") is True
+    assert await store.delete_role("analyst") is False
+
+
+@pytest.mark.asyncio
 async def test_sqlite_session_owner_store_persists_session_owners(tmp_path):
     db_path = tmp_path / "session_owners.db"
     store = SqliteSessionOwnerStore(str(db_path))
@@ -139,3 +164,33 @@ async def test_sqlite_enterprise_user_store_persists_users(tmp_path):
     enabled = await reopened.set_user_enabled("alice", True)
     assert enabled["enabled"] is True
     assert await reopened.set_user_enabled("missing", False) is None
+
+
+@pytest.mark.asyncio
+async def test_sqlite_enterprise_role_store_persists_roles_and_permissions(tmp_path):
+    db_path = tmp_path / "enterprise_roles.db"
+    store = SqliteEnterpriseRoleStore(str(db_path))
+
+    await store.upsert_role(
+        role_id="analyst",
+        name="Analyst",
+        description="Can analyze data",
+        permissions=["module.sql_executor", "module.chat"],
+    )
+    await store.upsert_role(role_id="viewer", name="Viewer", permissions=["module.report.view"], built_in=True)
+    await store.set_role_permissions("analyst", ["module.dashboard.query", "module.report.query"])
+
+    reopened = SqliteEnterpriseRoleStore(str(db_path))
+    analyst = await reopened.get_role("analyst")
+    assert analyst["name"] == "Analyst"
+    assert analyst["description"] == "Can analyze data"
+    assert analyst["permissions"] == ["module.dashboard.query", "module.report.query"]
+    assert analyst["built_in"] is False
+    assert analyst["created_at"]
+    assert analyst["updated_at"]
+    assert [role["role_id"] for role in await reopened.list_roles()] == ["analyst", "viewer"]
+    assert (await reopened.get_role("viewer"))["built_in"] is True
+
+    assert await reopened.delete_role("analyst") is True
+    assert await reopened.get_role("analyst") is None
+    assert await reopened.delete_role("missing") is False

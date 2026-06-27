@@ -1,10 +1,14 @@
 """Enterprise extension interfaces and local-compatible defaults."""
 
 from datus.api.enterprise.defaults import (
+    InMemoryEnterpriseRoleStore,
+    InMemoryEnterpriseUserStore,
     InMemorySessionOwnerStore,
     LocalAuthorizationProvider,
     NoopAuditSink,
     PassthroughConfigProjector,
+    SqliteEnterpriseRoleStore,
+    SqliteEnterpriseUserStore,
     SqliteSessionOwnerStore,
 )
 from datus.api.enterprise.deps import (
@@ -28,6 +32,8 @@ from datus.api.enterprise.protocols import (
     AuditSink,
     AuthorizationProvider,
     ConfigProjector,
+    EnterpriseRoleStore,
+    EnterpriseUserStore,
     SessionOwnerStore,
 )
 
@@ -40,6 +46,10 @@ __all__ = [
     "AuthorizationProvider",
     "ConfigProjector",
     "EnterpriseExtensions",
+    "EnterpriseRoleStore",
+    "EnterpriseUserStore",
+    "InMemoryEnterpriseRoleStore",
+    "InMemoryEnterpriseUserStore",
     "InMemorySessionOwnerStore",
     "LocalAuthorizationProvider",
     "NoopAuditSink",
@@ -49,6 +59,8 @@ __all__ = [
     "ResourceRef",
     "SessionOwnerStore",
     "SessionAccess",
+    "SqliteEnterpriseRoleStore",
+    "SqliteEnterpriseUserStore",
     "SqliteSessionOwnerStore",
     "authorize",
     "authorize_session_access",
