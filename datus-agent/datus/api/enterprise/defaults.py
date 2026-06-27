@@ -571,6 +571,68 @@ class InMemoryEnterpriseDatasourceGrantStore:
         return self._grants.pop((subject_type, subject_id, datasource_key), None) is not None
 
 
+class InMemoryEnterpriseQuotaStore:
+    """Process-local quota metadata and usage store for tests and local mode."""
+
+    def __init__(self) -> None:
+        self._quotas: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._usage: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    async def list_quotas(
+        self,
+        *,
+        subject_type: str | None = None,
+        subject_id: str | None = None,
+        resource: str | None = None,
+    ) -> list[dict[str, Any]]:
+        records = [
+            _copy_quota_record(record)
+            for record in self._quotas.values()
+            if _quota_filter_matches(record, subject_type=subject_type, subject_id=subject_id, resource=resource)
+        ]
+        return sorted(records, key=lambda record: (record["subject_type"], record["subject_id"], record["resource"]))
+
+    async def put_quota(
+        self,
+        *,
+        subject_type: str,
+        subject_id: str,
+        resource: str,
+        limit: int,
+        window_seconds: int,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        now = _sqlite_now()
+        key = (subject_type, subject_id, resource)
+        existing = self._quotas.get(key)
+        record = {
+            "subject_type": subject_type,
+            "subject_id": subject_id,
+            "resource": resource,
+            "limit": int(limit),
+            "window_seconds": int(window_seconds),
+            "enabled": bool(enabled),
+            "created_at": str(existing.get("created_at")) if existing else now,
+            "updated_at": now,
+        }
+        self._quotas[key] = record
+        return _copy_quota_record(record)
+
+    async def list_usage(
+        self,
+        *,
+        subject_type: str | None = None,
+        subject_id: str | None = None,
+        resource: str | None = None,
+    ) -> list[dict[str, Any]]:
+        usage = [
+            copy.deepcopy(record)
+            for record in self._usage.values()
+            if _quota_filter_matches(record, subject_type=subject_type, subject_id=subject_id, resource=resource)
+        ]
+        return sorted(usage, key=lambda record: (record["subject_type"], record["subject_id"], record["resource"]))
+
+
 class SqliteEnterpriseDatasourceGrantStore:
     """SQLite-backed datasource grant metadata store for single-node deployments."""
 
@@ -975,6 +1037,35 @@ def _copy_datasource_grant_record(record: dict[str, Any]) -> dict[str, Any]:
         "created_at": _optional_str(record.get("created_at")),
         "updated_at": _optional_str(record.get("updated_at")),
     }
+
+
+def _copy_quota_record(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "subject_type": str(record["subject_type"]),
+        "subject_id": str(record["subject_id"]),
+        "resource": str(record["resource"]),
+        "limit": int(record["limit"]),
+        "window_seconds": int(record["window_seconds"]),
+        "enabled": bool(record["enabled"]),
+        "created_at": _optional_str(record.get("created_at")),
+        "updated_at": _optional_str(record.get("updated_at")),
+    }
+
+
+def _quota_filter_matches(
+    record: dict[str, Any],
+    *,
+    subject_type: str | None = None,
+    subject_id: str | None = None,
+    resource: str | None = None,
+) -> bool:
+    if subject_type is not None and record.get("subject_type") != subject_type:
+        return False
+    if subject_id is not None and record.get("subject_id") != subject_id:
+        return False
+    if resource is not None and record.get("resource") != resource:
+        return False
+    return True
 
 
 def _datasource_grant_record_from_row(row) -> dict[str, Any]:

@@ -151,6 +151,44 @@ class EnterpriseDatasourceGrantStore(Protocol):
 
 
 @runtime_checkable
+class EnterpriseQuotaStore(Protocol):
+    """Persist and query enterprise quota metadata and usage summaries."""
+
+    async def list_quotas(
+        self,
+        *,
+        subject_type: str | None = None,
+        subject_id: str | None = None,
+        resource: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return quota records filtered by optional fields."""
+        ...
+
+    async def put_quota(
+        self,
+        *,
+        subject_type: str,
+        subject_id: str,
+        resource: str,
+        limit: int,
+        window_seconds: int,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        """Create or replace one quota record."""
+        ...
+
+    async def list_usage(
+        self,
+        *,
+        subject_type: str | None = None,
+        subject_id: str | None = None,
+        resource: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return usage counters filtered by optional fields."""
+        ...
+
+
+@runtime_checkable
 class SessionOwnerStore(Protocol):
     """Persist and query session owner metadata."""
 

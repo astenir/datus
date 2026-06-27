@@ -93,6 +93,17 @@ class _DatasourceGrantStore:
         return False
 
 
+class _QuotaStore:
+    async def list_quotas(self, *, subject_type=None, subject_id=None, resource=None):
+        return []
+
+    async def put_quota(self, *, subject_type, subject_id, resource, limit, window_seconds, enabled=True):
+        return {}
+
+    async def list_usage(self, *, subject_type=None, subject_id=None, resource=None):
+        return []
+
+
 class _ArtifactAclStore:
     async def get_acl(self, *, artifact_type, slug):
         return {}
@@ -130,6 +141,7 @@ def fake_module():
     mod.UserStore = _UserStore
     mod.RoleStore = _RoleStore
     mod.DatasourceGrantStore = _DatasourceGrantStore
+    mod.QuotaStore = _QuotaStore
     mod.ArtifactAclStore = _ArtifactAclStore
     mod.LegacyOwnerStore = _LegacyOwnerStore
     mod.OwnerStore = _OwnerStore
@@ -150,6 +162,7 @@ def test_disabled_enterprise_loads_local_defaults():
     assert extensions.session_owner_store is not None
     assert extensions.audit_sink is not None
     assert extensions.artifact_acl_store is None
+    assert extensions.quota_store is None
 
 
 def test_enabled_enterprise_requires_core_providers():
@@ -184,6 +197,7 @@ def test_enabled_enterprise_uses_passthrough_projector_when_projection_not_confi
     assert isinstance(extensions.role_store, InMemoryEnterpriseRoleStore)
     assert isinstance(extensions.datasource_grant_store, _DatasourceGrantStore)
     assert extensions.artifact_acl_store is None
+    assert extensions.quota_store is None
 
 
 def test_enabled_enterprise_loads_configured_core_providers(fake_module):
@@ -196,6 +210,7 @@ def test_enabled_enterprise_loads_configured_core_providers(fake_module):
             "role_store": {"class": f"{fake_module}.RoleStore"},
             "datasource_grant_store": {"class": f"{fake_module}.DatasourceGrantStore"},
             "artifact_acl_store": {"class": f"{fake_module}.ArtifactAclStore"},
+            "quota_store": {"class": f"{fake_module}.QuotaStore"},
             "audit_sink": {"class": f"{fake_module}.Audit"},
             "session_owner_store": {"class": f"{fake_module}.OwnerStore"},
         }
@@ -209,6 +224,7 @@ def test_enabled_enterprise_loads_configured_core_providers(fake_module):
     assert isinstance(extensions.datasource_grant_store, _DatasourceGrantStore)
     assert isinstance(extensions.audit_sink, _Audit)
     assert isinstance(extensions.artifact_acl_store, _ArtifactAclStore)
+    assert isinstance(extensions.quota_store, _QuotaStore)
     assert isinstance(extensions.session_owner_store, _OwnerStore)
 
 

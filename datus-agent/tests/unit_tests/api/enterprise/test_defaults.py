@@ -6,6 +6,7 @@ import pytest
 from datus.api.auth.context import AppContext
 from datus.api.enterprise.defaults import (
     InMemoryEnterpriseDatasourceGrantStore,
+    InMemoryEnterpriseQuotaStore,
     InMemoryEnterpriseRoleStore,
     InMemoryEnterpriseUserStore,
     InMemorySessionOwnerStore,
@@ -209,6 +210,44 @@ async def test_in_memory_datasource_grant_store_rejects_invalid_effect_or_scope(
             effect="allow",
             scope=[],
         )
+
+
+@pytest.mark.asyncio
+async def test_in_memory_quota_store_upserts_filters_and_lists_usage():
+    store = InMemoryEnterpriseQuotaStore()
+
+    created = await store.put_quota(
+        subject_type="user",
+        subject_id="alice",
+        resource="llm.tokens",
+        limit=1000,
+        window_seconds=3600,
+    )
+    replaced = await store.put_quota(
+        subject_type="user",
+        subject_id="alice",
+        resource="llm.tokens",
+        limit=2000,
+        window_seconds=86400,
+        enabled=False,
+    )
+    await store.put_quota(
+        subject_type="role",
+        subject_id="analyst",
+        resource="sql.query",
+        limit=100,
+        window_seconds=3600,
+    )
+
+    assert created["enabled"] is True
+    assert replaced["limit"] == 2000
+    assert replaced["enabled"] is False
+    assert [
+        (quota["subject_type"], quota["subject_id"], quota["resource"])
+        for quota in await store.list_quotas(subject_type="user")
+    ] == [("user", "alice", "llm.tokens")]
+    assert len(await store.list_quotas()) == 2
+    assert await store.list_usage(subject_type="user", subject_id="alice", resource="llm.tokens") == []
 
 
 @pytest.mark.asyncio
