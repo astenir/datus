@@ -52,6 +52,7 @@ from datus.api.models.cli_models import (
     SSEErrorData,
     SSEEvent,
     StreamChatInput,
+    UserInteractionData,
     UserInteractionInput,
 )
 from datus.api.services.background_drain import track_background_task
@@ -72,6 +73,19 @@ if TYPE_CHECKING:
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 ChatModuleCtx = Annotated[AppContext, Depends(require_module("module.chat"))]
+SSE_RESPONSE = {
+    200: {
+        "description": "Server-Sent Events stream",
+        "content": {
+            "text/event-stream": {
+                "schema": {
+                    "type": "string",
+                    "description": "SSE frames encoded as id/event/data lines. See docs/API/chat.md.",
+                }
+            }
+        },
+    }
+}
 
 # Timeout for JuiceFS FUSE operations: os.listdir + sqlite3.connect per session file.
 # Slightly above fuse_meta_op's 10 s default to give directory scans extra headroom.
@@ -354,6 +368,8 @@ def _principal_path_exists(principal: dict[str, Any], path: str) -> bool:
     summary="Stream Chat Message",
     description="Send chat message with streaming response (Server-Sent Events). "
     "Set subagent_id to route to a specific sub-agent.",
+    response_class=StreamingResponse,
+    responses=SSE_RESPONSE,
 )
 async def stream_chat(
     request: StreamChatInput,
@@ -493,6 +509,8 @@ async def stream_chat(
         "The server builds the canonical user prompt from reaction_emoji/reference_msg/reaction_msg "
         "and routes the request to the feedback sub-agent, which copies the source session and archives reusable knowledge."
     ),
+    response_class=StreamingResponse,
+    responses=SSE_RESPONSE,
 )
 async def stream_chat_feedback(
     request: FeedbackChatInput,
@@ -616,6 +634,8 @@ async def stream_chat_feedback(
     "/resume",
     summary="Resume Chat Session",
     description="Reconnect to a running chat task and consume events from a given cursor",
+    response_class=StreamingResponse,
+    responses=SSE_RESPONSE,
 )
 async def resume_chat(
     request: ResumeChatInput,
@@ -808,7 +828,7 @@ async def get_chat_history(
 
 @router.post(
     "/user_interaction",
-    response_model=Result[dict],
+    response_model=Result[UserInteractionData],
     summary="Submit User Interaction",
     description="Submit user's choice or input for an interactive dialog",
 )
@@ -816,7 +836,7 @@ async def submit_user_interaction(
     request: UserInteractionInput,
     svc: ServiceDep,
     ctx: ChatModuleCtx,
-) -> Result[dict]:
+) -> Result[UserInteractionData]:
     access = await authorize_session_access(svc, ctx, request.session_id, action="user_interaction")
     if access.error:
         return access.error
@@ -824,7 +844,7 @@ async def submit_user_interaction(
     task_manager = svc.task_manager
     task = task_manager.get_task(request.session_id)
     if task is None or task.node is None:
-        return Result[dict](
+        return Result[UserInteractionData](
             success=False,
             errorCode="SESSION_NOT_FOUND",
             errorMessage="No active task found for this session",
@@ -832,7 +852,7 @@ async def submit_user_interaction(
 
     broker = task.node.interaction_broker
     if not broker:
-        return Result[dict](
+        return Result[UserInteractionData](
             success=False,
             errorCode="BROKER_NOT_FOUND",
             errorMessage="Interaction broker not found for this session",
@@ -840,16 +860,16 @@ async def submit_user_interaction(
 
     # Validate: each answer must be non-empty
     if not request.input or any(len(ans) == 0 for ans in request.input):
-        return Result[dict](
+        return Result[UserInteractionData](
             success=False,
             errorCode="INVALID_INPUT",
             errorMessage="Each answer must contain at least one value",
         )
 
     success = await broker.submit(request.interaction_key, request.input)
-    return Result[dict](
+    return Result[UserInteractionData](
         success=success,
-        data={"interaction_key": request.interaction_key, "submitted": success},
+        data=UserInteractionData(interaction_key=request.interaction_key, submitted=success),
     )
 
 
@@ -948,7 +968,7 @@ def _sse_headers() -> dict:
     return {
         "Cache-Control": "no-cache",
         "Connection": "keep-alive",
-        "Access-Control-Allow-Origin": "*",
+        "X-Accel-Buffering": "no",
         "Content-Type": "text/event-stream; charset=utf-8",
     }
 

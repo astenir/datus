@@ -1,147 +1,89 @@
 # Datus Agent API Server
 
-A FastAPI-based HTTP server that provides REST API access to the Datus Agent functionality.
+This package contains the FastAPI HTTP service used by web frontends, services, and automation.
+
+The current server entry point is the `datus-api` console script, backed by `datus.api.main`.
 
 ## Quick Start
 
-### Foreground Mode
+Install dependencies once:
+
 ```bash
-python datus/api/server.py
+uv sync
 ```
 
-### Daemon Mode
+Start the API server in the foreground:
+
 ```bash
-# Start the server in background
-python datus/api/server.py --daemon
-
-# Check server status
-python datus/api/server.py --action status
-
-# Stop the server
-python datus/api/server.py --action stop
-
-# Restart the server
-python datus/api/server.py --action restart
+uv run datus-api --host 127.0.0.1 --port 8000
 ```
 
-## Configuration
+Start with a specific datasource and streaming thinking deltas enabled:
 
-### Basic Options
 ```bash
-python datus/api/server.py \
-  --host 0.0.0.0 \
+uv run datus-api \
+  --host 127.0.0.1 \
   --port 8000 \
-  --workers 4 \
-  --log-level info
+  --datasource <your_datasource> \
+  --stream
 ```
 
-### Agent Configuration
+Enable auto-reload for backend development:
+
 ```bash
-python datus/api/server.py \
-  --datasource your_datasource \
-  --config conf/agent.yml \
-  --max_steps 20 \
-  --workflow fixed
+uv run datus-api --host 127.0.0.1 --port 8000 --reload
 ```
 
-### Daemon Options
+## Frontend Integration
+
+The frontend-facing API contract is exposed by FastAPI:
+
+- Swagger UI: `http://127.0.0.1:8000/docs`
+- OpenAPI schema: `http://127.0.0.1:8000/openapi.json`
+- Health check: `http://127.0.0.1:8000/health`
+
+Most JSON endpoints live under `/api/v1` and return the `Result[T]` envelope:
+
+```json
+{
+  "success": true,
+  "data": {},
+  "errorCode": null,
+  "errorMessage": null
+}
+```
+
+Streaming endpoints such as `POST /api/v1/chat/stream` and `POST /api/v1/kb/bootstrap` return
+`text/event-stream` instead of the JSON envelope. See `docs/API/chat.md` and
+`docs/API/knowledge_base.md` for the event grammar.
+
+For local Vue/Vite development, either use a Vite proxy or restrict CORS explicitly:
+
 ```bash
-python datus/api/server.py \
-  --daemon \
-  --pid-file /custom/path/server.pid \
-  --daemon-log-file /custom/path/server.log
+DATUS_CORS_ORIGINS=http://127.0.0.1:5173 \
+  uv run datus-api --host 127.0.0.1 --port 8000
 ```
 
-## Default Paths
+## Common Endpoints
 
-- **API Endpoint**: `http://localhost:8000`
-- **PID File**: `~/.datus/run/datus-agent-api.pid`
-- **Log File**: `logs/datus-agent-api.log`
+- `GET /health`
+- `GET /docs`
+- `GET /openapi.json`
+- `POST /api/v1/chat/stream`
+- `POST /api/v1/chat/resume`
+- `POST /api/v1/chat/stop`
+- `GET /api/v1/chat/sessions`
+- `GET /api/v1/chat/history?session_id=...`
+- `GET /api/v1/catalog/list`
+- `GET /api/v1/models`
+- `GET /api/v1/agent/list`
+- `GET /api/v1/config/agent`
 
-## API Endpoints
+## More Documentation
 
-Once the server is running, you can access:
+Use the maintained API docs as the canonical reference:
 
-- **Interactive Docs**: `http://localhost:8000/docs`
-- **Health Check**: `GET /health`
-- **Authentication**: `POST /auth/token`
-- **Workflow Execution**: `POST /workflows/run`
-- **Feedback Recording**: `POST /workflows/feedback`
-
-## Usage Examples
-
-### Health Check
-```bash
-curl http://localhost:8000/health
-```
-
-### Get Access Token
-```bash
-curl -X POST "http://localhost:8000/auth/token" \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "grant_type=client_credentials&client_id=your_id&client_secret=your_secret"
-```
-
-### Run Workflow (Synchronous)
-```bash
-curl -X POST "http://localhost:8000/workflows/run" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "task": "Find all users from database",
-    "datasource": "your_datasource",
-    "workflow": "workflow_name",
-    "mode": "sync"
-  }'
-```
-
-### Run Workflow (Streaming)
-```bash
-curl -X POST "http://localhost:8000/workflows/run" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -H "Accept: text/event-stream" \
-  -d '{
-    "task": "Find all users from database",
-    "datasource": "your_datasource",
-    "workflow": "workflow_name",
-    "mode": "async"
-  }'
-```
-
-### Record Feedback
-```bash
-curl -X POST "http://localhost:8000/workflows/feedback" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "task_id": "your_task_id",
-    "status": "success"
-  }'
-```
-
-## Development Mode
-
-For development with auto-reload:
-```bash
-python datus/api/server.py --reload
-```
-
-Note: `--daemon` and `--reload` are mutually exclusive.
-
-## Troubleshooting
-
-### Check if server is running
-```bash
-python datus/api/server.py --action status
-```
-
-### View logs
-```bash
-tail -f logs/datus-agent-api.log
-```
-
-### Force stop
-```bash
-pkill -f "datus/api/server.py"
-```
+- `docs/API/introduction.md`
+- `docs/API/deployment.md`
+- `docs/API/chat.md`
+- `docs/API/knowledge_base.md`

@@ -23,12 +23,27 @@ from datus.utils.exceptions import DatusException
 
 router = APIRouter(prefix="/api/v1/kb", tags=["knowledge-base"])
 KbModuleCtx = Annotated[AppContext, Depends(require_module("module.kb"))]
+SSE_RESPONSE = {
+    200: {
+        "description": "Server-Sent Events progress stream",
+        "content": {
+            "text/event-stream": {
+                "schema": {
+                    "type": "string",
+                    "description": "SSE frames encoded as id/event/data lines. See docs/API/knowledge_base.md.",
+                }
+            }
+        },
+    }
+}
 
 
 @router.post(
     "/bootstrap",
     summary="Bootstrap Knowledge Base",
     description="Start KB bootstrap with SSE progress streaming",
+    response_class=StreamingResponse,
+    responses=SSE_RESPONSE,
 )
 async def bootstrap_kb(
     request: BootstrapKbInput,
@@ -62,7 +77,7 @@ async def bootstrap_kb(
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
+            "X-Accel-Buffering": "no",
             "Content-Type": "text/event-stream; charset=utf-8",
         },
     )
@@ -104,6 +119,8 @@ def _validate_paths(request: BootstrapKbInput, project_root: str) -> None:
     "/bootstrap-docs",
     summary="Bootstrap Platform Documentation",
     description="Start platform documentation bootstrap with SSE progress streaming",
+    response_class=StreamingResponse,
+    responses=SSE_RESPONSE,
 )
 async def bootstrap_docs(
     request: BootstrapDocInput,
@@ -148,7 +165,7 @@ async def bootstrap_docs(
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "Access-Control-Allow-Origin": "*",
+            "X-Accel-Buffering": "no",
             "Content-Type": "text/event-stream; charset=utf-8",
         },
     )

@@ -16,6 +16,7 @@ from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
 from datus.api.enterprise.deps import require_module
 from datus.api.models.base_models import Result
+from datus.api.models.config_models import AgentConfigSummaryData, MutationResultData, ProbeResultData
 from datus.configuration.agent_config import _SAFE_NAME_RE, DbConfig, load_model_config
 from datus.configuration.agent_config_loader import configuration_manager
 from datus.models.base import LLMBaseModel
@@ -121,14 +122,14 @@ async def _evict_current_project(project_id: str) -> None:
 
 @router.get(
     "/config/agent",
-    response_model=Result[dict],
+    response_model=Result[AgentConfigSummaryData],
     summary="Get Agent Configuration",
     description="Get the current project's agent configuration (models, datasource, agentic_nodes)",
 )
 async def get_agent_config_endpoint(
     svc: ServiceDep,
     _ctx: ConfigViewCtx,
-) -> Result[dict]:
+) -> Result[AgentConfigSummaryData]:
     """Return the project's loaded AgentConfig summary."""
     config = svc.agent_config
     flat_datasources: dict = {}
@@ -142,7 +143,7 @@ async def get_agent_config_endpoint(
         success=True,
         data={
             "target": config.target,
-            "models": config.models,
+            "models": config.models or {},
             "current_datasource": config.current_datasource,
             "datasources": flat_datasources,
             "home": config.home,
@@ -152,7 +153,7 @@ async def get_agent_config_endpoint(
 
 @router.put(
     "/config/datasources",
-    response_model=Result[dict],
+    response_model=Result[MutationResultData],
     summary="Update Datasources",
     description="Replace the datasources (services.datasources) block in agent.yml.",
 )
@@ -160,7 +161,7 @@ async def update_datasources_endpoint(
     body: UpdateDatasourcesRequest,
     svc: ServiceDep,  # noqa: ARG001  # populates request.state.app_context; must resolve before AppContextDep
     ctx: ConfigEditCtx,
-) -> Result[dict]:
+) -> Result[MutationResultData]:
     """Full-replace `services.datasources` with the provided datasources."""
     _validate_keys(body.datasources, kind="datasource")
 
@@ -176,7 +177,7 @@ async def update_datasources_endpoint(
 
 @router.put(
     "/config/models",
-    response_model=Result[dict],
+    response_model=Result[MutationResultData],
     summary="Update Models and Target",
     description="Replace the models block and/or update the default target in agent.yml.",
 )
@@ -184,7 +185,7 @@ async def update_models_endpoint(
     body: UpdateModelsRequest,
     svc: ServiceDep,  # noqa: ARG001
     ctx: ConfigEditCtx,
-) -> Result[dict]:
+) -> Result[MutationResultData]:
     """Optional full-replace `models`, optional update `target`. One must be set."""
     if body.models is None and body.target is None:
         raise DatusException(
@@ -218,7 +219,8 @@ async def update_models_endpoint(
 
 @router.post(
     "/config/models/test",
-    response_model=Result[dict],
+    response_model=Result[ProbeResultData],
+    response_model_exclude_none=True,
     summary="Test Model Connectivity",
     description="Send a tiny probe to verify an LLM model config is reachable.",
 )
@@ -226,7 +228,7 @@ async def probe_model_connectivity_endpoint(
     body: ProbeModelRequest,
     svc: ServiceDep,  # noqa: ARG001
     _ctx: ConfigEditCtx,
-) -> Result[dict]:
+) -> Result[ProbeResultData]:
     """Return `{ok: True}` if the probe succeeds, else `{ok: False, message: ...}`."""
     payload = body.model_dump()
     try:
@@ -239,7 +241,8 @@ async def probe_model_connectivity_endpoint(
 
 @router.post(
     "/config/datasources/test",
-    response_model=Result[dict],
+    response_model=Result[ProbeResultData],
+    response_model_exclude_none=True,
     summary="Test Datasource Connectivity",
     description="Run SELECT 1 against a datasource config to verify reachability and credentials.",
 )
@@ -247,7 +250,7 @@ async def probe_datasource_connectivity_endpoint(
     body: ProbeDatasourceRequest,
     svc: ServiceDep,  # noqa: ARG001
     _ctx: ConfigEditCtx,
-) -> Result[dict]:
+) -> Result[ProbeResultData]:
     """Return `{ok: True}` if the probe succeeds, else `{ok: False, message: ...}`."""
     payload = body.model_dump()
     try:

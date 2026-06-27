@@ -348,6 +348,13 @@ class UserInteractionInput(BaseModel):
         return v
 
 
+class UserInteractionData(BaseModel):
+    """Result for a submitted user interaction."""
+
+    interaction_key: str = Field(..., description="Interaction key that was submitted")
+    submitted: bool = Field(..., description="Whether the interaction answer was accepted")
+
+
 class StreamChatChunk(BaseModel):
     """Individual chunk in streaming chat response."""
 

@@ -1,7 +1,7 @@
 """Data models for unified agent configuration API endpoints."""
 
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -241,3 +241,28 @@ class ModelsData(BaseModel):
     current_model: Optional[str] = Field(None, description="Currently active model as 'provider/model'")
     fetched_at: Optional[str] = Field(None, description="ISO-8601 timestamp of the OpenRouter cache")
     source: str = Field(..., description="Where the data came from: cache or catalog")
+
+
+class AgentConfigSummaryData(BaseModel):
+    """Frontend-facing summary of the loaded project agent configuration."""
+
+    model_config = ConfigDict(exclude_none=True)
+
+    target: Optional[Any] = Field(None, description="Active target model configuration or legacy target value")
+    models: Dict[str, Any] = Field(default_factory=dict, description="Configured legacy/self-hosted model entries")
+    current_datasource: Optional[str] = Field(None, description="Currently active datasource key")
+    datasources: Dict[str, Any] = Field(default_factory=dict, description="Configured datasource entries")
+    home: str = Field(..., description="Resolved agent home/project storage path")
+
+
+class MutationResultData(BaseModel):
+    """Generic acknowledgement for configuration mutations."""
+
+    updated: bool = Field(..., description="Whether the configuration was updated")
+
+
+class ProbeResultData(BaseModel):
+    """Connectivity probe result."""
+
+    ok: bool = Field(..., description="Whether the probe succeeded")
+    message: Optional[str] = Field(None, description="Failure detail when ok=false")

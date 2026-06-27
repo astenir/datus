@@ -70,6 +70,7 @@ Approaches for diagnosing a misbehaving server:
 ## Next steps
 
 - [Deployment](deployment.md) — install and launch the API server
+- [Frontend Contract](frontend_contract.md) — OpenAPI typing, SSE handling, and frontend error-shape rules
 - [Chat](chat.md) — chat endpoints and SSE streaming
 - [Knowledge Base](knowledge_base.md) — KB bootstrap and platform doc endpoints with SSE
 - [Debugging](debugging.md) — diagnose hung requests with the SIGUSR1 async task dump

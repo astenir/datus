@@ -1,26 +1,50 @@
 """Data models for Agent API endpoints."""
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # ========== Agent List ==========
 
 
-class AgentInfo(BaseModel):
-    """Agent information."""
+class AgentSummary(BaseModel):
+    """Summary item returned by the agent list endpoint."""
 
-    name: str = Field(..., description="Agent name")
-    type: str = Field(..., description="Agent type (builtin/customize)")
-    config_yaml: Optional[str] = Field(None, description="Agent configuration YAML")
-    system_prompt: Optional[str] = Field(None, description="System prompt")
-    created_at: Optional[str] = Field(None, description="Creation timestamp")
+    id: str = Field(..., description="Agent id used by API requests")
+    name: str = Field(..., description="Agent display name")
+    type: str = Field(..., description="Agent type, e.g. builtin, gen_sql, gen_report")
+    description: str = Field(default="", description="Short agent description")
+
+
+AgentInfo = AgentSummary
 
 
 class AgentListData(BaseModel):
     """Agent list data."""
 
-    agents: List[AgentInfo]
+    agents: List[AgentSummary] = Field(default_factory=list, description="Available agents")
+
+
+class ToolCategoryData(BaseModel):
+    """Tool methods available under one tool category."""
+
+    tools: List[str] = Field(default_factory=list, description="Tool method names")
+
+
+class AgentUseToolsData(BaseModel):
+    """Tool selection contract for one agent type."""
+
+    default_tools: List[str] = Field(default_factory=list, description="Preselected tool patterns")
+    tool_types: Dict[str, ToolCategoryData] = Field(
+        default_factory=dict,
+        description="User-facing tool categories and selectable methods",
+    )
+
+
+class AgentToolsData(BaseModel):
+    """Full tool catalog returned by GET /agent/tools."""
+
+    tools: Dict[str, List[str]] = Field(default_factory=dict, description="All valid tool categories and methods")
 
 
 # ========== Create Agent ==========
@@ -85,6 +109,7 @@ class CreateAgentData(BaseModel):
     """Create agent result data."""
 
     name: str = Field(..., description="Created agent name")
+    id: str = Field(..., description="Created agent id")
 
 
 # ========== Get Agent ==========
@@ -99,21 +124,30 @@ class GetAgentInput(BaseModel):
 class IAgentInfo(BaseModel):
     """Detailed agent information."""
 
+    id: str = Field(..., description="Agent id used by API requests")
     name: str = Field(..., description="Agent name")
-    type: str = Field(..., description="Agent type (builtin/customize)")
-    config_yaml: str = Field(..., description="Agent configuration YAML")
-    system_prompt: str = Field(..., description="System prompt")
+    type: str = Field(..., description="Agent type, e.g. builtin, gen_sql, gen_report")
+    description: str = Field(default="", description="Agent description")
+    config_yaml: Optional[str] = Field(None, description="Agent configuration YAML, when available")
+    system_prompt: Optional[str] = Field(None, description="System prompt, when available")
     tools: List[str] = Field(default_factory=list, description="Available tools")
     catalogs: List[str] = Field(default_factory=list, description="Catalog access patterns")
     subjects: List[str] = Field(default_factory=list, description="Subject access patterns")
     rules: List[str] = Field(default_factory=list, description="Additional rules")
-    created_at: str = Field(..., description="Creation timestamp")
+    created_at: Optional[str] = Field(None, description="Creation timestamp")
 
 
 class GetAgentData(BaseModel):
     """Get agent result data."""
 
     agent: IAgentInfo
+
+
+class AgentMutationData(BaseModel):
+    """Result payload for create/edit/delete agent mutations."""
+
+    id: str = Field(..., description="Agent id")
+    name: str = Field(..., description="Agent name")
 
 
 # ========== Channels ==========
