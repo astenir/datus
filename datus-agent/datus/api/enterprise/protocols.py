@@ -58,3 +58,21 @@ class AuditSink(Protocol):
     async def write(self, event: AuditEvent) -> None:
         """Persist or forward an audit event."""
         ...
+
+
+@runtime_checkable
+class AuditLogReader(Protocol):
+    """Optional audit log query interface for admin APIs."""
+
+    async def query_events(
+        self,
+        *,
+        limit: int,
+        user_id: str | None = None,
+        action: str | None = None,
+        resource_type: str | None = None,
+        resource_id: str | None = None,
+        decision: str | None = None,
+    ) -> list[AuditEvent]:
+        """Return matching audit events, newest first."""
+        ...
