@@ -304,7 +304,7 @@ MVP 中 `datasource_grants` 采用每个 `(subject_type, subject_id, datasource_
 - admin user route：`/api/v1/admin/users`、`/api/v1/admin/users/{user_id}`、`/api/v1/admin/users/{user_id}/disable` 和 `/api/v1/admin/users/{user_id}/enable` 使用 `module.admin.users`，用户管理变更写入脱敏审计摘要；企业模式新请求会基于 `EnterpriseUserStore` 拒绝已禁用用户。
 - admin role route：`/api/v1/admin/roles`、`/api/v1/admin/roles/{role_id}`、`/api/v1/admin/roles/{role_id}/permissions` 和 `/api/v1/admin/users/{user_id}/roles` 使用 `module.admin.roles`，role metadata、permission set 和用户-role 绑定变更写入脱敏审计摘要；企业模式新请求会从 metadata store 合并用户角色与角色权限到 `AppContext.roles` / `AppContext.permissions`。
 
-后续新增 route 时应继续使用 `require_module()` dependency 接入模块权限；admin sessions/artifacts/audit/quotas 已进入阶段 6 接线，secrets API 仍属于后续阶段 6 切片。不要把 report/dashboard 的 query 权限合并进 `module.chat`；自然语言入口只能证明用户可用 chat，不能自动证明用户可实时查询报表或仪表盘。当前已先将可配置 datasource grant projection 接入 `/api/v1/chat/stream`、`/api/v1/chat/feedback`、`/api/v1/catalog/list`、`/api/v1/sql/execute` 和 `/api/v1/dashboard/query`，用于校验请求 datasource/database、过滤请求级 `AgentConfig` clone、按 catalog/database/schema/table scope 裁剪目录结果并注入 principal；`/api/v1/sql/execute` 和 `/api/v1/dashboard/query` 会在执行前复用 grant scope 和 SQL policy principal 校验手写或保存 SQL。企业模式新请求也会从 user/role/datasource grant metadata store 合并 roles、permissions 和 datasource_grants；report artifact 当前是预渲染静态 bundle，没有 agent-only live query endpoint。
+后续新增 route 时应继续使用 `require_module()` dependency 接入模块权限；admin sessions/artifacts/audit/quotas/secrets 已进入阶段 6 接线。不要把 report/dashboard 的 query 权限合并进 `module.chat`；自然语言入口只能证明用户可用 chat，不能自动证明用户可实时查询报表或仪表盘。当前已先将可配置 datasource grant projection 接入 `/api/v1/chat/stream`、`/api/v1/chat/feedback`、`/api/v1/catalog/list`、`/api/v1/sql/execute` 和 `/api/v1/dashboard/query`，用于校验请求 datasource/database、过滤请求级 `AgentConfig` clone、按 catalog/database/schema/table scope 裁剪目录结果并注入 principal；`/api/v1/sql/execute` 和 `/api/v1/dashboard/query` 会在执行前复用 grant scope 和 SQL policy principal 校验手写或保存 SQL。企业模式新请求也会从 user/role/datasource grant metadata store 合并 roles、permissions 和 datasource_grants；report artifact 当前是预渲染静态 bundle，没有 agent-only live query endpoint。
 
 ### SQL 与数据安全
 
@@ -354,6 +354,7 @@ SQL 不是唯一执行风险。以下能力也必须进入 `Authenticate -> Buil
 - datasource grant 撤销后，新 catalog、chat projection、dashboard/report/direct SQL 请求立即按新授权判定。
 - artifact ACL 修改后，新 list/detail/query/export 请求立即按新 ACL 判定。
 - admin mutation 审计只记录脱敏摘要，不记录 secret、完整连接串或大结果集。
+- secret admin API 只管理引用 metadata，响应和审计只允许 redacted hint，不允许回显完整 reference 或 secret value；把 secret reference 解析到 datasource/model 配置属于后续执行路径切片。
 
 错误语义：
 

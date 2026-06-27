@@ -23,6 +23,7 @@ from datus.api.enterprise.protocols import (
     EnterpriseDatasourceGrantStore,
     EnterpriseQuotaStore,
     EnterpriseRoleStore,
+    EnterpriseSecretStore,
     EnterpriseUserStore,
     SessionOwnerStore,
 )
@@ -45,6 +46,7 @@ class EnterpriseExtensions:
     audit_sink: AuditSink
     artifact_acl_store: ArtifactAclStore | None = None
     quota_store: EnterpriseQuotaStore | None = None
+    secret_store: EnterpriseSecretStore | None = None
     user_store: EnterpriseUserStore = field(default_factory=InMemoryEnterpriseUserStore)
     role_store: EnterpriseRoleStore = field(default_factory=InMemoryEnterpriseRoleStore)
     datasource_grant_store: EnterpriseDatasourceGrantStore = field(
@@ -79,6 +81,7 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
             audit_sink=NoopAuditSink(),
             artifact_acl_store=None,
             quota_store=None,
+            secret_store=None,
             user_store=InMemoryEnterpriseUserStore(),
             role_store=InMemoryEnterpriseRoleStore(),
             datasource_grant_store=InMemoryEnterpriseDatasourceGrantStore(),
@@ -131,6 +134,12 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         EnterpriseQuotaStore,
         None,
     )
+    secret_store = _load_optional_component(
+        raw,
+        "secret_store",
+        EnterpriseSecretStore,
+        None,
+    )
 
     return EnterpriseExtensions(
         enabled=True,
@@ -140,6 +149,7 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         audit_sink=audit_sink,
         artifact_acl_store=artifact_acl_store,
         quota_store=quota_store,
+        secret_store=secret_store,
         user_store=user_store,
         role_store=role_store,
         datasource_grant_store=datasource_grant_store,

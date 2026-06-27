@@ -633,6 +633,51 @@ class InMemoryEnterpriseQuotaStore:
         return sorted(usage, key=lambda record: (record["subject_type"], record["subject_id"], record["resource"]))
 
 
+class InMemoryEnterpriseSecretStore:
+    """Process-local secret reference store for tests and local mode."""
+
+    def __init__(self) -> None:
+        self._secrets: dict[str, dict[str, Any]] = {}
+
+    async def list_secrets(self, *, prefix: str | None = None) -> list[dict[str, Any]]:
+        records = [
+            _copy_secret_record(record)
+            for record in self._secrets.values()
+            if prefix is None or str(record["name"]).startswith(prefix)
+        ]
+        return sorted(records, key=lambda record: record["name"])
+
+    async def get_secret(self, name: str) -> dict[str, Any] | None:
+        record = self._secrets.get(name)
+        return _copy_secret_record(record) if record is not None else None
+
+    async def put_secret(
+        self,
+        *,
+        name: str,
+        provider: str,
+        reference: str,
+        description: str | None = None,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        now = _sqlite_now()
+        existing = self._secrets.get(name)
+        record = {
+            "name": name,
+            "provider": provider,
+            "reference": reference,
+            "description": description,
+            "enabled": bool(enabled),
+            "created_at": str(existing.get("created_at")) if existing else now,
+            "updated_at": now,
+        }
+        self._secrets[name] = record
+        return _copy_secret_record(record)
+
+    async def delete_secret(self, name: str) -> bool:
+        return self._secrets.pop(name, None) is not None
+
+
 class SqliteEnterpriseDatasourceGrantStore:
     """SQLite-backed datasource grant metadata store for single-node deployments."""
 
@@ -1046,6 +1091,18 @@ def _copy_quota_record(record: dict[str, Any]) -> dict[str, Any]:
         "resource": str(record["resource"]),
         "limit": int(record["limit"]),
         "window_seconds": int(record["window_seconds"]),
+        "enabled": bool(record["enabled"]),
+        "created_at": _optional_str(record.get("created_at")),
+        "updated_at": _optional_str(record.get("updated_at")),
+    }
+
+
+def _copy_secret_record(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": str(record["name"]),
+        "provider": str(record["provider"]),
+        "reference": str(record["reference"]),
+        "description": _optional_str(record.get("description")),
         "enabled": bool(record["enabled"]),
         "created_at": _optional_str(record.get("created_at")),
         "updated_at": _optional_str(record.get("updated_at")),

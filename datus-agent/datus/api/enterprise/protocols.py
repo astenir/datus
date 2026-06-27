@@ -189,6 +189,35 @@ class EnterpriseQuotaStore(Protocol):
 
 
 @runtime_checkable
+class EnterpriseSecretStore(Protocol):
+    """Persist and query enterprise secret references, never secret values."""
+
+    async def list_secrets(self, *, prefix: str | None = None) -> list[dict[str, Any]]:
+        """Return redaction-safe secret reference records."""
+        ...
+
+    async def get_secret(self, name: str) -> dict[str, Any] | None:
+        """Return one secret reference record, if present."""
+        ...
+
+    async def put_secret(
+        self,
+        *,
+        name: str,
+        provider: str,
+        reference: str,
+        description: str | None = None,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        """Create or replace one secret reference record."""
+        ...
+
+    async def delete_secret(self, name: str) -> bool:
+        """Delete one secret reference record."""
+        ...
+
+
+@runtime_checkable
 class SessionOwnerStore(Protocol):
     """Persist and query session owner metadata."""
 

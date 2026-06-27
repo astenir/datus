@@ -985,7 +985,7 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - MCP route 已接入 `module.mcp`，覆盖 MCP server/tool/filter 的列表、管理和调用接口。
 - 当前已注册的 datasource admin route `/api/v1/admin/datasources`、`/api/v1/admin/datasource-default` 和 `/api/v1/admin/datasource-grants` 已接入 `module.admin.datasources`，用于项目级数据源清单、默认数据源管理和 datasource grant metadata 管理。
 - 当前已注册的 user/role admin route 已分别接入 `module.admin.users` 和 `module.admin.roles`，用于阶段 6 的用户状态、role metadata 和 role permission set 管理。
-- admin sessions、artifacts ACL、audit query/export 和 quota metadata/usage API 已进入阶段 6 接线；secrets API 仍按后续切片推进。当前已将 user-role metadata、role permission set 和 role/user datasource grants 在企业模式新请求中合并回 `AppContext.roles`、`AppContext.permissions`、`AppContext.datasource_grants` 和 `principal`，但长期生产仍应使用共享 metadata store。direct SQL 和 dashboard query 已复用请求级 projection、grant scope、SQL policy principal 与审计；report artifact 当前是预渲染静态 bundle，没有 agent-only live query endpoint。
+- admin sessions、artifacts ACL、audit query/export、quota metadata/usage 和 secret reference API 已进入阶段 6 接线。当前已将 user-role metadata、role permission set 和 role/user datasource grants 在企业模式新请求中合并回 `AppContext.roles`、`AppContext.permissions`、`AppContext.datasource_grants` 和 `principal`，但长期生产仍应使用共享 metadata store。direct SQL 和 dashboard query 已复用请求级 projection、grant scope、SQL policy principal 与审计；report artifact 当前是预渲染静态 bundle，没有 agent-only live query endpoint。
 
 验收：
 
@@ -1063,6 +1063,9 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - 已新增 `EnterpriseQuotaStore` 协议，以及本地兼容的进程内 `InMemoryEnterpriseQuotaStore`；企业模式下可通过 `enterprise.quota_store.class` 替换为生产 quota/usage metadata store。当前切片只提供 metadata 管理和 usage 查询 API，执行路径消耗配额仍按后续切片接入。
 - 已注册 `/api/v1/admin/quotas` 和 `/api/v1/admin/usage`，统一要求 `module.admin.quotas`；quota upsert 校验 `subject_type`、`subject_id`、`resource`、`limit`、`window_seconds` 和 `enabled`，审计只写 quota 摘要，不记录执行结果或敏感配置。
 - quota 管理接口返回稳定 `Result` 错误码：`QUOTA_FILTER_INVALID`、`QUOTA_STORE_UNAVAILABLE`、`QUOTA_LIST_FAILED`、`QUOTA_UPSERT_FAILED`、`USAGE_LIST_FAILED`、`QUOTA_SUBJECT_INVALID`、`QUOTA_RESOURCE_INVALID`、`QUOTA_LIMIT_INVALID`、`QUOTA_WINDOW_INVALID`、`QUOTA_ENABLED_INVALID`。
+- 已新增 `EnterpriseSecretStore` 协议，以及本地兼容的进程内 `InMemoryEnterpriseSecretStore`；企业模式下可通过 `enterprise.secret_store.class` 替换为生产 secret reference store。当前切片只管理 secret 引用 metadata，不保存 secret 明文，不把 secret reference 解析接入 datasource/model 配置路径。
+- 已注册 `/api/v1/admin/secrets` 和 `/api/v1/admin/secrets/{name}`，统一要求 `module.admin.secrets`；secret upsert 只保存 `provider`、`reference`、描述和启用状态，响应与审计只返回 `ref_hint`，不回显完整 reference，更不接收或返回 secret value。
+- secret 管理接口返回稳定 `Result` 错误码：`SECRET_FILTER_INVALID`、`SECRET_STORE_UNAVAILABLE`、`SECRET_LIST_FAILED`、`SECRET_NAME_INVALID`、`SECRET_PROVIDER_INVALID`、`SECRET_REFERENCE_INVALID`、`SECRET_DESCRIPTION_INVALID`、`SECRET_ENABLED_INVALID`、`SECRET_READ_FAILED`、`SECRET_UPSERT_FAILED`、`SECRET_DELETE_FAILED`、`RESOURCE_NOT_FOUND`。
 
 验收：
 

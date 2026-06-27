@@ -8,6 +8,7 @@ from datus.api.enterprise.defaults import (
     InMemoryEnterpriseDatasourceGrantStore,
     InMemoryEnterpriseQuotaStore,
     InMemoryEnterpriseRoleStore,
+    InMemoryEnterpriseSecretStore,
     InMemoryEnterpriseUserStore,
     InMemorySessionOwnerStore,
     LocalAuthorizationProvider,
@@ -248,6 +249,37 @@ async def test_in_memory_quota_store_upserts_filters_and_lists_usage():
     ] == [("user", "alice", "llm.tokens")]
     assert len(await store.list_quotas()) == 2
     assert await store.list_usage(subject_type="user", subject_id="alice", resource="llm.tokens") == []
+
+
+@pytest.mark.asyncio
+async def test_in_memory_secret_store_upserts_filters_and_deletes_references():
+    store = InMemoryEnterpriseSecretStore()
+
+    created = await store.put_secret(
+        name="datasource/warehouse/password",
+        provider="env",
+        reference="WAREHOUSE_PASSWORD",
+        description="Warehouse password",
+    )
+    replaced = await store.put_secret(
+        name="datasource/warehouse/password",
+        provider="vault",
+        reference="kv/datus/warehouse#password",
+        enabled=False,
+    )
+    await store.put_secret(name="model/openai/key", provider="env", reference="OPENAI_API_KEY")
+
+    assert created["provider"] == "env"
+    assert replaced["provider"] == "vault"
+    assert replaced["enabled"] is False
+    assert replaced["reference"] == "kv/datus/warehouse#password"
+    assert await store.get_secret("datasource/warehouse/password") == replaced
+    assert [secret["name"] for secret in await store.list_secrets(prefix="datasource/")] == [
+        "datasource/warehouse/password"
+    ]
+    assert len(await store.list_secrets()) == 2
+    assert await store.delete_secret("datasource/warehouse/password") is True
+    assert await store.delete_secret("datasource/warehouse/password") is False
 
 
 @pytest.mark.asyncio
