@@ -209,6 +209,112 @@ def test_chat_stream_denies_unauthorized_datasource_before_task_start(monkeypatc
     svc.chat.stream_chat.assert_not_called()
 
 
+def test_chat_stream_returns_unavailable_without_quota_store(monkeypatch):
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(audit_sink=audit_sink, quota_store=None))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config()
+    svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    with _client(chat_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/chat/stream", json={"message": "hello"})
+
+    assert response.status_code == 200
+    assert "event: error" in response.text
+    assert "QUOTA_STORE_UNAVAILABLE" in response.text
+    svc.chat.stream_chat.assert_not_called()
+    event = next(event for event in audit_sink.events if event.action == "quota.consume")
+    assert event.resource_type == "chat"
+    assert event.resource_id is None
+    assert event.decision == "deny"
+    assert event.reason == "quota store unavailable"
+    assert event.metadata["quota_resource"] == "chat.stream"
+
+
+def test_chat_stream_rejects_quota_exceeded_before_task_start(monkeypatch):
+    quota_store = InMemoryEnterpriseQuotaStore()
+    asyncio.run(
+        quota_store.put_quota(
+            subject_type="user",
+            subject_id="u1",
+            resource="chat.stream",
+            limit=1,
+            window_seconds=3600,
+        )
+    )
+    asyncio.run(
+        quota_store.consume_quota(
+            subjects=[{"subject_type": "user", "subject_id": "u1"}],
+            resource="chat.stream",
+        )
+    )
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        _enterprise_extensions(audit_sink=audit_sink, quota_store=quota_store),
+    )
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config()
+    svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    with _client(chat_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/chat/stream", json={"message": "hello"})
+
+    assert response.status_code == 200
+    assert "event: error" in response.text
+    assert "QUOTA_EXCEEDED" in response.text
+    svc.chat.stream_chat.assert_not_called()
+    event = next(event for event in audit_sink.events if event.action == "quota.consume")
+    assert event.resource_type == "chat"
+    assert event.resource_id is None
+    assert event.decision == "deny"
+    assert event.reason == "quota exceeded"
+    assert event.metadata["resource"] == "chat.stream"
+    assert event.metadata["used"] == 1
+
+
+def test_chat_stream_consumes_quota_before_task_start(monkeypatch):
+    async def empty_stream(*_args, **_kwargs):
+        if False:
+            yield
+
+    quota_store = InMemoryEnterpriseQuotaStore()
+    asyncio.run(
+        quota_store.put_quota(
+            subject_type="user",
+            subject_id="u1",
+            resource="chat.stream",
+            limit=2,
+            window_seconds=3600,
+        )
+    )
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        _enterprise_extensions(audit_sink=audit_sink, quota_store=quota_store),
+    )
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config()
+    svc.chat.stream_chat = MagicMock(return_value=empty_stream())
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    with _client(chat_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/chat/stream", json={"message": "hello"})
+
+    usage = asyncio.run(quota_store.list_usage(subject_type="user", subject_id="u1", resource="chat.stream"))
+
+    assert response.status_code == 200
+    assert usage[0]["used"] == 1
+    event = next(event for event in audit_sink.events if event.action == "quota.consume")
+    assert event.decision == "allow"
+    assert event.metadata["quota_resource"] == "chat.stream"
+    svc.chat.stream_chat.assert_called_once()
+
+
 @pytest.mark.parametrize(
     "subagent_id",
     ["gen_sql", "gen_report", "gen_visual_report", "gen_dashboard", "gen_visual_dashboard"],

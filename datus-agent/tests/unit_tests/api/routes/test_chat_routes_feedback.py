@@ -12,6 +12,7 @@ import pytest
 
 from datus.api import deps
 from datus.api.enterprise.defaults import (
+    InMemoryEnterpriseQuotaStore,
     InMemorySessionOwnerStore,
     LocalAuthorizationProvider,
     NoopAuditSink,
@@ -66,13 +67,14 @@ class CollectingAuditSink:
         self.events.append(event)
 
 
-def _enterprise_extensions(config_projector=None, audit_sink=None) -> EnterpriseExtensions:
+def _enterprise_extensions(config_projector=None, audit_sink=None, quota_store=None) -> EnterpriseExtensions:
     return EnterpriseExtensions(
         enabled=True,
         authorization_provider=LocalAuthorizationProvider(),
         config_projector=config_projector or PassthroughConfigProjector(),
         session_owner_store=InMemorySessionOwnerStore(),
         audit_sink=audit_sink or NoopAuditSink(),
+        quota_store=quota_store or InMemoryEnterpriseQuotaStore(),
     )
 
 
@@ -233,3 +235,46 @@ async def test_feedback_endpoint_denies_when_sql_policy_enabled_without_principa
         "error_code": "SQL_POLICY_PRINCIPAL_REQUIRED",
         "missing_principal_paths": ["market_code"],
     }
+
+
+@pytest.mark.asyncio
+async def test_feedback_endpoint_rejects_quota_exceeded_before_task_start(monkeypatch):
+    quota_store = InMemoryEnterpriseQuotaStore()
+    await quota_store.put_quota(
+        subject_type="user",
+        subject_id="tester",
+        resource="chat.feedback",
+        limit=1,
+        window_seconds=3600,
+    )
+    await quota_store.consume_quota(
+        subjects=[{"subject_type": "user", "subject_id": "tester"}],
+        resource="chat.feedback",
+    )
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(
+        deps, "_enterprise_extensions", _enterprise_extensions(audit_sink=audit_sink, quota_store=quota_store)
+    )
+    svc = _build_svc()
+    svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
+    request = FeedbackChatInput(
+        source_session_id="chat_session_abc",
+        reaction_emoji="thumbsup",
+        reference_msg="Here is your SQL result",
+    )
+
+    response = await stream_chat_feedback(request, svc, _build_ctx())
+    chunks = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+    assert len(chunks) == 1
+    assert "event: error" in chunks[0]
+    payload = json.loads(next(line for line in chunks[0].splitlines() if line.startswith("data: "))[len("data: ") :])
+    assert payload["error_type"] == "QUOTA_EXCEEDED"
+    svc.chat.stream_chat.assert_not_called()
+    event = next(event for event in audit_sink.events if event.action == "quota.consume")
+    assert event.resource_type == "chat"
+    assert event.decision == "deny"
+    assert event.reason == "quota exceeded"
+    assert event.metadata["resource"] == "chat.feedback"

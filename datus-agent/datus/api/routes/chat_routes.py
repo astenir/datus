@@ -61,6 +61,7 @@ from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso
 from datus_enterprise.artifact_acl import require_artifact_access
 from datus_enterprise.audit import AuditEvent, audit_decision
+from datus_enterprise.quota import consume_enterprise_quota
 
 logger = get_logger(__name__)
 
@@ -232,6 +233,36 @@ async def _audit_chat_sql_policy_denial(
     )
 
 
+async def _consume_chat_request_quota(
+    ctx: AppContext,
+    request: StreamChatInput,
+    *,
+    operation: str,
+) -> Optional[ChatPreCheckOutcome]:
+    quota_error = await consume_enterprise_quota(
+        ctx,
+        resource=operation,
+        amount=1,
+        resource_type="chat",
+        resource_id=request.session_id,
+        metadata={
+            "operation": operation,
+            "session_id": request.session_id,
+            "subagent_id": request.subagent_id,
+            "datasource": request.datasource,
+            "database": request.database,
+            "model": request.model,
+        },
+    )
+    if quota_error is None:
+        return None
+    return ChatPreCheckOutcome(
+        allow=False,
+        error=quota_error.errorMessage or "Quota exceeded.",
+        error_type=quota_error.errorCode or "QUOTA_DENIED",
+    )
+
+
 def _required_principal_paths(raw: Any) -> list[str]:
     paths: set[str] = set()
 
@@ -348,6 +379,14 @@ async def stream_chat(
         await _audit_chat_sql_policy_denial(ctx, request, sql_policy_denial, operation="chat.stream")
         return StreamingResponse(
             _emit_pre_check_denial(request, sql_policy_denial),
+            media_type="text/event-stream",
+            headers=_sse_headers(),
+        )
+
+    quota_denial = await _consume_chat_request_quota(ctx, request, operation="chat.stream")
+    if quota_denial:
+        return StreamingResponse(
+            _emit_pre_check_denial(request, quota_denial),
             media_type="text/event-stream",
             headers=_sse_headers(),
         )
@@ -472,6 +511,14 @@ async def stream_chat_feedback(
         await _audit_chat_sql_policy_denial(ctx, stream_input, sql_policy_denial, operation="chat.feedback")
         return StreamingResponse(
             _emit_pre_check_denial(stream_input, sql_policy_denial),
+            media_type="text/event-stream",
+            headers=_sse_headers(),
+        )
+
+    quota_denial = await _consume_chat_request_quota(ctx, stream_input, operation="chat.feedback")
+    if quota_denial:
+        return StreamingResponse(
+            _emit_pre_check_denial(stream_input, quota_denial),
             media_type="text/event-stream",
             headers=_sse_headers(),
         )
