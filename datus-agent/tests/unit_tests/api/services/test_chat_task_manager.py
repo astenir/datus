@@ -650,6 +650,32 @@ class TestChatTaskManagerBehavior:
 
         await asyncio.gather(old_asyncio_task, return_exceptions=True)
 
+    @pytest.mark.asyncio
+    async def test_discard_wait_does_not_remove_reused_completed_session(self, monkeypatch):
+        """Stale discard cleanup must not remove a newer completed task snapshot."""
+
+        from datus.api.services import chat_task_manager as ctm
+
+        manager = ChatTaskManager()
+        old_task = ChatTask(session_id="reuse-session", asyncio_task=MagicMock())
+        new_task = ChatTask(session_id="reuse-session", asyncio_task=MagicMock())
+        manager._tasks["reuse-session"] = old_task
+
+        async def fake_wait_for(awaitable, timeout):
+            manager._release_task_slot("reuse-session", old_task)
+            manager._tasks["reuse-session"] = new_task
+            manager._release_task_slot("reuse-session", new_task)
+
+        monkeypatch.setattr(ctm.asyncio, "wait_for", fake_wait_for)
+
+        discarded = await manager.discard_task_snapshot("reuse-session", wait=True, timeout=0.001)
+
+        assert discarded is True
+        assert manager._tasks == {}
+        assert manager._completed_tasks["reuse-session"] is new_task
+        assert manager._completed_tasks["reuse-session"] is not old_task
+        assert id(old_task) not in manager._discarded_task_ids
+
 
 @pytest.mark.asyncio
 class TestStartChat:

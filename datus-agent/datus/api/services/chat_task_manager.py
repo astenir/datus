@@ -439,9 +439,10 @@ class ChatTaskManager:
         """Remove active/completed task metadata for a deleted session."""
 
         active_task = self._tasks.get(session_id)
+        completed_task = self._completed_tasks.get(session_id)
         if active_task is not None:
             self._discarded_task_ids.add(id(active_task))
-        had_task = active_task is not None or session_id in self._completed_tasks
+        had_task = active_task is not None or completed_task is not None
 
         if wait and active_task is not None and active_task.asyncio_task is not None:
             try:
@@ -456,7 +457,9 @@ class ChatTaskManager:
 
         if self._tasks.get(session_id) is active_task:
             self._tasks.pop(session_id, None)
-        self._completed_tasks.pop(session_id, None)
+        current_completed_task = self._completed_tasks.get(session_id)
+        if current_completed_task is active_task or current_completed_task is completed_task:
+            self._completed_tasks.pop(session_id, None)
         return had_task
 
     async def consume_events(self, task: ChatTask, start_from: Optional[int] = None) -> AsyncGenerator[SSEEvent, None]:
