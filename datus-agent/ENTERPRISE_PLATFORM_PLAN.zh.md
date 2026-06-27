@@ -407,6 +407,8 @@ GET /api/v1/me/usage
 
 返回当前用户在企业上下文下的 roles、permissions、features、datasource grants 摘要。前端隐藏菜单只依赖它做体验优化，不能替代后端授权。
 
+当前已注册 `/api/v1/me`、`/api/v1/me/permissions`、`/api/v1/me/datasource-grants`、`/api/v1/me/features`、`/api/v1/me/sessions` 和 `/api/v1/me/usage`，只读取认证后 `AppContext`、当前用户 session scope 和当前用户 quota usage，不接受前端传入 roles、permissions 或 datasource grant。
+
 ### 普通运行时 API
 
 运行时 API 使用当前 `AppContext` 的 `user_id/project_id`：
