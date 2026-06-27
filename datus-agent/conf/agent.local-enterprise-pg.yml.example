@@ -15,7 +15,27 @@
 #
 # Example:
 #   cp conf/agent.local-enterprise-pg.yml.example conf/agent.local-enterprise-pg.yml
+#   export DATUS_ENTERPRISE_HEADER_SECRET="$(uv run python scripts/enterprise_local_api.py secret)"
+#   export DATUS_ENTERPRISE_PG_DSN="postgresql://datus:datus@127.0.0.1:5433/datus_enterprise"
+#   uv run python scripts/enterprise_local_pg_seed.py --datasource ccks_fund
 #   uv run datus-api --config conf/agent.local-enterprise-pg.yml --datasource ccks_fund --port 8000 --reload
+#   uv run python scripts/enterprise_local_api.py smoke --datasource ccks_fund --print-curl
+#
+# To test UserInfoBearerAuthProvider instead of signed headers, run:
+#   uv run python scripts/enterprise_mock_userinfo.py --port 8010 --reload
+#   export DATUS_ENTERPRISE_USERINFO_URL="http://127.0.0.1:8010/userinfo"
+# Then replace the auth_provider block below with:
+#   class: datus_enterprise.auth_provider:UserInfoBearerAuthProvider
+#   kwargs:
+#     userinfo_url: ${DATUS_ENTERPRISE_USERINFO_URL}
+#     timeout_seconds: 3.0
+#     user_id_field: username
+#     external_user_id_field: userId
+#     email_field: email
+#     display_name_field: realname
+#     status_field: userStatus
+#     allowed_statuses: ["正常"]
+#     default_project_id: enterprise
 
 agent:
   home: /home/astenir/Code/personal/datus/datus-data
