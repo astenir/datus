@@ -548,6 +548,23 @@ class CLIService:
         ]
 
     @staticmethod
+    def _filter_schema_names_by_grant(schema_names: Sequence[str], agent_config: Optional[AgentConfig]) -> list[str]:
+        _datasource, grant = CLIService._current_datasource_grant(agent_config)
+        if not isinstance(grant, dict):
+            return list(schema_names)
+
+        patterns = _scope_patterns(grant, "schemas")
+        if patterns is None:
+            return list(schema_names)
+        if not patterns:
+            return []
+        return [
+            schema_name
+            for schema_name in schema_names
+            if any(fnmatchcase(schema_name, pattern) for pattern in patterns)
+        ]
+
+    @staticmethod
     def _field_order_for_grant(
         field_order: Sequence[str],
         agent_config: Optional[AgentConfig],
@@ -1059,6 +1076,19 @@ class CLIService:
                 else:
                     result_data.command_output = "No database connection"
                 result_data.action_taken = "list_tables"
+
+            elif command == "schemas":
+                if active_connector and hasattr(active_connector, "get_schemas"):
+                    schemas = active_connector.get_schemas(
+                        getattr(active_connector, "catalog_name", "") or "",
+                        getattr(active_connector, "database_name", "") or "",
+                    )
+                    schemas = self._filter_schema_names_by_grant(schemas, agent_config)
+                    result_data.command_output = f"Schemas: {', '.join(schemas or [])}"
+                    result_data.data = {"schemas": schemas or []}
+                else:
+                    result_data.command_output = "No database connection"
+                result_data.action_taken = "list_schemas"
 
             elif command == "clear":
                 # Clear LLM-level session by service session ID
