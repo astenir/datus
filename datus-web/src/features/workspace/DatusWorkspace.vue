@@ -1,16 +1,20 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, shallowRef } from "vue"
+import { computed, defineAsyncComponent } from "vue"
 import {
   BarChart3Icon,
   BotIcon,
+  BookMarkedIcon,
+  BookOpenTextIcon,
   DatabaseIcon,
   MessageSquareIcon,
   MoonIcon,
   RefreshCwIcon,
   ServerIcon,
   ShieldIcon,
+  SlidersHorizontalIcon,
   SunIcon,
   TerminalIcon,
+  UserRoundIcon,
 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
@@ -23,36 +27,79 @@ import { usePermission } from "@/composables/usePermission"
 import { useTheme } from "@/composables/useTheme"
 import ChatPanel from "@/features/chat/ChatPanel.vue"
 import SessionRail from "@/features/workspace/SessionRail.vue"
-import type { ArtifactViewTab, WorkspaceNavItem, WorkspaceView } from "@/features/workspace/types"
-import { isWorkspaceView } from "@/features/workspace/types"
+import type { WorkspaceNavItem } from "@/features/workspace/types"
+import { useWorkspaceRouting } from "@/features/workspace/useWorkspaceRouting"
 import { sessionUserQueryText } from "@/lib/chat"
 
 const AdminPanel = defineAsyncComponent(() => import("@/features/admin/AdminPanel.vue"))
 const AgentManagerPanel = defineAsyncComponent(() => import("@/features/agent/AgentManagerPanel.vue"))
 const ArtifactsPanel = defineAsyncComponent(() => import("@/features/artifacts/ArtifactsPanel.vue"))
 const CatalogPanel = defineAsyncComponent(() => import("@/features/catalog/CatalogPanel.vue"))
+const ConfigurationPanel = defineAsyncComponent(() => import("@/features/config/ConfigurationPanel.vue"))
+const KnowledgeBootstrapPanel = defineAsyncComponent(() => import("@/features/knowledge/KnowledgeBootstrapPanel.vue"))
 const McpPanel = defineAsyncComponent(() => import("@/features/mcp/McpPanel.vue"))
+const ProfilePanel = defineAsyncComponent(() => import("@/features/profile/ProfilePanel.vue"))
+const SemanticWorkbenchPanel = defineAsyncComponent(() => import("@/features/semantic/SemanticWorkbenchPanel.vue"))
 const SqlPanel = defineAsyncComponent(() => import("@/features/sql/SqlPanel.vue"))
 
 const workspace = useChatWorkspace()
 const { state: authState, checkAuth } = useAuth()
 const permission = usePermission()
 const { theme, toggleTheme } = useTheme()
-const activeView = shallowRef<WorkspaceView>("chat")
-const artifactTab = shallowRef<ArtifactViewTab>("dashboard")
 
 const canManagePermissions = computed(() => permission.isAdmin() || permission.hasFeaturePermission("admin"))
 const themeToggleLabel = computed(() => theme.value === "dark" ? "切换到亮色模式" : "切换到暗色模式")
+
+const {
+  activeView,
+  artifactTab,
+  artifactSlug,
+  adminTab,
+  adminSessionId,
+  adminUserId,
+  adminRoleId,
+  adminGrant,
+  adminSecretName,
+  adminArtifact,
+  adminAudit,
+  semanticTable,
+  catalogTable,
+  canRenderAdminPanel,
+  navigateToView,
+  setActiveView,
+  openChat,
+  openArtifactTab,
+  openArtifactDetail,
+  openSemanticTable,
+  openCatalogTable,
+  openAdminTab,
+  openAdminUser,
+  openAdminRole,
+  openAdminGrant,
+  openAdminSession,
+  openAdminSecret,
+  openAdminArtifact,
+  openAdminAudit,
+} = useWorkspaceRouting({
+  workspace,
+  authState,
+  canManagePermissions,
+  checkAuth,
+})
 
 const chatNavItem: WorkspaceNavItem = { value: "chat", label: "新对话", icon: MessageSquareIcon }
 
 const navItems: WorkspaceNavItem[] = [
   chatNavItem,
   { value: "catalog", label: "数据目录", icon: DatabaseIcon },
+  { value: "semantic", label: "语义模型", icon: BookOpenTextIcon },
+  { value: "knowledge", label: "知识构建", icon: BookMarkedIcon },
   { value: "sql", label: "SQL", icon: TerminalIcon },
   { value: "mcp", label: "MCP", icon: ServerIcon },
-  { value: "agents", label: "Agent 管理", icon: BotIcon },
+  { value: "agents", label: "Agent", icon: BotIcon },
+  { value: "configuration", label: "配置", icon: SlidersHorizontalIcon },
   { value: "artifacts", label: "产物", icon: BarChart3Icon },
+  { value: "profile", label: "我的权限", icon: UserRoundIcon },
   { value: "admin", label: "权限管理", icon: ShieldIcon },
 ]
 
@@ -85,24 +132,6 @@ const headerTitle = computed(() => {
   }
 
   return activeNavItem.value.label
-})
-
-function setActiveView(value: unknown) {
-  if (typeof value === "string" && isWorkspaceView(value)) {
-    activeView.value = value
-  }
-}
-
-function openArtifactTab(value: ArtifactViewTab) {
-  artifactTab.value = value
-  activeView.value = "artifacts"
-}
-
-onMounted(async () => {
-  await checkAuth()
-  if (authState.value.authenticated) {
-    await workspace.initialize()
-  }
 })
 </script>
 
@@ -147,8 +176,8 @@ onMounted(async () => {
           :active-view="activeView"
           :artifact-tab="artifactTab"
           :can-manage-permissions="canManagePermissions"
-          @open-chat="activeView = 'chat'"
-          @open-view="activeView = $event"
+          @open-chat="openChat"
+          @open-view="navigateToView"
           @open-artifact-tab="openArtifactTab"
         />
 
@@ -200,7 +229,27 @@ onMounted(async () => {
           value="catalog"
           class="m-0 flex min-h-0 flex-1"
         >
-          <CatalogPanel :workspace="workspace" />
+          <CatalogPanel
+            :workspace="workspace"
+            :selected-table="catalogTable"
+            @update-table="openCatalogTable"
+          />
+        </TabsContent>
+        <TabsContent
+          value="semantic"
+          class="m-0 flex min-h-0 flex-1"
+        >
+          <SemanticWorkbenchPanel
+            :workspace="workspace"
+            :selected-table="semanticTable"
+            @update-table="openSemanticTable"
+          />
+        </TabsContent>
+        <TabsContent
+          value="knowledge"
+          class="m-0 flex min-h-0 flex-1"
+        >
+          <KnowledgeBootstrapPanel />
         </TabsContent>
         <TabsContent
           value="sql"
@@ -221,21 +270,72 @@ onMounted(async () => {
           <AgentManagerPanel />
         </TabsContent>
         <TabsContent
+          value="configuration"
+          class="m-0 flex min-h-0 flex-1"
+        >
+          <ConfigurationPanel />
+        </TabsContent>
+        <TabsContent
           value="artifacts"
           class="m-0 flex min-h-0 flex-1"
         >
-          <ArtifactsPanel v-model:tab="artifactTab" />
+          <ArtifactsPanel
+            :tab="artifactTab"
+            :selected-slug="artifactSlug"
+            @update:tab="openArtifactTab"
+            @open-artifact="openArtifactDetail"
+            @close-detail="openArtifactTab(artifactTab)"
+          />
+        </TabsContent>
+        <TabsContent
+          value="profile"
+          class="m-0 flex min-h-0 flex-1"
+        >
+          <ProfilePanel :auth="authState" />
         </TabsContent>
         <TabsContent
           value="admin"
           class="m-0 flex min-h-0 flex-1"
         >
-          <AdminPanel />
+          <AdminPanel
+            v-if="canRenderAdminPanel"
+            :active-tab="adminTab"
+            :active-user-id="adminUserId"
+            :active-role-id="adminRoleId"
+            :active-grant="adminGrant"
+            :active-secret-name="adminSecretName"
+            :active-session-id="adminSessionId"
+            :active-artifact="adminArtifact"
+            :active-audit="adminAudit"
+            @update:active-tab="openAdminTab"
+            @update:active-user-id="openAdminUser"
+            @update:active-role-id="openAdminRole"
+            @update:active-grant="openAdminGrant"
+            @update:active-secret-name="openAdminSecret"
+            @update:active-session-id="openAdminSession"
+            @update:active-artifact="openAdminArtifact"
+            @update:active-audit="openAdminAudit"
+          />
+          <section
+            v-else
+            class="flex min-h-0 flex-1 items-center justify-center p-6 text-center"
+          >
+            <div class="flex max-w-sm flex-col items-center gap-3">
+              <ShieldIcon class="size-8 text-muted-foreground" />
+              <h1 class="text-lg font-semibold">无权限访问</h1>
+              <p class="text-sm text-muted-foreground">
+                正在返回可用工作区。权限管理入口仅对管理员开放。
+              </p>
+            </div>
+          </section>
         </TabsContent>
         </SidebarInset>
       </Tabs>
     </SidebarProvider>
 
-    <Toaster rich-colors />
+    <Toaster
+      rich-colors
+      :visible-toasts="2"
+    />
   </div>
 </template>

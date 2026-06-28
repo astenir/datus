@@ -12,6 +12,14 @@ export function putBody(data: unknown): RequestInit {
   return { method: "PUT", body: JSON.stringify(data) };
 }
 
+export function deleteJsonBody(data: unknown): RequestInit {
+  return {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  };
+}
+
 export function apiUrl(baseUrl: string, path: string): string {
   return `${normalizeBaseUrl(baseUrl)}${path}`;
 }

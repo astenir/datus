@@ -1,5 +1,5 @@
 import { apiResult, jsonBody } from "./helpers";
-import type { ArtifactManifest, DashboardDetail, ReportDetail, VisualizationResult } from "@/types";
+import type { ArtifactManifest, DashboardDetail, ReportDetail, SqlQueryResultEnvelope, VisualizationResult } from "@/types";
 
 export const dashboardApi = {
   list(baseUrl: string): Promise<ArtifactManifest[] | null> {
@@ -15,7 +15,12 @@ export const dashboardApi = {
     return `${base}/api/v1/dashboards/${encodeURIComponent(slug)}/html`;
   },
 
-  query(baseUrl: string, dashboardSlug: string, querySlug: string, params?: Record<string, unknown>): Promise<unknown> {
+  query(
+    baseUrl: string,
+    dashboardSlug: string,
+    querySlug: string,
+    params: Record<string, unknown> = {},
+  ): Promise<SqlQueryResultEnvelope | null> {
     return apiResult(baseUrl, "/api/v1/dashboard/query", jsonBody({ dashboard_slug: dashboardSlug, query_slug: querySlug, params }));
   },
 };

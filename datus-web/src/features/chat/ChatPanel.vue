@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, shallowRef } from "vue"
+import { computed, defineAsyncComponent, shallowRef } from "vue"
 import type { ChatStatus } from "ai"
 import { ChevronDownIcon, CpuIcon, Loader2Icon, SquareIcon } from "@lucide/vue"
 import { toast } from "vue-sonner"
@@ -37,12 +37,12 @@ import { useConnection } from "@/composables/useConnection"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import type { SelectOption } from "@/types"
 import ChatContextPicker from "@/features/chat/ChatContextPicker.vue"
-import ChatMessageItem from "@/features/chat/ChatMessageItem.vue"
 
 const props = defineProps<{
   workspace: ChatWorkspace
 }>()
 
+const ChatMessageItem = defineAsyncComponent(() => import("@/features/chat/ChatMessageItem.vue"))
 const DEFAULT_MODEL_VALUE = "__datus_default_model__"
 
 type ModelOptionGroup = {
@@ -247,13 +247,17 @@ function openArtifact(kind: string, slug: string) {
           <PromptInputFooter class="flex-wrap items-center gap-2 px-3 py-3 sm:px-4">
             <PromptInputTools class="min-w-0 flex-1 flex-wrap items-center gap-1.5">
               <ChatContextPicker
+                :datasource="workspace.currentDatasource.value"
                 :database="workspace.database.value"
                 :schema="workspace.schema.value"
                 :selected-agent="workspace.selectedAgent.value"
+                :datasource-options="workspace.visibleDatasourceOptions.value"
                 :database-options="workspace.databaseOptions.value"
                 :schema-options="schemaOptions"
                 :agent-options="workspace.agentOptions.value"
                 :loading-catalog="workspace.isLoadingCatalog.value"
+                :switching-datasource="workspace.connection.value === 'checking'"
+                @update-datasource="workspace.handleDatasourceSwitch"
                 @update-database="workspace.setDatabase"
                 @update-schema="workspace.setSchema"
                 @update-agent="(value) => { workspace.selectedAgent.value = value }"

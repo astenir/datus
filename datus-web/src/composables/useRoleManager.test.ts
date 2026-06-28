@@ -1,36 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const listRoles = vi.fn();
-const createRole = vi.fn();
-const updateRole = vi.fn();
+const getRole = vi.fn();
+const upsertRole = vi.fn();
 const deleteRole = vi.fn();
-const getRolePermissions = vi.fn();
-const updateRolePermissions = vi.fn();
-const getAgent = vi.fn();
-const listCatalog = vi.fn();
 const toastError = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   adminRoleApi: {
     listRoles,
-    createRole,
-    updateRole,
+    getRole,
+    upsertRole,
     deleteRole,
-    getRolePermissions,
-    updateRolePermissions,
   },
-  configApi: {
-    getAgent,
-  },
-  catalogApi: {
-    list: listCatalog,
-  },
-}));
-
-vi.mock("@/composables/useConnection", () => ({
-  useConnection: () => ({
-    effectiveBase: () => "",
-  }),
 }));
 
 vi.mock("vue-sonner", () => ({
@@ -40,123 +22,105 @@ vi.mock("vue-sonner", () => ({
 }));
 
 const role = {
-  id: 7,
-  role_code: "resource_admin",
-  role_name: "资源管理员",
-  role_type: "resource",
+  role_id: "resource_admin",
+  name: "资源管理员",
   description: "desc",
-  is_system: false,
+  permissions: ["dashboard"],
+  built_in: false,
   created_at: "2026-06-22T00:00:00Z",
-  user_count: 2,
+  updated_at: null,
 };
 
 describe("useRoleManager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    listRoles.mockResolvedValue({ data: { roles: [], total: 0, page: 1, size: 20 } });
-    getAgent.mockResolvedValue({ datasources: {}, current_datasource: null });
-    listCatalog.mockResolvedValue({ databases: [] });
+    listRoles.mockResolvedValue({ data: [] });
+    getRole.mockResolvedValue({ data: role });
   });
 
-  it("loads roles with current filters", async () => {
-    listRoles.mockResolvedValue({
-      data: {
-        roles: [role],
-        total: 1,
-        page: 1,
-        size: 20,
-      },
-    });
+  it("loads roles from the current enterprise role list endpoint", async () => {
+    listRoles.mockResolvedValue({ data: [role] });
 
     const { useRoleManager } = await import("./useRoleManager");
     const manager = useRoleManager();
-    manager.searchForm.value = {
-      role_type: "resource",
-      keyword: "管理员",
-    };
 
     await manager.loadRoles();
 
-    expect(listRoles).toHaveBeenCalledWith({
-      page: 1,
-      size: 20,
-      roleType: "resource",
-      keyword: "管理员",
-    });
+    expect(listRoles).toHaveBeenCalledWith();
     expect(manager.roles.value).toEqual([role]);
     expect(manager.total.value).toBe(1);
   });
 
-  it("resets filters before reloading roles", async () => {
-    const { useRoleManager } = await import("./useRoleManager");
-    const manager = useRoleManager();
-    manager.searchForm.value = {
-      role_type: "datasource",
-      keyword: "ods",
-    };
-    manager.page.value = 3;
-
-    manager.handleReset();
-
-    expect(manager.searchForm.value).toEqual({ role_type: "", keyword: "" });
-    expect(manager.page.value).toBe(1);
-    expect(listRoles).toHaveBeenCalledWith({
-      page: 1,
-      size: 20,
-      roleType: "",
-      keyword: "",
+  it("filters roles locally by keyword", async () => {
+    listRoles.mockResolvedValue({
+      data: [
+        role,
+        { ...role, role_id: "viewer", name: "查看员", permissions: ["report"] },
+      ],
     });
-  });
 
-  it("keeps pagination inside valid bounds", async () => {
     const { useRoleManager } = await import("./useRoleManager");
     const manager = useRoleManager();
-    manager.total.value = 40;
+    await manager.loadRoles();
+    manager.searchForm.value = { keyword: "查看" };
 
-    manager.goToPage(2);
-    manager.goToPage(3);
-    manager.goToPage(0);
-
-    expect(manager.page.value).toBe(2);
-    expect(listRoles).toHaveBeenCalledTimes(1);
+    expect(manager.filteredRoles.value.map((item) => item.role_id)).toEqual(["viewer"]);
   });
 
-  it("creates a role and saves selected permissions", async () => {
-    createRole.mockResolvedValue({ success: true, data: { role_id: 11 } });
+  it("opens role detail with a normalized route role id", async () => {
+    getRole.mockResolvedValue({
+      data: { ...role, name: "分析师", permissions: ["catalog", "dashboard"] },
+    });
 
+    const { useRoleManager } = await import("./useRoleManager");
+    const manager = useRoleManager();
+
+    const detailPromise = manager.openRoleDetail(" analyst ");
+
+    expect(manager.showRoleDetailDialog.value).toBe(true);
+    expect(manager.selectedRoleDetailId.value).toBe("analyst");
+    expect(manager.loadingRoleDetail.value).toBe(true);
+
+    await detailPromise;
+
+    expect(getRole).toHaveBeenCalledWith("analyst");
+    expect(manager.selectedRoleDetail.value?.name).toBe("分析师");
+    expect(manager.selectedRoleDetail.value?.permissions).toEqual(["catalog", "dashboard"]);
+    expect(manager.roleDetailError.value).toBeNull();
+    expect(manager.loadingRoleDetail.value).toBe(false);
+
+    manager.closeRoleDetail();
+
+    expect(manager.showRoleDetailDialog.value).toBe(false);
+    expect(manager.selectedRoleDetail.value).toBeNull();
+    expect(manager.selectedRoleDetailId.value).toBeNull();
+  });
+
+  it("upserts a role with selected permission codes", async () => {
     const { useRoleManager } = await import("./useRoleManager");
     const manager = useRoleManager();
     manager.roleForm.value = {
-      role_code: "resource_viewer",
-      role_name: "资源查看员",
-      role_type: "resource",
+      name: "资源查看员",
       description: "read only",
+      permissions: [],
     };
     manager.selectedFeatures.value = ["dashboard"];
 
     await manager.saveRole();
 
-    expect(createRole).toHaveBeenCalledWith({
-      role_code: "resource_viewer",
-      role_name: "资源查看员",
-      role_type: "resource",
+    expect(upsertRole).toHaveBeenCalledWith("资源查看员", {
+      name: "资源查看员",
       description: "read only",
+      permissions: ["dashboard"],
     });
-    expect(updateRolePermissions).toHaveBeenCalledWith(11, [
-      {
-        permission_type: "feature",
-        resource_code: "dashboard",
-        permission_value: "allow",
-      },
-    ]);
     expect(manager.showDialog.value).toBe(false);
   });
 
-  it("blocks system role deletion", async () => {
+  it("blocks built-in role deletion", async () => {
     const { useRoleManager } = await import("./useRoleManager");
     const manager = useRoleManager();
 
-    manager.requestDeleteRole({ ...role, is_system: true });
+    manager.requestDeleteRole({ ...role, built_in: true });
 
     expect(toastError).toHaveBeenCalledWith("系统内置角色不可删除");
     expect(manager.showDeleteConfirm.value).toBe(false);

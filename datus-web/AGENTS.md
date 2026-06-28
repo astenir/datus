@@ -292,6 +292,7 @@ This file is the durable project rulebook for Codex work in this repository.
 - `src/features/catalog`: datasource and catalog view
 - `src/features/sql`: SQL execution panel
 - `src/features/mcp`: MCP server/tool view
+- `src/features/agent`: legacy/OpenAPI Agent configuration view, guarded for enterprise-disabled route behavior
 - `src/features/artifacts`: dashboard/report listing
 - `src/features/admin`: user, role, and audit management summary
 

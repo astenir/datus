@@ -1,5 +1,15 @@
-import { apiResult, jsonBody } from "./helpers";
-import type { MetricInfo, ReferenceSQLInfo, SemanticModelValidation, SubjectNode, TableDetail } from "@/types";
+import { apiResult, deleteJsonBody, jsonBody } from "./helpers";
+import type {
+  MetricDimensionsData,
+  MetricInfo,
+  MetricPreviewData,
+  MetricPreviewInput,
+  ReferenceSQLInfo,
+  SemanticModelValidation,
+  SubjectNode,
+  SubjectNodeType,
+  TableDetail,
+} from "@/types";
 
 export const subjectApi = {
   list(baseUrl: string): Promise<{ subjects: SubjectNode[] } | null> {
@@ -10,20 +20,28 @@ export const subjectApi = {
     return apiResult(baseUrl, "/api/v1/subject/create", jsonBody({ subject_path: subjectPath }));
   },
 
-  rename(baseUrl: string, type: string, subjectPath: string[], newSubjectPath: string[]): Promise<unknown> {
+  rename(baseUrl: string, type: SubjectNodeType, subjectPath: string[], newSubjectPath: string[]): Promise<unknown> {
     return apiResult(baseUrl, "/api/v1/subject/rename", jsonBody({ type, subject_path: subjectPath, new_subject_path: newSubjectPath }));
   },
 
-  delete(baseUrl: string, type: string, subjectPath: string[]): Promise<unknown> {
-    return apiResult(baseUrl, "/api/v1/subject/delete", { method: "DELETE", body: JSON.stringify({ type, subject_path: subjectPath }) });
+  delete(baseUrl: string, type: SubjectNodeType, subjectPath: string[]): Promise<unknown> {
+    return apiResult(baseUrl, "/api/v1/subject/delete", deleteJsonBody({ type, subject_path: subjectPath }));
   },
 
   getMetric(baseUrl: string, subjectPath: string[]): Promise<MetricInfo | null> {
     return apiResult(baseUrl, "/api/v1/subject/metric", jsonBody({ subject_path: subjectPath }));
   },
 
-  createMetric(baseUrl: string, subjectPath: string[], name: string): Promise<unknown> {
-    return apiResult(baseUrl, "/api/v1/subject/metric/create", jsonBody({ subject_path: subjectPath, name }));
+  getMetricDimensions(baseUrl: string, subjectPath: string[]): Promise<MetricDimensionsData | null> {
+    return apiResult(baseUrl, "/api/v1/subject/metric/dimensions", jsonBody({ subject_path: subjectPath }));
+  },
+
+  previewMetric(baseUrl: string, input: MetricPreviewInput): Promise<MetricPreviewData | null> {
+    return apiResult(baseUrl, "/api/v1/subject/metric/preview", jsonBody(input));
+  },
+
+  createMetric(baseUrl: string, subjectPath: string[], yaml: string): Promise<unknown> {
+    return apiResult(baseUrl, "/api/v1/subject/metric/create", jsonBody({ subject_path: subjectPath, yaml }));
   },
 
   editMetric(baseUrl: string, subjectPath: string[], yaml: string): Promise<unknown> {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { get, setApiBaseResolver } from "./request";
+import { get, setApiBaseResolver, setCurrentAccessToken } from "./request";
 
 function mockJsonResponse(payload: unknown) {
   return new Response(JSON.stringify(payload), {
@@ -12,6 +12,7 @@ function mockJsonResponse(payload: unknown) {
 describe("request helpers", () => {
   afterEach(() => {
     setApiBaseResolver(null);
+    setCurrentAccessToken(null);
     vi.restoreAllMocks();
   });
 
@@ -37,5 +38,40 @@ describe("request helpers", () => {
       "https://auth.example.test/me",
       expect.objectContaining({ method: "GET" }),
     );
+  });
+
+  it("adds the configured bearer token to relative Datus API requests", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ ok: true }));
+    setCurrentAccessToken("dev-alice-token");
+
+    await get("/api/v1/me");
+
+    const init = fetchMock.mock.calls[0]?.[1];
+    const headers = new Headers(init?.headers);
+    expect(headers.get("Authorization")).toBe("Bearer dev-alice-token");
+  });
+
+  it("does not override explicit authorization headers", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ ok: true }));
+    setCurrentAccessToken("dev-alice-token");
+
+    await get("/api/v1/me", {
+      headers: { Authorization: "Bearer explicit-token" },
+    });
+
+    const init = fetchMock.mock.calls[0]?.[1];
+    const headers = new Headers(init?.headers);
+    expect(headers.get("Authorization")).toBe("Bearer explicit-token");
+  });
+
+  it("does not attach Datus bearer tokens to absolute URLs", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ ok: true }));
+    setCurrentAccessToken("dev-alice-token");
+
+    await get("https://auth.example.test/me");
+
+    const init = fetchMock.mock.calls[0]?.[1];
+    const headers = new Headers(init?.headers);
+    expect(headers.has("Authorization")).toBe(false);
   });
 });

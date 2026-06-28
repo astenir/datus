@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, shallowRef, watch } from "vue"
 import {
+  ArchiveIcon,
+  BookOpenTextIcon,
+  BookMarkedIcon,
   BotIcon,
   BriefcaseBusinessIcon,
   ChevronDownIcon,
@@ -14,13 +17,16 @@ import {
   ListChecksIcon,
   LoaderCircleIcon,
   MessageCircleIcon,
+  MoreHorizontalIcon,
   PlusIcon,
   SearchIcon,
   ServerIcon,
   ShieldCheckIcon,
   ShieldIcon,
+  SlidersHorizontalIcon,
   TerminalIcon,
   Trash2Icon,
+  UserRoundIcon,
 } from "@lucide/vue"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
@@ -66,6 +72,7 @@ import {
   SidebarMenuSubButton,
   SidebarMenuSubItem,
   SidebarRail,
+  useSidebar,
 } from "@/components/ui/sidebar"
 import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
@@ -73,6 +80,7 @@ import type { AuthState } from "@/composables/useAuth"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import type { ArtifactViewTab, WorkspaceView } from "@/features/workspace/types"
 import { cn } from "@/lib/utils"
+import { toast } from "vue-sonner"
 
 const props = defineProps<{
   auth: AuthState
@@ -83,13 +91,14 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  openChat: []
+  openChat: [sessionId?: string | null]
   openView: [view: WorkspaceView]
   openArtifactTab: [tab: ArtifactViewTab]
 }>()
 
 const searchQuery = shallowRef("")
 const userProfileOpen = shallowRef(false)
+const sidebar = useSidebar()
 
 type SidebarBadgeVariant = "default" | "secondary" | "destructive" | "outline" | "ghost" | "link"
 
@@ -122,6 +131,7 @@ const profileMenuValueClass = "ml-auto w-12 shrink-0 text-right tracking-normal"
 const profileDatasourceMenuValueClass = "ml-auto w-20 shrink-0 truncate text-right tracking-normal"
 const profileMenuSwitchClass = "ml-auto flex w-14 shrink-0 justify-start"
 const datasourceTestStatusIconClass = "shrink-0"
+const historySessionActionClass = "rounded-md opacity-0 group-focus-within/menu-item:opacity-100 group-hover/menu-item:opacity-100 data-[state=open]:opacity-100"
 
 const userLabel = computed(() => props.auth.user?.realname || props.auth.user?.username || "Datus")
 const userFallback = computed(() => userLabel.value.slice(0, 1).toUpperCase())
@@ -132,7 +142,7 @@ const userRoleLabel = computed(() => props.canManagePermissions ? "管理员" : 
 const userStatusLabel = computed(() => props.auth.user?.userStatus || "已登录")
 const datasourceTestOk = shallowRef<boolean | null>(null)
 const datasourceTestMessage = shallowRef("")
-const datasourceOptions = computed(() => props.workspace.datasourceOptions.value)
+const datasourceOptions = computed(() => props.workspace.visibleDatasourceOptions.value)
 const hasDatasourceOptions = computed(() => datasourceOptions.value.length > 0)
 const canTestDatasource = computed(() => Boolean(currentDatasourceName.value) && !props.workspace.isTestingDatasource.value)
 const datasourceTestActionLabel = computed(() => {
@@ -179,7 +189,13 @@ const permissionModeLabel = computed(() => {
   }
 })
 const isWorkbenchActive = computed(() => {
-  return props.activeView === "sql" || props.activeView === "catalog" || props.activeView === "mcp" || props.activeView === "agents"
+  return props.activeView === "sql"
+    || props.activeView === "catalog"
+    || props.activeView === "semantic"
+    || props.activeView === "knowledge"
+    || props.activeView === "mcp"
+    || props.activeView === "agents"
+    || props.activeView === "configuration"
 })
 const visibleSessions = computed(() => {
   const needle = searchQuery.value.trim().toLocaleLowerCase()
@@ -228,21 +244,30 @@ function titleFromQuery(value: unknown): string {
 }
 
 function openSession(sessionId: string) {
-  props.workspace.selectSession(sessionId)
-  emit("openChat")
+  closeMobileSidebar()
+  emit("openChat", sessionId)
 }
 
 function openView(view: WorkspaceView) {
+  closeMobileSidebar()
   emit("openView", view)
 }
 
 function openArtifactTab(tab: ArtifactViewTab) {
+  closeMobileSidebar()
   emit("openArtifactTab", tab)
 }
 
 function createSession() {
   props.workspace.clearMessages()
-  emit("openChat")
+  closeMobileSidebar()
+  emit("openChat", null)
+}
+
+function closeMobileSidebar() {
+  if (sidebar.isMobile.value) {
+    sidebar.setOpenMobile(false)
+  }
 }
 
 function updatePlanMode(value: boolean) {
@@ -279,6 +304,35 @@ async function runDatasourceTest() {
   const result = await props.workspace.handleDatasourceTest(currentDatasourceName.value)
   datasourceTestOk.value = result.ok
   datasourceTestMessage.value = result.message
+}
+
+async function compactSession(sessionId: string) {
+  try {
+    const result = await props.workspace.compactSession(sessionId)
+    if (result?.success) {
+      const saved = result.tokens_saved != null ? `，节省 ${result.tokens_saved.toLocaleString("zh-CN")} tokens` : ""
+      toast.success(`会话已压缩${saved}`)
+      return
+    }
+    toast.error(result?.error || "会话压缩失败")
+  } catch (error) {
+    console.error("压缩会话失败:", error)
+    toast.error("会话压缩失败")
+  }
+}
+
+async function deleteSession(sessionId: string) {
+  const wasActive = props.workspace.selectedSession.value === sessionId
+  try {
+    await props.workspace.deleteSession(sessionId)
+    if (wasActive) {
+      emit("openChat", null)
+    }
+    toast.success("会话已删除")
+  } catch (error) {
+    console.error("删除会话失败:", error)
+    toast.error("删除会话失败")
+  }
 }
 </script>
 
@@ -387,6 +441,28 @@ async function runDatasourceTest() {
                     <SidebarMenuSubItem class="w-full">
                       <SidebarMenuSubButton
                         as="button"
+                        :is-active="activeView === 'semantic'"
+                        :class="subNavButtonClass"
+                        @click="openView('semantic')"
+                      >
+                        <BookOpenTextIcon />
+                        <span>语义模型</span>
+                      </SidebarMenuSubButton>
+                    </SidebarMenuSubItem>
+                    <SidebarMenuSubItem class="w-full">
+                      <SidebarMenuSubButton
+                        as="button"
+                        :is-active="activeView === 'knowledge'"
+                        :class="subNavButtonClass"
+                        @click="openView('knowledge')"
+                      >
+                        <BookMarkedIcon />
+                        <span>知识构建</span>
+                      </SidebarMenuSubButton>
+                    </SidebarMenuSubItem>
+                    <SidebarMenuSubItem class="w-full">
+                      <SidebarMenuSubButton
+                        as="button"
                         :is-active="activeView === 'mcp'"
                         :class="subNavButtonClass"
                         @click="openView('mcp')"
@@ -403,7 +479,18 @@ async function runDatasourceTest() {
                         @click="openView('agents')"
                       >
                         <BotIcon />
-                        <span>Agent 管理</span>
+                        <span>Agent</span>
+                      </SidebarMenuSubButton>
+                    </SidebarMenuSubItem>
+                    <SidebarMenuSubItem class="w-full">
+                      <SidebarMenuSubButton
+                        as="button"
+                        :is-active="activeView === 'configuration'"
+                        :class="subNavButtonClass"
+                        @click="openView('configuration')"
+                      >
+                        <SlidersHorizontalIcon />
+                        <span>配置</span>
                       </SidebarMenuSubButton>
                     </SidebarMenuSubItem>
                   </SidebarMenuSub>
@@ -419,6 +506,16 @@ async function runDatasourceTest() {
               >
                 <ShieldIcon />
                 <span>权限管理</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                :is-active="activeView === 'profile'"
+                :class="secondaryNavButtonClass"
+                @click="openView('profile')"
+              >
+                <UserRoundIcon />
+                <span>我的权限</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
@@ -467,14 +564,36 @@ async function runDatasourceTest() {
                   <MessageCircleIcon />
                   <span>{{ titleFromQuery(session.user_query) }}</span>
                 </SidebarMenuButton>
-                <SidebarMenuAction
-                  show-on-hover
-                  aria-label="删除会话"
-                  class="rounded-md opacity-0 group-focus-within/menu-item:opacity-100 group-hover/menu-item:opacity-100"
-                  @click.stop="workspace.deleteSession(session.session_id)"
-                >
-                  <Trash2Icon />
-                </SidebarMenuAction>
+                <DropdownMenu>
+                  <DropdownMenuTrigger as-child>
+                    <SidebarMenuAction
+                      show-on-hover
+                      :aria-label="`${titleFromQuery(session.user_query)} 操作`"
+                      :class="historySessionActionClass"
+                    >
+                      <MoreHorizontalIcon />
+                    </SidebarMenuAction>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    side="right"
+                    align="start"
+                    class="w-40"
+                  >
+                    <DropdownMenuGroup>
+                      <DropdownMenuItem @select="compactSession(session.session_id)">
+                        <ArchiveIcon />
+                        <span>压缩会话</span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        variant="destructive"
+                        @select="deleteSession(session.session_id)"
+                      >
+                        <Trash2Icon />
+                        <span>删除会话</span>
+                      </DropdownMenuItem>
+                    </DropdownMenuGroup>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </SidebarMenuItem>
             </SidebarMenu>
 
@@ -620,6 +739,16 @@ async function runDatasourceTest() {
             <DropdownMenuSeparator />
 
             <DropdownMenuGroup class="p-1.5">
+              <DropdownMenuItem
+                class="h-10 rounded-xl px-2.5 text-sm"
+                @select="openView('profile')"
+              >
+                <UserRoundIcon />
+                <span>我的权限与用量</span>
+              </DropdownMenuItem>
+
+              <DropdownMenuSeparator />
+
               <DropdownMenuItem
                 class="h-10 rounded-xl px-2.5 text-sm"
                 @select.prevent="togglePlanMode"

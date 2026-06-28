@@ -1,5 +1,12 @@
 import { apiResult, jsonBody } from "./helpers";
-import type { AgentDetail, AgentInfo, CreateAgentInput, EditAgentInput } from "@/types";
+import type {
+  AgentDetail,
+  AgentInfo,
+  AgentToolsData,
+  AgentUseToolsData,
+  CreateAgentInput,
+  EditAgentInput,
+} from "@/types";
 
 export const agentApi = {
   list(baseUrl: string): Promise<{ agents: AgentInfo[] } | null> {
@@ -22,11 +29,11 @@ export const agentApi = {
     return apiResult(baseUrl, `/api/v1/agent/delete?agent_id=${encodeURIComponent(agentId)}`, { method: "DELETE" });
   },
 
-  tools(baseUrl: string): Promise<{ tools: Record<string, string[]> } | null> {
+  tools(baseUrl: string): Promise<AgentToolsData | null> {
     return apiResult(baseUrl, "/api/v1/agent/tools");
   },
 
-  useTools(baseUrl: string, agentType: string): Promise<unknown> {
+  useTools(baseUrl: string, agentType: string): Promise<AgentUseToolsData | null> {
     return apiResult(baseUrl, `/api/v1/agent/use_tools?agent_type=${encodeURIComponent(agentType)}`);
   },
 };

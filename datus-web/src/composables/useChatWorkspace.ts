@@ -1,12 +1,13 @@
 import { computed, onBeforeUnmount, shallowRef, watch } from "vue";
 
-import { useAgents } from "@/composables/useAgents";
 import { useCatalog } from "@/composables/useCatalog";
 import { useChatSettings } from "@/composables/useChatSettings";
 import { useChatState } from "@/composables/useChatState";
 import { useConnection } from "@/composables/useConnection";
 import { useModels } from "@/composables/useModels";
+import { usePermission } from "@/composables/usePermission";
 import { useTheme } from "@/composables/useTheme";
+import type { SelectOption } from "@/types";
 
 export function useChatWorkspace() {
   useTheme();
@@ -30,6 +31,7 @@ export function useChatWorkspace() {
     testDatasource,
     switchDatasource,
   } = useConnection();
+  const permission = usePermission();
   const {
     messages,
     sessions,
@@ -48,7 +50,6 @@ export function useChatWorkspace() {
     clearMessages,
     dispose,
   } = useChatState();
-  const { agents, loadAgents } = useAgents();
   const { modelOptions, defaultModelLabel, isLoadingModels, loadModels } = useModels();
   const {
     catalogEntries,
@@ -62,11 +63,14 @@ export function useChatWorkspace() {
     setSchema,
   } = useCatalog();
 
-  const agentOptions = computed(() =>
-    agents.value.map((agent) => ({ value: agent.name, label: agent.name }))
-  );
+  // Enterprise mode disables the legacy agent-config routes; keep chat on the default agent.
+  const agentOptions = computed<SelectOption[]>(() => []);
   const selectedAgent = shallowRef("");
   const selectedModel = shallowRef("");
+  const currentDatasource = computed(() => config.value?.current_datasource?.trim() ?? "");
+  const visibleDatasourceOptions = computed(() =>
+    datasourceOptions.value.filter((option) => permission.hasDatasourcePermission(option.value))
+  );
   const initialized = shallowRef(false);
   let initializePromise: Promise<void> | null = null;
 
@@ -98,13 +102,22 @@ export function useChatWorkspace() {
     return testDatasource(name);
   }
 
-  async function handleDatasourceSwitch(name: string) {
-    const changed = await switchDatasource(name);
-    if (!changed) return;
+  function canUseDatasource(name: string) {
+    const datasourceName = name.trim();
+    return visibleDatasourceOptions.value.some((option) => option.value === datasourceName);
+  }
+
+  async function handleDatasourceSwitch(name: string): Promise<boolean> {
+    const datasourceName = name.trim();
+    if (!datasourceName || !canUseDatasource(datasourceName)) return false;
+
+    const changed = await switchDatasource(datasourceName);
+    if (!changed) return false;
 
     setDatabase("");
     setSchema("");
     await loadCatalog();
+    return true;
   }
 
   async function initialize() {
@@ -115,7 +128,6 @@ export function useChatWorkspace() {
       await checkConnection();
       await Promise.all([
         loadSessions(),
-        loadAgents(),
         loadModels(),
         loadCatalog(),
       ]);
@@ -145,6 +157,8 @@ export function useChatWorkspace() {
     connection,
     config,
     datasourceOptions,
+    visibleDatasourceOptions,
+    currentDatasource,
     isTestingDatasource,
     setApiBase,
     messages,
@@ -179,6 +193,7 @@ export function useChatWorkspace() {
     handleDatasourceSwitched,
     handleDatasourceTest,
     handleDatasourceSwitch,
+    canUseDatasource,
     setLanguage,
     setPermissionMode,
     setPlanMode,

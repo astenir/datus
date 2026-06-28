@@ -1,5 +1,5 @@
 import { shallowRef } from "vue";
-import { setCurrentUser, request } from "@/lib/request";
+import { setCurrentAccessToken, setCurrentUser, request } from "@/lib/request";
 import { usePermission } from "@/composables/usePermission";
 
 // 权限
@@ -37,6 +37,7 @@ const state = shallowRef<AuthState>({
   authenticated: false,
   user: null,
 });
+let checkAuthPromise: Promise<void> | null = null;
 
 // 认证配置从环境变量获取
 const AUTH_API_URL = import.meta.env.VITE_AUTH_API_URL || "";
@@ -97,13 +98,17 @@ const DEV_DEFAULT_USER = createDevUser(DEV_USER);
  * 未指定 VITE_DEV_USER 且无 VITE_DEV_ACCESS_TOKEN 时，保持原有 admin 开发用户。
  */
 function isLocalDevelopment(): boolean {
-  return import.meta.env.DEV && (!!DEV_USER || !DEV_ACCESS_TOKEN);
+  return import.meta.env.DEV && (!!DEV_USER || !!DEV_ACCESS_TOKEN || !AUTH_API_URL);
 }
 
 /**
  * 从 cookie 中获取 access_token
  */
 function getAccessTokenFromCookie(): string | null {
+  if (typeof document === "undefined") {
+    return null;
+  }
+
   const cookies = document.cookie.split(";");
   for (const cookie of cookies) {
     const [name, value] = cookie.trim().split("=");
@@ -144,6 +149,12 @@ function redirectToLogin(): void {
   }
 }
 
+function clearAuthState(): void {
+  setCurrentAccessToken(null);
+  setCurrentUser(null);
+  state.value = { loading: false, authenticated: false, user: null };
+}
+
 /**
  * 获取用户详情
  */
@@ -158,6 +169,24 @@ async function fetchUserInfo(token: string): Promise<UserInfo> {
   return response.json();
 }
 
+async function activateAuthenticatedUser(user: UserInfo, token: string | null): Promise<void> {
+  setCurrentAccessToken(token);
+  setCurrentUser(user);
+
+  const permissions = await fetchPermissions();
+  if (!permissions) {
+    clearAuthState();
+    redirectToLogin();
+    return;
+  }
+
+  state.value = {
+    loading: false,
+    authenticated: true,
+    user,
+  };
+}
+
 /**
  * 认证 composable
  * 处理登录校验、用户信息获取等逻辑
@@ -167,17 +196,24 @@ export function useAuth() {
    * 执行认证校验
    */
   async function checkAuth(): Promise<void> {
+    if (checkAuthPromise) {
+      return checkAuthPromise;
+    }
+
+    checkAuthPromise = runCheckAuth();
+    try {
+      await checkAuthPromise;
+    } finally {
+      checkAuthPromise = null;
+    }
+  }
+
+  async function runCheckAuth(): Promise<void> {
     state.value = { ...state.value, loading: true };
 
     // 本地开发环境，免鉴权，使用默认用户数据
     if (isLocalDevelopment()) {
-      setCurrentUser(DEV_DEFAULT_USER);
-      state.value = {
-        loading: false,
-        authenticated: true,
-        user: DEV_DEFAULT_USER,
-      };
-      await fetchPermissions();
+      await activateAuthenticatedUser(DEV_DEFAULT_USER, getAccessToken());
       return;
     }
 
@@ -187,9 +223,8 @@ export function useAuth() {
 
       if (!token) {
         // token 为空，跳转登录页
-        setCurrentUser(null);
+        clearAuthState();
         redirectToLogin();
-        state.value = { loading: false, authenticated: false, user: null };
         return;
       }
 
@@ -198,25 +233,17 @@ export function useAuth() {
 
       // 判断是否认证成功：code 为 200 且 data 不为空
       if (result && Object.keys(result)?.length) {
-        setCurrentUser(result);
-        state.value = {
-          loading: false,
-          authenticated: true,
-          user: result,
-        };
-        await fetchPermissions();
+        await activateAuthenticatedUser(result, token);
       } else {
         // 认证失败，跳转登录页
-        setCurrentUser(null);
+        clearAuthState();
         redirectToLogin();
-        state.value = { loading: false, authenticated: false, user: null };
       }
     } catch (error) {
       console.error("认证校验失败:", error);
       // 发生错误，跳转登录页
-      setCurrentUser(null);
+      clearAuthState();
       redirectToLogin();
-      state.value = { loading: false, authenticated: false, user: null };
     }
   }
 
@@ -224,16 +251,14 @@ export function useAuth() {
    * 登出
    */
   async function logout(): Promise<void> {
-    // 清除前端缓存
+    // 清除认证相关的前端缓存，保留主题、API 地址等本地偏好。
     sessionStorage.removeItem("datus_permission_cache");
-    localStorage.clear();
 
     // 清除 cookie 中的 access_token
     clearAccessTokenCookie();
 
     // 重置状态
-    setCurrentUser(null);
-    state.value = { loading: false, authenticated: false, user: null };
+    clearAuthState();
 
     // 判断是否本地开发模式
     const isDev = import.meta.env.DEV && !DEV_ACCESS_TOKEN;

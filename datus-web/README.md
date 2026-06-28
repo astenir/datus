@@ -8,7 +8,7 @@ Datus Web 是 Datus 的新 Vue/Vite 前端。这个仓库使用 Vue 3、TypeScri
 
 - 工作区外壳、顶部栏、会话侧边栏、用户菜单和数据源连接测试
 - 聊天界面、消息渲染、AI Elements 组合和用户交互块
-- 数据目录、SQL 执行、MCP 服务/工具视图
+- 数据目录、语义模型、知识构建、SQL 执行、MCP 服务/工具视图
 - 报表和仪表盘入口
 - Agent 管理入口
 - 用户、角色和审计管理摘要
@@ -100,6 +100,13 @@ npm run api:types
 npm run api:smoke
 ```
 
+本地 `UserInfoBearerAuthProvider` 模式需要提供开发 Bearer token：
+
+```bash
+VITE_DEV_ACCESS_TOKEN=dev-alice-token npm run dev
+DATUS_API_TOKEN=dev-alice-token npm run api:smoke
+```
+
 ## 目录结构
 
 ```text
@@ -107,6 +114,9 @@ src/features/              # 项目业务 UI
 src/features/workspace/    # 工作区外壳、顶部栏、侧边栏、用户菜单
 src/features/chat/         # 聊天 UI、消息渲染、交互块
 src/features/catalog/      # 数据目录
+src/features/semantic/     # 语义模型、主题域、指标和参考 SQL 工作台
+src/features/config/       # 运行配置、模型和数据源连接探测
+src/features/knowledge/    # 业务知识库和平台文档构建
 src/features/sql/          # SQL 执行面板
 src/features/mcp/          # MCP 服务和工具视图
 src/features/artifacts/    # 报表和仪表盘入口

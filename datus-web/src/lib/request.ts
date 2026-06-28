@@ -6,6 +6,7 @@ import type { UserInfo } from "@/composables/useAuth";
  */
 let currentUser: UserInfo | null = null;
 let apiBaseResolver: (() => string) | null = null;
+let currentAccessToken: string | null = null;
 
 function normalizeBaseUrl(value: string): string {
   return value.trim().replace(/\/+$/, "");
@@ -32,6 +33,21 @@ export function setCurrentUser(user: UserInfo | null): void {
  */
 export function getCurrentUser(): UserInfo | null {
   return currentUser;
+}
+
+/**
+ * 设置当前 Datus API Bearer token。
+ */
+export function setCurrentAccessToken(token: string | null): void {
+  const normalized = token?.trim() ?? "";
+  currentAccessToken = normalized || null;
+}
+
+/**
+ * 获取当前 Datus API Bearer token。
+ */
+export function getCurrentAccessToken(): string | null {
+  return currentAccessToken;
 }
 
 /**
@@ -70,6 +86,10 @@ export async function request(
   // 添加用户标识 header
   if (currentUser?.username) {
     headers.set("X-Datus-User-Id", currentUser.username);
+  }
+
+  if (currentAccessToken && typeof input === "string" && input.startsWith("/") && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${currentAccessToken}`);
   }
 
   const response = await fetch(resolveRequestInput(input), {

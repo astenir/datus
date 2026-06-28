@@ -1,42 +1,33 @@
 <script setup lang="ts">
-import { onMounted, ref, shallowRef } from "vue"
-import { ExternalLinkIcon, RefreshCwIcon } from "@lucide/vue"
+import { computed, onMounted, watch } from "vue"
+import { RefreshCwIcon } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { dashboardApi, reportApi } from "@/lib/api"
-import { useConnection } from "@/composables/useConnection"
-import type { ArtifactManifest } from "@/types"
+import { useArtifacts } from "@/composables/useArtifacts"
+import ArtifactCollectionGrid from "@/features/artifacts/ArtifactCollectionGrid.vue"
+import ArtifactDetailPanel from "@/features/artifacts/ArtifactDetailPanel.vue"
 import type { ArtifactViewTab } from "@/features/workspace/types"
 import { isArtifactViewTab } from "@/features/workspace/types"
 
-const { effectiveBase } = useConnection()
 const props = withDefaults(defineProps<{
   tab?: ArtifactViewTab
+  selectedSlug?: string | null
 }>(), {
   tab: "dashboard",
+  selectedSlug: null,
 })
 const emit = defineEmits<{
   "update:tab": [value: ArtifactViewTab]
+  "open-artifact": [tab: ArtifactViewTab, slug: string]
+  "close-detail": []
 }>()
-const dashboards = ref<ArtifactManifest[]>([])
-const reports = ref<ArtifactManifest[]>([])
-const loading = shallowRef(false)
 
-async function loadArtifacts() {
-  loading.value = true
-  try {
-    const base = effectiveBase()
-    const [dashboardResult, reportResult] = await Promise.all([
-      dashboardApi.list(base),
-      reportApi.list(base),
-    ])
-    dashboards.value = dashboardResult ?? []
-    reports.value = reportResult ?? []
-  } finally {
-    loading.value = false
-  }
-}
+const artifacts = useArtifacts()
+
+const selectedPreviewHref = computed(() => {
+  const slug = props.selectedSlug?.trim()
+  return slug ? artifacts.htmlUrl(props.tab, slug) : null
+})
 
 function setTab(value: unknown) {
   if (typeof value === "string" && isArtifactViewTab(value)) {
@@ -44,7 +35,24 @@ function setTab(value: unknown) {
   }
 }
 
-onMounted(loadArtifacts)
+function openArtifact(tab: ArtifactViewTab, slug: string) {
+  emit("open-artifact", tab, slug)
+}
+
+function runDashboardQuery(querySlug: string, params: Record<string, unknown>) {
+  if (props.tab !== "dashboard" || !props.selectedSlug) return
+  void artifacts.runDashboardQuery(props.selectedSlug, querySlug, params)
+}
+
+onMounted(artifacts.loadArtifacts)
+
+watch(
+  () => [props.tab, props.selectedSlug] as const,
+  ([tab, slug]) => {
+    void artifacts.loadDetail(tab, slug)
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -62,8 +70,8 @@ onMounted(loadArtifacts)
         <Button
           variant="outline"
           size="sm"
-          :disabled="loading"
-          @click="loadArtifacts"
+          :disabled="artifacts.listLoading.value"
+          @click="artifacts.loadArtifacts"
         >
           <RefreshCwIcon data-icon="inline-start" />
           刷新
@@ -71,54 +79,61 @@ onMounted(loadArtifacts)
       </div>
 
       <TabsContent value="dashboard">
-        <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          <Card
-            v-for="item in dashboards"
-            :key="item.slug"
-          >
-            <CardHeader>
-              <CardTitle class="text-base">{{ item.name }}</CardTitle>
-            </CardHeader>
-            <CardContent class="flex flex-col gap-3">
-              <p class="min-h-10 text-sm text-muted-foreground">{{ item.description }}</p>
-              <Button
-                as="a"
-                target="_blank"
-                :href="dashboardApi.htmlUrl(effectiveBase(), item.slug)"
-                variant="outline"
-                size="sm"
-              >
-                <ExternalLinkIcon data-icon="inline-start" />
-                打开
-              </Button>
-            </CardContent>
-          </Card>
+        <div
+          class="grid items-start gap-4"
+          :class="props.selectedSlug ? 'lg:grid-cols-[minmax(0,1fr)_28rem]' : ''"
+        >
+          <ArtifactCollectionGrid
+            :items="artifacts.dashboards.value"
+            :loading="artifacts.listLoading.value"
+            :preview-url="(slug) => artifacts.htmlUrl('dashboard', slug)"
+            empty-title="暂无仪表盘"
+            @select="openArtifact('dashboard', $event)"
+          />
+          <ArtifactDetailPanel
+            v-if="props.selectedSlug"
+            tab="dashboard"
+            :slug="props.selectedSlug"
+            :detail="artifacts.activeDetail.value"
+            :loading="artifacts.detailLoading.value"
+            :error="artifacts.detailError.value"
+            :preview-href="selectedPreviewHref"
+            :query-result="artifacts.queryResult.value"
+            :query-loading="artifacts.queryLoading.value"
+            :query-error="artifacts.queryError.value"
+            :active-query-slug="artifacts.activeQuerySlug.value"
+            @close="emit('close-detail')"
+            @run-dashboard-query="runDashboardQuery"
+          />
         </div>
       </TabsContent>
 
       <TabsContent value="report">
-        <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          <Card
-            v-for="item in reports"
-            :key="item.slug"
-          >
-            <CardHeader>
-              <CardTitle class="text-base">{{ item.name }}</CardTitle>
-            </CardHeader>
-            <CardContent class="flex flex-col gap-3">
-              <p class="min-h-10 text-sm text-muted-foreground">{{ item.description }}</p>
-              <Button
-                as="a"
-                target="_blank"
-                :href="reportApi.htmlUrl(effectiveBase(), item.slug)"
-                variant="outline"
-                size="sm"
-              >
-                <ExternalLinkIcon data-icon="inline-start" />
-                打开
-              </Button>
-            </CardContent>
-          </Card>
+        <div
+          class="grid items-start gap-4"
+          :class="props.selectedSlug ? 'lg:grid-cols-[minmax(0,1fr)_28rem]' : ''"
+        >
+          <ArtifactCollectionGrid
+            :items="artifacts.reports.value"
+            :loading="artifacts.listLoading.value"
+            :preview-url="(slug) => artifacts.htmlUrl('report', slug)"
+            empty-title="暂无报表"
+            @select="openArtifact('report', $event)"
+          />
+          <ArtifactDetailPanel
+            v-if="props.selectedSlug"
+            tab="report"
+            :slug="props.selectedSlug"
+            :detail="artifacts.activeDetail.value"
+            :loading="artifacts.detailLoading.value"
+            :error="artifacts.detailError.value"
+            :preview-href="selectedPreviewHref"
+            :query-result="artifacts.queryResult.value"
+            :query-loading="artifacts.queryLoading.value"
+            :query-error="artifacts.queryError.value"
+            :active-query-slug="artifacts.activeQuerySlug.value"
+            @close="emit('close-detail')"
+          />
         </div>
       </TabsContent>
     </Tabs>

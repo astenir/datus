@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import DatusWorkspace from "@/features/workspace/DatusWorkspace.vue"
+import { RouterView } from "vue-router"
 </script>
 
 <template>
-  <DatusWorkspace />
+  <RouterView />
 </template>

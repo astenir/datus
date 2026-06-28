@@ -82,6 +82,39 @@ export type ConfigSummary = {
   home?: string;
 };
 
+export type SystemStatusSummary = {
+  platform_status: string;
+  enterprise_enabled: boolean;
+  project_id?: string | null;
+  current_datasource?: string | null;
+  active_tasks: number;
+  known_tasks: number;
+};
+
+export type DatasourceConfigMap = Record<string, Record<string, unknown>>;
+
+export type ModelConfigMap = Record<string, Record<string, unknown>>;
+
+export type ModelProbeInput = {
+  type: string;
+  model: string;
+  api_key?: string | null;
+  base_url?: string | null;
+  [key: string]: unknown;
+};
+
+export type DatasourceProbeInput = {
+  type: string;
+  [key: string]: unknown;
+};
+
+export type ConfigurationTextForms = {
+  target: string;
+  modelsText: string;
+  datasourcesText: string;
+  datasourceProbeText: string;
+};
+
 export type SelectOption = {
   value: string;
   label: string;
@@ -154,7 +187,7 @@ export type EditAgentInput = {
   id: string;
   name?: string;
   description?: string;
-  prompt_template?: string;
+  system_prompt?: string;
   prompt_version?: string;
   prompt_language?: string;
   tools?: string[];
@@ -171,6 +204,7 @@ export type EditAgentInput = {
   adapter_type?: string;
   sql_file_threshold?: number;
   sql_preview_lines?: number;
+  artifact_slug?: string;
 };
 
 // ─── Chat Extensions ─────────────────────────────────────────────────────────
@@ -206,6 +240,43 @@ export type MetricInfo = {
   yaml: string;
 };
 
+export type MetricDimensionItem = {
+  name: string;
+  type?: string | null;
+  description?: string | null;
+  is_primary_key?: boolean | null;
+};
+
+export type MetricDimensionsData = {
+  metric: string;
+  dimensions?: MetricDimensionItem[];
+};
+
+export type MetricDimensionPreflight = {
+  message: string;
+  invalid_dimensions?: Record<string, unknown>[];
+  common_dimensions?: string[];
+  suggested_metric_groups?: Record<string, unknown>[];
+};
+
+export type MetricPreviewData = {
+  metric: string;
+  sql?: string | null;
+  database?: string | null;
+  preflight_error?: MetricDimensionPreflight | null;
+};
+
+export type MetricPreviewInput = {
+  subject_path: string[];
+  dimensions?: string[] | null;
+  time_start?: string | null;
+  time_end?: string | null;
+  time_granularity?: string | null;
+  where?: string | null;
+  limit?: number | null;
+  order_by?: string[] | null;
+};
+
 export type ReferenceSQLInfo = {
   name: string;
   sql: string;
@@ -239,7 +310,7 @@ export type TableDetail = {
 
 export type SemanticModelValidation = {
   valid: boolean;
-  invalid_message?: string[];
+  invalid_message?: string[] | null;
 };
 
 // ─── SQL Execution ───────────────────────────────────────────────────────────
@@ -357,18 +428,21 @@ export type McpToolFilter = {
 
 // ─── Knowledge Base Bootstrap ────────────────────────────────────────────────
 
-export type BootstrapComponent = "metadata" | "semantic_model" | "metrics" | "ext_knowledge" | "reference_sql";
+export type BootstrapComponent = "metadata" | "semantic_model" | "metrics" | "reference_sql";
+
+export type BootstrapStrategy = "overwrite" | "check" | "incremental";
+
+export type BootstrapBuildMode = "overwrite" | "check";
 
 export type BootstrapKbInput = {
   components: BootstrapComponent[];
-  strategy?: "overwrite" | "check" | "incremental";
+  strategy?: BootstrapStrategy;
   schema_linking_type?: string;
   catalog?: string;
   database_name?: string;
-  success_story?: string;
-  subject_tree?: string[];
-  sql_dir?: string;
-  ext_knowledge?: string;
+  success_story?: string | null;
+  subject_tree?: string[] | null;
+  sql_dir?: string | null;
 };
 
 export type BootstrapKbEvent = {
@@ -384,18 +458,68 @@ export type BootstrapKbEvent = {
 
 export type BootstrapDocInput = {
   platform: string;
-  build_mode?: "overwrite" | "check";
+  build_mode?: BootstrapBuildMode;
   pool_size?: number;
-  source_type?: string;
-  source?: string;
-  version?: string;
-  github_ref?: string;
-  github_token?: string;
-  paths?: string[];
-  chunk_size?: number;
-  max_depth?: number;
-  include_patterns?: string[];
-  exclude_patterns?: string[];
+  source_type?: string | null;
+  source?: string | null;
+  version?: string | null;
+  github_ref?: string | null;
+  github_token?: string | null;
+  paths?: string[] | null;
+  chunk_size?: number | null;
+  max_depth?: number | null;
+  include_patterns?: string[] | null;
+  exclude_patterns?: string[] | null;
+};
+
+export type KnowledgeBootstrapMode = "kb" | "docs";
+
+export type KnowledgeBootstrapStatus = "idle" | "running" | "completed" | "cancelled" | "error";
+
+export type KnowledgeBootstrapLogLevel = "info" | "success" | "warning" | "error";
+
+export type KnowledgeBootstrapKbForm = {
+  components: BootstrapComponent[];
+  strategy: BootstrapStrategy;
+  schemaLinkingType: "table" | "view" | "mv" | "full";
+  catalog: string;
+  databaseName: string;
+  successStory: string;
+  subjectTreeText: string;
+  sqlDir: string;
+};
+
+export type KnowledgeBootstrapDocsForm = {
+  platform: string;
+  buildMode: BootstrapBuildMode;
+  poolSize: number;
+  sourceType: string;
+  source: string;
+  version: string;
+  githubRef: string;
+  githubToken: string;
+  pathsText: string;
+  chunkSize: string;
+  maxDepth: string;
+  includePatternsText: string;
+  excludePatternsText: string;
+};
+
+export type KnowledgeBootstrapForms = {
+  kb: KnowledgeBootstrapKbForm;
+  docs: KnowledgeBootstrapDocsForm;
+};
+
+export type KnowledgeBootstrapLogEntry = {
+  id: string;
+  mode: KnowledgeBootstrapMode;
+  event: string;
+  level: KnowledgeBootstrapLogLevel;
+  message: string;
+  createdAt: string;
+  streamId?: string;
+  component?: string;
+  payload?: unknown;
 };
 
 // ─── Dashboard / Report ──────────────────────────────────────────────────────
@@ -416,28 +540,57 @@ export type ArtifactFile = {
   content: string;
 };
 
-export type DashboardDetail = {
-  slug: string;
-  name: string;
-  description: string;
-  manifest: ArtifactManifest;
-  created_at?: string;
-  files: ArtifactFile[];
-  templates: Array<{ path: string; content: string }>;
-};
-
 export type QueryColumnMeta = {
   name: string;
-  type: string;
+  type: "string" | "integer" | "number" | "date" | "boolean";
+};
+
+export type DashboardTemplateParamType =
+  | "string"
+  | "integer"
+  | "number"
+  | "date"
+  | "boolean"
+  | "string[]"
+  | "integer[]"
+  | "number[]"
+  | "date[]"
+  | "boolean[]";
+
+export type DashboardTemplateParam = {
+  name: string;
+  type: DashboardTemplateParamType;
+  required?: boolean;
+};
+
+export type DashboardQueryTemplate = {
+  slug: string;
+  description?: string;
+  datasource: string;
+  params: readonly DashboardTemplateParam[];
+  columns: readonly QueryColumnMeta[];
+  sample_params?: Record<string, unknown>;
+  sample_row_count: number;
+  saved_at: string;
 };
 
 export type SqlQueryResultEnvelope = {
   executed_at: string;
   datasource: string;
   row_count: number;
-  columns: QueryColumnMeta[];
-  rows: Record<string, unknown>[];
-  sql?: string;
+  columns: readonly QueryColumnMeta[];
+  rows?: readonly Record<string, unknown>[];
+  sql?: string | null;
+};
+
+export type DashboardDetail = {
+  slug: string;
+  name: string;
+  description: string;
+  manifest: ArtifactManifest;
+  created_at?: string;
+  files: readonly ArtifactFile[];
+  templates?: readonly DashboardQueryTemplate[];
 };
 
 export type ReportDetail = {
@@ -446,7 +599,7 @@ export type ReportDetail = {
   description: string;
   manifest: ArtifactManifest;
   created_at?: string;
-  files: ArtifactFile[];
+  files: readonly ArtifactFile[];
 };
 
 // ─── Data Visualization ──────────────────────────────────────────────────────
@@ -471,6 +624,21 @@ export type VisualizationResult = {
   data_insight?: DataInsight;
 };
 
+// ─── Agent Tool Catalogs ─────────────────────────────────────────────────────
+
+export type AgentToolCategoryData = {
+  tools?: string[];
+};
+
+export type AgentUseToolsData = {
+  default_tools?: string[];
+  tool_types?: Record<string, AgentToolCategoryData>;
+};
+
+export type AgentToolsData = {
+  tools?: Record<string, string[]>;
+};
+
 // ─── Success Story ───────────────────────────────────────────────────────────
 
 export type SuccessStoryInput = {
@@ -487,4 +655,37 @@ export type SuccessStoryResult = {
   session_id: string;
   session_link?: string;
   timestamp: string;
+};
+
+// ─── Support-Only Legacy / Compatibility APIs ───────────────────────────────
+
+export type DirectToolResult = {
+  success?: 0 | 1;
+  error?: string | null;
+  result?: unknown;
+};
+
+export type WorkflowRunInput = {
+  workflow: string;
+  datasource: string;
+  task: string;
+  mode?: "sync" | "async";
+  task_id?: string | null;
+  catalog_name?: string | null;
+  database_name?: string | null;
+  schema_name?: string | null;
+  current_date?: string | null;
+  subject_path?: string[] | null;
+  ext_knowledge?: string | null;
+};
+
+export type WorkflowFeedbackInput = {
+  task_id: string;
+  status: "success" | "failed";
+};
+
+export type WorkflowFeedbackResult = {
+  task_id: string;
+  acknowledged: boolean;
+  recorded_at: string;
 };

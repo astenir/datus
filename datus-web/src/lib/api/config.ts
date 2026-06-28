@@ -1,27 +1,36 @@
 import { apiResult, jsonBody, putBody } from "./helpers";
-import type { ConfigSummary, DatabaseInfo, ModelsData, ProbeResult } from "@/types";
+import type {
+  ConfigSummary,
+  DatabaseInfo,
+  DatasourceConfigMap,
+  DatasourceProbeInput,
+  ModelConfigMap,
+  ModelProbeInput,
+  ModelsData,
+  ProbeResult,
+} from "@/types";
 
 export const configApi = {
   getAgent(baseUrl: string): Promise<ConfigSummary | null> {
     return apiResult(baseUrl, "/api/v1/config/agent");
   },
 
-  updateDatasources(baseUrl: string, datasources: Record<string, unknown>): Promise<unknown> {
+  updateDatasources(baseUrl: string, datasources: DatasourceConfigMap): Promise<unknown> {
     return apiResult(baseUrl, "/api/v1/config/datasources", putBody({ datasources }));
   },
 
-  updateModels(baseUrl: string, models?: Record<string, unknown>, target?: string): Promise<unknown> {
-    const body: Record<string, unknown> = {};
-    if (models) body.models = models;
-    if (target) body.target = target;
+  updateModels(baseUrl: string, models?: ModelConfigMap | null, target?: string | null): Promise<unknown> {
+    const body: { models?: ModelConfigMap | null; target?: string | null } = {};
+    if (models !== undefined) body.models = models;
+    if (target !== undefined) body.target = target;
     return apiResult(baseUrl, "/api/v1/config/models", putBody(body));
   },
 
-  testModel(baseUrl: string, probe: { type: string; model: string; api_key?: string; base_url?: string }): Promise<ProbeResult | null> {
+  testModel(baseUrl: string, probe: ModelProbeInput): Promise<ProbeResult | null> {
     return apiResult(baseUrl, "/api/v1/config/models/test", jsonBody(probe));
   },
 
-  testDatasource(baseUrl: string, probe: { type: string; [key: string]: unknown }): Promise<ProbeResult | null> {
+  testDatasource(baseUrl: string, probe: DatasourceProbeInput): Promise<ProbeResult | null> {
     return apiResult(baseUrl, "/api/v1/config/datasources/test", jsonBody(probe));
   },
 

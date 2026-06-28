@@ -1,46 +1,34 @@
 import { computed, ref, shallowRef } from "vue";
 import { toast } from "vue-sonner";
 
-import { useConnection } from "@/composables/useConnection";
-import { adminRoleApi, catalogApi, configApi } from "@/lib/api";
+import { adminRoleApi } from "@/lib/api";
 import { ROLE_FEATURE_OPTIONS } from "@/lib/navigation";
-import {
-  buildDatasourceTreeOptions,
-  datasourceNodeIdsFromPermissions,
-  featurePermissionCodes,
-  rolePermissionsFromSelections,
-} from "@/lib/role-permissions";
-import type { CatalogDatabase, Role, RoleFormData, RoleSearchForm } from "@/types/admin";
-
-export const roleTypeOptions = [
-  { value: "", label: "全部类型" },
-  { value: "resource", label: "资源角色" },
-  { value: "datasource", label: "数据源角色" },
-];
+import type { Role, RoleFormData, RoleSearchForm } from "@/types/admin";
 
 export function useRoleManager() {
   const featureOptions = ROLE_FEATURE_OPTIONS;
-  const { effectiveBase } = useConnection();
 
   const searchForm = ref<RoleSearchForm>({
-    role_type: "",
     keyword: "",
   });
 
-  const page = shallowRef(1);
-  const size = shallowRef(20);
   const total = shallowRef(0);
   const roles = ref<Role[]>([]);
   const loading = shallowRef(false);
+  const loadingRoleDetail = shallowRef(false);
+  const showRoleDetailDialog = shallowRef(false);
+  const selectedRoleDetailId = shallowRef<string | null>(null);
+  const selectedRoleDetail = shallowRef<Role | null>(null);
+  const roleDetailError = shallowRef<string | null>(null);
+  let roleDetailRequestId = 0;
 
   const showDialog = shallowRef(false);
   const dialogMode = shallowRef<"create" | "edit">("create");
   const editingRole = shallowRef<Role | null>(null);
   const roleForm = ref<RoleFormData>({
-    role_code: "",
-    role_name: "",
-    role_type: "resource",
+    name: "",
     description: "",
+    permissions: [],
   });
   const saving = shallowRef(false);
   const showDeleteConfirm = shallowRef(false);
@@ -48,175 +36,119 @@ export function useRoleManager() {
   const deleting = shallowRef(false);
 
   const selectedFeatures = ref<string[]>([]);
-  const selectedDatasourceNodes = ref<string[]>([]);
-  const catalogDatabases = ref<CatalogDatabase[]>([]);
-  const loadingDatasources = shallowRef(false);
 
-  const datasourceTreeOptions = computed(() => buildDatasourceTreeOptions(catalogDatabases.value));
-  const totalPages = computed(() => Math.ceil(total.value / size.value) || 1);
-  const resourceRoleCount = computed(() => roles.value.filter((role) => role.role_type === "resource").length);
-  const datasourceRoleCount = computed(() => roles.value.filter((role) => role.role_type === "datasource").length);
-  const systemRoleCount = computed(() => roles.value.filter((role) => role.is_system).length);
+  const filteredRoles = computed(() => {
+    const keyword = searchForm.value.keyword.trim().toLowerCase();
+    if (!keyword) return roles.value;
+    return roles.value.filter((role) =>
+      [role.role_id, role.name, role.description ?? ""].some((value) => value.toLowerCase().includes(keyword))
+    );
+  });
+  const builtInRoleCount = computed(() => roles.value.filter((role) => role.built_in).length);
+  const customRoleCount = computed(() => roles.value.filter((role) => !role.built_in).length);
 
   async function loadRoles() {
     loading.value = true;
     try {
-      const result = await adminRoleApi.listRoles({
-        page: page.value,
-        size: size.value,
-        roleType: searchForm.value.role_type,
-        keyword: searchForm.value.keyword,
-      });
-      roles.value = result?.data?.roles || [];
-      total.value = result?.data?.total || 0;
+      const result = await adminRoleApi.listRoles();
+      roles.value = result?.data ?? [];
+      total.value = roles.value.length;
     } catch (err) {
       console.error("加载角色列表失败:", err);
       roles.value = [];
+      total.value = 0;
     } finally {
       loading.value = false;
     }
   }
 
   function handleSearch() {
-    page.value = 1;
-    void loadRoles();
+    return filteredRoles.value;
   }
 
   function handleReset() {
-    searchForm.value = { role_type: "", keyword: "" };
-    page.value = 1;
-    void loadRoles();
+    searchForm.value = { keyword: "" };
   }
 
-  function goToPage(nextPage: number) {
-    if (nextPage < 1 || nextPage > totalPages.value) return;
-    page.value = nextPage;
-    void loadRoles();
-  }
+  async function openRoleDetail(roleId: string) {
+    const normalizedRoleId = roleId.trim();
+    if (!normalizedRoleId) return;
 
-  async function loadDatasources() {
-    if (catalogDatabases.value.length > 0) return;
-    loadingDatasources.value = true;
+    const requestId = roleDetailRequestId + 1;
+    roleDetailRequestId = requestId;
+    showRoleDetailDialog.value = true;
+    selectedRoleDetailId.value = normalizedRoleId;
+    selectedRoleDetail.value = null;
+    roleDetailError.value = null;
+    loadingRoleDetail.value = true;
+
     try {
-      const base = effectiveBase();
-      const config = await configApi.getAgent(base);
-      const datasourceNames = Object.keys(config?.datasources || {});
-      const names = datasourceNames.length > 0
-        ? datasourceNames
-        : config?.current_datasource
-          ? [config.current_datasource]
-          : [];
-
-      const catalogRows: CatalogDatabase[] = [];
-      for (const datasourceName of names) {
-        try {
-          const result = await catalogApi.list(base, {
-            datasource_id: datasourceName,
-            include_sys_schemas: false,
-          });
-          for (const db of result?.databases || []) {
-            catalogRows.push({
-              datasourceName,
-              name: db.name,
-              type: db.type || "unknown",
-              catalogName: db.catalog_name,
-              schemaName: db.schema_name,
-              tables: db.tables || [],
-            });
-          }
-        } catch (err) {
-          console.error(`加载数据源目录失败: ${datasourceName}`, err);
-        }
+      const result = await adminRoleApi.getRole(normalizedRoleId);
+      if (requestId !== roleDetailRequestId) return;
+      selectedRoleDetail.value = result.data ?? null;
+      if (!selectedRoleDetail.value) {
+        roleDetailError.value = "未找到角色详情";
       }
-
-      catalogDatabases.value = catalogRows;
     } catch (err) {
-      console.error("加载数据源目录失败:", err);
-      catalogDatabases.value = [];
+      if (requestId !== roleDetailRequestId) return;
+      console.error("加载角色详情失败:", err);
+      roleDetailError.value = "加载角色详情失败";
+      toast.error("加载角色详情失败");
     } finally {
-      loadingDatasources.value = false;
-    }
-  }
-
-  async function loadRolePermissions(roleId: number, roleType: string) {
-    try {
-      const result = await adminRoleApi.getRolePermissions(roleId);
-      const perms = result?.data || [];
-
-      if (roleType === "resource") {
-        selectedFeatures.value = featurePermissionCodes(perms);
-      } else {
-        selectedDatasourceNodes.value = datasourceNodeIdsFromPermissions(perms, catalogDatabases.value);
+      if (requestId === roleDetailRequestId) {
+        loadingRoleDetail.value = false;
       }
-    } catch (err) {
-      console.error("加载角色权限失败:", err);
-      selectedFeatures.value = [];
-      selectedDatasourceNodes.value = [];
     }
   }
 
-  async function openCreateDialog() {
+  function closeRoleDetail() {
+    roleDetailRequestId += 1;
+    showRoleDetailDialog.value = false;
+    selectedRoleDetailId.value = null;
+    selectedRoleDetail.value = null;
+    roleDetailError.value = null;
+    loadingRoleDetail.value = false;
+  }
+
+  function openCreateDialog() {
     dialogMode.value = "create";
     editingRole.value = null;
     roleForm.value = {
-      role_code: "",
-      role_name: "",
-      role_type: "resource",
+      name: "",
       description: "",
+      permissions: [],
     };
     selectedFeatures.value = [];
-    selectedDatasourceNodes.value = [];
-    await loadDatasources();
     showDialog.value = true;
   }
 
-  async function openEditDialog(role: Role) {
+  function openEditDialog(role: Role) {
     dialogMode.value = "edit";
     editingRole.value = role;
     roleForm.value = {
-      role_code: role.role_code,
-      role_name: role.role_name,
-      role_type: role.role_type,
-      description: role.description || "",
+      name: role.name,
+      description: role.description ?? "",
+      permissions: role.permissions ?? [],
     };
-    selectedFeatures.value = [];
-    selectedDatasourceNodes.value = [];
-    await loadDatasources();
-    await loadRolePermissions(role.id, role.role_type);
+    selectedFeatures.value = [...(role.permissions ?? [])];
     showDialog.value = true;
   }
 
   async function saveRole() {
-    if (!roleForm.value.role_code || !roleForm.value.role_name) {
-      toast.error("请填写角色编码和名称");
+    const name = roleForm.value.name.trim();
+    if (!name) {
+      toast.error("请填写角色名称");
       return;
     }
 
+    const roleId = editingRole.value?.role_id ?? name;
     saving.value = true;
     try {
-      let roleId: number | null = null;
-
-      if (dialogMode.value === "create") {
-        const result = await adminRoleApi.createRole(roleForm.value);
-        if (!result?.success || !result.data?.role_id) {
-          throw new Error(result?.errorMessage || "创建角色失败");
-        }
-        roleId = result.data.role_id;
-      } else if (editingRole.value) {
-        await adminRoleApi.updateRole(editingRole.value.id, {
-          role_name: roleForm.value.role_name,
-          description: roleForm.value.description,
-        });
-        roleId = editingRole.value.id;
-      }
-
-      if (roleId) {
-        await adminRoleApi.updateRolePermissions(
-          roleId,
-          rolePermissionsFromSelections(roleForm.value.role_type, selectedFeatures.value, selectedDatasourceNodes.value)
-        );
-      }
-
+      await adminRoleApi.upsertRole(roleId, {
+        name,
+        description: roleForm.value.description.trim() || null,
+        permissions: selectedFeatures.value,
+      });
       showDialog.value = false;
       void loadRoles();
     } catch (err) {
@@ -227,8 +159,14 @@ export function useRoleManager() {
     }
   }
 
+  function toggleSelectedFeature(featureCode: string) {
+    selectedFeatures.value = selectedFeatures.value.includes(featureCode)
+      ? selectedFeatures.value.filter(item => item !== featureCode)
+      : [...selectedFeatures.value, featureCode];
+  }
+
   function requestDeleteRole(role: Role) {
-    if (role.is_system) {
+    if (role.built_in) {
       toast.error("系统内置角色不可删除");
       return;
     }
@@ -242,7 +180,7 @@ export function useRoleManager() {
 
     deleting.value = true;
     try {
-      await adminRoleApi.deleteRole(roleToDelete.value.id);
+      await adminRoleApi.deleteRole(roleToDelete.value.role_id);
       void loadRoles();
     } catch (err) {
       console.error("删除角色失败:", err);
@@ -256,13 +194,16 @@ export function useRoleManager() {
 
   return {
     featureOptions,
-    roleTypeOptions,
     searchForm,
-    page,
-    size,
     total,
     roles,
+    filteredRoles,
     loading,
+    loadingRoleDetail,
+    showRoleDetailDialog,
+    selectedRoleDetailId,
+    selectedRoleDetail,
+    roleDetailError,
     showDialog,
     dialogMode,
     editingRole,
@@ -272,23 +213,17 @@ export function useRoleManager() {
     roleToDelete,
     deleting,
     selectedFeatures,
-    selectedDatasourceNodes,
-    catalogDatabases,
-    loadingDatasources,
-    datasourceTreeOptions,
-    totalPages,
-    resourceRoleCount,
-    datasourceRoleCount,
-    systemRoleCount,
+    builtInRoleCount,
+    customRoleCount,
     loadRoles,
     handleSearch,
     handleReset,
-    goToPage,
-    loadDatasources,
-    loadRolePermissions,
+    openRoleDetail,
+    closeRoleDetail,
     openCreateDialog,
     openEditDialog,
     saveRole,
+    toggleSelectedFeature,
     requestDeleteRole,
     deleteRole,
   };

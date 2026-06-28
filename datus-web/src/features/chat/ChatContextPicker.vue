@@ -10,6 +10,7 @@ import {
   Layers3Icon,
   Loader2Icon,
   RotateCcwIcon,
+  ServerIcon,
 } from "@lucide/vue"
 import { PromptInputButton } from "@/components/ai-elements/prompt-input"
 import {
@@ -26,24 +27,29 @@ import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
 import type { SelectOption } from "@/types"
 
-type ContextPanelView = "root" | "data-scope" | "agent"
+type ContextPanelView = "root" | "datasource" | "data-scope" | "agent"
 
 const props = defineProps<{
+  datasource: string
   database: string
   schema: string
   selectedAgent: string
+  datasourceOptions: readonly SelectOption[]
   databaseOptions: readonly SelectOption[]
   schemaOptions: readonly SelectOption[]
   agentOptions: readonly SelectOption[]
   loadingCatalog: boolean
+  switchingDatasource: boolean
 }>()
 
 const emit = defineEmits<{
+  updateDatasource: [value: string]
   updateDatabase: [value: string]
   updateSchema: [value: string]
   updateAgent: [value: string]
 }>()
 
+const datasourceLabel = computed(() => optionLabel(props.datasource, props.datasourceOptions) || "未选择数据源")
 const databaseLabel = computed(() => optionLabel(props.database, props.databaseOptions) || "全部")
 const schemaLabel = computed(() => {
   if (!props.database) return "先选择数据库"
@@ -53,7 +59,8 @@ const agentLabel = computed(() => optionLabel(props.selectedAgent, props.agentOp
 const schemaSelectDisabled = computed(() =>
   !props.database || props.loadingCatalog || (props.schemaOptions.length === 0 && !props.schema),
 )
-const hasCustomContext = computed(() => Boolean(props.database || props.schema || props.selectedAgent))
+const hasScopedContext = computed(() => Boolean(props.database || props.schema || props.selectedAgent))
+const hasTriggerContext = computed(() => Boolean(props.datasource || hasScopedContext.value))
 const popoverOpen = shallowRef(false)
 const panelView = shallowRef<ContextPanelView>("root")
 const dataScopeSummary = computed(() => {
@@ -61,14 +68,18 @@ const dataScopeSummary = computed(() => {
   return `${databaseLabel.value} / ${schemaLabel.value}`
 })
 const triggerLabel = computed(() => {
-  if (!hasCustomContext.value) return "默认上下文"
+  if (!hasTriggerContext.value) return "默认上下文"
 
-  return [dataScopeSummary.value, agentLabel.value].join(" / ")
+  return [
+    props.datasource ? datasourceLabel.value : "",
+    dataScopeSummary.value,
+    props.selectedAgent ? agentLabel.value : "",
+  ].filter(Boolean).join(" / ")
 })
 const triggerButtonClass = computed(() =>
   cn(
     "h-8 min-w-0 justify-start rounded-full px-2 text-sm",
-    hasCustomContext.value ? "max-w-72 shrink sm:max-w-96 lg:max-w-[28rem]" : "max-w-fit shrink-0",
+    hasTriggerContext.value ? "max-w-72 shrink sm:max-w-96 lg:max-w-[28rem]" : "max-w-fit shrink-0",
   ),
 )
 
@@ -92,6 +103,13 @@ function rowClass(isSelected = false, disabled = false) {
   )
 }
 
+function selectDatasource(value: string) {
+  if (value !== props.datasource) {
+    emit("updateDatasource", value)
+  }
+  panelView.value = "root"
+}
+
 function selectDatabase(value: string) {
   if (value !== props.database) {
     emit("updateDatabase", value)
@@ -109,8 +127,12 @@ function selectAgent(value: string) {
 }
 
 function resetContext() {
-  emit("updateDatabase", "")
-  emit("updateSchema", "")
+  if (props.database) {
+    emit("updateDatabase", "")
+  }
+  if (props.schema) {
+    emit("updateSchema", "")
+  }
   emit("updateAgent", "")
 }
 </script>
@@ -146,6 +168,38 @@ function resetContext() {
         </PopoverHeader>
 
         <div class="flex flex-col gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            :class="rowClass()"
+            @click="panelView = 'datasource'"
+          >
+            <div class="flex min-w-0 flex-1 items-center gap-3 text-left">
+              <ServerIcon
+                data-icon="inline-start"
+                class="text-muted-foreground"
+              />
+              <div class="min-w-0 flex-1">
+                <div class="text-xs font-medium text-muted-foreground">
+                  数据源
+                </div>
+                <div class="truncate text-sm font-medium text-foreground">
+                  {{ datasourceLabel }}
+                </div>
+              </div>
+            </div>
+            <Loader2Icon
+              v-if="switchingDatasource"
+              data-icon="inline-end"
+              class="animate-spin text-muted-foreground"
+            />
+            <ChevronRightIcon
+              v-else
+              data-icon="inline-end"
+              class="text-muted-foreground"
+            />
+          </Button>
+
           <Button
             type="button"
             variant="ghost"
@@ -206,13 +260,66 @@ function resetContext() {
             type="button"
             variant="ghost"
             size="sm"
-            :disabled="!hasCustomContext"
+            :disabled="!hasScopedContext"
             @click="resetContext"
           >
             <RotateCcwIcon data-icon="inline-start" />
             恢复默认
           </Button>
         </div>
+      </template>
+
+      <template v-else-if="panelView === 'datasource'">
+        <div class="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="返回上下文"
+            @click="panelView = 'root'"
+          >
+            <ChevronLeftIcon data-icon="inline-start" />
+          </Button>
+          <div class="min-w-0">
+            <PopoverTitle class="text-sm font-semibold">
+              数据源
+            </PopoverTitle>
+            <PopoverDescription class="text-xs">
+              可见选项来自当前用户的数据源授权
+            </PopoverDescription>
+          </div>
+        </div>
+
+        <ScrollArea class="h-56 pr-2 sm:h-80">
+          <div class="flex flex-col gap-1">
+            <Button
+              v-for="datasourceOption in datasourceOptions"
+              :key="datasourceOption.value"
+              type="button"
+              variant="ghost"
+              :disabled="switchingDatasource"
+              :class="rowClass(datasource === datasourceOption.value, switchingDatasource)"
+              @click="selectDatasource(datasourceOption.value)"
+            >
+              <ServerIcon
+                data-icon="inline-start"
+                class="text-muted-foreground"
+              />
+              <span class="min-w-0 flex-1 truncate text-sm">{{ datasourceOption.label }}</span>
+              <CheckIcon
+                v-if="datasource === datasourceOption.value"
+                data-icon="inline-end"
+                class="text-muted-foreground"
+              />
+            </Button>
+            <div
+              v-if="datasourceOptions.length === 0"
+              class="px-3 py-2 text-sm text-muted-foreground"
+            >
+              当前账号暂无可切换的数据源
+            </div>
+          </div>
+        </ScrollArea>
       </template>
 
       <template v-else-if="panelView === 'data-scope'">

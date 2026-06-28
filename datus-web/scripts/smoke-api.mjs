@@ -13,11 +13,22 @@ function apiTarget() {
   );
 }
 
+function authHeaders() {
+  const token = process.env.DATUS_API_TOKEN || process.env.DATUS_BEARER_TOKEN || "";
+  if (!token.trim()) return {};
+  return {
+    Authorization: token.trim().toLowerCase().startsWith("bearer ")
+      ? token.trim()
+      : `Bearer ${token.trim()}`,
+  };
+}
+
 async function requestJson(baseUrl, path, init) {
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
     headers: {
       Accept: "application/json",
+      ...authHeaders(),
       ...init?.headers,
     },
   });
