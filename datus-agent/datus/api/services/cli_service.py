@@ -529,6 +529,25 @@ class CLIService:
         return f"Requested database '{requested_database}' is not authorized for datasource '{datasource}'."
 
     @staticmethod
+    def _filter_database_names_by_grant(
+        database_names: Sequence[str], agent_config: Optional[AgentConfig]
+    ) -> list[str]:
+        _datasource, grant = CLIService._current_datasource_grant(agent_config)
+        if not isinstance(grant, dict):
+            return list(database_names)
+
+        patterns = _scope_patterns(grant, "databases")
+        if patterns is None:
+            return list(database_names)
+        if not patterns:
+            return []
+        return [
+            database_name
+            for database_name in database_names
+            if any(fnmatchcase(database_name, pattern) for pattern in patterns)
+        ]
+
+    @staticmethod
     def _field_order_for_grant(
         field_order: Sequence[str],
         agent_config: Optional[AgentConfig],
@@ -1021,6 +1040,7 @@ class CLIService:
                     else:
                         # Single connector - get database name from current context or config
                         db_list = [self.current_db_name] if self.current_db_name else ["default"]
+                    db_list = self._filter_database_names_by_grant(db_list, agent_config)
                     result_data.command_output = f"Available databases: {', '.join(db_list)}"
                     result_data.data = {"databases": db_list}
                 else:
