@@ -557,6 +557,20 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
         client_id = str(form.get("client_id") or "")
         client_secret = str(form.get("client_secret") or "")
         grant_type = str(form.get("grant_type") or "")
+        missing_fields = [
+            field
+            for field, value in (
+                ("client_id", client_id),
+                ("client_secret", client_secret),
+                ("grant_type", grant_type),
+            )
+            if not value
+        ]
+        if missing_fields:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"Missing required form fields: {', '.join(missing_fields)}",
+            )
         if grant_type != "client_credentials":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid grant_type. Must be 'client_credentials'"

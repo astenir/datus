@@ -120,6 +120,15 @@ def test_legacy_disabled_routes_are_audited_and_not_mixed_with_live_enterprise_p
 
 
 def test_admin_mutation_routes_use_module_rbac_and_platform_status_gate():
+    admin_mutation_permissions = {
+        "module.admin.artifacts",
+        "module.admin.datasources",
+        "module.admin.quotas",
+        "module.admin.roles",
+        "module.admin.secrets",
+        "module.admin.sessions",
+        "module.admin.users",
+    }
     for (method, path), policy in ROUTE_SECURITY_MATRIX.items():
         if not path.startswith("/api/v1/admin/") or method not in {"POST", "PUT", "DELETE"}:
             continue
@@ -128,7 +137,7 @@ def test_admin_mutation_routes_use_module_rbac_and_platform_status_gate():
 
         assert MODULE_RBAC in policy.categories
         assert PLATFORM_STATUS_GATE in policy.categories
-        assert policy.module_permission is not None
+        assert policy.module_permission in admin_mutation_permissions
 
 
 def test_datasource_grant_admin_routes_carry_datasource_boundary():

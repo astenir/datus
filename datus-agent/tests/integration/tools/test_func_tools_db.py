@@ -104,16 +104,25 @@ class TestDBFuncToolIntegrationReal:
 @pytest.mark.acceptance
 class TestSqliteMultiConnector:
     @pytest.fixture
-    def agent_config(self):
+    def agent_config(self, tmp_path):
         """Load acceptance config for the multi-database ``bird_sqlite`` datasource.
 
         ``bird_sqlite`` is a single datasource backed by a glob ``path_pattern``;
         its matched files (``california_schools``, ``card_games``, ...) are its
         databases, routed by ``(datasource, database)``.
         """
-        from tests.conftest import load_acceptance_config
+        from datus.configuration.agent_config_loader import load_agent_config
+        from tests.conftest import write_acceptance_config_with_local_bird
 
-        return load_acceptance_config(datasource="bird_sqlite", home="tests")
+        config_path = write_acceptance_config_with_local_bird(tmp_path)
+        return load_agent_config(
+            config=str(config_path),
+            datasource="bird_sqlite",
+            home=str(tmp_path / ".datus_home"),
+            reload=True,
+            force=True,
+            yes=True,
+        )
 
     @pytest.fixture
     def db_tool(self, agent_config):
