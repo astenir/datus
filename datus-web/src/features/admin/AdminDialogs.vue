@@ -778,6 +778,14 @@ defineProps<AdminDialogProps>()
           <FieldDescription>多个角色用英文逗号分隔。</FieldDescription>
         </Field>
         <Field>
+          <FieldLabel for="artifact-users">允许用户</FieldLabel>
+          <Input
+            id="artifact-users"
+            v-model="overview.artifactAclForm.value.allowed_user_ids_text"
+          />
+          <FieldDescription>多个 User ID 用英文逗号分隔。</FieldDescription>
+        </Field>
+        <Field>
           <FieldLabel for="artifact-datasources">关联数据源</FieldLabel>
           <Input
             id="artifact-datasources"

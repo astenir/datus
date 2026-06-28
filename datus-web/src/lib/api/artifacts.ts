@@ -1,5 +1,13 @@
-import { apiResult, jsonBody } from "./helpers";
-import type { ArtifactManifest, DashboardDetail, ReportDetail, SqlQueryResultEnvelope, VisualizationResult } from "@/types";
+import { apiResult, jsonBody, putBody } from "./helpers";
+import type {
+  ArtifactManifest,
+  ArtifactShare,
+  ArtifactShareUpdate,
+  DashboardDetail,
+  ReportDetail,
+  SqlQueryResultEnvelope,
+  VisualizationResult,
+} from "@/types";
 
 export const dashboardApi = {
   list(baseUrl: string): Promise<ArtifactManifest[] | null> {
@@ -13,6 +21,14 @@ export const dashboardApi = {
   htmlUrl(baseUrl: string, slug: string): string {
     const base = baseUrl.replace(/\/+$/, "");
     return `${base}/api/v1/dashboards/${encodeURIComponent(slug)}/html`;
+  },
+
+  getAcl(baseUrl: string, slug: string): Promise<ArtifactShare | null> {
+    return apiResult(baseUrl, `/api/v1/dashboards/${encodeURIComponent(slug)}/acl`);
+  },
+
+  putAcl(baseUrl: string, slug: string, share: ArtifactShareUpdate): Promise<ArtifactShare | null> {
+    return apiResult(baseUrl, `/api/v1/dashboards/${encodeURIComponent(slug)}/acl`, putBody(share));
   },
 
   query(
@@ -37,6 +53,14 @@ export const reportApi = {
   htmlUrl(baseUrl: string, slug: string): string {
     const base = baseUrl.replace(/\/+$/, "");
     return `${base}/api/v1/reports/${encodeURIComponent(slug)}/html`;
+  },
+
+  getAcl(baseUrl: string, slug: string): Promise<ArtifactShare | null> {
+    return apiResult(baseUrl, `/api/v1/reports/${encodeURIComponent(slug)}/acl`);
+  },
+
+  putAcl(baseUrl: string, slug: string, share: ArtifactShareUpdate): Promise<ArtifactShare | null> {
+    return apiResult(baseUrl, `/api/v1/reports/${encodeURIComponent(slug)}/acl`, putBody(share));
   },
 };
 

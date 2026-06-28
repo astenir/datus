@@ -535,6 +535,21 @@ export type ArtifactManifest = {
   key_tables?: string[];
 };
 
+export type ArtifactVisibility = "private" | "role" | "enterprise";
+
+export type ArtifactShare = {
+  owner_user_id: string;
+  visibility: ArtifactVisibility;
+  allowed_roles?: string[];
+  allowed_user_ids?: string[];
+};
+
+export type ArtifactShareUpdate = {
+  visibility: ArtifactVisibility;
+  allowed_roles?: string[];
+  allowed_user_ids?: string[];
+};
+
 export type ArtifactFile = {
   path: string;
   content: string;

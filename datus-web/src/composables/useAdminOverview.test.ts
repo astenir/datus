@@ -94,6 +94,7 @@ const artifactAcl = {
   owner_user_id: "alice",
   visibility: "role",
   allowed_roles: ["analyst"],
+  allowed_user_ids: ["bob"],
   datasources: ["fund"],
 };
 
@@ -331,10 +332,12 @@ describe("useAdminOverview", () => {
       owner_user_id: "alice",
       visibility: "role",
       allowed_roles_text: "analyst",
+      allowed_user_ids_text: "bob",
       datasources_text: "fund",
     });
 
     overview.artifactAclForm.value.allowed_roles_text = "analyst, admin";
+    overview.artifactAclForm.value.allowed_user_ids_text = "bob, charlie";
 
     await overview.saveArtifactAcl();
 
@@ -342,6 +345,7 @@ describe("useAdminOverview", () => {
       owner_user_id: "alice",
       visibility: "role",
       allowed_roles: ["analyst", "admin"],
+      allowed_user_ids: ["bob", "charlie"],
       datasources: ["fund"],
     });
     expect(overview.showArtifactAclDialog.value).toBe(false);

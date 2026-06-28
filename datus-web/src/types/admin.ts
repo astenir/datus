@@ -139,6 +139,7 @@ export interface ArtifactAclFormData {
   owner_user_id: string;
   visibility: "private" | "role" | "enterprise";
   allowed_roles_text: string;
+  allowed_user_ids_text: string;
   datasources_text: string;
 }
 

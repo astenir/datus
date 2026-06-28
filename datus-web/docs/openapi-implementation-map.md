@@ -6,7 +6,7 @@ This document tracks frontend coverage for the backend route surface. It is a wo
 
 ## Summary
 
-Current OpenAPI surface: 117 operations.
+Current OpenAPI surface: 121 operations.
 
 Implemented as interactive workspace UI:
 - Workspace navigation is route-backed with Vue Router: `/chat`, `/chat/:sessionId`, `/catalog`, `/semantic`, `/knowledge`, `/sql`, `/mcp`, `/agents`, `/configuration`, `/artifacts/dashboards`, `/artifacts/dashboards/:slug`, `/artifacts/reports`, `/artifacts/reports/:slug`, `/profile`, and `/admin?tab=...`.
@@ -19,8 +19,8 @@ Implemented as interactive workspace UI:
 - Configuration display, model/datasource replacement saves, model catalog listing, and connectivity probes through `src/features/config/ConfigurationPanel.vue`.
 - Enterprise system status summary through the configuration summary tab.
 - Knowledge-base bootstrap and documentation bootstrap start/cancel/progress streams through `src/features/knowledge/KnowledgeBootstrapPanel.vue`.
-- Dashboard/report listing, route-backed detail browsing, dashboard template query execution, and HTML preview URL construction through `src/features/artifacts/**`.
-- Enterprise admin users, user details, roles, role details, audit, datasource grants, sessions, session details, quotas, secrets, and artifact ACLs through route-backed admin tabs and detail dialogs in `src/features/admin/AdminPanel.vue`.
+- Dashboard/report listing, route-backed detail browsing, dashboard template query execution, HTML preview URL construction, and creator-side artifact sharing API support through `src/features/artifacts/**` and `src/lib/api/artifacts.ts`.
+- Enterprise admin users, user details, roles, role details, audit, datasource grants, sessions, session details, quotas, secrets, and artifact ACLs including allowed user IDs through route-backed admin tabs and detail dialogs in `src/features/admin/AdminPanel.vue`.
 
 Implemented as API/composable support but still needing richer product UI:
 - Enterprise `/me/*` routes: profile, effective permission, datasource grant, session, and usage views are implemented in the workspace.
@@ -51,7 +51,7 @@ Not suitable as standalone pages by default:
 | agent | 7 | Route-backed Agent Manager implemented at `/agents` for OpenAPI/local compatibility: list, detail, create, edit, delete, tool catalog, and use-tools views. The panel detects `ENTERPRISE_ROUTE_DISABLED` / `ENTERPRISE_LEGACY_API_DISABLED` and displays a disabled-route notice because the enterprise backend guards this legacy route family with `agent.config_legacy`. | `src/lib/api/agent.ts`, `src/composables/useAgentManager.ts`, `src/features/agent/AgentManagerPanel.vue`, `src/router/index.ts`, `src/composables/useAgentManager.test.ts` |
 | dashboard / report / visualization | 4 | Dashboard/report list, detail, preview, and dashboard template query execution implemented; visualization helper typed but hidden because the enterprise backend disables the legacy recommender route. | `src/lib/api/artifacts.ts`, `src/composables/useArtifacts.ts`, `src/features/artifacts/**` |
 | enterprise me | 6 | Profile, effective permissions, datasource grants, sessions, and usage implemented | `src/lib/api/profile.ts`, `src/composables/useProfileOverview.ts`, `src/features/profile/ProfilePanel.vue`, `src/composables/useAuth.ts`, `src/composables/usePermission.ts` |
-| enterprise artifacts | 9 | Dashboard/report collection and detail routes plus admin ACL list/edit implemented; admin ACL tab and ACL edit dialog are shareable through `/admin?tab=artifacts&artifact_type=dashboard&artifact_slug=...` | `src/lib/api/artifacts.ts`, `src/lib/api/admin.ts`, `src/composables/useArtifacts.ts`, `src/composables/useAdminOverview.ts`, `src/features/artifacts/**`, `src/features/admin/AdminPanel.vue`, `src/features/workspace/route-state.ts` |
+| enterprise artifacts | 13 | Dashboard/report collection and detail routes plus creator-side sharing helpers and admin ACL list/edit implemented; admin ACL tab and ACL edit dialog are shareable through `/admin?tab=artifacts&artifact_type=dashboard&artifact_slug=...` | `src/lib/api/artifacts.ts`, `src/lib/api/admin.ts`, `src/composables/useArtifacts.ts`, `src/composables/useAdminOverview.ts`, `src/features/artifacts/**`, `src/features/admin/AdminPanel.vue`, `src/features/workspace/route-state.ts` |
 | enterprise admin datasources | 6 | Datasource grants implemented with route-backed detail/edit via `/admin?tab=grants&grant_subject_type=...&grant_subject_id=...&grant_datasource=...`; default datasource wired through config API | `src/lib/api/admin.ts`, `src/lib/api/config.ts`, `src/composables/useAdminOverview.ts`, `src/features/admin/AdminPanel.vue`, `src/features/workspace/route-state.ts` |
 | enterprise audit | 2 | List, filtering, detail view, and CSV export implemented; audit tab and list filters are shareable through `/admin?tab=audit&audit_user=...&audit_action=...` | `src/lib/api/admin.ts`, `src/composables/useAuditLogs.ts`, `src/features/admin/AdminPanel.vue`, `src/features/workspace/route-state.ts` |
 | enterprise sessions | 4 | List, detail, stop, delete implemented; sessions tab and detail dialog are shareable through `/admin?tab=sessions&session=...` | `src/lib/api/admin.ts`, `src/composables/useAdminOverview.ts`, `src/features/admin/AdminPanel.vue`, `src/features/workspace/route-state.ts` |

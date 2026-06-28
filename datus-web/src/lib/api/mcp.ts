@@ -19,8 +19,8 @@ export const mcpApi = {
     return apiResult(baseUrl, `/api/v1/mcp/servers/${encodeURIComponent(serverName)}/connectivity`);
   },
 
-  listTools(baseUrl: string, serverName: string, applyFilter = true): Promise<{ tools: McpToolInfo[] } | null> {
-    return apiResult(baseUrl, `/api/v1/mcp/servers/${encodeURIComponent(serverName)}/tools?apply_filter=${applyFilter}`);
+  listTools(baseUrl: string, serverName: string): Promise<{ tools: McpToolInfo[] } | null> {
+    return apiResult(baseUrl, `/api/v1/mcp/servers/${encodeURIComponent(serverName)}/tools`);
   },
 
   callTool(baseUrl: string, serverName: string, toolName: string, parameters?: Record<string, unknown>): Promise<unknown> {

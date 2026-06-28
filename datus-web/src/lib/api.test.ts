@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   agentApi,
+  adminArtifactApi,
   adminAuditApi,
   adminDatasourceApi,
   adminQuotaApi,
@@ -146,16 +147,32 @@ describe("api client", () => {
     });
   });
 
-  it("uses current artifact collection routes", async () => {
+  it("uses current artifact collection and sharing routes", async () => {
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(mockJsonResponse({ success: true, data: [] }))
-      .mockResolvedValueOnce(mockJsonResponse({ success: true, data: [] }));
+      .mockResolvedValueOnce(mockJsonResponse({ success: true, data: [] }))
+      .mockResolvedValueOnce(mockJsonResponse({ success: true, data: null }))
+      .mockResolvedValueOnce(mockJsonResponse({ success: true, data: null }));
 
     await dashboardApi.list("http://localhost:8000/");
     await reportApi.list("http://localhost:8000/");
+    await dashboardApi.getAcl("http://localhost:8000/", "fund_overview");
+    await reportApi.putAcl("http://localhost:8000/", "fund_report", {
+      visibility: "role",
+      allowed_roles: ["analyst"],
+      allowed_user_ids: ["alice"],
+    });
 
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/dashboards");
     expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe("http://localhost:8000/api/v1/reports");
+    expect(vi.mocked(fetch).mock.calls[2]?.[0]).toBe("http://localhost:8000/api/v1/dashboards/fund_overview/acl");
+    expect(vi.mocked(fetch).mock.calls[3]?.[0]).toBe("http://localhost:8000/api/v1/reports/fund_report/acl");
+    expect((vi.mocked(fetch).mock.calls[3]?.[1] as RequestInit).method).toBe("PUT");
+    expect(JSON.parse(String((vi.mocked(fetch).mock.calls[3]?.[1] as RequestInit).body))).toEqual({
+      visibility: "role",
+      allowed_roles: ["analyst"],
+      allowed_user_ids: ["alice"],
+    });
     expect(dashboardApi.htmlUrl("http://localhost:8000/", "fund_overview")).toBe(
       "http://localhost:8000/api/v1/dashboards/fund_overview/html",
     );
@@ -290,6 +307,14 @@ describe("api client", () => {
       },
       timeout: 30,
     });
+  });
+
+  it("uses the current filtered MCP tools route", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ success: true, data: { tools: [] } }));
+
+    await mcpApi.listTools("http://localhost:8000", "filesystem");
+
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/mcp/servers/filesystem/tools");
   });
 
   it("does not expose subject knowledge endpoints without backend support", () => {
@@ -436,6 +461,13 @@ describe("api client", () => {
     await adminQuotaApi.listUsage({ resource: "chat_tokens" });
     await adminSecretApi.listSecrets({ prefix: "openai" });
     await adminSecretApi.getSecret("openai.default");
+    await adminArtifactApi.putAcl("dashboard", "fund-overview", {
+      owner_user_id: "alice",
+      visibility: "role",
+      allowed_roles: ["analyst"],
+      allowed_user_ids: ["bob"],
+      datasources: ["fund"],
+    });
 
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("/api/v1/admin/audit-logs?limit=20&user_id=alice&decision=deny");
     expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe(
@@ -452,6 +484,14 @@ describe("api client", () => {
     expect(vi.mocked(fetch).mock.calls[5]?.[0]).toBe("/api/v1/admin/usage?resource=chat_tokens");
     expect(vi.mocked(fetch).mock.calls[6]?.[0]).toBe("/api/v1/admin/secrets?prefix=openai");
     expect(vi.mocked(fetch).mock.calls[7]?.[0]).toBe("/api/v1/admin/secrets/openai.default");
+    expect(vi.mocked(fetch).mock.calls[8]?.[0]).toBe("/api/v1/admin/artifacts/dashboard/fund-overview/acl");
+    expect(JSON.parse(String((vi.mocked(fetch).mock.calls[8]?.[1] as RequestInit).body))).toEqual({
+      owner_user_id: "alice",
+      visibility: "role",
+      allowed_roles: ["analyst"],
+      allowed_user_ids: ["bob"],
+      datasources: ["fund"],
+    });
   });
 
   it("uses current enterprise me routes", async () => {

@@ -21,6 +21,49 @@ function resolveRequestInput(input: string | URL | globalThis.Request): string |
   return base ? `${base}${input}` : input;
 }
 
+function isDatusApiPath(pathname: string): boolean {
+  return pathname === "/api" || pathname.startsWith("/api/") || pathname === "/health";
+}
+
+function requestUrl(input: string | URL | globalThis.Request): URL | null {
+  const rawUrl = typeof input === "string"
+    ? input
+    : input instanceof URL
+      ? input.href
+      : input.url;
+
+  try {
+    return new URL(rawUrl, "http://datus.local");
+  } catch {
+    return null;
+  }
+}
+
+function apiBaseUrl(): URL | null {
+  const base = normalizeBaseUrl(apiBaseResolver?.() ?? "");
+  if (!base) return null;
+
+  try {
+    return new URL(base);
+  } catch {
+    return null;
+  }
+}
+
+function shouldAttachAccessToken(input: string | URL | globalThis.Request): boolean {
+  const target = requestUrl(input);
+  if (!target || !isDatusApiPath(target.pathname)) return false;
+
+  if (typeof input === "string" && input.startsWith("/")) {
+    return true;
+  }
+
+  const base = apiBaseUrl();
+  if (!base) return false;
+
+  return target.origin === base.origin;
+}
+
 /**
  * 设置当前用户信息
  */
@@ -88,7 +131,7 @@ export async function request(
     headers.set("X-Datus-User-Id", currentUser.username);
   }
 
-  if (currentAccessToken && typeof input === "string" && input.startsWith("/") && !headers.has("Authorization")) {
+  if (currentAccessToken && shouldAttachAccessToken(input) && !headers.has("Authorization")) {
     headers.set("Authorization", `Bearer ${currentAccessToken}`);
   }
 

@@ -138,6 +138,7 @@ export function useAdminOverview() {
     owner_user_id: "",
     visibility: "private",
     allowed_roles_text: "",
+    allowed_user_ids_text: "",
     datasources_text: "",
   });
 
@@ -525,6 +526,7 @@ export function useAdminOverview() {
       owner_user_id: "",
       visibility: "private",
       allowed_roles_text: "",
+      allowed_user_ids_text: "",
       datasources_text: editingArtifact.value?.manifest.datasources?.join(", ") ?? "",
     };
     showArtifactAclDialog.value = true;
@@ -539,6 +541,7 @@ export function useAdminOverview() {
           owner_user_id: acl.owner_user_id,
           visibility: acl.visibility,
           allowed_roles_text: acl.allowed_roles?.join(", ") ?? "",
+          allowed_user_ids_text: acl.allowed_user_ids?.join(", ") ?? "",
           datasources_text: acl.datasources?.join(", ") ?? "",
         };
       } else {
@@ -598,6 +601,7 @@ export function useAdminOverview() {
         owner_user_id: ownerUserId,
         visibility: artifactAclForm.value.visibility,
         allowed_roles: commaList(artifactAclForm.value.allowed_roles_text),
+        allowed_user_ids: commaList(artifactAclForm.value.allowed_user_ids_text),
         datasources: commaList(artifactAclForm.value.datasources_text),
       });
       closeArtifactAclDialog();
