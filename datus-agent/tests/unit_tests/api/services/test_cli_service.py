@@ -1043,6 +1043,66 @@ class TestCLIServiceExecuteContext:
         assert result.success is True
         assert isinstance(result.data.result.context_info, dict)
 
+    def test_context_catalogs_and_catalog_use_projected_connector_catalog(self, monkeypatch):
+        """Catalog context output must use the request-scoped connector catalog."""
+
+        class FakeConnector:
+            catalog_name = "finance_catalog"
+            schema_name = "finance_schema"
+
+            def get_catalogs(self):
+                return ["finance_catalog"]
+
+            def get_tables(self):
+                return ["orders"]
+
+        seen = {}
+
+        class FakeDBManager:
+            def __init__(self, datasource_configs):
+                seen["datasource_configs"] = datasource_configs
+
+            def first_conn_with_name(self, datasource):
+                seen["datasource"] = datasource
+                return "finance_db", FakeConnector()
+
+            def close(self):
+                seen["closed"] = seen.get("closed", 0) + 1
+
+        monkeypatch.setattr("datus.api.services.cli_service.DBManager", FakeDBManager)
+        projected_config = SimpleNamespace(
+            datasource_configs={"finance": object()},
+            current_datasource="finance",
+            db_type="sqlite",
+        )
+        svc = CLIService(agent_config=None, chat_service=None)
+        svc.cli_context.update_database_context(
+            catalog="hr_catalog",
+            db_name="hr_db",
+            schema="hr_schema",
+        )
+
+        catalogs_result = svc.execute_context(
+            "catalogs",
+            ExecuteContextInput(context_type="catalogs"),
+            agent_config=projected_config,
+        )
+        catalog_result = svc.execute_context(
+            "catalog",
+            ExecuteContextInput(context_type="catalog"),
+            agent_config=projected_config,
+        )
+
+        assert catalogs_result.success is True
+        assert catalogs_result.data.result.context_info["current"] == "finance_catalog"
+        assert catalog_result.success is True
+        assert catalog_result.data.result.context_info["catalog_name"] == "finance_catalog"
+        assert seen == {
+            "datasource_configs": projected_config.datasource_configs,
+            "datasource": "finance",
+            "closed": 2,
+        }
+
     def test_context_context(self, cli_svc):
         """execute_context 'context' returns connection context."""
         request = ExecuteContextInput(context_type="tables")

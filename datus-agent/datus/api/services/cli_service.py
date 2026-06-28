@@ -763,7 +763,7 @@ class CLIService:
                     try:
                         # Try to get actual catalogs from the database
                         catalogs = connector.get_catalogs() if hasattr(connector, "get_catalogs") else ["main"]
-                        current_catalog = self.cli_context.current_catalog if self.cli_context else "main"
+                        current_catalog = active_catalog or "main"
                         result_data.context_info = {
                             "catalogs": catalogs,
                             "current": current_catalog,
@@ -830,9 +830,7 @@ class CLIService:
                     if connector and active_agent_config:
                         # Use real catalog context similar to ContextCommands.cmd_catalog
                         db_type = getattr(active_agent_config, "db_type", "unknown")
-                        catalog_name = (
-                            getattr(self.cli_context, "current_catalog", "main") if self.cli_context else "main"
-                        )
+                        catalog_name = active_catalog or "main"
 
                         result_data.context_info = {
                             "db_type": db_type,
