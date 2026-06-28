@@ -37,7 +37,7 @@ _require_sql_executor = require_module("module.sql_executor")
 SqlExecutorModuleCtx = Annotated[AppContext, Depends(_require_sql_executor)]
 RequestContextDep = Annotated[AppContext, Depends(get_request_app_context)]
 
-_DATASOURCE_CATALOG_CONTEXT_TYPES = {"tables", "catalogs", "catalog"}
+_DATASOURCE_CATALOG_CONTEXT_TYPES = {"tables", "catalogs", "catalog", "context"}
 _DATASOURCE_CATALOG_INTERNAL_COMMANDS = {"database", "databases", "schemas", "tables"}
 _CHAT_INTERNAL_COMMANDS = {"chat_info", "clear", "sessions"}
 
