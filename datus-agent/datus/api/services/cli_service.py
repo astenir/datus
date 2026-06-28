@@ -921,7 +921,15 @@ class CLIService:
                             "database_name": current_db_name,
                             "connection_status": "connected",
                             "message": "Database catalog context displayed",
-                            "tables_available": len(connector.get_tables()) if connector else 0,
+                            "tables_available": len(
+                                self._filter_table_names_by_grant(
+                                    connector.get_tables(),
+                                    connector,
+                                    agent_config,
+                                )
+                            )
+                            if connector
+                            else 0,
                         }
                     else:
                         result_data.context_info = {
