@@ -59,6 +59,13 @@ def _build_ctx(user_id="tester", datasource_grants=None):
     return ctx
 
 
+def _request_with_service(svc):
+    async def override_service(request):
+        return svc
+
+    return SimpleNamespace(app=SimpleNamespace(dependency_overrides={deps.get_datus_service: override_service}))
+
+
 class CollectingAuditSink:
     def __init__(self):
         self.events = []
@@ -94,7 +101,7 @@ async def test_feedback_endpoint_renders_prompt_and_routes_to_feedback_subagent(
         database="sales_db",
     )
 
-    response = await stream_chat_feedback(request, svc, _build_ctx())
+    response = await stream_chat_feedback(request, _build_ctx(), _request_with_service(svc))
     await _drain(response)
 
     svc.chat.stream_chat.assert_called_once()
@@ -126,7 +133,7 @@ async def test_feedback_endpoint_denies_unauthorized_datasource_before_task_star
         datasource="hr",
     )
 
-    response = await stream_chat_feedback(request, svc, ctx)
+    response = await stream_chat_feedback(request, ctx, _request_with_service(svc))
     chunks = []
     async for chunk in response.body_iterator:
         chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
@@ -152,7 +159,7 @@ async def test_feedback_endpoint_denies_unauthorized_model_before_task_start():
         model="deepseek/deepseek-chat",
     )
 
-    response = await stream_chat_feedback(request, svc, ctx)
+    response = await stream_chat_feedback(request, ctx, _request_with_service(svc))
     chunks = []
     async for chunk in response.body_iterator:
         chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
@@ -162,6 +169,32 @@ async def test_feedback_endpoint_denies_unauthorized_model_before_task_start():
     payload = json.loads(next(line for line in chunks[0].splitlines() if line.startswith("data: "))[len("data: ") :])
     assert payload["error_type"] == "MODEL_FORBIDDEN"
     assert "deepseek/deepseek-chat" in payload["error"]
+    svc.chat.stream_chat.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_feedback_endpoint_denies_malformed_model_under_policy():
+    svc = _build_svc()
+    svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
+    ctx = _build_ctx()
+    ctx.principal = {"model_policy": {"allowed_models": ["openai/gpt-4.1"]}}
+    request = FeedbackChatInput(
+        source_session_id="chat_session_abc",
+        reaction_emoji="thumbsup",
+        reference_msg="Here is your SQL result",
+        model="gpt-4o",
+    )
+
+    response = await stream_chat_feedback(request, ctx, _request_with_service(svc))
+    chunks = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+    assert len(chunks) == 1
+    assert "event: error" in chunks[0]
+    payload = json.loads(next(line for line in chunks[0].splitlines() if line.startswith("data: "))[len("data: ") :])
+    assert payload["error_type"] == "MODEL_FORBIDDEN"
+    assert "gpt-4o" in payload["error"]
     svc.chat.stream_chat.assert_not_called()
 
 
@@ -204,7 +237,7 @@ async def test_feedback_endpoint_appends_optional_reaction_msg():
         reaction_msg="Please recheck the metric definition",
     )
 
-    response = await stream_chat_feedback(request, svc, _build_ctx())
+    response = await stream_chat_feedback(request, _build_ctx(), _request_with_service(svc))
     await _drain(response)
 
     stream_input: StreamChatInput = svc.chat.stream_chat.call_args.args[0]
@@ -232,7 +265,7 @@ async def test_feedback_endpoint_denies_when_sql_policy_enabled_without_principa
         reference_msg="Here is your SQL result",
     )
 
-    response = await stream_chat_feedback(request, svc, ctx)
+    response = await stream_chat_feedback(request, ctx, _request_with_service(svc))
     chunks = []
     async for chunk in response.body_iterator:
         chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
@@ -289,7 +322,7 @@ async def test_feedback_endpoint_rejects_quota_exceeded_before_task_start(monkey
         reference_msg="Here is your SQL result",
     )
 
-    response = await stream_chat_feedback(request, svc, _build_ctx())
+    response = await stream_chat_feedback(request, _build_ctx(), _request_with_service(svc))
     chunks = []
     async for chunk in response.body_iterator:
         chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)

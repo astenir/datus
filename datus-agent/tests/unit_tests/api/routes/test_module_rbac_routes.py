@@ -24,11 +24,11 @@ from datus.api.enterprise.defaults import (
 )
 from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.models.base_models import Result
-from datus.api.models.cli_models import ChatSessionData, ExecuteSQLData, StopExecuteSQLData
+from datus.api.models.cli_models import ChatSessionData, ExecuteContextData, ExecuteSQLData, StopExecuteSQLData
 from datus.api.models.dashboard_models import DashboardDetail, SqlQueryResultEnvelope
 from datus.api.models.database_models import DatabaseInfo, DatabasesData, ListDatabasesData
 from datus.api.models.report_models import ReportDetail
-from datus.api.routes import chat_routes, cli_routes, dashboard_routes, database_routes, report_routes
+from datus.api.routes import chat_routes, cli_routes, dashboard_routes, database_routes, report_routes, table_routes
 from datus.api.services.cli_service import CLIService, _SQLTaskRecord
 from datus.api.services.dashboard_service import DashboardService
 from datus.schemas.artifact_manifest import ArtifactManifest
@@ -164,6 +164,83 @@ def test_chat_routes_require_module_chat(monkeypatch):
 
     assert response.status_code == 403
     svc.chat.list_sessions.assert_not_called()
+
+
+def test_chat_rbac_denial_does_not_resolve_datus_service(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.datasource_catalog"})
+    app = FastAPI()
+    app.include_router(chat_routes.router)
+
+    async def reject_service(request: Request):
+        raise AssertionError("RBAC denial resolved DatusService")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        responses = [
+            client.post("/api/v1/chat/stream", json={"message": "hello"}),
+            client.post(
+                "/api/v1/chat/feedback",
+                json={"source_session_id": "s1", "reaction_emoji": "thumbsup", "reference_msg": "ok"},
+            ),
+            client.post("/api/v1/chat/resume", json={"session_id": "s1"}),
+            client.post("/api/v1/chat/stop", json={"session_id": "s1"}),
+            client.post("/api/v1/chat/sessions/s1/compact"),
+            client.get("/api/v1/chat/sessions"),
+            client.delete("/api/v1/chat/sessions/s1"),
+            client.get("/api/v1/chat/history", params={"session_id": "s1"}),
+            client.post(
+                "/api/v1/chat/user_interaction",
+                json={"session_id": "s1", "interaction_key": "k1", "input": [["1"]]},
+            ),
+            client.post("/api/v1/chat/insert", json={"session_id": "s1", "message": "hello"}),
+            client.post(
+                "/api/v1/chat/tool_result",
+                json={"session_id": "s1", "call_tool_id": "tc_1", "tool_result": {"success": 1, "result": {}}},
+            ),
+        ]
+
+    assert [response.status_code for response in responses] == [403] * len(responses)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/chat/stream",
+        "/api/v1/chat/feedback",
+        "/api/v1/chat/resume",
+        "/api/v1/chat/stop",
+        "/api/v1/chat/user_interaction",
+        "/api/v1/chat/insert",
+        "/api/v1/chat/tool_result",
+    ],
+)
+def test_chat_invalid_body_does_not_resolve_datus_service(monkeypatch, path):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+    app = FastAPI()
+    app.include_router(chat_routes.router)
+
+    async def reject_service(request: Request):
+        raise AssertionError("Invalid body resolved DatusService")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(path, json=[])
+
+    assert response.status_code == 422
 
 
 def test_chat_routes_allow_module_chat(monkeypatch):
@@ -452,6 +529,48 @@ def test_datasource_catalog_routes_require_module_datasource_catalog(monkeypatch
     svc.datasource.list_databases.assert_not_called()
 
 
+def test_catalog_and_table_rbac_denial_does_not_resolve_datus_service(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    async def reject_service(request: Request):
+        raise AssertionError("RBAC denial resolved DatusService")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    catalog_app = FastAPI()
+    catalog_app.include_router(database_routes.router)
+    catalog_app.dependency_overrides[deps.get_datus_service] = reject_service
+    catalog_app.dependency_overrides[deps.get_request_app_context] = override_context
+
+    table_app = FastAPI()
+    table_app.include_router(table_routes.router)
+    table_app.dependency_overrides[deps.get_datus_service] = reject_service
+    table_app.dependency_overrides[deps.get_request_app_context] = override_context
+
+    with TestClient(catalog_app, raise_server_exceptions=False) as client:
+        catalog_response = client.get("/api/v1/catalog/list")
+    with TestClient(table_app, raise_server_exceptions=False) as client:
+        table_response = client.get("/api/v1/table/detail", params={"table": "public.accounts"})
+        semantic_read_response = client.get("/api/v1/semantic_model", params={"table": "public.accounts"})
+        semantic_save_response = client.post(
+            "/api/v1/semantic_model",
+            json={"table": "public.accounts", "yaml": "semantic_model:\n  name: accounts\n"},
+        )
+        semantic_validate_response = client.post(
+            "/api/v1/semantic_model/validate",
+            json={"table": "public.accounts", "yaml": "semantic_model:\n  name: accounts\n"},
+        )
+
+    assert catalog_response.status_code == 403
+    assert table_response.status_code == 403
+    assert semantic_read_response.status_code == 403
+    assert semantic_save_response.status_code == 403
+    assert semantic_validate_response.status_code == 403
+
+
 def test_datasource_catalog_routes_allow_module_datasource_catalog(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()
@@ -489,6 +608,22 @@ def test_datasource_catalog_rejects_unauthorized_requested_datasource(monkeypatc
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Datasource 'hr' is not authorized for this request."
+    svc.datasource.list_databases.assert_not_called()
+
+
+def test_datasource_catalog_returns_bad_request_for_unknown_datasource(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config(current_datasource="finance")
+    svc.datasource.current_datasource = "finance"
+    svc.datasource.list_databases = MagicMock()
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.datasource_catalog"})
+
+    with _client(database_routes.router, ctx, svc) as client:
+        response = client.get("/api/v1/catalog/list", params={"datasource_id": "missing"})
+
+    assert response.status_code == 400
+    assert "Datasource 'missing' not found" in response.json()["detail"]
     svc.datasource.list_databases.assert_not_called()
 
 
@@ -717,6 +852,55 @@ def test_datasource_catalog_prunes_tables_by_grant_scope(monkeypatch):
     assert databases[0]["tables_count"] == 2
 
 
+def test_datasource_catalog_table_scope_accepts_catalog_database_table_grant(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config(current_datasource="finance")
+    svc.datasource.current_datasource = "finance"
+    svc.datasource.list_databases.return_value = Result[ListDatabasesData](
+        success=True,
+        data=ListDatabasesData(
+            databases=[
+                DatabaseInfo(
+                    name="finance",
+                    uri="starrocks://warehouse",
+                    type="starrocks",
+                    current=True,
+                    catalog_name="prod",
+                    connection_status="connected",
+                    tables_count=2,
+                    tables=["orders", "payroll"],
+                ),
+            ],
+            total_count=1,
+            current_database="finance",
+        ),
+    )
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.datasource_catalog"},
+        datasource_grants={
+            "finance": {
+                "effect": "allow",
+                "allow_catalog": True,
+                "catalogs": ["prod"],
+                "databases": ["finance"],
+                "tables": ["prod.finance.orders"],
+            }
+        },
+    )
+
+    with _client(database_routes.router, ctx, svc) as client:
+        response = client.get("/api/v1/catalog/list")
+
+    assert response.status_code == 200
+    databases = response.json()["data"]["databases"]
+    assert len(databases) == 1
+    assert databases[0]["tables"] == ["orders"]
+    assert databases[0]["tables_count"] == 1
+
+
 def test_report_detail_requires_module_report_view(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()
@@ -829,6 +1013,41 @@ def test_dashboard_query_requires_module_dashboard_query(monkeypatch):
 
     assert response.status_code == 403
     svc.dashboard.run_query.assert_not_awaited()
+
+
+def test_artifact_rbac_denial_does_not_resolve_datus_service(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    async def reject_service(request: Request):
+        raise AssertionError("RBAC denial resolved DatusService")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    report_app = FastAPI()
+    report_app.include_router(report_routes.router)
+    report_app.dependency_overrides[deps.get_datus_service] = reject_service
+    report_app.dependency_overrides[deps.get_request_app_context] = override_context
+
+    dashboard_app = FastAPI()
+    dashboard_app.include_router(dashboard_routes.router)
+    dashboard_app.dependency_overrides[deps.get_datus_service] = reject_service
+    dashboard_app.dependency_overrides[deps.get_request_app_context] = override_context
+
+    with TestClient(report_app, raise_server_exceptions=False) as client:
+        report_response = client.get("/api/v1/report/detail", params={"slug": "sales_overview"})
+    with TestClient(dashboard_app, raise_server_exceptions=False) as client:
+        dashboard_detail_response = client.get("/api/v1/dashboard/detail", params={"slug": "sales_overview"})
+        dashboard_query_response = client.post(
+            "/api/v1/dashboard/query",
+            json={"dashboard_slug": "sales_overview", "query_slug": "summary", "params": {}},
+        )
+
+    assert report_response.status_code == 403
+    assert dashboard_detail_response.status_code == 403
+    assert dashboard_query_response.status_code == 403
 
 
 def test_dashboard_query_allows_module_dashboard_query(monkeypatch):
@@ -1258,6 +1477,78 @@ def test_dashboard_query_rejects_template_datasource_without_grant(monkeypatch, 
     assert db_calls == []
 
 
+def test_dashboard_query_returns_result_when_template_datasource_is_missing(monkeypatch, tmp_path: Path):
+    quota_store = InMemoryEnterpriseQuotaStore()
+    asyncio.run(
+        quota_store.put_quota(
+            subject_type="user",
+            subject_id="u1",
+            resource="dashboard.query",
+            limit=2,
+            window_seconds=3600,
+        )
+    )
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        _enterprise_extensions(
+            DatasourceGrantConfigProjector(),
+            audit_sink=audit_sink,
+            quota_store=quota_store,
+        ),
+    )
+    _write_dashboard_query_fixture(tmp_path, datasource="missing")
+    agent_config = _datasource_agent_config(current_datasource="finance")
+    agent_config.project_root = str(tmp_path)
+    svc = SimpleNamespace(
+        agent_config=agent_config,
+        dashboard=DashboardService(agent_config=agent_config),
+    )
+    db_calls = []
+
+    class _UnexpectedDBFuncTool:
+        def __init__(self, *, agent_config, sub_agent_name):
+            db_calls.append((agent_config, sub_agent_name))
+
+    import datus.tools.func_tool as func_tool_mod
+
+    monkeypatch.setattr(func_tool_mod, "DBFuncTool", _UnexpectedDBFuncTool)
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.dashboard.query"},
+        datasource_grants={"finance": {"effect": "allow", "allow_sql": True}},
+    )
+
+    with _client(dashboard_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/dashboard/query",
+            json={"dashboard_slug": "sales_overview", "query_slug": "summary", "params": {}},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "COMMON_FIELD_INVALID"
+    assert "Datasource 'missing' not found" in body["errorMessage"]
+    usage = asyncio.run(quota_store.list_usage(subject_type="user", subject_id="u1", resource="dashboard.query"))
+    assert usage == []
+    assert db_calls == []
+
+    event = audit_sink.events[-1]
+    assert event.action == "dashboard.query"
+    assert event.resource_type == "dashboard"
+    assert event.resource_id == "sales_overview"
+    assert event.decision == "deny"
+    assert event.reason == "COMMON_FIELD_INVALID"
+    assert event.metadata == {
+        "query_slug": "summary",
+        "datasource": "missing",
+        "error_code": "COMMON_FIELD_INVALID",
+    }
+
+
 def test_dashboard_query_rejects_artifact_acl_denial(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()
@@ -1304,6 +1595,108 @@ def test_sql_execute_routes_require_module_sql_executor(monkeypatch):
 
     assert response.status_code == 403
     svc.cli.execute_sql.assert_not_awaited()
+
+
+def test_sql_executor_rbac_denial_does_not_resolve_datus_service(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+    app = FastAPI()
+    app.include_router(cli_routes.router)
+
+    async def reject_service(request: Request):
+        raise AssertionError("RBAC denial resolved DatusService")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        execute_response = client.post(
+            "/api/v1/sql/execute",
+            json={"sql_query": "SELECT 1", "result_format": "json"},
+        )
+        stop_response = client.post("/api/v1/sql/stop_execute", json={"execute_task_id": "task-1"})
+
+    assert execute_response.status_code == 403
+    assert stop_response.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("path", "permissions"),
+    [
+        ("/api/v1/sql/execute", {"module.sql_executor"}),
+        ("/api/v1/sql/stop_execute", {"module.sql_executor"}),
+        ("/api/v1/context/tables", {"module.datasource_catalog"}),
+        ("/api/v1/internal/tables", {"module.datasource_catalog"}),
+    ],
+)
+def test_cli_invalid_body_does_not_resolve_datus_service(monkeypatch, path, permissions):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    ctx = AppContext(user_id="u1", project_id="proj", permissions=permissions)
+    app = FastAPI()
+    app.include_router(cli_routes.router)
+
+    async def reject_service(request: Request):
+        raise AssertionError("Invalid body resolved DatusService")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(path, json=[])
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("router", "path", "json_body", "permissions", "expected_action"),
+    [
+        (
+            cli_routes.router,
+            "/api/v1/sql/execute",
+            {"sql_query": "SELECT 1", "result_format": "json"},
+            {"module.chat"},
+            "module.sql_executor",
+        ),
+        (
+            dashboard_routes.router,
+            "/api/v1/dashboard/query",
+            {"dashboard_slug": "sales_overview", "query_slug": "summary", "params": {}},
+            {"module.chat"},
+            "module.dashboard.query",
+        ),
+        (
+            chat_routes.router,
+            "/api/v1/chat/stream",
+            {"message": "hello"},
+            {"module.sql_executor"},
+            "module.chat",
+        ),
+    ],
+)
+def test_runtime_rbac_denial_precedes_readonly_status(
+    monkeypatch, router, path, json_body, permissions, expected_action
+):
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setenv("DATUS_PLATFORM_STATUS", "readonly")
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(audit_sink=audit_sink))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config()
+    ctx = AppContext(user_id="u1", project_id="proj", permissions=permissions)
+
+    with _client(router, ctx, svc) as client:
+        response = client.post(path, json=json_body)
+
+    assert response.status_code == 403
+    assert expected_action in response.json()["detail"]
+    assert [event.action for event in audit_sink.events] == [expected_action]
 
 
 def test_sql_execute_is_blocked_in_readonly_status_and_audited(monkeypatch):
@@ -1656,7 +2049,7 @@ def test_sql_stop_execute_routes_pass_user_owner_and_hide_other_user_task(monkey
     task.cancel.assert_not_called()
 
 
-@pytest.mark.parametrize("context_type", ["tables", "catalogs"])
+@pytest.mark.parametrize("context_type", ["tables", "catalogs", "catalog"])
 def test_cli_context_metadata_requires_datasource_catalog(monkeypatch, context_type):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()
@@ -1667,6 +2060,95 @@ def test_cli_context_metadata_requires_datasource_catalog(monkeypatch, context_t
 
     assert response.status_code == 403
     svc.cli.execute_context.assert_not_called()
+
+
+def test_cli_context_tables_rejects_missing_datasource_grant_before_execution(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config(current_datasource="finance")
+    svc.cli.execute_context.return_value = Result(
+        success=True,
+        data=ExecuteContextData(context_type="tables", database_name="finance", result={}),
+    )
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.datasource_catalog"},
+        datasource_grants={},
+    )
+
+    with _client(cli_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/context/tables", json={"context_type": "tables"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "No datasource grant available."
+    svc.cli.execute_context.assert_not_called()
+
+
+def test_cli_context_tables_passes_projected_config(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config(current_datasource="hr")
+    svc.cli.execute_context.return_value = Result(
+        success=True,
+        data=ExecuteContextData(context_type="tables", database_name="finance", result={}),
+    )
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.datasource_catalog"},
+        datasource_grants={"finance": {"effect": "allow", "allow_catalog": True}},
+    )
+
+    with _client(cli_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/context/tables", json={"context_type": "tables"})
+
+    assert response.status_code == 200
+    projected_config = svc.cli.execute_context.call_args.kwargs["agent_config"]
+    assert projected_config.current_datasource == "finance"
+    assert set(projected_config.services.datasources) == {"finance"}
+
+
+def test_cli_internal_tables_rejects_missing_datasource_grant_before_execution(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config(current_datasource="finance")
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.datasource_catalog"},
+        datasource_grants={},
+    )
+
+    with _client(cli_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/internal/tables", json={"command": "tables", "args": ""})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "No datasource grant available."
+    svc.cli.execute_internal_command.assert_not_called()
+
+
+@pytest.mark.parametrize("context_type", ["tables", "catalogs", "catalog"])
+def test_cli_context_metadata_rbac_denial_does_not_resolve_datus_service(monkeypatch, context_type):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+    app = FastAPI()
+    app.include_router(cli_routes.router)
+
+    async def reject_service(request: Request):
+        raise AssertionError("RBAC denial resolved DatusService")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(f"/api/v1/context/{context_type}", json={"context_type": context_type})
+
+    assert response.status_code == 403
 
 
 @pytest.mark.parametrize("command", ["databases", "tables"])
@@ -1680,3 +2162,58 @@ def test_cli_internal_metadata_requires_datasource_catalog(monkeypatch, command)
 
     assert response.status_code == 403
     svc.cli.execute_internal_command.assert_not_called()
+
+
+@pytest.mark.parametrize("command", ["databases", "tables"])
+def test_cli_internal_metadata_rbac_denial_does_not_resolve_datus_service(monkeypatch, command):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+    app = FastAPI()
+    app.include_router(cli_routes.router)
+
+    async def reject_service(request: Request):
+        raise AssertionError("RBAC denial resolved DatusService")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(f"/api/v1/internal/{command}", json={"command": command, "args": ""})
+
+    assert response.status_code == 403
+
+
+def test_cli_internal_clear_requires_chat_module(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    chat_service = MagicMock()
+    chat_service.delete_session.return_value = Result(success=True, data={"deleted": True})
+    svc = MagicMock()
+    svc.cli = CLIService(agent_config=None, chat_service=chat_service)
+    ctx = AppContext(user_id="bob", project_id="proj", permissions={"module.datasource_catalog"})
+
+    with _client(cli_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/internal/clear", json={"command": "clear", "args": "alice-session"})
+
+    assert response.status_code == 403
+    assert "module.chat" in response.json()["detail"]
+    chat_service.delete_session.assert_not_called()
+
+
+def test_cli_internal_clear_uses_current_user_scope(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    chat_service = MagicMock()
+    chat_service.delete_session.return_value = Result(success=True, data={"deleted": True})
+    svc = MagicMock()
+    svc.cli = CLIService(agent_config=None, chat_service=chat_service)
+    ctx = AppContext(user_id="bob", project_id="proj", permissions={"module.chat"})
+
+    with _client(cli_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/internal/clear", json={"command": "clear", "args": "alice-session"})
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    chat_service.delete_session.assert_called_once_with("alice-session", user_id="bob")

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fnmatch import fnmatchcase
+from inspect import isawaitable
 from pathlib import Path
 from typing import Annotated, Any, List, Literal
 
@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
+from datus.api import deps
 from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
 from datus.api.enterprise.deps import get_artifact_acl_store, require_platform_active
@@ -17,16 +18,21 @@ from datus.api.models.base_models import Result
 from datus.api.models.dashboard_models import DashboardDetail
 from datus.api.models.report_models import ReportDetail
 from datus.schemas.artifact_manifest import ArtifactManifest
+from datus.utils.loggings import get_logger
 from datus_enterprise.artifact_acl import filter_visible_artifacts, require_artifact_access
 from datus_enterprise.audit import AuditEvent, audit_decision
-from datus_enterprise.authorization import require_module
+from datus_enterprise.authorization import ResourceRef, authorize, require_module
 
 router = APIRouter(prefix="/api/v1", tags=["enterprise-artifacts"])
+logger = get_logger(__name__)
 
 
-DashboardViewCtx = Annotated[AppContext, Depends(require_module("module.dashboard.view"))]
-ReportViewCtx = Annotated[AppContext, Depends(require_module("module.report.view"))]
-AdminArtifactsCtx = Annotated[AppContext, Depends(require_module("module.admin.artifacts"))]
+_require_dashboard_view = require_module("module.dashboard.view")
+_require_report_view = require_module("module.report.view")
+_require_admin_artifacts = require_module("module.admin.artifacts")
+DashboardViewCtx = Annotated[AppContext, Depends(_require_dashboard_view)]
+ReportViewCtx = Annotated[AppContext, Depends(_require_report_view)]
+AdminArtifactsCtx = Annotated[AppContext, Depends(_require_admin_artifacts)]
 
 
 class AdminArtifactSummary(BaseModel):
@@ -67,7 +73,12 @@ def _project_files_root(svc: ServiceDep) -> Path:
     return Path(svc.agent_config.project_root)
 
 
-@router.get("/dashboards", response_model=Result[List[ArtifactManifest]], summary="List Dashboard Artifacts")
+@router.get(
+    "/dashboards",
+    response_model=Result[List[ArtifactManifest]],
+    summary="List Dashboard Artifacts",
+    dependencies=[Depends(_require_dashboard_view)],
+)
 async def list_dashboards(svc: ServiceDep, ctx: DashboardViewCtx) -> Result[List[ArtifactManifest]]:
     result = await svc.dashboard.list_dashboards(project_files_root=_project_files_root(svc))
     if not result.success or result.data is None:
@@ -76,13 +87,23 @@ async def list_dashboards(svc: ServiceDep, ctx: DashboardViewCtx) -> Result[List
     return Result(success=True, data=visible)
 
 
-@router.get("/dashboards/{slug}", response_model=Result[DashboardDetail], summary="Get Dashboard Artifact Detail")
+@router.get(
+    "/dashboards/{slug}",
+    response_model=Result[DashboardDetail],
+    summary="Get Dashboard Artifact Detail",
+    dependencies=[Depends(_require_dashboard_view)],
+)
 async def get_dashboard_detail(svc: ServiceDep, ctx: DashboardViewCtx, slug: str) -> Result[DashboardDetail]:
     await require_artifact_access(ctx, artifact_type="dashboard", slug=slug, action="view")
     return await svc.dashboard.get_detail(project_files_root=_project_files_root(svc), dashboard_slug=slug)
 
 
-@router.get("/dashboards/{slug}/acl", response_model=Result[ArtifactShare], summary="Get Dashboard Sharing ACL")
+@router.get(
+    "/dashboards/{slug}/acl",
+    response_model=Result[ArtifactShare],
+    summary="Get Dashboard Sharing ACL",
+    dependencies=[Depends(_require_dashboard_view)],
+)
 async def get_dashboard_share_acl(svc: ServiceDep, ctx: DashboardViewCtx, slug: str) -> Result[ArtifactShare]:
     return await _get_creator_artifact_share(svc, ctx, artifact_type="dashboard", slug=slug)
 
@@ -92,19 +113,26 @@ async def get_dashboard_share_acl(svc: ServiceDep, ctx: DashboardViewCtx, slug: 
     response_model=Result[ArtifactShare],
     summary="Update Dashboard Sharing ACL",
     dependencies=[
-        Depends(require_platform_active(operation="dashboard.artifact_acl.share", resource_type="artifact_acl"))
+        Depends(_require_dashboard_view),
+        Depends(require_platform_active(operation="dashboard.artifact_acl.share", resource_type="artifact_acl")),
     ],
 )
 async def put_dashboard_share_acl(
     share: ArtifactShareUpdate,
-    svc: ServiceDep,
     ctx: DashboardViewCtx,
     slug: str,
+    request: Request,
 ) -> Result[ArtifactShare]:
+    svc = await _resolve_request_service(request)
     return await _put_creator_artifact_share(svc, ctx, artifact_type="dashboard", slug=slug, share=share)
 
 
-@router.get("/dashboards/{slug}/html", response_class=HTMLResponse, summary="Get Dashboard HTML")
+@router.get(
+    "/dashboards/{slug}/html",
+    response_class=HTMLResponse,
+    summary="Get Dashboard HTML",
+    dependencies=[Depends(_require_dashboard_view)],
+)
 async def get_dashboard_html_by_path(
     svc: ServiceDep,
     ctx: DashboardViewCtx,
@@ -115,7 +143,12 @@ async def get_dashboard_html_by_path(
     return await _render_dashboard_html(svc, ctx, request, slug, query_endpoint)
 
 
-@router.get("/reports", response_model=Result[List[ArtifactManifest]], summary="List Report Artifacts")
+@router.get(
+    "/reports",
+    response_model=Result[List[ArtifactManifest]],
+    summary="List Report Artifacts",
+    dependencies=[Depends(_require_report_view)],
+)
 async def list_reports(svc: ServiceDep, ctx: ReportViewCtx) -> Result[List[ArtifactManifest]]:
     result = await svc.report.list_reports(project_files_root=_project_files_root(svc))
     if not result.success or result.data is None:
@@ -124,13 +157,23 @@ async def list_reports(svc: ServiceDep, ctx: ReportViewCtx) -> Result[List[Artif
     return Result(success=True, data=visible)
 
 
-@router.get("/reports/{slug}", response_model=Result[ReportDetail], summary="Get Report Artifact Detail")
+@router.get(
+    "/reports/{slug}",
+    response_model=Result[ReportDetail],
+    summary="Get Report Artifact Detail",
+    dependencies=[Depends(_require_report_view)],
+)
 async def get_report_detail(svc: ServiceDep, ctx: ReportViewCtx, slug: str) -> Result[ReportDetail]:
     await require_artifact_access(ctx, artifact_type="report", slug=slug, action="view")
     return await svc.report.get_detail(project_files_root=_project_files_root(svc), report_slug=slug)
 
 
-@router.get("/reports/{slug}/acl", response_model=Result[ArtifactShare], summary="Get Report Sharing ACL")
+@router.get(
+    "/reports/{slug}/acl",
+    response_model=Result[ArtifactShare],
+    summary="Get Report Sharing ACL",
+    dependencies=[Depends(_require_report_view)],
+)
 async def get_report_share_acl(svc: ServiceDep, ctx: ReportViewCtx, slug: str) -> Result[ArtifactShare]:
     return await _get_creator_artifact_share(svc, ctx, artifact_type="report", slug=slug)
 
@@ -140,24 +183,36 @@ async def get_report_share_acl(svc: ServiceDep, ctx: ReportViewCtx, slug: str) -
     response_model=Result[ArtifactShare],
     summary="Update Report Sharing ACL",
     dependencies=[
-        Depends(require_platform_active(operation="report.artifact_acl.share", resource_type="artifact_acl"))
+        Depends(_require_report_view),
+        Depends(require_platform_active(operation="report.artifact_acl.share", resource_type="artifact_acl")),
     ],
 )
 async def put_report_share_acl(
     share: ArtifactShareUpdate,
-    svc: ServiceDep,
     ctx: ReportViewCtx,
     slug: str,
+    request: Request,
 ) -> Result[ArtifactShare]:
+    svc = await _resolve_request_service(request)
     return await _put_creator_artifact_share(svc, ctx, artifact_type="report", slug=slug, share=share)
 
 
-@router.get("/reports/{slug}/html", response_class=HTMLResponse, summary="Get Report HTML")
+@router.get(
+    "/reports/{slug}/html",
+    response_class=HTMLResponse,
+    summary="Get Report HTML",
+    dependencies=[Depends(_require_report_view)],
+)
 async def get_report_html_by_path(svc: ServiceDep, ctx: ReportViewCtx, slug: str) -> Response:
     return await _render_report_html(svc, ctx, slug)
 
 
-@router.get("/admin/artifacts", response_model=Result[List[AdminArtifactSummary]], summary="List Admin Artifacts")
+@router.get(
+    "/admin/artifacts",
+    response_model=Result[List[AdminArtifactSummary]],
+    summary="List Admin Artifacts",
+    dependencies=[Depends(_require_admin_artifacts)],
+)
 async def list_admin_artifacts(svc: ServiceDep, ctx: AdminArtifactsCtx) -> Result[List[AdminArtifactSummary]]:
     """Return all report/dashboard manifests for admin inventory workflows."""
 
@@ -193,6 +248,7 @@ async def list_admin_artifacts(svc: ServiceDep, ctx: AdminArtifactsCtx) -> Resul
     "/admin/artifacts/{artifact_type}/{slug}/acl",
     response_model=Result[ArtifactAcl],
     summary="Get Artifact ACL",
+    dependencies=[Depends(_require_admin_artifacts)],
 )
 async def get_admin_artifact_acl(
     svc: ServiceDep,
@@ -266,18 +322,20 @@ async def get_admin_artifact_acl(
     response_model=Result[ArtifactAcl],
     summary="Update Artifact ACL",
     dependencies=[
-        Depends(require_platform_active(operation="admin.artifacts.acl.update", resource_type="artifact_acl"))
+        Depends(_require_admin_artifacts),
+        Depends(require_platform_active(operation="admin.artifacts.acl.update", resource_type="artifact_acl")),
     ],
 )
 async def put_admin_artifact_acl(
     acl: ArtifactAcl,
-    svc: ServiceDep,
     ctx: AdminArtifactsCtx,
     artifact_type: Literal["report", "dashboard"],
     slug: str,
+    request: Request,
 ) -> Result[ArtifactAcl]:
     """Persist ACL metadata for one managed artifact."""
 
+    svc = await _resolve_request_service(request)
     artifact = await _find_artifact(svc, artifact_type=artifact_type, slug=slug)
     if artifact is None:
         await _audit_artifact_acl(
@@ -317,7 +375,7 @@ async def put_admin_artifact_acl(
         )
         return Result(success=False, errorCode="ARTIFACT_ACL_UPDATE_FAILED", errorMessage="Artifact ACL update failed.")
 
-    await _audit_artifact_acl(
+    await _audit_artifact_acl_best_effort(
         ctx,
         operation="put_artifact_acl",
         artifact_type=artifact_type,
@@ -330,6 +388,14 @@ async def put_admin_artifact_acl(
         },
     )
     return Result(success=True, data=result_acl)
+
+
+async def _resolve_request_service(request: Request) -> ServiceDep:
+    service_provider = request.app.dependency_overrides.get(deps.get_datus_service, deps.get_datus_service)
+    result = service_provider(request)
+    if isawaitable(result):
+        return await result
+    return result
 
 
 async def _get_creator_artifact_share(
@@ -355,7 +421,7 @@ async def _get_creator_artifact_share(
     if isinstance(loaded, Result):
         return loaded
     acl = loaded
-    if not _can_manage_artifact_share(ctx, acl):
+    if not await _can_manage_artifact_share(ctx, acl):
         await _audit_artifact_share(
             ctx,
             operation="get_artifact_share",
@@ -401,7 +467,7 @@ async def _put_creator_artifact_share(
     if isinstance(loaded, Result):
         return loaded
     acl = loaded
-    if not _can_manage_artifact_share(ctx, acl):
+    if not await _can_manage_artifact_share(ctx, acl):
         await _audit_artifact_share(
             ctx,
             operation="put_artifact_share",
@@ -437,7 +503,7 @@ async def _put_creator_artifact_share(
         )
         return Result(success=False, errorCode="ARTIFACT_ACL_UPDATE_FAILED", errorMessage="Artifact ACL update failed.")
 
-    await _audit_artifact_share(
+    await _audit_artifact_share_best_effort(
         ctx,
         operation="put_artifact_share",
         artifact_type=artifact_type,
@@ -495,22 +561,15 @@ async def _load_artifact_acl_for_share(
         return Result(success=False, errorCode="ARTIFACT_ACL_QUERY_FAILED", errorMessage="Artifact ACL query failed.")
 
 
-def _can_manage_artifact_share(ctx: AppContext, acl: ArtifactAcl) -> bool:
+async def _can_manage_artifact_share(ctx: AppContext, acl: ArtifactAcl) -> bool:
     if ctx.user_id and ctx.user_id == acl.owner_user_id:
         return True
-    if ctx.is_admin:
-        return True
-    return _ctx_has_permission(ctx, "module.admin.artifacts")
-
-
-def _ctx_has_permission(ctx: AppContext, permission_key: str) -> bool:
-    if ctx.permissions:
-        return any(permission == "*" or fnmatchcase(permission_key, permission) for permission in ctx.permissions)
-    principal_permissions = ctx.principal.get("permissions")
-    return any(
-        permission == "*" or fnmatchcase(permission_key, permission)
-        for permission in _normalized_list(principal_permissions if isinstance(principal_permissions, list) else [])
+    decision = await authorize(
+        ctx,
+        action="module.admin.artifacts",
+        resource=ResourceRef(type="artifact_acl", id=acl.owner_user_id),
     )
+    return decision.allowed
 
 
 def _share_from_acl(acl: ArtifactAcl) -> ArtifactShare:
@@ -620,6 +679,35 @@ async def _audit_artifact_acl(
     )
 
 
+async def _audit_artifact_acl_best_effort(
+    ctx: AppContext,
+    *,
+    operation: str,
+    artifact_type: str,
+    slug: str,
+    decision: str,
+    reason: str | None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    try:
+        await _audit_artifact_acl(
+            ctx,
+            operation=operation,
+            artifact_type=artifact_type,
+            slug=slug,
+            decision=decision,
+            reason=reason,
+            metadata=metadata,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Artifact ACL audit write failed for operation '%s' decision '%s': %s",
+            operation,
+            decision,
+            exc,
+        )
+
+
 async def _audit_artifact_share(
     ctx: AppContext,
     *,
@@ -642,6 +730,35 @@ async def _audit_artifact_share(
             metadata=audit_metadata,
         ),
     )
+
+
+async def _audit_artifact_share_best_effort(
+    ctx: AppContext,
+    *,
+    operation: str,
+    artifact_type: str,
+    slug: str,
+    decision: str,
+    reason: str | None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    try:
+        await _audit_artifact_share(
+            ctx,
+            operation=operation,
+            artifact_type=artifact_type,
+            slug=slug,
+            decision=decision,
+            reason=reason,
+            metadata=metadata,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Artifact share audit write failed for operation '%s' decision '%s': %s",
+            operation,
+            decision,
+            exc,
+        )
 
 
 def _acl_summary(raw_acl: Any) -> dict[str, Any]:

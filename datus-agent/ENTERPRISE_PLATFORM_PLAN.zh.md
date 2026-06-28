@@ -607,6 +607,15 @@ module.dashboard.view
 module.dashboard.query
 module.kb
 module.mcp
+mcp.server.list
+mcp.server.add
+mcp.server.remove
+mcp.server.connectivity
+mcp.server.tools
+mcp.filter.view
+mcp.filter.set
+mcp.filter.remove
+mcp.{server}.{tool}
 module.config.view
 module.config.edit
 module.admin.users
@@ -657,7 +666,7 @@ def require_module(permission: str):
 | dashboard list/html/detail | `module.dashboard.view` |
 | `POST /api/v1/dashboard/query` | `module.dashboard.query` |
 | KB 导入/查询/管理 | `module.kb` |
-| MCP server/tool 管理与调用 | `module.mcp` |
+| MCP server/tool/filter 列表、管理与调用 | `module.mcp` + `mcp.server.list` / `mcp.server.add` / `mcp.server.remove` / `mcp.server.connectivity` / `mcp.server.tools` / `mcp.filter.view` / `mcp.filter.set` / `mcp.filter.remove` / `mcp.{server}.{tool}` |
 | config datasource/model 修改 | `module.config.edit` 或 admin 权限 |
 | 用户/角色/授权/审计 API | `module.admin.*` |
 | explorer、agent config、visualization、direct tool dispatch、success-story 旧兼容 route | 企业模式下暂不开放，统一 `ENTERPRISE_ROUTE_DISABLED` + `system.route_disabled` 审计 |
@@ -1066,7 +1075,7 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - dashboard route 已接入 `module.dashboard.view` 和 `module.dashboard.query`，覆盖当前 `/api/v1/dashboard/detail`、`/api/v1/dashboard/query`，并通过 enterprise artifact route 覆盖 `/api/v1/dashboards`、`/api/v1/dashboards/{slug}`、`/api/v1/dashboards/{slug}/acl`、`/api/v1/dashboards/{slug}/html`。
 - config/model route 已接入 `module.config.view` 和 `module.config.edit`，覆盖 `/api/v1/config/agent`、`/api/v1/models`、配置更新接口和连接探测接口。
 - KB route 已接入 `module.kb`，覆盖 KB bootstrap、platform docs bootstrap 和对应 cancel 接口。
-- MCP route 已接入 `module.mcp`，覆盖 MCP server/tool/filter 的列表、管理和调用接口。
+- MCP route 已接入 `module.mcp` + 细粒度 `mcp.*` 权限，覆盖 MCP server/tool/filter 的列表、管理和调用接口。
 - 当前已注册的 datasource admin route `/api/v1/admin/datasources`、`/api/v1/admin/datasource-default` 和 `/api/v1/admin/datasource-grants` 已接入 `module.admin.datasources`，用于项目级数据源清单、默认数据源管理和 datasource grant metadata 管理。
 - 当前已注册的 user/role admin route 已分别接入 `module.admin.users` 和 `module.admin.roles`，用于阶段 6 的用户状态、role metadata 和 role permission set 管理。
 - admin sessions、artifacts ACL、audit query/export、quota metadata/usage 和 secret reference API 已进入阶段 6 接线；`/api/v1/system/status` 已使用 `module.system.status` 接入只读系统状态。当前已将 user-role metadata、role permission set 和 role/user datasource grants 在企业模式新请求中合并回 `AppContext.roles`、`AppContext.permissions`、`AppContext.datasource_grants` 和 `principal`，但长期生产仍应使用共享 metadata store。direct SQL、dashboard query、table detail 和 semantic model route 已复用请求级 projection、grant scope、SQL policy principal 或 table grant 校验；table detail 和 semantic model 的 table scope 解析复用当前 datasource connector dialect，支持 StarRocks 等 catalog-capable dialect 的 `catalog.database.table` 授权语义；`/api/v1/models` 和 chat stream/feedback 已支持服务端 `principal.model_policy` provider/model allowlist 初版，未授权模型不能在目录中展示，也不能启动 chat task；chat stream/feedback 已接入请求启动级 quota；admin audit export 已接入导出配额；report artifact 当前是预渲染静态 bundle，没有 agent-only live query endpoint。

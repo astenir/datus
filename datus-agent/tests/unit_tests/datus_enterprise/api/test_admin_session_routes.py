@@ -1,6 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI, Request
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
@@ -25,6 +26,11 @@ class CollectingAuditSink:
 
     async def write(self, event):
         self.events.append(event)
+
+
+class FailingAuditSink:
+    async def write(self, event):
+        raise RuntimeError("audit down")
 
 
 class DummyAsyncioTask:
@@ -79,6 +85,16 @@ class LegacyOwnerStore:
             for (stored_project, session_id), owner in self.owners.items()
             if stored_project == project_id and owner == user_id
         ]
+
+
+class FailingOwnerStore(InMemorySessionOwnerStore):
+    async def get_owner(self, project_id, session_id):
+        raise RuntimeError("owner store down")
+
+
+class DeleteFailingOwnerStore(InMemorySessionOwnerStore):
+    async def delete_owner(self, project_id, session_id):
+        raise RuntimeError("owner delete down")
 
 
 def _install_extensions(monkeypatch, owner_store, audit_sink):
@@ -146,6 +162,39 @@ def test_admin_sessions_rejects_without_permission(monkeypatch):
 
     assert response.status_code == 403
     assert "module.admin.sessions" in response.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("get", "/api/v1/admin/sessions"),
+        ("get", "/api/v1/admin/sessions/s1"),
+        ("post", "/api/v1/admin/sessions/s1/stop"),
+        ("delete", "/api/v1/admin/sessions/s1"),
+    ],
+)
+def test_admin_sessions_rbac_denial_does_not_resolve_datus_service(monkeypatch, method, path):
+    owner_store = InMemorySessionOwnerStore()
+    audit_sink = CollectingAuditSink()
+    _install_extensions(monkeypatch, owner_store, audit_sink)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.datasources"})
+    app = FastAPI()
+    app.include_router(admin_session_routes.router)
+
+    async def reject_service(request: Request):
+        raise AssertionError("RBAC denial resolved DatusService")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = getattr(client, method)(path)
+
+    assert response.status_code == 403
 
 
 def test_admin_sessions_returns_unavailable_for_global_list_without_store_support(monkeypatch):
@@ -243,6 +292,34 @@ def test_admin_session_detail_returns_owner_and_runtime_status(monkeypatch):
     assert audit_sink.events[-1].metadata["old"]["status"] == "running"
 
 
+@pytest.mark.parametrize(
+    ("method", "path", "operation"),
+    [
+        ("get", "/api/v1/admin/sessions/s2", "get_admin_session"),
+        ("post", "/api/v1/admin/sessions/s2/stop", "stop_admin_session"),
+        ("delete", "/api/v1/admin/sessions/s2", "delete_admin_session"),
+    ],
+)
+def test_admin_session_read_failure_returns_stable_error(monkeypatch, method, path, operation):
+    audit_sink = CollectingAuditSink()
+    _install_extensions(monkeypatch, FailingOwnerStore(), audit_sink)
+    svc = _svc(existing={("bob", "s2"): True})
+    _add_running_task(svc.task_manager, "s2", "bob")
+    ctx = AppContext(user_id="operator", permissions={"module.admin.sessions"})
+
+    with _client(ctx, svc) as client:
+        response = getattr(client, method)(path)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "SESSION_READ_FAILED"
+    assert audit_sink.events[-1].decision == "deny"
+    assert audit_sink.events[-1].reason == "session read failed"
+    assert audit_sink.events[-1].metadata["operation"] == operation
+    assert svc.chat.delete_calls == []
+
+
 def test_admin_session_stop_cancels_running_task_and_audits(monkeypatch):
     owner_store = InMemorySessionOwnerStore()
     asyncio.run(owner_store.set_owner("project", "s2", "bob"))
@@ -266,6 +343,22 @@ def test_admin_session_stop_cancels_running_task_and_audits(monkeypatch):
     assert audit_sink.events[-1].decision == "allow"
     assert audit_sink.events[-1].metadata["operation"] == "stop_admin_session"
     assert audit_sink.events[-1].metadata["stopped"] is True
+
+
+@pytest.mark.asyncio
+async def test_admin_session_stop_returns_success_when_post_stop_audit_fails(monkeypatch):
+    owner_store = InMemorySessionOwnerStore()
+    await owner_store.set_owner("project", "s2", "bob")
+    _install_extensions(monkeypatch, owner_store, FailingAuditSink())
+    svc = _svc(existing={("bob", "s2"): True})
+    _, asyncio_task = _add_running_task(svc.task_manager, "s2", "bob")
+    ctx = AppContext(user_id="operator", permissions={"module.admin.sessions"})
+
+    result = await admin_session_routes.stop_admin_session("s2", svc, ctx)
+
+    assert result.success is True
+    assert result.data == {"session_id": "s2", "stopped": True}
+    assert asyncio_task.cancelled is True
 
 
 def test_admin_session_stop_not_running_audits_deny_noop(monkeypatch):
@@ -314,6 +407,45 @@ def test_admin_session_delete_uses_recorded_owner_scope_and_removes_owner(monkey
     assert audit_sink.events[-1].metadata["new"] == {"deleted": True}
 
 
+@pytest.mark.asyncio
+async def test_admin_session_delete_returns_success_when_post_delete_audit_fails(monkeypatch):
+    owner_store = InMemorySessionOwnerStore()
+    await owner_store.set_owner("project", "s1", "alice")
+    _install_extensions(monkeypatch, owner_store, FailingAuditSink())
+    svc = _svc(existing={("alice", "s1"): True})
+    ctx = AppContext(user_id="operator", permissions={"module.admin.sessions"})
+
+    result = await admin_session_routes.delete_admin_session("s1", svc, ctx)
+
+    assert result.success is True
+    assert result.data == {"session_id": "s1", "deleted": True}
+    assert svc.chat.delete_calls == [("s1", "alice")]
+    assert await owner_store.get_owner("project", "s1") is None
+
+
+def test_admin_session_delete_owner_store_failure_returns_stable_error(monkeypatch):
+    owner_store = DeleteFailingOwnerStore()
+    asyncio.run(owner_store.set_owner("project", "s1", "alice"))
+    audit_sink = CollectingAuditSink()
+    _install_extensions(monkeypatch, owner_store, audit_sink)
+    svc = _svc(existing={("alice", "s1"): True})
+    ctx = AppContext(user_id="operator", permissions={"module.admin.sessions"})
+
+    with _client(ctx, svc) as client:
+        response = client.delete("/api/v1/admin/sessions/s1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "SESSION_OWNER_DELETE_FAILED"
+    assert body["errorMessage"] == "Session owner metadata delete failed."
+    assert svc.chat.delete_calls == [("s1", "alice")]
+    assert audit_sink.events[-1].decision == "deny"
+    assert audit_sink.events[-1].reason == "session owner delete failed"
+    assert audit_sink.events[-1].metadata["operation"] == "delete_admin_session"
+    assert audit_sink.events[-1].metadata["old"]["owner_user_id"] == "alice"
+
+
 def test_admin_session_delete_removes_completed_task_snapshot(monkeypatch):
     owner_store = InMemorySessionOwnerStore()
     asyncio.run(owner_store.set_owner("project", "s1", "alice"))
@@ -332,6 +464,28 @@ def test_admin_session_delete_removes_completed_task_snapshot(monkeypatch):
     assert list_response.json()["data"] == []
     assert detail_response.json()["success"] is False
     assert detail_response.json()["errorCode"] == "RESOURCE_NOT_FOUND"
+
+
+def test_admin_session_delete_rejects_task_without_known_owner(monkeypatch):
+    owner_store = InMemorySessionOwnerStore()
+    audit_sink = CollectingAuditSink()
+    _install_extensions(monkeypatch, owner_store, audit_sink)
+    svc = _svc(existing={(None, "orphan"): True})
+    _add_completed_task(svc.task_manager, "orphan", None)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.sessions"})
+
+    with _client(ctx, svc) as client:
+        response = client.delete("/api/v1/admin/sessions/orphan")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "SESSION_OWNER_UNKNOWN"
+    assert svc.chat.delete_calls == []
+    assert audit_sink.events[-1].decision == "deny"
+    assert audit_sink.events[-1].reason == "session owner unknown"
+    assert audit_sink.events[-1].metadata["operation"] == "delete_admin_session"
+    assert audit_sink.events[-1].metadata["old"]["owner_user_id"] is None
 
 
 def test_admin_sessions_list_handles_invalid_owner_record_session_id(monkeypatch):

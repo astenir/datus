@@ -16,11 +16,13 @@ from datus.api.enterprise.deps import get_audit_sink
 from datus.api.enterprise.models import AuditEvent as CoreAuditEvent
 from datus.api.models.base_models import Result
 from datus.utils.csv_utils import sanitize_csv_field
+from datus.utils.loggings import get_logger
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
 from datus_enterprise.quota import consume_enterprise_quota
 
 router = APIRouter(prefix="/api/v1", tags=["enterprise-audit"])
+logger = get_logger(__name__)
 
 AdminAuditCtx = Annotated[AppContext, Depends(require_module("module.admin.audit"))]
 AdminAuditExportCtx = Annotated[AppContext, Depends(require_module("module.admin.audit.export"))]
@@ -81,6 +83,14 @@ async def export_audit_logs(
 ) -> Response | Result[dict]:
     """Export matching audit logs as a CSV file when the audit sink supports queries."""
 
+    query_events, error = await _audit_query_reader(
+        ctx,
+        operation="export_audit_logs",
+        audit_action="module.admin.audit.export",
+    )
+    if error is not None:
+        return error
+
     quota_error = await consume_enterprise_quota(
         ctx,
         resource="admin.audit.export",
@@ -104,6 +114,7 @@ async def export_audit_logs(
         ctx,
         operation="export_audit_logs",
         audit_action="module.admin.audit.export",
+        query_events=query_events,
         limit=limit,
         user_id=user_id,
         action=action,
@@ -129,11 +140,38 @@ async def export_audit_logs(
     )
 
 
+async def _audit_query_reader(
+    ctx: AppContext,
+    *,
+    operation: str,
+    audit_action: str,
+) -> tuple[Any, Result[Any] | None]:
+    sink = get_audit_sink()
+    query_events = getattr(sink, "query_events", None)
+    if callable(query_events):
+        return query_events, None
+
+    await _audit_query(
+        ctx,
+        operation=operation,
+        action=audit_action,
+        decision="deny",
+        reason="audit query unavailable",
+        count=None,
+    )
+    return None, Result(
+        success=False,
+        errorCode="AUDIT_QUERY_UNAVAILABLE",
+        errorMessage="The configured audit sink does not support audit log queries.",
+    )
+
+
 async def _query_audit_events(
     ctx: AppContext,
     *,
     operation: str,
     audit_action: str = "module.admin.audit",
+    query_events: Any | None = None,
     limit: int,
     user_id: str | None,
     action: str | None,
@@ -141,22 +179,14 @@ async def _query_audit_events(
     resource_id: str | None,
     decision: str | None,
 ) -> tuple[list[CoreAuditEvent], Result[Any] | None]:
-    sink = get_audit_sink()
-    query_events = getattr(sink, "query_events", None)
-    if not callable(query_events):
-        await _audit_query(
+    if query_events is None:
+        query_events, error = await _audit_query_reader(
             ctx,
             operation=operation,
-            action=audit_action,
-            decision="deny",
-            reason="audit query unavailable",
-            count=None,
+            audit_action=audit_action,
         )
-        return [], Result(
-            success=False,
-            errorCode="AUDIT_QUERY_UNAVAILABLE",
-            errorMessage="The configured audit sink does not support audit log queries.",
-        )
+        if error is not None:
+            return [], error
 
     try:
         events = await query_events(
@@ -197,17 +227,20 @@ async def _audit_query(
     metadata = {"operation": operation}
     if count is not None:
         metadata["count"] = count
-    await audit_decision(
-        ctx,
-        AuditEvent(
-            action=action,
-            resource_type="audit_log",
-            resource_id=None,
-            decision=decision,
-            reason=reason,
-            metadata=metadata,
-        ),
-    )
+    try:
+        await audit_decision(
+            ctx,
+            AuditEvent(
+                action=action,
+                resource_type="audit_log",
+                resource_id=None,
+                decision=decision,
+                reason=reason,
+                metadata=metadata,
+            ),
+        )
+    except Exception:
+        logger.warning("Admin audit query audit write failed for operation=%s", operation, exc_info=True)
 
 
 def _entry_from_event(event: CoreAuditEvent) -> AuditLogEntry:

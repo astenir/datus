@@ -29,6 +29,12 @@ from datus.utils.mcp_decorators import mcp_tool, mcp_tool_class
 
 logger = get_logger(__name__)
 
+_SQL_IDENTIFIER_RE = (
+    r"(?:`[^`]+`|\"[^\"]+\"|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_$]*)"
+    r"(?:\s*\.\s*(?:`[^`]+`|\"[^\"]+\"|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_$]*))*"
+)
+_SQL_IDENTIFIER_END_RE = r"(?=\s|$|;)"
+
 
 @dataclass
 class TableCoordinate:
@@ -48,7 +54,7 @@ class ScopedTablePattern:
 
     def matches(self, coordinate: TableCoordinate) -> bool:
         return all(
-            _pattern_matches(getattr(self, field), getattr(coordinate, field))
+            _field_matches(field, getattr(self, field), getattr(coordinate, field))
             for field in ("catalog", "database", "schema", "table")
         )
 
@@ -57,12 +63,15 @@ def _pattern_matches(pattern: str, value: str) -> bool:
     if not pattern or pattern in ("*", "%"):
         return True
     if not value:
-        # Empty value means the field could not be resolved from either the SQL
-        # or connector defaults (e.g. catalog_name not set).  Treat as a wildcard
-        # so that scope checking only enforces fields we can actually verify.
-        return True
+        return False
     normalized_pattern = pattern.replace("%", "*")
     return fnmatchcase(value, normalized_pattern)
+
+
+def _field_matches(field: str, pattern: str, value: str) -> bool:
+    if _pattern_matches(pattern, value):
+        return True
+    return field == "catalog" and bool(pattern) and not value
 
 
 @mcp_tool_class(
@@ -465,7 +474,9 @@ class DBFuncTool:
         # Strip common quoting characters
         return normalized.strip("`\"'[]")
 
-    def _default_field_value(self, field: str, explicit: Optional[str]) -> str:
+    def _default_field_value(
+        self, field: str, explicit: Optional[str], connector: Optional[BaseSqlConnector] = None
+    ) -> str:
         if field not in self._field_order:
             return ""
         if explicit:
@@ -477,8 +488,9 @@ class DBFuncTool:
             "schema": "schema_name",
         }
         fallback_attr = fallback_attr_map.get(field)
-        if fallback_attr and hasattr(self.connector, fallback_attr):
-            return self._normalize_identifier_part(getattr(self.connector, fallback_attr))
+        default_connector = connector or self.connector
+        if fallback_attr and hasattr(default_connector, fallback_attr):
+            return self._normalize_identifier_part(getattr(default_connector, fallback_attr))
         return ""
 
     def _dialect_for_datasource(self, datasource: Optional[str] = "") -> str:
@@ -513,11 +525,12 @@ class DBFuncTool:
         catalog: Optional[str] = "",
         database: Optional[str] = "",
         schema: Optional[str] = "",
+        connector: Optional[BaseSqlConnector] = None,
     ) -> TableCoordinate:
         coordinate = TableCoordinate(
-            catalog=self._default_field_value("catalog", catalog),
-            database=self._default_field_value("database", database),
-            schema=self._default_field_value("schema", schema),
+            catalog=self._default_field_value("catalog", catalog, connector),
+            database=self._default_field_value("database", database, connector),
+            schema=self._default_field_value("schema", schema, connector),
             table=self._normalize_identifier_part(raw_name),
         )
         parts = [self._normalize_identifier_part(part) for part in raw_name.split(".") if part.strip()]
@@ -600,22 +613,84 @@ class DBFuncTool:
             wildcard_allowed = True
         return wildcard_allowed
 
-    def _check_sql_table_scope(self, sql: str) -> List[str]:
+    def _check_sql_table_scope(self, sql: str, connector: Optional[BaseSqlConnector] = None) -> List[str]:
         """Return table names from *sql* that fall outside the scoped context."""
         if not self._scoped_patterns:
             return []
         from datus.utils.sql_utils import extract_table_names
 
-        dialect = getattr(self._primary_connector, "dialect", "") or ""
+        active_connector = connector or self._primary_connector
+        dialect = getattr(active_connector, "dialect", "") or ""
         table_names = extract_table_names(sql, dialect=dialect, ignore_empty=True)
+        table_names.extend(name for name in self._parenthesized_table_expression_names(sql) if name not in table_names)
+        table_names.extend(name for name in self._insert_table_expression_names(sql) if name not in table_names)
+        table_names.extend(name for name in self._ddl_as_table_names(sql) if name not in table_names)
+        table_names.extend(name for name in self._ddl_partition_table_names(sql) if name not in table_names)
         if not table_names:
             return []  # can't parse → allow (SHOW/DESCRIBE/EXPLAIN have no tables)
         out_of_scope: List[str] = []
         for name in table_names:
-            coordinate = self._build_table_coordinate(raw_name=name)
+            coordinate = self._build_table_coordinate(raw_name=name, connector=active_connector)
             if not self._table_matches_scope(coordinate):
                 out_of_scope.append(name)
         return out_of_scope
+
+    @staticmethod
+    def _ddl_as_table_names(sql: str) -> List[str]:
+        match = re.search(
+            rf"^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMPORARY|TEMP)\s+)?(?:TABLE|VIEW)\s+"
+            rf"(?:IF\s+NOT\s+EXISTS\s+)?(?P<target>{_SQL_IDENTIFIER_RE})(?:\s*\([^)]*\))?\s+"
+            rf"AS\s+TABLE\s+(?:ONLY\s+)?(?P<source>{_SQL_IDENTIFIER_RE}){_SQL_IDENTIFIER_END_RE}",
+            sql,
+            re.IGNORECASE,
+        )
+        if not match:
+            return []
+        return [match.group("target"), match.group("source")]
+
+    @staticmethod
+    def _ddl_partition_table_names(sql: str) -> List[str]:
+        match = re.search(
+            rf"^\s*ALTER\s+TABLE\s+(?P<target>{_SQL_IDENTIFIER_RE})\s+"
+            rf"(?:ATTACH|DETACH)\s+PARTITION\s+(?P<partition>{_SQL_IDENTIFIER_RE}){_SQL_IDENTIFIER_END_RE}",
+            sql,
+            re.IGNORECASE,
+        )
+        if match:
+            return [match.group("target"), match.group("partition")]
+        match = re.search(
+            rf"^\s*ALTER\s+TABLE\s+(?P<target>{_SQL_IDENTIFIER_RE})\s+"
+            rf"EXCHANGE\s+PARTITION\s+{_SQL_IDENTIFIER_RE}\s+WITH\s+TABLE\s+"
+            rf"(?P<table>{_SQL_IDENTIFIER_RE}){_SQL_IDENTIFIER_END_RE}",
+            sql,
+            re.IGNORECASE,
+        )
+        if match:
+            return [match.group("target"), match.group("table")]
+        return []
+
+    @staticmethod
+    def _parenthesized_table_expression_names(sql: str) -> List[str]:
+        return [
+            match.group("source")
+            for match in re.finditer(
+                rf"\(\s*TABLE\s+(?P<source>{_SQL_IDENTIFIER_RE})(?=\s|\)|$|;)",
+                sql,
+                re.IGNORECASE,
+            )
+        ]
+
+    @staticmethod
+    def _insert_table_expression_names(sql: str) -> List[str]:
+        match = re.search(
+            rf"^\s*INSERT\s+INTO\s+{_SQL_IDENTIFIER_RE}(?:\s*\([^)]*\))?\s+TABLE\s+"
+            rf"(?P<source>{_SQL_IDENTIFIER_RE}){_SQL_IDENTIFIER_END_RE}",
+            sql,
+            re.IGNORECASE,
+        )
+        if not match:
+            return []
+        return [match.group("source")]
 
     @staticmethod
     def all_tools_name() -> List[str]:
@@ -634,6 +709,63 @@ class DBFuncTool:
         if not isinstance(raw_value, str):
             return ""
         return raw_value.strip().lower()
+
+    @staticmethod
+    def _write_sql_reads_from_source(sql: str, dialect: str) -> bool:
+        try:
+            import sqlglot
+            from sqlglot import expressions as exp
+
+            from datus.utils.sql_utils import parse_read_dialect
+
+            parsed = sqlglot.parse_one(
+                sql,
+                read=parse_read_dialect(dialect),
+                error_level=sqlglot.ErrorLevel.IGNORE,
+            )
+            if not isinstance(parsed, (exp.Insert, exp.Update, exp.Delete)):
+                return False
+            if any(True for _ in parsed.find_all(exp.Select)):
+                return True
+            if DBFuncTool._insert_table_expression_names(sql):
+                return True
+            if DBFuncTool._parenthesized_table_expression_names(sql):
+                return True
+            if isinstance(parsed, (exp.Update, exp.Delete)):
+                return sum(1 for _ in parsed.find_all(exp.Table)) > 1
+            return False
+        except Exception:
+            return bool(
+                re.search(r"\bSELECT\b", sql, re.IGNORECASE)
+                or DBFuncTool._insert_table_expression_names(sql)
+                or DBFuncTool._parenthesized_table_expression_names(sql)
+                or re.search(r"^\s*UPDATE\b[\s\S]*\b(?:FROM|JOIN)\b", sql, re.IGNORECASE)
+                or re.search(r"^\s*DELETE\b[\s\S]*\bUSING\b", sql, re.IGNORECASE)
+            )
+
+    @staticmethod
+    def _ddl_sql_reads_from_source(sql: str, dialect: str) -> bool:
+        try:
+            import sqlglot
+            from sqlglot import expressions as exp
+
+            from datus.utils.sql_utils import parse_read_dialect
+
+            parsed = sqlglot.parse_one(
+                sql,
+                read=parse_read_dialect(dialect),
+                error_level=sqlglot.ErrorLevel.IGNORE,
+            )
+            if DBFuncTool._parenthesized_table_expression_names(sql):
+                return True
+            if not isinstance(parsed, exp.Create):
+                return bool(re.search(r"\bAS\s+(?:SELECT|TABLE)\b", sql, re.IGNORECASE))
+            return any(any(True for _ in select.find_all(exp.Table)) for select in parsed.find_all(exp.Select))
+        except Exception:
+            return bool(
+                re.search(r"\bAS\s+(?:SELECT|TABLE)\b", sql, re.IGNORECASE)
+                or DBFuncTool._parenthesized_table_expression_names(sql)
+            )
 
     def _configured_tool_dialects(self) -> set[str]:
         dialects: set[str] = set()
@@ -1187,7 +1319,7 @@ class DBFuncTool:
                     sql_type,
                 )
 
-        out_of_scope = self._check_sql_table_scope(sql)
+        out_of_scope = self._check_sql_table_scope(sql, connector)
         if out_of_scope:
             return (
                 FuncToolResult(
@@ -1258,11 +1390,13 @@ class DBFuncTool:
                 schema_name,
                 datasource,
             )
+            connector = self._get_connector(datasource, database)
             coordinate = self._build_table_coordinate(
                 raw_name=table_name,
                 catalog=catalog,
                 database=database,
                 schema=schema_name,
+                connector=connector,
             )
             if not self._table_matches_scope(coordinate):
                 return FuncToolResult(
@@ -1334,14 +1468,30 @@ class DBFuncTool:
                 "DROP TABLE/VIEW). DML statements (INSERT, UPDATE, DELETE, SELECT) are not permitted.",
             )
 
-        out_of_scope = self._check_sql_table_scope(cleaned)
+        connector = self._get_connector(datasource, database)
+        out_of_scope = self._check_sql_table_scope(cleaned, connector)
         if out_of_scope:
             return FuncToolResult(
                 success=0,
                 error=f"DDL statement references tables outside scoped context: {', '.join(out_of_scope)}",
             )
 
-        connector = self._get_connector(datasource, database)
+        if self._ddl_sql_reads_from_source(cleaned, connector.dialect):
+            try:
+                effective_datasource = self._resolve_effective_datasource(datasource)
+                policy_sql = self._enforce_sql_policy(
+                    cleaned,
+                    datasource=effective_datasource,
+                    dialect=connector.dialect,
+                )
+            except Exception as e:
+                return FuncToolResult(success=0, error=str(e))
+            if policy_sql != cleaned:
+                return FuncToolResult(
+                    success=0,
+                    error="SQL policy rewrites are not supported for read-backed DDL statements.",
+                )
+
         if not hasattr(connector, "execute_ddl"):
             return FuncToolResult(success=0, error="Current database connector does not support DDL operations")
         try:
@@ -1443,12 +1593,27 @@ class DBFuncTool:
                     ),
                 )
 
-            out_of_scope = self._check_sql_table_scope(normalized_sql)
+            out_of_scope = self._check_sql_table_scope(normalized_sql, connector)
             if out_of_scope:
                 return FuncToolResult(
                     success=0,
                     error=f"Write statement references tables outside scoped context: {', '.join(out_of_scope)}",
                 )
+            if self._write_sql_reads_from_source(normalized_sql, connector.dialect):
+                try:
+                    effective_datasource = self._resolve_effective_datasource(datasource)
+                    policy_sql = self._enforce_sql_policy(
+                        normalized_sql,
+                        datasource=effective_datasource,
+                        dialect=connector.dialect,
+                    )
+                except Exception as e:
+                    return FuncToolResult(success=0, error=str(e))
+                if policy_sql != normalized_sql:
+                    return FuncToolResult(
+                        success=0,
+                        error="SQL policy rewrites are not supported for read-backed write statements.",
+                    )
 
             method_name = {
                 SQLType.INSERT: "execute_insert",
@@ -1716,6 +1881,22 @@ class DBFuncTool:
                 "Check that the adapter is installed and the connection config is correct. "
                 "Do NOT fall back to a different source datasource.",
             )
+        validation_error, _ = self._validate_read_sql(cleaned_sql, source_conn)
+        if validation_error:
+            return validation_error
+        try:
+            effective_source_datasource = self._resolve_effective_datasource(source_datasource)
+            cleaned_sql = self._enforce_sql_policy(
+                cleaned_sql,
+                datasource=effective_source_datasource,
+                dialect=getattr(source_conn, "dialect", ""),
+            )
+            validation_error, _ = self._validate_read_sql(cleaned_sql, source_conn)
+            if validation_error:
+                return validation_error
+        except Exception as e:
+            return FuncToolResult(success=0, error=str(e))
+
         try:
             target_conn = self._get_connector(target_datasource)
         except Exception as e:
@@ -1724,6 +1905,12 @@ class DBFuncTool:
                 error=f"Target datasource '{target_datasource}' is not available: {str(e)}. "
                 "Check that the adapter is installed and the connection config is correct. "
                 "Do NOT fall back to a different target datasource — STOP and report this error to the user.",
+            )
+        target_coordinate = self._build_table_coordinate(target_table, connector=target_conn)
+        if not self._table_matches_scope(target_coordinate):
+            return FuncToolResult(
+                success=0,
+                error=f"Target table '{target_table}' is outside scoped context.",
             )
 
         # Authoritative source row count — wrap the user's source_sql in a COUNT
@@ -1752,7 +1939,7 @@ class DBFuncTool:
                     success=0,
                     error="Source datasource connector does not support pandas execution.",
                 )
-            source_result = source_conn.execute_pandas(source_sql)
+            source_result = source_conn.execute_pandas(cleaned_sql)
             if not source_result.success:
                 return FuncToolResult(success=0, error=f"Source query failed: {source_result.error}")
             df = source_result.sql_return

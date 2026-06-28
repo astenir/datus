@@ -63,6 +63,11 @@ class QueryableAuditSink(CollectingAuditSink):
         return self.source_events
 
 
+class QueryableFailingWriteAuditSink(QueryableAuditSink):
+    async def write(self, event):
+        raise RuntimeError("audit write down")
+
+
 def _install_extensions(monkeypatch, audit_sink, *, enabled=False, quota_store=None):
     monkeypatch.setattr(
         deps,
@@ -193,6 +198,30 @@ def test_admin_audit_logs_forwards_filters_returns_entries_and_audits(monkeypatc
     assert event.metadata == {"operation": "list_audit_logs", "count": 1}
 
 
+def test_admin_audit_logs_returns_entries_when_post_query_audit_fails(monkeypatch):
+    audit_event = CoreAuditEvent(
+        user_id="u2",
+        action="chat.stream",
+        resource_type="session",
+        resource_id="s1",
+        decision="allow",
+        reason=None,
+        request_id="r1",
+        metadata={},
+    )
+    audit_sink = QueryableFailingWriteAuditSink([audit_event])
+    ctx = AppContext(user_id="admin", permissions={"module.admin.audit"})
+    _install_extensions(monkeypatch, audit_sink)
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/admin/audit-logs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"][0]["resource_id"] == "s1"
+
+
 def test_admin_audit_log_export_returns_csv_and_audits(monkeypatch):
     audit_event = CoreAuditEvent(
         user_id="u2",
@@ -248,6 +277,30 @@ def test_admin_audit_log_export_returns_csv_and_audits(monkeypatch):
     assert event.resource_id is None
     assert event.decision == "allow"
     assert event.metadata == {"operation": "export_audit_logs", "count": 1}
+
+
+def test_admin_audit_log_export_returns_csv_when_post_query_audit_fails(monkeypatch):
+    audit_event = CoreAuditEvent(
+        user_id="u2",
+        action="sql.execute",
+        resource_type="datasource",
+        resource_id="finance",
+        decision="allow",
+        reason=None,
+        request_id="r2",
+        metadata={},
+    )
+    audit_sink = QueryableFailingWriteAuditSink([audit_event])
+    ctx = AppContext(user_id="admin", permissions={"module.admin.audit.export"})
+    _install_extensions(monkeypatch, audit_sink)
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/admin/audit-logs/export")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    rows = list(csv.DictReader(StringIO(response.text)))
+    assert rows[0]["resource_id"] == "finance"
 
 
 def test_admin_audit_log_export_returns_unavailable_without_quota_store(monkeypatch):
@@ -362,6 +415,34 @@ def test_admin_audit_log_export_returns_unavailable_when_sink_is_write_only(monk
     assert event.decision == "deny"
     assert event.reason == "audit query unavailable"
     assert event.metadata == {"operation": "export_audit_logs"}
+
+
+def test_admin_audit_log_export_write_only_sink_does_not_consume_quota(monkeypatch):
+    quota_store = InMemoryEnterpriseQuotaStore()
+    asyncio.run(
+        quota_store.put_quota(
+            subject_type="user",
+            subject_id="admin",
+            resource="admin.audit.export",
+            limit=1,
+            window_seconds=3600,
+        )
+    )
+    audit_sink = CollectingAuditSink()
+    ctx = AppContext(user_id="admin", permissions={"module.admin.audit.export"})
+    _install_extensions(monkeypatch, audit_sink, enabled=True, quota_store=quota_store)
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/admin/audit-logs/export")
+
+    usage = asyncio.run(quota_store.list_usage(subject_type="user", subject_id="admin", resource="admin.audit.export"))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "AUDIT_QUERY_UNAVAILABLE"
+    assert usage == []
+    assert [event.action for event in audit_sink.events] == ["module.admin.audit.export"]
 
 
 def test_admin_audit_log_export_rejects_without_export_permission(monkeypatch):

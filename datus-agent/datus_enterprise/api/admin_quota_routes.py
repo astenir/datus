@@ -12,12 +12,15 @@ from datus.api.auth.context import AppContext
 from datus.api.constants import USER_ID_PATTERN
 from datus.api.enterprise.deps import require_platform_active
 from datus.api.models.base_models import Result
+from datus.utils.loggings import get_logger
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
 
 router = APIRouter(prefix="/api/v1", tags=["enterprise-quotas"])
+logger = get_logger(__name__)
 
-AdminQuotasCtx = Annotated[AppContext, Depends(require_module("module.admin.quotas"))]
+_require_admin_quotas = require_module("module.admin.quotas")
+AdminQuotasCtx = Annotated[AppContext, Depends(_require_admin_quotas)]
 
 SUBJECT_TYPES = {"global", "role", "user"}
 MAX_RESOURCE_LENGTH = 120
@@ -106,7 +109,10 @@ async def list_admin_quotas(
     "/admin/quotas",
     response_model=Result[AdminQuotaSummary],
     summary="Upsert Admin Quota",
-    dependencies=[Depends(require_platform_active(operation="admin.quotas.upsert", resource_type="quota"))],
+    dependencies=[
+        Depends(_require_admin_quotas),
+        Depends(require_platform_active(operation="admin.quotas.upsert", resource_type="quota")),
+    ],
 )
 async def upsert_admin_quota(body: UpsertQuotaRequest, ctx: AdminQuotasCtx) -> Result[AdminQuotaSummary]:
     """Create or replace one enterprise quota metadata record."""
@@ -142,7 +148,7 @@ async def upsert_admin_quota(body: UpsertQuotaRequest, ctx: AdminQuotasCtx) -> R
         return _quota_error("QUOTA_UPSERT_FAILED", "Quota upsert failed.")
 
     summary = _quota_summary_from_record(record)
-    await _audit_quota(
+    await _audit_quota_best_effort(
         ctx,
         operation="upsert_admin_quota",
         decision="allow",
@@ -348,6 +354,37 @@ async def _audit_quota(
             metadata=event_metadata,
         ),
     )
+
+
+async def _audit_quota_best_effort(
+    ctx: AppContext,
+    *,
+    operation: str,
+    decision: str,
+    reason: str | None = None,
+    resource_id: str | None = None,
+    old_summary: dict[str, Any] | None = None,
+    new_summary: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    try:
+        await _audit_quota(
+            ctx,
+            operation=operation,
+            decision=decision,
+            reason=reason,
+            resource_id=resource_id,
+            old_summary=old_summary,
+            new_summary=new_summary,
+            metadata=metadata,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Admin quota audit write failed for operation '%s' decision '%s': %s",
+            operation,
+            decision,
+            exc,
+        )
 
 
 def _quota_error(code: str, message: str) -> Result:

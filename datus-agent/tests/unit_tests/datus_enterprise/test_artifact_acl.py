@@ -29,6 +29,14 @@ class MemoryArtifactAclStore:
         return dict(acl)
 
 
+class CollectingAuditSink:
+    def __init__(self):
+        self.events = []
+
+    async def write(self, event):
+        self.events.append(event)
+
+
 def _manifest(slug: str, kind: str = "report") -> ArtifactManifest:
     return ArtifactManifest(
         slug=slug, name=slug, description="Test artifact", kind=kind, created_at="2026-01-01T00:00:00Z"
@@ -117,6 +125,7 @@ async def test_require_artifact_access_uses_configured_acl_store(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_require_artifact_access_allows_explicit_user_share(monkeypatch):
+    audit_sink = CollectingAuditSink()
     store = MemoryArtifactAclStore(
         {
             ("report", "shared_sales"): {
@@ -136,7 +145,7 @@ async def test_require_artifact_access_allows_explicit_user_share(monkeypatch):
             authorization_provider=LocalAuthorizationProvider(),
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
-            audit_sink=NoopAuditSink(),
+            audit_sink=audit_sink,
             artifact_acl_store=store,
         ),
     )
@@ -147,6 +156,12 @@ async def test_require_artifact_access_allows_explicit_user_share(monkeypatch):
         slug="shared_sales",
         action="view",
     )
+
+    assert len(audit_sink.events) == 1
+    assert audit_sink.events[0].action == "module.report.view"
+    assert audit_sink.events[0].resource_type == "report"
+    assert audit_sink.events[0].resource_id == "shared_sales"
+    assert audit_sink.events[0].decision == "allow"
 
 
 @pytest.mark.asyncio
@@ -182,6 +197,43 @@ async def test_require_artifact_access_does_not_trust_principal_admin_when_permi
                 permissions={"module.report.view"},
                 principal={"permissions": ["module.admin.artifacts"]},
             ),
+            artifact_type="report",
+            slug="private_sales",
+            action="view",
+        )
+
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_require_artifact_access_does_not_treat_is_admin_as_acl_bypass(monkeypatch):
+    store = MemoryArtifactAclStore(
+        {
+            ("report", "private_sales"): {
+                "owner_user_id": "owner-1",
+                "visibility": "private",
+                "allowed_roles": [],
+                "allowed_user_ids": [],
+                "datasources": [],
+            }
+        }
+    )
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+            artifact_acl_store=store,
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await require_artifact_access(
+            AppContext(user_id="admin-1", is_admin=True, permissions={"module.report.view"}),
             artifact_type="report",
             slug="private_sales",
             action="view",

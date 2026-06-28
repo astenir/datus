@@ -6,7 +6,7 @@ import asyncio
 from fnmatch import fnmatchcase
 from typing import Annotated, Any, Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
@@ -18,9 +18,11 @@ from datus.api.models.database_models import (
     ListDatabasesData,
     ListDatabasesInput,
 )
+from datus.utils.exceptions import DatusException
 
 router = APIRouter(prefix="/api/v1", tags=["databases"])
-CatalogModuleCtx = Annotated[AppContext, Depends(require_module("module.datasource_catalog"))]
+_require_catalog_module = require_module("module.datasource_catalog")
+CatalogModuleCtx = Annotated[AppContext, Depends(_require_catalog_module)]
 
 # Timeout for datasource network I/O (test_connection, get_databases, get_schemas,
 # get_tables). Matches the adapter-level timeout_seconds=30 so the connector gets
@@ -40,6 +42,7 @@ INCLUDE_SYS_SCHEMAS_QUERY = Query(False, description="Include system schemas")
     response_model=Result[DatabasesData],
     summary="List Catalogs",
     description="List available catalogs",
+    dependencies=[Depends(_require_catalog_module)],
 )
 async def list_catalogs(
     svc: ServiceDep,
@@ -51,15 +54,18 @@ async def list_catalogs(
     include_sys_schemas: bool = INCLUDE_SYS_SCHEMAS_QUERY,
 ) -> Result[DatabasesData]:
     """List available databases."""
-    projection = await project_request_config(
-        _ctx,
-        svc.agent_config,
-        operation="catalog.list",
-        requested_datasource=datasource_id or None,
-        requested_catalog=catalog_name or None,
-        requested_database=database_name or None,
-        requested_schema=schema_name or None,
-    )
+    try:
+        projection = await project_request_config(
+            _ctx,
+            svc.agent_config,
+            operation="catalog.list",
+            requested_datasource=datasource_id or None,
+            requested_catalog=catalog_name or None,
+            requested_database=database_name or None,
+            requested_schema=schema_name or None,
+        )
+    except DatusException as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     request = ListDatabasesInput(
         datasource_id=datasource_id or projection.config.current_datasource or svc.datasource.current_datasource,
         catalog_name=catalog_name,
@@ -80,7 +86,9 @@ async def list_catalogs(
             errorCode=databases.errorCode,
             errorMessage=databases.errorMessage,
         )
-    selected_datasource = request.datasource_id or projection.config.current_datasource or svc.datasource.current_datasource
+    selected_datasource = (
+        request.datasource_id or projection.config.current_datasource or svc.datasource.current_datasource
+    )
     visible_databases = _prune_databases_for_datasource_grant(
         databases.data.databases,
         datasource_id=selected_datasource,
@@ -134,9 +142,7 @@ def _filter_tables_for_grant(database: DatabaseInfo, grant: dict[str, Any]) -> l
     if not database.tables:
         return []
     return [
-        table
-        for table in database.tables
-        if _matches_any(_table_scope_candidates(database, table), table_patterns)
+        table for table in database.tables if _matches_any(_table_scope_candidates(database, table), table_patterns)
     ]
 
 
@@ -144,8 +150,12 @@ def _table_scope_candidates(database: DatabaseInfo, table: str) -> list[str]:
     candidates = [table]
     if database.schema_name:
         candidates.append(f"{database.schema_name}.{table}")
+    if database.name:
+        candidates.append(f"{database.name}.{table}")
     if database.name and database.schema_name:
         candidates.append(f"{database.name}.{database.schema_name}.{table}")
+    if database.catalog_name and database.name:
+        candidates.append(f"{database.catalog_name}.{database.name}.{table}")
     if database.catalog_name and database.name and database.schema_name:
         candidates.append(f"{database.catalog_name}.{database.name}.{database.schema_name}.{table}")
     return candidates

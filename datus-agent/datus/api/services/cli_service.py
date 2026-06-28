@@ -702,7 +702,12 @@ class CLIService:
             data=StopExecuteSQLData(execute_task_id=task_id, stopped=True),
         )
 
-    def execute_context(self, context_type: str, request: ExecuteContextInput) -> Result[ExecuteContextData]:
+    def execute_context(
+        self,
+        context_type: str,
+        request: ExecuteContextInput,
+        agent_config: Optional[AgentConfig] = None,
+    ) -> Result[ExecuteContextData]:
         """
         Execute context command.
 
@@ -713,13 +718,20 @@ class CLIService:
         Returns:
             ExecuteContextResult with context result
         """
+        connector = self.current_db_connector
+        current_db_name = self.current_db_name
+        active_agent_config = agent_config or self.agent_config
+        cleanup_connector: Optional[Callable[[], None]] = None
         try:
+            if agent_config is not None:
+                connector, current_db_name, cleanup_connector = self._execution_connector(agent_config)
+
             result_data = ContextResultData()
 
             if context_type == "tables":
                 # Get tables list
-                if self.current_db_connector:
-                    tables = self.current_db_connector.get_tables()
+                if connector:
+                    tables = connector.get_tables()
                     if tables:
                         table_info_list = []
                         for table in tables:
@@ -738,14 +750,10 @@ class CLIService:
 
             elif context_type == "catalogs":
                 # Get real catalogs from database connection
-                if self.current_db_connector:
+                if connector:
                     try:
                         # Try to get actual catalogs from the database
-                        catalogs = (
-                            self.current_db_connector.get_catalogs()
-                            if hasattr(self.current_db_connector, "get_catalogs")
-                            else ["main"]
-                        )
+                        catalogs = connector.get_catalogs() if hasattr(connector, "get_catalogs") else ["main"]
                         current_catalog = self.cli_context.current_catalog if self.cli_context else "main"
                         result_data.context_info = {
                             "catalogs": catalogs,
@@ -769,17 +777,17 @@ class CLIService:
             elif context_type == "context":
                 # Get real current context with more details
                 db_info = {}
-                if self.current_db_connector:
+                if connector:
                     try:
                         # Get database type and details
-                        db_type = getattr(self.current_db_connector, "db_type", "unknown")
+                        db_type = getattr(connector, "db_type", "unknown")
                         db_name = getattr(
-                            self.current_db_connector,
+                            connector,
                             "database_name",
-                            self.current_db_name,
+                            current_db_name,
                         )
-                        host = getattr(self.current_db_connector, "host", None)
-                        port = getattr(self.current_db_connector, "port", None)
+                        host = getattr(connector, "host", None)
+                        port = getattr(connector, "port", None)
 
                         db_info = {
                             "db_type": db_type,
@@ -791,7 +799,7 @@ class CLIService:
                     except Exception as e:
                         logger.debug(f"Failed to get database details: {e}")
                         db_info = {
-                            "database_name": self.current_db_name,
+                            "database_name": current_db_name,
                             "connection_status": "connected",
                             "error": str(e),
                         }
@@ -800,7 +808,7 @@ class CLIService:
 
                 result_data.context_info = {
                     "current_datasource": self.current_datasource,
-                    "current_database": self.current_db_name,
+                    "current_database": current_db_name,
                     "current_catalog": getattr(self.cli_context, "current_catalog", None) if self.cli_context else None,
                     "current_schema": getattr(self.cli_context, "current_schema", None) if self.cli_context else None,
                     "database": db_info,
@@ -810,9 +818,9 @@ class CLIService:
             elif context_type == "catalog":
                 # Display database catalogs (@catalog command) - real implementation
                 try:
-                    if self.current_db_connector and hasattr(self, "agent_config") and self.agent_config:
+                    if connector and active_agent_config:
                         # Use real catalog context similar to ContextCommands.cmd_catalog
-                        db_type = getattr(self.agent_config, "db_type", "unknown")
+                        db_type = getattr(active_agent_config, "db_type", "unknown")
                         catalog_name = (
                             getattr(self.cli_context, "current_catalog", "main") if self.cli_context else "main"
                         )
@@ -820,12 +828,10 @@ class CLIService:
                         result_data.context_info = {
                             "db_type": db_type,
                             "catalog_name": catalog_name,
-                            "database_name": self.current_db_name,
+                            "database_name": current_db_name,
                             "connection_status": "connected",
                             "message": "Database catalog context displayed",
-                            "tables_available": len(self.current_db_connector.get_tables())
-                            if self.current_db_connector
-                            else 0,
+                            "tables_available": len(connector.get_tables()) if connector else 0,
                         }
                     else:
                         result_data.context_info = {
@@ -843,9 +849,9 @@ class CLIService:
                 # Display metrics (@subject command) - real implementation
                 try:
                     # Check if agent_config is available for RAG functionality
-                    if not self.agent_config:
+                    if not active_agent_config:
                         result_data.context_info = {
-                            "database_name": self.current_db_name,
+                            "database_name": current_db_name,
                             "metrics_available": False,
                             "error": "No agent configuration available",
                             "message": "Metrics context not available - agent config required",
@@ -854,12 +860,12 @@ class CLIService:
                         # Use real metrics RAG similar to ContextCommands.cmd_subject
                         from datus.storage.metric.store import MetricRAG
 
-                        metrics_rag = MetricRAG(self.agent_config)
+                        metrics_rag = MetricRAG(active_agent_config)
                         metrics_count = metrics_rag.get_metrics_size()
-                        rag_path = self.agent_config.rag_storage_path()
+                        rag_path = active_agent_config.rag_storage_path()
 
                         result_data.context_info = {
-                            "database_name": self.current_db_name,
+                            "database_name": current_db_name,
                             "metrics_available": metrics_count > 0,
                             "metrics_count": metrics_count,
                             "rag_storage_path": rag_path,
@@ -868,7 +874,7 @@ class CLIService:
                 except Exception as e:
                     logger.error(f"Error getting metrics context: {e}")
                     result_data.context_info = {
-                        "database_name": self.current_db_name,
+                        "database_name": current_db_name,
                         "metrics_available": False,
                         "error": str(e),
                         "message": "Failed to get metrics context",
@@ -878,9 +884,9 @@ class CLIService:
                 # Display historical SQL (@sql command) - real implementation
                 try:
                     # Check if agent_config is available for RAG functionality
-                    if not self.agent_config:
+                    if not active_agent_config:
                         result_data.context_info = {
-                            "database_name": self.current_db_name,
+                            "database_name": current_db_name,
                             "historical_sql_available": False,
                             "error": "No agent configuration available",
                             "message": "SQL history context not available - agent config required",
@@ -889,12 +895,12 @@ class CLIService:
                         # Use real reference SQL RAG
                         from datus.storage.reference_sql.store import ReferenceSqlRAG
 
-                        sql_rag = ReferenceSqlRAG(self.agent_config)
+                        sql_rag = ReferenceSqlRAG(active_agent_config)
                         sql_count = sql_rag.get_reference_sql_size()
-                        rag_path = self.agent_config.rag_storage_path()
+                        rag_path = active_agent_config.rag_storage_path()
 
                         result_data.context_info = {
-                            "database_name": self.current_db_name,
+                            "database_name": current_db_name,
                             "historical_sql_available": sql_count > 0,
                             "sql_count": sql_count,
                             "rag_storage_path": rag_path,
@@ -903,7 +909,7 @@ class CLIService:
                 except Exception as e:
                     logger.error(f"Error getting SQL history context: {e}")
                     result_data.context_info = {
-                        "database_name": self.current_db_name,
+                        "database_name": current_db_name,
                         "historical_sql_available": False,
                         "error": str(e),
                         "message": "Failed to get SQL history context",
@@ -918,7 +924,7 @@ class CLIService:
 
             data = ExecuteContextData(
                 context_type=context_type,
-                database_name=request.database_name or self.current_db_name,
+                database_name=request.database_name or current_db_name,
                 schema_name=request.schema_name,
                 result=result_data,
             )
@@ -932,8 +938,17 @@ class CLIService:
                 errorCode=ErrorCode.CONTEXT_COMMAND_ERROR,
                 errorMessage=str(e),
             )
+        finally:
+            if cleanup_connector:
+                cleanup_connector()
 
-    def execute_internal_command(self, command: str, request: InternalCommandInput) -> Result[InternalCommandData]:
+    def execute_internal_command(
+        self,
+        command: str,
+        request: InternalCommandInput,
+        user_id: Optional[str] = None,
+        agent_config: Optional[AgentConfig] = None,
+    ) -> Result[InternalCommandData]:
         """
         Execute internal command.
 
@@ -944,7 +959,17 @@ class CLIService:
         Returns:
             InternalCommandResult with command result
         """
+        active_db_manager = self.db_manager
+        active_datasource = self.current_datasource
+        active_connector = self.current_db_connector
+        cleanup_connector: Optional[Callable[[], None]] = None
         try:
+            if agent_config is not None:
+                active_db_manager, cleanup_connector = self._request_scoped_db_manager(agent_config.datasource_configs)
+                active_datasource = getattr(agent_config, "current_datasource", None)
+                if active_db_manager and active_datasource:
+                    _, active_connector = active_db_manager.first_conn_with_name(active_datasource)
+
             result_data = InternalCommandResultData(command_output="", action_taken="none", context_changed=False)
 
             if command == "help":
@@ -952,8 +977,8 @@ class CLIService:
                 result_data.action_taken = "display_help"
 
             elif command in ["databases", "database"]:
-                if self.db_manager:
-                    connections = self.db_manager.get_connections(self.current_datasource)
+                if active_db_manager:
+                    connections = active_db_manager.get_connections(active_datasource)
                     # Handle both single connector and dict of connectors
                     if isinstance(connections, dict):
                         db_list = list(connections.keys())
@@ -967,8 +992,8 @@ class CLIService:
                 result_data.action_taken = "list_databases"
 
             elif command == "tables":
-                if self.current_db_connector:
-                    tables = self.current_db_connector.get_tables()
+                if active_connector:
+                    tables = active_connector.get_tables()
                     result_data.command_output = f"Tables: {', '.join(tables or [])}"
                     result_data.data = {"tables": tables or []}
                 else:
@@ -983,7 +1008,7 @@ class CLIService:
 
                     if service_session_id:
                         # Call chat_service to delete LLM session for this service session
-                        result = self.chat_service.delete_session(service_session_id)
+                        result = self.chat_service.delete_session(service_session_id, user_id=user_id)
 
                         if result.success:
                             result_data.command_output = f"Session {service_session_id} cleared successfully"
@@ -1025,14 +1050,18 @@ class CLIService:
                     current_session_id = getattr(self, "current_session_id", None)
 
                     if current_session_id:
-                        # Use SessionManager to get detailed session info
-                        from datus.models.session_manager import SessionManager
+                        session_info_result = (
+                            self.chat_service.get_session_info(current_session_id, user_id=user_id)
+                            if self.chat_service
+                            else None
+                        )
+                        session_info = (
+                            session_info_result.data
+                            if session_info_result and session_info_result.success and session_info_result.data
+                            else None
+                        )
 
-                        session_dir = self.chat_service._session_dir if self.chat_service else None
-                        session_manager = SessionManager(session_dir=session_dir)
-                        session_info = session_manager.get_session_info(current_session_id)
-
-                        if session_info:
+                        if session_info and session_info.get("exists", False):
                             result_data.command_output = (
                                 f"Current session: {current_session_id}\n"
                                 f"  Token Count: {session_info.get('total_tokens', 0)}\n"
@@ -1069,7 +1098,7 @@ class CLIService:
             elif command == "sessions":
                 # Use chat_service.list_sessions() for consistent session listing
                 try:
-                    sessions_result = self.chat_service.list_sessions()
+                    sessions_result = self.chat_service.list_sessions(user_id=user_id)
 
                     if not sessions_result.success:
                         result_data.command_output = (
@@ -1087,7 +1116,7 @@ class CLIService:
                     else:
                         # Convert ChatSessionData to dict format
                         sessions_with_info = []
-                        for session_data in sessions_result.data:
+                        for session_data in sessions_result.data.sessions:
                             # Format timestamps to be readable
                             created = session_data.created_at
                             updated = session_data.last_updated
@@ -1113,7 +1142,7 @@ class CLIService:
 
                         result_data.data = {
                             "sessions": sessions_with_info,
-                            "total_count": len(sessions_with_info),
+                            "total_count": sessions_result.data.total_count,
                         }
                         result_data.action_taken = "list_sessions"
 
@@ -1141,3 +1170,6 @@ class CLIService:
                 errorCode=ErrorCode.INTERNAL_COMMAND_ERROR,
                 errorMessage=str(e),
             )
+        finally:
+            if cleanup_connector:
+                cleanup_connector()

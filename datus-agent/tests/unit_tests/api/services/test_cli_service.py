@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from datus.api.models.base_models import Result
 from datus.api.models.cli_models import ExecuteContextInput, ExecuteSQLInput
 from datus.api.services.chat_service import ChatService
 from datus.api.services.chat_task_manager import ChatTaskManager
@@ -1176,6 +1177,36 @@ class TestCLIServiceExecuteInternalCommand:
         assert result.success is True
         assert result.data.result.action_taken == "show_chat_info"
 
+    def test_chat_info_uses_current_user_scope(self):
+        """chat_info should read session metadata through ChatService with the current user scope."""
+        from datus.api.models.cli_models import InternalCommandInput
+
+        calls = []
+
+        def get_session_info(session_id, user_id=None):
+            calls.append((session_id, user_id))
+            return Result[dict](
+                success=True,
+                data={
+                    "exists": True,
+                    "total_tokens": 9,
+                    "action_count": 3,
+                    "created_at": "2026-06-28T01:02:03Z",
+                    "last_updated": "2026-06-28T01:03:04Z",
+                },
+            )
+
+        chat_service = SimpleNamespace(get_session_info=get_session_info)
+        svc = CLIService(agent_config=None, chat_service=chat_service)
+        svc.current_session_id = "session-1"
+
+        result = svc.execute_internal_command("chat_info", InternalCommandInput(command="chat_info"), user_id="alice")
+
+        assert result.success is True
+        assert result.data.result.action_taken == "show_chat_info"
+        assert result.data.result.data["token_count"] == 9
+        assert calls == [("session-1", "alice")]
+
     def test_sessions_command(self, cli_svc):
         """sessions command lists chat sessions."""
         from datus.api.models.cli_models import InternalCommandInput
@@ -1184,6 +1215,56 @@ class TestCLIServiceExecuteInternalCommand:
         result = cli_svc.execute_internal_command("sessions", request)
         assert result.success is True
         assert "sessions" in result.data.result.action_taken
+
+    def test_sessions_command_formats_chat_session_data(self):
+        """sessions command should consume ChatSessionData.sessions, not the model object itself."""
+        from datus.api.models.cli_models import (
+            ChatSessionData,
+            ChatSessionItemInfo,
+            InternalCommandInput,
+        )
+
+        calls = []
+
+        def list_sessions(user_id=None):
+            calls.append(user_id)
+            return Result[ChatSessionData](
+                success=True,
+                data=ChatSessionData(
+                    sessions=[
+                        ChatSessionItemInfo(
+                            session_id="session-1",
+                            created_at="2026-06-28T01:02:03Z",
+                            last_updated="2026-06-28T01:03:04Z",
+                            total_turns=2,
+                            token_count=42,
+                        )
+                    ],
+                    total_count=1,
+                ),
+            )
+
+        chat_service = SimpleNamespace(list_sessions=list_sessions)
+        svc = CLIService(agent_config=None, chat_service=chat_service)
+
+        result = svc.execute_internal_command("sessions", InternalCommandInput(command="sessions"), user_id="alice")
+
+        assert result.success is True
+        assert result.data.result.action_taken == "list_sessions"
+        assert result.data.result.data == {
+            "sessions": [
+                {
+                    "session_id": "session-1",
+                    "created_at": "2026-06-28T01:02:03",
+                    "last_updated": "2026-06-28T01:03:04",
+                    "total_turns": 2,
+                    "token_count": 42,
+                    "is_active": False,
+                }
+            ],
+            "total_count": 1,
+        }
+        assert calls == ["alice"]
 
     def test_clear_command_without_session_id(self, cli_svc):
         """clear command without session ID returns usage message."""

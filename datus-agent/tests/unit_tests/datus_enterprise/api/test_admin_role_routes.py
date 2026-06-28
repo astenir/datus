@@ -2,6 +2,7 @@ import argparse
 import asyncio
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -29,12 +30,17 @@ class CollectingAuditSink:
         self.events.append(event)
 
 
-def _install_extensions(monkeypatch, role_store, audit_sink=None, user_store=None):
+class FailingAuditSink:
+    async def write(self, event):
+        raise RuntimeError("audit down")
+
+
+def _install_extensions(monkeypatch, role_store, audit_sink=None, user_store=None, *, enabled=False):
     monkeypatch.setattr(
         admin_role_routes.deps,
         "_enterprise_extensions",
         EnterpriseExtensions(
-            enabled=False,
+            enabled=enabled,
             authorization_provider=LocalAuthorizationProvider(),
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
@@ -71,6 +77,25 @@ def test_admin_roles_rejects_without_permission(monkeypatch):
 
     assert response.status_code == 403
     assert "module.admin.roles" in response.json()["detail"]
+
+
+def test_admin_role_upsert_rbac_denial_precedes_readonly_status(monkeypatch):
+    role_store = InMemoryEnterpriseRoleStore()
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setenv("DATUS_PLATFORM_STATUS", "readonly")
+    _install_extensions(monkeypatch, role_store, audit_sink, enabled=True)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.users"})
+
+    with _client(ctx) as client:
+        response = client.put(
+            "/api/v1/admin/roles/analyst",
+            json={"name": "Analyst", "permissions": ["module.chat"]},
+        )
+
+    assert response.status_code == 403
+    assert "module.admin.roles" in response.json()["detail"]
+    assert asyncio.run(role_store.list_roles()) == []
+    assert [event.action for event in audit_sink.events] == ["module.admin.roles"]
 
 
 def test_admin_role_upsert_get_and_list_audit_sanitized(monkeypatch):
@@ -143,6 +168,75 @@ def test_admin_role_permissions_and_delete(monkeypatch):
     assert missing_response.json()["errorCode"] == "RESOURCE_NOT_FOUND"
     assert audit_sink.events[-3].metadata["operation"] == "set_admin_role_permissions"
     assert audit_sink.events[-2].metadata["operation"] == "delete_admin_role"
+
+
+@pytest.mark.asyncio
+async def test_admin_role_upsert_returns_success_when_post_write_audit_fails(monkeypatch):
+    role_store = InMemoryEnterpriseRoleStore()
+    _install_extensions(monkeypatch, role_store, FailingAuditSink())
+    ctx = AppContext(user_id="operator", permissions={"module.admin.roles"})
+
+    result = await admin_role_routes.upsert_admin_role(
+        "analyst",
+        admin_role_routes.UpsertAdminRoleRequest(name="Analyst", permissions=["module.chat"]),
+        ctx,
+    )
+
+    assert result.success is True
+    assert result.data.role_id == "analyst"
+    assert (await role_store.get_role("analyst"))["permissions"] == ["module.chat"]
+
+
+@pytest.mark.asyncio
+async def test_admin_role_permissions_return_success_when_post_write_audit_fails(monkeypatch):
+    role_store = InMemoryEnterpriseRoleStore()
+    await role_store.upsert_role(role_id="analyst", name="Analyst", permissions=["module.chat"])
+    _install_extensions(monkeypatch, role_store, FailingAuditSink())
+    ctx = AppContext(user_id="operator", permissions={"module.admin.roles"})
+
+    result = await admin_role_routes.set_admin_role_permissions(
+        "analyst",
+        admin_role_routes.SetRolePermissionsRequest(permissions=["module.sql_executor"]),
+        ctx,
+    )
+
+    assert result.success is True
+    assert result.data.permissions == ["module.sql_executor"]
+    assert (await role_store.get_role("analyst"))["permissions"] == ["module.sql_executor"]
+
+
+@pytest.mark.asyncio
+async def test_admin_user_roles_return_success_when_post_write_audit_fails(monkeypatch):
+    role_store = InMemoryEnterpriseRoleStore()
+    user_store = InMemoryEnterpriseUserStore()
+    await user_store.upsert_user(user_id="alice", display_name="Alice")
+    await role_store.upsert_role(role_id="analyst", name="Analyst")
+    _install_extensions(monkeypatch, role_store, FailingAuditSink(), user_store)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.roles"})
+
+    result = await admin_role_routes.set_admin_user_roles(
+        "alice",
+        admin_role_routes.SetUserRolesRequest(role_ids=["analyst"]),
+        ctx,
+    )
+
+    assert result.success is True
+    assert result.data.role_ids == ["analyst"]
+    assert await role_store.list_user_roles("alice") == ["analyst"]
+
+
+@pytest.mark.asyncio
+async def test_admin_role_delete_returns_success_when_post_delete_audit_fails(monkeypatch):
+    role_store = InMemoryEnterpriseRoleStore()
+    await role_store.upsert_role(role_id="analyst", name="Analyst")
+    _install_extensions(monkeypatch, role_store, FailingAuditSink())
+    ctx = AppContext(user_id="operator", permissions={"module.admin.roles"})
+
+    result = await admin_role_routes.delete_admin_role("analyst", ctx)
+
+    assert result.success is True
+    assert result.data == {"role_id": "analyst", "deleted": True}
+    assert await role_store.get_role("analyst") is None
 
 
 def test_admin_user_roles_get_put_and_audit_sanitized(monkeypatch):

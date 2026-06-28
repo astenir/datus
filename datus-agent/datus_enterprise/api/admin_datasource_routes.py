@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from inspect import isawaitable
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from datus.api import deps
@@ -14,7 +15,6 @@ from datus.api.deps import ServiceDep
 from datus.api.enterprise.deps import require_platform_active
 from datus.api.models.base_models import Result
 from datus.configuration.project_config import ProjectOverride, load_project_override, save_project_override
-from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
@@ -24,7 +24,8 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["enterprise-datasources"])
 
 
-AdminDatasourcesCtx = Annotated[AppContext, Depends(require_module("module.admin.datasources"))]
+_require_admin_datasources = require_module("module.admin.datasources")
+AdminDatasourcesCtx = Annotated[AppContext, Depends(_require_admin_datasources)]
 
 
 class SetDefaultDatasourceRequest(BaseModel):
@@ -65,6 +66,7 @@ class AdminDatasourceGrantSummary(BaseModel):
     response_model=Result[list[AdminDatasourceSummary]],
     summary="List Admin Datasources",
     description="Admin-only datasource key list. Connection details and secrets are never returned.",
+    dependencies=[Depends(_require_admin_datasources)],
 )
 async def list_admin_datasources_endpoint(
     svc: ServiceDep,
@@ -223,7 +225,8 @@ async def get_admin_datasource_grant(
     response_model=Result[AdminDatasourceGrantSummary],
     summary="Upsert Datasource Grant",
     dependencies=[
-        Depends(require_platform_active(operation="admin.datasource_grants.upsert", resource_type="datasource_grant"))
+        Depends(_require_admin_datasources),
+        Depends(require_platform_active(operation="admin.datasource_grants.upsert", resource_type="datasource_grant")),
     ],
 )
 async def upsert_admin_datasource_grant(
@@ -231,8 +234,8 @@ async def upsert_admin_datasource_grant(
     subject_id: str,
     datasource_key: str,
     body: UpsertDatasourceGrantRequest,
-    svc: ServiceDep,
     ctx: AdminDatasourcesCtx,
+    request: Request,
 ) -> Result[AdminDatasourceGrantSummary]:
     """Create or replace one role/user datasource grant."""
 
@@ -252,6 +255,7 @@ async def upsert_admin_datasource_grant(
         )
         return _datasource_error(_grant_validation_error_code(invalid), invalid)
 
+    svc = await _resolve_request_service(request)
     if datasource_key not in (getattr(svc.agent_config.services, "datasources", {}) or {}):
         await _audit_datasource_grant(
             ctx,
@@ -308,7 +312,7 @@ async def upsert_admin_datasource_grant(
         return _datasource_error("DATASOURCE_GRANT_UPSERT_FAILED", "Datasource grant upsert failed.")
 
     summary = _grant_summary_from_record(record)
-    await _audit_datasource_grant(
+    await _audit_datasource_grant_best_effort(
         ctx,
         operation="upsert_admin_datasource_grant",
         decision="allow",
@@ -324,7 +328,8 @@ async def upsert_admin_datasource_grant(
     response_model=Result[dict],
     summary="Delete Datasource Grant",
     dependencies=[
-        Depends(require_platform_active(operation="admin.datasource_grants.delete", resource_type="datasource_grant"))
+        Depends(_require_admin_datasources),
+        Depends(require_platform_active(operation="admin.datasource_grants.delete", resource_type="datasource_grant")),
     ],
 )
 async def delete_admin_datasource_grant(
@@ -403,7 +408,7 @@ async def delete_admin_datasource_grant(
         )
         return _datasource_error("RESOURCE_NOT_FOUND", "Datasource grant not found.")
 
-    await _audit_datasource_grant(
+    await _audit_datasource_grant_best_effort(
         ctx,
         operation="delete_admin_datasource_grant",
         decision="allow",
@@ -418,15 +423,35 @@ async def delete_admin_datasource_grant(
     response_model=Result[dict],
     summary="Set Project Default Datasource",
     description="Admin-only project default datasource mutation. This is not a user request-level datasource switch.",
-    dependencies=[Depends(require_platform_active(operation="admin.datasource_default.update", resource_type="config"))],
+    dependencies=[
+        Depends(_require_admin_datasources),
+        Depends(require_platform_active(operation="admin.datasource_default.update", resource_type="config")),
+    ],
 )
 async def set_project_default_datasource_endpoint(
     body: SetDefaultDatasourceRequest,
-    svc: ServiceDep,
     ctx: AdminDatasourcesCtx,
+    request: Request,
 ) -> Result[dict]:
     """Persist ``default_datasource`` to ``./.datus/config.yml``."""
 
+    svc = await _resolve_request_service(request)
+    return await _set_project_default_datasource(body, svc, ctx)
+
+
+async def _resolve_request_service(request: Request) -> ServiceDep:
+    service_provider = request.app.dependency_overrides.get(deps.get_datus_service, deps.get_datus_service)
+    result = service_provider(request)
+    if isawaitable(result):
+        return await result
+    return result
+
+
+async def _set_project_default_datasource(
+    body: SetDefaultDatasourceRequest,
+    svc: ServiceDep,
+    ctx: AppContext,
+) -> Result[dict]:
     if body.name not in svc.agent_config.services.datasources:
         await audit_decision(
             ctx,
@@ -438,17 +463,32 @@ async def set_project_default_datasource_endpoint(
                 reason="datasource not found",
             ),
         )
-        raise DatusException(
-            ErrorCode.COMMON_FIELD_INVALID,
-            message=f"Datasource '{body.name}' not found in services.datasources.",
+        raise HTTPException(
+            status_code=400,
+            detail=f"Datasource '{body.name}' not found in services.datasources.",
         )
 
-    current = load_project_override() or ProjectOverride()
-    current.default_datasource = body.name
-    save_project_override(current)
+    try:
+        current = load_project_override() or ProjectOverride()
+        current.default_datasource = body.name
+        save_project_override(current)
+    except Exception:
+        logger.exception("Failed to persist project default datasource")
+        await audit_decision(
+            ctx,
+            AuditEvent(
+                action="module.admin.datasources",
+                resource_type="datasource",
+                resource_id=body.name,
+                decision="deny",
+                reason="project default datasource update failed",
+                metadata={"mutation": "set_project_default_datasource"},
+            ),
+        )
+        return _datasource_error("DATASOURCE_DEFAULT_UPDATE_FAILED", "Project default datasource update failed.")
 
     await _evict_current_project(ctx.project_id or "default")
-    await audit_decision(
+    await _audit_decision_best_effort(
         ctx,
         AuditEvent(
             action="module.admin.datasources",
@@ -457,6 +497,8 @@ async def set_project_default_datasource_endpoint(
             decision="allow",
             metadata={"mutation": "set_project_default_datasource"},
         ),
+        operation="set_project_default_datasource",
+        decision="allow",
     )
 
     return Result(success=True, data={"default_datasource": body.name, "scope": "project"})
@@ -569,6 +611,55 @@ async def _audit_datasource_grant(
             metadata=audit_metadata,
         ),
     )
+
+
+async def _audit_datasource_grant_best_effort(
+    ctx: AppContext,
+    *,
+    operation: str,
+    decision: str,
+    reason: str | None = None,
+    resource_id: str | None = None,
+    old_summary: dict[str, Any] | None = None,
+    new_summary: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    try:
+        await _audit_datasource_grant(
+            ctx,
+            operation=operation,
+            decision=decision,
+            reason=reason,
+            resource_id=resource_id,
+            old_summary=old_summary,
+            new_summary=new_summary,
+            metadata=metadata,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Admin datasource grant audit write failed for operation '%s' decision '%s': %s",
+            operation,
+            decision,
+            exc,
+        )
+
+
+async def _audit_decision_best_effort(
+    ctx: AppContext,
+    event: AuditEvent,
+    *,
+    operation: str,
+    decision: str,
+) -> None:
+    try:
+        await audit_decision(ctx, event)
+    except Exception as exc:
+        logger.warning(
+            "Admin datasource audit write failed for operation '%s' decision '%s': %s",
+            operation,
+            decision,
+            exc,
+        )
 
 
 def _grant_summary_from_record(record: dict[str, Any]) -> AdminDatasourceGrantSummary:

@@ -97,6 +97,15 @@ class ChatService:
                 timestamp=now_utc_iso(),
             )
             return
+        except Exception as e:
+            logger.error("Failed to start chat stream for session %s: %s", request.session_id, e, exc_info=True)
+            yield SSEEvent(
+                id=1,
+                event="error",
+                data=SSEErrorData(error=str(e), error_type="CHAT_START_FAILED", session_id=request.session_id),
+                timestamp=now_utc_iso(),
+            )
+            return
         async for event in task_manager.consume_events(task):
             yield event
 
@@ -185,6 +194,15 @@ class ChatService:
         except Exception as e:
             logger.error(f"Failed to delete session {session_id}: {e}")
             return Result[ChatSessionData](success=False, errorCode="SESSION_DELETE_ERROR", errorMessage=str(e))
+
+    def get_session_info(self, session_id: str, user_id: Optional[str] = None) -> Result[Dict[str, Any]]:
+        """Get scoped metadata for a chat session."""
+        try:
+            session_mgr = self._session_manager(user_id)
+            return Result[Dict[str, Any]](success=True, data=session_mgr.get_session_info(session_id))
+        except Exception as e:
+            logger.error(f"Failed to get session info for {session_id}: {e}")
+            return Result[Dict[str, Any]](success=False, errorCode="SESSION_INFO_ERROR", errorMessage=str(e))
 
     async def compact_session(
         self, request: CompactSessionInput, user_id: Optional[str] = None

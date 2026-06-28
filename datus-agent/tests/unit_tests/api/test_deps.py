@@ -812,6 +812,94 @@ class TestGetDatusService:
         assert audit_sink.events[-1].action == "auth.enterprise_user_status"
         assert audit_sink.events[-1].decision == "deny"
 
+    async def test_enterprise_disabled_user_still_returns_stable_deny_when_audit_sink_fails(self):
+        """Audit sink failures must not mask disabled-user authorization denials."""
+        from datus.api.enterprise.defaults import (
+            InMemoryEnterpriseUserStore,
+            InMemorySessionOwnerStore,
+            LocalAuthorizationProvider,
+            PassthroughConfigProjector,
+        )
+        from datus.api.enterprise.loader import EnterpriseExtensions
+
+        class FailingAuditSink:
+            async def write(self, event):  # noqa: ARG002
+                raise RuntimeError("audit down")
+
+        user_store = InMemoryEnterpriseUserStore()
+        await user_store.upsert_user(user_id="alice", enabled=False)
+        mock_auth = MagicMock()
+        mock_auth.authenticate = AsyncMock(return_value=AppContext(user_id="alice", project_id="proj-1"))
+        mock_cache = MagicMock(spec=DatusServiceCache)
+        mock_cache.get_or_create = AsyncMock()
+        deps._auth_provider = mock_auth
+        deps._service_cache = mock_cache
+        deps._enterprise_extensions = EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=FailingAuditSink(),
+            user_store=user_store,
+        )
+
+        request = MagicMock()
+        request.state = MagicMock()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_datus_service(request)
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "USER_DISABLED"
+        mock_cache.get_or_create.assert_not_called()
+
+    async def test_enterprise_role_context_still_returns_stable_deny_when_audit_sink_fails(self):
+        """Audit sink failures must not mask role-context authorization denials."""
+        from datus.api.enterprise.defaults import (
+            InMemoryEnterpriseDatasourceGrantStore,
+            InMemoryEnterpriseRoleStore,
+            InMemoryEnterpriseUserStore,
+            InMemorySessionOwnerStore,
+            LocalAuthorizationProvider,
+            PassthroughConfigProjector,
+        )
+        from datus.api.enterprise.loader import EnterpriseExtensions
+
+        class StaleRoleStore(InMemoryEnterpriseRoleStore):
+            async def list_user_roles(self, user_id):  # noqa: ARG002
+                return ["missing_role"]
+
+        class FailingAuditSink:
+            async def write(self, event):  # noqa: ARG002
+                raise RuntimeError("audit down")
+
+        mock_auth = MagicMock()
+        mock_auth.authenticate = AsyncMock(return_value=AppContext(user_id="alice", project_id="proj-1"))
+        mock_cache = MagicMock(spec=DatusServiceCache)
+        mock_cache.get_or_create = AsyncMock()
+        deps._auth_provider = mock_auth
+        deps._service_cache = mock_cache
+        deps._enterprise_extensions = EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=FailingAuditSink(),
+            user_store=InMemoryEnterpriseUserStore(),
+            role_store=StaleRoleStore(),
+            datasource_grant_store=InMemoryEnterpriseDatasourceGrantStore(),
+        )
+
+        request = MagicMock()
+        request.state = MagicMock()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_datus_service(request)
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "ROLE_CONTEXT_UNAVAILABLE"
+        mock_cache.get_or_create.assert_not_called()
+
     async def test_enterprise_project_ids_do_not_share_sanitized_cache_key(self):
         """Unsafe project ids keep distinct cache entries and preserve canonical service project ids."""
         from unittest.mock import patch

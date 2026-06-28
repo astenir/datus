@@ -12,6 +12,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 
+from datus.api import deps as api_deps
 from datus.api.enterprise.models import AccessDecision
 from datus.api.models.base_models import Result
 from datus.api.models.cli_models import (
@@ -33,6 +34,7 @@ from datus.api.routes.chat_routes import (
     list_sessions,
     stream_chat,
     stream_chat_feedback,
+    submit_tool_result,
     submit_user_interaction,
 )
 from datus.tools.sql_policy import SqlPolicyConfig
@@ -68,12 +70,24 @@ def _mock_ctx(user_id=None, permissions=None):
     return ctx
 
 
+def _request_with_service(svc):
+    async def override_service(request):
+        return svc
+
+    return SimpleNamespace(app=SimpleNamespace(dependency_overrides={api_deps.get_datus_service: override_service}))
+
+
 class CollectingAuditSink:
     def __init__(self):
         self.events = []
 
     async def write(self, event):
         self.events.append(event)
+
+
+class FailingAuditSink:
+    async def write(self, event):
+        raise RuntimeError("audit sink down")
 
 
 def _patch_owner_extensions(monkeypatch, owner_store, *, enabled=False, session_body_store=None):
@@ -106,7 +120,7 @@ class TestSubmitUserInteractionConversion:
         svc = _mock_svc(task=task)
         request = UserInteractionInput(session_id="s1", interaction_key="k1", input=[["2"]])
 
-        result = await submit_user_interaction(request, svc, _mock_ctx())
+        result = await submit_user_interaction(request, _mock_ctx(), _request_with_service(svc))
 
         task.node.interaction_broker.submit.assert_called_once_with("k1", [["2"]])
         assert result.success is True
@@ -118,7 +132,7 @@ class TestSubmitUserInteractionConversion:
         svc = _mock_svc(task=task)
         request = UserInteractionInput(session_id="s1", interaction_key="k1", input=[["1", "3"]])
 
-        result = await submit_user_interaction(request, svc, _mock_ctx())
+        result = await submit_user_interaction(request, _mock_ctx(), _request_with_service(svc))
 
         task.node.interaction_broker.submit.assert_called_once_with("k1", [["1", "3"]])
         assert result.success is True
@@ -130,7 +144,7 @@ class TestSubmitUserInteractionConversion:
         svc = _mock_svc(task=task)
         request = UserInteractionInput(session_id="s1", interaction_key="k1", input=[["2"], ["1", "3"]])
 
-        result = await submit_user_interaction(request, svc, _mock_ctx())
+        result = await submit_user_interaction(request, _mock_ctx(), _request_with_service(svc))
 
         task.node.interaction_broker.submit.assert_called_once_with("k1", [["2"], ["1", "3"]])
         assert result.success is True
@@ -142,7 +156,7 @@ class TestSubmitUserInteractionConversion:
         svc = _mock_svc(task=task)
         request = UserInteractionInput(session_id="s1", interaction_key="k1", input=[["a"], ["b"]])
 
-        await submit_user_interaction(request, svc, _mock_ctx())
+        await submit_user_interaction(request, _mock_ctx(), _request_with_service(svc))
 
         task.node.interaction_broker.submit.assert_called_once_with("k1", [["a"], ["b"]])
 
@@ -152,7 +166,7 @@ class TestSubmitUserInteractionConversion:
         svc = _mock_svc(task=None)
         request = UserInteractionInput(session_id="s1", interaction_key="k1", input=[["1"]])
 
-        result = await submit_user_interaction(request, svc, _mock_ctx())
+        result = await submit_user_interaction(request, _mock_ctx(), _request_with_service(svc))
 
         assert result.success is False
         assert result.errorCode == "SESSION_NOT_FOUND"
@@ -165,7 +179,7 @@ class TestSubmitUserInteractionConversion:
         svc = _mock_svc(task=task)
         request = UserInteractionInput(session_id="s1", interaction_key="k1", input=[["1"]])
 
-        result = await submit_user_interaction(request, svc, _mock_ctx())
+        result = await submit_user_interaction(request, _mock_ctx(), _request_with_service(svc))
 
         assert result.success is False
         assert result.errorCode == "BROKER_NOT_FOUND"
@@ -177,7 +191,7 @@ class TestSubmitUserInteractionConversion:
         svc = _mock_svc(task=task)
         request = UserInteractionInput(session_id="s1", interaction_key="k1", input=[["1"]])
 
-        result = await submit_user_interaction(request, svc, _mock_ctx())
+        result = await submit_user_interaction(request, _mock_ctx(), _request_with_service(svc))
 
         assert result.success is False
 
@@ -237,7 +251,7 @@ class TestStreamChat404Gate:
         request = StreamChatInput(message="hi", subagent_id="nonexistent_xyz")
 
         with pytest.raises(HTTPException) as exc_info:
-            await stream_chat(request, svc, ctx, MagicMock())
+            await stream_chat(request, ctx, _request_with_service(svc))
 
         assert exc_info.value.status_code == 404
         assert "nonexistent_xyz" in exc_info.value.detail
@@ -250,7 +264,7 @@ class TestStreamChat404Gate:
         ctx = MagicMock(user_id="u1")
         request = StreamChatInput(message="hi", subagent_id=None)
 
-        response = await stream_chat(request, svc, ctx, MagicMock())
+        response = await stream_chat(request, ctx, _request_with_service(svc))
 
         assert isinstance(response, StreamingResponse)
         assert response.status_code == 200
@@ -259,6 +273,36 @@ class TestStreamChat404Gate:
 
 class TestStreamChatSessionOwner:
     """Owner checks for client-supplied stream session ids."""
+
+    @pytest.mark.asyncio
+    async def test_owner_store_failure_returns_sse_error_without_starting_stream(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+
+        class FailingOwnerStore(InMemorySessionOwnerStore):
+            async def get_owner(self, project_id, session_id):
+                raise RuntimeError("owner store down")
+
+        owner_store = FailingOwnerStore()
+        audit_sink = CollectingAuditSink()
+        _patch_owner_extensions(monkeypatch, owner_store, enabled=True, session_body_store=object())
+        monkeypatch.setattr(
+            "datus.api.enterprise.deps.get_audit_sink",
+            lambda: audit_sink,
+        )
+        svc = _mock_svc_with_nodes()
+        svc.project_id = "project-1"
+        svc.task_manager.get_task.return_value = None
+        svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
+        request = StreamChatInput(message="hi", session_id="s1")
+
+        response = await stream_chat(request, _mock_ctx(user_id="alice"), _request_with_service(svc))
+        chunks = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+        assert "SESSION_FORBIDDEN" in chunks[0]
+        svc.chat.stream_chat.assert_not_called()
+        assert audit_sink.events[-1].reason == "session owner store unavailable"
 
     @pytest.mark.asyncio
     async def test_existing_session_id_owned_by_other_user_returns_sse_error(self, monkeypatch):
@@ -274,7 +318,7 @@ class TestStreamChatSessionOwner:
         svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
         request = StreamChatInput(message="hi", session_id="s1")
 
-        response = await stream_chat(request, svc, _mock_ctx(user_id="bob"), MagicMock())
+        response = await stream_chat(request, _mock_ctx(user_id="bob"), _request_with_service(svc))
         chunks = []
         async for chunk in response.body_iterator:
             chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
@@ -303,7 +347,7 @@ class TestStreamChatSessionOwner:
         svc.chat.stream_chat = MagicMock(return_value=empty_stream())
         request = StreamChatInput(message="hi", session_id="s1")
 
-        response = await stream_chat(request, svc, _mock_ctx(user_id="alice"), MagicMock())
+        response = await stream_chat(request, _mock_ctx(user_id="alice"), _request_with_service(svc))
         async for _ in response.body_iterator:
             pass
 
@@ -328,9 +372,8 @@ class TestStreamChatSessionOwner:
 
         response = await stream_chat(
             request,
-            svc,
             _mock_ctx(user_id="bob", permissions={"module.admin.sessions"}),
-            MagicMock(),
+            _request_with_service(svc),
         )
         chunks = []
         async for chunk in response.body_iterator:
@@ -360,7 +403,7 @@ class TestFeedbackSessionOwner:
             reference_msg="good answer",
         )
 
-        response = await stream_chat_feedback(request, svc, _mock_ctx(user_id="bob"))
+        response = await stream_chat_feedback(request, _mock_ctx(user_id="bob"), _request_with_service(svc))
         chunks = []
         async for chunk in response.body_iterator:
             chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
@@ -389,7 +432,7 @@ class TestFeedbackSessionOwner:
             reference_msg="good answer",
         )
 
-        response = await stream_chat_feedback(request, svc, _mock_ctx(user_id="alice"))
+        response = await stream_chat_feedback(request, _mock_ctx(user_id="alice"), _request_with_service(svc))
         async for _ in response.body_iterator:
             pass
 
@@ -418,7 +461,7 @@ class TestStreamChatSqlPolicyPreCheck:
         ctx.principal = {}
         request = StreamChatInput(message="hi")
 
-        response = await stream_chat(request, svc, ctx, MagicMock())
+        response = await stream_chat(request, ctx, _request_with_service(svc))
 
         chunks = []
         async for chunk in response.body_iterator:
@@ -452,6 +495,37 @@ class TestStreamChatSqlPolicyPreCheck:
         }
 
     @pytest.mark.asyncio
+    async def test_sql_policy_denial_returns_sse_error_when_audit_sink_fails(self, monkeypatch):
+        import datus.api.enterprise.deps as enterprise_deps
+
+        monkeypatch.setattr(enterprise_deps, "get_audit_sink", lambda: FailingAuditSink())
+        svc = _mock_svc_with_nodes()
+        svc.agent_config.sql_policy_config = SqlPolicyConfig.from_dict(
+            {
+                "enabled": True,
+                "provider": "x:Y",
+                "policies": [{"condition": {"value_from": "principal.market_code"}}],
+            }
+        )
+        svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
+        ctx = MagicMock(user_id="alice")
+        ctx.principal = {}
+        request = StreamChatInput(message="hi")
+
+        response = await stream_chat(request, ctx, _request_with_service(svc))
+
+        chunks = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+        payload = json.loads(
+            next(line for line in chunks[0].splitlines() if line.startswith("data: "))[len("data: ") :]
+        )
+        assert payload["error_type"] == "SQL_POLICY_PRINCIPAL_REQUIRED"
+        assert "principal.market_code" in payload["error"]
+        svc.chat.stream_chat.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_enabled_sql_policy_with_required_principal_allows_service_call(self):
         async def empty_stream(*_args, **_kwargs):
             if False:
@@ -470,7 +544,7 @@ class TestStreamChatSqlPolicyPreCheck:
         ctx.principal = {"market_code": "MKT300"}
         request = StreamChatInput(message="hi")
 
-        response = await stream_chat(request, svc, ctx, MagicMock())
+        response = await stream_chat(request, ctx, _request_with_service(svc))
         async for _ in response.body_iterator:
             pass
 
@@ -496,7 +570,7 @@ class TestStreamChatSqlPolicyPreCheck:
         ctx.principal = {}
         request = StreamChatInput(message="hi")
 
-        response = await stream_chat(request, svc, ctx, MagicMock())
+        response = await stream_chat(request, ctx, _request_with_service(svc))
         async for _ in response.body_iterator:
             pass
 
@@ -518,7 +592,7 @@ class TestStreamChatSqlPolicyPreCheck:
         ctx.principal = {}
         request = StreamChatInput(message="hi")
 
-        response = await stream_chat(request, svc, ctx, MagicMock())
+        response = await stream_chat(request, ctx, _request_with_service(svc))
 
         chunks = []
         async for chunk in response.body_iterator:
@@ -543,7 +617,7 @@ class TestStreamChatModelPolicy:
         ctx.principal = {"model_policy": {"allowed_models": ["openai/gpt-4.1"]}}
         request = StreamChatInput(message="hi", model="claude/claude-sonnet-4-5")
 
-        response = await stream_chat(request, svc, ctx, MagicMock())
+        response = await stream_chat(request, ctx, _request_with_service(svc))
 
         chunks = []
         async for chunk in response.body_iterator:
@@ -568,7 +642,7 @@ class TestStreamChatModelPolicy:
         ctx.principal = {"model_policy": {"allowed_models": ["openai/gpt-4.1"]}}
         request = StreamChatInput(message="hi")
 
-        response = await stream_chat(request, svc, ctx, MagicMock())
+        response = await stream_chat(request, ctx, _request_with_service(svc))
 
         chunks = []
         async for chunk in response.body_iterator:
@@ -579,6 +653,27 @@ class TestStreamChatModelPolicy:
         )
         assert payload["error_type"] == "MODEL_FORBIDDEN"
         assert "openai/gpt-4o" in payload["error"]
+        svc.chat.stream_chat.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_malformed_requested_model_denied_under_policy(self):
+        svc = _mock_svc_with_nodes()
+        svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
+        ctx = _mock_ctx(user_id="alice")
+        ctx.principal = {"model_policy": {"allowed_models": ["openai/gpt-4.1"]}}
+        request = StreamChatInput(message="hi", model="gpt-4o")
+
+        response = await stream_chat(request, ctx, _request_with_service(svc))
+
+        chunks = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+        payload = json.loads(
+            next(line for line in chunks[0].splitlines() if line.startswith("data: "))[len("data: ") :]
+        )
+        assert payload["error_type"] == "MODEL_FORBIDDEN"
+        assert "gpt-4o" in payload["error"]
         svc.chat.stream_chat.assert_not_called()
 
     @pytest.mark.asyncio
@@ -593,7 +688,7 @@ class TestStreamChatModelPolicy:
         ctx.principal = {"model_policy": {"allowed_model_patterns": ["openai/gpt-4*"]}}
         request = StreamChatInput(message="hi", model="openai/gpt-4.1")
 
-        response = await stream_chat(request, svc, ctx, MagicMock())
+        response = await stream_chat(request, ctx, _request_with_service(svc))
         async for _ in response.body_iterator:
             pass
 
@@ -630,7 +725,7 @@ class TestChatRouteAcceptance:
             subagent_id="gen_sql",
         )
 
-        response = await stream_chat(request, svc, ctx, MagicMock())
+        response = await stream_chat(request, ctx, _request_with_service(svc))
         chunks = []
         async for chunk in response.body_iterator:
             chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
@@ -652,7 +747,7 @@ class TestChatRouteAcceptance:
         ctx = _mock_ctx(user_id="u1", permissions={"module.chat", "module.sql_executor"})
         request = StreamChatInput(message="hi", subagent_id="gen_sql")
 
-        response = await stream_chat(request, svc, ctx, MagicMock())
+        response = await stream_chat(request, ctx, _request_with_service(svc))
 
         assert isinstance(response, StreamingResponse)
         assert response.status_code == 200
@@ -694,7 +789,7 @@ class TestInsertMessageEndpoint:
         task = self._make_task_with_queue()
         svc = _mock_svc(task=task)
 
-        result = await insert_message(self._make_request("hello"), svc, _mock_ctx())
+        result = await insert_message(self._make_request("hello"), _mock_ctx(), _request_with_service(svc))
 
         assert result.success is True
         assert result.data.session_id == "s1"
@@ -708,8 +803,8 @@ class TestInsertMessageEndpoint:
         task = self._make_task_with_queue()
         svc = _mock_svc(task=task)
 
-        await insert_message(self._make_request("first"), svc, _mock_ctx())
-        result = await insert_message(self._make_request("second"), svc, _mock_ctx())
+        await insert_message(self._make_request("first"), _mock_ctx(), _request_with_service(svc))
+        result = await insert_message(self._make_request("second"), _mock_ctx(), _request_with_service(svc))
 
         assert result.success is True
         assert result.data.queued_count == 2
@@ -721,7 +816,7 @@ class TestInsertMessageEndpoint:
 
         svc = _mock_svc(task=None)
 
-        result = await insert_message(self._make_request("anything"), svc, _mock_ctx())
+        result = await insert_message(self._make_request("anything"), _mock_ctx(), _request_with_service(svc))
 
         assert result.success is False
         assert result.errorCode == "SESSION_NOT_RUNNING"
@@ -734,7 +829,7 @@ class TestInsertMessageEndpoint:
         task.node = None
         svc = _mock_svc(task=task)
 
-        result = await insert_message(self._make_request("anything"), svc, _mock_ctx())
+        result = await insert_message(self._make_request("anything"), _mock_ctx(), _request_with_service(svc))
 
         assert result.success is False
         assert result.errorCode == "SESSION_NOT_RUNNING"
@@ -746,7 +841,7 @@ class TestInsertMessageEndpoint:
         task = self._make_task_with_queue()
         svc = _mock_svc(task=task)
 
-        result = await insert_message(self._make_request("   \t  "), svc, _mock_ctx())
+        result = await insert_message(self._make_request("   \t  "), _mock_ctx(), _request_with_service(svc))
 
         assert result.success is False
         assert result.errorCode == "INVALID_INPUT"
@@ -764,7 +859,7 @@ class TestInsertMessageEndpoint:
         task.node.pending_input_queue = None
         svc = _mock_svc(task=task)
 
-        result = await insert_message(self._make_request("hello"), svc, _mock_ctx())
+        result = await insert_message(self._make_request("hello"), _mock_ctx(), _request_with_service(svc))
 
         assert result.success is False
         assert result.errorCode == "QUEUE_UNAVAILABLE"
@@ -776,7 +871,7 @@ class TestInsertMessageEndpoint:
         task = self._make_task_with_queue()
         svc = _mock_svc(task=task)
 
-        await insert_message(self._make_request("  padded  "), svc, _mock_ctx())
+        await insert_message(self._make_request("  padded  "), _mock_ctx(), _request_with_service(svc))
 
         # Stripped form lands in the queue.
         assert task.node.pending_input_queue.snapshot() == ["padded"]
@@ -805,8 +900,8 @@ class TestSessionOwnerAccess:
 
         result = await insert_message(
             TestInsertMessageEndpoint._make_request("hello"),
-            svc,
             _mock_ctx(user_id="bob"),
+            _request_with_service(svc),
         )
 
         assert result.success is False
@@ -832,12 +927,57 @@ class TestSessionOwnerAccess:
 
         result = await insert_message(
             TestInsertMessageEndpoint._make_request("hello"),
-            svc,
             _mock_ctx(user_id="bob", permissions={"module.admin.sessions"}),
+            _request_with_service(svc),
         )
 
         assert result.success is True
         assert task.node.pending_input_queue.snapshot() == ["hello"]
+
+
+# ===========================================================================
+# /api/v1/chat/tool_result — frontend tool execution callback
+# ===========================================================================
+
+
+class TestSubmitToolResultEndpoint:
+    @staticmethod
+    def _make_request(session_id: str = "s1"):
+        from datus.api.models.chat_models import ToolResultInput
+
+        return ToolResultInput(session_id=session_id, call_tool_id="tc_1", tool_result={"success": 1, "result": {}})
+
+    @staticmethod
+    def _make_task_with_channel(channel):
+        task = MagicMock()
+        task.node.tool_channel = channel
+        return task
+
+    @pytest.mark.asyncio
+    async def test_publish_success_returns_received(self):
+        channel = SimpleNamespace(publish=AsyncMock())
+        task = self._make_task_with_channel(channel)
+        svc = _mock_svc(task=task)
+
+        result = await submit_tool_result(self._make_request(), _mock_ctx(), _request_with_service(svc))
+
+        assert result.success is True
+        assert result.data.call_tool_id == "tc_1"
+        assert result.data.status == "received"
+        channel.publish.assert_awaited_once_with("tc_1", {"success": 1, "error": None, "result": {}})
+
+    @pytest.mark.asyncio
+    async def test_publish_failure_returns_stable_error(self):
+        channel = SimpleNamespace(publish=AsyncMock(side_effect=RuntimeError("channel closed")))
+        task = self._make_task_with_channel(channel)
+        svc = _mock_svc(task=task)
+
+        result = await submit_tool_result(self._make_request(), _mock_ctx(), _request_with_service(svc))
+
+        assert result.success is False
+        assert result.errorCode == "TOOL_RESULT_DELIVERY_FAILED"
+        assert result.errorMessage == "Tool result delivery failed."
+        channel.publish.assert_awaited_once()
 
 
 # ===========================================================================
@@ -1075,6 +1215,60 @@ class TestGetChatHistory:
         assert result.errorCode == "RESOURCE_NOT_FOUND"
         svc.chat.get_history.assert_not_called()
         assert await owner_store.get_owner("project-1", "orphan") is None
+
+    @pytest.mark.asyncio
+    async def test_pg_body_store_history_denies_when_owner_index_unavailable(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+
+        class FailingOwnerStore(InMemorySessionOwnerStore):
+            async def get_owner(self, project_id, session_id):
+                raise RuntimeError("owner store down")
+
+        owner_store = FailingOwnerStore()
+        audit_sink = CollectingAuditSink()
+        _patch_owner_extensions(monkeypatch, owner_store, enabled=True, session_body_store=object())
+        monkeypatch.setattr(
+            "datus.api.enterprise.deps.get_audit_sink",
+            lambda: audit_sink,
+        )
+        svc = MagicMock()
+        svc.project_id = "project-1"
+        svc.task_manager.get_task.return_value = None
+        svc.chat.session_exists.return_value = True
+
+        result = await get_chat_history(svc, _mock_ctx(user_id="alice"), session_id="orphan")
+
+        assert result.success is False
+        assert result.errorCode == "RESOURCE_NOT_FOUND"
+        svc.chat.get_history.assert_not_called()
+        assert audit_sink.events[-1].reason == "session owner store unavailable"
+
+    @pytest.mark.asyncio
+    async def test_history_denies_when_owner_index_backfill_fails(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+
+        class SetFailingOwnerStore(InMemorySessionOwnerStore):
+            async def set_owner(self, project_id, session_id, user_id):
+                raise RuntimeError("owner store down")
+
+        owner_store = SetFailingOwnerStore()
+        audit_sink = CollectingAuditSink()
+        _patch_owner_extensions(monkeypatch, owner_store, enabled=True)
+        monkeypatch.setattr(
+            "datus.api.enterprise.deps.get_audit_sink",
+            lambda: audit_sink,
+        )
+        svc = MagicMock()
+        svc.project_id = "project-1"
+        svc.task_manager.get_task.return_value = None
+        svc.chat.session_exists.return_value = True
+
+        result = await get_chat_history(svc, _mock_ctx(user_id="alice"), session_id="legacy")
+
+        assert result.success is False
+        assert result.errorCode == "RESOURCE_NOT_FOUND"
+        svc.chat.get_history.assert_not_called()
+        assert audit_sink.events[-1].reason == "session owner store unavailable"
 
     @pytest.mark.asyncio
     async def test_timeout_returns_request_timeout_error(self):

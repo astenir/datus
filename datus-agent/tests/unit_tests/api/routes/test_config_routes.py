@@ -3,11 +3,12 @@
 
 """Unit tests for datus/api/routes/config_routes.py."""
 
+import copy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.testclient import TestClient
 
 from datus.api import deps
@@ -31,7 +32,6 @@ from datus.api.routes.config_routes import (
     update_datasources_endpoint,
     update_models_endpoint,
 )
-from datus.utils.exceptions import DatusException
 
 
 def _mock_svc(datasources, *, target="deepseek", current_datasource="starrocks", models=None, home="~/.datus"):
@@ -56,7 +56,7 @@ async def test_get_agent_config_returns_datasources_flat():
         },
     )
 
-    result = await get_agent_config_endpoint(svc, _ctx=_ctx())
+    result = await get_agent_config_endpoint(svc=svc, _ctx=_ctx())
 
     assert result.success is True
     assert result.data["datasources"] == {
@@ -74,7 +74,7 @@ async def test_get_agent_config_skips_none_config():
     real_cfg = {"type": "duckdb"}
     svc = _mock_svc(datasources={"empty": None, "real": real_cfg})
 
-    result = await get_agent_config_endpoint(svc, _ctx=_ctx())
+    result = await get_agent_config_endpoint(svc=svc, _ctx=_ctx())
 
     assert result.data["datasources"] == {"real": real_cfg}
 
@@ -83,7 +83,7 @@ async def test_get_agent_config_skips_none_config():
 async def test_get_agent_config_handles_empty_datasources():
     svc = _mock_svc(datasources={})
 
-    result = await get_agent_config_endpoint(svc, _ctx=_ctx())
+    result = await get_agent_config_endpoint(svc=svc, _ctx=_ctx())
 
     assert result.data["datasources"] == {}
 
@@ -91,12 +91,15 @@ async def test_get_agent_config_handles_empty_datasources():
 class _FakeConfigManager:
     """Minimal stand-in for ConfigurationManager — captures save() calls."""
 
-    def __init__(self, initial=None):
-        self.data = dict(initial) if initial else {}
+    def __init__(self, initial=None, *, save_error: Exception | None = None):
+        self.data = copy.deepcopy(initial) if initial else {}
         self.save_count = 0
+        self.save_error = save_error
 
     def save(self):
         self.save_count += 1
+        if self.save_error is not None:
+            raise self.save_error
 
 
 @pytest.fixture
@@ -120,13 +123,21 @@ def _ctx(project_id="proj_a"):
     return SimpleNamespace(project_id=project_id)
 
 
-def _enterprise_extensions(enabled=True):
+class CollectingAuditSink:
+    def __init__(self):
+        self.events = []
+
+    async def write(self, event):
+        self.events.append(event)
+
+
+def _enterprise_extensions(enabled=True, audit_sink=None):
     return EnterpriseExtensions(
         enabled=enabled,
         authorization_provider=LocalAuthorizationProvider(),
         config_projector=PassthroughConfigProjector(),
         session_owner_store=InMemorySessionOwnerStore(),
-        audit_sink=NoopAuditSink(),
+        audit_sink=audit_sink or NoopAuditSink(),
     )
 
 
@@ -148,7 +159,7 @@ async def test_update_datasources_replaces_services_datasources(patched_cm, patc
         }
     )
 
-    result = await update_datasources_endpoint(body, svc=MagicMock(), ctx=_ctx("proj_a"))
+    result = await update_datasources_endpoint(body, ctx=_ctx("proj_a"))
 
     assert result.success is True
     assert result.data == {"updated": True}
@@ -167,7 +178,6 @@ async def test_update_datasources_evicts_enterprise_cache_key(monkeypatch, patch
 
     await update_datasources_endpoint(
         UpdateDatasourcesRequest(datasources={"db_a": {"type": "duckdb"}}),
-        svc=MagicMock(),
         ctx=_ctx("proj_a"),
     )
 
@@ -178,7 +188,7 @@ async def test_update_datasources_evicts_enterprise_cache_key(monkeypatch, patch
 async def test_update_datasources_empty_dict_clears_block(patched_cm, patched_cache):
     patched_cm.data = {"services": {"datasources": {"old": {"type": "duckdb"}}}}
 
-    result = await update_datasources_endpoint(UpdateDatasourcesRequest(datasources={}), svc=MagicMock(), ctx=_ctx())
+    result = await update_datasources_endpoint(UpdateDatasourcesRequest(datasources={}), ctx=_ctx())
 
     assert result.data["updated"] is True
     assert patched_cm.data["services"]["datasources"] == {}
@@ -187,8 +197,10 @@ async def test_update_datasources_empty_dict_clears_block(patched_cm, patched_ca
 @pytest.mark.asyncio
 async def test_update_datasources_rejects_invalid_name(patched_cm, patched_cache):
     body = UpdateDatasourcesRequest(datasources={"bad name!": {"type": "duckdb"}})
-    with pytest.raises(DatusException):
-        await update_datasources_endpoint(body, svc=MagicMock(), ctx=_ctx())
+    with pytest.raises(HTTPException) as exc_info:
+        await update_datasources_endpoint(body, ctx=_ctx())
+    assert exc_info.value.status_code == 400
+    assert "Invalid datasource name 'bad name!'" in exc_info.value.detail
     assert patched_cm.save_count == 0
     patched_cache.evict.assert_not_awaited()
 
@@ -199,11 +211,26 @@ async def test_update_datasources_initializes_services_when_missing(patched_cm, 
 
     await update_datasources_endpoint(
         UpdateDatasourcesRequest(datasources={"db_a": {"type": "duckdb"}}),
-        svc=MagicMock(),
         ctx=_ctx(),
     )
 
     assert patched_cm.data["services"]["datasources"] == {"db_a": {"type": "duckdb"}}
+
+
+@pytest.mark.asyncio
+async def test_update_datasources_restores_config_data_when_save_fails(monkeypatch, patched_cache):
+    original = {"services": {"datasources": {"old": {"type": "duckdb"}}, "other": "keep"}}
+    cm = _FakeConfigManager(initial=original, save_error=OSError("disk full"))
+    monkeypatch.setattr(config_routes, "configuration_manager", lambda: cm)
+
+    with pytest.raises(OSError, match="disk full"):
+        await update_datasources_endpoint(
+            UpdateDatasourcesRequest(datasources={"new": {"type": "sqlite"}}),
+            ctx=_ctx(),
+        )
+
+    assert cm.data == original
+    patched_cache.evict.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -214,7 +241,7 @@ async def test_update_models_replaces_models_and_target(patched_cm, patched_cach
         target="new",
     )
 
-    result = await update_models_endpoint(body, svc=MagicMock(), ctx=_ctx("proj_b"))
+    result = await update_models_endpoint(body, ctx=_ctx("proj_b"))
 
     assert result.data["updated"] is True
     assert patched_cm.data["models"] == {"new": {"type": "deepseek", "model": "deepseek-chat"}}
@@ -228,7 +255,7 @@ async def test_update_models_evicts_enterprise_cache_key(monkeypatch, patched_cm
     monkeypatch.setattr(config_routes.deps, "_enterprise_extensions", _enterprise_extensions(enabled=True))
     patched_cm.data = {"models": {"m1": {"type": "openai"}}, "target": "m1"}
 
-    await update_models_endpoint(UpdateModelsRequest(target="m1"), svc=MagicMock(), ctx=_ctx("proj_b"))
+    await update_models_endpoint(UpdateModelsRequest(target="m1"), ctx=_ctx("proj_b"))
 
     patched_cache.evict.assert_awaited_once_with("enterprise:proj_b")
 
@@ -237,7 +264,7 @@ async def test_update_models_evicts_enterprise_cache_key(monkeypatch, patched_cm
 async def test_update_models_target_only(patched_cm, patched_cache):
     patched_cm.data = {"models": {"m1": {"type": "openai"}, "m2": {"type": "claude"}}, "target": "m1"}
 
-    await update_models_endpoint(UpdateModelsRequest(target="m2"), svc=MagicMock(), ctx=_ctx())
+    await update_models_endpoint(UpdateModelsRequest(target="m2"), ctx=_ctx())
 
     assert patched_cm.data["target"] == "m2"
     assert patched_cm.data["models"] == {"m1": {"type": "openai"}, "m2": {"type": "claude"}}
@@ -249,7 +276,6 @@ async def test_update_models_models_only(patched_cm, patched_cache):
 
     await update_models_endpoint(
         UpdateModelsRequest(models={"old": {"type": "openai"}}),
-        svc=MagicMock(),
         ctx=_ctx(),
     )
 
@@ -258,9 +284,27 @@ async def test_update_models_models_only(patched_cm, patched_cache):
 
 
 @pytest.mark.asyncio
+async def test_update_models_restores_config_data_when_save_fails(monkeypatch, patched_cache):
+    original = {"models": {"old": {"type": "openai", "model": "gpt-old"}}, "target": "old"}
+    cm = _FakeConfigManager(initial=original, save_error=OSError("disk full"))
+    monkeypatch.setattr(config_routes, "configuration_manager", lambda: cm)
+
+    with pytest.raises(OSError, match="disk full"):
+        await update_models_endpoint(
+            UpdateModelsRequest(models={"new": {"type": "openai", "model": "gpt-new"}}, target="new"),
+            ctx=_ctx(),
+        )
+
+    assert cm.data == original
+    patched_cache.evict.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_update_models_requires_at_least_one_field(patched_cm, patched_cache):
-    with pytest.raises(DatusException):
-        await update_models_endpoint(UpdateModelsRequest(), svc=MagicMock(), ctx=_ctx())
+    with pytest.raises(HTTPException) as exc_info:
+        await update_models_endpoint(UpdateModelsRequest(), ctx=_ctx())
+    assert exc_info.value.status_code == 400
+    assert "At least one of 'models' or 'target' must be provided" in exc_info.value.detail
     assert patched_cm.save_count == 0
 
 
@@ -268,8 +312,10 @@ async def test_update_models_requires_at_least_one_field(patched_cm, patched_cac
 async def test_update_models_rejects_target_not_in_models(patched_cm, patched_cache):
     patched_cm.data = {"models": {"m1": {}}, "target": "m1"}
 
-    with pytest.raises(DatusException):
-        await update_models_endpoint(UpdateModelsRequest(target="ghost"), svc=MagicMock(), ctx=_ctx())
+    with pytest.raises(HTTPException) as exc_info:
+        await update_models_endpoint(UpdateModelsRequest(target="ghost"), ctx=_ctx())
+    assert exc_info.value.status_code == 400
+    assert "target 'ghost' does not exist in models" in exc_info.value.detail
     assert patched_cm.save_count == 0
 
 
@@ -278,22 +324,24 @@ async def test_update_models_target_validated_against_new_models(patched_cm, pat
     """When both models and target are provided, target must exist in the NEW models."""
     patched_cm.data = {"models": {"keep_me": {}}, "target": "keep_me"}
 
-    with pytest.raises(DatusException):
+    with pytest.raises(HTTPException) as exc_info:
         await update_models_endpoint(
             UpdateModelsRequest(models={"only_new": {"type": "openai"}}, target="keep_me"),
-            svc=MagicMock(),
             ctx=_ctx(),
         )
+    assert exc_info.value.status_code == 400
+    assert "target 'keep_me' does not exist in models" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
 async def test_update_models_rejects_invalid_model_name(patched_cm, patched_cache):
-    with pytest.raises(DatusException):
+    with pytest.raises(HTTPException) as exc_info:
         await update_models_endpoint(
             UpdateModelsRequest(models={"bad name!": {"type": "openai"}}),
-            svc=MagicMock(),
             ctx=_ctx(),
         )
+    assert exc_info.value.status_code == 400
+    assert "Invalid model name 'bad name!'" in exc_info.value.detail
     assert patched_cm.save_count == 0
 
 
@@ -304,7 +352,6 @@ async def test_update_datasources_survives_missing_service_cache(monkeypatch, pa
 
     result = await update_datasources_endpoint(
         UpdateDatasourcesRequest(datasources={"db_a": {"type": "duckdb"}}),
-        svc=MagicMock(),
         ctx=_ctx(),
     )
 
@@ -315,7 +362,6 @@ async def test_update_datasources_survives_missing_service_cache(monkeypatch, pa
 async def test_update_datasources_uses_default_project_when_missing(patched_cm, patched_cache):
     await update_datasources_endpoint(
         UpdateDatasourcesRequest(datasources={"db_a": {"type": "duckdb"}}),
-        svc=MagicMock(),
         ctx=_ctx(project_id=None),
     )
 
@@ -346,6 +392,143 @@ def test_update_config_http_requires_config_edit_permission(monkeypatch, patched
     assert datasources_response.status_code == 403
     assert models_response.status_code == 403
     assert patched_cm.save_count == 0
+
+
+def test_update_config_http_returns_bad_request_for_invalid_datasource_name(monkeypatch, patched_cm):
+    app = FastAPI()
+    app.include_router(config_routes.router)
+    ctx = AppContext(user_id="u1", project_id="proj_a", permissions={"module.config.edit"})
+    svc = MagicMock()
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return svc
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
+    monkeypatch.setattr(config_routes.deps, "_enterprise_extensions", _enterprise_extensions(enabled=True))
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.put("/api/v1/config/datasources", json={"datasources": {"bad name!": {"type": "duckdb"}}})
+
+    assert response.status_code == 400
+    assert "Invalid datasource name 'bad name!'" in response.json()["detail"]
+    assert patched_cm.save_count == 0
+
+
+def test_update_config_http_returns_bad_request_for_unknown_target(monkeypatch, patched_cm):
+    patched_cm.data = {"models": {"m1": {"type": "openai", "model": "gpt-test"}}, "target": "m1"}
+    app = FastAPI()
+    app.include_router(config_routes.router)
+    ctx = AppContext(user_id="u1", project_id="proj_a", permissions={"module.config.edit"})
+    svc = MagicMock()
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return svc
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
+    monkeypatch.setattr(config_routes.deps, "_enterprise_extensions", _enterprise_extensions(enabled=True))
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.put("/api/v1/config/models", json={"target": "ghost"})
+
+    assert response.status_code == 400
+    assert "target 'ghost' does not exist in models" in response.json()["detail"]
+    assert patched_cm.save_count == 0
+
+
+def test_config_rbac_denial_does_not_resolve_datus_service(monkeypatch, patched_cm):
+    app = FastAPI()
+    app.include_router(config_routes.router)
+    ctx = AppContext(user_id="u1", project_id="proj_a", permissions={"module.chat"})
+
+    async def reject_service(request: Request):
+        raise AssertionError("RBAC denial resolved DatusService")
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    _override_app_context(app, ctx)
+    monkeypatch.setattr(config_routes.deps, "_enterprise_extensions", _enterprise_extensions(enabled=True))
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        responses = [
+            client.get("/api/v1/config/agent"),
+            client.put("/api/v1/config/datasources", json={"datasources": {}}),
+            client.put(
+                "/api/v1/config/models",
+                json={"models": {"m1": {"type": "openai", "model": "gpt-test"}}, "target": "m1"},
+            ),
+            client.post("/api/v1/config/models/test", json={"type": "openai", "model": "gpt-test"}),
+            client.post("/api/v1/config/datasources/test", json={"type": "duckdb"}),
+        ]
+
+    assert [response.status_code for response in responses] == [403, 403, 403, 403, 403]
+    assert patched_cm.save_count == 0
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "json_body"),
+    [
+        ("put", "/api/v1/config/datasources", {"datasources": []}),
+        ("put", "/api/v1/config/datasources", {"bad": "body"}),
+        ("put", "/api/v1/config/models", {"models": []}),
+        ("put", "/api/v1/config/models", {"target": 123}),
+        ("post", "/api/v1/config/models/test", {"type": 1, "model": []}),
+        ("post", "/api/v1/config/datasources/test", {"type": []}),
+    ],
+)
+def test_config_invalid_body_does_not_resolve_datus_service(monkeypatch, patched_cm, method, path, json_body):
+    app = FastAPI()
+    app.include_router(config_routes.router)
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj_a",
+        permissions={"module.config.edit", "module.config.view"},
+    )
+
+    async def reject_service(request: Request):
+        raise AssertionError("invalid body resolved DatusService")
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    _override_app_context(app, ctx)
+    monkeypatch.setattr(config_routes.deps, "_enterprise_extensions", _enterprise_extensions(enabled=True))
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = getattr(client, method)(path, json=json_body)
+
+    assert response.status_code == 422
+    assert patched_cm.save_count == 0
+
+
+def test_config_edit_rbac_denial_precedes_readonly_status(monkeypatch, patched_cm):
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setenv("DATUS_PLATFORM_STATUS", "readonly")
+    app = FastAPI()
+    app.include_router(config_routes.router)
+    ctx = AppContext(user_id="u1", project_id="proj_a", permissions={"module.config.view"})
+
+    async def reject_service(request: Request):
+        raise AssertionError("RBAC denial resolved DatusService")
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    _override_app_context(app, ctx)
+    monkeypatch.setattr(
+        config_routes.deps,
+        "_enterprise_extensions",
+        _enterprise_extensions(enabled=True, audit_sink=audit_sink),
+    )
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.put(
+            "/api/v1/config/models",
+            json={"models": {"m1": {"type": "openai", "model": "gpt-test"}}, "target": "m1"},
+        )
+
+    assert response.status_code == 403
+    assert "module.config.edit" in response.json()["detail"]
+    assert patched_cm.save_count == 0
+    assert [event.action for event in audit_sink.events] == ["module.config.edit"]
 
 
 def test_get_config_http_requires_config_view_permission(monkeypatch):
@@ -459,7 +642,7 @@ async def test_test_model_connectivity_ok(monkeypatch):
     monkeypatch.setattr(config_routes, "_probe_llm_sync", fake_probe)
 
     body = ProbeModelRequest(type="openai", model="gpt-4o", api_key="sk-xxx", base_url="https://api.openai.com/v1")
-    result = await probe_model_connectivity_endpoint(body, svc=MagicMock(), _ctx=_ctx())
+    result = await probe_model_connectivity_endpoint(body, _ctx=_ctx())
 
     assert result.success is True
     assert result.data == {"ok": True}
@@ -477,7 +660,7 @@ async def test_test_model_connectivity_reports_error_message(monkeypatch):
     monkeypatch.setattr(config_routes, "_probe_llm_sync", fake_probe)
 
     body = ProbeModelRequest(type="openai", model="gpt-4o", api_key="bad")
-    result = await probe_model_connectivity_endpoint(body, svc=MagicMock(), _ctx=_ctx())
+    result = await probe_model_connectivity_endpoint(body, _ctx=_ctx())
 
     assert result.success is True
     assert result.data["ok"] is False
@@ -495,7 +678,7 @@ async def test_test_model_connectivity_passes_extra_fields(monkeypatch):
     monkeypatch.setattr(config_routes, "_probe_llm_sync", fake_probe)
 
     body = ProbeModelRequest.model_validate({"type": "openai", "model": "gpt-4o", "api_key": "k", "vendor": "openai"})
-    await probe_model_connectivity_endpoint(body, svc=MagicMock(), _ctx=_ctx())
+    await probe_model_connectivity_endpoint(body, _ctx=_ctx())
 
     assert captured["payload"].get("vendor") == "openai"
 
@@ -511,7 +694,7 @@ async def test_test_datasource_connectivity_ok(monkeypatch):
     monkeypatch.setattr(config_routes, "_probe_datasource_sync", fake_probe)
 
     body = ProbeDatasourceRequest.model_validate({"type": "duckdb", "uri": "/tmp/test.duckdb"})
-    result = await probe_datasource_connectivity_endpoint(body, svc=MagicMock(), _ctx=_ctx())
+    result = await probe_datasource_connectivity_endpoint(body, _ctx=_ctx())
 
     assert result.data == {"ok": True}
     assert captured["payload"]["type"] == "duckdb"
@@ -528,7 +711,7 @@ async def test_test_datasource_connectivity_reports_error_message(monkeypatch):
     monkeypatch.setattr(config_routes, "_probe_datasource_sync", fake_probe)
 
     body = ProbeDatasourceRequest.model_validate({"type": "starrocks", "host": "unreachable", "port": "9999"})
-    result = await probe_datasource_connectivity_endpoint(body, svc=MagicMock(), _ctx=_ctx())
+    result = await probe_datasource_connectivity_endpoint(body, _ctx=_ctx())
 
     assert result.data["ok"] is False
     assert "connection refused" in result.data["message"]

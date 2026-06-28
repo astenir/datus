@@ -4,10 +4,12 @@ API routes for Table and SemanticModel endpoints.
 
 import asyncio
 from fnmatch import fnmatchcase
+from inspect import isawaitable
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from datus.api import deps
 from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
 from datus.api.enterprise.deps import project_request_config, require_module, require_platform_active
@@ -22,8 +24,18 @@ from datus.utils.sql_utils import parse_table_name_parts
 from datus_enterprise.audit import AuditEvent, audit_decision
 
 router = APIRouter(prefix="/api/v1", tags=["table"])
-CatalogModuleCtx = Annotated[AppContext, Depends(require_module("module.datasource_catalog"))]
-ConfigEditCtx = Annotated[AppContext, Depends(require_module("module.config.edit"))]
+_require_catalog_module = require_module("module.datasource_catalog")
+_require_config_edit = require_module("module.config.edit")
+CatalogModuleCtx = Annotated[AppContext, Depends(_require_catalog_module)]
+ConfigEditCtx = Annotated[AppContext, Depends(_require_config_edit)]
+
+
+async def _resolve_request_service(request: Request) -> ServiceDep:
+    service_provider = request.app.dependency_overrides.get(deps.get_datus_service, deps.get_datus_service)
+    result = service_provider(request)
+    if isawaitable(result):
+        return await result
+    return result
 
 
 # ========== Table Endpoints ==========
@@ -34,6 +46,7 @@ ConfigEditCtx = Annotated[AppContext, Depends(require_module("module.config.edit
     response_model=Result[GetTableDetailData],
     summary="Get Table Detail",
     description="Get detailed information about a table including columns, indexes, and row count",
+    dependencies=[Depends(_require_catalog_module)],
 )
 async def get_table_detail(
     svc: ServiceDep,
@@ -56,6 +69,7 @@ async def get_table_detail(
     response_model=Result[GetSemanticModelData],
     summary="Get Semantic Model",
     description="Get SemanticModel YAML configuration for a specific table",
+    dependencies=[Depends(_require_catalog_module)],
 )
 async def get_semantic_model(
     svc: ServiceDep,
@@ -75,14 +89,18 @@ async def get_semantic_model(
     response_model=Result[dict],
     summary="Save Semantic Model",
     description="Save or update SemanticModel YAML configuration for a table",
-    dependencies=[Depends(require_platform_active(operation="semantic_model.save", resource_type="semantic_model"))],
+    dependencies=[
+        Depends(_require_config_edit),
+        Depends(require_platform_active(operation="semantic_model.save", resource_type="semantic_model")),
+    ],
 )
 async def save_semantic_model(
     request: SemanticModelInput,
-    svc: ServiceDep,
     ctx: ConfigEditCtx,
+    http_request: Request,
 ) -> Result[dict]:
     """Save SemanticModel YAML."""
+    svc = await _resolve_request_service(http_request)
     await _authorize_table_read(ctx, svc, table=request.table, operation="semantic_model.save")
     return await svc.datasource.save_semantic_model(request)
 
@@ -92,13 +110,15 @@ async def save_semantic_model(
     response_model=Result[ValidateSemanticModelData],
     summary="Validate Semantic Model",
     description="Validate SemanticModel YAML structure and syntax",
+    dependencies=[Depends(_require_config_edit)],
 )
 async def validate_semantic_model(
     request: SemanticModelInput,
-    svc: ServiceDep,
     ctx: ConfigEditCtx,
+    http_request: Request,
 ) -> Result[ValidateSemanticModelData]:
     """Validate SemanticModel YAML."""
+    svc = await _resolve_request_service(http_request)
     await _authorize_table_read(ctx, svc, table=request.table, operation="semantic_model.validate")
     return await svc.datasource.validate_semantic_model(request)
 

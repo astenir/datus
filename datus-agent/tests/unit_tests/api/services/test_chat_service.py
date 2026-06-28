@@ -72,7 +72,7 @@ class TestChatServiceListSessions:
         """list_sessions detects a session created via SessionManager."""
         sm = SessionManager(session_dir=chat_svc._session_dir)
         session = sm.create_session("test-list-session")
-        session.add_items([{"role": "user", "content": "Hello"}])
+        asyncio.run(session.add_items([{"role": "user", "content": "Hello"}]))
 
         result = chat_svc.list_sessions()
         assert result.success is True
@@ -242,6 +242,16 @@ class TestChatServiceScopePropagation:
             chat_svc.get_history("sid", user_id="dave")
             cls.assert_called_once_with(session_dir=chat_svc._session_dir, scope="dave")
 
+    def test_get_session_info_passes_scope(self, chat_svc):
+        fake = self._patched_sm()
+        fake.get_session_info.return_value = {"exists": True, "total_tokens": 7}
+        with patch("datus.api.services.chat_service.SessionManager", return_value=fake) as cls:
+            result = chat_svc.get_session_info("sid", user_id="erin")
+            cls.assert_called_once_with(session_dir=chat_svc._session_dir, scope="erin")
+
+        assert result.success is True
+        assert result.data == {"exists": True, "total_tokens": 7}
+
     def test_none_user_id_falls_back_to_default_scope(self, chat_svc):
         fake = self._patched_sm()
         with patch("datus.api.services.chat_service.SessionManager", return_value=fake) as cls:
@@ -410,3 +420,24 @@ class TestChatServiceStreamChat:
                 if stream2 is not None:
                     await stream2.aclose()
                 await tm.shutdown()
+
+    async def test_stream_chat_owner_store_failure_yields_error(self, real_agent_config):
+        """New-session owner-store failures must be returned as SSE errors, not uncaught generator errors."""
+        from datus.api.models.cli_models import StreamChatInput
+
+        class FailingOwnerStore:
+            async def set_owner(self, project_id, session_id, user_id):
+                raise RuntimeError("owner store unavailable")
+
+        tm = ChatTaskManager(project_id="project-1", session_owner_store=FailingOwnerStore())
+        svc = ChatService(agent_config=real_agent_config, task_manager=tm, project_id="project-1")
+
+        request = StreamChatInput(message="hello", session_id="new-session")
+        events = [event async for event in svc.stream_chat(request, user_id="alice")]
+
+        assert len(events) == 1
+        assert events[0].event == "error"
+        assert events[0].data.session_id == "new-session"
+        assert events[0].data.error_type == "CHAT_START_FAILED"
+        assert "owner store unavailable" in events[0].data.error
+        assert tm._tasks == {}

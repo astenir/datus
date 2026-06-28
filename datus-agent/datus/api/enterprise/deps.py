@@ -11,11 +11,13 @@ from fastapi import Depends, HTTPException, Request
 from datus.api.auth.context import AppContext
 from datus.api.enterprise.models import AuditEvent, ProjectionInput, ProjectionResult, ResourceRef
 from datus.api.models.base_models import Result
+from datus.utils.loggings import get_logger
 
 if TYPE_CHECKING:
     from datus.api.services.datus_service import DatusService
 
 _PLATFORM_STATUSES = {"active", "maintenance", "readonly"}
+logger = get_logger(__name__)
 
 
 def get_authorization_provider():
@@ -74,7 +76,7 @@ async def project_request_config(
     )
     if result.denied_reason:
         resource_id = requested_datasource or result.principal.get("datasource")
-        await get_audit_sink().write(
+        await _write_audit_best_effort(
             AuditEvent(
                 user_id=ctx.user_id,
                 action=operation,
@@ -101,7 +103,7 @@ async def require_authorized_module(
     if decision.allowed:
         return
 
-    await get_audit_sink().write(
+    await _write_audit_best_effort(
         AuditEvent(
             user_id=ctx.user_id,
             action=permission_key,
@@ -112,6 +114,18 @@ async def require_authorized_module(
         )
     )
     raise HTTPException(status_code=403, detail=decision.reason or "Permission denied.")
+
+
+async def _write_audit_best_effort(event: AuditEvent) -> None:
+    try:
+        await get_audit_sink().write(event)
+    except Exception as exc:
+        logger.warning(
+            "Enterprise audit write failed for action '%s' decision '%s': %s",
+            event.action,
+            event.decision,
+            exc,
+        )
 
 
 def current_platform_status() -> str:
@@ -143,7 +157,7 @@ async def enforce_platform_status(
         return
 
     reason = f"Platform status '{status}' does not allow operation '{operation}'."
-    await extensions.audit_sink.write(
+    await _write_audit_best_effort(
         AuditEvent(
             user_id=ctx.user_id,
             action="system.platform_status",
@@ -195,7 +209,7 @@ async def reject_in_enterprise_mode(
         return
 
     reason = f"Route operation '{operation}' is disabled in enterprise mode."
-    await extensions.audit_sink.write(
+    await _write_audit_best_effort(
         AuditEvent(
             user_id=ctx.user_id,
             action="system.route_disabled",
@@ -266,7 +280,15 @@ async def authorize_session_access(
             return SessionAccess(error=_session_error("SESSION_FORBIDDEN", "Session access denied"), user_id=None)
 
     if owner is None:
-        owner = await extensions.session_owner_store.get_owner(svc.project_id, session_id)
+        try:
+            owner = await extensions.session_owner_store.get_owner(svc.project_id, session_id)
+        except Exception:
+            if not extensions.enabled:
+                raise
+            await _audit_session_deny(ctx, session_id, action, "session owner store unavailable")
+            if require_existing_session:
+                return SessionAccess(error=_session_error("RESOURCE_NOT_FOUND", "Session not found"), user_id=None)
+            return SessionAccess(error=_session_error("SESSION_FORBIDDEN", "Session access denied"), user_id=None)
 
     if owner is None:
         owns_scoped_session = svc.chat.session_exists(session_id, user_id=ctx.user_id)
@@ -279,7 +301,15 @@ async def authorize_session_access(
                     error=_session_error("SESSION_FORBIDDEN", "Session access denied"),
                     user_id=None,
                 )
-            await extensions.session_owner_store.set_owner(svc.project_id, session_id, ctx.user_id)
+            try:
+                await extensions.session_owner_store.set_owner(svc.project_id, session_id, ctx.user_id)
+            except Exception:
+                if not extensions.enabled:
+                    raise
+                await _audit_session_deny(ctx, session_id, action, "session owner store unavailable")
+                if require_existing_session:
+                    return SessionAccess(error=_session_error("RESOURCE_NOT_FOUND", "Session not found"), user_id=None)
+                return SessionAccess(error=_session_error("SESSION_FORBIDDEN", "Session access denied"), user_id=None)
             return SessionAccess(error=None, user_id=ctx.user_id)
         if require_existing_session and extensions.enabled:
             return SessionAccess(error=_session_error("RESOURCE_NOT_FOUND", "Session not found"), user_id=None)
@@ -320,7 +350,7 @@ async def _can_administer_sessions(ctx: AppContext, session_id: str) -> bool:
 
 
 async def _audit_session_deny(ctx: AppContext, session_id: str, action: str, reason: str) -> None:
-    await get_audit_sink().write(
+    await _write_audit_best_effort(
         AuditEvent(
             user_id=ctx.user_id,
             action=f"session.{action}",

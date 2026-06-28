@@ -4,9 +4,19 @@ from starlette.datastructures import State
 
 from datus.api import deps
 from datus.api.auth.context import AppContext
-from datus.api.enterprise.defaults import InMemorySessionOwnerStore, PassthroughConfigProjector
+from datus.api.enterprise.defaults import (
+    InMemorySessionOwnerStore,
+    LocalAuthorizationProvider,
+    PassthroughConfigProjector,
+)
+from datus.api.enterprise.deps import (
+    authorize_session_access,
+    enforce_platform_status,
+    project_request_config,
+    reject_in_enterprise_mode,
+)
 from datus.api.enterprise.loader import EnterpriseExtensions
-from datus.api.enterprise.models import AccessDecision
+from datus.api.enterprise.models import AccessDecision, ProjectionResult
 from datus_enterprise.authorization import authorize, require_module
 
 
@@ -85,6 +95,186 @@ async def test_require_module_uses_authorization_provider_for_identity_only_cont
     assert exc.value.status_code == 403
     assert audit_sink.events[-1].user_id == "u1"
     assert audit_sink.events[-1].action == "module.admin.users"
+
+
+@pytest.mark.asyncio
+async def test_require_module_denial_stays_stable_when_audit_sink_fails(monkeypatch):
+    class DenyingAuthorizationProvider:
+        async def check(self, ctx, action, resource):  # noqa: ARG002
+            return AccessDecision(allowed=False, reason="missing permission module.admin.users")
+
+        async def allowed_datasources(self, ctx):  # noqa: ARG002
+            return {}
+
+    class FailingAuditSink:
+        async def write(self, event):  # noqa: ARG002
+            raise RuntimeError("audit down")
+
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=DenyingAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=FailingAuditSink(),
+        ),
+    )
+
+    request = type("Request", (), {})()
+    request.state = State()
+    request.state.app_context = AppContext(user_id="u1")
+
+    dependency = require_module("module.admin.users")
+
+    with pytest.raises(HTTPException) as exc:
+        await dependency(request)
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "missing permission module.admin.users"
+
+
+@pytest.mark.asyncio
+async def test_project_request_config_denial_stays_stable_when_audit_sink_fails(monkeypatch):
+    class DenyingConfigProjector:
+        async def project(self, request):
+            return ProjectionResult(
+                config=request.base_config,
+                denied_reason="No datasource grant available.",
+            )
+
+    class UnusedAuthorizationProvider:
+        async def check(self, ctx, action, resource):  # noqa: ARG002
+            return AccessDecision(allowed=True)
+
+        async def allowed_datasources(self, ctx):  # noqa: ARG002
+            return {}
+
+    class FailingAuditSink:
+        async def write(self, event):  # noqa: ARG002
+            raise RuntimeError("audit down")
+
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=UnusedAuthorizationProvider(),
+            config_projector=DenyingConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=FailingAuditSink(),
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await project_request_config(
+            AppContext(user_id="u1"),
+            object(),
+            operation="sql.query",
+            requested_datasource="finance",
+        )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "No datasource grant available."
+
+
+@pytest.mark.asyncio
+async def test_platform_status_denial_stays_stable_when_audit_sink_fails(monkeypatch):
+    class FailingAuditSink:
+        async def write(self, event):  # noqa: ARG002
+            raise RuntimeError("audit down")
+
+    monkeypatch.setenv("DATUS_PLATFORM_STATUS", "readonly")
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=FailingAuditSink(),
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await enforce_platform_status(
+            AppContext(user_id="u1"),
+            operation="session.delete",
+            resource_type="session",
+            resource_id="s1",
+        )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "PLATFORM_STATUS_FORBIDDEN"
+
+
+@pytest.mark.asyncio
+async def test_enterprise_route_disabled_stays_stable_when_audit_sink_fails(monkeypatch):
+    class FailingAuditSink:
+        async def write(self, event):  # noqa: ARG002
+            raise RuntimeError("audit down")
+
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=FailingAuditSink(),
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await reject_in_enterprise_mode(
+            AppContext(user_id="u1"),
+            operation="legacy.model.delete",
+            resource_type="legacy_api",
+            resource_id="/api/v1/model",
+        )
+
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "ENTERPRISE_ROUTE_DISABLED"
+
+
+@pytest.mark.asyncio
+async def test_session_access_denial_stays_stable_when_audit_sink_fails(monkeypatch):
+    class FailingOwnerStore(InMemorySessionOwnerStore):
+        async def get_owner(self, project_id, session_id):  # noqa: ARG002
+            raise RuntimeError("owner store down")
+
+    class FailingAuditSink:
+        async def write(self, event):  # noqa: ARG002
+            raise RuntimeError("audit down")
+
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=FailingOwnerStore(),
+            audit_sink=FailingAuditSink(),
+        ),
+    )
+    svc = type("Service", (), {})()
+    svc.project_id = "project-1"
+    svc.task_manager = type("TaskManager", (), {"get_task": lambda self, session_id: None})()
+
+    access = await authorize_session_access(
+        svc,
+        AppContext(user_id="u1"),
+        "s1",
+        action="history",
+        require_existing_session=True,
+    )
+
+    assert access.error.errorCode == "RESOURCE_NOT_FOUND"
+    assert access.user_id is None
 
 
 @pytest.mark.asyncio

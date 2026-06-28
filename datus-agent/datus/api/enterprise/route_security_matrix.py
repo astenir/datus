@@ -251,14 +251,24 @@ _add(
         note="Stop operation is an explicit maintenance control exception.",
     ),
 )
-_add_many(
+_add(
     "POST",
-    ["/api/v1/context/{context_type}", "/api/v1/internal/{command}"],
+    "/api/v1/context/{context_type}",
     _policy(
         MODULE_RBAC,
         SYSTEM_READONLY,
         module_permission="module.datasource_catalog",
-        note="Only datasource metadata-producing commands require catalog permission.",
+        note="Only datasource metadata-producing context commands require catalog permission.",
+    ),
+)
+_add(
+    "POST",
+    "/api/v1/internal/{command}",
+    _policy(
+        MODULE_RBAC,
+        SYSTEM_READONLY,
+        note="Command-specific RBAC: datasource metadata commands require module.datasource_catalog; "
+        "chat session commands require module.chat.",
     ),
 )
 
@@ -403,10 +413,11 @@ _add_many(
     ["/api/v1/kb/bootstrap/{stream_id}/cancel", "/api/v1/kb/bootstrap-docs/{stream_id}/cancel"],
     _policy(
         MODULE_RBAC,
+        SESSION_OWNER,
         PLATFORM_STATUS_EXCEPTION,
         MUTATION_EXECUTION,
         module_permission="module.kb",
-        note="Cancel operation is an explicit maintenance control exception.",
+        note="Cancel operation is an explicit maintenance control exception and is bound to the stream owner.",
     ),
 )
 

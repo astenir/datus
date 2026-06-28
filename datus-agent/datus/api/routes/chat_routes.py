@@ -73,7 +73,8 @@ if TYPE_CHECKING:
     from datus.api.services.datus_service import DatusService
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
-ChatModuleCtx = Annotated[AppContext, Depends(require_module("module.chat"))]
+_require_chat_module = require_module("module.chat")
+ChatModuleCtx = Annotated[AppContext, Depends(_require_chat_module)]
 SSE_RESPONSE = {
     200: {
         "description": "Server-Sent Events stream",
@@ -229,25 +230,28 @@ async def _audit_chat_sql_policy_denial(
 ) -> None:
     """Record a sanitized audit event for chat SQL-policy pre-check denial."""
 
-    await audit_decision(
-        ctx,
-        AuditEvent(
-            action="sql.policy.principal",
-            resource_type="chat",
-            resource_id=request.session_id,
-            decision="deny",
-            reason=denial.error_type or "SQL_POLICY_PRINCIPAL_REQUIRED",
-            metadata={
-                "operation": operation,
-                "session_id": request.session_id,
-                "subagent_id": request.subagent_id,
-                "datasource": request.datasource,
-                "database": request.database,
-                "error_code": denial.error_type,
-                "missing_principal_paths": denial.extra.get("missing_principal_paths", []),
-            },
-        ),
-    )
+    try:
+        await audit_decision(
+            ctx,
+            AuditEvent(
+                action="sql.policy.principal",
+                resource_type="chat",
+                resource_id=request.session_id,
+                decision="deny",
+                reason=denial.error_type or "SQL_POLICY_PRINCIPAL_REQUIRED",
+                metadata={
+                    "operation": operation,
+                    "session_id": request.session_id,
+                    "subagent_id": request.subagent_id,
+                    "datasource": request.datasource,
+                    "database": request.database,
+                    "error_code": denial.error_type,
+                    "missing_principal_paths": denial.extra.get("missing_principal_paths", []),
+                },
+            ),
+        )
+    except Exception:
+        logger.warning("Chat SQL policy denial audit failed for operation=%s", operation, exc_info=True)
 
 
 async def _consume_chat_request_quota(
@@ -371,14 +375,17 @@ def _principal_path_exists(principal: dict[str, Any], path: str) -> bool:
     "Set subagent_id to route to a specific sub-agent.",
     response_class=StreamingResponse,
     responses=SSE_RESPONSE,
-    dependencies=[Depends(require_platform_active(operation="chat.stream", resource_type="chat"))],
+    dependencies=[
+        Depends(_require_chat_module),
+        Depends(require_platform_active(operation="chat.stream", resource_type="chat")),
+    ],
 )
 async def stream_chat(
     request: StreamChatInput,
-    svc: ServiceDep,
     ctx: ChatModuleCtx,
     http_request: Request,
 ):
+    svc = await api_deps.resolve_datus_service_for_request(http_request)
     sub_agent_id = request.subagent_id
     if sub_agent_id and not _is_valid_subagent_id(svc, sub_agent_id):
         raise HTTPException(
@@ -513,13 +520,17 @@ async def stream_chat(
     ),
     response_class=StreamingResponse,
     responses=SSE_RESPONSE,
-    dependencies=[Depends(require_platform_active(operation="chat.feedback", resource_type="chat"))],
+    dependencies=[
+        Depends(_require_chat_module),
+        Depends(require_platform_active(operation="chat.feedback", resource_type="chat")),
+    ],
 )
 async def stream_chat_feedback(
     request: FeedbackChatInput,
-    svc: ServiceDep,
     ctx: ChatModuleCtx,
+    http_request: Request,
 ):
+    svc = await api_deps.resolve_datus_service_for_request(http_request)
     rendered_message = build_reaction_feedback_prompt(
         reaction_emoji=request.reaction_emoji,
         reference_msg=request.reference_msg,
@@ -639,13 +650,17 @@ async def stream_chat_feedback(
     description="Reconnect to a running chat task and consume events from a given cursor",
     response_class=StreamingResponse,
     responses=SSE_RESPONSE,
-    dependencies=[Depends(require_platform_active(operation="chat.resume", resource_type="chat"))],
+    dependencies=[
+        Depends(_require_chat_module),
+        Depends(require_platform_active(operation="chat.resume", resource_type="chat")),
+    ],
 )
 async def resume_chat(
     request: ResumeChatInput,
-    svc: ServiceDep,
     ctx: ChatModuleCtx,
+    http_request: Request,
 ):
+    svc = await api_deps.resolve_datus_service_for_request(http_request)
     access = await authorize_session_access(svc, ctx, request.session_id, action="resume")
     if access.error:
         return access.error
@@ -674,12 +689,14 @@ async def resume_chat(
     response_model=Result[dict],
     summary="Stop Chat Session",
     description="Stop a currently running chat session",
+    dependencies=[Depends(_require_chat_module)],
 )
 async def stop_chat(
     request: StopChatInput,
-    svc: ServiceDep,
     ctx: ChatModuleCtx,
+    http_request: Request,
 ) -> Result[dict]:
+    svc = await api_deps.resolve_datus_service_for_request(http_request)
     access = await authorize_session_access(svc, ctx, request.session_id, action="stop")
     if access.error:
         return access.error
@@ -702,7 +719,10 @@ async def stop_chat(
     response_model=Result[CompactSessionData],
     summary="Compact Chat Session",
     description="Compact chat session by summarizing conversation history",
-    dependencies=[Depends(require_platform_active(operation="chat.session.compact", resource_type="session"))],
+    dependencies=[
+        Depends(_require_chat_module),
+        Depends(require_platform_active(operation="chat.session.compact", resource_type="session")),
+    ],
 )
 async def compact_chat_session(
     session_id: Annotated[str, Path(description="Session ID to compact")],
@@ -724,6 +744,7 @@ async def compact_chat_session(
         "(use 'chat' for the default chat agent, or any builtin/custom subagent id). "
         "Omit to return every session for the user."
     ),
+    dependencies=[Depends(_require_chat_module)],
 )
 async def list_sessions(
     svc: ServiceDep,
@@ -777,7 +798,10 @@ async def _filter_session_list_by_owner_store(
     response_model=Result[ChatSessionData],
     summary="Delete Chat Session",
     description="Delete a chat session by ID",
-    dependencies=[Depends(require_platform_active(operation="chat.session.delete", resource_type="session"))],
+    dependencies=[
+        Depends(_require_chat_module),
+        Depends(require_platform_active(operation="chat.session.delete", resource_type="session")),
+    ],
 )
 async def delete_session(
     session_id: Annotated[str, Path(description="Session ID to delete")],
@@ -809,6 +833,7 @@ async def delete_session(
     response_model=Result[ChatHistoryData],
     summary="Get Chat History",
     description="Get full conversation messages for a chat session",
+    dependencies=[Depends(_require_chat_module)],
 )
 async def get_chat_history(
     svc: ServiceDep,
@@ -837,13 +862,17 @@ async def get_chat_history(
     response_model=Result[UserInteractionData],
     summary="Submit User Interaction",
     description="Submit user's choice or input for an interactive dialog",
-    dependencies=[Depends(require_platform_active(operation="chat.user_interaction", resource_type="chat"))],
+    dependencies=[
+        Depends(_require_chat_module),
+        Depends(require_platform_active(operation="chat.user_interaction", resource_type="chat")),
+    ],
 )
 async def submit_user_interaction(
     request: UserInteractionInput,
-    svc: ServiceDep,
     ctx: ChatModuleCtx,
+    http_request: Request,
 ) -> Result[UserInteractionData]:
+    svc = await api_deps.resolve_datus_service_for_request(http_request)
     access = await authorize_session_access(svc, ctx, request.session_id, action="user_interaction")
     if access.error:
         return access.error
@@ -893,13 +922,17 @@ async def submit_user_interaction(
         "OpenAI Agents SDK ``call_model_input_filter`` hook. If the run has already entered "
         "its final turn, the message will auto-continue the conversation in a follow-up run."
     ),
-    dependencies=[Depends(require_platform_active(operation="chat.insert", resource_type="chat"))],
+    dependencies=[
+        Depends(_require_chat_module),
+        Depends(require_platform_active(operation="chat.insert", resource_type="chat")),
+    ],
 )
 async def insert_message(
     request: InsertMessageInput,
-    svc: ServiceDep,
     ctx: ChatModuleCtx,
+    http_request: Request,
 ) -> Result[InsertMessageData]:
+    svc = await api_deps.resolve_datus_service_for_request(http_request)
     access = await authorize_session_access(svc, ctx, request.session_id, action="insert")
     if access.error:
         return access.error
@@ -944,14 +977,18 @@ async def insert_message(
     response_model=Result[ToolResultData],
     summary="Submit Tool Execution Result",
     description="Receive tool execution result from frontend after filesystem operation",
-    dependencies=[Depends(require_platform_active(operation="chat.tool_result", resource_type="chat"))],
+    dependencies=[
+        Depends(_require_chat_module),
+        Depends(require_platform_active(operation="chat.tool_result", resource_type="chat")),
+    ],
 )
 async def submit_tool_result(
     request: ToolResultInput,
-    svc: ServiceDep,
     ctx: ChatModuleCtx,
+    http_request: Request,
 ) -> Result[ToolResultData]:
     """Receive tool execution result from frontend."""
+    svc = await api_deps.resolve_datus_service_for_request(http_request)
     if request.session_id:
         access = await authorize_session_access(svc, ctx, request.session_id, action="tool_result")
         if access.error:
@@ -966,7 +1003,16 @@ async def submit_tool_result(
             errorMessage="No active task found for this session",
         )
 
-    await task.node.tool_channel.publish(request.call_tool_id, request.tool_result.model_dump())
+    try:
+        await task.node.tool_channel.publish(request.call_tool_id, request.tool_result.model_dump())
+    except Exception:
+        logger.warning("Tool result delivery failed for call_tool_id=%s", request.call_tool_id, exc_info=True)
+        return Result[ToolResultData](
+            success=False,
+            errorCode="TOOL_RESULT_DELIVERY_FAILED",
+            errorMessage="Tool result delivery failed.",
+        )
+
     return Result[ToolResultData](
         success=True,
         data=ToolResultData(call_tool_id=request.call_tool_id, status="received"),

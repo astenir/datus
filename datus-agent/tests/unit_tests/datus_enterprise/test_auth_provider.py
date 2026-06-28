@@ -255,6 +255,18 @@ async def test_userinfo_bearer_auth_provider_rejects_disallowed_status(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_userinfo_bearer_auth_provider_rejects_missing_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_async_client(monkeypatch, lambda _request: httpx.Response(200, json={"username": "x_liuyanping"}))
+    provider = UserInfoBearerAuthProvider(userinfo_url="https://sso.example.internal/api/userinfo")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await provider.authenticate(_bearer_request())
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "AUTH_USER_DISABLED"
+
+
+@pytest.mark.asyncio
 async def test_userinfo_bearer_auth_provider_maps_configured_user_id_field(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

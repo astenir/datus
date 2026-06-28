@@ -56,15 +56,18 @@ class KbService:
         queue: asyncio.Queue = asyncio.Queue()
         loop = asyncio.get_running_loop()
         summary: dict[str, dict] = {}
+        stream_cancelled = False
 
         for comp_name in request.components:
             if cancel_event.is_set():
+                stream_cancelled = True
                 yield self._make_event(
                     stream_id,
                     comp_name,
                     BatchStage.TASK_FAILED,
                     error="Cancelled by user",
                 )
+                summary[comp_name] = {"status": "failed", "message": "Cancelled by user"}
                 break
             # Run the sync init in a background thread.
             # Stream BatchEvents from the queue in real-time while the thread runs.
@@ -87,7 +90,13 @@ class KbService:
             # Consume events as they arrive until the thread signals completion
             result = None
             component_error = None
+            component_cancelled = False
             while True:
+                if cancel_event.is_set():
+                    component_cancelled = True
+                    stream_cancelled = True
+                    future.cancel()
+                    break
                 if future.done() and queue.empty():
                     # Thread finished and queue drained
                     break
@@ -103,12 +112,16 @@ class KbService:
                     break
                 yield self._batch_event_to_sse(stream_id, comp_name, item)
 
-            # Collect the thread result
-            try:
-                result = await future
-            except Exception as exc:
-                logger.exception(f"Component {comp_name} failed")
-                component_error = exc
+            # Collect the thread result. If cancelled while the executor is still
+            # running, do not wait for non-cooperative sync bootstrap work.
+            if component_cancelled:
+                result = {"status": "failed", "message": "Cancelled by user", "error": "Cancelled by user"}
+            else:
+                try:
+                    result = await future
+                except Exception as exc:
+                    logger.exception(f"Component {comp_name} failed")
+                    component_error = exc
 
             # Drain any remaining events
             while not queue.empty():
@@ -121,7 +134,11 @@ class KbService:
                 yield self._batch_event_to_sse(stream_id, comp_name, item)
 
             # Final per-component event
-            if component_error:
+            if component_cancelled:
+                yield self._make_event(stream_id, comp_name, BatchStage.TASK_FAILED, error="Cancelled by user")
+                summary[comp_name] = {"status": "failed", "message": "Cancelled by user"}
+                break
+            elif component_error:
                 yield self._make_event(stream_id, comp_name, BatchStage.TASK_FAILED, error=str(component_error))
                 summary[comp_name] = {"status": "failed", "message": str(component_error)}
             else:
@@ -149,8 +166,8 @@ class KbService:
         yield self._make_event(
             stream_id,
             "all",
-            BatchStage.TASK_COMPLETED,
-            message="Bootstrap complete",
+            BatchStage.TASK_FAILED if stream_cancelled else BatchStage.TASK_COMPLETED,
+            message="Bootstrap cancelled" if stream_cancelled else "Bootstrap complete",
             payload={"components": summary},
         )
 
@@ -330,7 +347,12 @@ class KbService:
         )
 
         # Drain queue (same pattern as bootstrap_stream)
+        component_cancelled = False
         while True:
+            if cancel_event.is_set():
+                component_cancelled = True
+                future.cancel()
+                break
             if future.done() and queue.empty():
                 break
             try:
@@ -346,11 +368,14 @@ class KbService:
         # Collect result
         result = None
         component_error = None
-        try:
-            result = await future
-        except Exception as exc:
-            logger.exception("Platform doc bootstrap failed")
-            component_error = exc
+        if component_cancelled:
+            result = None
+        else:
+            try:
+                result = await future
+            except Exception as exc:
+                logger.exception("Platform doc bootstrap failed")
+                component_error = exc
 
         # Drain remaining events
         while not queue.empty():
@@ -363,7 +388,9 @@ class KbService:
             yield self._batch_event_to_sse(stream_id, component, item)
 
         # Final event
-        if component_error:
+        if component_cancelled:
+            yield self._make_event(stream_id, component, BatchStage.TASK_FAILED, error="Cancelled by user")
+        elif component_error:
             yield self._make_event(stream_id, component, BatchStage.TASK_FAILED, error=str(component_error))
         elif result and result.success:
             yield self._make_event(

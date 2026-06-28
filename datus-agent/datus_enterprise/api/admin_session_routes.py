@@ -13,12 +13,15 @@ from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
 from datus.api.enterprise.deps import require_platform_active
 from datus.api.models.base_models import Result
+from datus.utils.loggings import get_logger
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
 
 router = APIRouter(prefix="/api/v1", tags=["enterprise-sessions"])
+logger = get_logger(__name__)
 
-AdminSessionsCtx = Annotated[AppContext, Depends(require_module("module.admin.sessions"))]
+_require_admin_sessions = require_module("module.admin.sessions")
+AdminSessionsCtx = Annotated[AppContext, Depends(_require_admin_sessions)]
 
 _SESSION_IO_TIMEOUT = 15.0
 
@@ -48,6 +51,7 @@ class AdminSessionDetail(AdminSessionSummary):
     response_model=Result[list[AdminSessionSummary]],
     summary="List Admin Sessions",
     description="Admin-only session owner and runtime status list.",
+    dependencies=[Depends(_require_admin_sessions)],
 )
 async def list_admin_sessions(
     svc: ServiceDep,
@@ -79,6 +83,7 @@ async def list_admin_sessions(
     response_model=Result[AdminSessionDetail],
     summary="Get Admin Session",
     description="Admin-only session owner and runtime status detail.",
+    dependencies=[Depends(_require_admin_sessions)],
 )
 async def get_admin_session(
     session_id: str,
@@ -87,7 +92,9 @@ async def get_admin_session(
 ) -> Result[AdminSessionDetail]:
     """Return bounded metadata for a known session."""
 
-    detail = await _resolve_session_detail(svc, session_id)
+    detail, error = await _resolve_session_detail_or_error(svc, ctx, session_id, operation="get_admin_session")
+    if error is not None:
+        return error
     if detail is None:
         await _audit_session_mutation(
             ctx,
@@ -113,6 +120,7 @@ async def get_admin_session(
     response_model=Result[dict],
     summary="Stop Admin Session",
     description="Admin-only stop for a running session.",
+    dependencies=[Depends(_require_admin_sessions)],
 )
 async def stop_admin_session(
     session_id: str,
@@ -121,7 +129,9 @@ async def stop_admin_session(
 ) -> Result[dict]:
     """Stop a running session without requiring the caller to own it."""
 
-    before = await _resolve_session_detail(svc, session_id)
+    before, error = await _resolve_session_detail_or_error(svc, ctx, session_id, operation="stop_admin_session")
+    if error is not None:
+        return error
     if before is None:
         await _audit_session_mutation(
             ctx,
@@ -133,7 +143,9 @@ async def stop_admin_session(
         return _session_error("RESOURCE_NOT_FOUND", "Session not found")
 
     stopped = await svc.task_manager.stop_task(session_id)
-    after = await _resolve_session_detail(svc, session_id)
+    after, error = await _resolve_session_detail_or_error(svc, ctx, session_id, operation="stop_admin_session")
+    if error is not None:
+        return error
     if not stopped:
         await _audit_session_mutation(
             ctx,
@@ -147,7 +159,7 @@ async def stop_admin_session(
         )
         return _session_error("SESSION_NOT_RUNNING", f"Session {session_id} is not currently running")
 
-    await _audit_session_mutation(
+    await _audit_session_mutation_best_effort(
         ctx,
         session_id=session_id,
         operation="stop_admin_session",
@@ -164,7 +176,10 @@ async def stop_admin_session(
     response_model=Result[dict],
     summary="Delete Admin Session",
     description="Admin-only deletion for a session and its owner metadata.",
-    dependencies=[Depends(require_platform_active(operation="admin.sessions.delete", resource_type="session"))],
+    dependencies=[
+        Depends(_require_admin_sessions),
+        Depends(require_platform_active(operation="admin.sessions.delete", resource_type="session")),
+    ],
 )
 async def delete_admin_session(
     session_id: str,
@@ -173,7 +188,9 @@ async def delete_admin_session(
 ) -> Result[dict]:
     """Delete a session from its owner's disk scope and remove owner metadata."""
 
-    before = await _resolve_session_detail(svc, session_id)
+    before, error = await _resolve_session_detail_or_error(svc, ctx, session_id, operation="delete_admin_session")
+    if error is not None:
+        return error
     if before is None:
         await _audit_session_mutation(
             ctx,
@@ -183,6 +200,17 @@ async def delete_admin_session(
             reason="session not found",
         )
         return _session_error("RESOURCE_NOT_FOUND", "Session not found")
+
+    if before.owner_user_id is None:
+        await _audit_session_mutation(
+            ctx,
+            session_id=session_id,
+            operation="delete_admin_session",
+            decision="deny",
+            reason="session owner unknown",
+            old_summary=_summary_for_audit(before),
+        )
+        return _session_error("SESSION_OWNER_UNKNOWN", "Session owner is unknown.")
 
     if before.is_running:
         await svc.task_manager.stop_task(session_id)
@@ -215,9 +243,21 @@ async def delete_admin_session(
         )
         return Result(success=False, errorCode=result.errorCode, errorMessage=result.errorMessage)
 
-    await deps.get_enterprise_extensions().session_owner_store.delete_owner(svc.project_id, session_id)
+    try:
+        await deps.get_enterprise_extensions().session_owner_store.delete_owner(svc.project_id, session_id)
+    except Exception:
+        await _audit_session_mutation(
+            ctx,
+            session_id=session_id,
+            operation="delete_admin_session",
+            decision="deny",
+            reason="session owner delete failed",
+            old_summary=_summary_for_audit(before),
+        )
+        return _session_error("SESSION_OWNER_DELETE_FAILED", "Session owner metadata delete failed.")
+
     await svc.task_manager.discard_task_snapshot(session_id)
-    await _audit_session_mutation(
+    await _audit_session_mutation_best_effort(
         ctx,
         session_id=session_id,
         operation="delete_admin_session",
@@ -336,6 +376,26 @@ async def _resolve_session_detail(svc: ServiceDep, session_id: str) -> AdminSess
     )
 
 
+async def _resolve_session_detail_or_error(
+    svc: ServiceDep,
+    ctx: AppContext,
+    session_id: str,
+    *,
+    operation: str,
+) -> tuple[AdminSessionDetail | None, Result[Any] | None]:
+    try:
+        return await _resolve_session_detail(svc, session_id), None
+    except Exception:
+        await _audit_session_mutation(
+            ctx,
+            session_id=session_id,
+            operation=operation,
+            decision="deny",
+            reason="session read failed",
+        )
+        return None, _session_error("SESSION_READ_FAILED", "Session read failed")
+
+
 async def _summary_from_record_and_task(
     svc: ServiceDep,
     record: dict[str, Any],
@@ -395,6 +455,37 @@ async def _audit_session_mutation(
             metadata=audit_metadata,
         ),
     )
+
+
+async def _audit_session_mutation_best_effort(
+    ctx: AppContext,
+    *,
+    session_id: str | None,
+    operation: str,
+    decision: str,
+    reason: str | None = None,
+    old_summary: dict[str, Any] | None = None,
+    new_summary: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    try:
+        await _audit_session_mutation(
+            ctx,
+            session_id=session_id,
+            operation=operation,
+            decision=decision,
+            reason=reason,
+            old_summary=old_summary,
+            new_summary=new_summary,
+            metadata=metadata,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Admin session audit write failed for operation '%s' decision '%s': %s",
+            operation,
+            decision,
+            exc,
+        )
 
 
 def _summary_for_audit(summary: AdminSessionSummary | None) -> dict[str, Any] | None:

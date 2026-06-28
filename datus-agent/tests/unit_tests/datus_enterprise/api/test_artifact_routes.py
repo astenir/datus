@@ -16,6 +16,7 @@ from datus.api.enterprise.defaults import (
     PassthroughConfigProjector,
 )
 from datus.api.enterprise.loader import EnterpriseExtensions
+from datus.api.enterprise.models import AccessDecision
 from datus.api.service import create_app
 from datus.api.services.dashboard_service import DashboardService
 from datus.api.services.report_service import ReportService
@@ -28,6 +29,11 @@ class CollectingAuditSink:
 
     async def write(self, event):
         self.events.append(event)
+
+
+class FailingAuditSink:
+    async def write(self, event):  # noqa: ARG002
+        raise RuntimeError("audit down")
 
 
 class MemoryArtifactAclStore:
@@ -43,6 +49,13 @@ class MemoryArtifactAclStore:
     async def put_acl(self, *, artifact_type: str, slug: str, acl: dict):
         self.acls[(artifact_type, slug)] = dict(acl)
         return dict(acl)
+
+
+class DenyAdminArtifactsAuthorizationProvider(LocalAuthorizationProvider):
+    async def check(self, ctx, action, resource):
+        if action == "module.admin.artifacts":
+            return AccessDecision(allowed=False, reason="admin artifacts denied")
+        return await super().check(ctx, action, resource)
 
 
 def _svc(tmp_path: Path):
@@ -105,6 +118,119 @@ def _client(monkeypatch, tmp_path: Path, ctx: AppContext, *, audit_sink=None, ar
     return TestClient(app)
 
 
+@pytest.mark.parametrize(
+    ("method", "path", "permissions", "json_body"),
+    [
+        ("get", "/api/v1/dashboards", {"module.report.view"}, None),
+        ("get", "/api/v1/dashboards/sales", {"module.report.view"}, None),
+        ("get", "/api/v1/dashboards/sales/acl", {"module.report.view"}, None),
+        (
+            "put",
+            "/api/v1/dashboards/sales/acl",
+            {"module.report.view"},
+            {"visibility": "private", "allowed_roles": [], "allowed_user_ids": []},
+        ),
+        ("get", "/api/v1/dashboards/sales/html", {"module.report.view"}, None),
+        ("get", "/api/v1/reports", {"module.dashboard.view"}, None),
+        ("get", "/api/v1/reports/sales", {"module.dashboard.view"}, None),
+        ("get", "/api/v1/reports/sales/acl", {"module.dashboard.view"}, None),
+        (
+            "put",
+            "/api/v1/reports/sales/acl",
+            {"module.dashboard.view"},
+            {"visibility": "private", "allowed_roles": [], "allowed_user_ids": []},
+        ),
+        ("get", "/api/v1/reports/sales/html", {"module.dashboard.view"}, None),
+        ("get", "/api/v1/admin/artifacts", {"module.report.view"}, None),
+        ("get", "/api/v1/admin/artifacts/report/sales/acl", {"module.report.view"}, None),
+        (
+            "put",
+            "/api/v1/admin/artifacts/report/sales/acl",
+            {"module.report.view"},
+            {
+                "owner_user_id": "u1",
+                "visibility": "private",
+                "allowed_roles": [],
+                "allowed_user_ids": [],
+                "datasources": [],
+            },
+        ),
+    ],
+)
+def test_artifact_rbac_denial_does_not_resolve_datus_service(monkeypatch, method, path, permissions, json_body):
+    ctx = AppContext(user_id="u1", permissions=permissions)
+    app = FastAPI()
+    app.include_router(artifact_routes.router)
+
+    async def reject_service(request: Request):
+        raise AssertionError("RBAC denial resolved DatusService")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+        ),
+    )
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = (
+            getattr(client, method)(path, json=json_body) if json_body is not None else getattr(client, method)(path)
+        )
+
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("path", "permissions"),
+    [
+        ("/api/v1/dashboards/sales/acl", {"module.dashboard.view"}),
+        ("/api/v1/reports/sales/acl", {"module.report.view"}),
+        ("/api/v1/admin/artifacts/report/sales/acl", {"module.admin.artifacts"}),
+    ],
+)
+def test_artifact_invalid_body_does_not_resolve_datus_service(monkeypatch, path, permissions):
+    ctx = AppContext(user_id="u1", permissions=permissions)
+    app = FastAPI()
+    app.include_router(artifact_routes.router)
+
+    async def reject_service(request: Request):
+        raise AssertionError("Invalid body resolved DatusService")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+        ),
+    )
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.put(path, json=[])
+
+    assert response.status_code == 422
+
+
 @pytest.mark.asyncio
 async def test_report_list_filters_through_enterprise_acl(tmp_path: Path):
     _write_manifest(tmp_path, "report", "visible")
@@ -150,6 +276,40 @@ async def test_report_list_uses_configured_acl_store_without_principal_fallback(
     )
 
     result = await artifact_routes.list_reports(_svc(tmp_path), ctx)
+
+    assert result.success is True
+    assert result.data == []
+
+
+@pytest.mark.asyncio
+async def test_dashboard_list_admin_visibility_uses_authorization_provider(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "dashboard", "ops")
+    store = MemoryArtifactAclStore(
+        {
+            ("dashboard", "ops"): {
+                "owner_user_id": "owner-1",
+                "visibility": "private",
+                "allowed_roles": [],
+                "allowed_user_ids": [],
+                "datasources": [],
+            }
+        }
+    )
+    ctx = AppContext(user_id="admin", permissions={"module.dashboard.view", "module.admin.artifacts"})
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=DenyAdminArtifactsAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+            artifact_acl_store=store,
+        ),
+    )
+
+    result = await artifact_routes.list_dashboards(_svc(tmp_path), ctx)
 
     assert result.success is True
     assert result.data == []
@@ -347,6 +507,38 @@ def test_put_admin_artifact_acl_updates_store_and_audits_summary(monkeypatch, tm
     }
 
 
+def test_put_admin_artifact_acl_returns_success_when_post_update_audit_fails(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "report", "sales")
+    store = MemoryArtifactAclStore(
+        {
+            ("report", "sales"): {
+                "owner_user_id": "old-owner",
+                "visibility": "private",
+                "allowed_roles": [],
+                "allowed_user_ids": [],
+                "datasources": [],
+            }
+        }
+    )
+    ctx = AppContext(user_id="u1", permissions={"module.admin.artifacts"})
+    payload = {
+        "owner_user_id": "new-owner",
+        "visibility": "enterprise",
+        "allowed_roles": ["analyst"],
+        "allowed_user_ids": ["viewer-1"],
+        "datasources": ["finance_dw"],
+    }
+
+    with _client(monkeypatch, tmp_path, ctx, audit_sink=FailingAuditSink(), artifact_acl_store=store) as client:
+        response = client.put("/api/v1/admin/artifacts/report/sales/acl", json=payload)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"] == payload
+    assert store.acls[("report", "sales")] == payload
+
+
 def test_put_admin_artifact_acl_creates_first_acl_for_existing_artifact(monkeypatch, tmp_path: Path):
     _write_manifest(tmp_path, "dashboard", "ops")
     audit_sink = CollectingAuditSink()
@@ -506,6 +698,40 @@ def test_creator_can_share_report_with_single_user(monkeypatch, tmp_path: Path):
     assert event.metadata["new_acl"]["datasources"] == ["finance_dw"]
 
 
+def test_creator_share_returns_success_when_post_update_audit_fails(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "report", "sales")
+    store = MemoryArtifactAclStore(
+        {
+            ("report", "sales"): {
+                "owner_user_id": "owner-1",
+                "visibility": "private",
+                "allowed_roles": [],
+                "allowed_user_ids": [],
+                "datasources": ["finance_dw"],
+            }
+        }
+    )
+    ctx = AppContext(user_id="owner-1", permissions={"module.report.view"})
+
+    with _client(monkeypatch, tmp_path, ctx, audit_sink=FailingAuditSink(), artifact_acl_store=store) as client:
+        response = client.put(
+            "/api/v1/reports/sales/acl",
+            json={"visibility": "private", "allowed_roles": [], "allowed_user_ids": ["viewer-1"]},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"]["allowed_user_ids"] == ["viewer-1"]
+    assert store.acls[("report", "sales")] == {
+        "owner_user_id": "owner-1",
+        "visibility": "private",
+        "allowed_roles": [],
+        "allowed_user_ids": ["viewer-1"],
+        "datasources": ["finance_dw"],
+    }
+
+
 def test_non_owner_shared_user_cannot_update_report_share(monkeypatch, tmp_path: Path):
     _write_manifest(tmp_path, "report", "sales")
     audit_sink = CollectingAuditSink()
@@ -521,6 +747,40 @@ def test_non_owner_shared_user_cannot_update_report_share(monkeypatch, tmp_path:
         }
     )
     ctx = AppContext(user_id="viewer-1", permissions={"module.report.view"})
+
+    with _client(monkeypatch, tmp_path, ctx, audit_sink=audit_sink, artifact_acl_store=store) as client:
+        response = client.put(
+            "/api/v1/reports/sales/acl",
+            json={"visibility": "enterprise", "allowed_roles": [], "allowed_user_ids": []},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "ARTIFACT_FORBIDDEN"
+    assert store.acls[("report", "sales")]["visibility"] == "private"
+    event = audit_sink.events[-1]
+    assert event.action == "artifact.share"
+    assert event.resource_id == "report:sales"
+    assert event.decision == "deny"
+    assert event.reason == "artifact owner required"
+
+
+def test_is_admin_without_admin_artifacts_cannot_update_report_share(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "report", "sales")
+    audit_sink = CollectingAuditSink()
+    store = MemoryArtifactAclStore(
+        {
+            ("report", "sales"): {
+                "owner_user_id": "owner-1",
+                "visibility": "private",
+                "allowed_roles": [],
+                "allowed_user_ids": [],
+                "datasources": [],
+            }
+        }
+    )
+    ctx = AppContext(user_id="admin-1", is_admin=True, permissions={"module.report.view"})
 
     with _client(monkeypatch, tmp_path, ctx, audit_sink=audit_sink, artifact_acl_store=store) as client:
         response = client.put(
@@ -581,6 +841,59 @@ def test_admin_artifacts_permission_can_update_dashboard_share(monkeypatch, tmp_
         "allowed_user_ids": ["viewer-1"],
         "datasources": [],
     }
+
+
+def test_admin_artifacts_share_management_uses_authorization_provider(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "dashboard", "ops")
+    audit_sink = CollectingAuditSink()
+    store = MemoryArtifactAclStore(
+        {
+            ("dashboard", "ops"): {
+                "owner_user_id": "owner-1",
+                "visibility": "private",
+                "allowed_roles": [],
+                "allowed_user_ids": [],
+                "datasources": [],
+            }
+        }
+    )
+    ctx = AppContext(user_id="admin", permissions={"module.dashboard.view", "module.admin.artifacts"})
+    app = FastAPI()
+    app.include_router(artifact_routes.router)
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return _svc(tmp_path)
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=DenyAdminArtifactsAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=audit_sink,
+            artifact_acl_store=store,
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/api/v1/dashboards/ops/acl",
+            json={"visibility": "enterprise", "allowed_roles": [], "allowed_user_ids": []},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "ARTIFACT_FORBIDDEN"
+    assert store.acls[("dashboard", "ops")]["visibility"] == "private"
+    assert audit_sink.events[-1].action == "artifact.share"
+    assert audit_sink.events[-1].decision == "deny"
+    assert audit_sink.events[-1].reason == "artifact owner required"
 
 
 def test_put_admin_artifact_acl_rejects_missing_artifact_before_store_write(monkeypatch, tmp_path: Path):

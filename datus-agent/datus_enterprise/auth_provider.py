@@ -138,7 +138,7 @@ class UserInfoBearerAuthProvider:
         if not self._allowed_statuses or not self._status_field:
             return
         status = _profile_str(profile, self._status_field)
-        if status and status not in self._allowed_statuses:
+        if not status or status not in self._allowed_statuses:
             raise HTTPException(status_code=403, detail="AUTH_USER_DISABLED")
 
     def _principal_from_profile(self, profile: dict[str, Any]) -> dict[str, Any]:

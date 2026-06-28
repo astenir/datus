@@ -259,7 +259,35 @@ def test_save_semantic_model_is_blocked_in_readonly_status(monkeypatch):
 
     assert response.status_code == 403
     assert response.json()["detail"] == "PLATFORM_STATUS_FORBIDDEN"
-    svc.datasource.save_semantic_model.assert_not_awaited()
+
+
+def test_save_semantic_model_rbac_denial_precedes_readonly_status(monkeypatch):
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(audit_sink=audit_sink))
+    monkeypatch.setenv("DATUS_PLATFORM_STATUS", "readonly")
+    ctx = _ctx(permissions={"module.datasource_catalog"})
+    app = FastAPI()
+    app.include_router(table_routes.router)
+
+    async def reject_service(request: Request):
+        raise AssertionError("RBAC denial resolved DatusService")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/api/v1/semantic_model",
+            json={"table": "public.accounts", "yaml": "semantic_model:\n  name: accounts\n"},
+        )
+
+    assert response.status_code == 403
+    assert "module.config.edit" in response.json()["detail"]
+    assert [event.action for event in audit_sink.events] == ["module.config.edit"]
 
 
 def test_save_semantic_model_readonly_status_does_not_resolve_datus_service(monkeypatch):
@@ -287,3 +315,26 @@ def test_save_semantic_model_readonly_status_does_not_resolve_datus_service(monk
 
     assert response.status_code == 403
     assert response.json()["detail"] == "PLATFORM_STATUS_FORBIDDEN"
+
+
+@pytest.mark.parametrize("path", ["/api/v1/semantic_model", "/api/v1/semantic_model/validate"])
+def test_semantic_model_invalid_body_does_not_resolve_datus_service(monkeypatch, path):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    ctx = _ctx(permissions={"module.config.edit"})
+    app = FastAPI()
+    app.include_router(table_routes.router)
+
+    async def reject_service(request: Request):
+        raise AssertionError("Invalid body resolved DatusService")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(path, json=[])
+
+    assert response.status_code == 422

@@ -1,6 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -55,7 +56,12 @@ def _client(ctx: AppContext, svc=None):
         request.state.app_context = ctx
         return svc or _svc()
 
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
     app.dependency_overrides[deps.get_datus_service] = override_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
     return TestClient(app)
 
 
@@ -101,6 +107,39 @@ def test_me_permissions_merges_principal_compatibility(monkeypatch):
 
     assert permissions_response.json()["data"] == ["module.chat", "module.report.view"]
     assert summary_response.json()["data"]["roles"] == ["ctx-role", "principal-role"]
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/api/v1/me",
+        "/api/v1/me/permissions",
+        "/api/v1/me/datasource-grants",
+        "/api/v1/me/features",
+        "/api/v1/me/usage",
+    ],
+)
+def test_current_user_metadata_routes_do_not_resolve_datus_service(monkeypatch, path):
+    _install_extensions(monkeypatch)
+    ctx = AppContext(user_id="u1", project_id="proj_a", permissions={"module.chat"})
+    app = FastAPI()
+    app.include_router(me_routes.router)
+
+    async def reject_service(request: Request):
+        raise AssertionError("Current-user metadata route resolved DatusService")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(path)
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
 
 
 def test_me_sessions_uses_current_user_scope(monkeypatch):

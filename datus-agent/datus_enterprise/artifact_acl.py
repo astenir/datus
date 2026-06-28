@@ -140,17 +140,17 @@ async def _store_acl_allows(store: Any, ctx: AppContext, *, artifact_type: str, 
         raw_acl = await store.get_acl(artifact_type=artifact_type, slug=slug)
     except Exception:
         return False
-    return _acl_allows(ctx, raw_acl)
+    return await _acl_allows(ctx, raw_acl)
 
 
-def _acl_allows(ctx: AppContext, raw_acl: Any) -> bool:
+async def _acl_allows(ctx: AppContext, raw_acl: Any) -> bool:
     if not isinstance(raw_acl, dict):
         return False
 
     owner_user_id = raw_acl.get("owner_user_id")
     if owner_user_id and ctx.user_id == str(owner_user_id):
         return True
-    if ctx.is_admin or _has_permission(ctx, "module.admin.artifacts"):
+    if await _is_authorized(ctx, "module.admin.artifacts", resource_type="artifact_acl"):
         return True
     allowed_user_ids = _string_set(raw_acl.get("allowed_user_ids"))
     if ctx.user_id and ctx.user_id in allowed_user_ids:
@@ -165,11 +165,9 @@ def _acl_allows(ctx: AppContext, raw_acl: Any) -> bool:
     return False
 
 
-def _has_permission(ctx: AppContext, permission_key: str) -> bool:
-    if ctx.permissions:
-        return _matches_permission(permission_key, ctx.permissions)
-    principal_permissions = ctx.principal.get("permissions")
-    return _matches_permission(permission_key, _string_set(principal_permissions))
+async def _is_authorized(ctx: AppContext, permission_key: str, *, resource_type: str) -> bool:
+    decision = await authorize(ctx, action=permission_key, resource=ResourceRef(type=resource_type, id=permission_key))
+    return decision.allowed
 
 
 def _matches_permission(permission_key: str, permissions: Iterable[str]) -> bool:

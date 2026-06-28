@@ -14,12 +14,15 @@ from datus.api.constants import USER_ID_PATTERN
 from datus.api.enterprise.deps import require_platform_active
 from datus.api.models.base_models import Result
 from datus.utils.exceptions import DatusException, ErrorCode
+from datus.utils.loggings import get_logger
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
 
 router = APIRouter(prefix="/api/v1", tags=["enterprise-roles"])
+logger = get_logger(__name__)
 
-AdminRolesCtx = Annotated[AppContext, Depends(require_module("module.admin.roles"))]
+_require_admin_roles = require_module("module.admin.roles")
+AdminRolesCtx = Annotated[AppContext, Depends(_require_admin_roles)]
 
 PERMISSION_KEY_PATTERN = re.compile(r"^[A-Za-z0-9_*.-]+$")
 MAX_PERMISSION_KEYS = 200
@@ -136,7 +139,10 @@ async def get_admin_role(role_id: str, ctx: AdminRolesCtx) -> Result[AdminRoleSu
     "/admin/roles/{role_id}",
     response_model=Result[AdminRoleSummary],
     summary="Upsert Admin Role",
-    dependencies=[Depends(require_platform_active(operation="admin.roles.upsert", resource_type="role"))],
+    dependencies=[
+        Depends(_require_admin_roles),
+        Depends(require_platform_active(operation="admin.roles.upsert", resource_type="role")),
+    ],
 )
 async def upsert_admin_role(
     role_id: str,
@@ -183,7 +189,7 @@ async def upsert_admin_role(
         return _role_error("ROLE_UPSERT_FAILED", "Role upsert failed.")
 
     summary = _summary_from_record(record)
-    await _audit_role_mutation(
+    await _audit_role_mutation_best_effort(
         ctx,
         role_id=role_id,
         operation="upsert_admin_role",
@@ -198,7 +204,10 @@ async def upsert_admin_role(
     "/admin/roles/{role_id}/permissions",
     response_model=Result[AdminRoleSummary],
     summary="Set Admin Role Permissions",
-    dependencies=[Depends(require_platform_active(operation="admin.roles.permissions.update", resource_type="role"))],
+    dependencies=[
+        Depends(_require_admin_roles),
+        Depends(require_platform_active(operation="admin.roles.permissions.update", resource_type="role")),
+    ],
 )
 async def set_admin_role_permissions(
     role_id: str,
@@ -263,7 +272,7 @@ async def set_admin_role_permissions(
         return _role_error("RESOURCE_NOT_FOUND", "Role not found.")
 
     summary = _summary_from_record(record)
-    await _audit_role_mutation(
+    await _audit_role_mutation_best_effort(
         ctx,
         role_id=role_id,
         operation="set_admin_role_permissions",
@@ -320,7 +329,10 @@ async def get_admin_user_roles(user_id: str, ctx: AdminRolesCtx) -> Result[Admin
     "/admin/users/{user_id}/roles",
     response_model=Result[AdminUserRolesSummary],
     summary="Set Admin User Roles",
-    dependencies=[Depends(require_platform_active(operation="admin.users.roles.update", resource_type="user"))],
+    dependencies=[
+        Depends(_require_admin_roles),
+        Depends(require_platform_active(operation="admin.users.roles.update", resource_type="user")),
+    ],
 )
 async def set_admin_user_roles(
     user_id: str,
@@ -404,7 +416,7 @@ async def set_admin_user_roles(
         return _role_error("USER_ROLES_UPDATE_FAILED", "User roles update failed.")
 
     summary = AdminUserRolesSummary(user_id=user_id, role_ids=role_ids)
-    await _audit_user_roles_mutation(
+    await _audit_user_roles_mutation_best_effort(
         ctx,
         user_id=user_id,
         operation="set_admin_user_roles",
@@ -419,7 +431,10 @@ async def set_admin_user_roles(
     "/admin/roles/{role_id}",
     response_model=Result[dict],
     summary="Delete Admin Role",
-    dependencies=[Depends(require_platform_active(operation="admin.roles.delete", resource_type="role"))],
+    dependencies=[
+        Depends(_require_admin_roles),
+        Depends(require_platform_active(operation="admin.roles.delete", resource_type="role")),
+    ],
 )
 async def delete_admin_role(role_id: str, ctx: AdminRolesCtx) -> Result[dict]:
     """Delete one enterprise role record and its permission set."""
@@ -521,7 +536,7 @@ async def delete_admin_role(role_id: str, ctx: AdminRolesCtx) -> Result[dict]:
         )
         return _role_error("RESOURCE_NOT_FOUND", "Role not found.")
 
-    await _audit_role_mutation(
+    await _audit_role_mutation_best_effort(
         ctx,
         role_id=role_id,
         operation="delete_admin_role",
@@ -607,6 +622,37 @@ async def _audit_role_mutation(
     )
 
 
+async def _audit_role_mutation_best_effort(
+    ctx: AppContext,
+    *,
+    role_id: str | None,
+    operation: str,
+    decision: str,
+    reason: str | None = None,
+    old_summary: dict[str, Any] | None = None,
+    new_summary: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    try:
+        await _audit_role_mutation(
+            ctx,
+            role_id=role_id,
+            operation=operation,
+            decision=decision,
+            reason=reason,
+            old_summary=old_summary,
+            new_summary=new_summary,
+            metadata=metadata,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Admin role audit write failed for operation '%s' decision '%s': %s",
+            operation,
+            decision,
+            exc,
+        )
+
+
 async def _audit_user_roles_mutation(
     ctx: AppContext,
     *,
@@ -636,6 +682,37 @@ async def _audit_user_roles_mutation(
             metadata=audit_metadata,
         ),
     )
+
+
+async def _audit_user_roles_mutation_best_effort(
+    ctx: AppContext,
+    *,
+    user_id: str | None,
+    operation: str,
+    decision: str,
+    reason: str | None = None,
+    old_summary: dict[str, Any] | None = None,
+    new_summary: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    try:
+        await _audit_user_roles_mutation(
+            ctx,
+            user_id=user_id,
+            operation=operation,
+            decision=decision,
+            reason=reason,
+            old_summary=old_summary,
+            new_summary=new_summary,
+            metadata=metadata,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Admin user roles audit write failed for operation '%s' decision '%s': %s",
+            operation,
+            decision,
+            exc,
+        )
 
 
 def _summary_from_record(record: dict[str, Any]) -> AdminRoleSummary:

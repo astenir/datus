@@ -12,12 +12,15 @@ from datus.api import deps
 from datus.api.auth.context import AppContext
 from datus.api.enterprise.deps import require_platform_active
 from datus.api.models.base_models import Result
+from datus.utils.loggings import get_logger
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
 
 router = APIRouter(prefix="/api/v1", tags=["enterprise-secrets"])
+logger = get_logger(__name__)
 
-AdminSecretsCtx = Annotated[AppContext, Depends(require_module("module.admin.secrets"))]
+_require_admin_secrets = require_module("module.admin.secrets")
+AdminSecretsCtx = Annotated[AppContext, Depends(_require_admin_secrets)]
 
 SECRET_NAME_RE = re.compile(r"^[A-Za-z0-9_.:/-]+$")
 SECRET_PROVIDER_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
@@ -119,7 +122,10 @@ async def get_admin_secret(name: str, ctx: AdminSecretsCtx) -> Result[AdminSecre
     "/admin/secrets/{name:path}",
     response_model=Result[AdminSecretSummary],
     summary="Upsert Admin Secret",
-    dependencies=[Depends(require_platform_active(operation="admin.secrets.upsert", resource_type="secret"))],
+    dependencies=[
+        Depends(_require_admin_secrets),
+        Depends(require_platform_active(operation="admin.secrets.upsert", resource_type="secret")),
+    ],
 )
 async def upsert_admin_secret(name: str, body: UpsertSecretRequest, ctx: AdminSecretsCtx) -> Result[AdminSecretSummary]:
     """Create or replace one enterprise secret reference without returning the raw reference."""
@@ -152,7 +158,7 @@ async def upsert_admin_secret(name: str, body: UpsertSecretRequest, ctx: AdminSe
         return _secret_error("SECRET_UPSERT_FAILED", "Secret upsert failed.")
 
     summary = _secret_summary_from_record(record)
-    await _audit_secret(
+    await _audit_secret_best_effort(
         ctx,
         operation="upsert_admin_secret",
         decision="allow",
@@ -167,7 +173,10 @@ async def upsert_admin_secret(name: str, body: UpsertSecretRequest, ctx: AdminSe
     "/admin/secrets/{name:path}",
     response_model=Result[dict],
     summary="Delete Admin Secret",
-    dependencies=[Depends(require_platform_active(operation="admin.secrets.delete", resource_type="secret"))],
+    dependencies=[
+        Depends(_require_admin_secrets),
+        Depends(require_platform_active(operation="admin.secrets.delete", resource_type="secret")),
+    ],
 )
 async def delete_admin_secret(name: str, ctx: AdminSecretsCtx) -> Result[dict]:
     """Delete one enterprise secret reference."""
@@ -207,7 +216,7 @@ async def delete_admin_secret(name: str, ctx: AdminSecretsCtx) -> Result[dict]:
         await _audit_secret(ctx, operation="delete_admin_secret", decision="deny", reason="secret not found")
         return _secret_error("RESOURCE_NOT_FOUND", "Secret not found.")
 
-    await _audit_secret(
+    await _audit_secret_best_effort(
         ctx,
         operation="delete_admin_secret",
         decision="allow",
@@ -352,6 +361,37 @@ async def _audit_secret(
             metadata=event_metadata,
         ),
     )
+
+
+async def _audit_secret_best_effort(
+    ctx: AppContext,
+    *,
+    operation: str,
+    decision: str,
+    reason: str | None = None,
+    resource_id: str | None = None,
+    old_summary: dict[str, Any] | None = None,
+    new_summary: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    try:
+        await _audit_secret(
+            ctx,
+            operation=operation,
+            decision=decision,
+            reason=reason,
+            resource_id=resource_id,
+            old_summary=old_summary,
+            new_summary=new_summary,
+            metadata=metadata,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Admin secret audit write failed for operation '%s' decision '%s': %s",
+            operation,
+            decision,
+            exc,
+        )
 
 
 def _secret_error(code: str, message: str) -> Result:

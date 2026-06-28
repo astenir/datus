@@ -45,8 +45,8 @@ def _project_files_root(svc: ServiceDep) -> Path:
     ),
 )
 async def get_report_detail(
-    svc: ServiceDep,
     ctx: ReportViewModuleCtx,
+    svc: ServiceDep,
     slug: str = Query(..., description="Report slug, e.g. 'account_activity_q1'"),
 ) -> Result[ReportDetail]:
     await require_artifact_access(ctx, artifact_type="report", slug=slug, action="view")

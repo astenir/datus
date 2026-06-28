@@ -1,6 +1,7 @@
 import asyncio
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -23,6 +24,11 @@ class CollectingAuditSink:
 
     async def write(self, event):
         self.events.append(event)
+
+
+class FailingAuditSink:
+    async def write(self, event):
+        raise RuntimeError("audit down")
 
 
 def _install_extensions(monkeypatch, user_store, audit_sink=None, *, enabled=False):
@@ -133,6 +139,25 @@ def test_admin_user_upsert_is_blocked_in_readonly_status_and_audited(monkeypatch
     assert event.metadata == {"operation": "admin.users.upsert", "platform_status": "readonly"}
 
 
+def test_admin_user_upsert_rbac_denial_precedes_readonly_status(monkeypatch):
+    user_store = InMemoryEnterpriseUserStore()
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setenv("DATUS_PLATFORM_STATUS", "readonly")
+    _install_extensions(monkeypatch, user_store, audit_sink, enabled=True)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.sessions"})
+
+    with _client(ctx) as client:
+        response = client.put(
+            "/api/v1/admin/users/alice",
+            json={"display_name": "Alice", "email": "alice@example.com", "enabled": True},
+        )
+
+    assert response.status_code == 403
+    assert "module.admin.users" in response.json()["detail"]
+    assert asyncio.run(user_store.list_users()) == []
+    assert [event.action for event in audit_sink.events] == ["module.admin.users"]
+
+
 def test_admin_users_enabled_filter_and_toggle(monkeypatch):
     user_store = InMemoryEnterpriseUserStore()
     audit_sink = CollectingAuditSink()
@@ -151,6 +176,41 @@ def test_admin_users_enabled_filter_and_toggle(monkeypatch):
     assert enable_response.json()["data"]["enabled"] is True
     assert audit_sink.events[-2].metadata["operation"] == "disable_admin_user"
     assert audit_sink.events[-1].metadata["operation"] == "enable_admin_user"
+
+
+@pytest.mark.asyncio
+async def test_admin_user_upsert_returns_success_when_post_write_audit_fails(monkeypatch):
+    user_store = InMemoryEnterpriseUserStore()
+    _install_extensions(monkeypatch, user_store, FailingAuditSink())
+    ctx = AppContext(user_id="operator", permissions={"module.admin.users"})
+
+    result = await admin_user_routes.upsert_admin_user(
+        "alice",
+        admin_user_routes.UpsertAdminUserRequest(display_name="Alice", email="alice@example.com", enabled=True),
+        ctx,
+    )
+
+    assert result.success is True
+    assert result.data.user_id == "alice"
+    assert result.data.display_name == "Alice"
+    stored = await user_store.get_user("alice")
+    assert stored["display_name"] == "Alice"
+    assert stored["email"] == "alice@example.com"
+
+
+@pytest.mark.asyncio
+async def test_admin_user_disable_returns_success_when_post_write_audit_fails(monkeypatch):
+    user_store = InMemoryEnterpriseUserStore()
+    await user_store.upsert_user(user_id="alice", display_name="Alice", email=None, enabled=True)
+    _install_extensions(monkeypatch, user_store, FailingAuditSink())
+    ctx = AppContext(user_id="operator", permissions={"module.admin.users"})
+
+    result = await admin_user_routes.disable_admin_user("alice", ctx)
+
+    assert result.success is True
+    assert result.data.user_id == "alice"
+    assert result.data.enabled is False
+    assert (await user_store.get_user("alice"))["enabled"] is False
 
 
 def test_admin_user_missing_and_invalid_id_return_result_errors(monkeypatch):

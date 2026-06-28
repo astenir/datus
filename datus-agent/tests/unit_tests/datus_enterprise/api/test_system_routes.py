@@ -70,6 +70,28 @@ def test_system_status_requires_permission(monkeypatch):
     assert "module.system.status" in response.json()["detail"]
 
 
+def test_system_status_rbac_denial_does_not_resolve_datus_service(monkeypatch):
+    _install_extensions(monkeypatch)
+    ctx = AppContext(user_id="u1", permissions={"module.admin.audit"})
+    app = FastAPI()
+    app.include_router(system_routes.router)
+
+    async def reject_service(request: Request):
+        raise AssertionError("RBAC denial resolved DatusService")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/api/v1/system/status")
+
+    assert response.status_code == 403
+
+
 def test_system_status_returns_sanitized_summary(monkeypatch):
     _install_extensions(monkeypatch, enabled=True)
     monkeypatch.setenv("DATUS_PLATFORM_STATUS", "readonly")

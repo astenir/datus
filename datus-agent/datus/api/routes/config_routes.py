@@ -6,9 +6,10 @@ and supported provider/database type listings.
 """
 
 import asyncio
+import copy
 from typing import Annotated, Any, Dict, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from datus.api import deps
@@ -27,8 +28,10 @@ logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["configuration"])
 
-ConfigViewCtx = Annotated[AppContext, Depends(require_module("module.config.view"))]
-ConfigEditCtx = Annotated[AppContext, Depends(require_module("module.config.edit"))]
+_require_config_view = require_module("module.config.view")
+_require_config_edit = require_module("module.config.edit")
+ConfigViewCtx = Annotated[AppContext, Depends(_require_config_view)]
+ConfigEditCtx = Annotated[AppContext, Depends(_require_config_edit)]
 
 
 class UpdateDatasourcesRequest(BaseModel):
@@ -112,6 +115,10 @@ def _validate_keys(entries: Dict[str, Any], kind: str) -> None:
             )
 
 
+def _raise_bad_request(exc: DatusException) -> None:
+    raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 async def _evict_current_project(project_id: str) -> None:
     """Drop the cached DatusService so the next request reloads from YAML."""
     try:
@@ -127,8 +134,8 @@ async def _evict_current_project(project_id: str) -> None:
     description="Get the current project's agent configuration (models, datasource, agentic_nodes)",
 )
 async def get_agent_config_endpoint(
-    svc: ServiceDep,
     _ctx: ConfigViewCtx,
+    svc: ServiceDep,
 ) -> Result[AgentConfigSummaryData]:
     """Return the project's loaded AgentConfig summary."""
     config = svc.agent_config
@@ -156,20 +163,30 @@ async def get_agent_config_endpoint(
     response_model=Result[MutationResultData],
     summary="Update Datasources",
     description="Replace the datasources (services.datasources) block in agent.yml.",
-    dependencies=[Depends(require_platform_active(operation="config.datasources.update", resource_type="config"))],
+    dependencies=[
+        Depends(_require_config_edit),
+        Depends(require_platform_active(operation="config.datasources.update", resource_type="config")),
+    ],
 )
 async def update_datasources_endpoint(
     body: UpdateDatasourcesRequest,
-    svc: ServiceDep,  # noqa: ARG001  # populates request.state.app_context; must resolve before AppContextDep
     ctx: ConfigEditCtx,
 ) -> Result[MutationResultData]:
     """Full-replace `services.datasources` with the provided datasources."""
-    _validate_keys(body.datasources, kind="datasource")
+    try:
+        _validate_keys(body.datasources, kind="datasource")
+    except DatusException as exc:
+        _raise_bad_request(exc)
 
     cm = configuration_manager()
+    previous_data = copy.deepcopy(cm.data)
     services = cm.data.setdefault("services", {})
     services["datasources"] = dict(body.datasources)
-    cm.save()
+    try:
+        cm.save()
+    except Exception:
+        cm.data = previous_data
+        raise
 
     await _evict_current_project(ctx.project_id or "default")
 
@@ -181,38 +198,48 @@ async def update_datasources_endpoint(
     response_model=Result[MutationResultData],
     summary="Update Models and Target",
     description="Replace the models block and/or update the default target in agent.yml.",
-    dependencies=[Depends(require_platform_active(operation="config.models.update", resource_type="config"))],
+    dependencies=[
+        Depends(_require_config_edit),
+        Depends(require_platform_active(operation="config.models.update", resource_type="config")),
+    ],
 )
 async def update_models_endpoint(
     body: UpdateModelsRequest,
-    svc: ServiceDep,  # noqa: ARG001
     ctx: ConfigEditCtx,
 ) -> Result[MutationResultData]:
     """Optional full-replace `models`, optional update `target`. One must be set."""
-    if body.models is None and body.target is None:
-        raise DatusException(
-            ErrorCode.COMMON_FIELD_INVALID,
-            message="At least one of 'models' or 'target' must be provided.",
-        )
-
-    if body.models is not None:
-        _validate_keys(body.models, kind="model")
-
-    cm = configuration_manager()
-
-    if body.target is not None:
-        effective_models = body.models if body.models is not None else cm.data.get("models") or {}
-        if body.target not in effective_models:
+    try:
+        if body.models is None and body.target is None:
             raise DatusException(
                 ErrorCode.COMMON_FIELD_INVALID,
-                message=f"target '{body.target}' does not exist in models.",
+                message="At least one of 'models' or 'target' must be provided.",
             )
 
+        if body.models is not None:
+            _validate_keys(body.models, kind="model")
+
+        cm = configuration_manager()
+
+        if body.target is not None:
+            effective_models = body.models if body.models is not None else cm.data.get("models") or {}
+            if body.target not in effective_models:
+                raise DatusException(
+                    ErrorCode.COMMON_FIELD_INVALID,
+                    message=f"target '{body.target}' does not exist in models.",
+                )
+    except DatusException as exc:
+        _raise_bad_request(exc)
+
+    previous_data = copy.deepcopy(cm.data)
     if body.models is not None:
         cm.data["models"] = dict(body.models)
     if body.target is not None:
         cm.data["target"] = body.target
-    cm.save()
+    try:
+        cm.save()
+    except Exception:
+        cm.data = previous_data
+        raise
 
     await _evict_current_project(ctx.project_id or "default")
 
@@ -225,11 +252,13 @@ async def update_models_endpoint(
     response_model_exclude_none=True,
     summary="Test Model Connectivity",
     description="Send a tiny probe to verify an LLM model config is reachable.",
-    dependencies=[Depends(require_platform_active(operation="config.models.probe", resource_type="config"))],
+    dependencies=[
+        Depends(_require_config_edit),
+        Depends(require_platform_active(operation="config.models.probe", resource_type="config")),
+    ],
 )
 async def probe_model_connectivity_endpoint(
     body: ProbeModelRequest,
-    svc: ServiceDep,  # noqa: ARG001
     _ctx: ConfigEditCtx,
 ) -> Result[ProbeResultData]:
     """Return `{ok: True}` if the probe succeeds, else `{ok: False, message: ...}`."""
@@ -248,11 +277,13 @@ async def probe_model_connectivity_endpoint(
     response_model_exclude_none=True,
     summary="Test Datasource Connectivity",
     description="Run SELECT 1 against a datasource config to verify reachability and credentials.",
-    dependencies=[Depends(require_platform_active(operation="config.datasources.probe", resource_type="config"))],
+    dependencies=[
+        Depends(_require_config_edit),
+        Depends(require_platform_active(operation="config.datasources.probe", resource_type="config")),
+    ],
 )
 async def probe_datasource_connectivity_endpoint(
     body: ProbeDatasourceRequest,
-    svc: ServiceDep,  # noqa: ARG001
     _ctx: ConfigEditCtx,
 ) -> Result[ProbeResultData]:
     """Return `{ok: True}` if the probe succeeds, else `{ok: False, message: ...}`."""

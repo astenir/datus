@@ -12,12 +12,15 @@ from datus.api.auth.context import AppContext
 from datus.api.constants import USER_ID_PATTERN
 from datus.api.enterprise.deps import require_platform_active
 from datus.api.models.base_models import Result
+from datus.utils.loggings import get_logger
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
 
 router = APIRouter(prefix="/api/v1", tags=["enterprise-users"])
+logger = get_logger(__name__)
 
-AdminUsersCtx = Annotated[AppContext, Depends(require_module("module.admin.users"))]
+_require_admin_users = require_module("module.admin.users")
+AdminUsersCtx = Annotated[AppContext, Depends(_require_admin_users)]
 
 
 class UpsertAdminUserRequest(BaseModel):
@@ -114,7 +117,10 @@ async def get_admin_user(user_id: str, ctx: AdminUsersCtx) -> Result[AdminUserSu
     "/admin/users/{user_id}",
     response_model=Result[AdminUserSummary],
     summary="Upsert Admin User",
-    dependencies=[Depends(require_platform_active(operation="admin.users.upsert", resource_type="user"))],
+    dependencies=[
+        Depends(_require_admin_users),
+        Depends(require_platform_active(operation="admin.users.upsert", resource_type="user")),
+    ],
 )
 async def upsert_admin_user(
     user_id: str,
@@ -159,7 +165,7 @@ async def upsert_admin_user(
         return _user_error("USER_UPSERT_FAILED", "User upsert failed.")
 
     summary = _summary_from_record(record)
-    await _audit_user_mutation(
+    await _audit_user_mutation_best_effort(
         ctx,
         user_id=user_id,
         operation="upsert_admin_user",
@@ -174,7 +180,10 @@ async def upsert_admin_user(
     "/admin/users/{user_id}/disable",
     response_model=Result[AdminUserSummary],
     summary="Disable Admin User",
-    dependencies=[Depends(require_platform_active(operation="admin.users.disable", resource_type="user"))],
+    dependencies=[
+        Depends(_require_admin_users),
+        Depends(require_platform_active(operation="admin.users.disable", resource_type="user")),
+    ],
 )
 async def disable_admin_user(user_id: str, ctx: AdminUsersCtx) -> Result[AdminUserSummary]:
     """Disable future requests from one enterprise user."""
@@ -186,7 +195,10 @@ async def disable_admin_user(user_id: str, ctx: AdminUsersCtx) -> Result[AdminUs
     "/admin/users/{user_id}/enable",
     response_model=Result[AdminUserSummary],
     summary="Enable Admin User",
-    dependencies=[Depends(require_platform_active(operation="admin.users.enable", resource_type="user"))],
+    dependencies=[
+        Depends(_require_admin_users),
+        Depends(require_platform_active(operation="admin.users.enable", resource_type="user")),
+    ],
 )
 async def enable_admin_user(user_id: str, ctx: AdminUsersCtx) -> Result[AdminUserSummary]:
     """Enable future requests from one enterprise user."""
@@ -210,7 +222,9 @@ async def _set_user_enabled(
     try:
         before = await store.get_user(user_id)
     except Exception:
-        await _audit_user_mutation(ctx, user_id=user_id, operation=operation, decision="deny", reason="user read failed")
+        await _audit_user_mutation(
+            ctx, user_id=user_id, operation=operation, decision="deny", reason="user read failed"
+        )
         return _user_error("USER_READ_FAILED", "User read failed.")
     if before is None:
         await _audit_user_mutation(ctx, user_id=user_id, operation=operation, decision="deny", reason="user not found")
@@ -233,7 +247,7 @@ async def _set_user_enabled(
         return _user_error("RESOURCE_NOT_FOUND", "User not found.")
 
     summary = _summary_from_record(record)
-    await _audit_user_mutation(
+    await _audit_user_mutation_best_effort(
         ctx,
         user_id=user_id,
         operation=operation,
@@ -273,6 +287,37 @@ async def _audit_user_mutation(
             metadata=audit_metadata,
         ),
     )
+
+
+async def _audit_user_mutation_best_effort(
+    ctx: AppContext,
+    *,
+    user_id: str | None,
+    operation: str,
+    decision: str,
+    reason: str | None = None,
+    old_summary: dict[str, Any] | None = None,
+    new_summary: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    try:
+        await _audit_user_mutation(
+            ctx,
+            user_id=user_id,
+            operation=operation,
+            decision=decision,
+            reason=reason,
+            old_summary=old_summary,
+            new_summary=new_summary,
+            metadata=metadata,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Admin user audit write failed for operation '%s' decision '%s': %s",
+            operation,
+            decision,
+            exc,
+        )
 
 
 def _summary_from_record(record: dict[str, Any]) -> AdminUserSummary:

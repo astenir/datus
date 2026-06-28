@@ -1,3 +1,6 @@
+import asyncio
+
+import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -20,6 +23,11 @@ class CollectingAuditSink:
 
     async def write(self, event):
         self.events.append(event)
+
+
+class FailingAuditSink:
+    async def write(self, event):
+        raise RuntimeError("audit down")
 
 
 def _install_extensions(monkeypatch, *, secret_store=None, audit_sink=None):
@@ -63,6 +71,25 @@ def test_admin_secrets_rejects_without_permission(monkeypatch):
 
     assert response.status_code == 403
     assert "module.admin.secrets" in response.json()["detail"]
+
+
+def test_admin_secret_upsert_rbac_denial_precedes_readonly_status(monkeypatch):
+    secret_store = InMemoryEnterpriseSecretStore()
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setenv("DATUS_PLATFORM_STATUS", "readonly")
+    _install_extensions(monkeypatch, secret_store=secret_store, audit_sink=audit_sink)
+    ctx = AppContext(user_id="u1", permissions={"module.admin.users"})
+
+    with _client(ctx) as client:
+        response = client.put(
+            "/api/v1/admin/secrets/datasource/password",
+            json={"provider": "env", "reference": "DATASOURCE_PASSWORD", "enabled": True},
+        )
+
+    assert response.status_code == 403
+    assert "module.admin.secrets" in response.json()["detail"]
+    assert asyncio.run(secret_store.list_secrets()) == []
+    assert [event.action for event in audit_sink.events] == ["module.admin.secrets"]
 
 
 def test_admin_secrets_returns_unavailable_without_store(monkeypatch):
@@ -129,6 +156,51 @@ def test_admin_secret_upsert_get_list_delete_and_audit_redaction(monkeypatch):
         "enabled": True,
     }
     assert "WAREHOUSE_PASSWORD" not in str(allow_events[0].metadata)
+
+
+@pytest.mark.asyncio
+async def test_admin_secret_upsert_returns_success_when_post_write_audit_fails(monkeypatch):
+    secret_store = InMemoryEnterpriseSecretStore()
+    _install_extensions(monkeypatch, secret_store=secret_store, audit_sink=FailingAuditSink())
+    ctx = AppContext(user_id="admin", permissions={"module.admin.secrets"})
+
+    result = await admin_secret_routes.upsert_admin_secret(
+        "datasource/warehouse/password",
+        admin_secret_routes.UpsertSecretRequest(
+            provider="env",
+            reference="WAREHOUSE_PASSWORD",
+            description="Warehouse password",
+            enabled=True,
+        ),
+        ctx,
+    )
+
+    assert result.success is True
+    assert result.data.name == "datasource/warehouse/password"
+    assert result.data.ref_hint == "***WORD"
+    stored = await secret_store.get_secret("datasource/warehouse/password")
+    assert stored["provider"] == "env"
+    assert stored["reference"] == "WAREHOUSE_PASSWORD"
+
+
+@pytest.mark.asyncio
+async def test_admin_secret_delete_returns_success_when_post_delete_audit_fails(monkeypatch):
+    secret_store = InMemoryEnterpriseSecretStore()
+    await secret_store.put_secret(
+        name="datasource/warehouse/password",
+        provider="env",
+        reference="WAREHOUSE_PASSWORD",
+        description=None,
+        enabled=True,
+    )
+    _install_extensions(monkeypatch, secret_store=secret_store, audit_sink=FailingAuditSink())
+    ctx = AppContext(user_id="admin", permissions={"module.admin.secrets"})
+
+    result = await admin_secret_routes.delete_admin_secret("datasource/warehouse/password", ctx)
+
+    assert result.success is True
+    assert result.data == {"deleted": True}
+    assert await secret_store.get_secret("datasource/warehouse/password") is None
 
 
 def test_admin_secret_validates_input(monkeypatch):

@@ -24,7 +24,7 @@ def is_model_ref_allowed(ctx: AppContext | None, model_ref: str | None) -> bool:
         return True
     provider, model_id = split_model_ref(model_ref)
     if not provider or not model_id:
-        return True
+        return False
     return is_model_allowed(ctx, provider, model_id)
 
 

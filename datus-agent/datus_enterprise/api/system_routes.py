@@ -15,7 +15,9 @@ from datus_enterprise.authorization import require_module
 
 router = APIRouter(prefix="/api/v1", tags=["enterprise-system"])
 
-SystemStatusCtx = Annotated[AppContext, Depends(require_module("module.system.status"))]
+_require_system_status = require_module("module.system.status")
+SystemStatusCtx = Annotated[AppContext, Depends(_require_system_status)]
+
 
 class SystemStatusSummary(BaseModel):
     """Sanitized platform status summary for operators."""
@@ -28,7 +30,12 @@ class SystemStatusSummary(BaseModel):
     known_tasks: int
 
 
-@router.get("/system/status", response_model=Result[SystemStatusSummary], summary="Get System Status")
+@router.get(
+    "/system/status",
+    response_model=Result[SystemStatusSummary],
+    summary="Get System Status",
+    dependencies=[Depends(_require_system_status)],
+)
 async def get_system_status(svc: ServiceDep, ctx: SystemStatusCtx) -> Result[SystemStatusSummary]:
     snapshots = _task_snapshots(svc)
     active_tasks = sum(1 for task in snapshots if bool(task.get("is_running")))

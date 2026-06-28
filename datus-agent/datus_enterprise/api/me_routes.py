@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import copy
 from fnmatch import fnmatchcase
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from datus.api import deps
@@ -16,6 +16,7 @@ from datus.api.models.base_models import Result
 from datus.api.models.cli_models import ChatSessionData
 
 router = APIRouter(prefix="/api/v1", tags=["enterprise-me"])
+RequestContextDep = Annotated[AppContext, Depends(deps.get_request_app_context)]
 
 _FEATURE_PERMISSIONS = {
     "chat": "module.chat",
@@ -43,12 +44,12 @@ class MeSummary(BaseModel):
 
 
 @router.get("/me", response_model=Result[MeSummary], summary="Get Current User Summary")
-async def get_me(svc: ServiceDep, ctx: AppContextDep) -> Result[MeSummary]:  # noqa: ARG001
+async def get_me(ctx: RequestContextDep) -> Result[MeSummary]:
     return Result(success=True, data=_me_summary(ctx))
 
 
 @router.get("/me/permissions", response_model=Result[list[str]], summary="Get Current User Permissions")
-async def get_my_permissions(svc: ServiceDep, ctx: AppContextDep) -> Result[list[str]]:  # noqa: ARG001
+async def get_my_permissions(ctx: RequestContextDep) -> Result[list[str]]:
     return Result(success=True, data=_permissions(ctx))
 
 
@@ -57,12 +58,12 @@ async def get_my_permissions(svc: ServiceDep, ctx: AppContextDep) -> Result[list
     response_model=Result[dict[str, Any]],
     summary="Get Current User Datasource Grants",
 )
-async def get_my_datasource_grants(svc: ServiceDep, ctx: AppContextDep) -> Result[dict[str, Any]]:  # noqa: ARG001
+async def get_my_datasource_grants(ctx: RequestContextDep) -> Result[dict[str, Any]]:
     return Result(success=True, data=_datasource_grants(ctx))
 
 
 @router.get("/me/features", response_model=Result[dict[str, bool]], summary="Get Current User Features")
-async def get_my_features(svc: ServiceDep, ctx: AppContextDep) -> Result[dict[str, bool]]:  # noqa: ARG001
+async def get_my_features(ctx: RequestContextDep) -> Result[dict[str, bool]]:
     return Result(success=True, data=_features(ctx))
 
 
@@ -72,7 +73,7 @@ async def get_my_sessions(svc: ServiceDep, ctx: AppContextDep) -> Result[ChatSes
 
 
 @router.get("/me/usage", response_model=Result[list[dict[str, Any]]], summary="Get Current User Usage")
-async def get_my_usage(svc: ServiceDep, ctx: AppContextDep) -> Result[list[dict[str, Any]]]:  # noqa: ARG001
+async def get_my_usage(ctx: RequestContextDep) -> Result[list[dict[str, Any]]]:
     store = deps.get_enterprise_extensions().quota_store
     if store is None or not ctx.user_id:
         return Result(success=True, data=[])

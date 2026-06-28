@@ -14,8 +14,10 @@ from datus.api.utils.stream_cancellation import (
 def _clear_tokens():
     """Ensure token dict is clean before/after each test."""
     stream_cancellation._tokens.clear()
+    stream_cancellation._token_metadata.clear()
     yield
     stream_cancellation._tokens.clear()
+    stream_cancellation._token_metadata.clear()
 
 
 class TestCreateCancelToken:
@@ -34,12 +36,14 @@ class TestCreateCancelToken:
         event = create_cancel_token("stream-abc")
         assert stream_cancellation._tokens["stream-abc"] is event
 
-    def test_overwrite_existing_token(self):
-        """Creating token with same ID replaces the old one."""
+    def test_rejects_duplicate_token_id(self):
+        """Creating a token with the same ID must not replace the active stream."""
         old = create_cancel_token("dup")
-        new = create_cancel_token("dup")
-        assert old is not new
-        assert stream_cancellation._tokens["dup"] is new
+
+        with pytest.raises(ValueError, match="already exists"):
+            create_cancel_token("dup")
+
+        assert stream_cancellation._tokens["dup"] is old
 
 
 class TestCancelStream:
@@ -62,6 +66,33 @@ class TestCancelStream:
         create_cancel_token("s2")
         assert cancel_stream("s2") is True
         assert cancel_stream("s2") is True
+
+    def test_cancel_rejects_foreign_owner(self):
+        """A stream bound to one user cannot be cancelled by another user."""
+        event = create_cancel_token("owned", owner_user_id="alice", project_id="proj")
+
+        result = cancel_stream("owned", owner_user_id="bob", project_id="proj")
+
+        assert result is False
+        assert not event.is_set()
+
+    def test_cancel_allows_matching_owner(self):
+        """A stream bound to a user can be cancelled by that same user."""
+        event = create_cancel_token("owned", owner_user_id="alice", project_id="proj")
+
+        result = cancel_stream("owned", owner_user_id="alice", project_id="proj")
+
+        assert result is True
+        assert event.is_set()
+
+    def test_cancel_rejects_project_mismatch(self):
+        """A project-bound stream cannot be cancelled from a different project."""
+        event = create_cancel_token("project-stream", owner_user_id="alice", project_id="proj-a")
+
+        result = cancel_stream("project-stream", owner_user_id="alice", project_id="proj-b")
+
+        assert result is False
+        assert not event.is_set()
 
 
 class TestCleanupCancelToken:
