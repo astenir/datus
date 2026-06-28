@@ -21,6 +21,14 @@ from datus.api.routes import table_routes
 from datus_enterprise.config_projection import DatasourceGrantConfigProjector
 
 
+class CollectingAuditSink:
+    def __init__(self):
+        self.events = []
+
+    async def write(self, event):
+        self.events.append(event)
+
+
 def _enterprise_extensions(audit_sink=None):
     return EnterpriseExtensions(
         enabled=True,
@@ -67,7 +75,12 @@ def _client(ctx: AppContext, svc):
         request.state.app_context = ctx
         return svc
 
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
     app.dependency_overrides[deps.get_datus_service] = override_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -95,7 +108,8 @@ def test_table_detail_requires_datasource_catalog_permission(monkeypatch):
 
 
 def test_table_detail_rejects_table_outside_datasource_grant(monkeypatch):
-    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(audit_sink=audit_sink))
     svc = _svc()
     ctx = _ctx(permissions={"module.datasource_catalog"})
 
@@ -105,6 +119,68 @@ def test_table_detail_rejects_table_outside_datasource_grant(monkeypatch):
     assert response.status_code == 403
     assert "not authorized" in response.json()["detail"]
     svc.datasource.get_table_schema.assert_not_called()
+    event = audit_sink.events[-1]
+    assert event.action == "table.detail"
+    assert event.resource_type == "table"
+    assert event.resource_id == "public.payroll"
+    assert event.decision == "deny"
+    assert event.metadata["datasource"] == "finance"
+
+
+def test_table_detail_rejects_when_catalog_access_is_disabled(monkeypatch):
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(audit_sink=audit_sink))
+    svc = _svc()
+    ctx = _ctx(
+        permissions={"module.datasource_catalog"},
+        grants={"finance": {"effect": "allow", "allow_catalog": False, "allow_sql": True}},
+    )
+
+    with _client(ctx, svc) as client:
+        response = client.get("/api/v1/table/detail?table=public.accounts")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "No datasource grant available."
+    svc.datasource.get_table_schema.assert_not_called()
+    event = audit_sink.events[-1]
+    assert event.action == "catalog.table.detail"
+    assert event.resource_type == "datasource"
+    assert event.decision == "deny"
+    assert event.reason == "No datasource grant available."
+
+
+def test_semantic_model_routes_allow_catalog_when_sql_access_is_disabled(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = _svc()
+    ctx = _ctx(
+        permissions={"module.datasource_catalog", "module.config.edit"},
+        grants={
+            "finance": {
+                "effect": "allow",
+                "allow_catalog": True,
+                "allow_sql": False,
+                "tables": ["public.accounts"],
+            }
+        },
+    )
+
+    with _client(ctx, svc) as client:
+        read_response = client.get("/api/v1/semantic_model?table=public.accounts")
+        save_response = client.post(
+            "/api/v1/semantic_model",
+            json={"table": "public.accounts", "yaml": "semantic_model:\n  name: accounts\n"},
+        )
+        validate_response = client.post(
+            "/api/v1/semantic_model/validate",
+            json={"table": "public.accounts", "yaml": "semantic_model:\n  name: accounts\n"},
+        )
+
+    assert read_response.status_code == 200
+    assert save_response.status_code == 200
+    assert validate_response.status_code == 200
+    svc.datasource.get_semantic_model.assert_called_once_with("public.accounts")
+    svc.datasource.save_semantic_model.assert_awaited_once()
+    svc.datasource.validate_semantic_model.assert_awaited_once()
 
 
 def test_table_detail_allows_authorized_table(monkeypatch):

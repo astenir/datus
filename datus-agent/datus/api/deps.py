@@ -117,15 +117,8 @@ async def get_datus_service(request: Request) -> DatusService:
     if _service_cache is None:
         raise RuntimeError("Service cache not initialized. Call init_deps() in lifespan.")
 
-    try:
-        ctx: AppContext = await _auth_provider.authenticate(request)
-    except DatusException as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    request.state.app_context = ctx
+    ctx = await get_request_app_context(request)
     enterprise_extensions = get_enterprise_extensions()
-    if enterprise_extensions.enabled:
-        await _validate_enterprise_context(ctx, enterprise_extensions)
-        await _refresh_enterprise_context(ctx, enterprise_extensions)
 
     expected_fp = DatusService.compute_fingerprint(ctx.config) if ctx.config is not None else None
     project_id = _canonical_project_id(ctx.project_id)
@@ -152,6 +145,34 @@ async def get_datus_service(request: Request) -> DatusService:
         )
 
     return await _service_cache.get_or_create(cache_key, _factory, expected_fingerprint=expected_fp)
+
+
+async def get_request_app_context(request: Request) -> AppContext:
+    """Authenticate and cache the request context without creating ``DatusService``."""
+
+    enterprise_extensions = get_enterprise_extensions()
+    cached = getattr(request.state, "app_context", None)
+    if cached is not None:
+        if enterprise_extensions.enabled and not getattr(request.state, "app_context_enterprise_ready", False):
+            await _validate_enterprise_context(cached, enterprise_extensions)
+            await _refresh_enterprise_context(cached, enterprise_extensions)
+            request.state.app_context_enterprise_ready = True
+        return cached
+
+    if _auth_provider is None:
+        raise RuntimeError("Auth provider not initialized. Call init_deps() in lifespan.")
+
+    try:
+        ctx: AppContext = await _auth_provider.authenticate(request)
+    except DatusException as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    request.state.app_context = ctx
+    if enterprise_extensions.enabled:
+        await _validate_enterprise_context(ctx, enterprise_extensions)
+        await _refresh_enterprise_context(ctx, enterprise_extensions)
+        request.state.app_context_enterprise_ready = True
+
+    return ctx
 
 
 async def _validate_enterprise_context(ctx: AppContext, enterprise_extensions: EnterpriseExtensions) -> None:

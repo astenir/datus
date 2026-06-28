@@ -28,9 +28,9 @@
 | 工具权限 | `datus/tools/permission/*` | 控制 agent 内部工具的 `allow` / `ask` / `deny`，不等价于业务模块 RBAC。 |
 | 报表/仪表盘 | `datus/api/routes/report_routes.py`、`datus/api/routes/dashboard_routes.py`、`datus_enterprise/api/artifact_routes.py` | report/dashboard 静态 artifact 已接入 view 权限和 artifact ACL；`/api/v1/dashboard/query` 已接入 query 权限、datasource/table grant、SQL policy principal、quota、审计和 active platform status gate；report 当前仍是预渲染静态 bundle，没有 live query endpoint。 |
 | 数据源目录 | `datus/api/routes/database_routes.py`、`datus/api/services/database_service.py` | `/api/v1/catalog/list` 已接入 `module.datasource_catalog` 和 request-level projection，并按 datasource/catalog/database/schema/table grant 裁剪目录结果。 |
-| 表和语义模型 | `datus/api/routes/table_routes.py` | `/api/v1/table/detail`、`/api/v1/semantic_model` 读取已接入 `module.datasource_catalog` 和 table grant；语义模型保存/校验使用 `module.config.edit`，保存另受 active platform status gate 约束。 |
-| 旧兼容 API 面 | `datus/api/routes/explorer_routes.py`、`agent_routes.py`、`visualization_routes.py`、`tool_routes.py`、`success_story_routes.py` | 这些旧 route 尚未进入完整企业安全链；`enterprise.enabled=true` 下统一返回 `ENTERPRISE_ROUTE_DISABLED` 并写入 `system.route_disabled` 审计，本地兼容模式保持原行为。 |
-| 平台运行状态 | `datus/api/enterprise/deps.py`、`datus_enterprise/api/system_routes.py` | `DATUS_PLATFORM_STATUS` 支持 `active`、`readonly`、`maintenance`；主要执行和 mutation route 在非 active 时 fail closed，写入 `system.platform_status` 审计。 |
+| 表和语义模型 | `datus/api/routes/table_routes.py` | `/api/v1/table/detail`、`/api/v1/semantic_model` 读取已接入 `module.datasource_catalog` 和 table grant，metadata projection 使用 `catalog.*` 操作语义，由 `allow_catalog` 控制而不是被 `allow_sql` 误放行；datasource/table scope 拒绝会写入审计。语义模型保存/校验使用 `module.config.edit`，保存另受 active platform status gate 约束。 |
+| 旧兼容 API 面 | `datus/api/routes/explorer_routes.py`、`agent_routes.py`、`visualization_routes.py`、`tool_routes.py`、`success_story_routes.py` | 这些旧 route 尚未进入完整企业安全链；`enterprise.enabled=true` 下统一返回 `ENTERPRISE_ROUTE_DISABLED` 并写入 `system.route_disabled` 审计，本地兼容模式先检查开关并保持原行为，不因禁用依赖额外初始化 `DatusService`。 |
+| 平台运行状态 | `datus/api/enterprise/deps.py`、`datus_enterprise/api/system_routes.py` | `DATUS_PLATFORM_STATUS` 支持 `active`、`readonly`、`maintenance`；主要执行和 mutation route 在非 active 时 fail closed，写入 `system.platform_status` 审计。状态 gate 只解析并刷新请求 `AppContext`，不在拒绝前构造或缓存 `DatusService`。 |
 
 ## 目标与非目标
 
@@ -1212,7 +1212,7 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - `tests/unit_tests/datus_enterprise/test_enterprise_mvp_smoke.py` 覆盖企业 MVP smoke：管理员写入 datasource grant，普通用户从服务端 store 刷新权限与授权，catalog 被 grant 裁剪，未授权 datasource 被拒绝，直接 SQL 使用投影后的 request-scoped config。
 - `enterprise.enabled=true` 时旧版 `/auth/token` 和 `/workflows/run` 返回 `ENTERPRISE_LEGACY_API_DISABLED`。
 - `enterprise.enabled=true` 时 explorer、agent config、visualization、direct tool dispatch 和 success-story 旧兼容 route 返回 `ENTERPRISE_ROUTE_DISABLED` 并写入 `system.route_disabled`。
-- `DATUS_PLATFORM_STATUS=readonly` 时 SQL execute、semantic model save 和 admin mutation 在业务服务/metadata store 执行前返回 `PLATFORM_STATUS_FORBIDDEN` 并写审计。
+- `DATUS_PLATFORM_STATUS=readonly` 时 SQL execute、semantic model save 和 admin mutation 在业务服务/metadata store 执行前返回 `PLATFORM_STATUS_FORBIDDEN` 并写审计；状态 gate 拒绝路径不得先初始化 `DatusService`。
 
 ### 回归测试
 

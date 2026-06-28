@@ -72,6 +72,14 @@ def _install_extensions(
     )
 
 
+def _override_app_context(app: FastAPI, ctx: AppContext) -> None:
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+
+
 def test_list_admin_datasources_returns_sanitized_summaries_and_audits(monkeypatch):
     audit_sink = CollectingAuditSink()
     ctx = AppContext(user_id="u1", project_id="proj_a", permissions={"module.admin.datasources"})
@@ -83,6 +91,7 @@ def test_list_admin_datasources_returns_sanitized_summaries_and_audits(monkeypat
         return _svc()
 
     app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
     _install_extensions(monkeypatch, audit_sink=audit_sink)
 
     with TestClient(app) as client:
@@ -115,6 +124,7 @@ def test_list_admin_datasources_rejects_without_admin_datasources(monkeypatch):
         return _svc()
 
     app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
     monkeypatch.setattr(
         admin_datasource_routes.deps,
         "_enterprise_extensions",
@@ -151,6 +161,7 @@ def test_admin_datasource_grants_upsert_get_list_delete_and_audit(monkeypatch):
         return _svc()
 
     app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
     _install_extensions(
         monkeypatch,
         audit_sink=audit_sink,
@@ -211,6 +222,7 @@ def test_admin_datasource_grants_validate_subject_datasource_and_scope(monkeypat
         return _svc()
 
     app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
     _install_extensions(
         monkeypatch,
         audit_sink=audit_sink,
@@ -309,6 +321,7 @@ def test_admin_datasource_grants_can_delete_stale_subject_or_datasource(monkeypa
         return _svc()
 
     app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
     _install_extensions(monkeypatch, datasource_grant_store=grant_store)
 
     with TestClient(app) as client:
@@ -431,6 +444,7 @@ def test_set_project_default_datasource_http_uses_app_context_dependency(monkeyp
         return _svc()
 
     app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
     monkeypatch.setattr(admin_datasource_routes.deps, "_service_cache", cache)
     monkeypatch.setattr(
         admin_datasource_routes.deps,
@@ -470,6 +484,7 @@ def test_set_project_default_datasource_http_rejects_config_edit_without_admin_d
         return _svc()
 
     app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
     monkeypatch.setattr(admin_datasource_routes.deps, "_service_cache", cache)
     monkeypatch.setattr(
         admin_datasource_routes.deps,

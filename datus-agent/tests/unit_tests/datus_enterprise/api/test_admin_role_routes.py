@@ -53,7 +53,12 @@ def _client(ctx: AppContext):
         request.state.app_context = ctx
         return SimpleNamespace()
 
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
     app.dependency_overrides[deps.get_datus_service] = override_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
     return TestClient(app)
 
 

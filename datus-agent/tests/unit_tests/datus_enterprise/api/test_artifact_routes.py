@@ -72,6 +72,14 @@ def _write_manifest(root: Path, kind: str, slug: str) -> None:
     )
 
 
+def _override_app_context(app: FastAPI, ctx: AppContext) -> None:
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+
+
 def _client(monkeypatch, tmp_path: Path, ctx: AppContext, *, audit_sink=None, artifact_acl_store=None) -> TestClient:
     app = FastAPI()
     app.include_router(artifact_routes.router)
@@ -81,6 +89,7 @@ def _client(monkeypatch, tmp_path: Path, ctx: AppContext, *, audit_sink=None, ar
         return _svc(tmp_path)
 
     app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
     monkeypatch.setattr(
         deps,
         "_enterprise_extensions",
@@ -175,6 +184,7 @@ def test_admin_artifacts_lists_all_manifests_and_audits(monkeypatch, tmp_path: P
         return _svc(tmp_path)
 
     app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
     monkeypatch.setattr(
         deps,
         "_enterprise_extensions",
@@ -364,7 +374,12 @@ def test_put_admin_artifact_acl_changes_runtime_report_visibility(monkeypatch, t
         request.state.app_context = ctx_holder["ctx"]
         return _svc(tmp_path)
 
+    async def override_context(request: Request):
+        request.state.app_context = ctx_holder["ctx"]
+        return ctx_holder["ctx"]
+
     app.dependency_overrides[deps.get_datus_service] = override_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
     monkeypatch.setattr(
         deps,
         "_enterprise_extensions",
@@ -438,6 +453,7 @@ def test_admin_artifacts_rejects_without_admin_artifacts(monkeypatch, tmp_path: 
         return _svc(tmp_path)
 
     app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
     monkeypatch.setattr(
         deps,
         "_enterprise_extensions",

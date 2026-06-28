@@ -18,6 +18,7 @@ from datus.api.models.table_models import (
     SemanticModelInput,
     ValidateSemanticModelData,
 )
+from datus_enterprise.audit import AuditEvent, audit_decision
 
 router = APIRouter(prefix="/api/v1", tags=["table"])
 CatalogModuleCtx = Annotated[AppContext, Depends(require_module("module.datasource_catalog"))]
@@ -104,7 +105,7 @@ async def validate_semantic_model(
 
 
 async def _authorize_table_read(ctx: AppContext, svc: ServiceDep, *, table: str, operation: str) -> None:
-    projection = await project_request_config(ctx, svc.agent_config, operation=operation)
+    projection = await project_request_config(ctx, svc.agent_config, operation=f"catalog.{operation}")
     selected_datasource = str(projection.principal.get("datasource") or projection.config.current_datasource or "")
     service_datasource = str(
         getattr(getattr(svc, "datasource", None), "current_datasource", None)
@@ -112,6 +113,14 @@ async def _authorize_table_read(ctx: AppContext, svc: ServiceDep, *, table: str,
         or ""
     )
     if selected_datasource and service_datasource and selected_datasource != service_datasource:
+        await _audit_table_denial(
+            ctx,
+            operation=operation,
+            table=table,
+            datasource=selected_datasource,
+            reason="DATASOURCE_FORBIDDEN",
+            metadata={"service_datasource": service_datasource},
+        )
         raise HTTPException(status_code=403, detail="DATASOURCE_FORBIDDEN")
 
     denial = _table_scope_denial(
@@ -120,6 +129,13 @@ async def _authorize_table_read(ctx: AppContext, svc: ServiceDep, *, table: str,
         datasource_grants=projection.datasource_grants,
     )
     if denial:
+        await _audit_table_denial(
+            ctx,
+            operation=operation,
+            table=table,
+            datasource=selected_datasource or service_datasource,
+            reason=denial,
+        )
         raise HTTPException(status_code=403, detail=denial)
 
 
@@ -203,3 +219,28 @@ def _table_scope_candidates(parsed: dict[str, str | None]) -> list[str]:
 
 def _matches_any(values: list[str], patterns: list[str]) -> bool:
     return any(fnmatchcase(value, pattern) for value in values for pattern in patterns)
+
+
+async def _audit_table_denial(
+    ctx: AppContext,
+    *,
+    operation: str,
+    table: str,
+    datasource: str,
+    reason: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    audit_metadata = {"datasource": datasource}
+    if metadata:
+        audit_metadata.update(metadata)
+    await audit_decision(
+        ctx,
+        AuditEvent(
+            action=operation,
+            resource_type="table",
+            resource_id=table,
+            decision="deny",
+            reason=reason,
+            metadata=audit_metadata,
+        ),
+    )

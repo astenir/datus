@@ -164,10 +164,9 @@ def require_platform_active(
 ):
     """FastAPI dependency for execution or mutation routes blocked outside active status."""
 
-    from datus.api.deps import get_app_context, get_datus_service
+    from datus.api.deps import get_request_app_context
 
-    async def _dependency(request: Request, _service: object = Depends(get_datus_service)) -> None:
-        ctx = get_app_context(request)
+    async def _dependency(ctx: AppContext = Depends(get_request_app_context)) -> None:  # noqa: B008
         await enforce_platform_status(
             ctx,
             operation=operation,
@@ -217,14 +216,12 @@ def require_enterprise_route_disabled(
 ):
     """FastAPI dependency for API surfaces intentionally unavailable in enterprise mode."""
 
-    from datus.api.deps import get_app_context, get_datus_service
-
-    async def _dependency(request: Request, _service: object = Depends(get_datus_service)) -> None:
-        from datus.api.deps import get_enterprise_extensions
+    async def _dependency(request: Request) -> None:
+        from datus.api.deps import get_enterprise_extensions, get_request_app_context
 
         if not get_enterprise_extensions().enabled:
             return
-        ctx = get_app_context(request)
+        ctx = await get_request_app_context(request)
         await reject_in_enterprise_mode(
             ctx,
             operation=operation,

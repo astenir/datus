@@ -1,8 +1,5 @@
 """Enterprise-mode disable strategy for legacy API route surfaces."""
 
-from types import SimpleNamespace
-from unittest.mock import MagicMock
-
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
@@ -12,6 +9,7 @@ from datus.api.auth.context import AppContext
 from datus.api.enterprise.defaults import (
     InMemorySessionOwnerStore,
     LocalAuthorizationProvider,
+    NoopAuditSink,
     PassthroughConfigProjector,
 )
 from datus.api.enterprise.loader import EnterpriseExtensions
@@ -24,6 +22,15 @@ class CollectingAuditSink:
 
     async def write(self, event):
         self.events.append(event)
+
+
+class StaticAuthProvider:
+    def __init__(self, ctx: AppContext):
+        self.ctx = ctx
+
+    async def authenticate(self, request: Request) -> AppContext:
+        request.state.app_context = self.ctx
+        return self.ctx
 
 
 def _install_extensions(monkeypatch, audit_sink):
@@ -40,15 +47,15 @@ def _install_extensions(monkeypatch, audit_sink):
     )
 
 
-def _client(router, ctx: AppContext, svc):
+def _client(monkeypatch, router, ctx: AppContext):
+    monkeypatch.setattr(deps, "_auth_provider", StaticAuthProvider(ctx))
     app = FastAPI()
     app.include_router(router)
 
-    async def override_service(request: Request):
-        request.state.app_context = ctx
-        return svc
+    async def reject_service(request: Request):
+        raise AssertionError("legacy disabled route resolved DatusService")
 
-    app.dependency_overrides[deps.get_datus_service] = override_service
+    app.dependency_overrides[deps.get_datus_service] = reject_service
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -77,19 +84,40 @@ def _client(router, ctx: AppContext, svc):
 def test_legacy_routes_are_disabled_in_enterprise_mode(monkeypatch, router, method, path, json_body, operation):
     audit_sink = CollectingAuditSink()
     _install_extensions(monkeypatch, audit_sink)
-    svc = MagicMock()
-    svc.agent_config = SimpleNamespace()
     ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.admin.*"})
 
-    with _client(router, ctx, svc) as client:
+    with _client(monkeypatch, router, ctx) as client:
         response = getattr(client, method)(path, json=json_body) if json_body is not None else getattr(client, method)(path)
 
     assert response.status_code == 403
     assert response.json()["detail"] == "ENTERPRISE_ROUTE_DISABLED"
-    assert svc.mock_calls == []
     event = audit_sink.events[-1]
     assert event.user_id == "u1"
     assert event.action == "system.route_disabled"
     assert event.resource_type == "legacy_api"
     assert event.decision == "deny"
     assert event.metadata == {"operation": operation}
+
+
+def test_local_agent_static_helper_does_not_require_service_initialization(monkeypatch):
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+        ),
+    )
+    monkeypatch.setattr(deps, "_auth_provider", None)
+    monkeypatch.setattr(deps, "_service_cache", None)
+    app = FastAPI()
+    app.include_router(agent_routes.router)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/api/v1/agent/use_tools", params={"agent_type": "gen_sql"})
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True

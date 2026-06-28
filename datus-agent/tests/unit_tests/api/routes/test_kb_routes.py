@@ -48,6 +48,14 @@ def _enterprise_extensions() -> EnterpriseExtensions:
     )
 
 
+def _override_app_context(app: FastAPI, ctx: AppContext) -> None:
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+
+
 @pytest.fixture
 def client(mock_datus_service):
     """Create a TestClient with mocked dependencies."""
@@ -55,12 +63,14 @@ def client(mock_datus_service):
 
     app = FastAPI()
     app.include_router(router)
+    ctx = AppContext(user_id="u1", project_id="proj")
 
     async def override_service(request: Request):
-        request.state.app_context = AppContext(user_id="u1", project_id="proj")
+        request.state.app_context = ctx
         return mock_datus_service
 
     app.dependency_overrides[get_datus_service] = override_service
+    _override_app_context(app, ctx)
     with TestClient(app) as c:
         yield c
 
@@ -74,6 +84,7 @@ def _client_with_context(mock_datus_service, ctx: AppContext):
         return mock_datus_service
 
     app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
     return TestClient(app, raise_server_exceptions=False)
 
 

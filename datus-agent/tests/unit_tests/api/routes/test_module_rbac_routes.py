@@ -66,7 +66,12 @@ def _client(router, ctx: AppContext, svc: MagicMock):
         request.state.app_context = ctx
         return svc
 
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
     app.dependency_overrides[deps.get_datus_service] = override_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -1321,6 +1326,32 @@ def test_sql_execute_is_blocked_in_readonly_status_and_audited(monkeypatch):
     assert event.resource_type == "datasource"
     assert event.decision == "deny"
     assert event.metadata == {"operation": "sql.execute", "platform_status": "readonly"}
+
+
+def test_sql_execute_readonly_status_does_not_resolve_datus_service(monkeypatch):
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setenv("DATUS_PLATFORM_STATUS", "readonly")
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(audit_sink=audit_sink))
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.sql_executor"})
+    app = FastAPI()
+    app.include_router(cli_routes.router)
+
+    async def reject_service(request: Request):
+        raise AssertionError("platform status gate resolved DatusService")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post("/api/v1/sql/execute", json={"sql_query": "SELECT 1", "result_format": "json"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "PLATFORM_STATUS_FORBIDDEN"
+    assert audit_sink.events[-1].action == "system.platform_status"
 
 
 def test_sql_execute_routes_allow_module_sql_executor(monkeypatch):

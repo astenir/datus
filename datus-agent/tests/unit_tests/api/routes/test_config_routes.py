@@ -130,6 +130,14 @@ def _enterprise_extensions(enabled=True):
     )
 
 
+def _override_app_context(app: FastAPI, ctx: AppContext) -> None:
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+
+
 @pytest.mark.asyncio
 async def test_update_datasources_replaces_services_datasources(patched_cm, patched_cache):
     patched_cm.data = {"services": {"datasources": {"old": {"type": "duckdb"}}, "other": "keep"}}
@@ -325,6 +333,7 @@ def test_update_config_http_requires_config_edit_permission(monkeypatch, patched
         return svc
 
     app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
     monkeypatch.setattr(config_routes.deps, "_enterprise_extensions", _enterprise_extensions(enabled=True))
 
     with TestClient(app) as client:
@@ -350,6 +359,7 @@ def test_get_config_http_requires_config_view_permission(monkeypatch):
         return svc
 
     app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
     monkeypatch.setattr(config_routes.deps, "_enterprise_extensions", _enterprise_extensions(enabled=True))
 
     with TestClient(app) as client:
@@ -369,6 +379,7 @@ def test_get_config_http_allows_config_view_permission(monkeypatch):
         return svc
 
     app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
     monkeypatch.setattr(config_routes.deps, "_enterprise_extensions", _enterprise_extensions(enabled=True))
 
     with TestClient(app) as client:
@@ -392,6 +403,7 @@ def test_config_probe_http_requires_config_edit_permission(monkeypatch):
         return svc
 
     app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
     monkeypatch.setattr(config_routes.deps, "_enterprise_extensions", _enterprise_extensions(enabled=True))
     monkeypatch.setattr(config_routes, "_probe_llm_sync", model_probe)
     monkeypatch.setattr(config_routes, "_probe_datasource_sync", datasource_probe)
@@ -419,6 +431,7 @@ def test_config_probe_http_allows_config_edit_permission(monkeypatch):
         return svc
 
     app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
     monkeypatch.setattr(config_routes.deps, "_enterprise_extensions", _enterprise_extensions(enabled=True))
     monkeypatch.setattr(config_routes, "_probe_llm_sync", model_probe)
     monkeypatch.setattr(config_routes, "_probe_datasource_sync", datasource_probe)
