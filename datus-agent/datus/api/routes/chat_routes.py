@@ -295,22 +295,25 @@ async def _enforce_chat_model_policy(
     if is_model_ref_allowed(ctx, model_ref):
         return None
 
-    await audit_decision(
-        ctx,
-        AuditEvent(
-            action="model.select",
-            resource_type="model",
-            resource_id=model_ref,
-            decision="deny",
-            reason="MODEL_FORBIDDEN",
-            metadata={
-                "operation": operation,
-                "session_id": request.session_id,
-                "subagent_id": request.subagent_id,
-                "requested_model": request.model,
-            },
-        ),
-    )
+    try:
+        await audit_decision(
+            ctx,
+            AuditEvent(
+                action="model.select",
+                resource_type="model",
+                resource_id=model_ref,
+                decision="deny",
+                reason="MODEL_FORBIDDEN",
+                metadata={
+                    "operation": operation,
+                    "session_id": request.session_id,
+                    "subagent_id": request.subagent_id,
+                    "requested_model": request.model,
+                },
+            ),
+        )
+    except Exception:
+        logger.warning("Chat model policy denial audit failed for operation=%s", operation, exc_info=True)
     return ChatPreCheckOutcome(
         allow=False,
         error=f"Model '{model_ref}' is not authorized for this request.",

@@ -633,6 +633,30 @@ class TestStreamChatModelPolicy:
         svc.chat.stream_chat.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_requested_model_denial_returns_sse_error_when_audit_sink_fails(self, monkeypatch):
+        import datus.api.enterprise.deps as enterprise_deps
+
+        monkeypatch.setattr(enterprise_deps, "get_audit_sink", lambda: FailingAuditSink())
+        svc = _mock_svc_with_nodes()
+        svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
+        ctx = _mock_ctx(user_id="alice")
+        ctx.principal = {"model_policy": {"allowed_models": ["openai/gpt-4.1"]}}
+        request = StreamChatInput(message="hi", model="claude/claude-sonnet-4-5")
+
+        response = await stream_chat(request, ctx, _request_with_service(svc))
+
+        chunks = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk.decode() if isinstance(chunk, bytes) else chunk)
+
+        payload = json.loads(
+            next(line for line in chunks[0].splitlines() if line.startswith("data: "))[len("data: ") :]
+        )
+        assert payload["error_type"] == "MODEL_FORBIDDEN"
+        assert "claude/claude-sonnet-4-5" in payload["error"]
+        svc.chat.stream_chat.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_default_model_denied_returns_sse_error(self):
         svc = _mock_svc_with_nodes()
         svc.agent_config._target_provider = "openai"
