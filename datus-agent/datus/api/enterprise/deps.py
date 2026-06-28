@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import os
 from typing import TYPE_CHECKING, NamedTuple, Optional
 
@@ -338,11 +339,27 @@ def _session_error(error_code: str, message: str) -> Result[dict]:
 def require_module(permission_key: str):
     """FastAPI dependency factory for module permissions."""
 
-    from datus.api.deps import get_app_context, get_datus_service
-
-    async def _dependency(request: Request, _service: object = Depends(get_datus_service)) -> AppContext:
-        ctx = get_app_context(request)
+    async def _dependency(request: Request) -> AppContext:
+        ctx = await _module_auth_context(request)
         await require_authorized_module(ctx, permission_key)
         return ctx
 
     return _dependency
+
+
+async def _module_auth_context(request: Request) -> AppContext:
+    from datus.api.deps import get_enterprise_extensions, get_request_app_context
+
+    app = getattr(request, "app", None)
+    override = getattr(app, "dependency_overrides", {}).get(get_request_app_context)
+    if override is not None:
+        result = override(request)
+        return await result if inspect.isawaitable(result) else result
+
+    cached = getattr(request.state, "app_context", None)
+    if isinstance(cached, AppContext):
+        enterprise_extensions = get_enterprise_extensions()
+        if not enterprise_extensions.enabled or getattr(request.state, "app_context_enterprise_ready", False):
+            return cached
+
+    return await get_request_app_context(request)

@@ -120,6 +120,12 @@ class TestInitDeps:
         mock_cache.evict.assert_awaited_once_with(deps.service_cache_key("proj/a", enterprise_enabled=True))
 
 
+def test_scope_pattern_intersection_uses_conservative_narrower_pattern():
+    assert deps._intersect_scope_patterns(["finance_*"], ["finance_202*"]) == ["finance_202*"]
+    assert deps._intersect_scope_patterns(["finance_20??"], ["finance_2024"]) == ["finance_2024"]
+    assert deps._intersect_scope_patterns(["finance_20??"], ["finance_202*"]) == []
+
+
 @pytest.mark.asyncio
 class TestGetRequestAppContext:
     """Tests for request context authentication and enterprise metadata refresh."""
@@ -578,6 +584,68 @@ class TestGetDatusService:
             "allow_catalog": True,
             "allow_sql": True,
             "schemas": ["public"],
+            "tables": ["finance_*"],
+            "effect": "allow",
+        }
+
+    async def test_enterprise_context_keeps_role_scope_when_user_grant_is_wider(self):
+        """A wider user grant should not erase the narrower role-derived datasource scope."""
+        from datus.api.enterprise.defaults import (
+            InMemoryEnterpriseDatasourceGrantStore,
+            InMemoryEnterpriseRoleStore,
+            InMemoryEnterpriseUserStore,
+            InMemorySessionOwnerStore,
+            LocalAuthorizationProvider,
+            NoopAuditSink,
+            PassthroughConfigProjector,
+        )
+        from datus.api.enterprise.loader import EnterpriseExtensions
+
+        role_store = InMemoryEnterpriseRoleStore()
+        grant_store = InMemoryEnterpriseDatasourceGrantStore()
+        await role_store.upsert_role(role_id="finance_reader", name="Finance Reader", permissions=["module.chat"])
+        await role_store.set_user_roles("alice", ["finance_reader"])
+        await grant_store.put_grant(
+            subject_type="role",
+            subject_id="finance_reader",
+            datasource_key="finance",
+            effect="allow",
+            scope={"tables": ["finance_*"], "schemas": ["mart"]},
+        )
+        await grant_store.put_grant(
+            subject_type="user",
+            subject_id="alice",
+            datasource_key="finance",
+            effect="allow",
+            scope={"tables": ["*"], "schemas": ["*"]},
+        )
+
+        ctx = AppContext(user_id="alice", project_id="proj-1", config=MagicMock())
+        mock_auth = MagicMock()
+        mock_auth.authenticate = AsyncMock(return_value=ctx)
+        mock_cache = MagicMock(spec=DatusServiceCache)
+        mock_cache.get_or_create = AsyncMock(return_value=MagicMock())
+        deps._auth_provider = mock_auth
+        deps._service_cache = mock_cache
+        deps._enterprise_extensions = EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+            user_store=InMemoryEnterpriseUserStore(),
+            role_store=role_store,
+            datasource_grant_store=grant_store,
+        )
+
+        request = MagicMock()
+        request.state = MagicMock()
+        await get_datus_service(request)
+
+        assert ctx.datasource_grants["finance"] == {
+            "allow_catalog": True,
+            "allow_sql": True,
+            "schemas": ["mart"],
             "tables": ["finance_*"],
             "effect": "allow",
         }

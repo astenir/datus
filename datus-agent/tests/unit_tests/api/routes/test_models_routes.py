@@ -108,7 +108,12 @@ def _client(ctx: AppContext, svc: MagicMock) -> TestClient:
         request.state.app_context = ctx
         return svc
 
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
     app.dependency_overrides[deps.get_datus_service] = override_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
     return TestClient(app)
 
 

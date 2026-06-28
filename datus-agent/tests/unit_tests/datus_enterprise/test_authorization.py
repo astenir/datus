@@ -85,3 +85,44 @@ async def test_require_module_uses_authorization_provider_for_identity_only_cont
     assert exc.value.status_code == 403
     assert audit_sink.events[-1].user_id == "u1"
     assert audit_sink.events[-1].action == "module.admin.users"
+
+
+@pytest.mark.asyncio
+async def test_require_module_authorizes_without_resolving_datus_service(monkeypatch):
+    class FakeAuthorizationProvider:
+        async def check(self, ctx, action, resource):
+            return AccessDecision(allowed=True, reason=f"checked {ctx.user_id}")
+
+        async def allowed_datasources(self, ctx):  # noqa: ARG002
+            return {}
+
+    class CollectingAuditSink:
+        async def write(self, event):  # noqa: ARG002
+            raise AssertionError("audit should not be written for allowed module access")
+
+    mock_auth = type("Auth", (), {})()
+    mock_auth.authenticate = None
+    mock_cache = type("Cache", (), {})()
+    mock_cache.get_or_create = None
+    monkeypatch.setattr(deps, "_auth_provider", mock_auth)
+    monkeypatch.setattr(deps, "_service_cache", mock_cache)
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=FakeAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=CollectingAuditSink(),
+        ),
+    )
+
+    request = type("Request", (), {})()
+    request.state = State()
+    request.state.app_context = AppContext(user_id="u1")
+    request.state.app_context_enterprise_ready = True
+
+    dependency = require_module("module.config.view")
+
+    assert await dependency(request) == request.state.app_context

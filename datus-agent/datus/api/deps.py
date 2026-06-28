@@ -32,6 +32,7 @@ _stream_thinking: bool = False
 _DEFAULT_PROJECT_KEY = "default"
 _SAFE_CACHE_SEGMENT_RE = re.compile(r"[^A-Za-z0-9_.\-]")
 _SAFE_CACHE_SEGMENT_FULL_RE = re.compile(r"[A-Za-z0-9_.\-]+")
+_SCOPE_GLOB_META_CHARS = "*?["
 
 
 def init_deps(
@@ -333,13 +334,53 @@ def _intersect_scope_patterns(left: Any, right: Any) -> list[str] | None:
         return right_patterns
     if right_patterns is None:
         return left_patterns
-    return sorted(
-        {
-            pattern
-            for pattern in right_patterns
-            if any(existing == "*" or fnmatchcase(pattern, existing) for existing in left_patterns)
-        }
-    )
+    intersected: set[str] = set()
+    for left_pattern in left_patterns:
+        for right_pattern in right_patterns:
+            narrower = _narrower_scope_pattern(left_pattern, right_pattern)
+            if narrower is not None:
+                intersected.add(narrower)
+    return sorted(intersected)
+
+
+def _narrower_scope_pattern(left_pattern: str, right_pattern: str) -> str | None:
+    if _scope_pattern_includes(left_pattern, right_pattern):
+        return right_pattern
+    if _scope_pattern_includes(right_pattern, left_pattern):
+        return left_pattern
+    return None
+
+
+def _scope_pattern_includes(container: str, candidate: str) -> bool:
+    if container == candidate or container == "*":
+        return True
+    if not _has_scope_glob(candidate):
+        return fnmatchcase(candidate, container)
+
+    container_prefix = _simple_prefix_glob(container)
+    if container_prefix is None:
+        return False
+    return _literal_glob_prefix(candidate).startswith(container_prefix)
+
+
+def _has_scope_glob(pattern: str) -> bool:
+    return any(char in pattern for char in _SCOPE_GLOB_META_CHARS)
+
+
+def _simple_prefix_glob(pattern: str) -> str | None:
+    if not pattern.endswith("*"):
+        return None
+    prefix = pattern[:-1]
+    if _has_scope_glob(prefix):
+        return None
+    return prefix
+
+
+def _literal_glob_prefix(pattern: str) -> str:
+    for index, char in enumerate(pattern):
+        if char in _SCOPE_GLOB_META_CHARS:
+            return pattern[:index]
+    return pattern
 
 
 def _scope_pattern_list(raw: Any) -> list[str] | None:
