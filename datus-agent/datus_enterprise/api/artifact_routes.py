@@ -231,16 +231,19 @@ async def list_admin_artifacts(svc: ServiceDep, ctx: AdminArtifactsCtx) -> Resul
     items.sort(
         key=lambda item: (item.manifest.updated_at or item.manifest.created_at or "", item.artifact_type), reverse=True
     )
-    await audit_decision(
-        ctx,
-        AuditEvent(
-            action="module.admin.artifacts",
-            resource_type="artifact",
-            resource_id=None,
-            decision="allow",
-            metadata={"operation": "list_admin_artifacts", "count": len(items)},
-        ),
-    )
+    try:
+        await audit_decision(
+            ctx,
+            AuditEvent(
+                action="module.admin.artifacts",
+                resource_type="artifact",
+                resource_id=None,
+                decision="allow",
+                metadata={"operation": "list_admin_artifacts", "count": len(items)},
+            ),
+        )
+    except Exception as exc:
+        logger.warning("Admin artifact list audit write failed: %s", exc)
     return Result(success=True, data=items)
 
 

@@ -379,6 +379,41 @@ def test_admin_artifacts_lists_all_manifests_and_audits(monkeypatch, tmp_path: P
     assert event.metadata == {"operation": "list_admin_artifacts", "count": 3}
 
 
+def test_admin_artifacts_list_survives_audit_failure(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "report", "visible_report")
+    _write_manifest(tmp_path, "dashboard", "visible_dashboard")
+    ctx = AppContext(user_id="u1", permissions={"module.admin.artifacts"})
+    app = FastAPI()
+    app.include_router(artifact_routes.router)
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return _svc(tmp_path)
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=FailingAuditSink(),
+        ),
+    )
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/api/v1/admin/artifacts")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    listed = {(item["artifact_type"], item["manifest"]["slug"]) for item in body["data"]}
+    assert listed == {("report", "visible_report"), ("dashboard", "visible_dashboard")}
+
+
 def test_get_admin_artifact_acl_returns_unavailable_without_store(monkeypatch, tmp_path: Path):
     _write_manifest(tmp_path, "report", "sales")
     audit_sink = CollectingAuditSink()
