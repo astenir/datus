@@ -152,7 +152,7 @@ async def get_request_app_context(request: Request) -> AppContext:
 
     enterprise_extensions = get_enterprise_extensions()
     cached = getattr(request.state, "app_context", None)
-    if cached is not None:
+    if isinstance(cached, AppContext):
         if enterprise_extensions.enabled and not getattr(request.state, "app_context_enterprise_ready", False):
             await _validate_enterprise_context(cached, enterprise_extensions)
             await _refresh_enterprise_context(cached, enterprise_extensions)

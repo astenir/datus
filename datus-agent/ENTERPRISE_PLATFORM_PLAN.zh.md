@@ -28,7 +28,7 @@
 | 工具权限 | `datus/tools/permission/*` | 控制 agent 内部工具的 `allow` / `ask` / `deny`，不等价于业务模块 RBAC。 |
 | 报表/仪表盘 | `datus/api/routes/report_routes.py`、`datus/api/routes/dashboard_routes.py`、`datus_enterprise/api/artifact_routes.py` | report/dashboard 静态 artifact 已接入 view 权限和 artifact ACL；`/api/v1/dashboard/query` 已接入 query 权限、datasource/table grant、SQL policy principal、quota、审计和 active platform status gate；report 当前仍是预渲染静态 bundle，没有 live query endpoint。 |
 | 数据源目录 | `datus/api/routes/database_routes.py`、`datus/api/services/database_service.py` | `/api/v1/catalog/list` 已接入 `module.datasource_catalog` 和 request-level projection，并按 datasource/catalog/database/schema/table grant 裁剪目录结果。 |
-| 表和语义模型 | `datus/api/routes/table_routes.py` | `/api/v1/table/detail`、`/api/v1/semantic_model` 读取已接入 `module.datasource_catalog` 和 table grant，metadata projection 使用 `catalog.*` 操作语义，由 `allow_catalog` 控制而不是被 `allow_sql` 误放行；datasource/table scope 拒绝会写入审计。语义模型保存/校验使用 `module.config.edit`，保存另受 active platform status gate 约束。 |
+| 表和语义模型 | `datus/api/routes/table_routes.py` | `/api/v1/table/detail`、`/api/v1/semantic_model` 读取已接入 `module.datasource_catalog` 和 table grant，metadata projection 使用 `catalog.*` 操作语义，由 `allow_catalog` 控制而不是被 `allow_sql` 误放行；table scope 使用当前连接器 dialect 解析 catalog/database/schema/table，避免 StarRocks `catalog.database.table` 被误判成 `database.schema.table`；datasource/table scope 拒绝会写入审计。语义模型保存/校验使用 `module.config.edit`，保存另受 active platform status gate 约束，且 platform status gate 在 `DatusService` 解析前执行。 |
 | 旧兼容 API 面 | `datus/api/routes/explorer_routes.py`、`agent_routes.py`、`visualization_routes.py`、`tool_routes.py`、`success_story_routes.py` | 这些旧 route 尚未进入完整企业安全链；`enterprise.enabled=true` 下统一返回 `ENTERPRISE_ROUTE_DISABLED` 并写入 `system.route_disabled` 审计，本地兼容模式先检查开关并保持原行为，不因禁用依赖额外初始化 `DatusService`。 |
 | 平台运行状态 | `datus/api/enterprise/deps.py`、`datus_enterprise/api/system_routes.py` | `DATUS_PLATFORM_STATUS` 支持 `active`、`readonly`、`maintenance`；主要执行和 mutation route 在非 active 时 fail closed，写入 `system.platform_status` 审计。状态 gate 只解析并刷新请求 `AppContext`，不在拒绝前构造或缓存 `DatusService`。 |
 
@@ -1055,7 +1055,7 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - `chat` route 已接入 `module.chat`，覆盖 stream、feedback、resume、stop、session list/history/delete/compact、user interaction、insert 和 tool result。
 - chat subagent dispatch 前已按内置/自定义 subagent 类型叠加权限：`gen_sql` 使用 `module.sql_executor`，report 类 subagent 使用 `module.report.query`，dashboard 类 subagent 使用 `module.dashboard.query`。
 - datasource catalog route 已接入 `module.datasource_catalog`，覆盖当前 `/api/v1/catalog/list`。
-- table/semantic model 读取 route 已接入 `module.datasource_catalog`，覆盖 `/api/v1/table/detail` 和 `GET /api/v1/semantic_model`；语义模型保存/校验已接入 `module.config.edit`。
+- table/semantic model 读取 route 已接入 `module.datasource_catalog`，覆盖 `/api/v1/table/detail` 和 `GET /api/v1/semantic_model`；语义模型保存/校验已接入 `module.config.edit`，其中保存 route 的 platform status gate 位于 route decorator dependency，保证 readonly/maintenance 拒绝发生在 `DatusService` 解析前。
 - 直接 SQL executor route 已接入 `module.sql_executor`，覆盖 `/api/v1/sql/execute` 和 `/api/v1/sql/stop_execute`。
 - report route 已接入 `module.report.view`，覆盖当前 `/api/v1/report/detail`，并通过 enterprise artifact route 覆盖 `/api/v1/reports`、`/api/v1/reports/{slug}`、`/api/v1/reports/{slug}/html`。
 - dashboard route 已接入 `module.dashboard.view` 和 `module.dashboard.query`，覆盖当前 `/api/v1/dashboard/detail`、`/api/v1/dashboard/query`，并通过 enterprise artifact route 覆盖 `/api/v1/dashboards`、`/api/v1/dashboards/{slug}`、`/api/v1/dashboards/{slug}/html`。
@@ -1064,7 +1064,7 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - MCP route 已接入 `module.mcp`，覆盖 MCP server/tool/filter 的列表、管理和调用接口。
 - 当前已注册的 datasource admin route `/api/v1/admin/datasources`、`/api/v1/admin/datasource-default` 和 `/api/v1/admin/datasource-grants` 已接入 `module.admin.datasources`，用于项目级数据源清单、默认数据源管理和 datasource grant metadata 管理。
 - 当前已注册的 user/role admin route 已分别接入 `module.admin.users` 和 `module.admin.roles`，用于阶段 6 的用户状态、role metadata 和 role permission set 管理。
-- admin sessions、artifacts ACL、audit query/export、quota metadata/usage 和 secret reference API 已进入阶段 6 接线；`/api/v1/system/status` 已使用 `module.system.status` 接入只读系统状态。当前已将 user-role metadata、role permission set 和 role/user datasource grants 在企业模式新请求中合并回 `AppContext.roles`、`AppContext.permissions`、`AppContext.datasource_grants` 和 `principal`，但长期生产仍应使用共享 metadata store。direct SQL、dashboard query、table detail 和 semantic model route 已复用请求级 projection、grant scope、SQL policy principal 或 table grant 校验；`/api/v1/models` 和 chat stream/feedback 已支持服务端 `principal.model_policy` provider/model allowlist 初版，未授权模型不能在目录中展示，也不能启动 chat task；chat stream/feedback 已接入请求启动级 quota；admin audit export 已接入导出配额；report artifact 当前是预渲染静态 bundle，没有 agent-only live query endpoint。
+- admin sessions、artifacts ACL、audit query/export、quota metadata/usage 和 secret reference API 已进入阶段 6 接线；`/api/v1/system/status` 已使用 `module.system.status` 接入只读系统状态。当前已将 user-role metadata、role permission set 和 role/user datasource grants 在企业模式新请求中合并回 `AppContext.roles`、`AppContext.permissions`、`AppContext.datasource_grants` 和 `principal`，但长期生产仍应使用共享 metadata store。direct SQL、dashboard query、table detail 和 semantic model route 已复用请求级 projection、grant scope、SQL policy principal 或 table grant 校验；table detail 和 semantic model 的 table scope 解析复用当前 datasource connector dialect，支持 StarRocks 等 catalog-capable dialect 的 `catalog.database.table` 授权语义；`/api/v1/models` 和 chat stream/feedback 已支持服务端 `principal.model_policy` provider/model allowlist 初版，未授权模型不能在目录中展示，也不能启动 chat task；chat stream/feedback 已接入请求启动级 quota；admin audit export 已接入导出配额；report artifact 当前是预渲染静态 bundle，没有 agent-only live query endpoint。
 - explorer、agent config、visualization、direct tool dispatch 和 success-story 旧兼容 route 尚未设计成企业 API；当前在 `enterprise.enabled=true` 下统一禁用并写入 `system.route_disabled` 审计，避免它们绕过已接入的 RBAC/projection/审计链路。
 
 验收：
@@ -1212,7 +1212,9 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - `tests/unit_tests/datus_enterprise/test_enterprise_mvp_smoke.py` 覆盖企业 MVP smoke：管理员写入 datasource grant，普通用户从服务端 store 刷新权限与授权，catalog 被 grant 裁剪，未授权 datasource 被拒绝，直接 SQL 使用投影后的 request-scoped config。
 - `enterprise.enabled=true` 时旧版 `/auth/token` 和 `/workflows/run` 返回 `ENTERPRISE_LEGACY_API_DISABLED`。
 - `enterprise.enabled=true` 时 explorer、agent config、visualization、direct tool dispatch 和 success-story 旧兼容 route 返回 `ENTERPRISE_ROUTE_DISABLED` 并写入 `system.route_disabled`。
-- `DATUS_PLATFORM_STATUS=readonly` 时 SQL execute、semantic model save 和 admin mutation 在业务服务/metadata store 执行前返回 `PLATFORM_STATUS_FORBIDDEN` 并写审计；状态 gate 拒绝路径不得先初始化 `DatusService`。
+- `DATUS_PLATFORM_STATUS=readonly` 时 SQL execute、semantic model save 和 admin mutation 在业务服务/metadata store 执行前返回 `PLATFORM_STATUS_FORBIDDEN` 并写审计；状态 gate 拒绝路径不得先初始化 `DatusService`，mutation route 应用 route-level dependency 或等价顺序测试证明 gate 先于 `ServiceDep`。
+- table detail 和 semantic model route 的 datasource/table grant 测试必须覆盖至少一种 catalog-capable dialect，例如 StarRocks `catalog.database.table`，避免 dialect-blind parser 错拒或错放 catalog/database/schema scope。
+- `get_request_app_context()` 应有直接单元测试覆盖 authenticate + refresh + cache、已缓存但未 enterprise-ready 的上下文刷新、缺少用户或禁用用户 fail closed；不要只依赖 route override 间接覆盖。
 
 ### 回归测试
 

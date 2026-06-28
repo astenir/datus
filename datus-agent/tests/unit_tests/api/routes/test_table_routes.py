@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -18,7 +19,29 @@ from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.models.base_models import Result
 from datus.api.models.table_models import ColumnInfo, GetTableDetailData, TableDetailData
 from datus.api.routes import table_routes
+from datus.tools.db_tools import connector_registry
 from datus_enterprise.config_projection import DatasourceGrantConfigProjector
+
+_CONNECTOR_REGISTRY_SNAPSHOT_ATTRS = ("_capabilities", "_uri_builders", "_context_resolvers")
+
+
+@pytest.fixture(autouse=True)
+def _register_catalog_dialect_capabilities():
+    snapshots = {
+        attr: {
+            key: (set(value) if isinstance(value, set) else value)
+            for key, value in getattr(connector_registry, attr).items()
+        }
+        for attr in _CONNECTOR_REGISTRY_SNAPSHOT_ATTRS
+    }
+    connector_registry.register_handlers("starrocks", capabilities={"catalog", "database"})
+    try:
+        yield
+    finally:
+        for attr, saved in snapshots.items():
+            live = getattr(connector_registry, attr)
+            live.clear()
+            live.update(saved)
 
 
 class CollectingAuditSink:
@@ -196,6 +219,32 @@ def test_table_detail_allows_authorized_table(monkeypatch):
     svc.datasource.get_table_schema.assert_called_once_with("public.accounts")
 
 
+def test_table_detail_allows_starrocks_catalog_database_table_grant(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = _svc()
+    svc.agent_config.services.datasources["finance"] = SimpleNamespace(type="starrocks")
+    svc.datasource.current_db_connector.get_type.return_value = "starrocks"
+    ctx = _ctx(
+        permissions={"module.datasource_catalog"},
+        grants={
+            "finance": {
+                "effect": "allow",
+                "allow_catalog": True,
+                "catalogs": ["default_catalog"],
+                "databases": ["finance"],
+                "tables": ["default_catalog.finance.orders"],
+            }
+        },
+    )
+
+    with _client(ctx, svc) as client:
+        response = client.get("/api/v1/table/detail?table=default_catalog.finance.orders")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    svc.datasource.get_table_schema.assert_called_once_with("default_catalog.finance.orders")
+
+
 def test_save_semantic_model_is_blocked_in_readonly_status(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     monkeypatch.setenv("DATUS_PLATFORM_STATUS", "readonly")
@@ -211,3 +260,30 @@ def test_save_semantic_model_is_blocked_in_readonly_status(monkeypatch):
     assert response.status_code == 403
     assert response.json()["detail"] == "PLATFORM_STATUS_FORBIDDEN"
     svc.datasource.save_semantic_model.assert_not_awaited()
+
+
+def test_save_semantic_model_readonly_status_does_not_resolve_datus_service(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    monkeypatch.setenv("DATUS_PLATFORM_STATUS", "readonly")
+    ctx = _ctx(permissions={"module.config.edit"})
+    app = FastAPI()
+    app.include_router(table_routes.router)
+
+    async def reject_service(request: Request):
+        raise AssertionError("resolved DatusService before platform status denial")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/api/v1/semantic_model",
+            json={"table": "public.accounts", "yaml": "semantic_model:\n  name: accounts\n"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "PLATFORM_STATUS_FORBIDDEN"

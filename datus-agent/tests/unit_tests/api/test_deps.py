@@ -1,6 +1,7 @@
 """Tests for datus.api.deps — dependency injection module."""
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -8,7 +9,7 @@ from fastapi import HTTPException
 
 from datus.api import deps
 from datus.api.auth.context import AppContext
-from datus.api.deps import get_datus_service, init_deps
+from datus.api.deps import get_datus_service, get_request_app_context, init_deps
 from datus.api.services.datus_service_cache import DatusServiceCache
 from datus.utils.exceptions import DatusException, ErrorCode
 
@@ -117,6 +118,149 @@ class TestInitDeps:
         callback = mock_auth.on_evict.call_args.args[0]
         asyncio.run(callback("proj/a"))
         mock_cache.evict.assert_awaited_once_with(deps.service_cache_key("proj/a", enterprise_enabled=True))
+
+
+@pytest.mark.asyncio
+class TestGetRequestAppContext:
+    """Tests for request context authentication and enterprise metadata refresh."""
+
+    async def test_enterprise_context_is_authenticated_refreshed_and_cached_once(self):
+        from datus.api.enterprise.defaults import (
+            InMemoryEnterpriseDatasourceGrantStore,
+            InMemoryEnterpriseRoleStore,
+            InMemoryEnterpriseUserStore,
+            InMemorySessionOwnerStore,
+            LocalAuthorizationProvider,
+            NoopAuditSink,
+            PassthroughConfigProjector,
+        )
+        from datus.api.enterprise.loader import EnterpriseExtensions
+
+        role_store = InMemoryEnterpriseRoleStore()
+        await role_store.upsert_role(role_id="analyst", name="Analyst", permissions=["module.chat"])
+        await role_store.set_user_roles("alice", ["analyst"])
+        list_user_roles = role_store.list_user_roles
+        role_store.list_user_roles = AsyncMock(side_effect=list_user_roles)
+
+        grant_store = InMemoryEnterpriseDatasourceGrantStore()
+        await grant_store.put_grant(
+            subject_type="role",
+            subject_id="analyst",
+            datasource_key="finance",
+            effect="allow",
+            scope={"allow_catalog": True, "tables": ["public.accounts"]},
+        )
+        list_grants = grant_store.list_grants
+        grant_store.list_grants = AsyncMock(side_effect=list_grants)
+
+        ctx = AppContext(user_id="alice", project_id="proj-1")
+        mock_auth = MagicMock()
+        mock_auth.authenticate = AsyncMock(return_value=ctx)
+        deps._auth_provider = mock_auth
+        deps._enterprise_extensions = EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+            user_store=InMemoryEnterpriseUserStore(),
+            role_store=role_store,
+            datasource_grant_store=grant_store,
+        )
+        request = SimpleNamespace(state=SimpleNamespace())
+
+        first = await get_request_app_context(request)
+        second = await get_request_app_context(request)
+
+        assert first is ctx
+        assert second is ctx
+        assert request.state.app_context_enterprise_ready is True
+        assert ctx.roles == ["analyst"]
+        assert ctx.permissions == {"module.chat"}
+        assert ctx.datasource_grants["finance"]["tables"] == ["public.accounts"]
+        mock_auth.authenticate.assert_awaited_once_with(request)
+        role_store.list_user_roles.assert_awaited_once_with("alice")
+        assert grant_store.list_grants.await_count == 2
+        grant_store.list_grants.assert_any_await(subject_type="role", subject_id="analyst")
+        grant_store.list_grants.assert_any_await(subject_type="user", subject_id="alice")
+
+    async def test_enterprise_context_refreshes_cached_context_before_reuse(self):
+        from datus.api.enterprise.defaults import (
+            InMemoryEnterpriseDatasourceGrantStore,
+            InMemoryEnterpriseRoleStore,
+            InMemoryEnterpriseUserStore,
+            InMemorySessionOwnerStore,
+            LocalAuthorizationProvider,
+            NoopAuditSink,
+            PassthroughConfigProjector,
+        )
+        from datus.api.enterprise.loader import EnterpriseExtensions
+
+        role_store = InMemoryEnterpriseRoleStore()
+        await role_store.upsert_role(role_id="viewer", name="Viewer", permissions=["module.report.view"])
+        await role_store.set_user_roles("alice", ["viewer"])
+        cached_ctx = AppContext(
+            user_id="alice",
+            project_id="proj-1",
+            roles=["stale_admin"],
+            permissions={"module.admin.users"},
+            datasource_grants={"legacy": {"effect": "allow"}},
+        )
+        mock_auth = MagicMock()
+        mock_auth.authenticate = AsyncMock()
+        deps._auth_provider = mock_auth
+        deps._enterprise_extensions = EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+            user_store=InMemoryEnterpriseUserStore(),
+            role_store=role_store,
+            datasource_grant_store=InMemoryEnterpriseDatasourceGrantStore(),
+        )
+        request = SimpleNamespace(state=SimpleNamespace(app_context=cached_ctx))
+
+        result = await get_request_app_context(request)
+
+        assert result is cached_ctx
+        assert request.state.app_context_enterprise_ready is True
+        assert cached_ctx.roles == ["viewer"]
+        assert cached_ctx.permissions == {"module.report.view"}
+        assert cached_ctx.datasource_grants == {}
+        mock_auth.authenticate.assert_not_awaited()
+
+    async def test_enterprise_context_missing_user_fails_before_service_cache(self):
+        from datus.api.enterprise.defaults import (
+            InMemoryEnterpriseUserStore,
+            InMemorySessionOwnerStore,
+            LocalAuthorizationProvider,
+            NoopAuditSink,
+            PassthroughConfigProjector,
+        )
+        from datus.api.enterprise.loader import EnterpriseExtensions
+
+        mock_auth = MagicMock()
+        mock_auth.authenticate = AsyncMock(return_value=AppContext(project_id="proj-1"))
+        mock_cache = MagicMock(spec=DatusServiceCache)
+        mock_cache.get_or_create = AsyncMock()
+        deps._auth_provider = mock_auth
+        deps._service_cache = mock_cache
+        deps._enterprise_extensions = EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+            user_store=InMemoryEnterpriseUserStore(),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_request_app_context(SimpleNamespace(state=SimpleNamespace()))
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.detail == "AUTH_REQUIRED"
+        mock_cache.get_or_create.assert_not_called()
 
 
 @pytest.mark.asyncio

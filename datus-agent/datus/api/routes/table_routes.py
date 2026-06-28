@@ -18,6 +18,7 @@ from datus.api.models.table_models import (
     SemanticModelInput,
     ValidateSemanticModelData,
 )
+from datus.utils.sql_utils import parse_table_name_parts
 from datus_enterprise.audit import AuditEvent, audit_decision
 
 router = APIRouter(prefix="/api/v1", tags=["table"])
@@ -74,14 +75,12 @@ async def get_semantic_model(
     response_model=Result[dict],
     summary="Save Semantic Model",
     description="Save or update SemanticModel YAML configuration for a table",
+    dependencies=[Depends(require_platform_active(operation="semantic_model.save", resource_type="semantic_model"))],
 )
 async def save_semantic_model(
     request: SemanticModelInput,
     svc: ServiceDep,
     ctx: ConfigEditCtx,
-    _platform: None = Depends(
-        require_platform_active(operation="semantic_model.save", resource_type="semantic_model")
-    ),
 ) -> Result[dict]:
     """Save SemanticModel YAML."""
     await _authorize_table_read(ctx, svc, table=request.table, operation="semantic_model.save")
@@ -127,6 +126,7 @@ async def _authorize_table_read(ctx: AppContext, svc: ServiceDep, *, table: str,
         table,
         datasource=selected_datasource or service_datasource,
         datasource_grants=projection.datasource_grants,
+        dialect=_table_parser_dialect(svc, selected_datasource or service_datasource),
     )
     if denial:
         await _audit_table_denial(
@@ -139,7 +139,13 @@ async def _authorize_table_read(ctx: AppContext, svc: ServiceDep, *, table: str,
         raise HTTPException(status_code=403, detail=denial)
 
 
-def _table_scope_denial(table: str, *, datasource: str, datasource_grants: dict[str, Any]) -> str | None:
+def _table_scope_denial(
+    table: str,
+    *,
+    datasource: str,
+    datasource_grants: dict[str, Any],
+    dialect: str | None = None,
+) -> str | None:
     if not datasource_grants:
         return None
     grant = datasource_grants.get(datasource)
@@ -150,7 +156,7 @@ def _table_scope_denial(table: str, *, datasource: str, datasource_grants: dict[
     if str(grant.get("effect", "allow")).strip().lower() != "allow":
         return f"Datasource '{datasource}' is not authorized for this request."
 
-    parsed = _parse_table_name(table)
+    parsed = _parse_table_name(table, dialect=dialect)
     for scope_key, label, value in (
         ("catalogs", "catalog", parsed["catalog"]),
         ("databases", "database", parsed["database"]),
@@ -190,7 +196,32 @@ def _scope_patterns(grant: dict[str, Any], scope_key: str) -> list[str] | None:
     return [str(pattern).strip() for pattern in raw_patterns if str(pattern).strip()]
 
 
-def _parse_table_name(table: str) -> dict[str, str | None]:
+def _table_parser_dialect(svc: ServiceDep, datasource: str) -> str | None:
+    connector = getattr(getattr(svc, "datasource", None), "current_db_connector", None)
+    get_type = getattr(connector, "get_type", None)
+    if callable(get_type):
+        db_type = get_type()
+        if isinstance(db_type, str) and db_type.strip():
+            return db_type
+
+    datasources = getattr(getattr(getattr(svc, "agent_config", None), "services", None), "datasources", {}) or {}
+    datasource_config = datasources.get(datasource)
+    config_type = getattr(datasource_config, "type", None)
+    if isinstance(config_type, str) and config_type.strip():
+        return config_type
+    return None
+
+
+def _parse_table_name(table: str, *, dialect: str | None = None) -> dict[str, str | None]:
+    if dialect:
+        parts = parse_table_name_parts(table, dialect=dialect)
+        return {
+            "catalog": parts.get("catalog_name") or None,
+            "database": parts.get("database_name") or None,
+            "schema": parts.get("schema_name") or None,
+            "table": parts.get("table_name") or "",
+        }
+
     parts = [part.strip('"`[] ') for part in table.split(".") if part.strip('"`[] ')]
     parsed = {"catalog": None, "database": None, "schema": None, "table": parts[-1] if parts else ""}
     if len(parts) >= 4:
@@ -210,8 +241,12 @@ def _table_scope_candidates(parsed: dict[str, str | None]) -> list[str]:
     candidates = [table] if table else []
     if schema and table:
         candidates.append(f"{schema}.{table}")
+    if database and table:
+        candidates.append(f"{database}.{table}")
     if database and schema and table:
         candidates.append(f"{database}.{schema}.{table}")
+    if catalog and database and table:
+        candidates.append(f"{catalog}.{database}.{table}")
     if catalog and database and schema and table:
         candidates.append(f"{catalog}.{database}.{schema}.{table}")
     return candidates
