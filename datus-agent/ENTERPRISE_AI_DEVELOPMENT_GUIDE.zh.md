@@ -311,8 +311,8 @@ MVP 中 `datasource_grants` 采用每个 `(subject_type, subject_id, datasource_
 - chat subagent dispatch：`gen_sql` 使用 `module.sql_executor`，report 类 subagent 使用 `module.report.query`，dashboard 类 subagent 使用 `module.dashboard.query`。
 - datasource catalog route：`/api/v1/catalog/list` 使用 `module.datasource_catalog`。
 - direct SQL executor route：`/api/v1/sql/execute` 和 `/api/v1/sql/stop_execute` 使用 `module.sql_executor`。
-- report route：`/api/v1/report/detail`、`/api/v1/reports`、`/api/v1/reports/{slug}` 和 `/api/v1/reports/{slug}/html` 使用 `module.report.view`。
-- dashboard route：`/api/v1/dashboard/detail`、`/api/v1/dashboards`、`/api/v1/dashboards/{slug}` 和 `/api/v1/dashboards/{slug}/html` 使用 `module.dashboard.view`，`/api/v1/dashboard/query` 使用 `module.dashboard.query`。
+- report route：`/api/v1/report/detail`、`/api/v1/reports`、`/api/v1/reports/{slug}`、`/api/v1/reports/{slug}/acl` 和 `/api/v1/reports/{slug}/html` 使用 `module.report.view`；`{slug}/acl` 额外要求 artifact owner 或 `module.admin.artifacts`，只允许创建者自助修改分享字段。
+- dashboard route：`/api/v1/dashboard/detail`、`/api/v1/dashboards`、`/api/v1/dashboards/{slug}`、`/api/v1/dashboards/{slug}/acl` 和 `/api/v1/dashboards/{slug}/html` 使用 `module.dashboard.view`，`/api/v1/dashboard/query` 使用 `module.dashboard.query`；`{slug}/acl` 额外要求 artifact owner 或 `module.admin.artifacts`，只允许创建者自助修改分享字段。
 - config/model route：`/api/v1/config/agent` 和 `/api/v1/models` 使用 `module.config.view`，配置更新和连接探测接口使用 `module.config.edit`。
 - KB route：KB bootstrap、platform docs bootstrap 和 cancel 接口使用 `module.kb`。
 - MCP route：MCP server/tool/filter 的列表、管理和调用接口使用 `module.mcp`。
@@ -347,7 +347,7 @@ SQL 不是唯一执行风险。以下能力也必须进入 `Authenticate -> Buil
 - MCP：MCP server/tool 的列表、启停、调用都需要 `module.mcp` 或更细 permission，且仍叠加 tool permission。
 - 文件系统与 skills：路径、写入、执行类工具必须使用 tool permission 和 path policy；企业数据、secret、artifact 路径不能被自然语言绕过。
 - KB/RAG：知识库导入、索引、检索结果进入 LLM 前必须做企业/项目/用户/角色 ACL 和脱敏；向量索引需要按企业、项目或权限域隔离。
-- BI/report/dashboard：静态 HTML 可见不代表实时 query/export 可用；query/export 必须重新校验 artifact ACL、模块权限、datasource grant 和 SQL policy。
+- BI/report/dashboard：新建静态产物必须写入默认 `private` artifact ACL，创建者和 `module.admin.artifacts` 管理员默认可见；静态 HTML 可见不代表实时 query/export 可用；query/export 必须重新校验 artifact ACL、模块权限、datasource grant 和 SQL policy。
 - export/download：导出文件必须有 owner/ACL、过期时间、审计和脱敏策略；不能把临时文件路径直接暴露为长期访问权限。
 - quota/rate limit：高成本 LLM、长 SQL、导出、大结果集、MCP 调用都应预留 quota hook；已接入执行配额的路径在企业模式缺失 quota provider 时必须 fail closed，尚未接入的路径必须在文档中保留明确后续项。
 
@@ -361,7 +361,7 @@ SQL 不是唯一执行风险。以下能力也必须进入 `Authenticate -> Buil
 - 模块 allow/deny、datasource allow/deny、session owner deny、artifact ACL deny。
 - SQL policy deny、SQL policy rewrite、dashboard/report/direct SQL query。
 - MCP 调用、文件写入/导出、KB 导入/检索、LLM provider/model 选择和高成本请求。
-- 用户、角色、权限、datasource grant、artifact ACL、secret、quota 等 admin mutation。
+- 用户、角色、权限、datasource grant、artifact ACL、creator artifact share、secret、quota 等 mutation。
 
 审计字段至少包含 `user_id`、`request_id`、`action`、`resource_type`、`resource_id`、`decision`、`reason` 和时间。metadata 可以记录摘要和策略版本，但禁止写入 secret、完整凭证、未脱敏 datasource 配置、完整大结果集或敏感 prompt。
 
@@ -370,7 +370,7 @@ SQL 不是唯一执行风险。以下能力也必须进入 `Authenticate -> Buil
 - 禁用用户后，新请求、长任务续写、session resume 和实时 query 必须拒绝；历史 audit、session ownership 和产物记录不自动删除。
 - 删除 role 前必须处理现有 `user_roles`、`role_permissions` 绑定；默认应阻止删除仍被使用的 role，强制删除必须清理关联并审计。
 - datasource grant 撤销后，新 catalog、chat projection、dashboard/report/direct SQL 请求立即按新授权判定。
-- artifact ACL 修改后，新 list/detail/query/export 请求立即按新 ACL 判定。
+- artifact ACL 或创建者自助分享修改后，新 list/detail/query/export 请求立即按新 ACL 判定；`allowed_user_ids` 可精确分享给指定用户。
 - admin mutation 审计只记录脱敏摘要，不记录 secret、完整连接串或大结果集。
 - secret admin API 只管理引用 metadata，响应和审计只允许 redacted hint，不允许回显完整 reference 或 secret value；把 secret reference 解析到 datasource/model 配置属于后续执行路径切片。
 

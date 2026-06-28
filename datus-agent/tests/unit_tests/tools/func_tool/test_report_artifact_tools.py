@@ -43,6 +43,21 @@ from datus.tools.func_tool.report_artifact_tools import (
 # ----------------------------------------------------------------------------- #
 
 
+class MemoryArtifactAclStore:
+    def __init__(self):
+        self.acls = {}
+
+    async def get_acl(self, *, artifact_type: str, slug: str):
+        key = (artifact_type, slug)
+        if key not in self.acls:
+            raise KeyError(key)
+        return dict(self.acls[key])
+
+    async def put_acl(self, *, artifact_type: str, slug: str, acl: dict):
+        self.acls[(artifact_type, slug)] = dict(acl)
+        return dict(acl)
+
+
 @pytest.fixture
 def sqlite_db(tmp_path: Path) -> Path:
     db_path = tmp_path / "demo.sqlite"
@@ -166,6 +181,32 @@ class TestStartNewReport:
         assert manifest["description"] == "Quarterly review of east-region direct sales."
         assert manifest["kind"] == "report"
         assert manifest["created_at"].endswith("Z")
+
+    def test_writes_default_private_acl_when_enterprise_context_is_available(
+        self, db_func_tool: DBFuncTool, project_root: Path
+    ):
+        store = MemoryArtifactAclStore()
+        agent_config = SimpleNamespace(
+            project_root=str(project_root),
+            _request_user_id="creator-1",
+            _artifact_acl_store=store,
+        )
+        tools = ReportArtifactTools(agent_config=agent_config, db_func_tool=db_func_tool)
+
+        result = tools.start_new_report(
+            slug="private_report",
+            name="private report",
+            description="Report with default private ACL.",
+        )
+
+        assert result.success == 1, result.error
+        assert store.acls[("report", "private_report")] == {
+            "owner_user_id": "creator-1",
+            "visibility": "private",
+            "allowed_roles": [],
+            "allowed_user_ids": [],
+            "datasources": [],
+        }
 
     def test_chinese_name_is_preserved_in_manifest(self, unbound_tools: ReportArtifactTools, project_root: Path):
         # The slug is always pure ASCII; the manifest's display name preserves

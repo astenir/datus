@@ -47,6 +47,7 @@ from datus.tools.func_tool._artifact_filesystem_base import ArtifactFilesystemFu
 from datus.tools.func_tool._visual_artifact_helpers import (
     append_intent_section,
     coerce_uses_arg,
+    create_default_artifact_acl_after_manifest,
     upsert_manifest_after_save,
     utc_now_iso,
     write_query_brief,
@@ -644,6 +645,14 @@ class DashboardArtifactTools:
                 )
             except OSError as exc:
                 return FuncToolResult(success=0, error=f"Failed to write manifest.json: {exc}")
+            acl_error = create_default_artifact_acl_after_manifest(
+                self.agent_config,
+                artifact_type="dashboard",
+                slug=dashboard_slug,
+                datasources=manifest.datasources,
+            )
+            if acl_error:
+                return FuncToolResult(success=0, error=acl_error)
             manifest_rel = manifest_path.relative_to(self._project_root).as_posix()
         self.dashboard_slug = dashboard_slug
         self.dashboard_dir = dashboard_dir

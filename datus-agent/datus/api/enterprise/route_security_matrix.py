@@ -453,8 +453,66 @@ _add_many(
     ["/api/v1/dashboards", "/api/v1/dashboards/{slug}", "/api/v1/dashboards/{slug}/html"],
     _ARTIFACT_DASHBOARD_VIEW_POLICY,
 )
+_add(
+    "GET",
+    "/api/v1/dashboards/{slug}/acl",
+    _policy(
+        MODULE_RBAC,
+        ARTIFACT_ACL,
+        AUDIT,
+        SYSTEM_READONLY,
+        module_permission="module.dashboard.view",
+        audit_action="artifact.share",
+        data_boundaries={ARTIFACT_ACL},
+        note="Creator/admin self-service sharing state; owner check is enforced through artifact ACL.",
+    ),
+)
+_add(
+    "PUT",
+    "/api/v1/dashboards/{slug}/acl",
+    _policy(
+        MODULE_RBAC,
+        ARTIFACT_ACL,
+        AUDIT,
+        PLATFORM_STATUS_GATE,
+        MUTATION_EXECUTION,
+        module_permission="module.dashboard.view",
+        audit_action="artifact.share",
+        data_boundaries={ARTIFACT_ACL},
+        note="Creator/admin self-service sharing mutation; owner check is enforced through artifact ACL.",
+    ),
+)
 _add_many(
     "GET", ["/api/v1/reports", "/api/v1/reports/{slug}", "/api/v1/reports/{slug}/html"], _ARTIFACT_REPORT_VIEW_POLICY
+)
+_add(
+    "GET",
+    "/api/v1/reports/{slug}/acl",
+    _policy(
+        MODULE_RBAC,
+        ARTIFACT_ACL,
+        AUDIT,
+        SYSTEM_READONLY,
+        module_permission="module.report.view",
+        audit_action="artifact.share",
+        data_boundaries={ARTIFACT_ACL},
+        note="Creator/admin self-service sharing state; owner check is enforced through artifact ACL.",
+    ),
+)
+_add(
+    "PUT",
+    "/api/v1/reports/{slug}/acl",
+    _policy(
+        MODULE_RBAC,
+        ARTIFACT_ACL,
+        AUDIT,
+        PLATFORM_STATUS_GATE,
+        MUTATION_EXECUTION,
+        module_permission="module.report.view",
+        audit_action="artifact.share",
+        data_boundaries={ARTIFACT_ACL},
+        note="Creator/admin self-service sharing mutation; owner check is enforced through artifact ACL.",
+    ),
 )
 _add(
     "GET",

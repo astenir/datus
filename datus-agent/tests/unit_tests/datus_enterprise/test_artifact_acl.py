@@ -72,6 +72,7 @@ async def test_require_artifact_access_uses_configured_acl_store(monkeypatch):
                 "owner_user_id": "owner-1",
                 "visibility": "private",
                 "allowed_roles": [],
+                "allowed_user_ids": [],
                 "datasources": [],
             }
         }
@@ -115,6 +116,40 @@ async def test_require_artifact_access_uses_configured_acl_store(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_require_artifact_access_allows_explicit_user_share(monkeypatch):
+    store = MemoryArtifactAclStore(
+        {
+            ("report", "shared_sales"): {
+                "owner_user_id": "owner-1",
+                "visibility": "private",
+                "allowed_roles": [],
+                "allowed_user_ids": ["viewer-1"],
+                "datasources": [],
+            }
+        }
+    )
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+            artifact_acl_store=store,
+        ),
+    )
+
+    await require_artifact_access(
+        AppContext(user_id="viewer-1", permissions={"module.report.view"}),
+        artifact_type="report",
+        slug="shared_sales",
+        action="view",
+    )
+
+
+@pytest.mark.asyncio
 async def test_require_artifact_access_does_not_trust_principal_admin_when_permissions_present(monkeypatch):
     store = MemoryArtifactAclStore(
         {
@@ -122,6 +157,7 @@ async def test_require_artifact_access_does_not_trust_principal_admin_when_permi
                 "owner_user_id": "owner-1",
                 "visibility": "private",
                 "allowed_roles": [],
+                "allowed_user_ids": [],
                 "datasources": [],
             }
         }

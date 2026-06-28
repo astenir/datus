@@ -42,7 +42,7 @@ from datus.utils.trace_context import build_chat_trace_context, reset_trace_cont
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
-    from datus.api.enterprise.protocols import SessionBodyStore, SessionOwnerStore
+    from datus.api.enterprise.protocols import ArtifactAclStore, SessionBodyStore, SessionOwnerStore
 
 HEARTBEAT_INTERVAL = 10  # seconds
 
@@ -292,6 +292,7 @@ class ChatTaskManager:
         project_id: str = "default",
         session_owner_store: Optional["SessionOwnerStore"] = None,
         session_body_store: Optional["SessionBodyStore"] = None,
+        artifact_acl_store: Optional["ArtifactAclStore"] = None,
     ) -> None:
         self._tasks: Dict[str, ChatTask] = {}
         self._completed_tasks: Dict[str, ChatTask] = {}
@@ -302,6 +303,7 @@ class ChatTaskManager:
         self._project_id = project_id
         self._session_owner_store = session_owner_store
         self._session_body_store = session_body_store
+        self._artifact_acl_store = artifact_acl_store
 
     # ------------------------------------------------------------------
     # Public API
@@ -325,6 +327,8 @@ class ChatTaskManager:
             agent_config._session_body_store = self._session_body_store
             agent_config._session_project_id = self._project_id
         agent_config.principal = dict(principal or {})
+        agent_config._request_user_id = user_id
+        agent_config._artifact_acl_store = self._artifact_acl_store
         # API surface has no interactive broker to confirm EXTERNAL file
         # access, so force filesystem strict mode — every node constructed
         # below reads this flag via AgenticNode._resolve_filesystem_strict().

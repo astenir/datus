@@ -126,6 +126,7 @@ async def test_report_list_uses_configured_acl_store_without_principal_fallback(
                 "owner_user_id": "owner-1",
                 "visibility": "private",
                 "allowed_roles": [],
+                "allowed_user_ids": [],
                 "datasources": [],
             }
         }
@@ -248,6 +249,7 @@ def test_get_admin_artifact_acl_returns_stored_acl_and_audits(monkeypatch, tmp_p
                 "owner_user_id": "owner-1",
                 "visibility": "role",
                 "allowed_roles": ["analyst"],
+                "allowed_user_ids": ["viewer-1"],
                 "datasources": ["finance_dw"],
             }
         }
@@ -264,6 +266,7 @@ def test_get_admin_artifact_acl_returns_stored_acl_and_audits(monkeypatch, tmp_p
         "owner_user_id": "owner-1",
         "visibility": "role",
         "allowed_roles": ["analyst"],
+        "allowed_user_ids": ["viewer-1"],
         "datasources": ["finance_dw"],
     }
     event = audit_sink.events[-1]
@@ -300,6 +303,7 @@ def test_put_admin_artifact_acl_updates_store_and_audits_summary(monkeypatch, tm
                 "owner_user_id": "old-owner",
                 "visibility": "private",
                 "allowed_roles": [],
+                "allowed_user_ids": [],
                 "datasources": [],
             }
         }
@@ -309,6 +313,7 @@ def test_put_admin_artifact_acl_updates_store_and_audits_summary(monkeypatch, tm
         "owner_user_id": "new-owner",
         "visibility": "enterprise",
         "allowed_roles": ["analyst", "lead"],
+        "allowed_user_ids": ["viewer-1"],
         "datasources": ["finance_dw"],
     }
 
@@ -329,12 +334,14 @@ def test_put_admin_artifact_acl_updates_store_and_audits_summary(monkeypatch, tm
             "owner_user_id": "old-owner",
             "visibility": "private",
             "allowed_roles": [],
+            "allowed_user_ids": [],
             "datasources": [],
         },
         "new_acl": {
             "owner_user_id": "new-owner",
             "visibility": "enterprise",
             "allowed_roles": ["analyst", "lead"],
+            "allowed_user_ids": ["viewer-1"],
             "datasources": ["finance_dw"],
         },
     }
@@ -349,6 +356,7 @@ def test_put_admin_artifact_acl_creates_first_acl_for_existing_artifact(monkeypa
         "owner_user_id": "owner-1",
         "visibility": "private",
         "allowed_roles": [],
+        "allowed_user_ids": [],
         "datasources": [],
     }
 
@@ -400,6 +408,7 @@ def test_put_admin_artifact_acl_changes_runtime_report_visibility(monkeypatch, t
                 "owner_user_id": "owner-1",
                 "visibility": "private",
                 "allowed_roles": [],
+                "allowed_user_ids": [],
                 "datasources": [],
             },
         )
@@ -416,6 +425,164 @@ def test_put_admin_artifact_acl_changes_runtime_report_visibility(monkeypatch, t
         assert [item["slug"] for item in owner_response.json()["data"]] == ["sales"]
 
 
+def test_creator_can_share_report_with_single_user(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "report", "sales")
+    audit_sink = CollectingAuditSink()
+    store = MemoryArtifactAclStore(
+        {
+            ("report", "sales"): {
+                "owner_user_id": "owner-1",
+                "visibility": "private",
+                "allowed_roles": [],
+                "allowed_user_ids": [],
+                "datasources": ["finance_dw"],
+            }
+        }
+    )
+    ctx_holder = {"ctx": AppContext(user_id="owner-1", permissions={"module.report.view"})}
+    app = FastAPI()
+    app.include_router(artifact_routes.router)
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx_holder["ctx"]
+        return _svc(tmp_path)
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx_holder["ctx"]
+        return ctx_holder["ctx"]
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=audit_sink,
+            artifact_acl_store=store,
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.put(
+            "/api/v1/reports/sales/acl",
+            json={"visibility": "private", "allowed_roles": [], "allowed_user_ids": ["viewer-1"]},
+        )
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["data"] == {
+            "owner_user_id": "owner-1",
+            "visibility": "private",
+            "allowed_roles": [],
+            "allowed_user_ids": ["viewer-1"],
+        }
+        assert store.acls[("report", "sales")] == {
+            "owner_user_id": "owner-1",
+            "visibility": "private",
+            "allowed_roles": [],
+            "allowed_user_ids": ["viewer-1"],
+            "datasources": ["finance_dw"],
+        }
+
+        ctx_holder["ctx"] = AppContext(user_id="viewer-1", permissions={"module.report.view"})
+        list_response = client.get("/api/v1/reports")
+        assert [item["slug"] for item in list_response.json()["data"]] == ["sales"]
+        detail_response = client.get("/api/v1/reports/sales")
+        assert detail_response.json()["success"] is True
+
+    event = next(
+        event
+        for event in audit_sink.events
+        if event.action == "artifact.share" and event.resource_id == "report:sales" and event.decision == "allow"
+    )
+    assert event.action == "artifact.share"
+    assert event.resource_id == "report:sales"
+    assert event.decision == "allow"
+    assert event.metadata["new_acl"]["allowed_user_ids"] == ["viewer-1"]
+    assert event.metadata["new_acl"]["datasources"] == ["finance_dw"]
+
+
+def test_non_owner_shared_user_cannot_update_report_share(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "report", "sales")
+    audit_sink = CollectingAuditSink()
+    store = MemoryArtifactAclStore(
+        {
+            ("report", "sales"): {
+                "owner_user_id": "owner-1",
+                "visibility": "private",
+                "allowed_roles": [],
+                "allowed_user_ids": ["viewer-1"],
+                "datasources": [],
+            }
+        }
+    )
+    ctx = AppContext(user_id="viewer-1", permissions={"module.report.view"})
+
+    with _client(monkeypatch, tmp_path, ctx, audit_sink=audit_sink, artifact_acl_store=store) as client:
+        response = client.put(
+            "/api/v1/reports/sales/acl",
+            json={"visibility": "enterprise", "allowed_roles": [], "allowed_user_ids": []},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "ARTIFACT_FORBIDDEN"
+    assert store.acls[("report", "sales")]["visibility"] == "private"
+    event = audit_sink.events[-1]
+    assert event.action == "artifact.share"
+    assert event.resource_id == "report:sales"
+    assert event.decision == "deny"
+    assert event.reason == "artifact owner required"
+
+
+def test_admin_artifacts_permission_can_update_dashboard_share(monkeypatch, tmp_path: Path):
+    _write_manifest(tmp_path, "dashboard", "ops")
+    store = MemoryArtifactAclStore(
+        {
+            ("dashboard", "ops"): {
+                "owner_user_id": "owner-1",
+                "visibility": "private",
+                "allowed_roles": [],
+                "allowed_user_ids": [],
+                "datasources": [],
+            }
+        }
+    )
+    ctx = AppContext(user_id="admin", permissions={"module.dashboard.view", "module.admin.artifacts"})
+
+    with _client(monkeypatch, tmp_path, ctx, artifact_acl_store=store) as client:
+        response = client.put(
+            "/api/v1/dashboards/ops/acl",
+            json={
+                "visibility": "role",
+                "allowed_roles": ["analyst", "analyst"],
+                "allowed_user_ids": ["viewer-1", "viewer-1"],
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"] == {
+        "owner_user_id": "owner-1",
+        "visibility": "role",
+        "allowed_roles": ["analyst"],
+        "allowed_user_ids": ["viewer-1"],
+    }
+    assert store.acls[("dashboard", "ops")] == {
+        "owner_user_id": "owner-1",
+        "visibility": "role",
+        "allowed_roles": ["analyst"],
+        "allowed_user_ids": ["viewer-1"],
+        "datasources": [],
+    }
+
+
 def test_put_admin_artifact_acl_rejects_missing_artifact_before_store_write(monkeypatch, tmp_path: Path):
     audit_sink = CollectingAuditSink()
     store = MemoryArtifactAclStore()
@@ -428,6 +595,7 @@ def test_put_admin_artifact_acl_rejects_missing_artifact_before_store_write(monk
                 "owner_user_id": "owner-1",
                 "visibility": "private",
                 "allowed_roles": [],
+                "allowed_user_ids": [],
                 "datasources": [],
             },
         )
@@ -481,8 +649,10 @@ def test_enterprise_artifact_routes_expose_resource_paths_only():
     assert "/api/v1/admin/artifacts" in route_paths
     assert "/api/v1/admin/artifacts/{artifact_type}/{slug}/acl" in route_paths
     assert "/api/v1/reports" in route_paths
+    assert "/api/v1/reports/{slug}/acl" in route_paths
     assert "/api/v1/reports/{slug}/html" in route_paths
     assert "/api/v1/dashboards" in route_paths
+    assert "/api/v1/dashboards/{slug}/acl" in route_paths
     assert "/api/v1/dashboards/{slug}/html" in route_paths
     assert "/api/v1/report/list" not in route_paths
     assert "/api/v1/report/html" not in route_paths

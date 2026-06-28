@@ -142,6 +142,7 @@ async def get_datus_service(request: Request) -> DatusService:
             stream_thinking=_stream_thinking,
             session_owner_store=enterprise_extensions.session_owner_store,
             session_body_store=enterprise_extensions.session_body_store,
+            artifact_acl_store=enterprise_extensions.artifact_acl_store,
         )
 
     return await _service_cache.get_or_create(cache_key, _factory, expected_fingerprint=expected_fp)

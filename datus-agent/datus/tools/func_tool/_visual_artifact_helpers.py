@@ -314,6 +314,61 @@ def upsert_manifest_after_save(
         return f"Failed to upsert manifest: {exc}"
 
 
+def create_default_artifact_acl_after_manifest(
+    agent_config: Any,
+    *,
+    artifact_type: str,
+    slug: str,
+    datasources: Optional[List[str]] = None,
+) -> Optional[str]:
+    """Persist the default private ACL for a newly-created visual artifact.
+
+    Local-compatible invocations have no ACL store or authenticated user and
+    intentionally skip this hook. Enterprise API chat requests attach both to
+    the request-scoped ``AgentConfig`` clone before the artifact tools run.
+    """
+
+    store = getattr(agent_config, "_artifact_acl_store", None)
+    owner_user_id = _request_owner_user_id(agent_config)
+    if store is None or not owner_user_id:
+        return None
+
+    try:
+        from datus_enterprise.artifact_acl import ensure_default_private_acl_sync
+
+        ensure_default_private_acl_sync(
+            store,
+            artifact_type=artifact_type,
+            slug=slug,
+            owner_user_id=owner_user_id,
+            datasources=datasources or [],
+        )
+        return None
+    except Exception as exc:
+        logger.warning(
+            "Failed to create default ACL for %s %s owned by %s: %s",
+            artifact_type,
+            slug,
+            owner_user_id,
+            exc,
+        )
+        return f"Failed to create default artifact ACL: {exc}"
+
+
+def _request_owner_user_id(agent_config: Any) -> str | None:
+    raw_user_id = getattr(agent_config, "_request_user_id", None)
+    if raw_user_id:
+        return str(raw_user_id).strip() or None
+    principal = getattr(agent_config, "principal", None)
+    if not isinstance(principal, dict):
+        return None
+    for key in ("user_id", "sub", "employee_id"):
+        value = principal.get(key)
+        if value:
+            return str(value).strip() or None
+    return None
+
+
 def write_query_brief(
     queries_dir: Path,
     *,

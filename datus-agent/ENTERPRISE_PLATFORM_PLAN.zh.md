@@ -476,18 +476,22 @@ GET  /api/v1/sql/tasks/{task_id}
 ```text
 GET  /api/v1/reports
 GET  /api/v1/reports/{slug}
+GET  /api/v1/reports/{slug}/acl
+PUT  /api/v1/reports/{slug}/acl
 GET  /api/v1/reports/{slug}/html
 POST /api/v1/reports/{slug}/query
 POST /api/v1/reports/{slug}/export
 
 GET  /api/v1/dashboards
 GET  /api/v1/dashboards/{slug}
+GET  /api/v1/dashboards/{slug}/acl
+PUT  /api/v1/dashboards/{slug}/acl
 GET  /api/v1/dashboards/{slug}/html
 POST /api/v1/dashboards/{slug}/query
 POST /api/v1/dashboards/{slug}/export
 ```
 
-`view` 权限只表示可看 list/detail/html，不自动包含实时查询或导出。
+`view` 权限只表示可看 list/detail/html，不自动包含实时查询或导出。产物创建后默认写入 `private` ACL：创建者和 `module.admin.artifacts` 管理员可见；创建者可通过 `{slug}/acl` 自助分享给角色、指定用户或企业全员，管理员仍通过 `/admin/artifacts/{artifact_type}/{slug}/acl` 管理完整 ACL。
 
 ### `/admin`
 
@@ -819,6 +823,7 @@ chat 请求投影流程：
   "owner_user_id": "user_1",
   "visibility": "private",
   "allowed_roles": ["analyst"],
+  "allowed_user_ids": ["user_2"],
   "datasources": ["finance_dw"]
 }
 ```
@@ -1057,8 +1062,8 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - datasource catalog route 已接入 `module.datasource_catalog`，覆盖当前 `/api/v1/catalog/list`。
 - table/semantic model 读取 route 已接入 `module.datasource_catalog`，覆盖 `/api/v1/table/detail` 和 `GET /api/v1/semantic_model`；语义模型保存/校验已接入 `module.config.edit`，其中保存 route 的 platform status gate 位于 route decorator dependency，保证 readonly/maintenance 拒绝发生在 `DatusService` 解析前。
 - 直接 SQL executor route 已接入 `module.sql_executor`，覆盖 `/api/v1/sql/execute` 和 `/api/v1/sql/stop_execute`。
-- report route 已接入 `module.report.view`，覆盖当前 `/api/v1/report/detail`，并通过 enterprise artifact route 覆盖 `/api/v1/reports`、`/api/v1/reports/{slug}`、`/api/v1/reports/{slug}/html`。
-- dashboard route 已接入 `module.dashboard.view` 和 `module.dashboard.query`，覆盖当前 `/api/v1/dashboard/detail`、`/api/v1/dashboard/query`，并通过 enterprise artifact route 覆盖 `/api/v1/dashboards`、`/api/v1/dashboards/{slug}`、`/api/v1/dashboards/{slug}/html`。
+- report route 已接入 `module.report.view`，覆盖当前 `/api/v1/report/detail`，并通过 enterprise artifact route 覆盖 `/api/v1/reports`、`/api/v1/reports/{slug}`、`/api/v1/reports/{slug}/acl`、`/api/v1/reports/{slug}/html`。
+- dashboard route 已接入 `module.dashboard.view` 和 `module.dashboard.query`，覆盖当前 `/api/v1/dashboard/detail`、`/api/v1/dashboard/query`，并通过 enterprise artifact route 覆盖 `/api/v1/dashboards`、`/api/v1/dashboards/{slug}`、`/api/v1/dashboards/{slug}/acl`、`/api/v1/dashboards/{slug}/html`。
 - config/model route 已接入 `module.config.view` 和 `module.config.edit`，覆盖 `/api/v1/config/agent`、`/api/v1/models`、配置更新接口和连接探测接口。
 - KB route 已接入 `module.kb`，覆盖 KB bootstrap、platform docs bootstrap 和对应 cancel 接口。
 - MCP route 已接入 `module.mcp`，覆盖 MCP server/tool/filter 的列表、管理和调用接口。

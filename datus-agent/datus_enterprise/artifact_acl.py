@@ -10,10 +10,66 @@ from fastapi import HTTPException
 from datus.api.auth.context import AppContext
 from datus.api.enterprise.deps import get_artifact_acl_store
 from datus.schemas.artifact_manifest import ArtifactManifest
+from datus.utils.async_utils import run_async
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import ResourceRef, authorize
 
 TManifest = TypeVar("TManifest", bound=ArtifactManifest)
+
+DEFAULT_ARTIFACT_ACL_VISIBILITY = "private"
+
+
+def build_default_private_acl(*, owner_user_id: str, datasources: Sequence[str] | None = None) -> dict[str, Any]:
+    """Return the default ACL for a newly-created report/dashboard artifact."""
+
+    return {
+        "owner_user_id": owner_user_id,
+        "visibility": DEFAULT_ARTIFACT_ACL_VISIBILITY,
+        "allowed_roles": [],
+        "allowed_user_ids": [],
+        "datasources": _normalized_strings(datasources or []),
+    }
+
+
+async def ensure_default_private_acl(
+    store: Any,
+    *,
+    artifact_type: str,
+    slug: str,
+    owner_user_id: str | None,
+    datasources: Sequence[str] | None = None,
+) -> dict[str, Any] | None:
+    """Create a default private ACL when the artifact has no stored ACL yet."""
+
+    owner = str(owner_user_id or "").strip()
+    if store is None or not owner:
+        return None
+    try:
+        return await store.get_acl(artifact_type=artifact_type, slug=slug)
+    except KeyError:
+        default_acl = build_default_private_acl(owner_user_id=owner, datasources=datasources)
+        return await store.put_acl(artifact_type=artifact_type, slug=slug, acl=default_acl)
+
+
+def ensure_default_private_acl_sync(
+    store: Any,
+    *,
+    artifact_type: str,
+    slug: str,
+    owner_user_id: str | None,
+    datasources: Sequence[str] | None = None,
+) -> dict[str, Any] | None:
+    """Synchronous bridge for artifact tools that create manifest files."""
+
+    return run_async(
+        ensure_default_private_acl(
+            store,
+            artifact_type=artifact_type,
+            slug=slug,
+            owner_user_id=owner_user_id,
+            datasources=datasources,
+        )
+    )
 
 
 async def filter_visible_artifacts(
@@ -118,6 +174,9 @@ def _acl_allows(ctx: AppContext, raw_acl: Any) -> bool:
         return True
     if ctx.is_admin or _has_permission(ctx, "module.admin.artifacts"):
         return True
+    allowed_user_ids = _string_set(raw_acl.get("allowed_user_ids"))
+    if ctx.user_id and ctx.user_id in allowed_user_ids:
+        return True
 
     visibility = raw_acl.get("visibility")
     if visibility == "enterprise":
@@ -147,6 +206,20 @@ def _string_set(raw: Any) -> set[str]:
     if isinstance(raw, Iterable):
         return {item for item in raw if isinstance(item, str)}
     return set()
+
+
+def _normalized_strings(raw: Iterable[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, str):
+            continue
+        value = item.strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized
 
 
 def _allowed_slugs(ctx: AppContext, artifact_type: str) -> set[str] | None:

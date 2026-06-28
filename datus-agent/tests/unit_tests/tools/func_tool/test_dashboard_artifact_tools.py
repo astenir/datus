@@ -49,6 +49,21 @@ from datus.tools.func_tool.dashboard_artifact_tools import (
 # ----------------------------------------------------------------------------- #
 
 
+class MemoryArtifactAclStore:
+    def __init__(self):
+        self.acls = {}
+
+    async def get_acl(self, *, artifact_type: str, slug: str):
+        key = (artifact_type, slug)
+        if key not in self.acls:
+            raise KeyError(key)
+        return dict(self.acls[key])
+
+    async def put_acl(self, *, artifact_type: str, slug: str, acl: dict):
+        self.acls[(artifact_type, slug)] = dict(acl)
+        return dict(acl)
+
+
 @pytest.fixture
 def sqlite_db(tmp_path: Path) -> Path:
     db_path = tmp_path / "demo.sqlite"
@@ -352,6 +367,32 @@ class TestStartNewDashboard:
         assert manifest["description"] == "Live north-region sales dashboard with date and channel filters."
         assert manifest["kind"] == "dashboard"
         assert manifest["created_at"].endswith("Z")
+
+    def test_writes_default_private_acl_when_enterprise_context_is_available(
+        self, db_func_tool: DBFuncTool, project_root: Path
+    ):
+        store = MemoryArtifactAclStore()
+        agent_config = SimpleNamespace(
+            project_root=str(project_root),
+            _request_user_id="creator-1",
+            _artifact_acl_store=store,
+        )
+        tools = DashboardArtifactTools(agent_config=agent_config, db_func_tool=db_func_tool)
+
+        result = tools.start_new_dashboard(
+            slug="private_dashboard",
+            name="private dashboard",
+            description="Dashboard with default private ACL.",
+        )
+
+        assert result.success == 1, result.error
+        assert store.acls[("dashboard", "private_dashboard")] == {
+            "owner_user_id": "creator-1",
+            "visibility": "private",
+            "allowed_roles": [],
+            "allowed_user_ids": [],
+            "datasources": [],
+        }
 
     def test_chinese_name_is_preserved_in_manifest(self, unbound_tools: DashboardArtifactTools, project_root: Path):
         result = unbound_tools.start_new_dashboard(

@@ -361,7 +361,7 @@ class SessionBodyStore(Protocol):
 
 @runtime_checkable
 class ArtifactAclStore(Protocol):
-    """Optional artifact ACL persistence interface for admin APIs."""
+    """Optional artifact ACL persistence interface for report/dashboard artifacts."""
 
     async def get_acl(self, *, artifact_type: str, slug: str) -> dict[str, Any]:
         """Return the ACL metadata for one artifact."""
