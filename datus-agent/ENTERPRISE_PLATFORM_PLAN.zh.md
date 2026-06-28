@@ -1108,6 +1108,7 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - 已新增可配置的 `DatasourceGrantProjector`，支持按 `AppContext.datasource_grants` 生成请求级 `AgentConfig` clone、过滤未授权 datasource、选择授权默认 datasource，并向 principal 注入 `user_id`、`datasource`、`allowed_datasources` 和 `datasource_grants`。
 - `/api/v1/chat/stream` 已通过统一 config projection 校验 `request.datasource`，未授权 datasource 以 SSE error 返回，并使用 projection clone 启动 chat task，避免污染缓存的 `DatusService.agent_config`。
 - `/api/v1/catalog/list` 已接入 datasource-level projection：显式请求未授权 datasource 返回 403，未指定 datasource 时使用授权后的默认 datasource，并按 grant 中的 catalog/database/schema/table scope 裁剪返回的目录结果。
+- CLI/API 复用的 `CLIService` metadata 路径已补齐请求级投影边界：`context tables/catalogs/catalog/context` 和 internal `databases/tables/schemas` 使用 request-scoped `AgentConfig`、连接器和 datasource grant，按 catalog/database/schema/table scope 裁剪列表、当前上下文和计数；目录 introspection fallback、单连接 database 名称和共享 `cli_context` 不得泄漏缓存服务上的未授权状态。
 - `/api/v1/sql/execute` 已接入请求级 datasource projection 和执行前兜底：直接 SQL 使用投影后的 `AgentConfig` 执行，显式或默认 database 必须在 grant 范围内，手写 SQL 的 table/schema/database scope 会在执行前校验，并复用 SQL policy principal 进行 deny/rewrite。
 - `/api/v1/dashboard/query` 已接入请求级 datasource projection，保存 SQL 模板中声明的 datasource 必须在 grant 范围内，并复用投影后的 config 与 principal 执行。
 - `/api/v1/table/detail`、`GET /api/v1/semantic_model`、`POST /api/v1/semantic_model` 和 `POST /api/v1/semantic_model/validate` 已在 route 层叠加 datasource/table grant：无 datasource grant、deny grant、未充分限定的 schema/table scope 或不匹配 table glob 都会拒绝。
@@ -1120,6 +1121,7 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - LLM 工具列表、datasource prompt context、schema/RAG 检索不包含未授权 datasource。
 - 直接 SQL API 和 chat prompt 都不能使用未授权 datasource。
 - table detail 和 semantic model route 不能读取或写入未授权 table。
+- CLI/API metadata 上下文和 internal 命令不能使用共享 `DatusService` / `CliContext` 的 datasource、catalog、database、schema、table 列表或计数绕过 request-scoped projection。
 
 ### 阶段 5：SQL policy、产物查询与审计兜底
 
