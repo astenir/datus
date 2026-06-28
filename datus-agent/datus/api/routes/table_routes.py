@@ -20,10 +20,12 @@ from datus.api.models.table_models import (
     SemanticModelInput,
     ValidateSemanticModelData,
 )
+from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import parse_table_name_parts
 from datus_enterprise.audit import AuditEvent, audit_decision
 
 router = APIRouter(prefix="/api/v1", tags=["table"])
+logger = get_logger(__name__)
 _require_catalog_module = require_module("module.datasource_catalog")
 _require_config_edit = require_module("module.config.edit")
 CatalogModuleCtx = Annotated[AppContext, Depends(_require_catalog_module)]
@@ -288,14 +290,17 @@ async def _audit_table_denial(
     audit_metadata = {"datasource": datasource}
     if metadata:
         audit_metadata.update(metadata)
-    await audit_decision(
-        ctx,
-        AuditEvent(
-            action=operation,
-            resource_type="table",
-            resource_id=table,
-            decision="deny",
-            reason=reason,
-            metadata=audit_metadata,
-        ),
-    )
+    try:
+        await audit_decision(
+            ctx,
+            AuditEvent(
+                action=operation,
+                resource_type="table",
+                resource_id=table,
+                decision="deny",
+                reason=reason,
+                metadata=audit_metadata,
+            ),
+        )
+    except Exception:
+        logger.warning("Table denial audit write failed for operation=%s table=%s", operation, table, exc_info=True)

@@ -52,6 +52,11 @@ class CollectingAuditSink:
         self.events.append(event)
 
 
+class FailingAuditSink:
+    async def write(self, event):
+        raise RuntimeError("audit unavailable")
+
+
 def _enterprise_extensions(audit_sink=None):
     return EnterpriseExtensions(
         enabled=True,
@@ -148,6 +153,19 @@ def test_table_detail_rejects_table_outside_datasource_grant(monkeypatch):
     assert event.resource_id == "public.payroll"
     assert event.decision == "deny"
     assert event.metadata["datasource"] == "finance"
+
+
+def test_table_detail_denial_survives_audit_failure(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(audit_sink=FailingAuditSink()))
+    svc = _svc()
+    ctx = _ctx(permissions={"module.datasource_catalog"})
+
+    with _client(ctx, svc) as client:
+        response = client.get("/api/v1/table/detail?table=public.payroll")
+
+    assert response.status_code == 403
+    assert "not authorized" in response.json()["detail"]
+    svc.datasource.get_table_schema.assert_not_called()
 
 
 def test_table_detail_rejects_when_catalog_access_is_disabled(monkeypatch):
