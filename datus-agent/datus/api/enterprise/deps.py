@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, NamedTuple, Optional
 
 from fastapi import Depends, HTTPException, Request
@@ -12,6 +13,8 @@ from datus.api.models.base_models import Result
 
 if TYPE_CHECKING:
     from datus.api.services.datus_service import DatusService
+
+_PLATFORM_STATUSES = {"active", "maintenance", "readonly"}
 
 
 def get_authorization_provider():
@@ -108,6 +111,128 @@ async def require_authorized_module(
         )
     )
     raise HTTPException(status_code=403, detail=decision.reason or "Permission denied.")
+
+
+def current_platform_status() -> str:
+    """Return the configured enterprise platform status."""
+
+    raw_status = os.getenv("DATUS_PLATFORM_STATUS", "active").strip().lower()
+    return raw_status if raw_status in _PLATFORM_STATUSES else "unknown"
+
+
+async def enforce_platform_status(
+    ctx: AppContext,
+    *,
+    operation: str,
+    resource_type: str,
+    resource_id: str | None = None,
+    allowed_statuses: set[str] | None = None,
+) -> None:
+    """Fail closed for protected enterprise operations when the platform is not writable."""
+
+    from datus.api.deps import get_enterprise_extensions
+
+    extensions = get_enterprise_extensions()
+    if not extensions.enabled:
+        return
+
+    status = current_platform_status()
+    allowed = allowed_statuses or {"active"}
+    if status in allowed:
+        return
+
+    reason = f"Platform status '{status}' does not allow operation '{operation}'."
+    await extensions.audit_sink.write(
+        AuditEvent(
+            user_id=ctx.user_id,
+            action="system.platform_status",
+            resource_type=resource_type,
+            resource_id=resource_id,
+            decision="deny",
+            reason=reason,
+            metadata={"operation": operation, "platform_status": status},
+        )
+    )
+    raise HTTPException(status_code=403, detail="PLATFORM_STATUS_FORBIDDEN")
+
+
+def require_platform_active(
+    *,
+    operation: str,
+    resource_type: str,
+    resource_id: str | None = None,
+):
+    """FastAPI dependency for execution or mutation routes blocked outside active status."""
+
+    from datus.api.deps import get_app_context, get_datus_service
+
+    async def _dependency(request: Request, _service: object = Depends(get_datus_service)) -> None:
+        ctx = get_app_context(request)
+        await enforce_platform_status(
+            ctx,
+            operation=operation,
+            resource_type=resource_type,
+            resource_id=resource_id,
+            allowed_statuses={"active"},
+        )
+
+    return _dependency
+
+
+async def reject_in_enterprise_mode(
+    ctx: AppContext,
+    *,
+    operation: str,
+    resource_type: str,
+    resource_id: str | None = None,
+) -> None:
+    """Reject legacy route surfaces that have no enterprise security chain yet."""
+
+    from datus.api.deps import get_enterprise_extensions
+
+    extensions = get_enterprise_extensions()
+    if not extensions.enabled:
+        return
+
+    reason = f"Route operation '{operation}' is disabled in enterprise mode."
+    await extensions.audit_sink.write(
+        AuditEvent(
+            user_id=ctx.user_id,
+            action="system.route_disabled",
+            resource_type=resource_type,
+            resource_id=resource_id,
+            decision="deny",
+            reason=reason,
+            metadata={"operation": operation},
+        )
+    )
+    raise HTTPException(status_code=403, detail="ENTERPRISE_ROUTE_DISABLED")
+
+
+def require_enterprise_route_disabled(
+    *,
+    operation: str,
+    resource_type: str = "legacy_api",
+    resource_id: str | None = None,
+):
+    """FastAPI dependency for API surfaces intentionally unavailable in enterprise mode."""
+
+    from datus.api.deps import get_app_context, get_datus_service
+
+    async def _dependency(request: Request, _service: object = Depends(get_datus_service)) -> None:
+        from datus.api.deps import get_enterprise_extensions
+
+        if not get_enterprise_extensions().enabled:
+            return
+        ctx = get_app_context(request)
+        await reject_in_enterprise_mode(
+            ctx,
+            operation=operation,
+            resource_type=resource_type,
+            resource_id=resource_id,
+        )
+
+    return _dependency
 
 
 class SessionAccess(NamedTuple):

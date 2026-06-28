@@ -8,7 +8,12 @@ from fastapi import APIRouter, Depends, Path
 
 from datus.api.auth.context import AppContext
 from datus.api.deps import AppContextDep, ServiceDep
-from datus.api.enterprise.deps import project_request_config, require_authorized_module, require_module
+from datus.api.enterprise.deps import (
+    project_request_config,
+    require_authorized_module,
+    require_module,
+    require_platform_active,
+)
 from datus.api.enterprise.models import ResourceRef
 from datus.api.models.base_models import Result
 from datus.api.models.cli_models import (
@@ -36,6 +41,7 @@ _DATASOURCE_CATALOG_INTERNAL_COMMANDS = {"database", "databases", "schemas", "ta
     response_model=Result[ExecuteSQLData],
     summary="Execute SQL Query",
     description="Execute SQL query directly against the database. Returns an execute_task_id that can be used to stop the execution.",
+    dependencies=[Depends(require_platform_active(operation="sql.execute", resource_type="datasource"))],
 )
 async def execute_sql(
     request: ExecuteSQLInput,

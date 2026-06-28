@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 from datus.api import deps
 from datus.api.auth.context import AppContext
 from datus.api.constants import USER_ID_PATTERN
+from datus.api.enterprise.deps import require_platform_active
 from datus.api.models.base_models import Result
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus_enterprise.audit import AuditEvent, audit_decision
@@ -131,7 +132,12 @@ async def get_admin_role(role_id: str, ctx: AdminRolesCtx) -> Result[AdminRoleSu
     return Result(success=True, data=summary)
 
 
-@router.put("/admin/roles/{role_id}", response_model=Result[AdminRoleSummary], summary="Upsert Admin Role")
+@router.put(
+    "/admin/roles/{role_id}",
+    response_model=Result[AdminRoleSummary],
+    summary="Upsert Admin Role",
+    dependencies=[Depends(require_platform_active(operation="admin.roles.upsert", resource_type="role"))],
+)
 async def upsert_admin_role(
     role_id: str,
     body: UpsertAdminRoleRequest,
@@ -192,6 +198,7 @@ async def upsert_admin_role(
     "/admin/roles/{role_id}/permissions",
     response_model=Result[AdminRoleSummary],
     summary="Set Admin Role Permissions",
+    dependencies=[Depends(require_platform_active(operation="admin.roles.permissions.update", resource_type="role"))],
 )
 async def set_admin_role_permissions(
     role_id: str,
@@ -313,6 +320,7 @@ async def get_admin_user_roles(user_id: str, ctx: AdminRolesCtx) -> Result[Admin
     "/admin/users/{user_id}/roles",
     response_model=Result[AdminUserRolesSummary],
     summary="Set Admin User Roles",
+    dependencies=[Depends(require_platform_active(operation="admin.users.roles.update", resource_type="user"))],
 )
 async def set_admin_user_roles(
     user_id: str,
@@ -407,7 +415,12 @@ async def set_admin_user_roles(
     return Result(success=True, data=summary)
 
 
-@router.delete("/admin/roles/{role_id}", response_model=Result[dict], summary="Delete Admin Role")
+@router.delete(
+    "/admin/roles/{role_id}",
+    response_model=Result[dict],
+    summary="Delete Admin Role",
+    dependencies=[Depends(require_platform_active(operation="admin.roles.delete", resource_type="role"))],
+)
 async def delete_admin_role(role_id: str, ctx: AdminRolesCtx) -> Result[dict]:
     """Delete one enterprise role record and its permission set."""
 

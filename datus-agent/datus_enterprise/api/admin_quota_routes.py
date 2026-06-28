@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from datus.api import deps
 from datus.api.auth.context import AppContext
 from datus.api.constants import USER_ID_PATTERN
+from datus.api.enterprise.deps import require_platform_active
 from datus.api.models.base_models import Result
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
@@ -101,7 +102,12 @@ async def list_admin_quotas(
     return Result(success=True, data=quotas)
 
 
-@router.put("/admin/quotas", response_model=Result[AdminQuotaSummary], summary="Upsert Admin Quota")
+@router.put(
+    "/admin/quotas",
+    response_model=Result[AdminQuotaSummary],
+    summary="Upsert Admin Quota",
+    dependencies=[Depends(require_platform_active(operation="admin.quotas.upsert", resource_type="quota"))],
+)
 async def upsert_admin_quota(body: UpsertQuotaRequest, ctx: AdminQuotasCtx) -> Result[AdminQuotaSummary]:
     """Create or replace one enterprise quota metadata record."""
 

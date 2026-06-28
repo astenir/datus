@@ -11,6 +11,7 @@ from datus.api import deps
 from datus.api.auth.context import AppContext
 from datus.api.constants import USER_ID_PATTERN
 from datus.api.deps import ServiceDep
+from datus.api.enterprise.deps import require_platform_active
 from datus.api.models.base_models import Result
 from datus.configuration.project_config import ProjectOverride, load_project_override, save_project_override
 from datus.utils.exceptions import DatusException, ErrorCode
@@ -221,6 +222,9 @@ async def get_admin_datasource_grant(
     "/admin/datasource-grants/{subject_type}/{subject_id}/{datasource_key}",
     response_model=Result[AdminDatasourceGrantSummary],
     summary="Upsert Datasource Grant",
+    dependencies=[
+        Depends(require_platform_active(operation="admin.datasource_grants.upsert", resource_type="datasource_grant"))
+    ],
 )
 async def upsert_admin_datasource_grant(
     subject_type: str,
@@ -319,6 +323,9 @@ async def upsert_admin_datasource_grant(
     "/admin/datasource-grants/{subject_type}/{subject_id}/{datasource_key}",
     response_model=Result[dict],
     summary="Delete Datasource Grant",
+    dependencies=[
+        Depends(require_platform_active(operation="admin.datasource_grants.delete", resource_type="datasource_grant"))
+    ],
 )
 async def delete_admin_datasource_grant(
     subject_type: str,
@@ -411,6 +418,7 @@ async def delete_admin_datasource_grant(
     response_model=Result[dict],
     summary="Set Project Default Datasource",
     description="Admin-only project default datasource mutation. This is not a user request-level datasource switch.",
+    dependencies=[Depends(require_platform_active(operation="admin.datasource_default.update", resource_type="config"))],
 )
 async def set_project_default_datasource_endpoint(
     body: SetDefaultDatasourceRequest,

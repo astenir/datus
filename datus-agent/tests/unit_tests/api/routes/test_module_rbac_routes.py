@@ -1301,6 +1301,28 @@ def test_sql_execute_routes_require_module_sql_executor(monkeypatch):
     svc.cli.execute_sql.assert_not_awaited()
 
 
+def test_sql_execute_is_blocked_in_readonly_status_and_audited(monkeypatch):
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setenv("DATUS_PLATFORM_STATUS", "readonly")
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(audit_sink=audit_sink))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config()
+    svc.cli.execute_sql = AsyncMock(side_effect=AssertionError("upstream invoked"))
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.sql_executor"})
+
+    with _client(cli_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/sql/execute", json={"sql_query": "SELECT 1", "result_format": "json"})
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "PLATFORM_STATUS_FORBIDDEN"
+    svc.cli.execute_sql.assert_not_awaited()
+    event = audit_sink.events[-1]
+    assert event.action == "system.platform_status"
+    assert event.resource_type == "datasource"
+    assert event.decision == "deny"
+    assert event.metadata == {"operation": "sql.execute", "platform_status": "readonly"}
+
+
 def test_sql_execute_routes_allow_module_sql_executor(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()

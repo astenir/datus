@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -10,15 +9,13 @@ from pydantic import BaseModel
 
 from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
+from datus.api.enterprise.deps import current_platform_status
 from datus.api.models.base_models import Result
 from datus_enterprise.authorization import require_module
 
 router = APIRouter(prefix="/api/v1", tags=["enterprise-system"])
 
 SystemStatusCtx = Annotated[AppContext, Depends(require_module("module.system.status"))]
-
-_PLATFORM_STATUSES = {"active", "maintenance", "readonly"}
-
 
 class SystemStatusSummary(BaseModel):
     """Sanitized platform status summary for operators."""
@@ -50,10 +47,7 @@ async def get_system_status(svc: ServiceDep, ctx: SystemStatusCtx) -> Result[Sys
 
 
 def _platform_status() -> str:
-    raw_status = os.getenv("DATUS_PLATFORM_STATUS", "active").strip().lower()
-    if raw_status in _PLATFORM_STATUSES:
-        return raw_status
-    return "unknown"
+    return current_platform_status()
 
 
 def _enterprise_enabled() -> bool:

@@ -26,6 +26,7 @@ from datus.api.enterprise.deps import (
     project_request_config,
     require_authorized_module,
     require_module,
+    require_platform_active,
 )
 from datus.api.enterprise.models import ResourceRef
 from datus.api.hooks import (
@@ -370,6 +371,7 @@ def _principal_path_exists(principal: dict[str, Any], path: str) -> bool:
     "Set subagent_id to route to a specific sub-agent.",
     response_class=StreamingResponse,
     responses=SSE_RESPONSE,
+    dependencies=[Depends(require_platform_active(operation="chat.stream", resource_type="chat"))],
 )
 async def stream_chat(
     request: StreamChatInput,
@@ -511,6 +513,7 @@ async def stream_chat(
     ),
     response_class=StreamingResponse,
     responses=SSE_RESPONSE,
+    dependencies=[Depends(require_platform_active(operation="chat.feedback", resource_type="chat"))],
 )
 async def stream_chat_feedback(
     request: FeedbackChatInput,

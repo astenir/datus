@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 
 from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
-from datus.api.enterprise.deps import require_module
+from datus.api.enterprise.deps import require_module, require_platform_active
 from datus.api.models.base_models import Result
 from datus.api.models.kb_models import BootstrapDocInput, BootstrapKbInput
 from datus.api.utils.path_utils import safe_resolve
@@ -44,6 +44,7 @@ SSE_RESPONSE = {
     description="Start KB bootstrap with SSE progress streaming",
     response_class=StreamingResponse,
     responses=SSE_RESPONSE,
+    dependencies=[Depends(require_platform_active(operation="kb.bootstrap", resource_type="kb"))],
 )
 async def bootstrap_kb(
     request: BootstrapKbInput,
@@ -121,6 +122,7 @@ def _validate_paths(request: BootstrapKbInput, project_root: str) -> None:
     description="Start platform documentation bootstrap with SSE progress streaming",
     response_class=StreamingResponse,
     responses=SSE_RESPONSE,
+    dependencies=[Depends(require_platform_active(operation="kb.bootstrap_docs", resource_type="kb"))],
 )
 async def bootstrap_docs(
     request: BootstrapDocInput,

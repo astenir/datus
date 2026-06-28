@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from datus.api import deps
 from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
-from datus.api.enterprise.deps import require_module
+from datus.api.enterprise.deps import require_module, require_platform_active
 from datus.api.models.base_models import Result
 from datus.api.models.config_models import AgentConfigSummaryData, MutationResultData, ProbeResultData
 from datus.configuration.agent_config import _SAFE_NAME_RE, DbConfig, load_model_config
@@ -156,6 +156,7 @@ async def get_agent_config_endpoint(
     response_model=Result[MutationResultData],
     summary="Update Datasources",
     description="Replace the datasources (services.datasources) block in agent.yml.",
+    dependencies=[Depends(require_platform_active(operation="config.datasources.update", resource_type="config"))],
 )
 async def update_datasources_endpoint(
     body: UpdateDatasourcesRequest,
@@ -180,6 +181,7 @@ async def update_datasources_endpoint(
     response_model=Result[MutationResultData],
     summary="Update Models and Target",
     description="Replace the models block and/or update the default target in agent.yml.",
+    dependencies=[Depends(require_platform_active(operation="config.models.update", resource_type="config"))],
 )
 async def update_models_endpoint(
     body: UpdateModelsRequest,
@@ -223,6 +225,7 @@ async def update_models_endpoint(
     response_model_exclude_none=True,
     summary="Test Model Connectivity",
     description="Send a tiny probe to verify an LLM model config is reachable.",
+    dependencies=[Depends(require_platform_active(operation="config.models.probe", resource_type="config"))],
 )
 async def probe_model_connectivity_endpoint(
     body: ProbeModelRequest,
@@ -245,6 +248,7 @@ async def probe_model_connectivity_endpoint(
     response_model_exclude_none=True,
     summary="Test Datasource Connectivity",
     description="Run SELECT 1 against a datasource config to verify reachability and credentials.",
+    dependencies=[Depends(require_platform_active(operation="config.datasources.probe", resource_type="config"))],
 )
 async def probe_datasource_connectivity_endpoint(
     body: ProbeDatasourceRequest,

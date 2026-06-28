@@ -10,9 +10,10 @@ API routes for Agent endpoints.
 - /agent/tools: list all valid tool categories
 """
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
 from datus.api.deps import ServiceDep
+from datus.api.enterprise.deps import require_enterprise_route_disabled
 from datus.api.models.agent_models import (
     AgentListData,
     AgentMutationData,
@@ -25,7 +26,11 @@ from datus.api.models.agent_models import (
 from datus.api.models.base_models import Result
 from datus.api.services.agent_service import VALID_TOOL_METHODS, AgentService
 
-router = APIRouter(prefix="/api/v1", tags=["agent"])
+router = APIRouter(
+    prefix="/api/v1",
+    tags=["agent"],
+    dependencies=[Depends(require_enterprise_route_disabled(operation="agent.config_legacy"))],
+)
 
 
 # ========== Agent Use Tools ==========

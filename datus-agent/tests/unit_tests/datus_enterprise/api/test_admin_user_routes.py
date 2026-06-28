@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 
 from fastapi import FastAPI, Request
@@ -24,12 +25,12 @@ class CollectingAuditSink:
         self.events.append(event)
 
 
-def _install_extensions(monkeypatch, user_store, audit_sink=None):
+def _install_extensions(monkeypatch, user_store, audit_sink=None, *, enabled=False):
     monkeypatch.setattr(
         admin_user_routes.deps,
         "_enterprise_extensions",
         EnterpriseExtensions(
-            enabled=False,
+            enabled=enabled,
             authorization_provider=LocalAuthorizationProvider(),
             config_projector=PassthroughConfigProjector(),
             session_owner_store=InMemorySessionOwnerStore(),
@@ -102,6 +103,29 @@ def test_admin_user_upsert_get_and_list_audit_sanitized(monkeypatch):
         "email": "alice@example.com",
         "enabled": True,
     }
+
+
+def test_admin_user_upsert_is_blocked_in_readonly_status_and_audited(monkeypatch):
+    user_store = InMemoryEnterpriseUserStore()
+    audit_sink = CollectingAuditSink()
+    monkeypatch.setenv("DATUS_PLATFORM_STATUS", "readonly")
+    _install_extensions(monkeypatch, user_store, audit_sink, enabled=True)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.users"})
+
+    with _client(ctx) as client:
+        response = client.put(
+            "/api/v1/admin/users/alice",
+            json={"display_name": "Alice", "email": "alice@example.com", "enabled": True},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "PLATFORM_STATUS_FORBIDDEN"
+    assert asyncio.run(user_store.list_users()) == []
+    event = audit_sink.events[-1]
+    assert event.action == "system.platform_status"
+    assert event.resource_type == "user"
+    assert event.decision == "deny"
+    assert event.metadata == {"operation": "admin.users.upsert", "platform_status": "readonly"}
 
 
 def test_admin_users_enabled_filter_and_toggle(monkeypatch):

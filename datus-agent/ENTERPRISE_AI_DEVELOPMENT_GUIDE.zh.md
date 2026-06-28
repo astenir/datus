@@ -74,6 +74,14 @@
 - 企业开关不引入 `tenant_id`，也不允许把企业上下文当作业务 API 参数由客户端提交。
 - MVP 身份方案优先适配当前企业环境：网关不可改时，实现 Bearer access token + userinfo `AuthProvider`，由 Datus 调企业用户信息接口换取身份；网关可改时可使用 `datus_enterprise.auth_provider.SignedHeaderAuthProvider`，只信任带 HMAC-SHA256 签名和时间戳的反向代理身份 header；直接 OIDC/JWKS 校验 provider、JWKS cache 和 key rotation 仍是后续切片。
 
+平台运行状态语义：
+
+- `DATUS_PLATFORM_STATUS=active` 是唯一允许启动执行类请求和写入类 mutation 的状态。
+- `readonly` 和 `maintenance` 下，直接 SQL、dashboard query、chat stream/feedback、KB bootstrap、配置修改、semantic model 保存、admin metadata mutation 等路径必须在执行或写入前拒绝，返回 `PLATFORM_STATUS_FORBIDDEN` 并写入 `system.platform_status` 审计。
+- 只读查询类接口可继续按模块权限开放，例如 `/me`、静态 artifact list/detail/html、admin list/detail、audit query 和 system status。
+- 运维停止类接口可按显式策略保留，例如 admin session stop 可以在维护期停止运行中任务；这种例外必须在文档和测试里说明。
+- 未识别的 platform status 必须按 fail closed 处理，不能默认为 active。
+
 ## 架构约束
 
 ### 主包与企业包边界
@@ -170,6 +178,8 @@ SESSION_FORBIDDEN
 ARTIFACT_FORBIDDEN
 QUOTA_EXCEEDED
 POLICY_DENIED
+PLATFORM_STATUS_FORBIDDEN
+ENTERPRISE_ROUTE_DISABLED
 APPROVAL_REQUIRED
 RESOURCE_NOT_FOUND
 ```
@@ -307,8 +317,10 @@ MVP 中 `datasource_grants` 采用每个 `(subject_type, subject_id, datasource_
 - admin datasource route：`/api/v1/admin/datasources`、`/api/v1/admin/datasource-default` 和 `/api/v1/admin/datasource-grants` 使用 `module.admin.datasources`，datasource grant admin upsert 只管理 metadata store，不自动把 grant 合并进当前请求 `AppContext.datasource_grants`；`enterprise.enabled=true` 时必须显式配置 `enterprise.datasource_grant_store.class`，不能静默使用进程内默认 store。
 - admin user route：`/api/v1/admin/users`、`/api/v1/admin/users/{user_id}`、`/api/v1/admin/users/{user_id}/disable` 和 `/api/v1/admin/users/{user_id}/enable` 使用 `module.admin.users`，用户管理变更写入脱敏审计摘要；企业模式新请求会基于 `EnterpriseUserStore` 拒绝已禁用用户。
 - admin role route：`/api/v1/admin/roles`、`/api/v1/admin/roles/{role_id}`、`/api/v1/admin/roles/{role_id}/permissions` 和 `/api/v1/admin/users/{user_id}/roles` 使用 `module.admin.roles`，role metadata、permission set 和用户-role 绑定变更写入脱敏审计摘要；企业模式新请求会从 metadata store 合并用户角色与角色权限到 `AppContext.roles` / `AppContext.permissions`。
+- table/semantic model route：`/api/v1/table/detail` 和 `GET /api/v1/semantic_model` 使用 `module.datasource_catalog` 并叠加 datasource/table grant；`POST /api/v1/semantic_model` 和 `POST /api/v1/semantic_model/validate` 使用 `module.config.edit` 并叠加 datasource/table grant，其中保存类 mutation 还要求 platform status 为 `active`。
+- legacy route：explorer、agent config、visualization、direct tool dispatch 和 success-story 旧兼容 route 暂未进入完整企业安全链，`enterprise.enabled=true` 时必须统一禁用并写入 `system.route_disabled` 审计；不要让这些 route 以本地兼容行为暴露在企业模式下。
 
-后续新增 route 时应继续使用 `require_module()` dependency 接入模块权限；admin sessions/artifacts/audit/quotas/secrets 已进入阶段 6 接线，`/api/v1/system/status` 已使用 `module.system.status` 接入只读系统状态。不要把 report/dashboard 的 query 权限合并进 `module.chat`；自然语言入口只能证明用户可用 chat，不能自动证明用户可实时查询报表或仪表盘。当前已先将可配置 datasource grant projection 接入 `/api/v1/chat/stream`、`/api/v1/chat/feedback`、`/api/v1/catalog/list`、`/api/v1/sql/execute` 和 `/api/v1/dashboard/query`，用于校验请求 datasource/database、过滤请求级 `AgentConfig` clone、按 catalog/database/schema/table scope 裁剪目录结果并注入 principal；`/api/v1/sql/execute` 和 `/api/v1/dashboard/query` 会在执行前复用 grant scope 和 SQL policy principal 校验手写或保存 SQL。`/api/v1/models` 和 chat stream/feedback 已接入服务端 `principal.model_policy` 初版，支持 `allowed_models`、`allowed_model_patterns`、`allowed_providers` 以及对应 deny 列表；该策略只能由认证/RBAC provider 从服务端 metadata 构造，不接受请求体覆盖。`/api/v1/sql/execute`、`/api/v1/dashboard/query`、`/api/v1/chat/stream`、`/api/v1/chat/feedback` 和 `/api/v1/admin/audit-logs/export` 已分别接入 `sql.execute`、`dashboard.query`、`chat.stream`、`chat.feedback` 和 `admin.audit.export` 配额消耗，企业模式缺失 quota store 或超额时必须在真正执行前拒绝并审计；chat token、模型 token、report/dashboard export 和并发类配额仍需后续切片接入。企业模式新请求也会从 user/role/datasource grant metadata store 合并 roles、permissions 和 datasource_grants；report artifact 当前是预渲染静态 bundle，没有 agent-only live query endpoint。
+后续新增 route 时应继续使用 `require_module()` dependency 接入模块权限；admin sessions/artifacts/audit/quotas/secrets 已进入阶段 6 接线，`/api/v1/system/status` 已使用 `module.system.status` 接入只读系统状态。不要把 report/dashboard 的 query 权限合并进 `module.chat`；自然语言入口只能证明用户可用 chat，不能自动证明用户可实时查询报表或仪表盘。当前已先将可配置 datasource grant projection 接入 `/api/v1/chat/stream`、`/api/v1/chat/feedback`、`/api/v1/catalog/list`、`/api/v1/sql/execute`、`/api/v1/dashboard/query`、table detail 和 semantic model route，用于校验请求 datasource/database/table、过滤请求级 `AgentConfig` clone、按 catalog/database/schema/table scope 裁剪目录结果并注入 principal；`/api/v1/sql/execute` 和 `/api/v1/dashboard/query` 会在执行前复用 grant scope 和 SQL policy principal 校验手写或保存 SQL。`/api/v1/models` 和 chat stream/feedback 已接入服务端 `principal.model_policy` 初版，支持 `allowed_models`、`allowed_model_patterns`、`allowed_providers` 以及对应 deny 列表；该策略只能由认证/RBAC provider 从服务端 metadata 构造，不接受请求体覆盖。`/api/v1/sql/execute`、`/api/v1/dashboard/query`、`/api/v1/chat/stream`、`/api/v1/chat/feedback` 和 `/api/v1/admin/audit-logs/export` 已分别接入 `sql.execute`、`dashboard.query`、`chat.stream`、`chat.feedback` 和 `admin.audit.export` 配额消耗，企业模式缺失 quota store 或超额时必须在真正执行前拒绝并审计；chat token、模型 token、report/dashboard export 和并发类配额仍需后续切片接入。企业模式新请求也会从 user/role/datasource grant metadata store 合并 roles、permissions 和 datasource_grants；report artifact 当前是预渲染静态 bundle，没有 agent-only live query endpoint。
 
 ### SQL 与数据安全
 
@@ -413,6 +425,8 @@ SQL 不是唯一执行风险。以下能力也必须进入 `Authenticate -> Buil
 - 角色、permission、datasource grant、artifact ACL 变更后，新请求立即按新规则生效。
 - datasource grant 合并时 deny 优先于 allow。
 - datasource grant admin upsert 不产生同主体同数据源的重复 grant。
+- `readonly` / `maintenance` 状态下，执行类请求和写入类 mutation 在业务服务或 metadata store 执行前被拒绝，并写入 `system.platform_status` 审计。
+- 尚未接入完整企业安全链的 legacy route 在 `enterprise.enabled=true` 下返回 `ENTERPRISE_ROUTE_DISABLED`，并写入 `system.route_disabled` 审计；本地兼容模式保持原行为。
 - permission glob 或 role template 展开结果稳定。
 - request body 试图覆盖 `principal`、roles、permissions 或企业上下文字段时被拒绝或忽略。
 - config projection 后原始 `DatusService.agent_config` 不变。

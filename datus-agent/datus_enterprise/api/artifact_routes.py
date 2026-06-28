@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
-from datus.api.enterprise.deps import get_artifact_acl_store
+from datus.api.enterprise.deps import get_artifact_acl_store, require_platform_active
 from datus.api.models.base_models import Result
 from datus.api.models.dashboard_models import DashboardDetail
 from datus.api.models.report_models import ReportDetail
@@ -202,6 +202,7 @@ async def get_admin_artifact_acl(
     "/admin/artifacts/{artifact_type}/{slug}/acl",
     response_model=Result[ArtifactAcl],
     summary="Update Artifact ACL",
+    dependencies=[Depends(require_platform_active(operation="admin.artifacts.acl.update", resource_type="artifact_acl"))],
 )
 async def put_admin_artifact_acl(
     acl: ArtifactAcl,

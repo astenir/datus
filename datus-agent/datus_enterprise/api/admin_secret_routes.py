@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from datus.api import deps
 from datus.api.auth.context import AppContext
+from datus.api.enterprise.deps import require_platform_active
 from datus.api.models.base_models import Result
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
@@ -114,7 +115,12 @@ async def get_admin_secret(name: str, ctx: AdminSecretsCtx) -> Result[AdminSecre
     return Result(success=True, data=summary)
 
 
-@router.put("/admin/secrets/{name:path}", response_model=Result[AdminSecretSummary], summary="Upsert Admin Secret")
+@router.put(
+    "/admin/secrets/{name:path}",
+    response_model=Result[AdminSecretSummary],
+    summary="Upsert Admin Secret",
+    dependencies=[Depends(require_platform_active(operation="admin.secrets.upsert", resource_type="secret"))],
+)
 async def upsert_admin_secret(name: str, body: UpsertSecretRequest, ctx: AdminSecretsCtx) -> Result[AdminSecretSummary]:
     """Create or replace one enterprise secret reference without returning the raw reference."""
 
@@ -157,7 +163,12 @@ async def upsert_admin_secret(name: str, body: UpsertSecretRequest, ctx: AdminSe
     return Result(success=True, data=summary)
 
 
-@router.delete("/admin/secrets/{name:path}", response_model=Result[dict], summary="Delete Admin Secret")
+@router.delete(
+    "/admin/secrets/{name:path}",
+    response_model=Result[dict],
+    summary="Delete Admin Secret",
+    dependencies=[Depends(require_platform_active(operation="admin.secrets.delete", resource_type="secret"))],
+)
 async def delete_admin_secret(name: str, ctx: AdminSecretsCtx) -> Result[dict]:
     """Delete one enterprise secret reference."""
 

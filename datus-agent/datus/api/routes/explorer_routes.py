@@ -2,9 +2,10 @@
 API routes for Explorer endpoints.
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from datus.api.deps import ServiceDep
+from datus.api.enterprise.deps import require_enterprise_route_disabled
 from datus.api.models.base_models import Result
 from datus.api.models.explorer_models import (
     CreateDirectoryInput,
@@ -22,7 +23,11 @@ from datus.api.models.explorer_models import (
     SubjectPathInput,
 )
 
-router = APIRouter(prefix="/api/v1", tags=["explorer"])
+router = APIRouter(
+    prefix="/api/v1",
+    tags=["explorer"],
+    dependencies=[Depends(require_enterprise_route_disabled(operation="explorer.legacy"))],
+)
 
 
 # ========== Subject Endpoints ==========

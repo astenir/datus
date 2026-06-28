@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from datus.api import deps
 from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
+from datus.api.enterprise.deps import require_platform_active
 from datus.api.models.base_models import Result
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
@@ -163,6 +164,7 @@ async def stop_admin_session(
     response_model=Result[dict],
     summary="Delete Admin Session",
     description="Admin-only deletion for a session and its owner metadata.",
+    dependencies=[Depends(require_platform_active(operation="admin.sessions.delete", resource_type="session"))],
 )
 async def delete_admin_session(
     session_id: str,

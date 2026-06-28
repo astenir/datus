@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from datus.api import deps
 from datus.api.auth.context import AppContext
 from datus.api.constants import USER_ID_PATTERN
+from datus.api.enterprise.deps import require_platform_active
 from datus.api.models.base_models import Result
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import require_module
@@ -109,7 +110,12 @@ async def get_admin_user(user_id: str, ctx: AdminUsersCtx) -> Result[AdminUserSu
     return Result(success=True, data=summary)
 
 
-@router.put("/admin/users/{user_id}", response_model=Result[AdminUserSummary], summary="Upsert Admin User")
+@router.put(
+    "/admin/users/{user_id}",
+    response_model=Result[AdminUserSummary],
+    summary="Upsert Admin User",
+    dependencies=[Depends(require_platform_active(operation="admin.users.upsert", resource_type="user"))],
+)
 async def upsert_admin_user(
     user_id: str,
     body: UpsertAdminUserRequest,
@@ -164,14 +170,24 @@ async def upsert_admin_user(
     return Result(success=True, data=summary)
 
 
-@router.post("/admin/users/{user_id}/disable", response_model=Result[AdminUserSummary], summary="Disable Admin User")
+@router.post(
+    "/admin/users/{user_id}/disable",
+    response_model=Result[AdminUserSummary],
+    summary="Disable Admin User",
+    dependencies=[Depends(require_platform_active(operation="admin.users.disable", resource_type="user"))],
+)
 async def disable_admin_user(user_id: str, ctx: AdminUsersCtx) -> Result[AdminUserSummary]:
     """Disable future requests from one enterprise user."""
 
     return await _set_user_enabled(ctx, user_id=user_id, enabled=False, operation="disable_admin_user")
 
 
-@router.post("/admin/users/{user_id}/enable", response_model=Result[AdminUserSummary], summary="Enable Admin User")
+@router.post(
+    "/admin/users/{user_id}/enable",
+    response_model=Result[AdminUserSummary],
+    summary="Enable Admin User",
+    dependencies=[Depends(require_platform_active(operation="admin.users.enable", resource_type="user"))],
+)
 async def enable_admin_user(user_id: str, ctx: AdminUsersCtx) -> Result[AdminUserSummary]:
     """Enable future requests from one enterprise user."""
 

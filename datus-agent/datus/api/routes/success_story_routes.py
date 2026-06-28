@@ -5,9 +5,10 @@ Thin HTTP wrapper around :class:`SuccessStoryService`. The service resolves
 ``{benchmark_dir}/{subagent}/success_story.csv``.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from datus.api.deps import ServiceDep
+from datus.api.enterprise.deps import require_enterprise_route_disabled
 from datus.api.models.base_models import Result
 from datus.api.models.success_story_models import SuccessStoryData, SuccessStoryInput
 from datus.api.services.success_story_service import SubagentNotFoundError
@@ -15,7 +16,11 @@ from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
 
-router = APIRouter(prefix="/api/v1/success-stories", tags=["success-stories"])
+router = APIRouter(
+    prefix="/api/v1/success-stories",
+    tags=["success-stories"],
+    dependencies=[Depends(require_enterprise_route_disabled(operation="success_stories.write_legacy"))],
+)
 
 
 @router.post(

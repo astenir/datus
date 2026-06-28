@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, Query
 
 from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
-from datus.api.enterprise.deps import project_request_config, require_module
+from datus.api.enterprise.deps import project_request_config, require_module, require_platform_active
 from datus.api.models.base_models import Result
 from datus.api.models.dashboard_models import (
     DashboardDetail,
@@ -75,6 +75,7 @@ async def get_dashboard_detail(
         "execute it live against the project's bound datasource. Returns the result "
         "envelope expected by RemoteQueryArtifactProvider in @datus/web-artifact."
     ),
+    dependencies=[Depends(require_platform_active(operation="dashboard.query", resource_type="dashboard"))],
 )
 async def run_dashboard_query(
     body: DashboardQueryRequest,
