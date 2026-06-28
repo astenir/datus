@@ -301,7 +301,7 @@ MVP 中 `datasource_grants` 采用每个 `(subject_type, subject_id, datasource_
 
 管理员跨用户操作必须要求 `module.admin.sessions`，且只能在当前企业上下文内。
 
-当前阶段 2 主包接线已覆盖上述 chat/session 路径。后续继续扩展时，不要绕过 `SessionOwnerStore` 和 route owner helper；多 worker 或滚动发布场景应使用共享 metadata store 替换默认 SQLite/内存骨架，并明确 sticky session 或 SSE event buffer 外部化策略。
+当前阶段 2 主包接线已覆盖上述 chat/session 路径。当前版本定位为单节点或粘性会话的企业内网试点；后续继续扩展时，不要绕过 `SessionOwnerStore` 和 route owner helper。多 worker 或滚动发布场景应使用共享 metadata store 替换默认 SQLite/内存骨架，并明确 sticky session 要求；Redis / task metadata / SSE event buffer / 长任务状态外部化属于多实例或 HA 前的后续切片，不是当前试点版的必选项。
 
 ### Module RBAC
 
@@ -383,14 +383,14 @@ SQL 不是唯一执行风险。以下能力也必须进入 `Authenticate -> Buil
 
 ### 运维与状态边界
 
-企业化改造不能只在单进程 happy path 成立。
+当前版本定位为单节点或粘性会话的企业内网试点。企业化改造不能只在单进程 happy path 成立，但在多实例/HA 切片落地前，必须把部署约束写清楚：单节点优先；多 worker 或多 pod 必须使用粘性会话，并接受运行中 task/SSE 在发布或实例故障时可能中断。
 
 必须检查：
 
 - `DatusServiceCache` key 必须区分企业生产模式和本地兼容模式，避免配置互相污染。
 - `DatusService.agent_config` 必须保持共享只读语义；用户级 projection 只能写 clone。
 - user/project/session 用于路径或 cache key 前必须转成 safe slug，不直接拼接外部输入。
-- 运行中 task 在多 worker 下如果仍保存在进程内，必须明确 sticky session 要求；长期方案应把 task metadata、SSE event buffer 或长任务状态外部化。
+- 运行中 task 在多 worker 下如果仍保存在进程内，必须明确 sticky session 要求；长期方案应把 task metadata、SSE event buffer 或长任务状态外部化。不要把当前试点版描述成无状态横向扩展架构。
 - Postgres/Redis/object storage/vector store 等外部状态引入时，必须说明迁移、回滚、清理、备份恢复和企业级隔离策略。
 - 滚动发布期间，新旧代码对 session owner、artifact ACL、audit schema 和 permission key 的兼容性必须有测试或迁移说明。
 - 当前 `datus_enterprise.postgres_stores` 只通过 `_SCHEMA_SQL` 执行 `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` 做最小 bootstrap；不要把它当作生产 schema migration 工具。

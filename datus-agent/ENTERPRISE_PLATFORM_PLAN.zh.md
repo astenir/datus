@@ -9,7 +9,7 @@
 - 当前代码已有轻量身份上下文、按 `user_id` 的会话 scope、SQL policy principal 入口和工具级 permission profile，但它们还不是完整企业内网权限边界。
 - 第一阶段必须先补齐硬边界：企业 SSO/认证、用户会话与运行中 task owner 校验、模块 RBAC、数据源投影、SQL policy 兜底和基础审计。
 - `scoped_context`、前端隐藏、catalog 过滤、tool permission 都只能作为分层控制的一部分，不能单独声明为 RBAC、数据权限或员工隔离。
-- 企业级能力应分阶段推进，先完成内部员工安全硬边界，再做审计、限流、状态外部化、审批流、列级权限、模型治理和高可用能力。
+- 当前版本定位为**单节点或粘性会话的企业内网试点版**：先完成内部员工安全硬边界和基础治理；Redis、运行态外部化、对象存储、审批流、列级权限、模型治理和完整高可用能力进入后续阶段。
 
 ## 当前实现锚点
 
@@ -746,7 +746,7 @@ class ChatTask:
 - 普通用户只能操作同 `user_id` 的 task/session。
 - 管理员必须有 `module.admin.sessions` 才能管理企业内 task/session。
 - 找不到或无权限时建议返回统一错误，避免暴露其他用户 session 是否存在。
-- 多 worker 下运行中 task 仍在进程内，MVP 需要 sticky session；长期外部化 task metadata 和 event buffer。
+- 当前试点版按单节点或粘性会话部署。多 worker 下运行中 task 仍在进程内，必须由网关保证同一 chat/SSE/session 控制请求落到持有 task 的实例；长期再外部化 task metadata 和 event buffer。
 
 建议新增 `session_owners` 索引表：
 
@@ -1262,7 +1262,7 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 | --- | --- |
 | 只做前端隐藏数据源会被 API 绕过 | 必须后端过滤 + 执行层 SQL policy。 |
 | `session_id` 可猜测或泄露 | 运行中任务和磁盘会话都做 owner 校验。 |
-| 多 worker 下 task 在进程内 | MVP 明确 sticky session；长期外部化 task/event store。 |
+| 多 worker 下 task 在进程内 | 当前试点版只承诺单节点或粘性会话部署；多实例/HA 前必须外部化 task/event store，或提供等价机制。 |
 | 企业生产模式和本地/测试模式配置缓存串扰 | cache key 必须区分 enterprise 模式与本地兼容模式。 |
 | admin 过度授权 | admin 也使用显式 permission，不用硬编码超级用户。 |
 | SQL policy 只覆盖部分 read path | dashboard/report/direct SQL 路径都要接入同一执行层。 |
@@ -1271,7 +1271,7 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 
 ## 最小可交付 MVP
 
-第一版不需要完整管理后台，建议最小范围：
+第一版不需要完整管理后台，也不要求 Redis。当前版本定位为单节点或粘性会话的企业内网试点，建议最小范围：
 
 1. Bearer access token + userinfo `AuthProvider`，或企业网关/反向代理签名 header `AuthProvider`。
 2. `user_id/roles/permissions/datasource_grants` 上下文。
@@ -1289,6 +1289,13 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - 普通用户不能访问被禁用的报表/仪表盘/SQL 执行器模块。
 - 普通用户只能看到和使用授权数据源。
 - 未授权数据源不能通过 agent prompt、direct API 或 dashboard/report query 绕过。
+
+运行约束：
+
+- API 默认按单节点部署，或由网关对 chat/SSE/session 控制类请求做粘性会话。
+- 不承诺运行中 SSE 在跨 worker、跨 pod、滚动发布期间无损迁移；发布前应 drain 或允许中断运行中任务。
+- 当前 quota 可使用 SQLite/in-memory/PG metadata store 试点；Redis rate limit、短窗口计数和并发槽位属于多实例/HA 前的后续切片。
+- 如果部署为多 pod 且不启用粘性会话，必须先接入 task/event 外部化方案，不能把当前试点版视为无状态横向扩展架构。
 
 ## 企业级后续能力
 
@@ -1348,7 +1355,7 @@ Browser / Client
 
 ## 企业内网 MVP 建议
 
-如果目标是企业内部员工使用，建议企业内网 MVP 定义为：
+如果目标是企业内部员工使用，当前企业内网 MVP 定义为单节点或粘性会话试点：
 
 1. 企业登录后返回 access token；Datus 用 access token 调用户信息接口获取身份，或在网关可改时由网关注入签名身份 header。
 2. 用户、角色、权限、数据源 grant 存储。
@@ -1358,9 +1365,9 @@ Browser / Client
 6. 数据源投影。
 7. SQL policy 兜底。
 8. Postgres 保存 RBAC metadata、session owner、artifact ACL、audit log。
-9. Redis 保存限流计数和 SSE 事件缓冲。
-10. 基础 admin API。
-11. 基础 quota。
-12. secret 引用和脱敏返回。
+9. 基础 admin API。
+10. 基础 quota，可先使用 PG/SQLite/in-memory store；Redis rate limit 不作为当前试点必选项。
+11. secret 引用和脱敏返回。
+12. 明确部署约束：单节点优先；如多 worker 或多 pod，必须启用粘性会话，并接受运行中 task/SSE 在发布或实例故障时可能中断。
 
-完成这一版后，系统可支撑企业内网单租户、多用户、RBAC + 数据权限试点。后续再逐步补齐审批、列级权限、模型治理、KB 治理和报表发布流。
+完成这一版后，系统可支撑企业内网单租户、多用户、RBAC + 数据权限试点。后续进入多实例/HA 前，再补齐 Redis 或等价的运行态外部化方案；之后逐步补齐审批、列级权限、模型治理、KB 治理和报表发布流。
