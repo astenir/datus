@@ -728,6 +728,12 @@ class CLIService:
         try:
             if agent_config is not None:
                 connector, current_db_name, cleanup_connector = self._execution_connector(agent_config)
+            active_catalog = getattr(connector, "catalog_name", None) or (
+                getattr(self.cli_context, "current_catalog", None) if self.cli_context else None
+            )
+            active_schema = getattr(connector, "schema_name", None) or (
+                getattr(self.cli_context, "current_schema", None) if self.cli_context else None
+            )
 
             result_data = ContextResultData()
 
@@ -812,8 +818,8 @@ class CLIService:
                 result_data.context_info = {
                     "current_datasource": active_datasource,
                     "current_database": current_db_name,
-                    "current_catalog": getattr(self.cli_context, "current_catalog", None) if self.cli_context else None,
-                    "current_schema": getattr(self.cli_context, "current_schema", None) if self.cli_context else None,
+                    "current_catalog": active_catalog,
+                    "current_schema": active_schema,
                     "database": db_info,
                     "timestamp": now_utc_iso(),
                 }

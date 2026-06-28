@@ -1056,8 +1056,10 @@ class TestCLIServiceExecuteContext:
         """Request-scoped context output must not leak the shared service datasource."""
 
         class FakeConnector:
+            catalog_name = "finance_catalog"
             db_type = "sqlite"
             database_name = "finance_db"
+            schema_name = "finance_schema"
 
         seen = {}
 
@@ -1079,6 +1081,11 @@ class TestCLIServiceExecuteContext:
         )
         svc = CLIService(agent_config=None, chat_service=None)
         svc.current_datasource = "hr"
+        svc.cli_context.update_database_context(
+            catalog="hr_catalog",
+            db_name="hr_db",
+            schema="hr_schema",
+        )
 
         result = svc.execute_context(
             "context",
@@ -1088,6 +1095,8 @@ class TestCLIServiceExecuteContext:
 
         assert result.success is True
         assert result.data.result.context_info["current_datasource"] == "finance"
+        assert result.data.result.context_info["current_catalog"] == "finance_catalog"
+        assert result.data.result.context_info["current_schema"] == "finance_schema"
         assert seen == {
             "datasource_configs": projected_config.datasource_configs,
             "datasource": "finance",
