@@ -614,6 +614,31 @@ class CLIService:
         return None
 
     @staticmethod
+    def _filter_table_names_by_grant(
+        table_names: Sequence[str], connector, agent_config: Optional[AgentConfig]
+    ) -> list[str]:
+        guard = object.__new__(DBFuncTool)
+        guard._primary_connector = connector
+        guard.agent_config = agent_config
+        guard.sub_agent_name = None
+        guard._field_order = CLIService._field_order_for_grant(
+            guard._determine_field_order(),
+            agent_config,
+            dialect=getattr(connector, "dialect", "") or "",
+        )
+        scoped_tables = CLIService._scoped_table_patterns(agent_config, guard._field_order)
+        guard._scoped_patterns = guard._load_scoped_patterns(scoped_tables)
+        if not guard._scoped_patterns:
+            return list(table_names)
+        return [
+            table_name
+            for table_name in table_names
+            if guard._table_matches_scope(
+                guard._build_table_coordinate(raw_name=table_name, connector=connector),
+            )
+        ]
+
+    @staticmethod
     def _current_datasource_grant(agent_config: Optional[AgentConfig]) -> tuple[str, object | None]:
         if agent_config is None:
             return "", None
@@ -740,7 +765,11 @@ class CLIService:
             if context_type == "tables":
                 # Get tables list
                 if connector:
-                    tables = connector.get_tables()
+                    tables = self._filter_table_names_by_grant(
+                        connector.get_tables(),
+                        connector,
+                        agent_config,
+                    )
                     if tables:
                         table_info_list = []
                         for table in tables:

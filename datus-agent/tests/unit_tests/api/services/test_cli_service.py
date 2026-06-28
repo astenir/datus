@@ -1036,6 +1036,55 @@ class TestCLIServiceExecuteContext:
         table_names = [t.table_name for t in result.data.result.tables]
         assert "schools" in table_names
 
+    def test_context_tables_prunes_projected_table_scope(self, monkeypatch):
+        """Tables context output must not leak names outside datasource grant scope."""
+
+        class FakeConnector:
+            catalog_name = "finance_catalog"
+            database_name = "finance_db"
+            dialect = "sqlite"
+            schema_name = ""
+
+            def get_tables(self):
+                return ["orders", "payroll"]
+
+        class FakeDBManager:
+            def __init__(self, datasource_configs):
+                self.datasource_configs = datasource_configs
+
+            def first_conn_with_name(self, datasource):
+                return "finance_db", FakeConnector()
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("datus.api.services.cli_service.DBManager", FakeDBManager)
+        projected_config = SimpleNamespace(
+            datasource_configs={"finance": object()},
+            current_datasource="finance",
+            principal={
+                "datasource": "finance",
+                "datasource_grants": {
+                    "finance": {
+                        "effect": "allow",
+                        "allow_catalog": True,
+                        "tables": ["orders"],
+                    }
+                },
+            },
+        )
+        svc = CLIService(agent_config=None, chat_service=None)
+
+        result = svc.execute_context(
+            "tables",
+            ExecuteContextInput(context_type="tables"),
+            agent_config=projected_config,
+        )
+
+        assert result.success is True
+        assert [table.table_name for table in result.data.result.tables] == ["orders"]
+        assert result.data.result.total_count == 1
+
     def test_context_catalogs(self, cli_svc):
         """execute_context 'catalogs' returns catalog info as a dict."""
         request = ExecuteContextInput(context_type="tables")
