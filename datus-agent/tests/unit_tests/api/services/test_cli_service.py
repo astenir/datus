@@ -1483,6 +1483,53 @@ class TestCLIServiceExecuteInternalCommand:
         assert result.data.result.data == {"databases": ["finance_db"]}
         assert result.data.result.command_output == "Available databases: finance_db"
 
+    def test_databases_command_uses_projected_single_connection_database(self, monkeypatch):
+        """Internal databases output must use the request-scoped single connector database."""
+        from datus.api.models.cli_models import InternalCommandInput
+
+        class FakeConnector:
+            database_name = "finance_db"
+
+        class FakeDBManager:
+            def __init__(self, datasource_configs):
+                self.datasource_configs = datasource_configs
+
+            def first_conn_with_name(self, datasource):
+                return "finance_db", FakeConnector()
+
+            def get_connections(self, datasource):
+                return FakeConnector()
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("datus.api.services.cli_service.DBManager", FakeDBManager)
+        projected_config = SimpleNamespace(
+            datasource_configs={"finance": object()},
+            current_datasource="finance",
+            principal={
+                "datasource": "finance",
+                "datasource_grants": {
+                    "finance": {
+                        "effect": "allow",
+                        "allow_catalog": True,
+                    }
+                },
+            },
+        )
+        svc = CLIService(agent_config=None, chat_service=None)
+        svc.current_db_name = "shared_hr_db"
+
+        result = svc.execute_internal_command(
+            "databases",
+            InternalCommandInput(command="databases"),
+            agent_config=projected_config,
+        )
+
+        assert result.success is True
+        assert result.data.result.data == {"databases": ["finance_db"]}
+        assert result.data.result.command_output == "Available databases: finance_db"
+
     def test_tables_command(self, cli_svc):
         """tables command lists available tables."""
         from datus.api.models.cli_models import InternalCommandInput

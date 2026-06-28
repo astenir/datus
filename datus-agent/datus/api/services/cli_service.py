@@ -1062,13 +1062,14 @@ class CLIService:
         active_db_manager = self.db_manager
         active_datasource = self.current_datasource
         active_connector = self.current_db_connector
+        active_db_name = self.current_db_name
         cleanup_connector: Optional[Callable[[], None]] = None
         try:
             if agent_config is not None:
                 active_db_manager, cleanup_connector = self._request_scoped_db_manager(agent_config.datasource_configs)
                 active_datasource = getattr(agent_config, "current_datasource", None)
                 if active_db_manager and active_datasource:
-                    _, active_connector = active_db_manager.first_conn_with_name(active_datasource)
+                    active_db_name, active_connector = active_db_manager.first_conn_with_name(active_datasource)
 
             result_data = InternalCommandResultData(command_output="", action_taken="none", context_changed=False)
 
@@ -1084,7 +1085,7 @@ class CLIService:
                         db_list = list(connections.keys())
                     else:
                         # Single connector - get database name from current context or config
-                        db_list = [self.current_db_name] if self.current_db_name else ["default"]
+                        db_list = [active_db_name] if active_db_name else ["default"]
                     db_list = self._filter_database_names_by_grant(db_list, agent_config)
                     result_data.command_output = f"Available databases: {', '.join(db_list)}"
                     result_data.data = {"databases": db_list}
