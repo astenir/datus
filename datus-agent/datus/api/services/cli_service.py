@@ -721,6 +721,9 @@ class CLIService:
         connector = self.current_db_connector
         current_db_name = self.current_db_name
         active_agent_config = agent_config or self.agent_config
+        active_datasource = getattr(agent_config, "current_datasource", None) if agent_config is not None else None
+        if not active_datasource:
+            active_datasource = self.current_datasource
         cleanup_connector: Optional[Callable[[], None]] = None
         try:
             if agent_config is not None:
@@ -807,7 +810,7 @@ class CLIService:
                     db_info = {"connection_status": "disconnected"}
 
                 result_data.context_info = {
-                    "current_datasource": self.current_datasource,
+                    "current_datasource": active_datasource,
                     "current_database": current_db_name,
                     "current_catalog": getattr(self.cli_context, "current_catalog", None) if self.cli_context else None,
                     "current_schema": getattr(self.cli_context, "current_schema", None) if self.cli_context else None,

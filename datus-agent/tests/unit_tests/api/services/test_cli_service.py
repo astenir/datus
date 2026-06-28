@@ -1052,6 +1052,48 @@ class TestCLIServiceExecuteContext:
         assert "current_datasource" in info
         assert "database" in info
 
+    def test_context_context_uses_projected_agent_config_datasource(self, monkeypatch):
+        """Request-scoped context output must not leak the shared service datasource."""
+
+        class FakeConnector:
+            db_type = "sqlite"
+            database_name = "finance_db"
+
+        seen = {}
+
+        class FakeDBManager:
+            def __init__(self, datasource_configs):
+                seen["datasource_configs"] = datasource_configs
+
+            def first_conn_with_name(self, datasource):
+                seen["datasource"] = datasource
+                return "finance_db", FakeConnector()
+
+            def close(self):
+                seen["closed"] = True
+
+        monkeypatch.setattr("datus.api.services.cli_service.DBManager", FakeDBManager)
+        projected_config = SimpleNamespace(
+            datasource_configs={"finance": object()},
+            current_datasource="finance",
+        )
+        svc = CLIService(agent_config=None, chat_service=None)
+        svc.current_datasource = "hr"
+
+        result = svc.execute_context(
+            "context",
+            ExecuteContextInput(context_type="context"),
+            agent_config=projected_config,
+        )
+
+        assert result.success is True
+        assert result.data.result.context_info["current_datasource"] == "finance"
+        assert seen == {
+            "datasource_configs": projected_config.datasource_configs,
+            "datasource": "finance",
+            "closed": True,
+        }
+
     def test_context_catalog(self, cli_svc):
         """execute_context 'catalog' returns catalog context."""
         request = ExecuteContextInput(context_type="tables")
