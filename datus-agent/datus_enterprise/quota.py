@@ -7,7 +7,10 @@ from typing import Any
 from datus.api import deps
 from datus.api.auth.context import AppContext
 from datus.api.models.base_models import Result
+from datus.utils.loggings import get_logger
 from datus_enterprise.audit import AuditEvent, audit_decision
+
+logger = get_logger(__name__)
 
 
 async def consume_enterprise_quota(
@@ -119,17 +122,22 @@ async def _audit_quota(
     reason: str | None,
     metadata: dict[str, Any],
 ) -> None:
-    await audit_decision(
-        ctx,
-        AuditEvent(
-            action="quota.consume",
-            resource_type=resource_type,
-            resource_id=resource_id,
-            decision=decision,
-            reason=reason,
-            metadata=metadata,
-        ),
-    )
+    try:
+        await audit_decision(
+            ctx,
+            AuditEvent(
+                action="quota.consume",
+                resource_type=resource_type,
+                resource_id=resource_id,
+                decision=decision,
+                reason=reason,
+                metadata=metadata,
+            ),
+        )
+    except Exception:
+        logger.warning(
+            "Quota audit write failed for resource_type=%s decision=%s", resource_type, decision, exc_info=True
+        )
 
 
 def _quota_error(code: str, message: str) -> Result:
