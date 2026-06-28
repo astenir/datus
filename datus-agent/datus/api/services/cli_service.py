@@ -548,6 +548,23 @@ class CLIService:
         ]
 
     @staticmethod
+    def _filter_catalog_names_by_grant(catalog_names: Sequence[str], agent_config: Optional[AgentConfig]) -> list[str]:
+        _datasource, grant = CLIService._current_datasource_grant(agent_config)
+        if not isinstance(grant, dict):
+            return list(catalog_names)
+
+        patterns = _scope_patterns(grant, "catalogs")
+        if patterns is None:
+            return list(catalog_names)
+        if not patterns:
+            return []
+        return [
+            catalog_name
+            for catalog_name in catalog_names
+            if any(fnmatchcase(catalog_name, pattern) for pattern in patterns)
+        ]
+
+    @staticmethod
     def _filter_schema_names_by_grant(schema_names: Sequence[str], agent_config: Optional[AgentConfig]) -> list[str]:
         _datasource, grant = CLIService._current_datasource_grant(agent_config)
         if not isinstance(grant, dict):
@@ -828,6 +845,7 @@ class CLIService:
                     try:
                         # Try to get actual catalogs from the database
                         catalogs = connector.get_catalogs() if hasattr(connector, "get_catalogs") else ["main"]
+                        catalogs = self._filter_catalog_names_by_grant(catalogs, agent_config)
                         current_catalog = active_catalog or "main"
                         result_data.context_info = {
                             "catalogs": catalogs,

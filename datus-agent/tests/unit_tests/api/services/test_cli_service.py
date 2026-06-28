@@ -1152,6 +1152,53 @@ class TestCLIServiceExecuteContext:
             "closed": 2,
         }
 
+    def test_context_catalogs_prunes_projected_catalog_scope(self, monkeypatch):
+        """Catalog context output must not leak names outside datasource grant scope."""
+
+        class FakeConnector:
+            catalog_name = "finance_catalog"
+            schema_name = "finance_schema"
+
+            def get_catalogs(self):
+                return ["finance_catalog", "hr_catalog"]
+
+        class FakeDBManager:
+            def __init__(self, datasource_configs):
+                self.datasource_configs = datasource_configs
+
+            def first_conn_with_name(self, datasource):
+                return "finance_db", FakeConnector()
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("datus.api.services.cli_service.DBManager", FakeDBManager)
+        projected_config = SimpleNamespace(
+            datasource_configs={"finance": object()},
+            current_datasource="finance",
+            principal={
+                "datasource": "finance",
+                "datasource_grants": {
+                    "finance": {
+                        "effect": "allow",
+                        "allow_catalog": True,
+                        "catalogs": ["finance_catalog"],
+                    }
+                },
+            },
+        )
+        svc = CLIService(agent_config=None, chat_service=None)
+
+        result = svc.execute_context(
+            "catalogs",
+            ExecuteContextInput(context_type="catalogs"),
+            agent_config=projected_config,
+        )
+
+        assert result.success is True
+        assert result.data.result.context_info["catalogs"] == ["finance_catalog"]
+        assert result.data.result.context_info["total_count"] == 1
+
     def test_context_context(self, cli_svc):
         """execute_context 'context' returns connection context."""
         request = ExecuteContextInput(context_type="tables")
