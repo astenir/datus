@@ -854,9 +854,11 @@ class CLIService:
                         }
                     except Exception as e:
                         logger.debug(f"Failed to get catalogs from database: {e}")
+                        fallback_catalog = active_catalog or "main"
+                        catalogs = self._filter_catalog_names_by_grant([fallback_catalog], agent_config)
                         result_data.context_info = {
-                            "catalogs": ["main"],
-                            "current": "main",
+                            "catalogs": catalogs,
+                            "current": fallback_catalog if fallback_catalog in catalogs else None,
                             "error": str(e),
                         }
                 else:
