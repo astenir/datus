@@ -2049,7 +2049,7 @@ def test_sql_stop_execute_routes_pass_user_owner_and_hide_other_user_task(monkey
     task.cancel.assert_not_called()
 
 
-@pytest.mark.parametrize("context_type", ["tables", "catalogs", "catalog", "context"])
+@pytest.mark.parametrize("context_type", ["tables", "catalogs", "catalog", "context", "subject", "sql"])
 def test_cli_context_metadata_requires_datasource_catalog(monkeypatch, context_type):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()
@@ -2128,7 +2128,7 @@ def test_cli_internal_tables_rejects_missing_datasource_grant_before_execution(m
     svc.cli.execute_internal_command.assert_not_called()
 
 
-@pytest.mark.parametrize("context_type", ["tables", "catalogs", "catalog", "context"])
+@pytest.mark.parametrize("context_type", ["tables", "catalogs", "catalog", "context", "subject", "sql"])
 def test_cli_context_metadata_rbac_denial_does_not_resolve_datus_service(monkeypatch, context_type):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
