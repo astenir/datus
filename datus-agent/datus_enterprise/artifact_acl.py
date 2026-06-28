@@ -10,12 +10,14 @@ from fastapi import HTTPException
 from datus.api.auth.context import AppContext
 from datus.api.enterprise.deps import get_artifact_acl_store
 from datus.schemas.artifact_manifest import ArtifactManifest
+from datus.utils.loggings import get_logger
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import ResourceRef, authorize
 
 TManifest = TypeVar("TManifest", bound=ArtifactManifest)
 
 DEFAULT_ARTIFACT_ACL_VISIBILITY = "private"
+logger = get_logger(__name__)
 
 
 def build_default_private_acl(*, owner_user_id: str, datasources: Sequence[str] | None = None) -> dict[str, Any]:
@@ -82,7 +84,7 @@ async def require_artifact_access(ctx: AppContext, *, artifact_type: str, slug: 
     permission_action = f"module.{artifact_type}.{action}"
     decision = await authorize(ctx, action=permission_action, resource=ResourceRef(type=artifact_type, id=slug))
     if not decision.allowed:
-        await audit_decision(
+        await _audit_artifact_access(
             ctx,
             AuditEvent(
                 action=permission_action,
@@ -97,7 +99,7 @@ async def require_artifact_access(ctx: AppContext, *, artifact_type: str, slug: 
     store = get_artifact_acl_store()
     if store is not None:
         if not await _store_acl_allows(store, ctx, artifact_type=artifact_type, slug=slug):
-            await audit_decision(
+            await _audit_artifact_access(
                 ctx,
                 AuditEvent(
                     action=permission_action,
@@ -109,7 +111,7 @@ async def require_artifact_access(ctx: AppContext, *, artifact_type: str, slug: 
             )
             raise HTTPException(status_code=404, detail="Artifact not found.")
 
-        await audit_decision(
+        await _audit_artifact_access(
             ctx,
             AuditEvent(action=permission_action, resource_type=artifact_type, resource_id=slug, decision="allow"),
         )
@@ -117,7 +119,7 @@ async def require_artifact_access(ctx: AppContext, *, artifact_type: str, slug: 
 
     allowed_slugs = _allowed_slugs(ctx, artifact_type)
     if allowed_slugs is not None and slug not in allowed_slugs:
-        await audit_decision(
+        await _audit_artifact_access(
             ctx,
             AuditEvent(
                 action=permission_action,
@@ -129,10 +131,23 @@ async def require_artifact_access(ctx: AppContext, *, artifact_type: str, slug: 
         )
         raise HTTPException(status_code=404, detail="Artifact not found.")
 
-    await audit_decision(
+    await _audit_artifact_access(
         ctx,
         AuditEvent(action=permission_action, resource_type=artifact_type, resource_id=slug, decision="allow"),
     )
+
+
+async def _audit_artifact_access(ctx: AppContext, event: AuditEvent) -> None:
+    try:
+        await audit_decision(ctx, event)
+    except Exception:
+        logger.warning(
+            "Artifact access audit failed for action=%s resource_type=%s decision=%s",
+            event.action,
+            event.resource_type,
+            event.decision,
+            exc_info=True,
+        )
 
 
 async def _store_acl_allows(store: Any, ctx: AppContext, *, artifact_type: str, slug: str) -> bool:

@@ -37,6 +37,30 @@ class CollectingAuditSink:
         self.events.append(event)
 
 
+class FailingAuditSink:
+    def __init__(self):
+        self.events = []
+
+    async def write(self, event):
+        self.events.append(event)
+        raise RuntimeError("audit down")
+
+
+def _install_extensions(monkeypatch, *, audit_sink=None, artifact_acl_store=None):
+    monkeypatch.setattr(
+        deps,
+        "_enterprise_extensions",
+        EnterpriseExtensions(
+            enabled=False,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=audit_sink or NoopAuditSink(),
+            artifact_acl_store=artifact_acl_store,
+        ),
+    )
+
+
 def _manifest(slug: str, kind: str = "report") -> ArtifactManifest:
     return ArtifactManifest(
         slug=slug, name=slug, description="Test artifact", kind=kind, created_at="2026-01-01T00:00:00Z"
@@ -70,6 +94,56 @@ async def test_require_artifact_access_returns_404_for_acl_miss():
         await require_artifact_access(ctx, artifact_type="dashboard", slug="hidden", action="view")
 
     assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_require_artifact_access_permission_denial_survives_audit_failure(monkeypatch):
+    audit_sink = FailingAuditSink()
+    _install_extensions(monkeypatch, audit_sink=audit_sink)
+
+    with pytest.raises(HTTPException) as exc:
+        await require_artifact_access(
+            AppContext(user_id="viewer-1", permissions={"module.dashboard.view"}),
+            artifact_type="report",
+            slug="private_sales",
+            action="view",
+        )
+
+    assert exc.value.status_code == 403
+    assert audit_sink.events[0].decision == "deny"
+
+
+@pytest.mark.asyncio
+async def test_require_artifact_access_acl_denial_survives_audit_failure(monkeypatch):
+    audit_sink = FailingAuditSink()
+    _install_extensions(monkeypatch, audit_sink=audit_sink)
+
+    with pytest.raises(HTTPException) as exc:
+        await require_artifact_access(
+            AppContext(
+                user_id="viewer-1", permissions={"module.report.view"}, principal={"artifact_acl": {"report": []}}
+            ),
+            artifact_type="report",
+            slug="private_sales",
+            action="view",
+        )
+
+    assert exc.value.status_code == 404
+    assert audit_sink.events[0].decision == "deny"
+
+
+@pytest.mark.asyncio
+async def test_require_artifact_access_allow_survives_audit_failure(monkeypatch):
+    audit_sink = FailingAuditSink()
+    _install_extensions(monkeypatch, audit_sink=audit_sink)
+
+    await require_artifact_access(
+        AppContext(user_id="viewer-1", permissions={"module.report.view"}),
+        artifact_type="report",
+        slug="public_sales",
+        action="view",
+    )
+    assert audit_sink.events[0].decision == "allow"
 
 
 @pytest.mark.asyncio
