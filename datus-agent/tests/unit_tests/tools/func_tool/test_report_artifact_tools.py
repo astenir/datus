@@ -37,6 +37,7 @@ from datus.tools.func_tool.report_artifact_tools import (
     _infer_column_type,
     _resolve_relative_import,
 )
+from datus.utils.async_utils import run_async
 
 # ----------------------------------------------------------------------------- #
 # Fixtures                                                                      #
@@ -56,6 +57,33 @@ class MemoryArtifactAclStore:
     async def put_acl(self, *, artifact_type: str, slug: str, acl: dict):
         self.acls[(artifact_type, slug)] = dict(acl)
         return dict(acl)
+
+
+class LoopBoundArtifactAclStore(MemoryArtifactAclStore):
+    def __init__(self):
+        super().__init__()
+        self.loop = None
+
+    def _assert_current_loop(self):
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        if self.loop is None:
+            self.loop = loop
+        elif self.loop is not loop:
+            raise RuntimeError("artifact ACL store used from the wrong event loop")
+
+    async def get_acl(self, *, artifact_type: str, slug: str):
+        self._assert_current_loop()
+        return await super().get_acl(artifact_type=artifact_type, slug=slug)
+
+    async def put_acl(self, *, artifact_type: str, slug: str, acl: dict):
+        self._assert_current_loop()
+        return await super().put_acl(artifact_type=artifact_type, slug=slug, acl=acl)
+
+
+def _start_new_report(tools: ReportArtifactTools, *, slug: str, name: str, description: str):
+    return run_async(tools.start_new_report(slug=slug, name=name, description=description))
 
 
 @pytest.fixture
@@ -102,7 +130,8 @@ def unbound_tools(db_func_tool: DBFuncTool, project_root: Path) -> ReportArtifac
 
 @pytest.fixture
 def report_tools(unbound_tools: ReportArtifactTools) -> ReportArtifactTools:
-    result = unbound_tools.start_new_report(
+    result = _start_new_report(
+        unbound_tools,
         slug="demo_test",
         name="demo test",
         description="Smoke-test report used by the report-artifact-tools unit tests.",
@@ -152,7 +181,8 @@ class TestResolveRelativeImport:
 
 class TestStartNewReport:
     def test_uses_supplied_slug_and_writes_manifest(self, unbound_tools: ReportArtifactTools, project_root: Path):
-        result = unbound_tools.start_new_report(
+        result = _start_new_report(
+            unbound_tools,
             slug="east_sales_q1",
             name="east sales",
             description="Quarterly review of east-region direct sales.",
@@ -193,7 +223,8 @@ class TestStartNewReport:
         )
         tools = ReportArtifactTools(agent_config=agent_config, db_func_tool=db_func_tool)
 
-        result = tools.start_new_report(
+        result = _start_new_report(
+            tools,
             slug="private_report",
             name="private report",
             description="Report with default private ACL.",
@@ -208,10 +239,35 @@ class TestStartNewReport:
             "datasources": [],
         }
 
+    @pytest.mark.asyncio
+    async def test_writes_default_private_acl_on_current_event_loop(self, db_func_tool: DBFuncTool, project_root: Path):
+        store = LoopBoundArtifactAclStore()
+        await store.put_acl(
+            artifact_type="report",
+            slug="seed",
+            acl={"owner_user_id": "creator-1", "visibility": "private"},
+        )
+        agent_config = SimpleNamespace(
+            project_root=str(project_root),
+            _request_user_id="creator-1",
+            _artifact_acl_store=store,
+        )
+        tools = ReportArtifactTools(agent_config=agent_config, db_func_tool=db_func_tool)
+
+        result = await tools.start_new_report(
+            slug="loop_safe_report",
+            name="loop safe report",
+            description="Report whose ACL store must stay on this event loop.",
+        )
+
+        assert result.success == 1, result.error
+        assert store.acls[("report", "loop_safe_report")]["owner_user_id"] == "creator-1"
+
     def test_chinese_name_is_preserved_in_manifest(self, unbound_tools: ReportArtifactTools, project_root: Path):
         # The slug is always pure ASCII; the manifest's display name preserves
         # the original (potentially Chinese) text verbatim.
-        result = unbound_tools.start_new_report(
+        result = _start_new_report(
+            unbound_tools,
             slug="sales_q1_review",
             name="销售季度复盘",
             description="第一季度区域销售业绩复盘。",
@@ -226,12 +282,12 @@ class TestStartNewReport:
         assert manifest["name"] == "销售季度复盘"
 
     def test_empty_name_rejected(self, unbound_tools: ReportArtifactTools):
-        result = unbound_tools.start_new_report(slug="ok", name="", description="x")
+        result = _start_new_report(unbound_tools, slug="ok", name="", description="x")
         assert result.success == 0
         assert "name" in (result.error or "").lower()
 
     def test_empty_description_rejected(self, unbound_tools: ReportArtifactTools):
-        result = unbound_tools.start_new_report(slug="ok", name="ok name", description="   ")
+        result = _start_new_report(unbound_tools, slug="ok", name="ok name", description="   ")
         assert result.success == 0
         assert "description" in (result.error or "").lower()
 
@@ -246,13 +302,13 @@ class TestStartNewReport:
         ],
     )
     def test_invalid_slug_rejected(self, unbound_tools: ReportArtifactTools, bad_slug: str):
-        result = unbound_tools.start_new_report(slug=bad_slug, name="ok", description="ok")
+        result = _start_new_report(unbound_tools, slug=bad_slug, name="ok", description="ok")
         assert result.success == 0
         assert "slug" in (result.error or "").lower()
 
     def test_existing_directory_rejected(self, unbound_tools: ReportArtifactTools, project_root: Path):
         (project_root / "reports" / "preexisting").mkdir(parents=True)
-        result = unbound_tools.start_new_report(slug="preexisting", name="x", description="y")
+        result = _start_new_report(unbound_tools, slug="preexisting", name="x", description="y")
         assert result.success == 0
         assert "already exists" in (result.error or "").lower()
 

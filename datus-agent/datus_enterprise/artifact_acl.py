@@ -10,7 +10,6 @@ from fastapi import HTTPException
 from datus.api.auth.context import AppContext
 from datus.api.enterprise.deps import get_artifact_acl_store
 from datus.schemas.artifact_manifest import ArtifactManifest
-from datus.utils.async_utils import run_async
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.authorization import ResourceRef, authorize
 
@@ -49,27 +48,6 @@ async def ensure_default_private_acl(
     except KeyError:
         default_acl = build_default_private_acl(owner_user_id=owner, datasources=datasources)
         return await store.put_acl(artifact_type=artifact_type, slug=slug, acl=default_acl)
-
-
-def ensure_default_private_acl_sync(
-    store: Any,
-    *,
-    artifact_type: str,
-    slug: str,
-    owner_user_id: str | None,
-    datasources: Sequence[str] | None = None,
-) -> dict[str, Any] | None:
-    """Synchronous bridge for artifact tools that create manifest files."""
-
-    return run_async(
-        ensure_default_private_acl(
-            store,
-            artifact_type=artifact_type,
-            slug=slug,
-            owner_user_id=owner_user_id,
-            datasources=datasources,
-        )
-    )
 
 
 async def filter_visible_artifacts(

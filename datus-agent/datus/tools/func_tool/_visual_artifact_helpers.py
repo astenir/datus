@@ -314,7 +314,7 @@ def upsert_manifest_after_save(
         return f"Failed to upsert manifest: {exc}"
 
 
-def create_default_artifact_acl_after_manifest(
+async def create_default_artifact_acl_after_manifest(
     agent_config: Any,
     *,
     artifact_type: str,
@@ -334,9 +334,9 @@ def create_default_artifact_acl_after_manifest(
         return None
 
     try:
-        from datus_enterprise.artifact_acl import ensure_default_private_acl_sync
+        from datus_enterprise.artifact_acl import ensure_default_private_acl
 
-        ensure_default_private_acl_sync(
+        await ensure_default_private_acl(
             store,
             artifact_type=artifact_type,
             slug=slug,

@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -481,7 +482,7 @@ class DashboardArtifactTools:
 
     # -- intent declaration --------------------------------------------------
 
-    def start_new_dashboard(self, slug: str, name: str, description: str) -> FuncToolResult:
+    async def start_new_dashboard(self, slug: str, name: str, description: str) -> FuncToolResult:
         """
         Create a fresh dashboard directory at ``dashboards/<slug>/``, write its manifest, and bind it.
 
@@ -556,7 +557,20 @@ class DashboardArtifactTools:
             )
         except Exception as exc:
             return FuncToolResult(success=0, error=f"Manifest validation failed: {exc}")
-        return self._activate(slug, mode="new", create_dirs=True, manifest=manifest)
+        result = self._activate(slug, mode="new", create_dirs=True, manifest=manifest)
+        if result.success != 1:
+            return result
+        acl_error = await create_default_artifact_acl_after_manifest(
+            self.agent_config,
+            artifact_type="dashboard",
+            slug=slug,
+            datasources=manifest.datasources,
+        )
+        if acl_error:
+            cleanup_error = self._rollback_created_dashboard(slug)
+            error = acl_error if cleanup_error is None else f"{acl_error}; cleanup failed: {cleanup_error}"
+            return FuncToolResult(success=0, error=error)
+        return result
 
     def bind_existing_dashboard(self, dashboard_slug: str) -> FuncToolResult:
         """
@@ -645,14 +659,6 @@ class DashboardArtifactTools:
                 )
             except OSError as exc:
                 return FuncToolResult(success=0, error=f"Failed to write manifest.json: {exc}")
-            acl_error = create_default_artifact_acl_after_manifest(
-                self.agent_config,
-                artifact_type="dashboard",
-                slug=dashboard_slug,
-                datasources=manifest.datasources,
-            )
-            if acl_error:
-                return FuncToolResult(success=0, error=acl_error)
             manifest_rel = manifest_path.relative_to(self._project_root).as_posix()
         self.dashboard_slug = dashboard_slug
         self.dashboard_dir = dashboard_dir
@@ -683,6 +689,23 @@ class DashboardArtifactTools:
         if intent_warning:
             result["intent_warning"] = intent_warning
         return FuncToolResult(result=result)
+
+    def _rollback_created_dashboard(self, dashboard_slug: str) -> str | None:
+        if self.dashboard_slug == dashboard_slug:
+            self.dashboard_slug = None
+            self.dashboard_dir = None
+            self.queries_dir = None
+            self.render_dir = None
+            self.analysis_dir = None
+            self.mode = None
+        try:
+            shutil.rmtree(self._project_root / "dashboards" / dashboard_slug)
+            return None
+        except OSError as exc:
+            logger.warning(
+                "Failed to roll back dashboard artifact %s after ACL creation failure: %s", dashboard_slug, exc
+            )
+            return str(exc)
 
     def _require_active(self, tool_name: str) -> Optional[FuncToolResult]:
         if self.dashboard_slug is None or self.dashboard_dir is None or self.queries_dir is None:

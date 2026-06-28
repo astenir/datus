@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -348,7 +349,7 @@ class ReportArtifactTools:
 
     # -- intent declaration --------------------------------------------------
 
-    def start_new_report(self, slug: str, name: str, description: str) -> FuncToolResult:
+    async def start_new_report(self, slug: str, name: str, description: str) -> FuncToolResult:
         """
         Create a fresh report directory at ``reports/<slug>/``, write its manifest, and bind it.
 
@@ -424,7 +425,20 @@ class ReportArtifactTools:
             )
         except Exception as exc:
             return FuncToolResult(success=0, error=f"Manifest validation failed: {exc}")
-        return self._activate(slug, mode="new", create_dirs=True, manifest=manifest)
+        result = self._activate(slug, mode="new", create_dirs=True, manifest=manifest)
+        if result.success != 1:
+            return result
+        acl_error = await create_default_artifact_acl_after_manifest(
+            self.agent_config,
+            artifact_type="report",
+            slug=slug,
+            datasources=manifest.datasources,
+        )
+        if acl_error:
+            cleanup_error = self._rollback_created_report(slug)
+            error = acl_error if cleanup_error is None else f"{acl_error}; cleanup failed: {cleanup_error}"
+            return FuncToolResult(success=0, error=error)
+        return result
 
     def bind_existing_report(self, report_slug: str) -> FuncToolResult:
         """
@@ -514,14 +528,6 @@ class ReportArtifactTools:
                 )
             except OSError as exc:
                 return FuncToolResult(success=0, error=f"Failed to write manifest.json: {exc}")
-            acl_error = create_default_artifact_acl_after_manifest(
-                self.agent_config,
-                artifact_type="report",
-                slug=report_slug,
-                datasources=manifest.datasources,
-            )
-            if acl_error:
-                return FuncToolResult(success=0, error=acl_error)
             manifest_rel = manifest_path.relative_to(self._project_root).as_posix()
         self.report_slug = report_slug
         self.report_dir = report_dir
@@ -555,6 +561,21 @@ class ReportArtifactTools:
         if intent_warning:
             result["intent_warning"] = intent_warning
         return FuncToolResult(result=result)
+
+    def _rollback_created_report(self, report_slug: str) -> str | None:
+        if self.report_slug == report_slug:
+            self.report_slug = None
+            self.report_dir = None
+            self.queries_dir = None
+            self.render_dir = None
+            self.analysis_dir = None
+            self.mode = None
+        try:
+            shutil.rmtree(self._project_root / "reports" / report_slug)
+            return None
+        except OSError as exc:
+            logger.warning("Failed to roll back report artifact %s after ACL creation failure: %s", report_slug, exc)
+            return str(exc)
 
     def _require_active(self, tool_name: str) -> Optional[FuncToolResult]:
         """Return a failure result when no report is bound, else ``None``."""

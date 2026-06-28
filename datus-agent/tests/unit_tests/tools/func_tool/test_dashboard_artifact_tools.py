@@ -43,6 +43,7 @@ from datus.tools.func_tool.dashboard_artifact_tools import (
     sql_quote_scalar,
     strip_sql_comments,
 )
+from datus.utils.async_utils import run_async
 
 # ----------------------------------------------------------------------------- #
 # Fixtures                                                                      #
@@ -62,6 +63,33 @@ class MemoryArtifactAclStore:
     async def put_acl(self, *, artifact_type: str, slug: str, acl: dict):
         self.acls[(artifact_type, slug)] = dict(acl)
         return dict(acl)
+
+
+class LoopBoundArtifactAclStore(MemoryArtifactAclStore):
+    def __init__(self):
+        super().__init__()
+        self.loop = None
+
+    def _assert_current_loop(self):
+        import asyncio
+
+        loop = asyncio.get_running_loop()
+        if self.loop is None:
+            self.loop = loop
+        elif self.loop is not loop:
+            raise RuntimeError("artifact ACL store used from the wrong event loop")
+
+    async def get_acl(self, *, artifact_type: str, slug: str):
+        self._assert_current_loop()
+        return await super().get_acl(artifact_type=artifact_type, slug=slug)
+
+    async def put_acl(self, *, artifact_type: str, slug: str, acl: dict):
+        self._assert_current_loop()
+        return await super().put_acl(artifact_type=artifact_type, slug=slug, acl=acl)
+
+
+def _start_new_dashboard(tools: DashboardArtifactTools, *, slug: str, name: str, description: str):
+    return run_async(tools.start_new_dashboard(slug=slug, name=name, description=description))
 
 
 @pytest.fixture
@@ -109,7 +137,8 @@ def unbound_tools(db_func_tool: DBFuncTool, project_root: Path) -> DashboardArti
 
 @pytest.fixture
 def dashboard_tools(unbound_tools: DashboardArtifactTools) -> DashboardArtifactTools:
-    result = unbound_tools.start_new_dashboard(
+    result = _start_new_dashboard(
+        unbound_tools,
         slug="demo_test",
         name="demo test",
         description="Smoke-test dashboard used by the dashboard-artifact-tools unit tests.",
@@ -341,7 +370,8 @@ class TestExtractBindNames:
 
 class TestStartNewDashboard:
     def test_uses_supplied_slug_and_writes_manifest(self, unbound_tools: DashboardArtifactTools, project_root: Path):
-        result = unbound_tools.start_new_dashboard(
+        result = _start_new_dashboard(
+            unbound_tools,
             slug="north_sales",
             name="north sales",
             description="Live north-region sales dashboard with date and channel filters.",
@@ -379,7 +409,8 @@ class TestStartNewDashboard:
         )
         tools = DashboardArtifactTools(agent_config=agent_config, db_func_tool=db_func_tool)
 
-        result = tools.start_new_dashboard(
+        result = _start_new_dashboard(
+            tools,
             slug="private_dashboard",
             name="private dashboard",
             description="Dashboard with default private ACL.",
@@ -394,8 +425,33 @@ class TestStartNewDashboard:
             "datasources": [],
         }
 
+    @pytest.mark.asyncio
+    async def test_writes_default_private_acl_on_current_event_loop(self, db_func_tool: DBFuncTool, project_root: Path):
+        store = LoopBoundArtifactAclStore()
+        await store.put_acl(
+            artifact_type="dashboard",
+            slug="seed",
+            acl={"owner_user_id": "creator-1", "visibility": "private"},
+        )
+        agent_config = SimpleNamespace(
+            project_root=str(project_root),
+            _request_user_id="creator-1",
+            _artifact_acl_store=store,
+        )
+        tools = DashboardArtifactTools(agent_config=agent_config, db_func_tool=db_func_tool)
+
+        result = await tools.start_new_dashboard(
+            slug="loop_safe_dashboard",
+            name="loop safe dashboard",
+            description="Dashboard whose ACL store must stay on this event loop.",
+        )
+
+        assert result.success == 1, result.error
+        assert store.acls[("dashboard", "loop_safe_dashboard")]["owner_user_id"] == "creator-1"
+
     def test_chinese_name_is_preserved_in_manifest(self, unbound_tools: DashboardArtifactTools, project_root: Path):
-        result = unbound_tools.start_new_dashboard(
+        result = _start_new_dashboard(
+            unbound_tools,
             slug="sales_live",
             name="销售看板",
             description="实时销售看板，按地区过滤。",
@@ -408,12 +464,12 @@ class TestStartNewDashboard:
         assert manifest["name"] == "销售看板"
 
     def test_empty_name_rejected(self, unbound_tools: DashboardArtifactTools):
-        result = unbound_tools.start_new_dashboard(slug="ok", name=" ", description="x")
+        result = _start_new_dashboard(unbound_tools, slug="ok", name=" ", description="x")
         assert result.success == 0
         assert "name" in (result.error or "").lower()
 
     def test_empty_description_rejected(self, unbound_tools: DashboardArtifactTools):
-        result = unbound_tools.start_new_dashboard(slug="ok", name="ok", description="")
+        result = _start_new_dashboard(unbound_tools, slug="ok", name="ok", description="")
         assert result.success == 0
         assert "description" in (result.error or "").lower()
 
@@ -428,13 +484,13 @@ class TestStartNewDashboard:
         ],
     )
     def test_invalid_slug_rejected(self, unbound_tools: DashboardArtifactTools, bad_slug: str):
-        result = unbound_tools.start_new_dashboard(slug=bad_slug, name="ok", description="ok")
+        result = _start_new_dashboard(unbound_tools, slug=bad_slug, name="ok", description="ok")
         assert result.success == 0
         assert "slug" in (result.error or "").lower()
 
     def test_existing_directory_rejected(self, unbound_tools: DashboardArtifactTools, project_root: Path):
         (project_root / "dashboards" / "preexisting").mkdir(parents=True)
-        result = unbound_tools.start_new_dashboard(slug="preexisting", name="x", description="y")
+        result = _start_new_dashboard(unbound_tools, slug="preexisting", name="x", description="y")
         assert result.success == 0
         assert "already exists" in (result.error or "").lower()
 
