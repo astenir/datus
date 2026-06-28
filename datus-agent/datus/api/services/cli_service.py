@@ -1029,7 +1029,11 @@ class CLIService:
 
             elif command == "tables":
                 if active_connector:
-                    tables = active_connector.get_tables()
+                    tables = self._filter_table_names_by_grant(
+                        active_connector.get_tables(),
+                        active_connector,
+                        agent_config,
+                    )
                     result_data.command_output = f"Tables: {', '.join(tables or [])}"
                     result_data.data = {"tables": tables or []}
                 else:

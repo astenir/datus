@@ -1300,6 +1300,56 @@ class TestCLIServiceExecuteInternalCommand:
         assert result.data.result.action_taken == "list_tables"
         assert "schools" in result.data.result.command_output
 
+    def test_tables_command_prunes_projected_table_scope(self, monkeypatch):
+        """Internal tables output must not leak names outside datasource grant scope."""
+        from datus.api.models.cli_models import InternalCommandInput
+
+        class FakeConnector:
+            catalog_name = "finance_catalog"
+            database_name = "finance_db"
+            dialect = "sqlite"
+            schema_name = ""
+
+            def get_tables(self):
+                return ["orders", "payroll"]
+
+        class FakeDBManager:
+            def __init__(self, datasource_configs):
+                self.datasource_configs = datasource_configs
+
+            def first_conn_with_name(self, datasource):
+                return "finance_db", FakeConnector()
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("datus.api.services.cli_service.DBManager", FakeDBManager)
+        projected_config = SimpleNamespace(
+            datasource_configs={"finance": object()},
+            current_datasource="finance",
+            principal={
+                "datasource": "finance",
+                "datasource_grants": {
+                    "finance": {
+                        "effect": "allow",
+                        "allow_catalog": True,
+                        "tables": ["orders"],
+                    }
+                },
+            },
+        )
+        svc = CLIService(agent_config=None, chat_service=None)
+
+        result = svc.execute_internal_command(
+            "tables",
+            InternalCommandInput(command="tables"),
+            agent_config=projected_config,
+        )
+
+        assert result.success is True
+        assert result.data.result.data == {"tables": ["orders"]}
+        assert result.data.result.command_output == "Tables: orders"
+
     def test_exit_command(self, cli_svc):
         """exit command returns goodbye message."""
         from datus.api.models.cli_models import InternalCommandInput
