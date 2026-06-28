@@ -19,6 +19,7 @@ from datus.agent.agent import Agent
 from datus.api.auth import load_auth_provider
 from datus.api.deps import init_deps
 from datus.api.enterprise import load_enterprise_extensions
+from datus.api.enterprise.models import AuditEvent
 from datus.api.services.background_drain import drain_background_tasks
 from datus.api.services.datus_service_cache import DatusServiceCache
 from datus.configuration.agent_config_loader import load_agent_config, parse_config_path
@@ -551,7 +552,7 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
     @app.post("/auth/token", response_model=TokenResponse, tags=["auth"])
     async def authenticate(request: Request) -> TokenResponse:
         """OAuth2 client credentials token endpoint."""
-        _reject_legacy_api_in_enterprise()
+        await _reject_legacy_api_in_enterprise(operation="auth.token_legacy")
         form = await request.form()
         client_id = str(form.get("client_id") or "")
         client_secret = str(form.get("client_secret") or "")
@@ -570,7 +571,7 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
     @app.post("/workflows/run", tags=["workflows"])
     async def run_workflow(req: RunWorkflowRequest, request: Request):
         """Execute a workflow based on the request parameters."""
-        current_client = _get_legacy_current_client(request)
+        current_client = await _get_legacy_current_client(request)
         try:
             logger.info(f"Workflow request from client: {current_client}, mode: {req.mode}")
 
@@ -605,7 +606,7 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
     @app.post("/workflows/feedback", response_model=FeedbackResponse, tags=["workflows"])
     async def record_feedback(req: FeedbackRequest, request: Request):
         """Record user feedback for a task."""
-        current_client = _get_legacy_current_client(request)
+        current_client = await _get_legacy_current_client(request)
         try:
             logger.info(f"Feedback request from client: {current_client} for task: {req.task_id}")
             return await service.record_feedback(req)
@@ -616,19 +617,33 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
     return app
 
 
-def _reject_legacy_api_in_enterprise() -> None:
+async def _reject_legacy_api_in_enterprise(*, operation: str) -> None:
     """Disable legacy OAuth/workflow endpoints in enterprise mode."""
 
     from datus.api import deps
 
-    if deps.get_enterprise_extensions().enabled:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_LEGACY_ENTERPRISE_DISABLED_DETAIL)
+    extensions = deps.get_enterprise_extensions()
+    if not extensions.enabled:
+        return
+
+    await extensions.audit_sink.write(
+        AuditEvent(
+            user_id=None,
+            action="system.route_disabled",
+            resource_type="legacy_api",
+            resource_id=None,
+            decision="deny",
+            reason=f"Route operation '{operation}' is disabled in enterprise mode.",
+            metadata={"operation": operation},
+        )
+    )
+    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_LEGACY_ENTERPRISE_DISABLED_DETAIL)
 
 
-def _get_legacy_current_client(request: Request) -> str:
+async def _get_legacy_current_client(request: Request) -> str:
     """Authenticate legacy workflow requests after enterprise-mode rejection."""
 
-    _reject_legacy_api_in_enterprise()
+    await _reject_legacy_api_in_enterprise(operation="workflow.legacy")
     raw = request.headers.get("Authorization")
     if raw is None:
         raise HTTPException(

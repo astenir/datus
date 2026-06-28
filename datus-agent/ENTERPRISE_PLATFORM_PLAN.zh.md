@@ -1185,6 +1185,24 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 
 ## 测试计划
 
+### Route coverage matrix
+
+当前企业安全链增加一个持续验收件：`datus/api/enterprise/route_security_matrix.py`。它按
+`create_app()` 实际注册的 `method + path` 枚举每个 FastAPI route，并记录该 route 在
+`enterprise.enabled=true` 下依赖的安全策略分类。后续新增或上游合并 route 时，必须先回答：
+
+- 该 route 是否需要 `module_rbac`，对应哪个稳定 permission key。
+- 是否访问用户 session/task，是否需要 `session_owner`。
+- 是否访问 datasource、SQL、dashboard、table、semantic model 或 datasource grant metadata，是否具备 `datasource_projection`、`datasource_grant`、`sql_policy`、`table_scope` 或 `artifact_acl`。
+- 是否属于执行类请求或写入类 mutation；如果是，必须声明 `platform_status_gate`，或在矩阵中写明 `platform_status_exception` 的运维理由。
+- 是否会产生关键安全决策或管理变更，是否写入 `audit`。
+- 如果只是旧兼容 route 且尚未进入完整企业安全链，必须归类为 `legacy_disabled`，在企业模式禁用并审计。
+- 如果是 root、health、system status、当前用户能力视图等只读接口，必须归类为 `system_readonly` 或 `local_compatible`，并明确不会绕过授权执行企业资源访问。
+
+`tests/unit_tests/api/enterprise/test_route_security_matrix.py` 会将矩阵与 `create_app()` 当前 route 集合一一比对。
+因此 route coverage matrix 是企业平台后续新增 API 的必经验收项：未分类 route、未声明状态策略的 mutation/execution route、
+未声明数据执行边界的数据类 route、未审计的 legacy disabled route 都应阻断提交。
+
 ### 单元测试
 
 - RBAC permission glob 匹配。

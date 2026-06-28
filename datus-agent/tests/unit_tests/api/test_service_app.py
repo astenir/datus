@@ -12,11 +12,18 @@ from datus.api.enterprise.defaults import (
     InMemoryEnterpriseDatasourceGrantStore,
     InMemorySessionOwnerStore,
     LocalAuthorizationProvider,
-    NoopAuditSink,
     PassthroughConfigProjector,
 )
 from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.service import DatusAPIService, create_app
+
+
+class CollectingAuditSink:
+    def __init__(self):
+        self.events = []
+
+    async def write(self, event):
+        self.events.append(event)
 
 
 class TestCreateApp:
@@ -67,6 +74,7 @@ class TestCreateApp:
         """Enterprise mode must not expose legacy client-token workflow APIs."""
         args = argparse.Namespace(config="", datasource="default", output_dir="./output", log_level="INFO")
         app = create_app(args)
+        audit_sink = CollectingAuditSink()
 
         with TestClient(app, raise_server_exceptions=False) as client:
             monkeypatch.setattr(
@@ -77,7 +85,7 @@ class TestCreateApp:
                     authorization_provider=LocalAuthorizationProvider(),
                     config_projector=PassthroughConfigProjector(),
                     session_owner_store=InMemorySessionOwnerStore(),
-                    audit_sink=NoopAuditSink(),
+                    audit_sink=audit_sink,
                     datasource_grant_store=InMemoryEnterpriseDatasourceGrantStore(),
                 ),
             )
@@ -112,6 +120,16 @@ class TestCreateApp:
         assert token_response.json()["detail"]["errorCode"] == "ENTERPRISE_LEGACY_API_DISABLED"
         assert workflow_response.json()["detail"]["errorCode"] == "ENTERPRISE_LEGACY_API_DISABLED"
         assert feedback_response.json()["detail"]["errorCode"] == "ENTERPRISE_LEGACY_API_DISABLED"
+        assert [event.action for event in audit_sink.events] == [
+            "system.route_disabled",
+            "system.route_disabled",
+            "system.route_disabled",
+        ]
+        assert [event.metadata for event in audit_sink.events] == [
+            {"operation": "auth.token_legacy"},
+            {"operation": "workflow.legacy"},
+            {"operation": "workflow.legacy"},
+        ]
 
     def test_lifespan_closes_enterprise_extensions(self, monkeypatch):
         """Application shutdown closes loaded enterprise extension providers."""

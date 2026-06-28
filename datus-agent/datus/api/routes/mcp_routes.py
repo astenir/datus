@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Path, Query
 
 from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
-from datus.api.enterprise.deps import require_module
+from datus.api.enterprise.deps import require_module, require_platform_active
 from datus.api.models.base_models import Result
 from datus.api.models.mcp_models import (
     AddServerInput,
@@ -48,6 +48,7 @@ async def list_servers(
     response_model=Result[Dict[str, Any]],
     summary="Add MCP Server",
     description="Add a new MCP server configuration",
+    dependencies=[Depends(require_platform_active(operation="mcp.server.add", resource_type="mcp_server"))],
 )
 async def add_server(
     server_config: AddServerInput,
@@ -63,6 +64,7 @@ async def add_server(
     response_model=Result[Dict[str, Any]],
     summary="Remove MCP Server",
     description="Remove an MCP server configuration",
+    dependencies=[Depends(require_platform_active(operation="mcp.server.remove", resource_type="mcp_server"))],
 )
 async def remove_server(
     svc: ServiceDep,
@@ -78,6 +80,7 @@ async def remove_server(
     response_model=Result[Dict[str, Any]],
     summary="Check Server Connectivity",
     description="Check connectivity status of an MCP server",
+    dependencies=[Depends(require_platform_active(operation="mcp.server.connectivity", resource_type="mcp_server"))],
 )
 async def check_connectivity(
     svc: ServiceDep,
@@ -109,6 +112,7 @@ async def list_tools(
     response_model=Result[Dict[str, Any]],
     summary="Call Tool",
     description="Call a tool on an MCP server",
+    dependencies=[Depends(require_platform_active(operation="mcp.tool.call", resource_type="mcp_tool"))],
 )
 async def call_tool(
     request: CallToolInput,
@@ -141,6 +145,7 @@ async def get_tool_filter(
     response_model=Result[Dict[str, Any]],
     summary="Set Tool Filter",
     description="Set tool filter configuration for an MCP server",
+    dependencies=[Depends(require_platform_active(operation="mcp.filter.set", resource_type="mcp_filter"))],
 )
 async def set_tool_filter(
     filter_config: ToolFilterInput,
@@ -157,6 +162,7 @@ async def set_tool_filter(
     response_model=Result[Dict[str, Any]],
     summary="Remove Tool Filter",
     description="Remove tool filter configuration from an MCP server",
+    dependencies=[Depends(require_platform_active(operation="mcp.filter.remove", resource_type="mcp_filter"))],
 )
 async def remove_tool_filter(
     svc: ServiceDep,

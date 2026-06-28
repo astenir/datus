@@ -639,6 +639,7 @@ async def stream_chat_feedback(
     description="Reconnect to a running chat task and consume events from a given cursor",
     response_class=StreamingResponse,
     responses=SSE_RESPONSE,
+    dependencies=[Depends(require_platform_active(operation="chat.resume", resource_type="chat"))],
 )
 async def resume_chat(
     request: ResumeChatInput,
@@ -701,6 +702,7 @@ async def stop_chat(
     response_model=Result[CompactSessionData],
     summary="Compact Chat Session",
     description="Compact chat session by summarizing conversation history",
+    dependencies=[Depends(require_platform_active(operation="chat.session.compact", resource_type="session"))],
 )
 async def compact_chat_session(
     session_id: Annotated[str, Path(description="Session ID to compact")],
@@ -775,6 +777,7 @@ async def _filter_session_list_by_owner_store(
     response_model=Result[ChatSessionData],
     summary="Delete Chat Session",
     description="Delete a chat session by ID",
+    dependencies=[Depends(require_platform_active(operation="chat.session.delete", resource_type="session"))],
 )
 async def delete_session(
     session_id: Annotated[str, Path(description="Session ID to delete")],
@@ -834,6 +837,7 @@ async def get_chat_history(
     response_model=Result[UserInteractionData],
     summary="Submit User Interaction",
     description="Submit user's choice or input for an interactive dialog",
+    dependencies=[Depends(require_platform_active(operation="chat.user_interaction", resource_type="chat"))],
 )
 async def submit_user_interaction(
     request: UserInteractionInput,
@@ -889,6 +893,7 @@ async def submit_user_interaction(
         "OpenAI Agents SDK ``call_model_input_filter`` hook. If the run has already entered "
         "its final turn, the message will auto-continue the conversation in a follow-up run."
     ),
+    dependencies=[Depends(require_platform_active(operation="chat.insert", resource_type="chat"))],
 )
 async def insert_message(
     request: InsertMessageInput,
@@ -939,6 +944,7 @@ async def insert_message(
     response_model=Result[ToolResultData],
     summary="Submit Tool Execution Result",
     description="Receive tool execution result from frontend after filesystem operation",
+    dependencies=[Depends(require_platform_active(operation="chat.tool_result", resource_type="chat"))],
 )
 async def submit_tool_result(
     request: ToolResultInput,

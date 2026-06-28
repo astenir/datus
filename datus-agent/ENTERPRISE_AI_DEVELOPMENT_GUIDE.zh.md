@@ -408,6 +408,25 @@ SQL 不是唯一执行风险。以下能力也必须进入 `Authenticate -> Buil
 
 企业级安全改造必须至少覆盖以下测试维度。
 
+### Route coverage matrix
+
+新增、删除或修改任何 `create_app()` 会注册的 FastAPI route 时，必须同步更新
+`datus/api/enterprise/route_security_matrix.py`。该矩阵是企业模式 API 暴露面的必经验收项，
+每个 route 都必须声明它在 `enterprise.enabled=true` 下的安全策略分类，例如：
+
+- `module_rbac`：需要稳定 permission key，例如 `module.chat`、`module.admin.users`。
+- `session_owner`：必须通过 session/task owner index 或等价 helper 防止跨用户访问。
+- `datasource_projection` / `datasource_grant` / `sql_policy` / `table_scope`：数据源、SQL、dashboard、table、semantic model 等数据访问面必须至少具备其中一种执行边界，并在需要时组合使用。
+- `artifact_acl`：report/dashboard artifact list/detail/html/query/admin ACL 必须基于 artifact ACL 或等价资源授权。
+- `platform_status_gate`：执行类请求和写入类 mutation 必须在业务服务、metadata store 或外部系统执行前校验 `DATUS_PLATFORM_STATUS=active`。
+- `platform_status_exception`：少数停止/取消/只读导出类例外必须在矩阵中写明原因，不能默默绕过状态策略。
+- `audit`：legacy disable、平台状态拒绝、管理变更、执行拒绝、artifact/session/datasource deny 等关键安全决策必须进入审计。
+- `legacy_disabled`：尚未接入完整企业安全链的旧兼容 route 在企业模式必须禁用并审计。
+- `system_readonly` / `local_compatible`：只读系统状态、本地兼容入口等必须明确声明不会暴露企业资源或绕过生产安全链。
+
+`tests/unit_tests/api/enterprise/test_route_security_matrix.py` 会把矩阵与 `create_app()` 的真实注册 route
+做一一比对；新增 route 如果没有分类，测试必须失败。后续 PR 或本地提交不得通过删除矩阵测试来绕过分类要求。
+
 ### 必测正反例
 
 - 有权限允许，无权限拒绝。
