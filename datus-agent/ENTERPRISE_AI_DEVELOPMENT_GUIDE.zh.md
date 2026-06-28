@@ -69,7 +69,7 @@
 企业开关语义：
 
 - `enterprise.enabled=false` 只表示本地/开源兼容模式；允许 `NoAuthProvider`，但不得把该行为带入生产企业模式。
-- `enterprise.enabled=true` 时必须启用生产 auth provider、RBAC store、AuthorizationProvider、ConfigProjector 和 AuditSink，缺任一关键接线都必须 fail closed 或在启动时失败。
+- `enterprise.enabled=true` 时必须启用生产 auth provider、RBAC store、AuthorizationProvider、ConfigProjector 和 AuditSink。试点或生产配置必须显式配置 `enterprise.config_projector.class`；当前 loader 为兼容旧配置，在缺少该项时仍回退 passthrough skeleton，但该 fallback 只允许本地开发、历史配置升级或兼容验证使用，不能据此声明满足 datasource grant/request-level projection 门槛。
 - 生产企业模式不得信任裸 `X-Datus-User-Id`、前端传入的 roles、permissions、principal 或企业上下文字段。
 - 企业开关不引入 `tenant_id`，也不允许把企业上下文当作业务 API 参数由客户端提交。
 - MVP 身份方案优先适配当前企业环境：网关不可改时，实现 Bearer access token + userinfo `AuthProvider`，由 Datus 调企业用户信息接口换取身份；网关可改时可使用 `datus_enterprise.auth_provider.SignedHeaderAuthProvider`，只信任带 HMAC-SHA256 签名和时间戳的反向代理身份 header；直接 OIDC/JWKS 校验 provider、JWKS cache 和 key rotation 仍是后续切片。
@@ -238,7 +238,7 @@ module.system.status
 - 协议和数据结构位于 `datus/api/enterprise/`。
 - 本地兼容默认实现位于 `datus/api/enterprise/defaults.py`，缺少权限列表时允许访问；一旦 `AppContext.permissions` 或兼容的 `principal.permissions` 存在，就按稳定 permission key 或 glob 判断。
 - 生产企业模式通过 `enterprise.authorization_provider.class` 动态加载实现；`enterprise.enabled=true` 且缺失该 provider 时启动失败，不降级为 allow。
-- `enterprise.config_projector.class` 在阶段 1 只是可加载扩展点，未配置时使用 passthrough skeleton；不要在 `get_datus_service()` 中把用户级 projection 写入 project 级缓存。Datasource grant 与 request-level projection 的真实执行接入属于阶段 4。
+- `enterprise.config_projector.class` 在当前 loader 中仍保留兼容 fallback：未配置时使用 passthrough skeleton；不要在 `get_datus_service()` 中把用户级 projection 写入 project 级缓存。Datasource grant 与 request-level projection 已进入执行路径后，试点和生产配置必须显式配置真实 `ConfigProjector`，不能依赖 fallback。
 
 正确方向：
 
@@ -268,6 +268,7 @@ if "enterprise_admin" in ctx.roles:
 - 不修改缓存里的 `DatusService.agent_config`。
 - 未授权 datasource 从 clone 中删除。
 - `request.datasource` 未授权时拒绝。
+- 试点和生产配置显式配置真实 `ConfigProjector`；loader 的 passthrough fallback 只作为本地/历史兼容行为保留。
 - principal 由服务端构造，不由前端覆盖。
 - dashboard/report/direct SQL 与 chat 使用同一投影逻辑。
 
@@ -404,6 +405,31 @@ SQL 不是唯一执行风险。以下能力也必须进入 `Authenticate -> Buil
 - 生产备份恢复说明必须区分 enterprise metadata、chat 正文历史、RAG/vector、项目 `subject/` 文件、artifact bundle/export 文件和业务 datasource；不要把 PG metadata store 覆盖范围扩大成全平台状态迁移。启用 PG session body backend 时，backup/restore 需要同时验证 `session_owners` 与正文表的一致性。
 - secret reference store 是内部 metadata store，可以保存原始外部 reference，但不得保存 secret 明文；任何 admin API 响应、审计 metadata、日志或导出都必须使用 `ref_hint` 等脱敏摘要，不得直接暴露 store 返回的 raw reference。
 
+### 试点上线与运维门槛
+
+企业相关变更如果声称“可试点”或“可上线”，必须同时说明以下门槛是否满足：
+
+- 身份 provider 是否为生产 provider，是否禁用裸 `X-Datus-User-Id`，userinfo/header 失败是否 fail closed。
+- RBAC、datasource grant、artifact ACL、session owner、audit、quota 等权限事实是否来自服务端 store，而不是前端或 request body。
+- route security matrix 是否覆盖 `create_app()` 新增或变更的 route；未完成安全链的 legacy route 是否在企业模式禁用并审计。
+- 多 worker/pod 是否依赖粘性会话；如果不依赖，task metadata、SSE event buffer 和长任务状态是否已经外部化。
+- `readonly` / `maintenance` 是否在执行或写入前拒绝，拒绝路径是否不会先初始化 `DatusService` 或写 metadata store。
+- 是否有最小 runbook：部署拓扑、sticky session、发布 drain、状态切换、故障处理、连接数预算、备份恢复和审计留存。
+- 是否有基础观测来源：`request_id`、deny 计数、userinfo 延迟、projection 延迟、chat 首事件/首 token、SQL/dashboard query 耗时、PG pool、audit sink 和 quota store 错误率。
+
+如果上述门槛缺失，最终说明必须把变更限定为本地兼容、开发验证或单节点试点，不能描述成生产可用或 HA 可用。
+
+### 上游升级复核
+
+合并 upstream release tag 或 cherry-pick 上游提交后，必须做企业安全复核：
+
+- 新增 route 必须先进入 `datus/api/enterprise/route_security_matrix.py`，并声明 module permission、数据边界、platform status、audit 和 legacy disabled 策略。
+- chat/session/task 改动必须复核 owner store、用户级 scope、运行中 task owner 和 SSE/control 路径。
+- datasource、SQL、dashboard、report、table、semantic model 改动必须复核 request-level projection、grant scope、SQL policy principal 和审计。
+- MCP、filesystem、skills、export/download、LLM/model 改动必须复核非 SQL 执行面治理，不能只靠模块入口权限。
+- `DatusServiceCache`、`DatusService.agent_config`、`ConfigProjector`、project_id/cache key 改动必须证明不会缓存用户级授权状态。
+- 新增 schema、permission key、audit action、quota resource 时，必须说明迁移、兼容和文档更新；PG schema 变更不能只依赖应用启动时的 `_SCHEMA_SQL`。
+
 ## 测试标准
 
 企业级安全改造必须至少覆盖以下测试维度。
@@ -441,7 +467,7 @@ SQL 不是唯一执行风险。以下能力也必须进入 `Authenticate -> Buil
 - owner store 与正文 store 不一致时 fail closed 或返回统一资源不可见错误，不能因为正文存在绕过 owner 校验。
 - PG body backend 下的 orphan body session 必须有 route 层回归测试，覆盖 list 不显示、history/delete 不调用正文读取或删除服务。
 - invalid `session_id` 和 user scope 不能导致路径穿越或跨 scope 读取；PG backend 同样必须覆盖这些输入。
-- `enterprise.enabled=true` 但生产 auth/RBAC/authorization/config projection 缺失时 fail closed。
+- 试点或生产配置缺少生产 auth/RBAC/authorization/config projection 时不得通过 go/no-go；loader 兼容 fallback 需要单独测试，不能被当作生产安全链。
 - 禁用用户的新请求、resume 和实时 query 被拒绝。
 - 角色、permission、datasource grant、artifact ACL 变更后，新请求立即按新规则生效。
 - datasource grant 合并时 deny 优先于 allow。
@@ -457,6 +483,9 @@ SQL 不是唯一执行风险。以下能力也必须进入 `Authenticate -> Buil
 - 同一进程内两个用户或两个权限域并发请求不同 datasource grants 时互不污染。
 - artifact slug、导出文件 id、KB 文档 id 等可猜测资源不能跨用户或跨权限域泄漏。
 - 多 worker 或 sticky session 相关行为与文档声明一致。
+- userinfo、PG metadata、audit sink、quota store 或 SQL policy backend 不可用时返回稳定错误并 fail closed，不能静默放行。
+- 非 SQL 执行面新增能力时，MCP、KB/RAG、filesystem/skills、LLM/model、export/download 必须分别有权限、资源边界、quota 或审计测试；未完整接入时必须证明企业模式关闭或禁用。
+- 上游升级或新增 route 后，route security matrix、legacy disabled、platform status、owner/projection/cache 隔离相关测试必须覆盖新增暴露面。
 
 ### 测试位置
 
@@ -479,6 +508,8 @@ SQL 不是唯一执行风险。以下能力也必须进入 `Authenticate -> Buil
 - 改变 repo 通用工作契约：更新 `AGENTS.md`，并保持 `CLAUDE.md` 继续指向 `AGENTS.md`。
 - 新增 API：说明权限、企业上下文来源、错误码和审计行为。
 - 新增 provider/protocol：说明默认实现、生产 fail closed 行为和测试要求。
+- 声称支持试点、生产、多 worker 或 HA：同步说明上线门槛、部署拓扑、sticky session/task 外部化、备份恢复、连接数预算和观测指标。
+- 合并上游 release 或新增 route/执行面：同步更新 route security matrix、权限 key、审计 action、quota resource 和对应测试。
 
 ## 禁止清单
 
@@ -500,3 +531,4 @@ SQL 不是唯一执行风险。以下能力也必须进入 `Authenticate -> Buil
 - 哪些路径仍未覆盖，是否 fail closed。
 - 跑了哪些测试，未跑哪些测试及原因。
 - 是否需要更新 `ENTERPRISE_PLATFORM_PLAN.zh.md` 或本规范。
+- 是否达到本地开发、单节点试点、多 worker 粘性会话试点或 HA 的哪一级门槛；缺失的运维、观测、迁移或非 SQL 治理项必须明示。

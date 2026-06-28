@@ -150,7 +150,7 @@ Authenticate -> Build Context -> Authorize -> Project Config -> Execute -> Audit
 - 主包 `datus/api/enterprise/` 定义稳定 dataclass、Protocol、默认 local-compatible 实现、动态 loader 和 `require_module()` dependency。
 - 企业包 `datus_enterprise.auth_provider.SignedHeaderAuthProvider` 已提供生产反向代理签名 header 身份 provider 初版：网关完成 SSO/JWT/OIDC 校验后，用 HMAC-SHA256 签名 `user_id`、project、roles、permissions 和 principal 等 header，Datus 后端校验签名、时间戳和安全 ID 后构造 `AppContext`，不信任裸 `X-Datus-User-Id`。
 - `AppContext` 已扩展 `roles`、`permissions`、`datasource_grants`、`is_admin` 字段；本地 `NoAuthProvider` 继续留空这些字段。
-- `enterprise.enabled=true` 时，启动期必须配置生产 `api.auth_provider.class`，并显式配置 `enterprise.authorization_provider`、`enterprise.datasource_grant_store` 和 `enterprise.audit_sink`；缺失时 fail closed。`enterprise.config_projector` 的协议和 loader 已存在，但阶段 4 才接入 datasource grant/request-level projection 执行路径，阶段 1 未配置时使用 passthrough skeleton，避免把用户级 projection 缓存在 project 级 `DatusService` 中。
+- `enterprise.enabled=true` 时，启动期必须配置生产 `api.auth_provider.class`，并显式配置 `enterprise.authorization_provider`、`enterprise.datasource_grant_store` 和 `enterprise.audit_sink`；缺失时 fail closed。`enterprise.config_projector` 的协议和 loader 已存在，当前 loader 为兼容旧配置，未配置时仍使用 passthrough skeleton；但 datasource grant/request-level projection 已进入执行路径后，试点和生产配置必须显式配置真实 `ConfigProjector`，不能依赖 fallback。
 - 企业模式下 `DatusService` cache key 使用 `enterprise:{project_id}`，但传入服务内部的 `project_id` 保持不带 cache 前缀的项目标识，避免污染会话、日志和下游存储语义。
 - `SessionOwnerStore` 协议已覆盖 owner 写入、查询、删除和按用户列出 session；默认提供进程内实现和 SQLite `session_owners` 骨架。chat 运行中 task、磁盘 session scope 和 session owner 校验已进入阶段 2 接线，长期多 worker 状态外部化仍需后续阶段推进。
 - 已新增 PostgreSQL-backed enterprise metadata stores，可通过 `enterprise.*.class` loader 配置启用，覆盖 user、role、datasource grant、session owner、artifact ACL、audit、quota 和 secret reference metadata。生产多 worker/HA 建议使用 `conf/agent.enterprise.pg.yml.example`，SQLite MVP 配置仅适合本地单节点或试点。
@@ -264,7 +264,7 @@ enterprise:
     class: datus_enterprise.quota:RedisQuotaLimiter
 ```
 
-生产企业模式下，缺失必要 provider 应 fail closed。本地 `NoAuthProvider` 模式继续使用默认 no-op 实现保持兼容。
+生产企业模式下，缺失生产 auth、authorization、datasource grant store 或 audit sink 应 fail closed。本地 `NoAuthProvider` 模式继续使用默认 no-op 实现保持兼容。`enterprise.config_projector.class` 当前保留 loader 兼容 fallback；试点和生产配置必须显式配置，不得把 passthrough fallback 视为满足数据源授权投影。
 
 ### FastAPI 接入方式
 
@@ -1004,7 +1004,7 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 
 - `enterprise.enabled=false`：保持开源/本地兼容行为，允许 `NoAuthProvider`，不要求 RBAC store、AuthorizationProvider、ConfigProjector 全量接线。
 - `enterprise.enabled=true`：必须使用生产 auth provider；缺少 provider、provider 初始化失败或 token 缺失时 fail closed，不信任裸 `X-Datus-User-Id`。
-- `enterprise.enabled=true`：RBAC store、AuthorizationProvider、ConfigProjector、AuditSink 至少要有可执行实现或显式 fail-closed stub，不能静默降级为 allow。
+- `enterprise.enabled=true`：RBAC store、AuthorizationProvider、AuditSink 至少要有可执行实现或显式 fail-closed stub，不能静默降级为 allow。`ConfigProjector` 在 loader 层仍保留 passthrough 兼容 fallback，但试点和生产配置必须显式配置真实 projector；缺失时只能归类为本地/兼容验证。
 - 企业模式开关只决定运行安全链是否启用，不引入 `tenant_id` 维度，也不作为业务 API 参数传递。
 
 ### 阶段 1：认证、上下文与 service cache
@@ -1223,7 +1223,7 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 ### API 测试
 
 - 无 token、生产认证/授权接线缺失、禁用用户。
-- `enterprise.enabled=true` 但缺少生产 auth/RBAC/authorization 接线时 fail closed。
+- `enterprise.enabled=true` 但缺少生产 auth/RBAC/authorization 接线时 fail closed；试点或生产配置缺少真实 config projector 时不得通过 go/no-go。
 - 普通用户访问无权限模块返回 403。
 - 用户 A 无法操作用户 B 运行中 task。
 - catalog list 只返回授权 datasource。
@@ -1296,6 +1296,90 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - 不承诺运行中 SSE 在跨 worker、跨 pod、滚动发布期间无损迁移；发布前应 drain 或允许中断运行中任务。
 - 当前 quota 可使用 SQLite/in-memory/PG metadata store 试点；Redis rate limit、短窗口计数和并发槽位属于多实例/HA 前的后续切片。
 - 如果部署为多 pod 且不启用粘性会话，必须先接入 task/event 外部化方案，不能把当前试点版视为无状态横向扩展架构。
+
+### 试点上线门槛
+
+企业内网 MVP 不是“功能能跑就上线”。进入真实员工试点前，必须满足以下 go/no-go 条件：
+
+| 条件 | 试点门槛 | 不满足时的结论 |
+| --- | --- | --- |
+| 身份边界 | 使用 `UserInfoBearerAuthProvider` 或 `SignedHeaderAuthProvider`，生产模式不信任裸 `X-Datus-User-Id`，userinfo/header 校验失败时 fail closed。 | 只能本地开发或演示，不能接入企业员工。 |
+| 配置完整性 | 显式配置生产 auth provider、AuthorizationProvider、datasource grant store、ConfigProjector、AuditSink；loader 的 passthrough projector fallback 只用于本地/历史兼容。 | 不能声明满足试点或生产安全链。 |
+| 权限来源 | 角色、permission、datasource grant、artifact ACL 来自服务端 metadata store，新请求会刷新，不能由前端或 request body 覆盖。 | 不能接真实企业数据源。 |
+| 执行链路 | chat、direct SQL、dashboard query、table/semantic metadata 读取必须经过模块权限、datasource/table grant、request-level projection、SQL policy principal 和审计。 | 不能开放自然语言查数、SQL 执行器或实时 dashboard query。 |
+| 旧 API 暴露面 | 未进入企业安全链的 legacy route 在 `enterprise.enabled=true` 下必须禁用并审计；route security matrix 与 `create_app()` 注册面一致。 | 不能暴露企业模式 API。 |
+| 会话隔离 | session owner index、用户级 session scope、运行中 task owner 校验全部开启；多 worker 必须配置粘性会话或外部化 task/event。 | 只能单进程本地试用，不能多用户试点。 |
+| 审计 | auth deny、permission deny、datasource deny、session/artifact deny、SQL/dashboard 执行、admin mutation 和 platform status deny 必须写入审计，且 metadata 脱敏。 | 不能给真实员工或管理员使用。 |
+| 平台状态 | `DATUS_PLATFORM_STATUS` 的 `readonly` / `maintenance` 能在执行或写入前拒绝主要 mutation/execution route，并写审计。 | 不能进入可运维试点。 |
+| 存储 | 单节点可用 SQLite MVP；多 worker/HA 试点必须使用 PG metadata store，且明确 session body 是否启用 PG backend。 | 不能声明支持多 worker 或 HA。 |
+| 备份恢复 | 至少有 enterprise metadata、session body、artifact bundle/export、RAG/vector、`subject/` 文件和业务 datasource 的备份范围说明。 | 不能承载需要恢复保障的生产数据。 |
+| 密钥与导出 | secret 只保存引用并脱敏返回；导出类能力默认关闭或只开放已接 ACL、quota、审计和脱敏策略的路径。 | 不能开放 secret 管理或大结果导出。 |
+
+当前 MVP 的适用范围：
+
+- 适合单企业内部小范围员工试点。
+- 适合单节点部署，或多 worker/pod 但由网关保证 chat/SSE/session 控制类请求粘性路由。
+- 适合表级 datasource grant 能满足边界要求、数据库账号本身已做最小权限的场景。
+- 适合静态 report/dashboard artifact 的受控查看，以及已接安全链的 dashboard query。
+
+当前 MVP 不适用的场景：
+
+- 不适合无粘性会话的无状态横向扩展部署。
+- 不适合要求运行中 SSE/task 在滚动发布或 pod 故障时无损迁移的场景。
+- 不适合直接承载强敏感列的开放式查询，除非数据库账号、SQL policy、数据库 RLS 或后续列级脱敏已经兜底。
+- 不适合开放 report/dashboard 大结果导出、KB/RAG 跨权限域检索、任意 MCP 工具调用或文件系统写入，除非这些路径已经分别接入 ACL、脱敏、quota 和审计。
+- 不适合把 PG metadata store 误认为全平台状态迁移；RAG/vector、artifact bundle/export、`subject/` 文件和业务 datasource 仍是独立存储面。
+
+### 运维 Runbook 要求
+
+企业试点前必须形成最小运维手册，至少覆盖以下操作：
+
+1. **部署拓扑**：说明单节点、粘性会话多 worker、PG metadata、可选 PG session body、artifact 文件系统、LanceDB/vector store 和业务 datasource 的实际位置。
+2. **粘性会话**：网关必须按用户/session 或等价 key 固定 chat/SSE/session 控制类请求；如果不能保证，必须先外部化 task metadata 和 SSE event buffer。
+3. **发布与 drain**：滚动发布前进入 `readonly` 或维护策略，停止新 chat/SQL/dashboard query 和 admin mutation；等待运行中 task 完成，或由管理员显式 stop 后再替换实例。
+4. **状态切换**：`active`、`readonly`、`maintenance` 的切换命令、预期可用 API、审计查询方式和回滚步骤必须写清楚。
+5. **故障处理**：userinfo 失败、PG metadata 不可用、audit sink 不可用、quota store 不可用、SQL policy backend 失败、LLM provider 失败时应返回稳定错误，禁止静默降级为 allow。
+6. **连接数预算**：按 `store 数量 * max_size * API 进程数` 计算 enterprise PG 连接，并叠加业务 datasource、迁移、运维和监控连接余量。
+7. **备份恢复**：分别演练 enterprise metadata、PG session body、项目 `subject/`、RAG/vector、artifact bundle/export 和配置文件恢复；恢复后必须校验 `SessionOwnerStore` 与 session body 一致性。
+8. **审计留存**：明确 audit retention、查询权限、导出权限、导出 quota 和 CSV 注入防护；审计导出仍不得泄漏 secret 或完整敏感结果。
+
+### 观测与 SLO 基线
+
+试点版至少要能回答“请求为什么被拒绝、慢在哪里、成本花在哪”。基础观测项：
+
+- `request_id` 在 auth、route dependency、projection、SQL policy、quota、audit、LLM 调用和错误响应中贯通。
+- 计数：auth deny、user disabled、permission deny、datasource deny、session owner deny、artifact ACL deny、SQL policy deny、quota deny、platform status deny、legacy route disabled。
+- 延迟：userinfo 调用、`get_request_app_context()` 刷新、config projection、catalog list、chat 首事件、chat 首 token、direct SQL、dashboard query、audit sink 写入。
+- 资源：enterprise PG pool 使用率、连接数、quota store 错误率、audit sink 错误率、LLM token/模型/用户/部门维度成本。
+- 质量：chat stream 中断率、SSE reconnect/resume 失败率、SQL/dashboard query 错误率、policy deny 原因分布。
+
+这些指标不要求第一版全部接入外部 APM，但必须在日志、审计或内部 metrics 中有明确来源。当前 checkout 还没有完整的 request_id/metrics/APM 贯通实现；进入可运维试点前至少要明确每项指标的来源，生产化前应补齐告警阈值，例如 userinfo 超时率、PG pool 耗尽、audit sink 连续失败、policy backend 连续失败和 quota store 不可用。
+
+### 非 SQL 执行面治理补充
+
+SQL 安全链不是全部执行风险。以下能力必须单独分阶段推进，未完成前默认关闭、只读或仅本地兼容：
+
+| 能力 | MVP 默认策略 | 后续验收 |
+| --- | --- | --- |
+| KB/RAG | 当前 API 只开放已接 `module.kb` 的 bootstrap/cancel 和路径校验；检索 ACL、向量隔离和撤权失效仍未完成时，不得开放跨权限域检索。 | 文档/向量 ACL、索引按企业/项目/用户/角色隔离、撤权后检索失效、敏感内容脱敏和重建流程。 |
+| MCP | 当前 API 已接 `module.mcp` 和主要 mutation/execution 的 platform status gate，但这只证明用户可进入 MCP 模块；仍必须叠加 tool permission，危险工具默认 deny。 | server/tool allowlist、参数级审计、调用 quota、写入/网络/文件类工具的独立策略和回滚。 |
+| 文件系统与 skills | 只允许受控目录和受控工具，不能让自然语言写入企业配置、secret、artifact ACL 或系统路径。 | path policy、写入审计、artifact/subject/skills 边界、执行类工具审批或禁用策略。 |
+| LLM/model | 已有 provider/model allowlist 初版；外部模型出境和成本治理仍按试点约束处理。 | 模型治理 store、私有 endpoint、fallback 策略、token/cost 统计、敏感 prompt/trace 脱敏、部门/项目级模型策略。 |
+| export/download | admin audit export 已有独立权限、quota 和审计；report/dashboard export 不作为当前默认能力。 | artifact/download owner/ACL、过期 URL、对象存储、导出脱敏、大结果审批、下载审计和清理任务。 |
+
+新增任何非 SQL 执行能力，都必须先更新 route security matrix、权限 key、审计 action、quota 资源名和测试 fixture；如果无法同时接入完整安全链，企业模式下应 fail closed 或归类为 `legacy_disabled`。
+
+### 上游升级安全复核
+
+本 fork 通过 upstream release tag 接收官方更新。每次合并上游 release 或 cherry-pick 上游提交后，必须做企业安全复核：
+
+1. 比对 `create_app()` 实际注册 route 与 `datus/api/enterprise/route_security_matrix.py`；新增 route 必须分类，旧兼容 route 默认 enterprise disabled。
+2. 搜索新增或改动的 chat/session/task 路径，确认仍使用 `SessionOwnerStore`、用户级 scope 和 owner helper。
+3. 搜索新增或改动的 datasource、SQL、dashboard、report、table、semantic model 路径，确认 request-level projection、datasource/table grant、SQL policy principal 和审计没有被绕过。
+4. 搜索新增 MCP、filesystem、skill、export、LLM/model 执行入口，确认有 module permission、tool/path policy、quota 和审计策略。
+5. 复核 `DatusServiceCache`、`DatusService.agent_config`、`ConfigProjector` 和 project_id/cache key 改动，确保不会把用户级授权状态写入共享 service。
+6. 复核新增 metadata schema、permission key、audit action 和 quota resource；需要迁移或兼容说明时不能只依赖 `_SCHEMA_SQL`。
+7. 至少运行 route security matrix、企业 MVP smoke、auth provider、session owner、projection/SQL policy、legacy route disabled 和 platform status gate 相关测试；若因上游升级无法全跑，必须在提交说明里写清楚缺口和风险。
 
 ## 企业级后续能力
 
