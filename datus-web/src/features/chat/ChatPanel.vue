@@ -31,10 +31,11 @@ import {
   ModelSelectorTrigger,
 } from "@/components/ai-elements/model-selector"
 import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion"
-import { dashboardApi, reportApi } from "@/lib/api"
 import { activeStreamingMessageId, mergeToolExecutionMessages } from "@/lib/chat"
 import { useConnection } from "@/composables/useConnection"
+import { artifactHtml, createArtifactPreviewUrl } from "@/composables/useArtifacts"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
+import type { ArtifactViewTab } from "@/features/workspace/types"
 import type { SelectOption } from "@/types"
 import ChatContextPicker from "@/features/chat/ChatContextPicker.vue"
 
@@ -168,12 +169,26 @@ async function submitInteraction(interactionKey: string, answers: string[][]) {
   }
 }
 
-function openArtifact(kind: string, slug: string) {
-  const base = effectiveBase()
-  const url = kind === "report"
-    ? reportApi.htmlUrl(base, slug)
-    : dashboardApi.htmlUrl(base, slug)
-  window.open(url, "_blank", "noopener,noreferrer")
+async function openArtifact(kind: string, slug: string) {
+  const tab: ArtifactViewTab = kind === "report" ? "report" : "dashboard"
+  const previewWindow = window.open("about:blank", "_blank")
+  if (previewWindow) {
+    previewWindow.opener = null
+  }
+
+  try {
+    const html = await artifactHtml(effectiveBase(), tab, slug)
+    const url = createArtifactPreviewUrl(html)
+    if (previewWindow) {
+      previewWindow.location.href = url
+      return
+    }
+    window.open(url, "_blank", "noopener,noreferrer")
+  } catch (error) {
+    console.error("Failed to open artifact preview:", error)
+    previewWindow?.close()
+    toast.error("打开产物预览失败")
+  }
 }
 </script>
 

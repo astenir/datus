@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const dashboardList = vi.fn();
 const dashboardDetail = vi.fn();
 const dashboardHtmlUrl = vi.fn();
+const dashboardHtml = vi.fn();
 const dashboardQuery = vi.fn();
 const reportList = vi.fn();
 const reportDetail = vi.fn();
 const reportHtmlUrl = vi.fn();
+const reportHtml = vi.fn();
 const toastError = vi.fn();
 
 vi.mock("@/lib/api", () => ({
@@ -14,12 +16,14 @@ vi.mock("@/lib/api", () => ({
     list: dashboardList,
     detail: dashboardDetail,
     htmlUrl: dashboardHtmlUrl,
+    html: dashboardHtml,
     query: dashboardQuery,
   },
   reportApi: {
     list: reportList,
     detail: reportDetail,
     htmlUrl: reportHtmlUrl,
+    html: reportHtml,
   },
 }));
 
@@ -37,6 +41,7 @@ vi.mock("vue-sonner", () => ({
 
 describe("useArtifacts", () => {
   beforeEach(() => {
+    vi.unstubAllGlobals();
     vi.clearAllMocks();
     dashboardList.mockResolvedValue([
       {
@@ -85,6 +90,8 @@ describe("useArtifacts", () => {
       sql: "select 10 as total",
     });
     reportHtmlUrl.mockReturnValue("http://api.test/api/v1/reports/fund-report/html");
+    dashboardHtml.mockResolvedValue("<!doctype html><html><body>dashboard</body></html>");
+    reportHtml.mockResolvedValue("<!doctype html><html><body>report</body></html>");
   });
 
   it("loads dashboard and report collections from the active connection", async () => {
@@ -142,7 +149,7 @@ describe("useArtifacts", () => {
   });
 
   it("builds artifact preview URLs through the owning API helper", async () => {
-    const { artifactHtmlUrl } = await import("./useArtifacts");
+    const { artifactHtml, artifactHtmlUrl } = await import("./useArtifacts");
 
     expect(artifactHtmlUrl("http://api.test", "dashboard", "fund-overview")).toBe(
       "http://api.test/api/v1/dashboards/fund-overview/html",
@@ -150,6 +157,38 @@ describe("useArtifacts", () => {
     expect(artifactHtmlUrl("http://api.test", "report", "fund-report")).toBe(
       "http://api.test/api/v1/reports/fund-report/html",
     );
+    await expect(artifactHtml("http://api.test", "dashboard", "fund-overview")).resolves.toContain("dashboard");
+    await expect(artifactHtml("http://api.test", "report", "fund-report")).resolves.toContain("report");
+    expect(dashboardHtml).toHaveBeenCalledWith("http://api.test", "fund-overview");
+    expect(reportHtml).toHaveBeenCalledWith("http://api.test", "fund-report");
+  });
+
+  it("opens artifact previews from authenticated HTML responses instead of raw backend URLs", async () => {
+    const openedWindow = {
+      location: { href: "" },
+      opener: {},
+      close: vi.fn(),
+    };
+    const openWindow = vi.fn(() => openedWindow);
+    const createObjectUrl = vi.fn(() => "blob:artifact-preview");
+    const revokeObjectUrl = vi.fn();
+    vi.stubGlobal("window", { open: openWindow });
+    vi.stubGlobal("URL", {
+      createObjectURL: createObjectUrl,
+      revokeObjectURL: revokeObjectUrl,
+    });
+    const { useArtifacts } = await import("./useArtifacts");
+    const artifacts = useArtifacts();
+
+    await artifacts.openHtmlPreview("report", "fund-report");
+
+    expect(openWindow).toHaveBeenCalledWith("about:blank", "_blank");
+    expect(openedWindow.opener).toBeNull();
+    expect(reportHtml).toHaveBeenCalledWith("http://api.test", "fund-report");
+    expect(createObjectUrl).toHaveBeenCalled();
+    expect(openedWindow.location.href).toBe("blob:artifact-preview");
+    expect(artifacts.previewLoadingKey.value).toBeNull();
+    expect(artifacts.previewError.value).toBeNull();
   });
 
   it("runs dashboard queries with route-selected slug and template params", async () => {

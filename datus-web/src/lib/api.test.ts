@@ -152,7 +152,9 @@ describe("api client", () => {
       .mockResolvedValueOnce(mockJsonResponse({ success: true, data: [] }))
       .mockResolvedValueOnce(mockJsonResponse({ success: true, data: [] }))
       .mockResolvedValueOnce(mockJsonResponse({ success: true, data: null }))
-      .mockResolvedValueOnce(mockJsonResponse({ success: true, data: null }));
+      .mockResolvedValueOnce(mockJsonResponse({ success: true, data: null }))
+      .mockResolvedValueOnce(new Response("<!doctype html><html></html>", { status: 200 }))
+      .mockResolvedValueOnce(new Response("<!doctype html><html></html>", { status: 200 }));
 
     await dashboardApi.list("http://localhost:8000/");
     await reportApi.list("http://localhost:8000/");
@@ -162,11 +164,15 @@ describe("api client", () => {
       allowed_roles: ["analyst"],
       allowed_user_ids: ["alice"],
     });
+    await dashboardApi.html("http://localhost:8000/", "fund_overview");
+    await reportApi.html("http://localhost:8000/", "fund_report");
 
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/dashboards");
     expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe("http://localhost:8000/api/v1/reports");
     expect(vi.mocked(fetch).mock.calls[2]?.[0]).toBe("http://localhost:8000/api/v1/dashboards/fund_overview/acl");
     expect(vi.mocked(fetch).mock.calls[3]?.[0]).toBe("http://localhost:8000/api/v1/reports/fund_report/acl");
+    expect(vi.mocked(fetch).mock.calls[4]?.[0]).toBe("http://localhost:8000/api/v1/dashboards/fund_overview/html");
+    expect(vi.mocked(fetch).mock.calls[5]?.[0]).toBe("http://localhost:8000/api/v1/reports/fund_report/html");
     expect((vi.mocked(fetch).mock.calls[3]?.[1] as RequestInit).method).toBe("PUT");
     expect(JSON.parse(String((vi.mocked(fetch).mock.calls[3]?.[1] as RequestInit).body))).toEqual({
       visibility: "role",

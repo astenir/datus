@@ -18,7 +18,7 @@ const props = defineProps<{
   detail: ArtifactDetail | null
   loading: boolean
   error: string | null
-  previewHref: string | null
+  previewOpening: boolean
   queryResult: SqlQueryResultEnvelope | null
   queryLoading: boolean
   queryError: string | null
@@ -27,6 +27,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   close: []
+  openPreview: []
   runDashboardQuery: [querySlug: string, params: Record<string, unknown>]
 }>()
 
@@ -185,15 +186,13 @@ const templates = computed(() => isDashboardDetail(props.detail) ? props.detail.
         />
 
         <Button
-          v-if="props.previewHref"
-          as="a"
-          target="_blank"
-          :href="props.previewHref"
           variant="outline"
           size="sm"
+          :disabled="props.previewOpening"
+          @click="emit('openPreview')"
         >
           <ExternalLinkIcon data-icon="inline-start" />
-          打开 HTML 预览
+          {{ props.previewOpening ? "打开中" : "打开 HTML 预览" }}
         </Button>
       </div>
     </CardContent>

@@ -3,7 +3,7 @@ import { computed, onMounted, watch } from "vue"
 import { RefreshCwIcon } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { useArtifacts } from "@/composables/useArtifacts"
+import { artifactPreviewKey, useArtifacts } from "@/composables/useArtifacts"
 import ArtifactCollectionGrid from "@/features/artifacts/ArtifactCollectionGrid.vue"
 import ArtifactDetailPanel from "@/features/artifacts/ArtifactDetailPanel.vue"
 import type { ArtifactViewTab } from "@/features/workspace/types"
@@ -24,10 +24,23 @@ const emit = defineEmits<{
 
 const artifacts = useArtifacts()
 
-const selectedPreviewHref = computed(() => {
+const selectedPreviewKey = computed(() => {
   const slug = props.selectedSlug?.trim()
-  return slug ? artifacts.htmlUrl(props.tab, slug) : null
+  return slug ? artifactPreviewKey(props.tab, slug) : null
 })
+
+const selectedPreviewOpening = computed(() => {
+  return Boolean(selectedPreviewKey.value && artifacts.previewLoadingKey.value === selectedPreviewKey.value)
+})
+
+const dashboardOpeningSlug = computed(() => loadingSlugFor("dashboard"))
+const reportOpeningSlug = computed(() => loadingSlugFor("report"))
+
+function loadingSlugFor(tab: ArtifactViewTab): string | null {
+  const key = artifacts.previewLoadingKey.value
+  const prefix = `${tab}:`
+  return key?.startsWith(prefix) ? key.slice(prefix.length) : null
+}
 
 function setTab(value: unknown) {
   if (typeof value === "string" && isArtifactViewTab(value)) {
@@ -42,6 +55,10 @@ function openArtifact(tab: ArtifactViewTab, slug: string) {
 function runDashboardQuery(querySlug: string, params: Record<string, unknown>) {
   if (props.tab !== "dashboard" || !props.selectedSlug) return
   void artifacts.runDashboardQuery(props.selectedSlug, querySlug, params)
+}
+
+function openPreview(tab: ArtifactViewTab, slug: string | null | undefined) {
+  void artifacts.openHtmlPreview(tab, slug)
 }
 
 onMounted(artifacts.loadArtifacts)
@@ -86,9 +103,10 @@ watch(
           <ArtifactCollectionGrid
             :items="artifacts.dashboards.value"
             :loading="artifacts.listLoading.value"
-            :preview-url="(slug) => artifacts.htmlUrl('dashboard', slug)"
+            :opening-slug="dashboardOpeningSlug"
             empty-title="暂无仪表盘"
             @select="openArtifact('dashboard', $event)"
+            @open-preview="openPreview('dashboard', $event)"
           />
           <ArtifactDetailPanel
             v-if="props.selectedSlug"
@@ -97,12 +115,13 @@ watch(
             :detail="artifacts.activeDetail.value"
             :loading="artifacts.detailLoading.value"
             :error="artifacts.detailError.value"
-            :preview-href="selectedPreviewHref"
+            :preview-opening="selectedPreviewOpening"
             :query-result="artifacts.queryResult.value"
             :query-loading="artifacts.queryLoading.value"
             :query-error="artifacts.queryError.value"
             :active-query-slug="artifacts.activeQuerySlug.value"
             @close="emit('close-detail')"
+            @open-preview="openPreview('dashboard', props.selectedSlug)"
             @run-dashboard-query="runDashboardQuery"
           />
         </div>
@@ -116,9 +135,10 @@ watch(
           <ArtifactCollectionGrid
             :items="artifacts.reports.value"
             :loading="artifacts.listLoading.value"
-            :preview-url="(slug) => artifacts.htmlUrl('report', slug)"
+            :opening-slug="reportOpeningSlug"
             empty-title="暂无报表"
             @select="openArtifact('report', $event)"
+            @open-preview="openPreview('report', $event)"
           />
           <ArtifactDetailPanel
             v-if="props.selectedSlug"
@@ -127,12 +147,13 @@ watch(
             :detail="artifacts.activeDetail.value"
             :loading="artifacts.detailLoading.value"
             :error="artifacts.detailError.value"
-            :preview-href="selectedPreviewHref"
+            :preview-opening="selectedPreviewOpening"
             :query-result="artifacts.queryResult.value"
             :query-loading="artifacts.queryLoading.value"
             :query-error="artifacts.queryError.value"
             :active-query-slug="artifacts.activeQuerySlug.value"
             @close="emit('close-detail')"
+            @open-preview="openPreview('report', props.selectedSlug)"
           />
         </div>
       </TabsContent>

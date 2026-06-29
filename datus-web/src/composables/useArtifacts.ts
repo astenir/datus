@@ -1,4 +1,4 @@
-import { computed, readonly, ref, shallowRef } from "vue";
+import { computed, onScopeDispose, readonly, ref, shallowRef } from "vue";
 import { toast } from "vue-sonner";
 
 import { useConnection } from "@/composables/useConnection";
@@ -23,6 +23,20 @@ export function artifactHtmlUrl(baseUrl: string, tab: ArtifactViewTab, slug: str
     : dashboardApi.htmlUrl(baseUrl, slug);
 }
 
+export function artifactPreviewKey(tab: ArtifactViewTab, slug: string): string {
+  return `${tab}:${slug}`;
+}
+
+export async function artifactHtml(baseUrl: string, tab: ArtifactViewTab, slug: string): Promise<string> {
+  return tab === "report"
+    ? reportApi.html(baseUrl, slug)
+    : dashboardApi.html(baseUrl, slug);
+}
+
+export function createArtifactPreviewUrl(html: string): string {
+  return URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
+}
+
 export function useArtifacts() {
   const connection = useConnection();
 
@@ -42,6 +56,9 @@ export function useArtifacts() {
   const queryResult = ref<SqlQueryResultEnvelope | null>(null);
   const activeQuerySlug = shallowRef<string | null>(null);
   const queryRequestId = shallowRef(0);
+  const previewLoadingKey = shallowRef<string | null>(null);
+  const previewError = shallowRef<string | null>(null);
+  const previewUrls: string[] = [];
 
   const activeDetail = computed<ArtifactDetail | null>(() => {
     if (activeDetailTab.value === "report") return reportDetail.value;
@@ -75,6 +92,50 @@ export function useArtifacts() {
     queryError.value = null;
     queryResult.value = null;
     activeQuerySlug.value = null;
+  }
+
+  function rememberPreviewUrl(url: string) {
+    previewUrls.push(url);
+    if (previewUrls.length <= 12) return;
+
+    const stale = previewUrls.shift();
+    if (stale) URL.revokeObjectURL(stale);
+  }
+
+  async function openHtmlPreview(tab: ArtifactViewTab, slugValue: string | null | undefined) {
+    const slug = nonEmptySlug(slugValue);
+    if (!slug) return;
+
+    const key = artifactPreviewKey(tab, slug);
+    previewLoadingKey.value = key;
+    previewError.value = null;
+
+    const previewWindow = window.open("about:blank", "_blank");
+    if (previewWindow) {
+      previewWindow.opener = null;
+    }
+
+    try {
+      const html = await artifactHtml(connection.effectiveBase(), tab, slug);
+      const url = createArtifactPreviewUrl(html);
+      rememberPreviewUrl(url);
+
+      if (previewWindow) {
+        previewWindow.location.href = url;
+        return;
+      }
+
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      console.error("打开产物 HTML 预览失败:", err);
+      previewWindow?.close();
+      previewError.value = "打开 HTML 预览失败";
+      toast.error("打开 HTML 预览失败");
+    } finally {
+      if (previewLoadingKey.value === key) {
+        previewLoadingKey.value = null;
+      }
+    }
   }
 
   async function loadDetail(tab: ArtifactViewTab, slugValue: string | null | undefined) {
@@ -176,6 +237,13 @@ export function useArtifacts() {
     return artifactHtmlUrl(connection.effectiveBase(), tab, slug);
   }
 
+  onScopeDispose(() => {
+    for (const url of previewUrls) {
+      URL.revokeObjectURL(url);
+    }
+    previewUrls.length = 0;
+  });
+
   return {
     dashboards: readonly(dashboards),
     reports: readonly(reports),
@@ -190,9 +258,12 @@ export function useArtifacts() {
     queryError: readonly(queryError),
     queryResult: readonly(queryResult),
     activeQuerySlug: readonly(activeQuerySlug),
+    previewLoadingKey: readonly(previewLoadingKey),
+    previewError: readonly(previewError),
     loadArtifacts,
     loadDetail,
     runDashboardQuery,
     htmlUrl,
+    openHtmlPreview,
   };
 }

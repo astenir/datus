@@ -1,4 +1,5 @@
-import { apiResult, jsonBody, putBody } from "./helpers";
+import { request } from "@/lib/request";
+import { apiResult, apiUrl, jsonBody, putBody } from "./helpers";
 import type {
   ArtifactManifest,
   ArtifactShare,
@@ -21,6 +22,11 @@ export const dashboardApi = {
   htmlUrl(baseUrl: string, slug: string): string {
     const base = baseUrl.replace(/\/+$/, "");
     return `${base}/api/v1/dashboards/${encodeURIComponent(slug)}/html`;
+  },
+
+  async html(baseUrl: string, slug: string): Promise<string> {
+    const response = await request(apiUrl(baseUrl, `/api/v1/dashboards/${encodeURIComponent(slug)}/html`));
+    return response.text();
   },
 
   getAcl(baseUrl: string, slug: string): Promise<ArtifactShare | null> {
@@ -53,6 +59,11 @@ export const reportApi = {
   htmlUrl(baseUrl: string, slug: string): string {
     const base = baseUrl.replace(/\/+$/, "");
     return `${base}/api/v1/reports/${encodeURIComponent(slug)}/html`;
+  },
+
+  async html(baseUrl: string, slug: string): Promise<string> {
+    const response = await request(apiUrl(baseUrl, `/api/v1/reports/${encodeURIComponent(slug)}/html`));
+    return response.text();
   },
 
   getAcl(baseUrl: string, slug: string): Promise<ArtifactShare | null> {

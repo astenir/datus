@@ -17,11 +17,12 @@ const props = defineProps<{
   items: readonly ReadonlyArtifactManifest[]
   emptyTitle: string
   loading: boolean
-  previewUrl: (slug: string) => string
+  openingSlug: string | null
 }>()
 
 const emit = defineEmits<{
   select: [slug: string]
+  openPreview: [slug: string]
 }>()
 </script>
 
@@ -77,14 +78,13 @@ const emit = defineEmits<{
             详情
           </Button>
           <Button
-            as="a"
-            target="_blank"
-            :href="props.previewUrl(item.slug)"
             variant="outline"
             size="sm"
+            :disabled="props.openingSlug === item.slug"
+            @click="emit('openPreview', item.slug)"
           >
             <ExternalLinkIcon data-icon="inline-start" />
-            打开
+            {{ props.openingSlug === item.slug ? "打开中" : "打开" }}
           </Button>
         </div>
       </CardContent>
