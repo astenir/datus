@@ -13,11 +13,15 @@ const database = shallowRef("");
 const schema = shallowRef("");
 const isLoadingCatalog = shallowRef(false);
 
-async function loadCatalog(databaseName?: string) {
+async function loadCatalog(databaseName?: string, datasourceId?: string) {
   const base = effectiveBase();
   isLoadingCatalog.value = true;
   try {
-    const result = await catalogApi.list(base, databaseName ? { database_name: databaseName } : undefined);
+    const datasource = datasourceId?.trim() ?? "";
+    const result = await catalogApi.list(base, {
+      ...(datasource ? { datasource_id: datasource } : {}),
+      ...(databaseName ? { database_name: databaseName } : {}),
+    });
     if (result) {
       catalogEntries.value = result.databases ?? [];
       if (!databaseName) {

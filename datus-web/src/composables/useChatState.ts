@@ -111,6 +111,7 @@ async function sendMessage(opts: {
   message: string;
   selectedAgent: string;
   model: string;
+  datasource: string;
   database: string;
   schema: string;
 }) {
@@ -130,6 +131,7 @@ async function sendMessage(opts: {
     sessionId: selectedSession.value ?? "",
     selectedAgent: opts.selectedAgent,
     model: opts.model,
+    datasource: opts.datasource,
     database: opts.database,
     schema: opts.schema,
     language: language.value,

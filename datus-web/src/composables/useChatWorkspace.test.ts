@@ -141,13 +141,7 @@ describe("useChatWorkspace", () => {
       { value: "demo", label: "demo" },
       { value: "blocked", label: "blocked" },
     ]);
-    const switchDatasource = vi.fn(async (name: string) => {
-      config.value = {
-        ...config.value,
-        current_datasource: name,
-      };
-      return true;
-    });
+    const switchDatasource = vi.fn();
     const loadCatalog = vi.fn(async () => {});
     const setDatabase = vi.fn();
     const setSchema = vi.fn();
@@ -243,10 +237,10 @@ describe("useChatWorkspace", () => {
     expect(switchDatasource).not.toHaveBeenCalled();
 
     await expect(workspace.handleDatasourceSwitch("demo")).resolves.toBe(true);
-    expect(switchDatasource).toHaveBeenCalledWith("demo");
+    expect(switchDatasource).not.toHaveBeenCalled();
     expect(setDatabase).toHaveBeenCalledWith("");
     expect(setSchema).toHaveBeenCalledWith("");
-    expect(loadCatalog).toHaveBeenCalledWith();
+    expect(loadCatalog).toHaveBeenCalledWith(undefined, "demo");
     expect(workspace.currentDatasource.value).toBe("demo");
   });
 });

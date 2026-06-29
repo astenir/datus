@@ -18,6 +18,7 @@ export type ChatStreamRequestInput = {
   sessionId: string;
   selectedAgent: string;
   model: string;
+  datasource: string;
   database: string;
   schema: string;
   language: string;
@@ -30,6 +31,7 @@ export function buildChatStreamRequest({
   sessionId,
   selectedAgent,
   model,
+  datasource,
   database,
   schema,
   language,
@@ -41,6 +43,7 @@ export function buildChatStreamRequest({
     session_id: sessionId || null,
     subagent_id: selectedAgent || null,
     model: model || null,
+    datasource: datasource || null,
     database: database || null,
     db_schema: schema || null,
     language: language || null,

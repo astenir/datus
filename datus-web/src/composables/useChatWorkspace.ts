@@ -29,7 +29,6 @@ export function useChatWorkspace() {
     checkConnection,
     setApiBase,
     testDatasource,
-    switchDatasource,
   } = useConnection();
   const permission = usePermission();
   const {
@@ -67,7 +66,9 @@ export function useChatWorkspace() {
   const agentOptions = computed<SelectOption[]>(() => []);
   const selectedAgent = shallowRef("");
   const selectedModel = shallowRef("");
-  const currentDatasource = computed(() => config.value?.current_datasource?.trim() ?? "");
+  const selectedDatasource = shallowRef("");
+  const defaultDatasource = computed(() => config.value?.current_datasource?.trim() ?? "");
+  const currentDatasource = computed(() => selectedDatasource.value || defaultDatasource.value);
   const visibleDatasourceOptions = computed(() =>
     datasourceOptions.value.filter((option) => permission.hasDatasourcePermission(option.value))
   );
@@ -79,6 +80,7 @@ export function useChatWorkspace() {
       message,
       selectedAgent: selectedAgent.value,
       model: selectedModel.value,
+      datasource: currentDatasource.value,
       database: database.value,
       schema: schema.value,
     });
@@ -93,13 +95,18 @@ export function useChatWorkspace() {
   }
 
   function handleDatasourceSwitched() {
+    selectedDatasource.value = defaultDatasource.value;
     setDatabase("");
     setSchema("");
-    loadCatalog();
+    loadCatalog(undefined, currentDatasource.value);
   }
 
   async function handleDatasourceTest(name?: string) {
     return testDatasource(name);
+  }
+
+  function refreshCatalog(databaseName?: string) {
+    return loadCatalog(databaseName, currentDatasource.value);
   }
 
   function canUseDatasource(name: string) {
@@ -110,13 +117,12 @@ export function useChatWorkspace() {
   async function handleDatasourceSwitch(name: string): Promise<boolean> {
     const datasourceName = name.trim();
     if (!datasourceName || !canUseDatasource(datasourceName)) return false;
+    if (datasourceName === currentDatasource.value) return true;
 
-    const changed = await switchDatasource(datasourceName);
-    if (!changed) return false;
-
+    selectedDatasource.value = datasourceName;
     setDatabase("");
     setSchema("");
-    await loadCatalog();
+    await loadCatalog(undefined, datasourceName);
     return true;
   }
 
@@ -126,10 +132,11 @@ export function useChatWorkspace() {
 
     initializePromise = (async () => {
       await checkConnection();
+      selectedDatasource.value = defaultDatasource.value;
       await Promise.all([
         loadSessions(),
         loadModels(),
-        loadCatalog(),
+        loadCatalog(undefined, currentDatasource.value),
       ]);
       initialized.value = true;
     })();
@@ -145,7 +152,7 @@ export function useChatWorkspace() {
 
   watch(database, (db) => {
     if (db) {
-      loadCatalog(db);
+      loadCatalog(db, currentDatasource.value);
     }
   });
 
@@ -182,7 +189,7 @@ export function useChatWorkspace() {
     schemaOptions,
     isLoadingCatalog,
     loadSessions,
-    loadCatalog,
+    loadCatalog: refreshCatalog,
     selectedAgent,
     selectedModel,
     database,

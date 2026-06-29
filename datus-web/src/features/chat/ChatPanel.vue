@@ -271,7 +271,7 @@ async function openArtifact(kind: string, slug: string) {
                 :schema-options="schemaOptions"
                 :agent-options="workspace.agentOptions.value"
                 :loading-catalog="workspace.isLoadingCatalog.value"
-                :switching-datasource="workspace.connection.value === 'checking'"
+                :switching-datasource="workspace.isLoadingCatalog.value"
                 @update-datasource="workspace.handleDatasourceSwitch"
                 @update-database="workspace.setDatabase"
                 @update-schema="workspace.setSchema"
