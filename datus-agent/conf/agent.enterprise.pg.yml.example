@@ -65,6 +65,13 @@ enterprise:
       min_size: 1
       max_size: 2
 
+  agent_store:
+    class: datus_enterprise.postgres_stores:PgEnterpriseAgentStore
+    kwargs:
+      dsn: ${DATUS_ENTERPRISE_PG_DSN}
+      min_size: 1
+      max_size: 2
+
   session_owner_store:
     class: datus_enterprise.postgres_stores:PgSessionOwnerStore
     kwargs:

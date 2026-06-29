@@ -62,6 +62,7 @@ from datus.utils.exceptions import DatusException
 from datus.utils.feedback_prompt import build_reaction_feedback_prompt
 from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso
+from datus_enterprise.agent_registry import agent_record_to_runtime_entry, resolve_enterprise_agent_for_dispatch
 from datus_enterprise.artifact_acl import require_artifact_access
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.model_policy import is_model_ref_allowed
@@ -137,12 +138,17 @@ def _resolve_agentic_node_entry_with_name(svc, subagent_id: str) -> tuple[Option
     return None, None
 
 
-async def _authorize_subagent_dispatch(svc, ctx: AppContext, subagent_id: Optional[str]) -> None:
+async def _authorize_subagent_dispatch(
+    svc,
+    ctx: AppContext,
+    subagent_id: Optional[str],
+    enterprise_agent_record: Optional[dict[str, Any]] = None,
+) -> None:
     """Enforce module permissions before dispatching privileged builtin subagents."""
 
     if not subagent_id:
         return
-    permission_key = _subagent_module_permission(svc, subagent_id)
+    permission_key = _subagent_module_permission(svc, subagent_id, enterprise_agent_record)
     if permission_key is None:
         return
     await require_authorized_module(
@@ -150,16 +156,24 @@ async def _authorize_subagent_dispatch(svc, ctx: AppContext, subagent_id: Option
         permission_key,
         resource=ResourceRef(type="subagent", id=subagent_id),
     )
-    artifact_requirement = _subagent_artifact_acl_requirement(svc, subagent_id)
+    artifact_requirement = _subagent_artifact_acl_requirement(svc, subagent_id, enterprise_agent_record)
     if artifact_requirement is not None:
         artifact_type, artifact_slug = artifact_requirement
         await require_artifact_access(ctx, artifact_type=artifact_type, slug=artifact_slug, action="query")
 
 
-def _subagent_module_permission(svc, subagent_id: str) -> Optional[str]:
+def _subagent_module_permission(
+    svc,
+    subagent_id: str,
+    enterprise_agent_record: Optional[dict[str, Any]] = None,
+) -> Optional[str]:
     permission_key = _SUBAGENT_MODULE_PERMISSIONS.get(subagent_id)
     if permission_key is not None or svc is None:
         return permission_key
+
+    if enterprise_agent_record is not None:
+        node_class = enterprise_agent_record.get("node_class") or enterprise_agent_record.get("type")
+        return _SUBAGENT_MODULE_PERMISSIONS.get(node_class)
 
     entry_name, entry = _resolve_agentic_node_entry_with_name(svc, subagent_id)
     if not isinstance(entry, dict):
@@ -168,8 +182,15 @@ def _subagent_module_permission(svc, subagent_id: str) -> Optional[str]:
     return _SUBAGENT_MODULE_PERMISSIONS.get(node_class)
 
 
-def _subagent_artifact_acl_requirement(svc, subagent_id: str) -> Optional[tuple[str, str]]:
-    entry_name, entry = _resolve_agentic_node_entry_with_name(svc, subagent_id)
+def _subagent_artifact_acl_requirement(
+    svc,
+    subagent_id: str,
+    enterprise_agent_record: Optional[dict[str, Any]] = None,
+) -> Optional[tuple[str, str]]:
+    if enterprise_agent_record is not None:
+        entry_name, entry = subagent_id, enterprise_agent_record
+    else:
+        entry_name, entry = _resolve_agentic_node_entry_with_name(svc, subagent_id)
     if not isinstance(entry, dict):
         return None
 
@@ -183,6 +204,14 @@ def _subagent_artifact_acl_requirement(svc, subagent_id: str) -> Optional[tuple[
 
     artifact_type = "report" if node_class == "ask_report" else "dashboard"
     return artifact_type, artifact_slug
+
+
+def _materialize_enterprise_agent(agent_config: Any, record: dict[str, Any]) -> None:
+    """Install one enterprise agent into a request-scoped AgentConfig clone."""
+
+    agentic_nodes = dict(getattr(agent_config, "agentic_nodes", None) or {})
+    agentic_nodes[str(record["agent_id"])] = agent_record_to_runtime_entry(record)
+    agent_config.agentic_nodes = agentic_nodes
 
 
 def _sql_policy_principal_pre_check(
@@ -390,12 +419,26 @@ async def stream_chat(
 ):
     svc = await api_deps.resolve_datus_service_for_request(http_request)
     sub_agent_id = request.subagent_id
-    if sub_agent_id and not _is_valid_subagent_id(svc, sub_agent_id):
-        raise HTTPException(
-            status_code=404,
-            detail=f"Subagent '{sub_agent_id}' not found",
-        )
-    await _authorize_subagent_dispatch(svc, ctx, sub_agent_id)
+    enterprise_agent_record: Optional[dict[str, Any]] = None
+    if sub_agent_id:
+        if _is_valid_subagent_id(svc, sub_agent_id):
+            pass
+        elif api_deps.get_enterprise_extensions().enabled:
+            try:
+                enterprise_agent_record = await resolve_enterprise_agent_for_dispatch(ctx, sub_agent_id)
+            except PermissionError as exc:
+                raise HTTPException(status_code=403, detail=str(exc) or "AGENT_FORBIDDEN") from exc
+            if enterprise_agent_record is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Subagent '{sub_agent_id}' not found",
+                )
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Subagent '{sub_agent_id}' not found",
+            )
+    await _authorize_subagent_dispatch(svc, ctx, sub_agent_id, enterprise_agent_record)
 
     if request.session_id:
         access = await authorize_session_access(
@@ -478,6 +521,9 @@ async def stream_chat(
             media_type="text/event-stream",
             headers=_sse_headers(),
         )
+
+    if enterprise_agent_record is not None:
+        _materialize_enterprise_agent(projection.config, enterprise_agent_record)
 
     hooks = get_chat_hooks()
     pre_outcome = await _run_pre_chat_hook(hooks, http_request, request, ctx.user_id)

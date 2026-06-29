@@ -124,6 +124,26 @@ _CHAT_READ_POLICY = _policy(
     module_permission="module.chat",
     note="Read-only chat/session metadata; session owner checks prevent cross-user access.",
 )
+_AGENT_READ_POLICY = _policy(
+    MODULE_RBAC,
+    SYSTEM_READONLY,
+    module_permission="module.chat",
+    note="Current-user agent catalog; enterprise agents are filtered by status and ACL before dispatch.",
+)
+_ADMIN_AGENT_READ_POLICY = _policy(
+    MODULE_RBAC,
+    AUDIT,
+    SYSTEM_READONLY,
+    module_permission="module.admin.agents",
+)
+_ADMIN_AGENT_MUTATION_POLICY = _policy(
+    MODULE_RBAC,
+    AUDIT,
+    PLATFORM_STATUS_GATE,
+    MUTATION_EXECUTION,
+    module_permission="module.admin.agents",
+    audit_action="module.admin.agents",
+)
 _CHAT_ACTIVE_POLICY = _policy(
     MODULE_RBAC,
     SESSION_OWNER,
@@ -221,6 +241,23 @@ _add_many(
 _add("POST", "/api/v1/chat/stop", _CHAT_CONTROL_EXCEPTION_POLICY)
 _add_many("GET", ["/api/v1/chat/sessions", "/api/v1/chat/history"], _CHAT_READ_POLICY)
 _add("DELETE", "/api/v1/chat/sessions/{session_id}", _CHAT_ACTIVE_POLICY)
+
+_add_many("GET", ["/api/v1/agents", "/api/v1/agents/{agent_id}"], _AGENT_READ_POLICY)
+_add_many(
+    "GET",
+    ["/api/v1/admin/agents", "/api/v1/admin/agents/{agent_id}", "/api/v1/admin/agents/{agent_id}/acl"],
+    _ADMIN_AGENT_READ_POLICY,
+)
+_add_many(
+    "PUT",
+    [
+        "/api/v1/admin/agents/{agent_id}",
+        "/api/v1/admin/agents/{agent_id}/status",
+        "/api/v1/admin/agents/{agent_id}/acl",
+    ],
+    _ADMIN_AGENT_MUTATION_POLICY,
+)
+_add("DELETE", "/api/v1/admin/agents/{agent_id}", _ADMIN_AGENT_MUTATION_POLICY)
 
 _add(
     "POST",

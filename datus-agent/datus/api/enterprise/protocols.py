@@ -151,6 +151,35 @@ class EnterpriseDatasourceGrantStore(Protocol):
 
 
 @runtime_checkable
+class EnterpriseAgentStore(Protocol):
+    """Persist and query enterprise-managed custom agent definitions."""
+
+    async def list_agents(self, *, status: str | None = None) -> list[dict[str, Any]]:
+        """Return enterprise agent records, optionally filtered by status."""
+        ...
+
+    async def get_agent(self, agent_id: str) -> dict[str, Any] | None:
+        """Return one enterprise agent record, if present."""
+        ...
+
+    async def put_agent(self, *, agent_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Create or replace one enterprise agent definition."""
+        ...
+
+    async def set_agent_status(self, agent_id: str, status: str) -> dict[str, Any] | None:
+        """Update one enterprise agent status."""
+        ...
+
+    async def put_agent_acl(self, agent_id: str, acl: dict[str, Any]) -> dict[str, Any] | None:
+        """Replace one enterprise agent ACL."""
+        ...
+
+    async def delete_agent(self, agent_id: str) -> bool:
+        """Delete one enterprise agent definition."""
+        ...
+
+
+@runtime_checkable
 class EnterpriseQuotaStore(Protocol):
     """Persist and query enterprise quota metadata and usage summaries."""
 

@@ -430,6 +430,286 @@ class PgEnterpriseDatasourceGrantStore(_PgStoreBase):
         return _affected_rows(result) > 0
 
 
+class PgEnterpriseAgentStore(_PgStoreBase):
+    """PostgreSQL-backed enterprise custom agent metadata store."""
+
+    async def list_agents(self, *, status: str | None = None) -> list[dict[str, Any]]:
+        if status is None:
+            rows = await self._fetch(
+                """
+                SELECT
+                    agent_id,
+                    name,
+                    description,
+                    node_class,
+                    status,
+                    owner_user_id,
+                    datasource_id,
+                    artifact_slug,
+                    prompt_template,
+                    prompt_language,
+                    prompt_version,
+                    tools,
+                    mcp,
+                    skills,
+                    scoped_context_json,
+                    rules,
+                    max_turns,
+                    acl_json,
+                    created_at,
+                    updated_at
+                FROM enterprise_agents
+                ORDER BY agent_id ASC
+                """
+            )
+        else:
+            normalized_status = _normalized_agent_status(status)
+            rows = await self._fetch(
+                """
+                SELECT
+                    agent_id,
+                    name,
+                    description,
+                    node_class,
+                    status,
+                    owner_user_id,
+                    datasource_id,
+                    artifact_slug,
+                    prompt_template,
+                    prompt_language,
+                    prompt_version,
+                    tools,
+                    mcp,
+                    skills,
+                    scoped_context_json,
+                    rules,
+                    max_turns,
+                    acl_json,
+                    created_at,
+                    updated_at
+                FROM enterprise_agents
+                WHERE status = $1
+                ORDER BY agent_id ASC
+                """,
+                normalized_status,
+            )
+        return [_agent_record(row) for row in rows]
+
+    async def get_agent(self, agent_id: str) -> dict[str, Any] | None:
+        row = await self._fetchrow(
+            """
+            SELECT
+                agent_id,
+                name,
+                description,
+                node_class,
+                status,
+                owner_user_id,
+                datasource_id,
+                artifact_slug,
+                prompt_template,
+                prompt_language,
+                prompt_version,
+                tools,
+                mcp,
+                skills,
+                scoped_context_json,
+                rules,
+                max_turns,
+                acl_json,
+                created_at,
+                updated_at
+            FROM enterprise_agents
+            WHERE agent_id = $1
+            """,
+            agent_id,
+        )
+        return _agent_record(row) if row else None
+
+    async def put_agent(self, *, agent_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        normalized = _normalized_agent_metadata({"agent_id": agent_id, **dict(payload)})
+        row = await self._fetchrow(
+            """
+            INSERT INTO enterprise_agents (
+                agent_id,
+                name,
+                description,
+                node_class,
+                status,
+                owner_user_id,
+                datasource_id,
+                artifact_slug,
+                prompt_template,
+                prompt_language,
+                prompt_version,
+                tools,
+                mcp,
+                skills,
+                scoped_context_json,
+                rules,
+                max_turns,
+                acl_json,
+                created_at,
+                updated_at
+            )
+            VALUES (
+                $1,
+                $2,
+                $3,
+                $4,
+                $5,
+                $6,
+                $7,
+                $8,
+                $9,
+                $10,
+                $11,
+                $12::text[],
+                $13::text[],
+                $14::text[],
+                $15::jsonb,
+                $16::text[],
+                $17,
+                $18::jsonb,
+                now(),
+                now()
+            )
+            ON CONFLICT(agent_id) DO UPDATE SET
+                name = excluded.name,
+                description = excluded.description,
+                node_class = excluded.node_class,
+                status = excluded.status,
+                owner_user_id = excluded.owner_user_id,
+                datasource_id = excluded.datasource_id,
+                artifact_slug = excluded.artifact_slug,
+                prompt_template = excluded.prompt_template,
+                prompt_language = excluded.prompt_language,
+                prompt_version = excluded.prompt_version,
+                tools = excluded.tools,
+                mcp = excluded.mcp,
+                skills = excluded.skills,
+                scoped_context_json = excluded.scoped_context_json,
+                rules = excluded.rules,
+                max_turns = excluded.max_turns,
+                acl_json = excluded.acl_json,
+                updated_at = now()
+            RETURNING
+                agent_id,
+                name,
+                description,
+                node_class,
+                status,
+                owner_user_id,
+                datasource_id,
+                artifact_slug,
+                prompt_template,
+                prompt_language,
+                prompt_version,
+                tools,
+                mcp,
+                skills,
+                scoped_context_json,
+                rules,
+                max_turns,
+                acl_json,
+                created_at,
+                updated_at
+            """,
+            normalized["agent_id"],
+            normalized["name"],
+            normalized["description"],
+            normalized["node_class"],
+            normalized["status"],
+            normalized["owner_user_id"],
+            normalized["datasource_id"],
+            normalized["artifact_slug"],
+            normalized["prompt_template"],
+            normalized["prompt_language"],
+            normalized["prompt_version"],
+            normalized["tools"],
+            normalized["mcp"],
+            normalized["skills"],
+            json.dumps(normalized["scoped_context"], ensure_ascii=False, sort_keys=True),
+            normalized["rules"],
+            normalized["max_turns"],
+            json.dumps(normalized["acl"], ensure_ascii=False, sort_keys=True),
+        )
+        if row is None:
+            raise DatusException(ErrorCode.COMMON_UNKNOWN, message="Failed to persist enterprise agent.")
+        return _agent_record(row)
+
+    async def set_agent_status(self, agent_id: str, status: str) -> dict[str, Any] | None:
+        row = await self._fetchrow(
+            """
+            UPDATE enterprise_agents
+            SET status = $2, updated_at = now()
+            WHERE agent_id = $1
+            RETURNING
+                agent_id,
+                name,
+                description,
+                node_class,
+                status,
+                owner_user_id,
+                datasource_id,
+                artifact_slug,
+                prompt_template,
+                prompt_language,
+                prompt_version,
+                tools,
+                mcp,
+                skills,
+                scoped_context_json,
+                rules,
+                max_turns,
+                acl_json,
+                created_at,
+                updated_at
+            """,
+            agent_id,
+            _normalized_agent_status(status),
+        )
+        return _agent_record(row) if row else None
+
+    async def put_agent_acl(self, agent_id: str, acl: dict[str, Any]) -> dict[str, Any] | None:
+        normalized_acl = _normalized_agent_acl(acl)
+        row = await self._fetchrow(
+            """
+            UPDATE enterprise_agents
+            SET acl_json = $2::jsonb, updated_at = now()
+            WHERE agent_id = $1
+            RETURNING
+                agent_id,
+                name,
+                description,
+                node_class,
+                status,
+                owner_user_id,
+                datasource_id,
+                artifact_slug,
+                prompt_template,
+                prompt_language,
+                prompt_version,
+                tools,
+                mcp,
+                skills,
+                scoped_context_json,
+                rules,
+                max_turns,
+                acl_json,
+                created_at,
+                updated_at
+            """,
+            agent_id,
+            json.dumps(normalized_acl, ensure_ascii=False, sort_keys=True),
+        )
+        return _agent_record(row) if row else None
+
+    async def delete_agent(self, agent_id: str) -> bool:
+        result = await self._execute("DELETE FROM enterprise_agents WHERE agent_id = $1", agent_id)
+        return _affected_rows(result) > 0
+
+
 class PgSessionOwnerStore(_PgStoreBase):
     """PostgreSQL-backed session owner metadata store."""
 
@@ -897,6 +1177,74 @@ def _normalized_strings(values: Any) -> list[str]:
     return sorted({value.strip() for value in values if isinstance(value, str) and value.strip()})
 
 
+def _normalized_string_list(values: Any) -> list[str]:
+    if values is None:
+        return []
+    if isinstance(values, str):
+        raw_values = values.split(",")
+    elif isinstance(values, (list, tuple, set)):
+        raw_values = list(values)
+    else:
+        return []
+    return sorted({str(value).strip() for value in raw_values if str(value).strip()})
+
+
+def _normalized_agent_status(status: Any) -> str:
+    normalized = str(status or "draft").strip().lower()
+    if normalized not in {"draft", "published", "disabled", "archived"}:
+        raise DatusException(
+            ErrorCode.COMMON_FIELD_INVALID,
+            message="Enterprise agent status must be one of: archived, disabled, draft, published.",
+        )
+    return normalized
+
+
+def _normalized_agent_acl(value: Any) -> dict[str, Any]:
+    raw = value if isinstance(value, dict) else {}
+    visibility = str(raw.get("visibility") or "private").strip().lower()
+    if visibility not in {"private", "role", "enterprise"}:
+        raise DatusException(
+            ErrorCode.COMMON_FIELD_INVALID,
+            message="Enterprise agent visibility must be one of: enterprise, private, role.",
+        )
+    return {
+        "visibility": visibility,
+        "allowed_roles": _normalized_string_list(raw.get("allowed_roles")),
+        "allowed_user_ids": _normalized_string_list(raw.get("allowed_user_ids")),
+    }
+
+
+def _normalized_agent_metadata(record: dict[str, Any]) -> dict[str, Any]:
+    agent_id = str(record.get("agent_id") or "").strip()
+    if not agent_id:
+        raise DatusException(ErrorCode.COMMON_FIELD_INVALID, message="Enterprise agent id is required.")
+    scoped_context = record.get("scoped_context")
+    if scoped_context is not None and not isinstance(scoped_context, dict):
+        raise DatusException(
+            ErrorCode.COMMON_FIELD_INVALID, message="Enterprise agent scoped_context must be a mapping."
+        )
+    return {
+        "agent_id": agent_id,
+        "name": str(record.get("name") or agent_id).strip(),
+        "description": _optional_str(record.get("description")),
+        "node_class": str(record.get("node_class") or record.get("type") or "gen_sql").strip(),
+        "status": _normalized_agent_status(record.get("status")),
+        "owner_user_id": _optional_str(record.get("owner_user_id")),
+        "datasource_id": _optional_str(record.get("datasource_id")),
+        "artifact_slug": _optional_str(record.get("artifact_slug")),
+        "prompt_template": _optional_str(record.get("prompt_template")),
+        "prompt_language": str(record.get("prompt_language") or "en").strip(),
+        "prompt_version": _optional_str(record.get("prompt_version")) or "1.0",
+        "tools": _normalized_string_list(record.get("tools")),
+        "mcp": _normalized_string_list(record.get("mcp")),
+        "skills": _normalized_string_list(record.get("skills")),
+        "scoped_context": dict(scoped_context or {}),
+        "rules": _normalized_string_list(record.get("rules")),
+        "max_turns": int(record.get("max_turns") or 30),
+        "acl": _normalized_agent_acl(record.get("acl")),
+    }
+
+
 def _normalized_grant_effect(effect: Any) -> str:
     normalized = str(effect).strip().lower()
     if normalized not in {"allow", "deny"}:
@@ -1029,6 +1377,31 @@ def _datasource_grant_record(row: Any) -> dict[str, Any]:
         "datasource_key": str(row["datasource_key"]),
         "effect": _normalized_grant_effect(row["effect"]),
         "scope": _normalized_grant_scope(_load_jsonb(row["scope_json"])),
+        "created_at": _iso(row["created_at"]),
+        "updated_at": _iso(row["updated_at"]),
+    }
+
+
+def _agent_record(row: Any) -> dict[str, Any]:
+    return {
+        "agent_id": str(row["agent_id"]),
+        "name": str(row["name"]),
+        "description": _optional_str(row["description"]),
+        "node_class": str(row["node_class"]),
+        "status": _normalized_agent_status(row["status"]),
+        "owner_user_id": _optional_str(row["owner_user_id"]),
+        "datasource_id": _optional_str(row["datasource_id"]),
+        "artifact_slug": _optional_str(row["artifact_slug"]),
+        "prompt_template": _optional_str(row["prompt_template"]),
+        "prompt_language": str(row["prompt_language"] or "en"),
+        "prompt_version": _optional_str(row["prompt_version"]) or "1.0",
+        "tools": _normalized_strings(list(row["tools"] or [])),
+        "mcp": _normalized_strings(list(row["mcp"] or [])),
+        "skills": _normalized_strings(list(row["skills"] or [])),
+        "scoped_context": _load_jsonb(row["scoped_context_json"]),
+        "rules": _normalized_strings(list(row["rules"] or [])),
+        "max_turns": int(row["max_turns"] or 30),
+        "acl": _normalized_agent_acl(_load_jsonb(row["acl_json"])),
         "created_at": _iso(row["created_at"]),
         "updated_at": _iso(row["updated_at"]),
     }
@@ -1175,6 +1548,35 @@ CREATE TABLE IF NOT EXISTS enterprise_datasource_grants (
 
 CREATE INDEX IF NOT EXISTS idx_enterprise_datasource_grants_datasource
 ON enterprise_datasource_grants (datasource_key, subject_type, subject_id);
+
+CREATE TABLE IF NOT EXISTS enterprise_agents (
+    agent_id text PRIMARY KEY,
+    name text NOT NULL,
+    description text,
+    node_class text NOT NULL,
+    status text NOT NULL,
+    owner_user_id text,
+    datasource_id text,
+    artifact_slug text,
+    prompt_template text,
+    prompt_language text NOT NULL DEFAULT 'en',
+    prompt_version text NOT NULL DEFAULT '1.0',
+    tools text[] NOT NULL DEFAULT ARRAY[]::text[],
+    mcp text[] NOT NULL DEFAULT ARRAY[]::text[],
+    skills text[] NOT NULL DEFAULT ARRAY[]::text[],
+    scoped_context_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+    rules text[] NOT NULL DEFAULT ARRAY[]::text[],
+    max_turns integer NOT NULL DEFAULT 30,
+    acl_json jsonb NOT NULL DEFAULT '{"visibility":"private","allowed_roles":[],"allowed_user_ids":[]}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_enterprise_agents_status
+ON enterprise_agents (status, agent_id);
+
+CREATE INDEX IF NOT EXISTS idx_enterprise_agents_owner
+ON enterprise_agents (owner_user_id, agent_id);
 
 CREATE TABLE IF NOT EXISTS session_owners (
     project_id text NOT NULL,

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, TypeVar
 
 from datus.api.enterprise.defaults import (
+    InMemoryEnterpriseAgentStore,
     InMemoryEnterpriseDatasourceGrantStore,
     InMemoryEnterpriseRoleStore,
     InMemoryEnterpriseUserStore,
@@ -21,6 +22,7 @@ from datus.api.enterprise.protocols import (
     AuditSink,
     AuthorizationProvider,
     ConfigProjector,
+    EnterpriseAgentStore,
     EnterpriseDatasourceGrantStore,
     EnterpriseQuotaStore,
     EnterpriseRoleStore,
@@ -55,6 +57,7 @@ class EnterpriseExtensions:
     datasource_grant_store: EnterpriseDatasourceGrantStore = field(
         default_factory=InMemoryEnterpriseDatasourceGrantStore
     )
+    agent_store: EnterpriseAgentStore = field(default_factory=InMemoryEnterpriseAgentStore)
 
     async def close(self) -> None:
         """Close extension providers that expose a best-effort ``close`` hook."""
@@ -71,6 +74,7 @@ class EnterpriseExtensions:
             self.user_store,
             self.role_store,
             self.datasource_grant_store,
+            self.agent_store,
         ):
             if component is None:
                 continue
@@ -121,6 +125,7 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
             user_store=InMemoryEnterpriseUserStore(),
             role_store=InMemoryEnterpriseRoleStore(),
             datasource_grant_store=InMemoryEnterpriseDatasourceGrantStore(),
+            agent_store=InMemoryEnterpriseAgentStore(),
         )
 
     authorization_provider = _load_required_component(
@@ -182,6 +187,12 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         EnterpriseSecretStore,
         None,
     )
+    agent_store = _load_optional_component(
+        raw,
+        "agent_store",
+        EnterpriseAgentStore,
+        InMemoryEnterpriseAgentStore(),
+    )
 
     return EnterpriseExtensions(
         enabled=True,
@@ -196,6 +207,7 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         user_store=user_store,
         role_store=role_store,
         datasource_grant_store=datasource_grant_store,
+        agent_store=agent_store,
     )
 
 

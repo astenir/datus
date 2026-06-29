@@ -571,6 +571,63 @@ class InMemoryEnterpriseDatasourceGrantStore:
         return self._grants.pop((subject_type, subject_id, datasource_key), None) is not None
 
 
+class InMemoryEnterpriseAgentStore:
+    """Process-local enterprise agent registry for tests and single-node local mode."""
+
+    def __init__(self) -> None:
+        self._agents: dict[str, dict[str, Any]] = {}
+
+    async def list_agents(self, *, status: str | None = None) -> list[dict[str, Any]]:
+        records = [
+            _copy_agent_record(record)
+            for record in self._agents.values()
+            if status is None or record.get("status") == status
+        ]
+        return sorted(records, key=lambda record: str(record["agent_id"]))
+
+    async def get_agent(self, agent_id: str) -> dict[str, Any] | None:
+        record = self._agents.get(agent_id)
+        return _copy_agent_record(record) if record is not None else None
+
+    async def put_agent(self, *, agent_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        now = _sqlite_now()
+        existing = self._agents.get(agent_id)
+        record = _normalized_agent_record(
+            {
+                **(existing or {}),
+                **dict(payload),
+                "agent_id": agent_id,
+                "created_at": (existing or {}).get("created_at") or now,
+                "updated_at": now,
+            }
+        )
+        self._agents[agent_id] = record
+        return _copy_agent_record(record)
+
+    async def set_agent_status(self, agent_id: str, status: str) -> dict[str, Any] | None:
+        record = self._agents.get(agent_id)
+        if record is None:
+            return None
+        updated = dict(record)
+        updated["status"] = _normalized_agent_status(status)
+        updated["updated_at"] = _sqlite_now()
+        self._agents[agent_id] = _normalized_agent_record(updated)
+        return _copy_agent_record(self._agents[agent_id])
+
+    async def put_agent_acl(self, agent_id: str, acl: dict[str, Any]) -> dict[str, Any] | None:
+        record = self._agents.get(agent_id)
+        if record is None:
+            return None
+        updated = dict(record)
+        updated["acl"] = _normalized_agent_acl(acl)
+        updated["updated_at"] = _sqlite_now()
+        self._agents[agent_id] = _normalized_agent_record(updated)
+        return _copy_agent_record(self._agents[agent_id])
+
+    async def delete_agent(self, agent_id: str) -> bool:
+        return self._agents.pop(agent_id, None) is not None
+
+
 class InMemoryEnterpriseQuotaStore:
     """Process-local quota metadata and usage store for tests and local mode."""
 
@@ -1272,6 +1329,69 @@ def _copy_datasource_grant_record(record: dict[str, Any]) -> dict[str, Any]:
         "created_at": _optional_str(record.get("created_at")),
         "updated_at": _optional_str(record.get("updated_at")),
     }
+
+
+def _normalized_agent_status(status: Any) -> str:
+    normalized = str(status or "draft").strip().lower()
+    if normalized not in {"draft", "published", "disabled", "archived"}:
+        raise DatusException(ErrorCode.COMMON_FIELD_INVALID, message=f"Invalid agent status: {status!r}.")
+    return normalized
+
+
+def _normalized_agent_acl(value: Any) -> dict[str, Any]:
+    raw = value if isinstance(value, dict) else {}
+    visibility = str(raw.get("visibility") or "private").strip().lower()
+    if visibility not in {"private", "role", "enterprise"}:
+        raise DatusException(ErrorCode.COMMON_FIELD_INVALID, message=f"Invalid agent visibility: {visibility!r}.")
+    allowed_roles = sorted({str(item).strip() for item in raw.get("allowed_roles") or [] if str(item).strip()})
+    allowed_user_ids = sorted({str(item).strip() for item in raw.get("allowed_user_ids") or [] if str(item).strip()})
+    return {
+        "visibility": visibility,
+        "allowed_roles": allowed_roles,
+        "allowed_user_ids": allowed_user_ids,
+    }
+
+
+def _normalized_string_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        items = value.split(",")
+    elif isinstance(value, (list, tuple, set)):
+        items = value
+    else:
+        return []
+    return [str(item).strip() for item in items if str(item).strip()]
+
+
+def _normalized_agent_record(record: dict[str, Any]) -> dict[str, Any]:
+    agent_id = str(record["agent_id"]).strip()
+    return {
+        "agent_id": agent_id,
+        "name": str(record.get("name") or agent_id).strip(),
+        "description": _optional_str(record.get("description")),
+        "node_class": str(record.get("node_class") or record.get("type") or "gen_sql").strip(),
+        "status": _normalized_agent_status(record.get("status")),
+        "owner_user_id": _optional_str(record.get("owner_user_id")),
+        "datasource_id": _optional_str(record.get("datasource_id")),
+        "artifact_slug": _optional_str(record.get("artifact_slug")),
+        "prompt_template": _optional_str(record.get("prompt_template")),
+        "prompt_language": str(record.get("prompt_language") or "en").strip(),
+        "prompt_version": _optional_str(record.get("prompt_version")) or "1.0",
+        "tools": _normalized_string_list(record.get("tools")),
+        "mcp": _normalized_string_list(record.get("mcp")),
+        "skills": _normalized_string_list(record.get("skills")),
+        "scoped_context": copy.deepcopy(record.get("scoped_context") or {}),
+        "rules": _normalized_string_list(record.get("rules")),
+        "max_turns": int(record.get("max_turns") or 30),
+        "acl": _normalized_agent_acl(record.get("acl")),
+        "created_at": _optional_str(record.get("created_at")),
+        "updated_at": _optional_str(record.get("updated_at")),
+    }
+
+
+def _copy_agent_record(record: dict[str, Any]) -> dict[str, Any]:
+    return copy.deepcopy(_normalized_agent_record(record))
 
 
 def _copy_quota_record(record: dict[str, Any]) -> dict[str, Any]:

@@ -121,6 +121,7 @@ def test_legacy_disabled_routes_are_audited_and_not_mixed_with_live_enterprise_p
 
 def test_admin_mutation_routes_use_module_rbac_and_platform_status_gate():
     admin_mutation_permissions = {
+        "module.admin.agents",
         "module.admin.artifacts",
         "module.admin.datasources",
         "module.admin.quotas",

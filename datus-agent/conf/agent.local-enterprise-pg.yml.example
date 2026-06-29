@@ -75,6 +75,10 @@ agent:
       class: datus_enterprise.postgres_stores:PgEnterpriseDatasourceGrantStore
       kwargs: *enterprise_pg
 
+    agent_store:
+      class: datus_enterprise.postgres_stores:PgEnterpriseAgentStore
+      kwargs: *enterprise_pg
+
     session_owner_store:
       class: datus_enterprise.postgres_stores:PgSessionOwnerStore
       kwargs: *enterprise_pg

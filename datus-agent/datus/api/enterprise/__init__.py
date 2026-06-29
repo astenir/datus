@@ -1,6 +1,7 @@
 """Enterprise extension interfaces and local-compatible defaults."""
 
 from datus.api.enterprise.defaults import (
+    InMemoryEnterpriseAgentStore,
     InMemoryEnterpriseDatasourceGrantStore,
     InMemoryEnterpriseRoleStore,
     InMemoryEnterpriseUserStore,
@@ -35,6 +36,7 @@ from datus.api.enterprise.protocols import (
     AuditSink,
     AuthorizationProvider,
     ConfigProjector,
+    EnterpriseAgentStore,
     EnterpriseDatasourceGrantStore,
     EnterpriseRoleStore,
     EnterpriseUserStore,
@@ -51,10 +53,12 @@ __all__ = [
     "AuthorizationProvider",
     "ConfigProjector",
     "EnterpriseDatasourceGrantStore",
+    "EnterpriseAgentStore",
     "EnterpriseExtensions",
     "EnterpriseRoleStore",
     "EnterpriseUserStore",
     "InMemoryEnterpriseDatasourceGrantStore",
+    "InMemoryEnterpriseAgentStore",
     "InMemoryEnterpriseRoleStore",
     "InMemoryEnterpriseUserStore",
     "InMemorySessionOwnerStore",

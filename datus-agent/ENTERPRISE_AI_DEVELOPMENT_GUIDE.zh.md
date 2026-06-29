@@ -224,6 +224,7 @@ module.admin.audit
 module.admin.audit.export
 module.admin.quotas
 module.admin.secrets
+module.admin.agents
 module.system.status
 ```
 
@@ -329,6 +330,7 @@ MVP 中 `datasource_grants` 采用每个 `(subject_type, subject_id, datasource_
 - admin datasource route：`/api/v1/admin/datasources`、`/api/v1/admin/datasource-default` 和 `/api/v1/admin/datasource-grants` 使用 `module.admin.datasources`，datasource grant admin upsert 只管理 metadata store，不自动把 grant 合并进当前请求 `AppContext.datasource_grants`；`enterprise.enabled=true` 时必须显式配置 `enterprise.datasource_grant_store.class`，不能静默使用进程内默认 store。
 - admin user route：`/api/v1/admin/users`、`/api/v1/admin/users/{user_id}`、`/api/v1/admin/users/{user_id}/disable` 和 `/api/v1/admin/users/{user_id}/enable` 使用 `module.admin.users`，用户管理变更写入脱敏审计摘要；企业模式新请求会基于 `EnterpriseUserStore` 拒绝已禁用用户。
 - admin role route：`/api/v1/admin/roles`、`/api/v1/admin/roles/{role_id}`、`/api/v1/admin/roles/{role_id}/permissions` 和 `/api/v1/admin/users/{user_id}/roles` 使用 `module.admin.roles`，role metadata、permission set 和用户-role 绑定变更写入脱敏审计摘要；企业模式新请求会从 metadata store 合并用户角色与角色权限到 `AppContext.roles` / `AppContext.permissions`。
+- enterprise agent route：`/api/v1/agents` 和 `/api/v1/agents/{agent_id}` 使用 `module.chat` 返回当前用户可用 agent 目录；`/api/v1/admin/agents`、`/api/v1/admin/agents/{agent_id}`、`/api/v1/admin/agents/{agent_id}/status` 和 `/api/v1/admin/agents/{agent_id}/acl` 使用 `module.admin.agents` 管理企业 custom agent metadata、发布状态和 ACL。chat dispatch 仍通过 `/api/v1/chat/stream` 的 `subagent_id` 执行，并在 dispatch 前按 agent ACL、状态和 node_class 叠加 SQL/report/dashboard 模块权限；旧 `/api/v1/agent/*` 仍是 legacy route，企业模式禁用。
 - table/semantic model route：`/api/v1/table/detail` 和 `GET /api/v1/semantic_model` 使用 `module.datasource_catalog` 并叠加 datasource/table grant；`POST /api/v1/semantic_model` 和 `POST /api/v1/semantic_model/validate` 使用 `module.config.edit` 并叠加 datasource/table grant，其中保存类 mutation 还要求 platform status 为 `active`，且 status gate 必须先于 `DatusService` 解析。
 - legacy route：explorer、agent config、visualization、direct tool dispatch 和 success-story 旧兼容 route 暂未进入完整企业安全链，`enterprise.enabled=true` 时必须统一禁用并写入 `system.route_disabled` 审计；本地兼容模式必须先检查企业开关并保持原行为，不得因禁用依赖额外初始化 `DatusService`。不要让这些 route 以本地兼容行为暴露在企业模式下。
 
@@ -403,7 +405,7 @@ SQL 不是唯一执行风险。以下能力也必须进入 `Authenticate -> Buil
 - 运行中 task 在多 worker 下如果仍保存在进程内，必须明确 sticky session 要求；长期方案应把 task metadata、SSE event buffer 或长任务状态外部化。不要把当前试点版描述成无状态横向扩展架构。
 - Postgres/Redis/object storage/vector store 等外部状态引入时，必须说明迁移、回滚、清理、备份恢复和企业级隔离策略。
 - 滚动发布期间，新旧代码对 session owner、artifact ACL、audit schema 和 permission key 的兼容性必须有测试或迁移说明。
-- 当前 `datus_enterprise.postgres_stores` 只通过 `_SCHEMA_SQL` 执行 `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` 做最小 bootstrap；不要把它当作生产 schema migration 工具。
+- 当前 `datus_enterprise.postgres_stores` 只通过 `_SCHEMA_SQL` 执行 `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` 做最小 bootstrap；其中 enterprise agent store 只保存 custom agent 定义、状态和 ACL metadata，不保存运行中 agent 状态，也不会把定义写回共享 `DatusService.agent_config`。不要把它当作生产 schema migration 工具。
 - `enterprise.session_body_store` 只负责聊天正文/状态 backend，包括 messages/items、message structure、turn usage、running turn usage 和 system-prompt snapshot。它不得替代 `SessionOwnerStore`，不得把 owner/index metadata 当成正文存储，也不得因为正文存在就授予访问权。
 - 启用 PG session body backend 时，不得用正文表存在性自动补写 owner metadata；普通用户 session list 必须按 `SessionOwnerStore` 过滤，history/delete/resume/feedback 等指定 session 的路径必须在 owner 缺失或不一致时返回统一不可见错误。
 - 修改 session backend 时必须保持默认本地 `AdvancedSQLiteSession` SQLite 行为不变；PG backend 必须通过显式配置启用。不要在应用启动路径自动扫描、导入或迁移历史 `.db` 文件。
