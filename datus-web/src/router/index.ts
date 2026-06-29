@@ -52,8 +52,7 @@ export const workspaceRoutes: RouteRecordRaw[] = [
   {
     path: "/sql",
     name: workspaceRouteNames.sql,
-    component: DatusWorkspace,
-    meta: { workspaceView: "sql" },
+    redirect: { name: workspaceRouteNames.chat },
   },
   {
     path: "/mcp",

@@ -180,6 +180,11 @@ describe("workspace router", () => {
       path: "/artifacts/dashboards",
     })
 
+    await expect(routeTo("/sql")).resolves.toMatchObject({
+      name: workspaceRouteNames.chat,
+      path: "/chat",
+    })
+
     await expect(routeTo("/missing-view")).resolves.toMatchObject({
       name: workspaceRouteNames.chat,
       path: "/chat",

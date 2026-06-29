@@ -23,7 +23,6 @@ import {
   ShieldCheckIcon,
   ShieldIcon,
   SlidersHorizontalIcon,
-  TerminalIcon,
   Trash2Icon,
   UserRoundIcon,
 } from "@lucide/vue"
@@ -188,8 +187,7 @@ const permissionModeLabel = computed(() => {
   }
 })
 const isWorkbenchActive = computed(() => {
-  return props.activeView === "sql"
-    || props.activeView === "catalog"
+  return props.activeView === "catalog"
     || props.activeView === "semantic"
     || props.activeView === "knowledge"
     || props.activeView === "mcp"
@@ -420,17 +418,6 @@ async function deleteSession(sessionId: string) {
                 </CollapsibleTrigger>
                 <CollapsibleContent>
                   <SidebarMenuSub class="mx-2 my-0.5 gap-0.5 border-sidebar-border/60 px-1 py-0.5">
-                    <SidebarMenuSubItem class="w-full">
-                      <SidebarMenuSubButton
-                        as="button"
-                        :is-active="activeView === 'sql'"
-                        :class="subNavButtonClass"
-                        @click="openView('sql')"
-                      >
-                        <TerminalIcon />
-                        <span>SQL</span>
-                      </SidebarMenuSubButton>
-                    </SidebarMenuSubItem>
                     <SidebarMenuSubItem class="w-full">
                       <SidebarMenuSubButton
                         as="button"

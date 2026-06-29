@@ -88,7 +88,7 @@ function handleOpenUpdate(value: boolean) {
       <DialogHeader>
         <DialogTitle>执行 SQL</DialogTitle>
         <DialogDescription>
-          在当前数据源上下文中执行这段 read_query SQL，并查看返回结果。
+          输入 SQL，在当前数据源上下文中执行并查看返回结果。
         </DialogDescription>
       </DialogHeader>
 

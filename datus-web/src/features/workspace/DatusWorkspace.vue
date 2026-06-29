@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent } from "vue"
+import { computed, defineAsyncComponent, shallowRef } from "vue"
 import {
   BarChart3Icon,
   BotIcon,
@@ -24,6 +24,7 @@ import { useChatWorkspace } from "@/composables/useChatWorkspace"
 import { usePermission } from "@/composables/usePermission"
 import { useTheme } from "@/composables/useTheme"
 import ChatPanel from "@/features/chat/ChatPanel.vue"
+import SqlExecutionDialog from "@/features/chat/SqlExecutionDialog.vue"
 import SessionRail from "@/features/workspace/SessionRail.vue"
 import type { WorkspaceNavItem } from "@/features/workspace/types"
 import { useWorkspaceRouting } from "@/features/workspace/useWorkspaceRouting"
@@ -36,14 +37,19 @@ const ConfigurationPanel = defineAsyncComponent(() => import("@/features/config/
 const KnowledgeBasePanel = defineAsyncComponent(() => import("@/features/knowledge/KnowledgeBasePanel.vue"))
 const McpPanel = defineAsyncComponent(() => import("@/features/mcp/McpPanel.vue"))
 const ProfilePanel = defineAsyncComponent(() => import("@/features/profile/ProfilePanel.vue"))
-const SqlPanel = defineAsyncComponent(() => import("@/features/sql/SqlPanel.vue"))
 
 const workspace = useChatWorkspace()
 const { state: authState, checkAuth } = useAuth()
 const permission = usePermission()
 const { theme, toggleTheme } = useTheme()
+const sqlDialogOpen = shallowRef(false)
 
 const canManagePermissions = computed(() => permission.isAdmin() || permission.hasFeaturePermission("admin"))
+const canExecuteSql = computed(() => {
+  return permission.isAdmin()
+    || permission.hasFeaturePermission("sql_generation")
+    || permission.hasFeaturePermission("sql_executor")
+})
 const themeToggleLabel = computed(() => theme.value === "dark" ? "切换到亮色模式" : "切换到暗色模式")
 
 const {
@@ -86,7 +92,6 @@ const chatNavItem: WorkspaceNavItem = { value: "chat", label: "新对话", icon:
 const navItems: WorkspaceNavItem[] = [
   chatNavItem,
   { value: "knowledge", label: "知识库", icon: BookMarkedIcon },
-  { value: "sql", label: "SQL", icon: TerminalIcon },
   { value: "mcp", label: "MCP", icon: ServerIcon },
   { value: "agents", label: "Agent", icon: BotIcon },
   { value: "configuration", label: "配置", icon: SlidersHorizontalIcon },
@@ -125,6 +130,10 @@ const headerTitle = computed(() => {
 
   return activeNavItem.value.label
 })
+
+function openSqlDialog() {
+  sqlDialogOpen.value = true
+}
 </script>
 
 <template>
@@ -186,6 +195,15 @@ const headerTitle = computed(() => {
 
             <div class="flex items-center gap-1">
               <Button
+                v-if="canExecuteSql"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="执行 SQL"
+                @click="openSqlDialog"
+              >
+                <TerminalIcon data-icon="inline-start" />
+              </Button>
+              <Button
                 variant="ghost"
                 size="icon-sm"
                 aria-label="刷新连接"
@@ -226,12 +244,6 @@ const headerTitle = computed(() => {
             :selected-table="knowledgeTable"
             @update-table="openKnowledgeTable"
           />
-        </TabsContent>
-        <TabsContent
-          value="sql"
-          class="m-0 flex min-h-0 flex-1"
-        >
-          <SqlPanel :workspace="workspace" />
         </TabsContent>
         <TabsContent
           value="mcp"
@@ -307,6 +319,13 @@ const headerTitle = computed(() => {
         </SidebarInset>
       </Tabs>
     </SidebarProvider>
+
+    <SqlExecutionDialog
+      v-if="canExecuteSql"
+      v-model:open="sqlDialogOpen"
+      initial-sql=""
+      :database-name="workspace.database.value || undefined"
+    />
 
     <Toaster
       rich-colors

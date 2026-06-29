@@ -40,7 +40,7 @@ describe("workspace access", () => {
       canManagePermissions: true,
     })).toBeNull()
 
-    expect(workspaceRedirectTarget("sql", {
+    expect(workspaceRedirectTarget("knowledge", {
       authenticated: true,
       loading: false,
       canManagePermissions: false,
