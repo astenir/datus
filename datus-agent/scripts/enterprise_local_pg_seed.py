@@ -15,7 +15,7 @@ from datus_enterprise.postgres_stores import (
     PgEnterpriseUserStore,
 )
 
-DEFAULT_ADMIN_PERMISSIONS = ["module.*", "module.admin.*"]
+DEFAULT_ADMIN_PERMISSIONS = ["*"]
 DEFAULT_READER_PERMISSIONS = [
     "module.chat",
     "module.datasource_catalog",
@@ -63,7 +63,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--admin-permission",
         action="append",
         default=None,
-        help="Admin permission key. Repeat or comma-separate. Defaults to module.*,module.admin.*.",
+        help="Admin permission key. Repeat or comma-separate. Defaults to *.",
     )
     parser.add_argument(
         "--reader-permission",

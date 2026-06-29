@@ -255,7 +255,7 @@ class TestGetRequestAppContext:
             project_id="enterprise",
             principal={"_datus_dev_admin": True, "auth_mode": "dev_admin"},
             roles=["enterprise_admin"],
-            permissions={"module.*", "module.admin.*"},
+            permissions={"*"},
             datasource_grants={"*": {"effect": "allow", "allow_catalog": True, "allow_sql": True}},
             is_admin=True,
         )
@@ -278,10 +278,10 @@ class TestGetRequestAppContext:
 
         assert result is ctx
         assert ctx.roles == ["enterprise_admin"]
-        assert ctx.permissions == {"module.*", "module.admin.*"}
+        assert ctx.permissions == {"*"}
         assert ctx.datasource_grants == {"*": {"effect": "allow", "allow_catalog": True, "allow_sql": True}}
         assert ctx.is_admin is True
-        assert ctx.principal["permissions"] == ["module.*", "module.admin.*"]
+        assert ctx.principal["permissions"] == ["*"]
         assert ctx.principal["datasource_grants"] == ctx.datasource_grants
 
     async def test_enterprise_context_missing_user_fails_before_service_cache(self):

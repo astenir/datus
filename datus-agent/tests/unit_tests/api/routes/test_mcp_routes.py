@@ -155,6 +155,19 @@ def test_mcp_routes_allow_module_mcp(monkeypatch):
     svc.mcp.list_servers.assert_called_once_with(server_type=None)
 
 
+def test_mcp_routes_allow_wildcard_admin_permission(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = _svc()
+    ctx = AppContext(user_id="admin", project_id="enterprise", permissions={"*"}, is_admin=True)
+
+    with _client(ctx, svc) as client:
+        response = client.get("/api/v1/mcp/servers")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    svc.mcp.list_servers.assert_called_once_with(server_type=None)
+
+
 @pytest.mark.parametrize(
     ("path", "expected_permission", "service_attr"),
     [

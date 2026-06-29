@@ -101,7 +101,7 @@ class UserInfoBearerAuthProvider:
         self._dev_admin_require_basic_auth = dev_admin_require_basic_auth_bool
         self._dev_admin_project_id = dev_admin_project_id or default_project_id
         self._dev_admin_roles = dev_admin_roles or ["local_admin", "enterprise_admin"]
-        self._dev_admin_permissions = set(dev_admin_permissions or ["module.*", "module.admin.*"])
+        self._dev_admin_permissions = set(dev_admin_permissions or ["*"])
         self._dev_admin_datasource_grants = dev_admin_datasource_grants or {
             "*": {"effect": "allow", "allow_catalog": True, "allow_sql": True}
         }

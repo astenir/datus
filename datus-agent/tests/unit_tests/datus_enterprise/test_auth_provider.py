@@ -211,7 +211,7 @@ async def test_userinfo_bearer_auth_provider_dev_admin_defaults_without_header()
     assert ctx.project_id is None
     assert ctx.is_admin is True
     assert "enterprise_admin" in ctx.roles
-    assert "module.*" in ctx.permissions
+    assert "*" in ctx.permissions
     assert ctx.datasource_grants == {"*": {"effect": "allow", "allow_catalog": True, "allow_sql": True}}
     assert ctx.principal["auth_mode"] == "dev_admin"
     assert ctx.principal["_datus_dev_admin"] is True
