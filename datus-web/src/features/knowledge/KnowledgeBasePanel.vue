@@ -236,7 +236,7 @@ onMounted(() => {
         </Button>
       </div>
 
-      <div class="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-4 overflow-hidden xl:grid-cols-[24rem_minmax(0,1fr)] xl:grid-rows-1">
+      <div class="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-4 overflow-visible xl:grid-cols-[24rem_minmax(0,1fr)] xl:grid-rows-1">
         <Card class="flex min-h-0 min-w-0 flex-col">
           <CardHeader class="shrink-0">
             <div class="flex flex-col gap-3">
