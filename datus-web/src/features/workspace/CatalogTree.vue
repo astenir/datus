@@ -81,7 +81,10 @@ function handleExpandedChange(paths: Set<string>) {
       </Button>
     </CardHeader>
     <CardContent :class="embedded ? 'flex min-h-0 flex-1 flex-col p-0' : 'flex min-h-0 flex-1 flex-col'">
-      <ScrollArea class="min-h-0 flex-1 pr-3">
+      <ScrollArea
+        type="auto"
+        class="min-h-0 flex-1 overflow-hidden pr-3"
+      >
         <FileTree
           :expanded="expandedPaths"
           :selected-path="selectedPath"

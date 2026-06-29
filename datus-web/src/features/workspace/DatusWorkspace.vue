@@ -153,7 +153,7 @@ const headerTitle = computed(() => {
 
   <div
     v-else
-    class="h-screen min-h-0 bg-background text-foreground"
+    class="h-screen min-h-0 overflow-hidden bg-background text-foreground"
   >
     <SidebarProvider class="h-full min-h-0">
       <Tabs

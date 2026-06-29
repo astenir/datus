@@ -236,7 +236,7 @@ onMounted(() => {
         </Button>
       </div>
 
-      <div class="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-4 overflow-visible xl:grid-cols-[24rem_minmax(0,1fr)] xl:grid-rows-1">
+      <div class="-m-3 grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-4 overflow-hidden p-3 xl:grid-cols-[24rem_minmax(0,1fr)] xl:grid-rows-1">
         <Card class="flex min-h-0 min-w-0 flex-col">
           <CardHeader class="shrink-0">
             <div class="flex flex-col gap-3">
@@ -279,7 +279,7 @@ onMounted(() => {
               </div>
             </div>
           </CardHeader>
-          <CardContent class="min-h-0 flex-1">
+          <CardContent class="flex min-h-0 flex-1 flex-col">
             <CatalogTree
               v-if="treeMode === 'catalog'"
               class="min-h-0 flex-1"
@@ -333,7 +333,7 @@ onMounted(() => {
             <Badge variant="outline">索引 {{ tableIndexCount }}</Badge>
           </CardHeader>
           <CardContent class="min-h-0 flex-1 p-0">
-            <ScrollArea class="h-full px-6 pb-6">
+            <ScrollArea class="h-full overflow-hidden px-6 pb-6">
               <div class="flex min-w-0 flex-col gap-4">
                 <template v-if="treeMode === 'subject'">
                   <div
