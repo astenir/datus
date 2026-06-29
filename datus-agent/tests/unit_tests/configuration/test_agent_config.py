@@ -1138,10 +1138,45 @@ class TestAgentConfigApiSection:
         cfg = self._make(tmp_path, api=api)
         assert cfg.api_config == api
 
+    def test_api_config_resolves_nested_env_values(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DATUS_ENTERPRISE_USERINFO_URL", "http://127.0.0.1:8010/userinfo")
+        api = {
+            "auth_provider": {
+                "class": "datus_enterprise.auth_provider:UserInfoBearerAuthProvider",
+                "kwargs": {
+                    "userinfo_url": "${DATUS_ENTERPRISE_USERINFO_URL}",
+                    "principal_fields": ["username", "${DATUS_EXTRA_PRINCIPAL:-department}"],
+                },
+            }
+        }
+
+        cfg = self._make(tmp_path, api=api)
+
+        assert cfg.api_config["auth_provider"]["kwargs"]["userinfo_url"] == "http://127.0.0.1:8010/userinfo"
+        assert cfg.api_config["auth_provider"]["kwargs"]["principal_fields"] == ["username", "department"]
+
     def test_enterprise_config_parsed(self, tmp_path):
         enterprise = {"enabled": True, "authorization_provider": {"class": "pkg.Authz"}}
         cfg = self._make(tmp_path, enterprise=enterprise)
         assert cfg.enterprise_config == enterprise
+
+    def test_enterprise_config_resolves_nested_env_values(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DATUS_ENTERPRISE_PG_DSN", "postgresql://datus:datus@127.0.0.1:5433/datus_enterprise")
+        enterprise = {
+            "enabled": True,
+            "audit_sink": {
+                "class": "datus_enterprise.postgres_stores:PgAuditSink",
+                "kwargs": {"dsn": "${DATUS_ENTERPRISE_PG_DSN}", "min_size": 1},
+            },
+        }
+
+        cfg = self._make(tmp_path, enterprise=enterprise)
+
+        assert (
+            cfg.enterprise_config["audit_sink"]["kwargs"]["dsn"]
+            == "postgresql://datus:datus@127.0.0.1:5433/datus_enterprise"
+        )
+        assert cfg.enterprise_config["audit_sink"]["kwargs"]["min_size"] == 1
 
     def test_enterprise_config_rejects_non_mapping(self, tmp_path):
         from datus.utils.exceptions import DatusException

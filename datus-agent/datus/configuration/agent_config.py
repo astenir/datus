@@ -807,14 +807,15 @@ class AgentConfig:
         self._current_datasource = ""
         self.nodes = nodes
         self.export_config: Dict[str, Any] = kwargs.get("export", {})
-        self.api_config: Dict[str, Any] = kwargs.get("api", {}) or {}
+        api_raw = kwargs.get("api", {}) or {}
+        self.api_config: Dict[str, Any] = _resolve_nested_value(api_raw) if isinstance(api_raw, dict) else {}
         enterprise_raw = kwargs.get("enterprise", {}) or {}
         if not isinstance(enterprise_raw, dict):
             raise DatusException(
                 ErrorCode.COMMON_CONFIG_ERROR,
                 message="agent.enterprise must be a mapping.",
             )
-        self.enterprise_config: Dict[str, Any] = enterprise_raw
+        self.enterprise_config: Dict[str, Any] = _resolve_nested_value(enterprise_raw)
         self.observability = ObservabilityConfig.from_dict(_resolve_nested_value(kwargs.get("observability")))
         self.agentic_nodes = kwargs.get("agentic_nodes", {})
         self.dashboard_config: Dict[str, DashboardConfig] = {}
