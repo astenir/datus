@@ -89,13 +89,19 @@ describe("workspace router", () => {
     await expect(routeTo("/semantic?table=fund.public.fund_nav")).resolves.toMatchObject({
       name: workspaceRouteNames.semantic,
       query: { table: "fund.public.fund_nav" },
-      meta: { workspaceView: "semantic" },
+      meta: { workspaceView: "knowledge" },
     })
 
     await expect(routeTo("/catalog?table=fund.public.fund_nav")).resolves.toMatchObject({
       name: workspaceRouteNames.catalog,
       query: { table: "fund.public.fund_nav" },
-      meta: { workspaceView: "catalog" },
+      meta: { workspaceView: "knowledge" },
+    })
+
+    await expect(routeTo("/knowledge?table=fund.public.fund_nav")).resolves.toMatchObject({
+      name: workspaceRouteNames.knowledge,
+      query: { table: "fund.public.fund_nav" },
+      meta: { workspaceView: "knowledge" },
     })
 
     await expect(routeTo("/agents")).resolves.toMatchObject({

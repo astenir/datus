@@ -57,6 +57,7 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
   const adminAudit = computed(() => adminTab.value === "audit" ? adminAuditFromQuery(route.query) : null)
   const semanticTable = computed(() => semanticTableFromQuery(route.query))
   const catalogTable = computed(() => tableFromQuery(route.query))
+  const knowledgeTable = computed(() => tableFromQuery(route.query))
   const routeWorkspaceContext = computed(() => workspaceContextFromQuery(route.query))
   const canRenderAdminPanel = computed(() => canRenderWorkspaceView("admin", {
     canManagePermissions: options.canManagePermissions.value,
@@ -78,8 +79,15 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
 
     if (view === "semantic") {
       return {
-        name: workspaceRouteNames.semantic,
+        name: workspaceRouteNames.knowledge,
         query: workspaceContextRouteQuery({ table: semanticTable.value }),
+      }
+    }
+
+    if (view === "catalog") {
+      return {
+        name: workspaceRouteNames.knowledge,
+        query: workspaceContextRouteQuery({ table: catalogTable.value }),
       }
     }
 
@@ -171,15 +179,16 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
   }
 
   function openSemanticTable(table: string) {
-    void router.replace({
-      name: workspaceRouteNames.semantic,
-      query: replaceQueryStringParam(route.query, "table", table),
-    })
+    openKnowledgeTable(table)
   }
 
   function openCatalogTable(table: string) {
+    openKnowledgeTable(table)
+  }
+
+  function openKnowledgeTable(table: string) {
     void router.replace({
-      name: workspaceRouteNames.catalog,
+      name: workspaceRouteNames.knowledge,
       query: replaceQueryStringParam(route.query, "table", table),
     })
   }
@@ -442,6 +451,7 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
     adminAudit,
     semanticTable,
     catalogTable,
+    knowledgeTable,
     canRenderAdminPanel,
     navigateToView,
     setActiveView,
@@ -450,6 +460,7 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
     openArtifactDetail,
     openSemanticTable,
     openCatalogTable,
+    openKnowledgeTable,
     openAdminTab,
     openAdminUser,
     openAdminRole,

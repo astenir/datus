@@ -5,7 +5,6 @@ import {
   CheckCircle2Icon,
   DatabaseIcon,
   RefreshCwIcon,
-  Table2Icon,
 } from "@lucide/vue"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -20,10 +19,10 @@ import {
 } from "@/components/ui/table"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import { useConnection } from "@/composables/useConnection"
+import CatalogTree from "@/features/workspace/CatalogTree.vue"
 import { tableApi } from "@/lib/api"
-import { databaseNameFromCatalog } from "@/lib/chat"
-import { cn } from "@/lib/utils"
-import type { CatalogRecord, TableDetail } from "@/types"
+import { catalogSchemaRows, catalogTableRows } from "@/lib/catalog-tree"
+import type { TableDetail } from "@/types"
 
 const props = defineProps<{
   workspace: ChatWorkspace
@@ -34,46 +33,13 @@ const emit = defineEmits<{
   updateTable: [table: string]
 }>()
 
-type CatalogSchemaRow = {
-  key: string
-  database: string
-  schema: string
-  type: string
-  tableCount: number
-}
-
-type CatalogTableRow = {
-  key: string
-  database: string
-  schema: string
-  table: string
-  tableType: string
-  rowsLabel: string
-  columnsLabel: string
-  fullName: string
-}
-
 const connection = useConnection()
 const loadingDetail = ref(false)
 const tableDetail = ref<TableDetail | null>(null)
 
 const selectedTableName = computed(() => props.selectedTable?.trim() ?? "")
-const schemaRows = computed<CatalogSchemaRow[]>(() =>
-  props.workspace.catalogEntries.value.map((entry) => {
-    const database = databaseNameFromCatalog(entry)
-    const schema = stringField(entry.schema_name ?? entry.schema ?? entry.catalog_name)
-    return {
-      key: [database, schema, stringField(entry.type)].join(":"),
-      database,
-      schema,
-      type: stringField(entry.type),
-      tableCount: catalogTableRowsForEntry(entry).length,
-    }
-  }),
-)
-const tableRows = computed<CatalogTableRow[]>(() =>
-  props.workspace.catalogEntries.value.flatMap(catalogTableRowsForEntry),
-)
+const schemaRows = computed(() => catalogSchemaRows(props.workspace.catalogEntries.value))
+const tableRows = computed(() => catalogTableRows(props.workspace.catalogEntries.value))
 const selectedTableRow = computed(() =>
   tableRows.value.find((row) => row.fullName === selectedTableName.value) ?? null,
 )
@@ -81,74 +47,9 @@ const detailRowCount = computed(() => formatCount(tableDetail.value?.rows))
 const detailColumnCount = computed(() => tableDetail.value?.columns.length ?? 0)
 const detailIndexCount = computed(() => tableDetail.value?.indexes.length ?? 0)
 const displayedDetailName = computed(() => tableDetail.value?.name || selectedTableName.value || "未选择表")
-const summaryGridClass = computed(() =>
-  cn("gap-3 md:grid-cols-3", selectedTableName.value ? "hidden md:grid" : "grid"),
-)
-const listCardClass = computed(() =>
-  cn("min-w-0", selectedTableName.value ? "order-2 xl:order-1" : "order-1"),
-)
-const detailCardClass = computed(() =>
-  cn("min-w-0", selectedTableName.value ? "order-1 xl:order-2" : "order-2"),
-)
-
-function stringField(value: unknown) {
-  return typeof value === "string" ? value.trim() : ""
-}
-
-function numberLabel(value: unknown) {
-  return typeof value === "number" ? value.toLocaleString("zh-CN") : "-"
-}
 
 function formatCount(value: number | undefined) {
   return typeof value === "number" ? value.toLocaleString("zh-CN") : "-"
-}
-
-function tableNameFromItem(item: unknown) {
-  if (typeof item === "string") return item.trim()
-  if (typeof item !== "object" || item === null) return ""
-
-  const record = item as Record<string, unknown>
-  return stringField(record.name ?? record.table_name)
-}
-
-function tableTypeFromItem(item: unknown) {
-  if (typeof item !== "object" || item === null) return ""
-  return stringField((item as Record<string, unknown>).table_type)
-}
-
-function tableRowsLabelFromItem(item: unknown) {
-  if (typeof item !== "object" || item === null) return "-"
-  return numberLabel((item as Record<string, unknown>).row_count)
-}
-
-function tableColumnsLabelFromItem(item: unknown) {
-  if (typeof item !== "object" || item === null) return "-"
-  return numberLabel((item as Record<string, unknown>).columns_count)
-}
-
-function fullTableName(database: string, schema: string, table: string) {
-  if (table.includes(".")) return table
-  return [database, schema, table].filter(Boolean).join(".")
-}
-
-function catalogTableRowsForEntry(entry: CatalogRecord): CatalogTableRow[] {
-  const tables = Array.isArray(entry.tables) ? entry.tables : []
-  const database = databaseNameFromCatalog(entry)
-  const schema = stringField(entry.schema_name ?? entry.schema ?? entry.catalog_name)
-  return tables.map((item, index) => {
-    const table = tableNameFromItem(item)
-    const fullName = fullTableName(database, schema, table)
-    return {
-      key: [database, schema, table, String(index)].join(":"),
-      database,
-      schema,
-      table,
-      tableType: tableTypeFromItem(item),
-      rowsLabel: tableRowsLabelFromItem(item),
-      columnsLabel: tableColumnsLabelFromItem(item),
-      fullName,
-    }
-  }).filter((row) => row.table && row.fullName)
 }
 
 async function loadTableDetail(table: string) {
@@ -212,7 +113,7 @@ watch(
       </Button>
     </div>
 
-    <div :class="summaryGridClass">
+    <div class="grid gap-3 md:grid-cols-3">
       <Card>
         <CardHeader class="pb-2">
           <CardTitle class="text-sm">目录范围</CardTitle>
@@ -244,64 +145,18 @@ watch(
       </Card>
     </div>
 
-    <div class="grid min-h-0 gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(24rem,0.85fr)]">
-      <Card :class="listCardClass">
-        <CardHeader>
-          <CardTitle class="text-lg">目录列表</CardTitle>
-          <CardDescription class="text-sm">
-            点击表名查看字段、索引和行数。
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div class="overflow-x-auto rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Database</TableHead>
-                  <TableHead>Schema</TableHead>
-                  <TableHead>Table</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead class="text-right">Rows</TableHead>
-                  <TableHead class="text-right">Columns</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                <TableRow
-                  v-for="row in tableRows"
-                  :key="row.key"
-                  :class="cn(row.fullName === selectedTableName && 'bg-muted/50')"
-                >
-                  <TableCell class="font-medium">{{ row.database || "-" }}</TableCell>
-                  <TableCell>{{ row.schema || "-" }}</TableCell>
-                  <TableCell>
-                    <Button
-                      variant="link"
-                      class="h-auto min-w-0 justify-start px-0 py-0 text-sm font-medium"
-                      @click="selectTable(row.fullName)"
-                    >
-                      <Table2Icon data-icon="inline-start" />
-                      <span class="truncate">{{ row.table }}</span>
-                    </Button>
-                  </TableCell>
-                  <TableCell>{{ row.tableType || "-" }}</TableCell>
-                  <TableCell class="text-right">{{ row.rowsLabel }}</TableCell>
-                  <TableCell class="text-right">{{ row.columnsLabel }}</TableCell>
-                </TableRow>
-                <TableRow v-if="tableRows.length === 0">
-                  <TableCell
-                    class="h-24 text-center text-sm text-muted-foreground"
-                    colspan="6"
-                  >
-                    暂无可浏览表，刷新目录或切换数据范围后重试。
-                  </TableCell>
-                </TableRow>
-              </TableBody>
-            </Table>
-          </div>
-        </CardContent>
-      </Card>
+    <div class="grid min-h-0 gap-4 xl:grid-cols-[24rem_minmax(0,1fr)]">
+      <CatalogTree
+        :entries="workspace.catalogEntries.value"
+        :selected-table="selectedTableName"
+        :loading="workspace.isLoadingCatalog.value"
+        title="数据目录树"
+        description="点击表节点查看字段、索引和行数。"
+        @refresh="workspace.loadCatalog()"
+        @select-table="selectTable"
+      />
 
-      <Card :class="detailCardClass">
+      <Card class="min-w-0">
         <CardHeader class="flex flex-row items-start justify-between gap-3">
           <div class="min-w-0">
             <CardTitle class="truncate text-lg">{{ displayedDetailName }}</CardTitle>

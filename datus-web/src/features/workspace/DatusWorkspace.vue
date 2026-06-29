@@ -4,8 +4,6 @@ import {
   BarChart3Icon,
   BotIcon,
   BookMarkedIcon,
-  BookOpenTextIcon,
-  DatabaseIcon,
   MessageSquareIcon,
   MoonIcon,
   RefreshCwIcon,
@@ -34,12 +32,10 @@ import { sessionUserQueryText } from "@/lib/chat"
 const AdminPanel = defineAsyncComponent(() => import("@/features/admin/AdminPanel.vue"))
 const AgentManagerPanel = defineAsyncComponent(() => import("@/features/agent/AgentManagerPanel.vue"))
 const ArtifactsPanel = defineAsyncComponent(() => import("@/features/artifacts/ArtifactsPanel.vue"))
-const CatalogPanel = defineAsyncComponent(() => import("@/features/catalog/CatalogPanel.vue"))
 const ConfigurationPanel = defineAsyncComponent(() => import("@/features/config/ConfigurationPanel.vue"))
-const KnowledgeBootstrapPanel = defineAsyncComponent(() => import("@/features/knowledge/KnowledgeBootstrapPanel.vue"))
+const KnowledgeBasePanel = defineAsyncComponent(() => import("@/features/knowledge/KnowledgeBasePanel.vue"))
 const McpPanel = defineAsyncComponent(() => import("@/features/mcp/McpPanel.vue"))
 const ProfilePanel = defineAsyncComponent(() => import("@/features/profile/ProfilePanel.vue"))
-const SemanticWorkbenchPanel = defineAsyncComponent(() => import("@/features/semantic/SemanticWorkbenchPanel.vue"))
 const SqlPanel = defineAsyncComponent(() => import("@/features/sql/SqlPanel.vue"))
 
 const workspace = useChatWorkspace()
@@ -62,16 +58,14 @@ const {
   adminSecretName,
   adminArtifact,
   adminAudit,
-  semanticTable,
-  catalogTable,
+  knowledgeTable,
   canRenderAdminPanel,
   navigateToView,
   setActiveView,
   openChat,
   openArtifactTab,
   openArtifactDetail,
-  openSemanticTable,
-  openCatalogTable,
+  openKnowledgeTable,
   openAdminTab,
   openAdminUser,
   openAdminRole,
@@ -91,9 +85,7 @@ const chatNavItem: WorkspaceNavItem = { value: "chat", label: "新对话", icon:
 
 const navItems: WorkspaceNavItem[] = [
   chatNavItem,
-  { value: "catalog", label: "数据目录", icon: DatabaseIcon },
-  { value: "semantic", label: "语义模型", icon: BookOpenTextIcon },
-  { value: "knowledge", label: "知识构建", icon: BookMarkedIcon },
+  { value: "knowledge", label: "知识库", icon: BookMarkedIcon },
   { value: "sql", label: "SQL", icon: TerminalIcon },
   { value: "mcp", label: "MCP", icon: ServerIcon },
   { value: "agents", label: "Agent", icon: BotIcon },
@@ -181,7 +173,7 @@ const headerTitle = computed(() => {
           @open-artifact-tab="openArtifactTab"
         />
 
-        <SidebarInset class="min-w-0">
+        <SidebarInset class="min-h-0 min-w-0 overflow-hidden">
           <header class="flex h-14 shrink-0 items-center gap-3 border-b px-3 md:px-5">
             <SidebarTrigger
               aria-label="侧边栏"
@@ -226,30 +218,14 @@ const headerTitle = computed(() => {
           <ChatPanel :workspace="workspace" />
         </TabsContent>
         <TabsContent
-          value="catalog"
-          class="m-0 flex min-h-0 flex-1"
-        >
-          <CatalogPanel
-            :workspace="workspace"
-            :selected-table="catalogTable"
-            @update-table="openCatalogTable"
-          />
-        </TabsContent>
-        <TabsContent
-          value="semantic"
-          class="m-0 flex min-h-0 flex-1"
-        >
-          <SemanticWorkbenchPanel
-            :workspace="workspace"
-            :selected-table="semanticTable"
-            @update-table="openSemanticTable"
-          />
-        </TabsContent>
-        <TabsContent
           value="knowledge"
           class="m-0 flex min-h-0 flex-1"
         >
-          <KnowledgeBootstrapPanel />
+          <KnowledgeBasePanel
+            :workspace="workspace"
+            :selected-table="knowledgeTable"
+            @update-table="openKnowledgeTable"
+          />
         </TabsContent>
         <TabsContent
           value="sql"

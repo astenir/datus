@@ -35,13 +35,13 @@ export const workspaceRoutes: RouteRecordRaw[] = [
     path: "/catalog",
     name: workspaceRouteNames.catalog,
     component: DatusWorkspace,
-    meta: { workspaceView: "catalog" },
+    meta: { workspaceView: "knowledge" },
   },
   {
     path: "/semantic",
     name: workspaceRouteNames.semantic,
     component: DatusWorkspace,
-    meta: { workspaceView: "semantic" },
+    meta: { workspaceView: "knowledge" },
   },
   {
     path: "/knowledge",

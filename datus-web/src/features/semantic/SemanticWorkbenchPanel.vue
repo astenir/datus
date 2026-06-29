@@ -2,7 +2,6 @@
 import { computed, watch } from "vue"
 import {
   CheckCircle2Icon,
-  DatabaseIcon,
   SaveIcon,
   Table2Icon,
   XCircleIcon,
@@ -10,8 +9,6 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
 import {
   Table,
   TableBody,
@@ -23,7 +20,7 @@ import {
 import { Textarea } from "@/components/ui/textarea"
 import { useSemanticWorkbench } from "@/composables/useSemanticWorkbench"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
-import type { CatalogRecord } from "@/types"
+import CatalogTree from "@/features/workspace/CatalogTree.vue"
 
 const props = defineProps<{
   workspace: ChatWorkspace
@@ -39,44 +36,9 @@ const workbench = useSemanticWorkbench()
 const tableColumnCount = computed(() => workbench.tableDetail.value?.columns.length ?? 0)
 const tableIndexCount = computed(() => workbench.tableDetail.value?.indexes.length ?? 0)
 const tableRowCount = computed(() => formatRows(workbench.tableDetail.value?.rows))
-const catalogRows = computed(() => props.workspace.catalogEntries.value.slice(0, 8).map((entry) => ({
-  key: catalogKey(entry),
-  database: stringField(entry.database_name ?? entry.name ?? entry.catalog_name),
-  schema: stringField(entry.schema_name ?? entry.schema),
-  tables: catalogTableNames(entry),
-  raw: entry,
-})))
-
-function stringField(value: unknown) {
-  return typeof value === "string" ? value : ""
-}
-
-function catalogKey(entry: CatalogRecord) {
-  return [
-    stringField(entry.database_name ?? entry.name ?? entry.catalog_name),
-    stringField(entry.schema_name ?? entry.schema),
-    catalogTableNames(entry).join(","),
-  ].filter(Boolean).join(":") || JSON.stringify(entry)
-}
-
-function catalogTableNames(entry: CatalogRecord) {
-  const tables = Array.isArray(entry.tables) ? entry.tables : []
-  return tables.map((item) => {
-    if (typeof item === "string") return item
-    if (typeof item === "object" && item !== null && "name" in item) {
-      return stringField((item as { name?: unknown }).name)
-    }
-    return ""
-  }).filter(Boolean)
-}
-
 function formatRows(value: number | undefined) {
   if (typeof value !== "number") return "-"
   return value.toLocaleString("zh-CN")
-}
-
-function loadTable() {
-  requestTableLoad(workbench.tableName.value)
 }
 
 function requestTableLoad(value: string) {
@@ -92,13 +54,6 @@ function requestTableLoad(value: string) {
   }
 
   emit("updateTable", target)
-}
-
-function useCatalogTable(entry: CatalogRecord) {
-  const tableName = workbench.useCatalogTable(entry)
-  if (tableName) {
-    emit("updateTable", tableName)
-  }
 }
 
 const selectedTable = computed(() => props.selectedTable?.trim() ?? "")
@@ -164,75 +119,16 @@ watch(
         </Card>
       </div>
 
-      <div class="grid gap-4 xl:grid-cols-[26rem_minmax(0,1fr)]">
-        <div class="flex flex-col gap-4">
-          <Card>
-            <CardHeader>
-              <CardTitle class="text-lg">加载表</CardTitle>
-              <CardDescription class="text-sm">
-                表结构与语义 YAML。
-              </CardDescription>
-            </CardHeader>
-            <CardContent class="flex flex-col gap-4">
-              <FieldGroup>
-                <Field>
-                  <FieldLabel for="semantic-table-name">表名</FieldLabel>
-                  <Input
-                    id="semantic-table-name"
-                    v-model="workbench.tableName.value"
-                    placeholder="database.schema.table"
-                    @keydown.enter.prevent="loadTable"
-                  />
-                </Field>
-              </FieldGroup>
-              <Button
-                :disabled="!workbench.canLoadTable.value || workbench.loadingTable.value"
-                @click="loadTable"
-              >
-                <DatabaseIcon data-icon="inline-start" />
-                加载表
-              </Button>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle class="text-lg">目录快捷入口</CardTitle>
-              <CardDescription class="text-sm">
-                最近加载的数据目录表。
-              </CardDescription>
-            </CardHeader>
-            <CardContent class="flex flex-col gap-2">
-              <div
-                v-for="entry in catalogRows"
-                :key="entry.key"
-                class="flex items-center gap-3 rounded-md border p-2"
-              >
-                <div class="min-w-0 flex-1">
-                  <div class="truncate text-sm font-medium">{{ entry.database || "-" }}</div>
-                  <div class="truncate text-xs text-muted-foreground">
-                    {{ entry.schema || "默认 schema" }} · 表 {{ entry.tables.length }}
-                  </div>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  :disabled="entry.tables.length === 0"
-                  @click="useCatalogTable(entry.raw)"
-                >
-                  <Table2Icon data-icon="inline-start" />
-                  使用
-                </Button>
-              </div>
-              <div
-                v-if="catalogRows.length === 0"
-                class="rounded-md border p-4 text-sm text-muted-foreground"
-              >
-                当前目录没有可用表，先在数据目录中刷新。
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+      <div class="grid gap-4 xl:grid-cols-[24rem_minmax(0,1fr)]">
+        <CatalogTree
+          :entries="workspace.catalogEntries.value"
+          :selected-table="selectedTable"
+          :loading="workspace.isLoadingCatalog.value"
+          title="语义模型目录"
+          description="点击表节点加载结构和语义 YAML。"
+          @refresh="workspace.loadCatalog()"
+          @select-table="requestTableLoad"
+        />
 
         <div class="flex flex-col gap-4">
           <Card>

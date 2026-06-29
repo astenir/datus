@@ -2,7 +2,6 @@
 import { computed, shallowRef, watch } from "vue"
 import {
   ArchiveIcon,
-  BookOpenTextIcon,
   BookMarkedIcon,
   BotIcon,
   BriefcaseBusinessIcon,
@@ -135,7 +134,7 @@ const historySessionActionClass = "rounded-md opacity-0 group-focus-within/menu-
 
 const userLabel = computed(() => props.auth.user?.realname || props.auth.user?.username || "Datus")
 const userFallback = computed(() => userLabel.value.slice(0, 1).toUpperCase())
-const currentDatasourceName = computed(() => props.workspace.config.value?.current_datasource?.trim() || "")
+const currentDatasourceName = computed(() => props.workspace.currentDatasource.value.trim())
 const currentDatasourceLabel = computed(() => currentDatasourceName.value || "当前数据源未选择")
 const userMeta = computed(() => props.auth.user?.department || props.auth.user?.title || currentDatasourceLabel.value)
 const userRoleLabel = computed(() => props.canManagePermissions ? "管理员" : "成员")
@@ -290,11 +289,16 @@ function updatePermissionMode(value: unknown) {
   }
 }
 
-function updateDatasource(value: unknown) {
+async function updateDatasource(value: unknown) {
   if (typeof value !== "string") return
   datasourceTestOk.value = null
   datasourceTestMessage.value = ""
-  props.workspace.handleDatasourceSwitch(value)
+  const changed = await props.workspace.handleDatasourceSwitch(value)
+  if (changed) {
+    toast.success(`已切换到数据源 ${value}`)
+  } else {
+    toast.error("切换数据源失败，请确认权限或数据源配置")
+  }
 }
 
 async function runDatasourceTest() {
@@ -430,34 +434,12 @@ async function deleteSession(sessionId: string) {
                     <SidebarMenuSubItem class="w-full">
                       <SidebarMenuSubButton
                         as="button"
-                        :is-active="activeView === 'catalog'"
-                        :class="subNavButtonClass"
-                        @click="openView('catalog')"
-                      >
-                        <DatabaseIcon />
-                        <span>数据目录</span>
-                      </SidebarMenuSubButton>
-                    </SidebarMenuSubItem>
-                    <SidebarMenuSubItem class="w-full">
-                      <SidebarMenuSubButton
-                        as="button"
-                        :is-active="activeView === 'semantic'"
-                        :class="subNavButtonClass"
-                        @click="openView('semantic')"
-                      >
-                        <BookOpenTextIcon />
-                        <span>语义模型</span>
-                      </SidebarMenuSubButton>
-                    </SidebarMenuSubItem>
-                    <SidebarMenuSubItem class="w-full">
-                      <SidebarMenuSubButton
-                        as="button"
                         :is-active="activeView === 'knowledge'"
                         :class="subNavButtonClass"
                         @click="openView('knowledge')"
                       >
                         <BookMarkedIcon />
-                        <span>知识构建</span>
+                        <span>知识库</span>
                       </SidebarMenuSubButton>
                     </SidebarMenuSubItem>
                     <SidebarMenuSubItem class="w-full">
