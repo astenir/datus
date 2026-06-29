@@ -44,6 +44,7 @@ defineProps<{
   streaming?: boolean
   thinkingDisplay?: "answer" | "reasoning"
   interactionDisabled?: boolean
+  databaseName?: string
 }>()
 
 const emit = defineEmits<{
@@ -129,6 +130,7 @@ function childMessageLabel(message: ToolChildMessage) {
         mode="input"
         :tool-name="block.toolName"
         :value="block.params"
+        :database-name="databaseName"
       />
       <div
         v-if="block.childMessages?.length"
@@ -151,6 +153,7 @@ function childMessageLabel(message: ToolChildMessage) {
                 :streaming="streaming"
                 :thinking-display="thinkingDisplay"
                 :interaction-disabled="interactionDisabled"
+                :database-name="databaseName"
                 @submit-interaction="submitInteraction"
                 @open-artifact="openArtifact"
               />
@@ -177,6 +180,7 @@ function childMessageLabel(message: ToolChildMessage) {
         :tool-name="block.toolName"
         :value="block.result"
         :error-text="block.errorText"
+        :database-name="databaseName"
       />
     </ToolContent>
   </Tool>
@@ -192,6 +196,7 @@ function childMessageLabel(message: ToolChildMessage) {
         mode="input"
         :tool-name="block.toolName"
         :value="block.params"
+        :database-name="databaseName"
       />
       <div
         v-if="block.childMessages?.length"
@@ -214,6 +219,7 @@ function childMessageLabel(message: ToolChildMessage) {
                 :streaming="streaming"
                 :thinking-display="thinkingDisplay"
                 :interaction-disabled="interactionDisabled"
+                :database-name="databaseName"
                 @submit-interaction="submitInteraction"
                 @open-artifact="openArtifact"
               />
@@ -230,6 +236,7 @@ function childMessageLabel(message: ToolChildMessage) {
         :tool-name="block.toolName"
         :value="block.result"
         :error-text="block.errorText"
+        :database-name="databaseName"
       />
     </ToolContent>
   </Tool>

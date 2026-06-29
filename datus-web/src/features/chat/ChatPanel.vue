@@ -229,6 +229,7 @@ async function openArtifact(kind: string, slug: string) {
           :message="message"
           :streaming="message.id === streamingMessageId"
           :interaction-disabled="Boolean(pendingInteractionKey)"
+          :database-name="workspace.database.value"
           @submit-interaction="submitInteraction"
           @open-artifact="openArtifact"
         />

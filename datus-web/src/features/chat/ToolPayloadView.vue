@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import type { BundledLanguage } from "shiki"
-import { computed } from "vue"
+import { computed, shallowRef } from "vue"
+import { PlayIcon } from "@lucide/vue"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 import {
   CodeBlock,
   CodeBlockActions,
@@ -17,6 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import SqlExecutionDialog from "@/features/chat/SqlExecutionDialog.vue"
 import {
   displayValueForTool,
   sqlFromToolValue,
@@ -32,7 +36,10 @@ const props = defineProps<{
   toolName: string
   value?: unknown
   errorText?: string
+  databaseName?: string
 }>()
+
+const sqlDialogOpen = shallowRef(false)
 
 const title = computed(() => {
   if (props.errorText) return "错误"
@@ -73,6 +80,11 @@ const showFallback = computed(() => {
 const fallbackCode = computed(() => formatCode(displayValue.value))
 const fallbackLanguage = computed<BundledLanguage>(() => "json")
 const valueSummary = computed(() => table.value?.sourceLabel ?? summarizeValue(displayValue.value))
+const canExecuteSql = computed(() => (
+  props.mode === "input"
+    && isReadQueryTool(props.toolName)
+    && Boolean(sql.value)
+))
 
 function formatCode(value: unknown): string {
   if (typeof value === "string") return value
@@ -81,6 +93,11 @@ function formatCode(value: unknown): string {
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
+}
+
+function isReadQueryTool(toolName: string) {
+  const normalized = toolName.trim().toLowerCase()
+  return normalized === "read_query" || normalized.endsWith(".read_query")
 }
 </script>
 
@@ -110,13 +127,38 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
       :code="sql"
       language="sql"
     >
-      <CodeBlockHeader>
+      <CodeBlockHeader class="px-2 py-1">
         <CodeBlockTitle>SQL</CodeBlockTitle>
         <CodeBlockActions>
+          <TooltipProvider v-if="canExecuteSql">
+            <Tooltip>
+              <TooltipTrigger as-child>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  aria-label="执行 SQL"
+                  @click="sqlDialogOpen = true"
+                >
+                  <PlayIcon data-icon="inline-start" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>执行 SQL</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
           <CodeBlockCopyButton />
         </CodeBlockActions>
       </CodeBlockHeader>
     </CodeBlock>
+
+    <SqlExecutionDialog
+      v-if="sql && canExecuteSql"
+      v-model:open="sqlDialogOpen"
+      :initial-sql="sql"
+      :database-name="databaseName"
+    />
 
     <div
       v-if="showTable && table"
@@ -170,7 +212,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
       :code="fallbackCode"
       :language="fallbackLanguage"
     >
-      <CodeBlockHeader>
+      <CodeBlockHeader class="px-2 py-1">
         <CodeBlockTitle>{{ typeof displayValue === "string" ? "Text" : "JSON" }}</CodeBlockTitle>
         <CodeBlockActions>
           <CodeBlockCopyButton />
