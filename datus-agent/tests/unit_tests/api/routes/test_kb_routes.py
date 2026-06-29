@@ -3,6 +3,7 @@
 All external dependencies are mocked. Zero API keys, zero network access required.
 """
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -34,8 +35,11 @@ from datus.utils.exceptions import DatusException, ErrorCode
 def mock_datus_service():
     """Create a mock DatusService with agent_config and kb."""
     svc = MagicMock()
+    svc.project_id = "proj"
     svc.agent_config = MagicMock()
     svc.agent_config.home = "/tmp/test_home"
+    svc.agent_config.api_config = {}
+    svc.agent_config.enterprise_config = {}
     svc.agent_config.document_configs = {}
     svc.kb = MagicMock()
     return svc
@@ -222,6 +226,246 @@ def test_kb_cancel_routes_do_not_resolve_datus_service(monkeypatch, path):
     body = response.json()
     assert body["success"] is True
     assert body["data"] == {"stream_id": "owned-stream", "cancelled": True}
+
+
+# ---------------------------------------------------------------------------
+# /api/v1/kb/uploads
+# ---------------------------------------------------------------------------
+
+
+class TestKbUploads:
+    def test_upload_success_story_csv_success(self, mock_datus_service, tmp_path):
+        mock_datus_service.agent_config.home = str(tmp_path)
+        ctx = AppContext(user_id="alice", project_id="proj", permissions={"module.kb"})
+
+        with _client_with_context(mock_datus_service, ctx) as test_client:
+            response = test_client.post(
+                "/api/v1/kb/uploads",
+                data={"purpose": "success_story_csv"},
+                files=[("files", ("success_story.csv", b"question,sql\nq,select 1\n", "text/csv"))],
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["purpose"] == "success_story_csv"
+        assert body["owner_user_id"] == "alice"
+        assert body["project_id"] == "proj"
+        assert body["files"][0]["filename"] == "success_story.csv"
+        assert body["files"][0]["relative_path"].startswith("uploads/proj/alice/")
+        assert not body["files"][0]["relative_path"].startswith("/")
+        assert (tmp_path / "files" / body["files"][0]["relative_path"]).is_file()
+
+    def test_upload_reference_sql_multiple_files_success(self, mock_datus_service, tmp_path):
+        mock_datus_service.agent_config.home = str(tmp_path)
+        ctx = AppContext(user_id="alice", project_id="proj", permissions={"module.kb"})
+
+        with _client_with_context(mock_datus_service, ctx) as test_client:
+            response = test_client.post(
+                "/api/v1/kb/uploads",
+                data={"purpose": "reference_sql"},
+                files=[
+                    ("files", ("a.sql", b"select 1", "text/plain")),
+                    ("files", ("b.sql", b"select 2", "text/plain")),
+                ],
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["purpose"] == "reference_sql"
+        assert [file["filename"] for file in body["files"]] == ["a.sql", "b.sql"]
+        assert all((tmp_path / "files" / file["relative_path"]).is_file() for file in body["files"])
+
+    def test_upload_invalid_extension_fails(self, mock_datus_service, tmp_path):
+        mock_datus_service.agent_config.home = str(tmp_path)
+        ctx = AppContext(user_id="alice", project_id="proj", permissions={"module.kb"})
+
+        with _client_with_context(mock_datus_service, ctx) as test_client:
+            response = test_client.post(
+                "/api/v1/kb/uploads",
+                data={"purpose": "success_story_csv"},
+                files=[("files", ("story.exe", b"not csv", "application/octet-stream"))],
+            )
+
+        assert response.status_code == 415
+        assert response.json()["detail"] == "KB_UPLOAD_INVALID_FILE_TYPE"
+
+    def test_upload_empty_file_fails_and_cleans_up(self, mock_datus_service, tmp_path):
+        mock_datus_service.agent_config.home = str(tmp_path)
+        ctx = AppContext(user_id="alice", project_id="proj", permissions={"module.kb"})
+
+        with _client_with_context(mock_datus_service, ctx) as test_client:
+            response = test_client.post(
+                "/api/v1/kb/uploads",
+                data={"purpose": "success_story_csv"},
+                files=[("files", ("empty.csv", b"", "text/csv"))],
+            )
+
+        assert response.status_code == 422
+        assert response.json()["detail"] == "KB_UPLOAD_EMPTY"
+        uploads_root = tmp_path / "files" / "uploads"
+        assert not uploads_root.exists() or not any(uploads_root.rglob("*"))
+
+    def test_upload_filename_with_path_separator_cannot_escape(self, mock_datus_service, tmp_path):
+        mock_datus_service.agent_config.home = str(tmp_path)
+        ctx = AppContext(user_id="alice", project_id="proj", permissions={"module.kb"})
+
+        with _client_with_context(mock_datus_service, ctx) as test_client:
+            response = test_client.post(
+                "/api/v1/kb/uploads",
+                data={"purpose": "success_story_csv"},
+                files=[("files", ("../story.csv", b"question,sql\nq,select 1\n", "text/csv"))],
+            )
+
+        assert response.status_code == 200
+        file_info = response.json()["files"][0]
+        assert file_info["filename"] == "story.csv"
+        saved_path = (tmp_path / "files" / file_info["relative_path"]).resolve()
+        assert saved_path.is_relative_to((tmp_path / "files").resolve())
+
+    def test_user_cannot_read_or_delete_another_users_upload(self, mock_datus_service, tmp_path):
+        mock_datus_service.agent_config.home = str(tmp_path)
+        alice_ctx = AppContext(user_id="alice", project_id="proj", permissions={"module.kb"})
+        bob_ctx = AppContext(user_id="bob", project_id="proj", permissions={"module.kb"})
+
+        with _client_with_context(mock_datus_service, alice_ctx) as test_client:
+            upload = test_client.post(
+                "/api/v1/kb/uploads",
+                data={"purpose": "success_story_csv"},
+                files=[("files", ("story.csv", b"question,sql\nq,select 1\n", "text/csv"))],
+            ).json()
+
+        with _client_with_context(mock_datus_service, bob_ctx) as test_client:
+            get_response = test_client.get(f"/api/v1/kb/uploads/{upload['upload_id']}")
+            delete_response = test_client.delete(f"/api/v1/kb/uploads/{upload['upload_id']}")
+
+        assert get_response.status_code == 403
+        assert get_response.json()["detail"] == "KB_UPLOAD_FORBIDDEN"
+        assert delete_response.status_code == 403
+        assert delete_response.json()["detail"] == "KB_UPLOAD_FORBIDDEN"
+
+    def test_deleted_upload_cannot_be_used_for_build(self, mock_datus_service, tmp_path):
+        mock_datus_service.agent_config.home = str(tmp_path)
+        ctx = AppContext(user_id="alice", project_id="proj", permissions={"module.kb"})
+
+        with _client_with_context(mock_datus_service, ctx) as test_client:
+            upload = test_client.post(
+                "/api/v1/kb/uploads",
+                data={"purpose": "success_story_csv"},
+                files=[("files", ("story.csv", b"question,sql\nq,select 1\n", "text/csv"))],
+            ).json()
+            delete_response = test_client.delete(f"/api/v1/kb/uploads/{upload['upload_id']}")
+            build_response = test_client.post(
+                "/api/v1/kb/bootstrap",
+                json={"components": ["semantic_model"], "upload_id": upload["upload_id"]},
+            )
+
+        assert delete_response.status_code == 200
+        assert build_response.status_code == 404
+        assert build_response.json()["detail"] == "KB_UPLOAD_NOT_FOUND"
+        mock_datus_service.kb.bootstrap_stream.assert_not_called()
+
+    def test_semantic_model_can_bootstrap_from_upload_id(self, mock_datus_service, tmp_path):
+        mock_datus_service.agent_config.home = str(tmp_path)
+        ctx = AppContext(user_id="alice", project_id="proj", permissions={"module.kb"})
+        captured_requests = []
+
+        async def mock_stream(request, stream_id, cancel_event, project_files_root):  # noqa: ARG001
+            captured_requests.append((request, project_files_root))
+            yield BootstrapKbEvent(
+                stream_id=stream_id,
+                component="semantic_model",
+                stage="task_completed",
+                timestamp="2025-01-01T00:00:00",
+            )
+
+        mock_datus_service.kb.bootstrap_stream = mock_stream
+        with _client_with_context(mock_datus_service, ctx) as test_client:
+            upload = test_client.post(
+                "/api/v1/kb/uploads",
+                data={"purpose": "success_story_csv"},
+                files=[("files", ("story.csv", b"question,sql\nq,select 1\n", "text/csv"))],
+            ).json()
+            response = test_client.post(
+                "/api/v1/kb/bootstrap",
+                json={"components": ["semantic_model"], "upload_id": upload["upload_id"]},
+            )
+
+        assert response.status_code == 200
+        request, project_files_root = captured_requests[0]
+        assert request.success_story == upload["files"][0]["relative_path"]
+        assert project_files_root == str(tmp_path / "files")
+
+    def test_reference_sql_can_bootstrap_from_upload_id(self, mock_datus_service, tmp_path):
+        mock_datus_service.agent_config.home = str(tmp_path)
+        ctx = AppContext(user_id="alice", project_id="proj", permissions={"module.kb"})
+        captured_requests = []
+
+        async def mock_stream(request, stream_id, cancel_event, project_files_root):  # noqa: ARG001
+            captured_requests.append(request)
+            yield BootstrapKbEvent(
+                stream_id=stream_id,
+                component="reference_sql",
+                stage="task_completed",
+                timestamp="2025-01-01T00:00:00",
+            )
+
+        mock_datus_service.kb.bootstrap_stream = mock_stream
+        with _client_with_context(mock_datus_service, ctx) as test_client:
+            upload = test_client.post(
+                "/api/v1/kb/uploads",
+                data={"purpose": "reference_sql"},
+                files=[
+                    ("files", ("a.sql", b"select 1", "text/plain")),
+                    ("files", ("b.sql", b"select 2", "text/plain")),
+                ],
+            ).json()
+            response = test_client.post(
+                "/api/v1/kb/bootstrap",
+                json={"components": ["reference_sql"], "upload_id": upload["upload_id"]},
+            )
+
+        assert response.status_code == 200
+        assert captured_requests[0].sql_dir == Path(upload["files"][0]["relative_path"]).parent.as_posix()
+
+    def test_bootstrap_docs_can_use_upload_id(self, mock_datus_service, tmp_path):
+        mock_datus_service.agent_config.home = str(tmp_path)
+        mock_datus_service.agent_config.document_configs = {}
+        ctx = AppContext(user_id="alice", project_id="proj", permissions={"module.kb"})
+        captured_requests = []
+
+        async def mock_stream(request, stream_id, cancel_event):  # noqa: ARG001
+            captured_requests.append(request)
+            yield BootstrapKbEvent(
+                stream_id=stream_id,
+                component="platform_doc",
+                stage="task_completed",
+                timestamp="2025-01-01T00:00:00",
+            )
+
+        mock_datus_service.kb.bootstrap_doc_stream = mock_stream
+        with _client_with_context(mock_datus_service, ctx) as test_client:
+            upload = test_client.post(
+                "/api/v1/kb/uploads",
+                data={"purpose": "platform_docs", "platform": "duckdb"},
+                files=[("files", ("README.md", b"# Docs", "text/markdown"))],
+            ).json()
+            response = test_client.post(
+                "/api/v1/kb/bootstrap-docs",
+                json={"platform": "duckdb", "source_type": "local", "upload_id": upload["upload_id"]},
+            )
+
+        assert response.status_code == 200
+        assert captured_requests[0].source_type == "local"
+        assert captured_requests[0].source.startswith(str(tmp_path / "files"))
+        assert upload["upload_id"] in captured_requests[0].source
+
+    def test_upload_openapi_is_multipart_form_data(self):
+        app = FastAPI()
+        app.include_router(router)
+
+        request_body = app.openapi()["paths"]["/api/v1/kb/uploads"]["post"]["requestBody"]
+
+        assert "multipart/form-data" in request_body["content"]
 
 
 # ---------------------------------------------------------------------------

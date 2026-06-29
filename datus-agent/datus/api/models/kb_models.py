@@ -15,6 +15,56 @@ class KbComponent(str, Enum):
     REFERENCE_SQL = "reference_sql"
 
 
+class KbUploadPurpose(str, Enum):
+    """Temporary upload purposes supported by the KB bootstrap API."""
+
+    SUCCESS_STORY_CSV = "success_story_csv"
+    REFERENCE_SQL = "reference_sql"
+    PLATFORM_DOCS = "platform_docs"
+
+
+class KbUploadStatus(str, Enum):
+    """Lifecycle state for temporary KB uploads."""
+
+    AVAILABLE = "available"
+    DELETED = "deleted"
+    EXPIRED = "expired"
+
+
+class KbUploadedFile(BaseModel):
+    """File saved in a KB upload batch."""
+
+    file_id: str = Field(..., description="Opaque file identifier inside the upload batch.")
+    filename: str = Field(..., description="Sanitized display filename.")
+    size: int = Field(..., ge=0, description="Saved file size in bytes.")
+    content_type: Optional[str] = Field(default=None, description="Client-provided content type, if available.")
+    relative_path: str = Field(
+        ...,
+        description="Path relative to the controlled project files root. Never an absolute server path.",
+    )
+
+
+class KbUploadRecord(BaseModel):
+    """Metadata returned for a temporary KB upload."""
+
+    upload_id: str
+    purpose: KbUploadPurpose
+    files: list[KbUploadedFile]
+    created_at: str
+    expires_at: Optional[str] = None
+    status: KbUploadStatus = KbUploadStatus.AVAILABLE
+    owner_user_id: Optional[str] = Field(default=None, description="Upload owner user id.")
+    project_id: str = Field(default="default", description="Project id the upload belongs to.")
+    metadata: dict[str, str] = Field(default_factory=dict, description="Non-sensitive upload metadata.")
+
+
+class KbUploadDeleteResponse(BaseModel):
+    """Response returned after deleting a temporary KB upload."""
+
+    upload_id: str
+    deleted: bool
+
+
 class BootstrapKbInput(BaseModel):
     """POST body for /api/v1/kb/bootstrap.
 
@@ -70,8 +120,24 @@ class BootstrapKbInput(BaseModel):
         default=None,
         description=(
             "Project-root-relative path to a success-story CSV containing historical question/SQL pairs. "
-            "Used by `semantic_model` and `metrics` when bootstrapping from success stories."
+            "Used by `semantic_model` and `metrics` when bootstrapping from success stories. "
+            "Advanced/server-side mode only; browser clients should prefer upload references."
         ),
+    )
+    upload_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Generic upload reference for browser flows. For `semantic_model`/`metrics`, it must point to a "
+            "`success_story_csv` upload; for `reference_sql`, it must point to a `reference_sql` upload."
+        ),
+    )
+    success_story_upload_id: Optional[str] = Field(
+        default=None,
+        description="Upload id for a `success_story_csv` batch used by `semantic_model` or `metrics`.",
+    )
+    success_story_file_id: Optional[str] = Field(
+        default=None,
+        description="Optional file id inside the success-story upload. If omitted, the first CSV is used.",
     )
     subject_tree: Optional[list[str]] = Field(
         default=None,
@@ -87,8 +153,13 @@ class BootstrapKbInput(BaseModel):
         default=None,
         description=(
             "Project-root-relative directory containing `.sql` files for the `reference_sql` component. "
-            "Files are scanned recursively and only `SELECT` statements are indexed."
+            "Files are scanned recursively and only `SELECT` statements are indexed. "
+            "Advanced/server-side mode only; browser clients should prefer upload references."
         ),
+    )
+    reference_sql_upload_id: Optional[str] = Field(
+        default=None,
+        description="Upload id for a `reference_sql` batch. The uploaded directory is used as the SQL source.",
     )
 
 
@@ -111,6 +182,13 @@ class BootstrapDocInput(BaseModel):
     # Optional overrides — if omitted, resolved from AgentConfig.document_configs[platform]
     source_type: Optional[str] = Field(default=None, description="Source type: 'github', 'website', or 'local'.")
     source: Optional[str] = Field(default=None, description="GitHub repo 'owner/repo', URL, or local path.")
+    upload_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Upload id for a `platform_docs` batch. When `source_type` is `local`, the uploaded directory is used "
+            "as the local documentation source and `source` is not required."
+        ),
+    )
     version: Optional[str] = Field(default=None, description="Document version (auto-detected if omitted).")
     github_ref: Optional[str] = Field(default=None, description="Git branch / tag / commit for GitHub sources.")
     github_token: Optional[str] = Field(default=None, description="GitHub API token for authenticated access.")

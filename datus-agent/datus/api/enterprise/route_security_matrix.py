@@ -492,8 +492,31 @@ _add_many(
 
 _add_many(
     "POST",
-    ["/api/v1/kb/bootstrap", "/api/v1/kb/bootstrap-docs"],
+    ["/api/v1/kb/bootstrap", "/api/v1/kb/bootstrap-docs", "/api/v1/kb/uploads"],
     _policy(MODULE_RBAC, PLATFORM_STATUS_GATE, MUTATION_EXECUTION, module_permission="module.kb"),
+)
+_add(
+    "GET",
+    "/api/v1/kb/uploads/{upload_id}",
+    _policy(
+        MODULE_RBAC,
+        SESSION_OWNER,
+        SYSTEM_READONLY,
+        module_permission="module.kb",
+        note="Upload metadata is owner-bound; admins may read across users through the authenticated admin flag.",
+    ),
+)
+_add(
+    "DELETE",
+    "/api/v1/kb/uploads/{upload_id}",
+    _policy(
+        MODULE_RBAC,
+        SESSION_OWNER,
+        PLATFORM_STATUS_GATE,
+        MUTATION_EXECUTION,
+        module_permission="module.kb",
+        note="Upload deletion is owner-bound; admins may delete across users through the authenticated admin flag.",
+    ),
 )
 _add_many(
     "POST",
