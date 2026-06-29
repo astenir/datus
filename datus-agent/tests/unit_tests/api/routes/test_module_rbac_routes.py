@@ -40,6 +40,7 @@ from datus.api.routes import (
 from datus.api.services.cli_service import CLIService, _SQLTaskRecord
 from datus.api.services.dashboard_service import DashboardService
 from datus.schemas.artifact_manifest import ArtifactManifest
+from datus_enterprise.api import agent_routes as enterprise_agent_routes
 from datus_enterprise.config_projection import DatasourceGrantConfigProjector
 
 _UNSET = object()
@@ -215,6 +216,36 @@ def test_chat_rbac_denial_does_not_resolve_datus_service(monkeypatch):
         ]
 
     assert [response.status_code for response in responses] == [403] * len(responses)
+
+
+@pytest.mark.parametrize(
+    ("path", "permissions"),
+    [
+        ("/api/v1/agents/sales_sql/tools", {"module.datasource_catalog"}),
+        ("/api/v1/admin/agents/tools", {"module.chat"}),
+        ("/api/v1/admin/agents/tool-reference", {"module.chat"}),
+    ],
+)
+def test_enterprise_agent_tools_rbac_denial_does_not_resolve_datus_service(monkeypatch, path, permissions):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    ctx = AppContext(user_id="u1", project_id="proj", permissions=permissions)
+    app = FastAPI()
+    app.include_router(enterprise_agent_routes.router)
+
+    async def reject_service(request: Request):
+        raise AssertionError("RBAC denial resolved DatusService")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get(path)
+
+    assert response.status_code == 403
 
 
 @pytest.mark.parametrize(
@@ -2128,7 +2159,17 @@ def test_subject_tree_requires_datasource_catalog(monkeypatch):
     assert response.status_code == 403
 
 
-def test_subject_tree_rbac_denial_does_not_resolve_datus_service(monkeypatch):
+@pytest.mark.parametrize(
+    ("method", "path", "json_body"),
+    [
+        ("GET", "/api/v1/subject-tree", None),
+        ("POST", "/api/v1/subject-tree/metric", {"subject_path": ["finance", "revenue"]}),
+        ("POST", "/api/v1/subject-tree/metric/dimensions", {"subject_path": ["finance", "revenue"]}),
+        ("POST", "/api/v1/subject-tree/metric/preview", {"subject_path": ["finance", "revenue"]}),
+        ("POST", "/api/v1/subject-tree/reference_sql", {"subject_path": ["finance", "daily_revenue"]}),
+    ],
+)
+def test_subject_tree_read_rbac_denial_does_not_resolve_datus_service(monkeypatch, method, path, json_body):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
     app = FastAPI()
@@ -2145,7 +2186,78 @@ def test_subject_tree_rbac_denial_does_not_resolve_datus_service(monkeypatch):
     app.dependency_overrides[deps.get_request_app_context] = override_context
 
     with TestClient(app, raise_server_exceptions=False) as client:
-        response = client.get("/api/v1/subject-tree")
+        response = client.request(method, path, json=json_body)
+
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "json_body"),
+    [
+        ("POST", "/api/v1/subject-tree/create", {"subject_path": ["finance"]}),
+        (
+            "POST",
+            "/api/v1/subject-tree/rename",
+            {"type": "directory", "subject_path": ["finance"], "new_subject_path": ["finance_v2"]},
+        ),
+        ("DELETE", "/api/v1/subject-tree/delete", {"type": "directory", "subject_path": ["finance"]}),
+        (
+            "POST",
+            "/api/v1/subject-tree/metric/create",
+            {"subject_path": ["finance", "revenue"], "yaml": "metrics:\\n  - name: revenue\\n"},
+        ),
+        (
+            "POST",
+            "/api/v1/subject-tree/metric/edit",
+            {"subject_path": ["finance", "revenue"], "yaml": "metrics:\\n  - name: revenue\\n"},
+        ),
+        (
+            "POST",
+            "/api/v1/subject-tree/reference_sql/create",
+            {
+                "subject_path": ["finance"],
+                "name": "daily_revenue",
+                "sql": "SELECT 1",
+                "summary": "daily revenue",
+                "search_text": "daily revenue",
+            },
+        ),
+        (
+            "POST",
+            "/api/v1/subject-tree/reference_sql/edit",
+            {
+                "subject_path": ["finance"],
+                "name": "daily_revenue",
+                "sql": "SELECT 1",
+                "summary": "daily revenue",
+                "search_text": "daily revenue",
+            },
+        ),
+        (
+            "POST",
+            "/api/v1/subject-tree/semantic_model/edit",
+            {"entry_id": "table:orders", "update_values": {"description": "Orders"}},
+        ),
+    ],
+)
+def test_subject_tree_mutation_requires_config_edit_before_service(monkeypatch, method, path, json_body):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.datasource_catalog"})
+    app = FastAPI()
+    app.include_router(subject_routes.router)
+
+    async def reject_service(request: Request):
+        raise AssertionError("RBAC denial resolved DatusService")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.request(method, path, json=json_body)
 
     assert response.status_code == 403
 

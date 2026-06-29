@@ -179,6 +179,16 @@ _SUBJECT_TREE_READ_POLICY = _policy(
     data_boundaries={DATASOURCE_PROJECTION, DATASOURCE_GRANT},
     note="Read-only subject library discovery for an authorized datasource.",
 )
+_SUBJECT_TREE_MUTATION_POLICY = _policy(
+    MODULE_RBAC,
+    DATASOURCE_PROJECTION,
+    DATASOURCE_GRANT,
+    PLATFORM_STATUS_GATE,
+    MUTATION_EXECUTION,
+    module_permission="module.config.edit",
+    data_boundaries={DATASOURCE_PROJECTION, DATASOURCE_GRANT},
+    note="Subject library metadata mutation for an authorized datasource.",
+)
 _ARTIFACT_DASHBOARD_VIEW_POLICY = _policy(
     MODULE_RBAC,
     ARTIFACT_ACL,
@@ -251,10 +261,16 @@ _add("POST", "/api/v1/chat/stop", _CHAT_CONTROL_EXCEPTION_POLICY)
 _add_many("GET", ["/api/v1/chat/sessions", "/api/v1/chat/history"], _CHAT_READ_POLICY)
 _add("DELETE", "/api/v1/chat/sessions/{session_id}", _CHAT_ACTIVE_POLICY)
 
-_add_many("GET", ["/api/v1/agents", "/api/v1/agents/{agent_id}"], _AGENT_READ_POLICY)
+_add_many("GET", ["/api/v1/agents", "/api/v1/agents/{agent_id}", "/api/v1/agents/{agent_id}/tools"], _AGENT_READ_POLICY)
 _add_many(
     "GET",
-    ["/api/v1/admin/agents", "/api/v1/admin/agents/{agent_id}", "/api/v1/admin/agents/{agent_id}/acl"],
+    [
+        "/api/v1/admin/agents",
+        "/api/v1/admin/agents/tools",
+        "/api/v1/admin/agents/tool-reference",
+        "/api/v1/admin/agents/{agent_id}",
+        "/api/v1/admin/agents/{agent_id}/acl",
+    ],
     _ADMIN_AGENT_READ_POLICY,
 )
 _add_many(
@@ -321,6 +337,30 @@ _add(
 _add("GET", "/api/v1/catalog/list", _CATALOG_READ_POLICY)
 _add_many("GET", ["/api/v1/table/detail", "/api/v1/semantic_model"], _CATALOG_READ_POLICY)
 _add("GET", "/api/v1/subject-tree", _SUBJECT_TREE_READ_POLICY)
+_add_many(
+    "POST",
+    [
+        "/api/v1/subject-tree/metric",
+        "/api/v1/subject-tree/metric/dimensions",
+        "/api/v1/subject-tree/metric/preview",
+        "/api/v1/subject-tree/reference_sql",
+    ],
+    _SUBJECT_TREE_READ_POLICY,
+)
+_add_many(
+    "POST",
+    [
+        "/api/v1/subject-tree/create",
+        "/api/v1/subject-tree/rename",
+        "/api/v1/subject-tree/metric/create",
+        "/api/v1/subject-tree/metric/edit",
+        "/api/v1/subject-tree/reference_sql/create",
+        "/api/v1/subject-tree/reference_sql/edit",
+        "/api/v1/subject-tree/semantic_model/edit",
+    ],
+    _SUBJECT_TREE_MUTATION_POLICY,
+)
+_add("DELETE", "/api/v1/subject-tree/delete", _SUBJECT_TREE_MUTATION_POLICY)
 _add(
     "POST",
     "/api/v1/semantic_model",

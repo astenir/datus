@@ -68,6 +68,50 @@ def test_admin_agents_rejects_without_permission(monkeypatch):
     assert "module.admin.agents" in response.json()["detail"]
 
 
+def test_admin_agent_tools_and_tool_reference(monkeypatch):
+    _install_extensions(monkeypatch, InMemoryEnterpriseAgentStore())
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        catalog_response = client.get("/api/v1/admin/agents/tools")
+        reference_response = client.get("/api/v1/admin/agents/tool-reference", params={"node_class": "gen_sql"})
+
+    assert catalog_response.status_code == 200
+    assert catalog_response.json()["success"] is True
+    assert "db_tools" in catalog_response.json()["data"]["tools"]
+    assert reference_response.status_code == 200
+    assert reference_response.json()["success"] is True
+    assert "db_tools.*" in reference_response.json()["data"]["default_tools"]
+    assert "db_tools" in reference_response.json()["data"]["tool_types"]
+
+
+def test_available_agent_tools_require_visible_agent_and_node_permission(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store)
+    agent_store._agents["sales_sql"] = {
+        "agent_id": "sales_sql",
+        "node_class": "gen_sql",
+        "status": "published",
+        "acl": {"visibility": "enterprise"},
+    }
+
+    analyst_ctx = AppContext(user_id="alice", permissions={"module.chat", "module.sql_executor"})
+    with _client(analyst_ctx) as client:
+        response = client.get("/api/v1/agents/sales_sql/tools")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert "semantic_tools.*" in response.json()["data"]["default_tools"]
+
+    chat_only_ctx = AppContext(user_id="bob", permissions={"module.chat"})
+    with _client(chat_only_ctx) as client:
+        denied_response = client.get("/api/v1/agents/sales_sql/tools")
+
+    assert denied_response.status_code == 200
+    assert denied_response.json()["success"] is False
+    assert denied_response.json()["errorCode"] == "RESOURCE_NOT_FOUND"
+
+
 def test_admin_agent_upsert_acl_and_available_list(monkeypatch):
     agent_store = InMemoryEnterpriseAgentStore()
     audit_sink = CollectingAuditSink()
