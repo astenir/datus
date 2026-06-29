@@ -3,8 +3,6 @@ import { computed } from "vue"
 import {
   BookMarkedIcon,
   CheckCircle2Icon,
-  DatabaseIcon,
-  FileTextIcon,
   LoaderCircleIcon,
   PlayIcon,
   RotateCcwIcon,
@@ -38,13 +36,10 @@ import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { useKnowledgeBootstrap } from "@/composables/useKnowledgeBootstrap"
-import { stringifyContent } from "@/lib/chat"
 import type {
   BootstrapBuildMode,
   BootstrapComponent,
   BootstrapStrategy,
-  KnowledgeBootstrapLogEntry,
-  KnowledgeBootstrapLogLevel,
   KnowledgeBootstrapStatus,
 } from "@/types"
 
@@ -77,7 +72,6 @@ const buildModeOptions: ReadonlyArray<{ value: BootstrapBuildMode; label: string
   { value: "check", label: "检查" },
 ]
 
-const recentLogs = computed(() => manager.logs.value.slice(-6).reverse())
 const statusLabel = computed(() => statusText(manager.status.value))
 const activeModeLabel = computed(() => manager.activeMode.value === "kb" ? "业务知识库" : "平台文档")
 const streamLabel = computed(() => manager.activeStreamId.value || "等待事件流")
@@ -112,17 +106,6 @@ function statusBadgeVariant(status: KnowledgeBootstrapStatus): BadgeVariant {
   return "outline"
 }
 
-function logBadgeVariant(level: KnowledgeBootstrapLogLevel): BadgeVariant {
-  if (level === "success") return "secondary"
-  if (level === "error") return "destructive"
-  return "outline"
-}
-
-function payloadText(entry: KnowledgeBootstrapLogEntry) {
-  const text = stringifyContent(entry.payload).trim()
-  return text.length > 180 ? `${text.slice(0, 180)}...` : text
-}
-
 function updateStrategy(value: unknown) {
   if (value === "overwrite" || value === "check" || value === "incremental") {
     manager.forms.value.kb.strategy = value
@@ -147,73 +130,36 @@ function updateComponent(component: BootstrapComponent, value: boolean) {
 </script>
 
 <template>
-  <section class="min-h-0 flex-1 overflow-y-auto p-4">
+  <section class="min-h-0 flex-1 overflow-y-auto">
     <div class="flex flex-col gap-4">
-      <div class="flex flex-wrap items-center gap-3">
-        <div class="min-w-0 flex-1">
-          <h1 class="text-lg font-semibold">知识构建</h1>
-          <p class="text-sm text-muted-foreground">
-            运行业务知识库和平台文档的后端构建任务，事件流会实时写入右侧日志。
-          </p>
+      <div class="flex flex-wrap items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm">
+        <Badge :variant="statusBadgeVariant(manager.status.value)">
+          <component
+            :is="statusIcon"
+            :class="{ 'animate-spin': manager.status.value === 'running' }"
+            data-icon="inline-start"
+          />
+          {{ statusLabel }}
+        </Badge>
+        <Badge variant="outline">{{ activeModeLabel }}</Badge>
+        <span class="min-w-0 truncate text-xs text-muted-foreground">
+          {{ streamLabel }}
+        </span>
+        <div class="ml-auto flex shrink-0 items-center gap-2">
+          <span class="text-xs text-muted-foreground">日志 {{ manager.logs.value.length }}</span>
+          <Button
+            variant="outline"
+            size="sm"
+            :disabled="manager.logs.value.length === 0 || manager.isRunning.value"
+            @click="manager.clearLogs"
+          >
+            <RotateCcwIcon data-icon="inline-start" />
+            清空
+          </Button>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          :disabled="manager.logs.value.length === 0 || manager.isRunning.value"
-          @click="manager.clearLogs"
-        >
-          <RotateCcwIcon data-icon="inline-start" />
-          清空日志
-        </Button>
       </div>
 
-      <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <Card>
-          <CardHeader class="pb-2">
-            <CardTitle class="text-sm">任务状态</CardTitle>
-          </CardHeader>
-          <CardContent class="flex items-end justify-between gap-3">
-            <Badge :variant="statusBadgeVariant(manager.status.value)">
-              <component
-                :is="statusIcon"
-                :class="{ 'animate-spin': manager.status.value === 'running' }"
-                data-icon="inline-start"
-              />
-              {{ statusLabel }}
-            </Badge>
-            <span class="text-xs text-muted-foreground">{{ activeModeLabel }}</span>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader class="pb-2">
-            <CardTitle class="text-sm">事件流</CardTitle>
-          </CardHeader>
-          <CardContent class="flex min-w-0 items-end justify-between gap-3">
-            <span class="min-w-0 truncate text-lg font-semibold">{{ streamLabel }}</span>
-            <span class="text-xs text-muted-foreground">事件流 ID</span>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader class="pb-2">
-            <CardTitle class="text-sm">构建组件</CardTitle>
-          </CardHeader>
-          <CardContent class="flex items-end justify-between gap-3">
-            <span class="text-lg font-semibold">{{ manager.kbComponentCount.value }}</span>
-            <span class="text-xs text-muted-foreground">业务知识库</span>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader class="pb-2">
-            <CardTitle class="text-sm">日志</CardTitle>
-          </CardHeader>
-          <CardContent class="flex items-end justify-between gap-3">
-            <span class="text-lg font-semibold">{{ manager.logs.value.length }}</span>
-            <span class="text-xs text-muted-foreground">事件记录</span>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_29rem]">
+      <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_28rem]">
         <Tabs
           default-value="kb"
           class="flex flex-col gap-4"
@@ -552,94 +498,24 @@ function updateComponent(component: BootstrapComponent, value: boolean) {
           </TabsContent>
         </Tabs>
 
-        <div class="flex flex-col gap-4">
-          <Card>
-            <CardHeader>
-              <CardTitle class="text-lg">最近事件</CardTitle>
-              <CardDescription class="text-sm">
-                {{ manager.latestLog.value?.message || "暂无构建事件" }}
-              </CardDescription>
-            </CardHeader>
-            <CardContent class="flex flex-col gap-3">
-              <div
-                v-if="recentLogs.length === 0"
-                class="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground"
-              >
-                启动构建后显示事件摘要
-              </div>
-              <div
-                v-for="entry in recentLogs"
-                :key="entry.id"
-                class="flex flex-col gap-2 rounded-lg border bg-muted/20 p-3"
-              >
-                <div class="flex min-w-0 items-center gap-2">
-                  <Badge
-                    :variant="logBadgeVariant(entry.level)"
-                    class="shrink-0"
-                  >
-                    {{ entry.event }}
-                  </Badge>
-                  <span class="min-w-0 flex-1 truncate text-sm font-medium">{{ entry.message }}</span>
-                </div>
-                <div class="flex flex-wrap gap-2 text-xs text-muted-foreground">
-                  <span>{{ entry.mode === "kb" ? "业务知识库" : "平台文档" }}</span>
-                  <span v-if="entry.component">{{ entry.component }}</span>
-                  <span v-if="entry.streamId">{{ entry.streamId }}</span>
-                </div>
-                <p
-                  v-if="payloadText(entry)"
-                  class="line-clamp-2 text-xs leading-5 text-muted-foreground"
-                >
-                  {{ payloadText(entry) }}
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Terminal
-            :output="terminalText"
-            :is-streaming="manager.isRunning.value"
-            class="min-h-96"
-            @clear="manager.clearLogs"
-          >
-            <TerminalHeader>
-              <TerminalTitle>构建事件流</TerminalTitle>
-              <div class="flex items-center gap-2">
-                <TerminalStatus />
-                <TerminalActions>
-                  <TerminalCopyButton />
-                  <TerminalClearButton />
-                </TerminalActions>
-              </div>
-            </TerminalHeader>
-            <TerminalContent class="min-h-80 text-xs leading-6" />
-          </Terminal>
-        </div>
-      </div>
-
-      <div class="grid gap-3 md:grid-cols-2">
-        <Card>
-          <CardHeader class="pb-3">
-            <CardTitle class="flex items-center gap-2 text-sm">
-              <DatabaseIcon data-icon="inline-start" />
-              业务知识范围
-            </CardTitle>
-          </CardHeader>
-          <CardContent class="text-sm text-muted-foreground">
-            当前表单会提交组件、策略、目录名、数据库名、主题树、成功案例和 SQL 目录。
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader class="pb-3">
-            <CardTitle class="flex items-center gap-2 text-sm">
-              <FileTextIcon data-icon="inline-start" />
-              文档知识范围
-            </CardTitle>
-          </CardHeader>
-          <CardContent class="text-sm text-muted-foreground">
-            当前表单会提交平台、构建模式、来源、路径、分块和 GitHub 引用；敏感令牌只随请求发送。
-          </CardContent>
-        </Card>
+        <Terminal
+          :output="terminalText"
+          :is-streaming="manager.isRunning.value"
+          class="min-h-[28rem]"
+          @clear="manager.clearLogs"
+        >
+          <TerminalHeader>
+            <TerminalTitle>构建事件流</TerminalTitle>
+            <div class="flex items-center gap-2">
+              <TerminalStatus />
+              <TerminalActions>
+                <TerminalCopyButton />
+                <TerminalClearButton />
+              </TerminalActions>
+            </div>
+          </TerminalHeader>
+          <TerminalContent class="min-h-96 text-xs leading-6" />
+        </Terminal>
       </div>
     </div>
   </section>
