@@ -6,11 +6,22 @@ export type ChatMessage = {
   content: string;
   blocks?: readonly MessageBlock[];
   depth?: number;
+  parentActionId?: string;
 };
 
 export type MessageOperation = "createMessage" | "appendMessage" | "updateMessage";
 
-export type ToolCallBlock = { type: "tool-call"; callToolId?: string; toolName: string; params: unknown };
+export type ToolChildMessage = Omit<ChatMessage, "blocks"> & {
+  blocks?: readonly MessageDisplayBlock[];
+};
+
+export type ToolCallBlock = {
+  type: "tool-call";
+  callToolId?: string;
+  toolName: string;
+  params: unknown;
+  childMessages?: readonly ToolChildMessage[];
+};
 export type ToolResultBlock = {
   type: "tool-result";
   callToolId?: string;
@@ -29,6 +40,7 @@ export type ToolExecutionBlock = {
   shortDesc?: string;
   errorText?: string;
   result?: unknown;
+  childMessages?: readonly ToolChildMessage[];
 };
 
 export type MessageBlock =
@@ -133,6 +145,8 @@ export type SseMessagePayload = {
   role?: Role;
   content?: Array<{ type?: string; payload?: Record<string, unknown> }>;
   depth?: number;
+  parent_action_id?: string | null;
+  parentActionId?: string | null;
 };
 
 export type CatalogRecord = Record<string, unknown>;

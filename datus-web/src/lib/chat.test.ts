@@ -268,6 +268,118 @@ describe("tool execution blocks", () => {
       },
     ]);
   });
+
+  it("groups sub-agent task stream messages under the parent task tool call", () => {
+    const displayMessages = mergeToolExecutionMessages([
+      {
+        id: "parent-task-call",
+        role: "assistant",
+        content: "调用工具 task",
+        blocks: [
+          {
+            type: "tool-call",
+            callToolId: "task-call-1",
+            toolName: "task",
+            params: { type: "gen_sql", prompt: "生成 SQL" },
+          },
+        ],
+      },
+      {
+        id: "child-thinking",
+        role: "assistant",
+        content: "正在理解问题",
+        depth: 1,
+        parentActionId: "task-call-1",
+        blocks: [{ type: "thinking", content: "正在理解问题" }],
+      },
+      {
+        id: "child-tool-call",
+        role: "assistant",
+        content: "调用工具 read_query",
+        depth: 1,
+        parentActionId: "task-call-1",
+        blocks: [
+          {
+            type: "tool-call",
+            callToolId: "read-call-1",
+            toolName: "read_query",
+            params: { sql: "select 1" },
+          },
+        ],
+      },
+      {
+        id: "child-tool-result",
+        role: "assistant",
+        content: "工具结果 read_query",
+        depth: 1,
+        parentActionId: "task-call-1",
+        blocks: [
+          {
+            type: "tool-result",
+            callToolId: "read-call-1",
+            toolName: "read_query",
+            result: { rows: [[1]] },
+          },
+        ],
+      },
+      {
+        id: "parent-task-result",
+        role: "assistant",
+        content: "工具结果 task",
+        blocks: [
+          {
+            type: "tool-result",
+            callToolId: "task-call-1",
+            toolName: "task",
+            result: { success: 1, result: { session_id: "gen_sql_session_1" } },
+          },
+        ],
+      },
+    ]);
+
+    expect(displayMessages).toEqual([
+      {
+        id: "parent-task-call",
+        role: "assistant",
+        content: "调用工具 task",
+        blocks: [
+          {
+            type: "tool-execution",
+            callToolId: "task-call-1",
+            toolName: "task",
+            params: { type: "gen_sql", prompt: "生成 SQL" },
+            result: { success: 1, result: { session_id: "gen_sql_session_1" } },
+            childMessages: [
+              {
+                id: "child-thinking",
+                role: "assistant",
+                content: "正在理解问题",
+                depth: 1,
+                parentActionId: "task-call-1",
+                blocks: [{ type: "thinking", content: "正在理解问题" }],
+              },
+              {
+                id: "child-tool-call",
+                role: "assistant",
+                content: "调用工具 read_query",
+                depth: 1,
+                parentActionId: "task-call-1",
+                blocks: [
+                  {
+                    type: "tool-execution",
+                    callToolId: "read-call-1",
+                    toolName: "read_query",
+                    params: { sql: "select 1" },
+                    result: { rows: [[1]] },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+  });
 });
 
 describe("shouldResetConversationOnAgentChange", () => {
@@ -310,6 +422,29 @@ describe("messageFromPayload", () => {
     );
 
     expect(message).toBeNull();
+  });
+
+  it("preserves parent action ids for sub-agent task stream messages", () => {
+    const message = messageFromPayload(
+      {
+        message_id: "child-1",
+        role: "assistant",
+        content: [{ type: "thinking", payload: { content: "working" } }],
+        depth: 1,
+        parent_action_id: "task-call-1",
+      },
+      "createMessage",
+      "fallback"
+    );
+
+    expect(message).toEqual({
+      id: "child-1",
+      role: "assistant",
+      content: "working",
+      blocks: [{ type: "thinking", content: "working" }],
+      depth: 1,
+      parentActionId: "task-call-1",
+    });
   });
 
   it("uses a fallback id when crypto.randomUUID is unavailable", () => {

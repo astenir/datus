@@ -84,6 +84,66 @@ function callToolIdFromPayload(payload: Record<string, unknown>) {
   return stringifyContent(payload.callToolId ?? payload.call_tool_id).trim() || undefined;
 }
 
+function parentActionIdFromPayload(payload: SseMessagePayload) {
+  const parentActionId = payload.parent_action_id ?? payload.parentActionId;
+  return typeof parentActionId === "string" && parentActionId.trim() ? parentActionId.trim() : undefined;
+}
+
+function childMessagesForParent(
+  messages: readonly ChatMessage[],
+  parentCallIds: ReadonlySet<string>,
+) {
+  const childGroups = new Map<string, ChatMessage[]>();
+
+  for (const message of messages) {
+    if (!message.parentActionId || !message.depth || !parentCallIds.has(message.parentActionId)) continue;
+
+    const group = childGroups.get(message.parentActionId);
+    if (group) {
+      group.push(message);
+    } else {
+      childGroups.set(message.parentActionId, [message]);
+    }
+  }
+
+  const displayGroups = new Map<string, ChatDisplayMessage[]>();
+  for (const [parentActionId, childMessages] of childGroups) {
+    displayGroups.set(parentActionId, mergeToolExecutionMessages(childMessages));
+  }
+
+  return displayGroups;
+}
+
+function mergeToolCallWithResult(
+  block: Extract<MessageBlock, { type: "tool-call" }>,
+  result?: Extract<MessageBlock, { type: "tool-result" }>,
+  childMessages: readonly ChatDisplayMessage[] = [],
+): MessageDisplayBlock {
+  if (!result) {
+    if (childMessages.length === 0) return block;
+    return { ...block, childMessages };
+  }
+
+  const callToolId = block.callToolId;
+  if (!callToolId) {
+    if (childMessages.length === 0) return block;
+    return { ...block, childMessages };
+  }
+
+  const mergedBlock: Extract<MessageDisplayBlock, { type: "tool-execution" }> = {
+    type: "tool-execution",
+    callToolId,
+    toolName: block.toolName,
+    params: block.params,
+    result: result.result,
+  };
+  if (result.duration != null) mergedBlock.duration = result.duration;
+  if (result.shortDesc) mergedBlock.shortDesc = result.shortDesc;
+  if (result.errorText) mergedBlock.errorText = result.errorText;
+  if (childMessages.length > 0) mergedBlock.childMessages = childMessages;
+  return mergedBlock;
+}
+
 export function mergeToolExecutionBlocks(blocks: readonly MessageDisplayBlock[]): MessageDisplayBlock[] {
   const resultByCallId = new Map<string, Extract<MessageBlock, { type: "tool-result" }>>();
   for (const block of blocks) {
@@ -97,20 +157,11 @@ export function mergeToolExecutionBlocks(blocks: readonly MessageDisplayBlock[])
 
   for (const block of blocks) {
     if (block.type === "tool-call" && block.callToolId) {
+      const blockWithCallId = { ...block, callToolId: block.callToolId };
       const result = resultByCallId.get(block.callToolId);
       if (result) {
         consumedResultIds.add(block.callToolId);
-        const mergedBlock: Extract<MessageDisplayBlock, { type: "tool-execution" }> = {
-          type: "tool-execution",
-          callToolId: block.callToolId,
-          toolName: block.toolName,
-          params: block.params,
-          result: result.result,
-        };
-        if (result.duration != null) mergedBlock.duration = result.duration;
-        if (result.shortDesc) mergedBlock.shortDesc = result.shortDesc;
-        if (result.errorText) mergedBlock.errorText = result.errorText;
-        merged.push(mergedBlock);
+        merged.push(mergeToolCallWithResult(blockWithCallId, result, block.childMessages ?? []));
         continue;
       }
     }
@@ -127,19 +178,28 @@ export function mergeToolExecutionBlocks(blocks: readonly MessageDisplayBlock[])
 
 export function mergeToolExecutionMessages(messages: readonly ChatMessage[]): ChatDisplayMessage[] {
   const resultByCallId = new Map<string, { messageIndex: number; block: Extract<MessageBlock, { type: "tool-result" }> }>();
+  const parentCallIds = new Set<string>();
 
   messages.forEach((message, messageIndex) => {
     for (const block of message.blocks ?? []) {
+      if (block.type === "tool-call" && block.callToolId) {
+        parentCallIds.add(block.callToolId);
+      }
       if (block.type === "tool-result" && block.callToolId) {
         resultByCallId.set(block.callToolId, { messageIndex, block });
       }
     }
   });
 
+  const childMessagesByParent = childMessagesForParent(messages, parentCallIds);
   const consumedResultKeys = new Set<string>();
   const mergedMessages: ChatDisplayMessage[] = [];
 
   messages.forEach((message, messageIndex) => {
+    if (message.parentActionId && message.depth && parentCallIds.has(message.parentActionId)) {
+      return;
+    }
+
     if (!message.blocks?.length) {
       mergedMessages.push(message);
       return;
@@ -148,20 +208,16 @@ export function mergeToolExecutionMessages(messages: readonly ChatMessage[]): Ch
     const blocks: MessageDisplayBlock[] = [];
     for (const block of message.blocks) {
       if (block.type === "tool-call" && block.callToolId) {
+        const blockWithCallId = { ...block, callToolId: block.callToolId };
         const result = resultByCallId.get(block.callToolId);
+        const childMessages = childMessagesByParent.get(block.callToolId) ?? [];
         if (result) {
           consumedResultKeys.add(`${result.messageIndex}:${block.callToolId}`);
-          const mergedBlock: Extract<MessageDisplayBlock, { type: "tool-execution" }> = {
-            type: "tool-execution",
-            callToolId: block.callToolId,
-            toolName: block.toolName,
-            params: block.params,
-            result: result.block.result,
-          };
-          if (result.block.duration != null) mergedBlock.duration = result.block.duration;
-          if (result.block.shortDesc) mergedBlock.shortDesc = result.block.shortDesc;
-          if (result.block.errorText) mergedBlock.errorText = result.block.errorText;
-          blocks.push(mergedBlock);
+          blocks.push(mergeToolCallWithResult(blockWithCallId, result.block, childMessages));
+          continue;
+        }
+        if (childMessages.length > 0) {
+          blocks.push(mergeToolCallWithResult(blockWithCallId, undefined, childMessages));
           continue;
         }
       }
@@ -548,7 +604,8 @@ export function messageFromPayload(
     role: payload.role,
     content,
     blocks,
-    depth: payload.depth
+    depth: payload.depth,
+    parentActionId: parentActionIdFromPayload(payload)
   };
 }
 
@@ -581,12 +638,14 @@ function historyPayloadFromUnknown(value: unknown): SseMessagePayload | null {
 
   const messageId = value.message_id ?? value.messageId;
   const depth = typeof value.depth === "number" ? value.depth : undefined;
+  const parentActionId = value.parent_action_id ?? value.parentActionId;
 
   return {
     message_id: typeof messageId === "string" || typeof messageId === "number" ? messageId : undefined,
     role: value.role,
     content: normalizePayloadContent(value.content),
-    depth
+    depth,
+    parent_action_id: typeof parentActionId === "string" ? parentActionId : undefined
   };
 }
 
@@ -672,7 +731,8 @@ export function mergeMessage(messages: ChatMessage[], incoming: ParsedMessage) {
     ...previous,
     content,
     blocks: operation === "appendMessage" ? mergeBlocks(previous.blocks, incomingMessage.blocks) : incomingMessage.blocks ?? previous.blocks,
-    depth: incomingMessage.depth ?? previous.depth
+    depth: incomingMessage.depth ?? previous.depth,
+    parentActionId: incomingMessage.parentActionId ?? previous.parentActionId
   };
   return next;
 }

@@ -38,7 +38,7 @@ import {
 } from "@/components/ai-elements/tool"
 import { MessageResponse } from "@/components/ai-elements/message"
 import UserInteractionBlock from "@/features/chat/UserInteractionBlock.vue"
-import type { MessageDisplayBlock } from "@/types"
+import type { MessageDisplayBlock, ToolChildMessage } from "@/types"
 
 defineProps<{
   block: MessageDisplayBlock
@@ -78,6 +78,12 @@ function subagentSummary(block: Extract<MessageDisplayBlock, { type: "subagent-c
   if (block.toolCount != null) parts.push(`${block.toolCount} tools`)
   if (block.duration != null) parts.push(`${block.duration.toFixed(2)}s`)
   return parts.join(" · ") || "已完成"
+}
+
+function childMessageLabel(message: ToolChildMessage) {
+  if (message.role === "system") return "系统事件"
+  if (message.role === "user") return "用户输入"
+  return message.depth && message.depth > 0 ? "子 Agent" : "关联消息"
 }
 </script>
 
@@ -121,6 +127,38 @@ function subagentSummary(block: Extract<MessageDisplayBlock, { type: "subagent-c
     />
     <ToolContent>
       <ToolInput :input="block.params as never" />
+      <div
+        v-if="block.childMessages?.length"
+        class="space-y-3 border-t border-border/70 p-4"
+      >
+        <div
+          v-for="child in block.childMessages"
+          :key="child.id"
+          class="space-y-2 rounded-md bg-muted/40 p-3"
+        >
+          <div class="text-xs font-medium text-muted-foreground">
+            {{ childMessageLabel(child) }}
+          </div>
+          <div class="space-y-2 text-sm leading-6">
+            <template v-if="child.blocks?.length">
+              <ChatBlockRenderer
+                v-for="(childBlock, index) in child.blocks"
+                :key="`${child.id}-${index}`"
+                :block="childBlock"
+                :streaming="streaming"
+                :thinking-display="thinkingDisplay"
+                :interaction-disabled="interactionDisabled"
+                @submit-interaction="submitInteraction"
+                @open-artifact="openArtifact"
+              />
+            </template>
+            <MessageResponse
+              v-else
+              :content="child.content"
+            />
+          </div>
+        </div>
+      </div>
     </ToolContent>
   </Tool>
 
@@ -146,6 +184,38 @@ function subagentSummary(block: Extract<MessageDisplayBlock, { type: "subagent-c
     />
     <ToolContent>
       <ToolInput :input="block.params as never" />
+      <div
+        v-if="block.childMessages?.length"
+        class="space-y-3 border-t border-border/70 p-4"
+      >
+        <div
+          v-for="child in block.childMessages"
+          :key="child.id"
+          class="space-y-2 rounded-md bg-muted/40 p-3"
+        >
+          <div class="text-xs font-medium text-muted-foreground">
+            {{ childMessageLabel(child) }}
+          </div>
+          <div class="space-y-2 text-sm leading-6">
+            <template v-if="child.blocks?.length">
+              <ChatBlockRenderer
+                v-for="(childBlock, index) in child.blocks"
+                :key="`${child.id}-${index}`"
+                :block="childBlock"
+                :streaming="streaming"
+                :thinking-display="thinkingDisplay"
+                :interaction-disabled="interactionDisabled"
+                @submit-interaction="submitInteraction"
+                @open-artifact="openArtifact"
+              />
+            </template>
+            <MessageResponse
+              v-else
+              :content="child.content"
+            />
+          </div>
+        </div>
+      </div>
       <ToolOutput
         :output="block.result as never"
         :error-text="block.errorText"
