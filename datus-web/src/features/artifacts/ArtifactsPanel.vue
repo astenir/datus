@@ -2,6 +2,13 @@
 import { computed, onMounted, watch } from "vue"
 import { RefreshCwIcon } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
+import {
+  Dialog,
+  DialogDescription,
+  DialogHeader,
+  DialogScrollContent,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { artifactPreviewKey, useArtifacts } from "@/composables/useArtifacts"
 import ArtifactCollectionGrid from "@/features/artifacts/ArtifactCollectionGrid.vue"
 import ArtifactDetailPanel from "@/features/artifacts/ArtifactDetailPanel.vue"
@@ -21,8 +28,11 @@ const emit = defineEmits<{
 
 const artifacts = useArtifacts()
 
+const selectedDetailSlug = computed(() => props.selectedSlug?.trim() || null)
+const detailDialogOpen = computed(() => Boolean(selectedDetailSlug.value))
+const detailKindLabel = computed(() => props.tab === "report" ? "报表" : "仪表盘")
 const selectedPreviewKey = computed(() => {
-  const slug = props.selectedSlug?.trim()
+  const slug = selectedDetailSlug.value
   return slug ? artifactPreviewKey(props.tab, slug) : null
 })
 
@@ -44,18 +54,24 @@ function openArtifact(tab: ArtifactViewTab, slug: string) {
 }
 
 function runDashboardQuery(querySlug: string, params: Record<string, unknown>) {
-  if (props.tab !== "dashboard" || !props.selectedSlug) return
-  void artifacts.runDashboardQuery(props.selectedSlug, querySlug, params)
+  if (props.tab !== "dashboard" || !selectedDetailSlug.value) return
+  void artifacts.runDashboardQuery(selectedDetailSlug.value, querySlug, params)
 }
 
 function openPreview(tab: ArtifactViewTab, slug: string | null | undefined) {
   void artifacts.openHtmlPreview(tab, slug)
 }
 
+function handleDetailDialogOpen(open: boolean) {
+  if (!open) {
+    emit("close-detail")
+  }
+}
+
 onMounted(artifacts.loadArtifacts)
 
 watch(
-  () => [props.tab, props.selectedSlug] as const,
+  () => [props.tab, selectedDetailSlug.value] as const,
   ([tab, slug]) => {
     void artifacts.loadDetail(tab, slug)
   },
@@ -79,54 +95,44 @@ watch(
       </div>
 
       <template v-if="props.tab === 'dashboard'">
-        <div
-          class="grid items-start gap-4"
-          :class="props.selectedSlug ? 'lg:grid-cols-[minmax(0,1fr)_28rem]' : ''"
-        >
-          <ArtifactCollectionGrid
-            :items="artifacts.dashboards.value"
-            :loading="artifacts.listLoading.value"
-            :opening-slug="dashboardOpeningSlug"
-            empty-title="暂无仪表盘"
-            @select="openArtifact('dashboard', $event)"
-            @open-preview="openPreview('dashboard', $event)"
-          />
-          <ArtifactDetailPanel
-            v-if="props.selectedSlug"
-            tab="dashboard"
-            :slug="props.selectedSlug"
-            :detail="artifacts.activeDetail.value"
-            :loading="artifacts.detailLoading.value"
-            :error="artifacts.detailError.value"
-            :preview-opening="selectedPreviewOpening"
-            :query-result="artifacts.queryResult.value"
-            :query-loading="artifacts.queryLoading.value"
-            :query-error="artifacts.queryError.value"
-            :active-query-slug="artifacts.activeQuerySlug.value"
-            @close="emit('close-detail')"
-            @open-preview="openPreview('dashboard', props.selectedSlug)"
-            @run-dashboard-query="runDashboardQuery"
-          />
-        </div>
+        <ArtifactCollectionGrid
+          :items="artifacts.dashboards.value"
+          :loading="artifacts.listLoading.value"
+          :opening-slug="dashboardOpeningSlug"
+          empty-title="暂无仪表盘"
+          @select="openArtifact('dashboard', $event)"
+          @open-preview="openPreview('dashboard', $event)"
+        />
       </template>
 
       <template v-else>
-        <div
-          class="grid items-start gap-4"
-          :class="props.selectedSlug ? 'lg:grid-cols-[minmax(0,1fr)_28rem]' : ''"
-        >
-          <ArtifactCollectionGrid
-            :items="artifacts.reports.value"
-            :loading="artifacts.listLoading.value"
-            :opening-slug="reportOpeningSlug"
-            empty-title="暂无报表"
-            @select="openArtifact('report', $event)"
-            @open-preview="openPreview('report', $event)"
-          />
+        <ArtifactCollectionGrid
+          :items="artifacts.reports.value"
+          :loading="artifacts.listLoading.value"
+          :opening-slug="reportOpeningSlug"
+          empty-title="暂无报表"
+          @select="openArtifact('report', $event)"
+          @open-preview="openPreview('report', $event)"
+        />
+      </template>
+    </div>
+
+    <Dialog
+      :open="detailDialogOpen"
+      @update:open="handleDetailDialogOpen"
+    >
+      <DialogScrollContent class="max-h-[88vh] w-[calc(100vw-2rem)] min-w-0 overflow-y-auto sm:max-w-2xl lg:max-w-4xl">
+        <DialogHeader class="min-w-0 pr-8">
+          <DialogTitle>{{ detailKindLabel }}详情</DialogTitle>
+          <DialogDescription class="truncate">
+            {{ selectedDetailSlug ?? "未选择产物" }}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div class="pr-1">
           <ArtifactDetailPanel
-            v-if="props.selectedSlug"
-            tab="report"
-            :slug="props.selectedSlug"
+            v-if="selectedDetailSlug"
+            :tab="props.tab"
             :detail="artifacts.activeDetail.value"
             :loading="artifacts.detailLoading.value"
             :error="artifacts.detailError.value"
@@ -135,11 +141,11 @@ watch(
             :query-loading="artifacts.queryLoading.value"
             :query-error="artifacts.queryError.value"
             :active-query-slug="artifacts.activeQuerySlug.value"
-            @close="emit('close-detail')"
-            @open-preview="openPreview('report', props.selectedSlug)"
+            @open-preview="openPreview(props.tab, selectedDetailSlug)"
+            @run-dashboard-query="runDashboardQuery"
           />
         </div>
-      </template>
-    </div>
+      </DialogScrollContent>
+    </Dialog>
   </section>
 </template>

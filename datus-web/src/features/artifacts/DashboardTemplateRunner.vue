@@ -46,6 +46,7 @@ const localError = shallowRef<string | null>(null)
 const selectedTemplate = computed(() =>
   props.templates.find(template => template.slug === selectedSlug.value) ?? null
 )
+const selectedTemplateParams = computed(() => selectedTemplate.value?.params ?? [])
 const visibleResult = computed(() => props.activeSlug === selectedSlug.value ? props.result : null)
 const resultColumns = computed(() => visibleResult.value?.columns ?? [])
 const resultRows = computed(() => visibleResult.value?.rows?.slice(0, 5) ?? [])
@@ -187,14 +188,14 @@ watch(
           class="flex flex-wrap gap-1.5"
         >
           <Badge
-            v-for="param in selectedTemplate.params"
+            v-for="param in selectedTemplateParams"
             :key="param.name"
             variant="outline"
           >
             {{ param.name }} · {{ param.type }}
           </Badge>
           <Badge
-            v-if="selectedTemplate.params.length === 0"
+            v-if="selectedTemplateParams.length === 0"
             variant="outline"
           >
             无参数
