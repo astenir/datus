@@ -32,6 +32,7 @@ from datus.api.routes.config_routes import (
     update_datasources_endpoint,
     update_models_endpoint,
 )
+from datus.configuration.agent_config import DbConfig
 
 
 def _mock_svc(datasources, *, target="deepseek", current_datasource="starrocks", models=None, home="~/.datus"):
@@ -699,6 +700,37 @@ async def test_test_datasource_connectivity_ok(monkeypatch):
     assert result.data == {"ok": True}
     assert captured["payload"]["type"] == "duckdb"
     assert captured["payload"]["uri"] == "/tmp/test.duckdb"
+
+
+def test_probe_datasource_sync_uses_flat_db_config_map(monkeypatch):
+    """DBManager expects {datasource: DbConfig}, not a nested datasource/database map."""
+    captured = {}
+
+    class FakeConn:
+        def test_connection(self):
+            captured["tested"] = True
+
+    class FakeDBManager:
+        def __init__(self, db_configs):
+            captured["db_configs"] = db_configs
+
+        def get_conn(self, datasource):
+            captured["datasource"] = datasource
+            return FakeConn()
+
+        def close(self):
+            captured["closed"] = True
+
+    monkeypatch.setattr("datus.tools.db_tools.db_manager.DBManager", FakeDBManager)
+
+    config_routes._probe_datasource_sync({"type": "postgresql", "host": "localhost", "database": "postgres"})
+
+    assert captured["datasource"] == "_probe_"
+    assert captured["tested"] is True
+    assert captured["closed"] is True
+    assert set(captured["db_configs"]) == {"_probe_"}
+    assert isinstance(captured["db_configs"]["_probe_"], DbConfig)
+    assert captured["db_configs"]["_probe_"].type == "postgresql"
 
 
 @pytest.mark.asyncio

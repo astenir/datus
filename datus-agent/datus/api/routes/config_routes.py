@@ -95,7 +95,7 @@ def _probe_datasource_sync(payload: Dict[str, Any]) -> None:
     kwargs.setdefault("name", "_probe_")
     db_config = DbConfig.filter_kwargs(DbConfig, kwargs)
 
-    manager = DBManager({"_probe_": {"_probe_": db_config}})
+    manager = DBManager({"_probe_": db_config})
     try:
         conn = manager.get_conn("_probe_")
         conn.test_connection()
