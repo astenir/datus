@@ -759,7 +759,7 @@ async def list_sessions(
 ) -> Result[ChatSessionData]:
     try:
         result = await asyncio.wait_for(
-            asyncio.to_thread(svc.chat.list_sessions, user_id=ctx.user_id, subagent_id=subagent_id),
+            svc.chat.list_sessions_async(user_id=ctx.user_id, subagent_id=subagent_id),
             timeout=_FUSE_IO_TIMEOUT,
         )
         return await _filter_session_list_by_owner_store(svc, ctx, result)
@@ -816,7 +816,7 @@ async def delete_session(
         return access.error
     try:
         result = await asyncio.wait_for(
-            asyncio.to_thread(svc.chat.delete_session, session_id, user_id=access.user_id),
+            svc.chat.delete_session_async(session_id, user_id=access.user_id),
             timeout=_FUSE_IO_TIMEOUT,
         )
         if result.success:
@@ -848,7 +848,7 @@ async def get_chat_history(
         return access.error
     try:
         return await asyncio.wait_for(
-            asyncio.to_thread(svc.chat.get_history, session_id, user_id=access.user_id),
+            svc.chat.get_history_async(session_id, user_id=access.user_id),
             timeout=_FUSE_IO_TIMEOUT,
         )
     except TimeoutError:

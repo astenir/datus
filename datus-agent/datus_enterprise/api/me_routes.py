@@ -69,7 +69,7 @@ async def get_my_features(ctx: RequestContextDep) -> Result[dict[str, bool]]:
 
 @router.get("/me/sessions", response_model=Result[ChatSessionData], summary="Get Current User Sessions")
 async def get_my_sessions(svc: ServiceDep, ctx: AppContextDep) -> Result[ChatSessionData]:
-    return svc.chat.list_sessions(user_id=ctx.user_id, subagent_id=None)
+    return await svc.chat.list_sessions_async(user_id=ctx.user_id, subagent_id=None)
 
 
 @router.get("/me/usage", response_model=Result[list[dict[str, Any]]], summary="Get Current User Usage")

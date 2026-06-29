@@ -200,7 +200,7 @@ def _mock_svc_with_nodes(agentic_nodes=None):
     svc = MagicMock()
     svc.agent_config = SimpleNamespace(agentic_nodes=agentic_nodes or {}, principal={}, sql_policy_config=None)
     svc.task_manager.get_task.return_value = None
-    svc.chat.session_exists.return_value = True
+    svc.chat.session_exists_async = AsyncMock(return_value=True)
     return svc
 
 
@@ -314,7 +314,7 @@ class TestStreamChatSessionOwner:
         svc = _mock_svc_with_nodes()
         svc.project_id = "project-1"
         svc.task_manager.get_task.return_value = None
-        svc.chat.session_exists.return_value = False
+        svc.chat.session_exists_async = AsyncMock(return_value=False)
         svc.chat.stream_chat = MagicMock(side_effect=AssertionError("upstream invoked"))
         request = StreamChatInput(message="hi", session_id="s1")
 
@@ -740,7 +740,7 @@ class TestChatRouteAcceptance:
 
         svc = _mock_svc_with_nodes()
         svc.task_manager.get_task.return_value = None
-        svc.chat.session_exists.return_value = False
+        svc.chat.session_exists_async = AsyncMock(return_value=False)
         svc.chat.stream_chat = MagicMock(return_value=fake_chat_stream())
         ctx = _mock_ctx(user_id="user-1", permissions={"module.chat", "module.sql_executor"})
         request = StreamChatInput(
@@ -920,7 +920,7 @@ class TestSessionOwnerAccess:
         task.owner_user_id = "alice"
         svc = _mock_svc(task=task)
         svc.project_id = "project-1"
-        svc.chat.session_exists.return_value = False
+        svc.chat.session_exists_async = AsyncMock(return_value=False)
 
         result = await insert_message(
             TestInsertMessageEndpoint._make_request("hello"),
@@ -1010,7 +1010,7 @@ class TestSubmitToolResultEndpoint:
 
 
 class TestListSessions:
-    """list_sessions offloads the blocking call to a thread and handles FUSE timeout."""
+    """list_sessions awaits the chat service and handles FUSE timeout."""
 
     @pytest.mark.asyncio
     async def test_success_returns_service_result(self):
@@ -1018,13 +1018,13 @@ class TestListSessions:
         ctx = MagicMock()
         ctx.user_id = "user1"
         expected = Result[ChatSessionData](success=True, data=ChatSessionData(sessions=[], total_count=0))
-        svc.chat.list_sessions.return_value = expected
+        svc.chat.list_sessions_async = AsyncMock(return_value=expected)
 
         result = await list_sessions(svc, ctx, subagent_id=None)
 
         assert result.success is True
         assert result is expected
-        svc.chat.list_sessions.assert_called_once_with(user_id="user1", subagent_id=None)
+        svc.chat.list_sessions_async.assert_awaited_once_with(user_id="user1", subagent_id=None)
 
     @pytest.mark.asyncio
     async def test_timeout_returns_request_timeout_error(self):
@@ -1045,13 +1045,13 @@ class TestListSessions:
         svc = MagicMock()
         ctx = MagicMock()
         ctx.user_id = "user2"
-        svc.chat.list_sessions.return_value = Result[ChatSessionData](
-            success=True, data=ChatSessionData(sessions=[], total_count=0)
+        svc.chat.list_sessions_async = AsyncMock(
+            return_value=Result[ChatSessionData](success=True, data=ChatSessionData(sessions=[], total_count=0))
         )
 
         await list_sessions(svc, ctx, subagent_id="gen_sql")
 
-        svc.chat.list_sessions.assert_called_once_with(user_id="user2", subagent_id="gen_sql")
+        svc.chat.list_sessions_async.assert_awaited_once_with(user_id="user2", subagent_id="gen_sql")
 
     @pytest.mark.asyncio
     async def test_timeout_result_type_is_result(self):
@@ -1076,23 +1076,25 @@ class TestListSessions:
         svc = MagicMock()
         svc.project_id = "project-1"
         ctx = _mock_ctx(user_id="alice")
-        svc.chat.list_sessions.return_value = Result[ChatSessionData](
-            success=True,
-            data=ChatSessionData(
-                sessions=[
-                    ChatSessionItemInfo(
-                        session_id="owned",
-                        created_at="2026-01-01T00:00:00Z",
-                        last_updated="2026-01-01T00:00:00Z",
-                    ),
-                    ChatSessionItemInfo(
-                        session_id="orphan",
-                        created_at="2026-01-01T00:00:00Z",
-                        last_updated="2026-01-01T00:00:00Z",
-                    ),
-                ],
-                total_count=2,
-            ),
+        svc.chat.list_sessions_async = AsyncMock(
+            return_value=Result[ChatSessionData](
+                success=True,
+                data=ChatSessionData(
+                    sessions=[
+                        ChatSessionItemInfo(
+                            session_id="owned",
+                            created_at="2026-01-01T00:00:00Z",
+                            last_updated="2026-01-01T00:00:00Z",
+                        ),
+                        ChatSessionItemInfo(
+                            session_id="orphan",
+                            created_at="2026-01-01T00:00:00Z",
+                            last_updated="2026-01-01T00:00:00Z",
+                        ),
+                    ],
+                    total_count=2,
+                ),
+            )
         )
 
         result = await list_sessions(svc, ctx, subagent_id=None)
@@ -1108,22 +1110,22 @@ class TestListSessions:
 
 
 class TestDeleteSession:
-    """delete_session offloads the blocking call to a thread and handles FUSE timeout."""
+    """delete_session awaits the chat service and handles FUSE timeout."""
 
     @pytest.mark.asyncio
     async def test_success_returns_service_result(self):
         svc = MagicMock()
         ctx = _mock_ctx(user_id="user1")
         expected = Result[ChatSessionData](success=True, data=ChatSessionData(sessions=[], total_count=0))
-        svc.chat.delete_session.return_value = expected
-        svc.chat.session_exists.return_value = True
+        svc.chat.delete_session_async = AsyncMock(return_value=expected)
+        svc.chat.session_exists_async = AsyncMock(return_value=True)
         svc.task_manager.get_task.return_value = None
 
         result = await delete_session("session123", svc, ctx)
 
         assert result.success is True
         assert result is expected
-        svc.chat.delete_session.assert_called_once_with("session123", user_id="user1")
+        svc.chat.delete_session_async.assert_awaited_once_with("session123", user_id="user1")
 
     @pytest.mark.asyncio
     async def test_admin_delete_uses_target_owner_scope(self, monkeypatch):
@@ -1140,7 +1142,7 @@ class TestDeleteSession:
         svc.project_id = "project-1"
         svc.task_manager.get_task.return_value = None
         expected = Result[ChatSessionData](success=True, data=ChatSessionData(sessions=[], total_count=0))
-        svc.chat.delete_session.return_value = expected
+        svc.chat.delete_session_async = AsyncMock(return_value=expected)
 
         result = await delete_session(
             "session123",
@@ -1149,7 +1151,7 @@ class TestDeleteSession:
         )
 
         assert result.success is True
-        svc.chat.delete_session.assert_called_once_with("session123", user_id="alice")
+        svc.chat.delete_session_async.assert_awaited_once_with("session123", user_id="alice")
 
     @pytest.mark.asyncio
     async def test_pg_body_store_delete_denies_when_owner_index_missing(self, monkeypatch):
@@ -1160,20 +1162,20 @@ class TestDeleteSession:
         svc = MagicMock()
         svc.project_id = "project-1"
         svc.task_manager.get_task.return_value = None
-        svc.chat.session_exists.return_value = True
+        svc.chat.session_exists_async = AsyncMock(return_value=True)
 
         result = await delete_session("orphan", svc, _mock_ctx(user_id="alice"))
 
         assert result.success is False
         assert result.errorCode == "RESOURCE_NOT_FOUND"
-        svc.chat.delete_session.assert_not_called()
+        svc.chat.delete_session_async.assert_not_called()
         assert await owner_store.get_owner("project-1", "orphan") is None
 
     @pytest.mark.asyncio
     async def test_timeout_returns_request_timeout_error(self):
         svc = MagicMock()
         ctx = _mock_ctx(user_id="user1")
-        svc.chat.session_exists.return_value = True
+        svc.chat.session_exists_async = AsyncMock(return_value=True)
         svc.task_manager.get_task.return_value = None
 
         with patch("datus.api.routes.chat_routes.asyncio.wait_for", side_effect=_timeout_wait_for) as mock_wf:
@@ -1188,7 +1190,7 @@ class TestDeleteSession:
     async def test_timeout_result_type_is_result(self):
         svc = MagicMock()
         ctx = _mock_ctx(user_id="u1")
-        svc.chat.session_exists.return_value = True
+        svc.chat.session_exists_async = AsyncMock(return_value=True)
         svc.task_manager.get_task.return_value = None
 
         with patch("datus.api.routes.chat_routes.asyncio.wait_for", side_effect=_timeout_wait_for) as mock_wf:
@@ -1205,22 +1207,22 @@ class TestDeleteSession:
 
 
 class TestGetChatHistory:
-    """get_chat_history offloads the blocking call to a thread and handles FUSE timeout."""
+    """get_chat_history awaits the chat service and handles FUSE timeout."""
 
     @pytest.mark.asyncio
     async def test_success_returns_service_result(self):
         svc = MagicMock()
         ctx = _mock_ctx(user_id="user1")
         expected = Result[ChatHistoryData](success=True, data=ChatHistoryData(messages=[]))
-        svc.chat.get_history.return_value = expected
-        svc.chat.session_exists.return_value = True
+        svc.chat.get_history_async = AsyncMock(return_value=expected)
+        svc.chat.session_exists_async = AsyncMock(return_value=True)
         svc.task_manager.get_task.return_value = None
 
         result = await get_chat_history(svc, ctx, session_id="sess1")
 
         assert result.success is True
         assert result is expected
-        svc.chat.get_history.assert_called_once_with("sess1", user_id="user1")
+        svc.chat.get_history_async.assert_awaited_once_with("sess1", user_id="user1")
 
     @pytest.mark.asyncio
     async def test_pg_body_store_history_denies_when_owner_index_missing(self, monkeypatch):
@@ -1231,13 +1233,13 @@ class TestGetChatHistory:
         svc = MagicMock()
         svc.project_id = "project-1"
         svc.task_manager.get_task.return_value = None
-        svc.chat.session_exists.return_value = True
+        svc.chat.session_exists_async = AsyncMock(return_value=True)
 
         result = await get_chat_history(svc, _mock_ctx(user_id="alice"), session_id="orphan")
 
         assert result.success is False
         assert result.errorCode == "RESOURCE_NOT_FOUND"
-        svc.chat.get_history.assert_not_called()
+        svc.chat.get_history_async.assert_not_called()
         assert await owner_store.get_owner("project-1", "orphan") is None
 
     @pytest.mark.asyncio
@@ -1258,13 +1260,13 @@ class TestGetChatHistory:
         svc = MagicMock()
         svc.project_id = "project-1"
         svc.task_manager.get_task.return_value = None
-        svc.chat.session_exists.return_value = True
+        svc.chat.session_exists_async = AsyncMock(return_value=True)
 
         result = await get_chat_history(svc, _mock_ctx(user_id="alice"), session_id="orphan")
 
         assert result.success is False
         assert result.errorCode == "RESOURCE_NOT_FOUND"
-        svc.chat.get_history.assert_not_called()
+        svc.chat.get_history_async.assert_not_called()
         assert audit_sink.events[-1].reason == "session owner store unavailable"
 
     @pytest.mark.asyncio
@@ -1285,20 +1287,20 @@ class TestGetChatHistory:
         svc = MagicMock()
         svc.project_id = "project-1"
         svc.task_manager.get_task.return_value = None
-        svc.chat.session_exists.return_value = True
+        svc.chat.session_exists_async = AsyncMock(return_value=True)
 
         result = await get_chat_history(svc, _mock_ctx(user_id="alice"), session_id="legacy")
 
         assert result.success is False
         assert result.errorCode == "RESOURCE_NOT_FOUND"
-        svc.chat.get_history.assert_not_called()
+        svc.chat.get_history_async.assert_not_called()
         assert audit_sink.events[-1].reason == "session owner store unavailable"
 
     @pytest.mark.asyncio
     async def test_timeout_returns_request_timeout_error(self):
         svc = MagicMock()
         ctx = _mock_ctx(user_id="user1")
-        svc.chat.session_exists.return_value = True
+        svc.chat.session_exists_async = AsyncMock(return_value=True)
         svc.task_manager.get_task.return_value = None
 
         with patch("datus.api.routes.chat_routes.asyncio.wait_for", side_effect=_timeout_wait_for) as mock_wf:
@@ -1313,7 +1315,7 @@ class TestGetChatHistory:
     async def test_timeout_result_type_is_result(self):
         svc = MagicMock()
         ctx = _mock_ctx(user_id="u1")
-        svc.chat.session_exists.return_value = True
+        svc.chat.session_exists_async = AsyncMock(return_value=True)
         svc.task_manager.get_task.return_value = None
 
         with patch("datus.api.routes.chat_routes.asyncio.wait_for", side_effect=_timeout_wait_for) as mock_wf:

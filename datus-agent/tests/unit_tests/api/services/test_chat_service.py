@@ -171,6 +171,77 @@ class TestChatServiceListSessions:
         parsed = datetime.fromisoformat(target.created_at.replace("Z", "+00:00"))
         assert parsed == datetime(2026, 4, 30, 12, 34, 56, tzinfo=timezone.utc)
 
+    @pytest.mark.asyncio
+    async def test_list_sessions_async_uses_body_store_directly(self, real_agent_config):
+        """PG body-store API reads must not go through SessionManager.run_async bridges."""
+
+        class BodyStore:
+            async def list_session_ids(self, **kwargs):
+                assert kwargs == {"project_id": "project-1", "scope": "alice"}
+                return ["s2", "s1"]
+
+            async def get_session_info(self, **kwargs):
+                if kwargs["session_id"] == "s2":
+                    return {
+                        "exists": True,
+                        "created_at": "2026-01-02T00:00:00Z",
+                        "updated_at": "2026-01-02T00:01:00Z",
+                        "first_user_message": "newer",
+                        "message_count": 2,
+                        "total_tokens": 20,
+                    }
+                return {
+                    "exists": True,
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-01T00:01:00Z",
+                    "first_user_message": "older",
+                    "message_count": 1,
+                    "total_tokens": 10,
+                }
+
+        svc = ChatService(
+            agent_config=real_agent_config,
+            task_manager=ChatTaskManager(),
+            project_id="project-1",
+            session_body_store=BodyStore(),
+        )
+
+        with patch("datus.api.services.chat_service.SessionManager", side_effect=AssertionError("sync bridge used")):
+            result = await svc.list_sessions_async(user_id="alice")
+
+        assert result.success is True
+        assert [item.session_id for item in result.data.sessions] == ["s2", "s1"]
+        assert result.data.total_count == 2
+
+    @pytest.mark.asyncio
+    async def test_delete_session_async_uses_body_store_directly(self, real_agent_config):
+        """PG body-store deletes must stay on the caller event loop."""
+
+        class BodyStore:
+            def __init__(self):
+                self.deleted = []
+
+            async def session_exists(self, **kwargs):
+                assert kwargs == {"project_id": "project-1", "scope": "alice", "session_id": "s1"}
+                return True
+
+            async def delete_session(self, **kwargs):
+                self.deleted.append(kwargs)
+
+        body_store = BodyStore()
+        svc = ChatService(
+            agent_config=real_agent_config,
+            task_manager=ChatTaskManager(),
+            project_id="project-1",
+            session_body_store=body_store,
+        )
+
+        with patch("datus.api.services.chat_service.SessionManager", side_effect=AssertionError("sync bridge used")):
+            result = await svc.delete_session_async("s1", user_id="alice")
+
+        assert result.success is True
+        assert body_store.deleted == [{"project_id": "project-1", "scope": "alice", "session_id": "s1"}]
+
 
 class TestChatServiceDeleteSession:
     """Tests for delete_session."""

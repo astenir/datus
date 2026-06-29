@@ -145,13 +145,15 @@ def test_current_user_metadata_routes_do_not_resolve_datus_service(monkeypatch, 
 def test_me_sessions_uses_current_user_scope(monkeypatch):
     _install_extensions(monkeypatch)
     calls = []
+
+    async def list_sessions_async(user_id=None, subagent_id=None):
+        calls.append((user_id, subagent_id))
+        return Result[ChatSessionData](success=True, data=ChatSessionData(sessions=[]))
+
     svc = SimpleNamespace(
         agent_config=SimpleNamespace(),
         chat=SimpleNamespace(
-            list_sessions=lambda user_id=None, subagent_id=None: (
-                calls.append((user_id, subagent_id))
-                or Result[ChatSessionData](success=True, data=ChatSessionData(sessions=[]))
-            )
+            list_sessions_async=list_sessions_async,
         ),
     )
     ctx = AppContext(user_id="u1")
