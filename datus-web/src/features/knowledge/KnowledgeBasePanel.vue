@@ -519,7 +519,7 @@ onMounted(() => {
             运行业务知识库和平台文档构建任务。
           </DialogDescription>
         </DialogHeader>
-        <KnowledgeBootstrapPanel />
+        <KnowledgeBootstrapPanel :datasource="workspace.currentDatasource.value" />
       </DialogScrollContent>
     </Dialog>
   </section>

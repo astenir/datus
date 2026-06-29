@@ -442,7 +442,7 @@ export type KnowledgeBootstrapStatus = "idle" | "running" | "completed" | "cance
 export type KnowledgeBootstrapLogLevel = "info" | "success" | "warning" | "error";
 
 export type KnowledgeBootstrapKbForm = {
-  components: BootstrapComponent[];
+  component: BootstrapComponent;
   strategy: BootstrapStrategy;
   schemaLinkingType: "table" | "view" | "mv" | "full";
   catalog: string;

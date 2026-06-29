@@ -22,7 +22,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field"
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -32,7 +32,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { useKnowledgeBootstrap } from "@/composables/useKnowledgeBootstrap"
@@ -44,6 +43,10 @@ import type {
 } from "@/types"
 
 type BadgeVariant = "default" | "secondary" | "destructive" | "outline"
+
+const props = defineProps<{
+  datasource?: string | null
+}>()
 
 const manager = useKnowledgeBootstrap()
 
@@ -60,13 +63,6 @@ const strategyOptions: ReadonlyArray<{ value: BootstrapStrategy; label: string }
   { value: "overwrite", label: "覆盖" },
 ]
 
-const schemaLinkingOptions = [
-  { value: "full", label: "完整" },
-  { value: "table", label: "表" },
-  { value: "view", label: "视图" },
-  { value: "mv", label: "物化视图" },
-] as const
-
 const buildModeOptions: ReadonlyArray<{ value: BootstrapBuildMode; label: string }> = [
   { value: "overwrite", label: "覆盖" },
   { value: "check", label: "检查" },
@@ -76,6 +72,10 @@ const statusLabel = computed(() => statusText(manager.status.value))
 const activeModeLabel = computed(() => manager.activeMode.value === "kb" ? "业务知识库" : "平台文档")
 const streamLabel = computed(() => manager.activeStreamId.value || "等待事件流")
 const terminalText = computed(() => manager.terminalOutput.value || "等待构建事件...")
+const currentDatasourceLabel = computed(() => props.datasource?.trim() || "后端默认数据源")
+const selectedKbComponent = computed(() =>
+  kbComponentOptions.find((option) => option.value === manager.forms.value.kb.component) ?? kbComponentOptions[0],
+)
 const statusIcon = computed(() => {
   if (manager.status.value === "running") return LoaderCircleIcon
   if (manager.status.value === "completed") return CheckCircle2Icon
@@ -106,15 +106,15 @@ function statusBadgeVariant(status: KnowledgeBootstrapStatus): BadgeVariant {
   return "outline"
 }
 
-function updateStrategy(value: unknown) {
-  if (value === "overwrite" || value === "check" || value === "incremental") {
-    manager.forms.value.kb.strategy = value
+function updateKbComponent(value: unknown) {
+  if (value === "metadata" || value === "semantic_model" || value === "metrics" || value === "reference_sql") {
+    manager.forms.value.kb.component = value
   }
 }
 
-function updateSchemaLinkingType(value: unknown) {
-  if (value === "table" || value === "view" || value === "mv" || value === "full") {
-    manager.forms.value.kb.schemaLinkingType = value
+function updateStrategy(value: unknown) {
+  if (value === "overwrite" || value === "check" || value === "incremental") {
+    manager.forms.value.kb.strategy = value
   }
 }
 
@@ -122,10 +122,6 @@ function updateBuildMode(value: unknown) {
   if (value === "overwrite" || value === "check") {
     manager.forms.value.docs.buildMode = value
   }
-}
-
-function updateComponent(component: BootstrapComponent, value: boolean) {
-  manager.toggleKbComponent(component, value)
 }
 </script>
 
@@ -174,39 +170,48 @@ function updateComponent(component: BootstrapComponent, value: boolean) {
               <CardHeader>
                 <CardTitle class="text-lg">业务知识库构建</CardTitle>
                 <CardDescription class="text-sm">
-                  提交后端 `/api/v1/kb/bootstrap`，可按目录、库名和构建策略控制范围。
+                  提交后端 `/api/v1/kb/bootstrap`，每次只构建一个知识组件。
                 </CardDescription>
               </CardHeader>
               <CardContent class="flex flex-col gap-4">
-                <FieldSet>
-                  <FieldLegend>组件</FieldLegend>
-                  <div class="grid gap-3 md:grid-cols-2">
-                    <Field
-                      v-for="component in kbComponentOptions"
-                      :key="component.value"
-                      class="rounded-lg border bg-muted/20 p-3"
-                    >
-                      <div class="flex items-start justify-between gap-3">
-                        <div class="min-w-0">
-                          <FieldLabel :for="`kb-component-${component.value}`">{{ component.label }}</FieldLabel>
-                          <FieldDescription>{{ component.description }}</FieldDescription>
-                        </div>
-                        <Switch
-                          :id="`kb-component-${component.value}`"
-                          size="sm"
-                          :model-value="manager.forms.value.kb.components.includes(component.value)"
-                          :aria-label="`切换 ${component.label}`"
-                          @update:model-value="updateComponent(component.value, $event)"
-                        />
-                      </div>
-                    </Field>
-                  </div>
-                </FieldSet>
-
                 <div class="grid gap-4 md:grid-cols-2">
                   <FieldGroup>
                     <Field>
-                      <FieldLabel for="kb-strategy">策略</FieldLabel>
+                      <FieldLabel for="kb-component">构建类型</FieldLabel>
+                      <Select
+                        :model-value="manager.forms.value.kb.component"
+                        @update:model-value="updateKbComponent"
+                      >
+                        <SelectTrigger id="kb-component">
+                          <SelectValue placeholder="选择构建类型" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            <SelectItem
+                              v-for="option in kbComponentOptions"
+                              :key="option.value"
+                              :value="option.value"
+                            >
+                              {{ option.label }}
+                            </SelectItem>
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                      <FieldDescription>{{ selectedKbComponent.description }}</FieldDescription>
+                    </Field>
+                    <Field>
+                      <FieldLabel for="kb-datasource">数据源</FieldLabel>
+                      <Input
+                        id="kb-datasource"
+                        :model-value="currentDatasourceLabel"
+                        disabled
+                      />
+                    </Field>
+                  </FieldGroup>
+
+                  <FieldGroup>
+                    <Field>
+                      <FieldLabel for="kb-strategy">更新策略</FieldLabel>
                       <Select
                         :model-value="manager.forms.value.kb.strategy"
                         @update:model-value="updateStrategy"
@@ -227,76 +232,47 @@ function updateComponent(component: BootstrapComponent, value: boolean) {
                         </SelectContent>
                       </Select>
                     </Field>
-                    <Field>
-                      <FieldLabel for="kb-schema-linking">模式链接类型</FieldLabel>
-                      <Select
-                        :model-value="manager.forms.value.kb.schemaLinkingType"
-                        @update:model-value="updateSchemaLinkingType"
-                      >
-                        <SelectTrigger id="kb-schema-linking">
-                          <SelectValue placeholder="选择链接类型" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectGroup>
-                            <SelectItem
-                              v-for="option in schemaLinkingOptions"
-                              :key="option.value"
-                              :value="option.value"
-                            >
-                              {{ option.label }}
-                            </SelectItem>
-                          </SelectGroup>
-                        </SelectContent>
-                      </Select>
-                    </Field>
-                  </FieldGroup>
-
-                  <FieldGroup>
-                    <Field>
-                      <FieldLabel for="kb-catalog">目录名</FieldLabel>
-                      <Input
-                        id="kb-catalog"
-                        v-model="manager.forms.value.kb.catalog"
-                        placeholder="main"
-                      />
-                    </Field>
-                    <Field>
-                      <FieldLabel for="kb-database">数据库</FieldLabel>
-                      <Input
-                        id="kb-database"
-                        v-model="manager.forms.value.kb.databaseName"
-                        placeholder="fund"
-                      />
-                    </Field>
                   </FieldGroup>
                 </div>
 
-                <FieldGroup>
+                <FieldGroup v-if="manager.forms.value.kb.component === 'semantic_model' || manager.forms.value.kb.component === 'metrics'">
                   <Field>
-                    <FieldLabel for="kb-subject-tree">主题树</FieldLabel>
+                    <FieldLabel for="kb-success-story">历史 SQL CSV</FieldLabel>
+                    <Input
+                      id="kb-success-story"
+                      v-model="manager.forms.value.kb.successStory"
+                      placeholder="benchmark/semantic_layer/success_story.csv"
+                    />
+                  </Field>
+                  <Field v-if="manager.forms.value.kb.component === 'metrics'">
+                    <FieldLabel for="kb-subject-tree">预定义分类</FieldLabel>
                     <Textarea
                       id="kb-subject-tree"
                       v-model="manager.forms.value.kb.subjectTreeText"
                       class="min-h-24 text-sm leading-6"
                       placeholder="每行一个主题路径"
                     />
-                    <FieldDescription>留空时由后端使用默认范围。</FieldDescription>
+                    <FieldDescription>留空时由后端复用或学习已有分类。</FieldDescription>
                   </Field>
+                </FieldGroup>
+
+                <FieldGroup v-if="manager.forms.value.kb.component === 'reference_sql'">
                   <div class="grid gap-4 md:grid-cols-2">
                     <Field>
-                      <FieldLabel for="kb-success-story">成功案例</FieldLabel>
-                      <Input
-                        id="kb-success-story"
-                        v-model="manager.forms.value.kb.successStory"
-                        placeholder="可选 CSV 或目录"
-                      />
-                    </Field>
-                    <Field>
-                      <FieldLabel for="kb-sql-dir">SQL 目录</FieldLabel>
+                      <FieldLabel for="kb-sql-dir">SQL 文件目录</FieldLabel>
                       <Input
                         id="kb-sql-dir"
                         v-model="manager.forms.value.kb.sqlDir"
-                        placeholder="可选"
+                        placeholder="queries/sql"
+                      />
+                    </Field>
+                    <Field>
+                      <FieldLabel for="kb-reference-subject-tree">预定义主题树分类</FieldLabel>
+                      <Textarea
+                        id="kb-reference-subject-tree"
+                        v-model="manager.forms.value.kb.subjectTreeText"
+                        class="min-h-24 text-sm leading-6"
+                        placeholder="每行一个主题路径"
                       />
                     </Field>
                   </div>

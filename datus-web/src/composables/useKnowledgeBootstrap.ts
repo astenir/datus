@@ -25,7 +25,7 @@ const ERROR_EVENTS = new Set(["error", "failed", "failure"]);
 
 function defaultKbForm(): KnowledgeBootstrapKbForm {
   return {
-    components: ["metadata", "semantic_model", "metrics", "reference_sql"],
+    component: "metadata",
     strategy: "incremental",
     schemaLinkingType: "full",
     catalog: "",
@@ -168,17 +168,41 @@ function isErrorEvent(eventName: string, payload: unknown): boolean {
 }
 
 function buildKbBootstrapInput(form: KnowledgeBootstrapKbForm): BootstrapKbInput {
-  const components = form.components.filter((component) => KB_COMPONENTS.includes(component));
-  return {
-    components: components.length > 0 ? components : ["metadata"],
+  const component = KB_COMPONENTS.includes(form.component) ? form.component : "metadata";
+  const input: BootstrapKbInput = {
+    components: [component],
     strategy: form.strategy,
-    schema_linking_type: form.schemaLinkingType,
-    catalog: form.catalog.trim(),
-    database_name: form.databaseName.trim(),
-    success_story: optionalString(form.successStory),
-    subject_tree: parseLines(form.subjectTreeText),
-    sql_dir: optionalString(form.sqlDir),
   };
+
+  if (component === "metadata") {
+    input.schema_linking_type = form.schemaLinkingType;
+    input.catalog = form.catalog.trim();
+    input.database_name = form.databaseName.trim();
+    return input;
+  }
+
+  if (component === "semantic_model" || component === "metrics") {
+    const successStory = optionalString(form.successStory);
+    if (!successStory) {
+      throw new Error(component === "semantic_model" ? "请填写历史 SQL CSV 文件" : "请填写指标构建 CSV 文件");
+    }
+    input.success_story = successStory;
+  }
+
+  if (component === "metrics") {
+    input.subject_tree = parseLines(form.subjectTreeText);
+  }
+
+  if (component === "reference_sql") {
+    const sqlDir = optionalString(form.sqlDir);
+    if (!sqlDir) {
+      throw new Error("请填写 SQL 文件目录");
+    }
+    input.sql_dir = sqlDir;
+    input.subject_tree = parseLines(form.subjectTreeText);
+  }
+
+  return input;
 }
 
 function buildDocsBootstrapInput(form: KnowledgeBootstrapDocsForm): BootstrapDocInput {
@@ -248,7 +272,6 @@ export function useKnowledgeBootstrap() {
 
   const isRunning = computed(() => status.value === "running");
   const canCancel = computed(() => isRunning.value);
-  const kbComponentCount = computed(() => forms.value.kb.components.length);
   const terminalOutput = computed(() => logs.value.map(formatLogLine).join("\n"));
   const latestLog = computed(() => logs.value[logs.value.length - 1] ?? null);
 
@@ -266,15 +289,6 @@ export function useKnowledgeBootstrap() {
 
   function currentStatus(): KnowledgeBootstrapStatus {
     return status.value;
-  }
-
-  function toggleKbComponent(component: BootstrapComponent, enabled: boolean) {
-    const components = forms.value.kb.components;
-    if (enabled) {
-      if (!components.includes(component)) components.push(component);
-      return;
-    }
-    forms.value.kb.components = components.filter((item) => item !== component);
   }
 
   async function consumeStream(stream: ReadableStream<Uint8Array>, mode: KnowledgeBootstrapMode) {
@@ -363,7 +377,13 @@ export function useKnowledgeBootstrap() {
   }
 
   async function startKbBootstrap() {
-    const input = buildKbBootstrapInput(forms.value.kb);
+    let input: BootstrapKbInput;
+    try {
+      input = buildKbBootstrapInput(forms.value.kb);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "知识库构建参数无效");
+      return;
+    }
     await runBootstrap("kb", input);
   }
 
@@ -408,14 +428,12 @@ export function useKnowledgeBootstrap() {
     activeStreamId: readonly(activeStreamId),
     isRunning,
     canCancel,
-    kbComponentCount,
     terminalOutput,
     latestLog,
     startKbBootstrap,
     startDocsBootstrap,
     cancelActiveBootstrap,
     clearLogs,
-    toggleKbComponent,
   };
 }
 

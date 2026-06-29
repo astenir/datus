@@ -71,7 +71,7 @@ describe("knowledgeBootstrapInternals", () => {
     const { knowledgeBootstrapInternals } = await import("./useKnowledgeBootstrap");
 
     expect(knowledgeBootstrapInternals.buildKbBootstrapInput({
-      components: ["metadata", "metrics"],
+      component: "metadata",
       strategy: "incremental",
       schemaLinkingType: "full",
       catalog: "main",
@@ -80,13 +80,50 @@ describe("knowledgeBootstrapInternals", () => {
       subjectTreeText: "基金\n风控\n",
       sqlDir: "sql_examples",
     })).toEqual({
-      components: ["metadata", "metrics"],
+      components: ["metadata"],
       strategy: "incremental",
       schema_linking_type: "full",
       catalog: "main",
       database_name: "fund",
+    });
+  });
+
+  it("builds a metrics bootstrap request with only metrics-specific fields", async () => {
+    const { knowledgeBootstrapInternals } = await import("./useKnowledgeBootstrap");
+
+    expect(knowledgeBootstrapInternals.buildKbBootstrapInput({
+      component: "metrics",
+      strategy: "overwrite",
+      schemaLinkingType: "full",
+      catalog: "ignored",
+      databaseName: "ignored",
+      successStory: "success.csv",
+      subjectTreeText: "基金\n风控\n",
+      sqlDir: "ignored",
+    })).toEqual({
+      components: ["metrics"],
+      strategy: "overwrite",
       success_story: "success.csv",
       subject_tree: ["基金", "风控"],
+    });
+  });
+
+  it("builds a reference SQL bootstrap request with only SQL-specific fields", async () => {
+    const { knowledgeBootstrapInternals } = await import("./useKnowledgeBootstrap");
+
+    expect(knowledgeBootstrapInternals.buildKbBootstrapInput({
+      component: "reference_sql",
+      strategy: "check",
+      schemaLinkingType: "full",
+      catalog: "ignored",
+      databaseName: "ignored",
+      successStory: "ignored",
+      subjectTreeText: "基金\n",
+      sqlDir: "sql_examples",
+    })).toEqual({
+      components: ["reference_sql"],
+      strategy: "check",
+      subject_tree: ["基金"],
       sql_dir: "sql_examples",
     });
   });
@@ -171,22 +208,19 @@ describe("useKnowledgeBootstrap", () => {
   it("runs business KB bootstrap and captures stream state", async () => {
     const { useKnowledgeBootstrap } = await import("./useKnowledgeBootstrap");
     const manager = useKnowledgeBootstrap();
-    manager.forms.value.kb.components = ["metadata", "reference_sql"];
+    manager.forms.value.kb.component = "reference_sql";
     manager.forms.value.kb.catalog = "main";
     manager.forms.value.kb.databaseName = "fund";
     manager.forms.value.kb.subjectTreeText = "基金\n风控";
+    manager.forms.value.kb.sqlDir = "sql_examples";
 
     await manager.startKbBootstrap();
 
     expect(bootstrap).toHaveBeenCalledWith("http://api.test", {
-      components: ["metadata", "reference_sql"],
+      components: ["reference_sql"],
       strategy: "incremental",
-      schema_linking_type: "full",
-      catalog: "main",
-      database_name: "fund",
-      success_story: null,
       subject_tree: ["基金", "风控"],
-      sql_dir: null,
+      sql_dir: "sql_examples",
     });
     expect(manager.status.value).toBe("completed");
     expect(manager.activeStreamId.value).toBe("stream-kb-1");
