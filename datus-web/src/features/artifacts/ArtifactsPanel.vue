@@ -2,12 +2,10 @@
 import { computed, onMounted, watch } from "vue"
 import { RefreshCwIcon } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { artifactPreviewKey, useArtifacts } from "@/composables/useArtifacts"
 import ArtifactCollectionGrid from "@/features/artifacts/ArtifactCollectionGrid.vue"
 import ArtifactDetailPanel from "@/features/artifacts/ArtifactDetailPanel.vue"
 import type { ArtifactViewTab } from "@/features/workspace/types"
-import { isArtifactViewTab } from "@/features/workspace/types"
 
 const props = withDefaults(defineProps<{
   tab?: ArtifactViewTab
@@ -17,7 +15,6 @@ const props = withDefaults(defineProps<{
   selectedSlug: null,
 })
 const emit = defineEmits<{
-  "update:tab": [value: ArtifactViewTab]
   "open-artifact": [tab: ArtifactViewTab, slug: string]
   "close-detail": []
 }>()
@@ -40,12 +37,6 @@ function loadingSlugFor(tab: ArtifactViewTab): string | null {
   const key = artifacts.previewLoadingKey.value
   const prefix = `${tab}:`
   return key?.startsWith(prefix) ? key.slice(prefix.length) : null
-}
-
-function setTab(value: unknown) {
-  if (typeof value === "string" && isArtifactViewTab(value)) {
-    emit("update:tab", value)
-  }
 }
 
 function openArtifact(tab: ArtifactViewTab, slug: string) {
@@ -74,16 +65,8 @@ watch(
 
 <template>
   <section class="min-h-0 flex-1 overflow-y-auto p-4">
-    <Tabs
-      :model-value="props.tab"
-      class="flex flex-col gap-4"
-      @update:model-value="setTab"
-    >
-      <div class="flex items-center gap-3">
-        <TabsList>
-          <TabsTrigger value="dashboard">仪表盘</TabsTrigger>
-          <TabsTrigger value="report">报表</TabsTrigger>
-        </TabsList>
+    <div class="flex flex-col gap-4">
+      <div class="flex items-center justify-end">
         <Button
           variant="outline"
           size="sm"
@@ -95,7 +78,7 @@ watch(
         </Button>
       </div>
 
-      <TabsContent value="dashboard">
+      <template v-if="props.tab === 'dashboard'">
         <div
           class="grid items-start gap-4"
           :class="props.selectedSlug ? 'lg:grid-cols-[minmax(0,1fr)_28rem]' : ''"
@@ -125,9 +108,9 @@ watch(
             @run-dashboard-query="runDashboardQuery"
           />
         </div>
-      </TabsContent>
+      </template>
 
-      <TabsContent value="report">
+      <template v-else>
         <div
           class="grid items-start gap-4"
           :class="props.selectedSlug ? 'lg:grid-cols-[minmax(0,1fr)_28rem]' : ''"
@@ -156,7 +139,7 @@ watch(
             @open-preview="openPreview('report', props.selectedSlug)"
           />
         </div>
-      </TabsContent>
-    </Tabs>
+      </template>
+    </div>
   </section>
 </template>

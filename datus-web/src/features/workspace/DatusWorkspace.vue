@@ -282,7 +282,6 @@ const headerTitle = computed(() => {
           <ArtifactsPanel
             :tab="artifactTab"
             :selected-slug="artifactSlug"
-            @update:tab="openArtifactTab"
             @open-artifact="openArtifactDetail"
             @close-detail="openArtifactTab(artifactTab)"
           />
