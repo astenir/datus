@@ -9,31 +9,37 @@ import type {
 } from "@/types";
 
 export const agentApi = {
-  list(baseUrl: string): Promise<{ agents: AgentInfo[] } | null> {
-    return apiResult(baseUrl, "/api/v1/agent/list");
+  list(baseUrl: string): Promise<AgentInfo[] | null> {
+    return apiResult(baseUrl, "/api/v1/admin/agents");
   },
 
   get(baseUrl: string, agentId: string): Promise<AgentDetail | null> {
-    return apiResult(baseUrl, `/api/v1/agent?agent_id=${encodeURIComponent(agentId)}`);
+    return apiResult(baseUrl, `/api/v1/admin/agents/${encodeURIComponent(agentId)}`);
   },
 
-  create(baseUrl: string, input: CreateAgentInput): Promise<{ name: string } | null> {
-    return apiResult(baseUrl, "/api/v1/agent/create", jsonBody(input));
+  create(baseUrl: string, agentId: string, input: CreateAgentInput): Promise<AgentDetail | null> {
+    return apiResult(baseUrl, `/api/v1/admin/agents/${encodeURIComponent(agentId)}`, {
+      ...jsonBody(input),
+      method: "PUT",
+    });
   },
 
-  edit(baseUrl: string, input: EditAgentInput): Promise<unknown> {
-    return apiResult(baseUrl, "/api/v1/agent/edit", jsonBody(input));
+  edit(baseUrl: string, agentId: string, input: EditAgentInput): Promise<AgentDetail | null> {
+    return apiResult(baseUrl, `/api/v1/admin/agents/${encodeURIComponent(agentId)}`, {
+      ...jsonBody(input),
+      method: "PUT",
+    });
   },
 
   delete(baseUrl: string, agentId: string): Promise<unknown> {
-    return apiResult(baseUrl, `/api/v1/agent/delete?agent_id=${encodeURIComponent(agentId)}`, { method: "DELETE" });
+    return apiResult(baseUrl, `/api/v1/admin/agents/${encodeURIComponent(agentId)}`, { method: "DELETE" });
   },
 
   tools(baseUrl: string): Promise<AgentToolsData | null> {
-    return apiResult(baseUrl, "/api/v1/agent/tools");
+    return apiResult(baseUrl, "/api/v1/admin/agents/tools");
   },
 
-  useTools(baseUrl: string, agentType: string): Promise<AgentUseToolsData | null> {
-    return apiResult(baseUrl, `/api/v1/agent/use_tools?agent_type=${encodeURIComponent(agentType)}`);
+  useTools(baseUrl: string, nodeClass: string): Promise<AgentUseToolsData | null> {
+    return apiResult(baseUrl, `/api/v1/admin/agents/tool-reference?node_class=${encodeURIComponent(nodeClass)}`);
   },
 };

@@ -1,3 +1,5 @@
+import type { components } from "./types/openapi";
+
 export type Role = "user" | "assistant" | "system";
 
 export type ChatMessage = {
@@ -158,68 +160,15 @@ export type ViewType = DeveloperViewType | "settings";
 
 // ─── Agent Management ────────────────────────────────────────────────────────
 
-export type AgentInfo = {
-  name: string;
-  type?: string;
-  config_yaml?: string;
-  system_prompt?: string;
-  created_at?: string;
-};
+export type AgentAcl = components["schemas"]["AgentAcl"];
 
-export type AgentDetail = AgentInfo & {
-  tools?: string[];
-  catalogs?: string[];
-  subjects?: string[];
-  rules?: string[];
-};
+export type AgentInfo = components["schemas"]["EnterpriseAgentSummary"];
 
-export type CreateAgentInput = {
-  name: string;
-  datasource_id?: string;
-  type?: string;
-  artifact_slug?: string;
-  description?: string;
-  prompt_template?: string;
-  prompt_version?: string;
-  prompt_language?: string;
-  tools?: string[];
-  mcp?: string[];
-  skills?: string[];
-  catalogs?: string[];
-  subjects?: string[];
-  permissions?: Record<string, unknown>;
-  hooks?: Record<string, unknown>;
-  rules?: string[];
-  max_turns?: number;
-  workspace_root?: string;
-  adapter_type?: string;
-  sql_file_threshold?: number;
-  sql_preview_lines?: number;
-};
+export type AgentDetail = components["schemas"]["EnterpriseAgentDetail"];
 
-export type EditAgentInput = {
-  id: string;
-  name?: string;
-  description?: string;
-  system_prompt?: string;
-  prompt_version?: string;
-  prompt_language?: string;
-  tools?: string[];
-  mcp?: string[];
-  skills?: string[];
-  scoped_context?: Record<string, unknown>;
-  permissions?: Record<string, unknown>;
-  catalogs?: string[];
-  subjects?: string[];
-  hooks?: Record<string, unknown>;
-  rules?: string[];
-  max_turns?: number;
-  workspace_root?: string;
-  adapter_type?: string;
-  sql_file_threshold?: number;
-  sql_preview_lines?: number;
-  artifact_slug?: string;
-};
+export type CreateAgentInput = components["schemas"]["UpsertEnterpriseAgentRequest"];
+
+export type EditAgentInput = components["schemas"]["UpsertEnterpriseAgentRequest"];
 
 // ─── Chat Extensions ─────────────────────────────────────────────────────────
 

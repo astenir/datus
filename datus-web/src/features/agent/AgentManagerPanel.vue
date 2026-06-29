@@ -27,6 +27,13 @@ import {
 import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import {
   Table,
   TableBody,
   TableCell,
@@ -38,13 +45,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { useAgentManager } from "@/composables/useAgentManager"
 import { formatDate } from "@/lib/utils"
-import type { AgentInfo } from "@/types"
 
 const manager = useAgentManager()
-const deleteTarget = shallowRef<AgentInfo | null>(null)
+type AgentRow = (typeof manager.agents.value)[number]
+
+const deleteTarget = shallowRef<AgentRow | null>(null)
 
 const selectedTitle = computed(() => manager.selectedAgentName.value ?? "新建 Agent")
-const selectedTypeLabel = computed(() => manager.selectedAgent.value?.type || manager.form.value.type || "未指定")
+const selectedTypeLabel = computed(() => manager.selectedAgent.value?.node_class || manager.form.value.nodeClass || "未指定")
 const toolCatalogEntries = computed(() => manager.toolCatalogEntries())
 const useToolTypeEntries = computed(() => manager.useToolTypeEntries())
 const defaultUseTools = computed(() => manager.selectedUseTools.value?.default_tools ?? [])
@@ -57,13 +65,13 @@ const deleteDialogOpen = computed({
 const formModeLabel = computed(() => manager.formMode.value === "edit" ? "编辑" : "新建")
 const saveLabel = computed(() => manager.formMode.value === "edit" ? "保存 Agent" : "创建 Agent")
 
-function systemPromptSummary(agent: AgentInfo) {
-  const text = agent.system_prompt || agent.config_yaml || ""
+function systemPromptSummary(agent: AgentRow) {
+  const text = agent.description || ""
   return text.trim() || "-"
 }
 
-function selectAgent(agent: AgentInfo) {
-  void manager.selectAgent(agent.name)
+function selectAgent(agent: AgentRow) {
+  void manager.selectAgent(agent.agent_id)
 }
 
 function startCreate() {
@@ -81,7 +89,7 @@ async function confirmDelete() {
   const target = deleteTarget.value
   if (!target) return
 
-  await manager.deleteAgent(target.name)
+  await manager.deleteAgent(target.agent_id)
   deleteTarget.value = null
 }
 
@@ -121,13 +129,13 @@ onMounted(() => {
       </div>
 
       <Alert
-        v-if="manager.legacyRoutesDisabled.value"
+        v-if="manager.enterpriseRoutesUnavailable.value"
         variant="destructive"
       >
         <BotIcon />
-        <AlertTitle>企业模式已禁用 Agent 配置接口</AlertTitle>
+        <AlertTitle>企业 Agent 管理接口不可用</AlertTitle>
         <AlertDescription>
-          当前 `/api/v1/agent/*` 路由是 legacy Agent 配置面，企业后端会通过 `agent.config_legacy` 保护关闭它。此页面保留 OpenAPI 对齐和本地兼容能力，生产企业环境需要接入新的企业 Agent 管理接口后再启用编辑操作。
+          当前页面已切换到 `/api/v1/admin/agents*` 企业接口。请确认后端企业 Agent 管理路由已启用，且当前用户具备对应管理权限。
         </AlertDescription>
       </Alert>
 
@@ -208,8 +216,9 @@ onMounted(() => {
                 <TableHeader>
                   <TableRow>
                     <TableHead>名称</TableHead>
-                    <TableHead>类型</TableHead>
-                    <TableHead>提示词</TableHead>
+                    <TableHead>节点类型</TableHead>
+                    <TableHead>状态</TableHead>
+                    <TableHead>描述</TableHead>
                     <TableHead>创建时间</TableHead>
                     <TableHead class="w-24 text-right">操作</TableHead>
                   </TableRow>
@@ -217,21 +226,24 @@ onMounted(() => {
                 <TableBody>
                   <TableRow
                     v-for="agent in manager.agents.value"
-                    :key="agent.name"
+                    :key="agent.agent_id"
                     class="cursor-pointer"
                     @click="selectAgent(agent)"
                   >
                     <TableCell class="font-medium">
                       <div class="flex min-w-0 items-center gap-2">
                         <CheckCircle2Icon
-                          v-if="agent.name === manager.selectedAgentName.value"
+                          v-if="agent.agent_id === manager.selectedAgentId.value"
                           class="shrink-0 text-primary"
                         />
                         <span class="truncate">{{ agent.name }}</span>
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge variant="secondary">{{ agent.type || "default" }}</Badge>
+                      <Badge variant="secondary">{{ agent.node_class || "gen_sql" }}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{{ agent.status || "draft" }}</Badge>
                     </TableCell>
                     <TableCell class="max-w-md">
                       <span class="line-clamp-2 text-sm text-muted-foreground">{{ systemPromptSummary(agent) }}</span>
@@ -250,7 +262,7 @@ onMounted(() => {
                   </TableRow>
                   <TableRow v-if="manager.agents.value.length === 0">
                     <TableCell
-                      colspan="5"
+                      colspan="6"
                       class="h-24 text-center text-sm text-muted-foreground"
                     >
                       暂无 Agent。点击新建创建第一个可复用 Agent。
@@ -266,7 +278,7 @@ onMounted(() => {
           <CardHeader>
             <CardTitle class="text-lg">{{ formModeLabel }} Agent</CardTitle>
             <CardDescription class="text-sm">
-              列表字段支持英文逗号或换行分隔；编辑时会使用后端 `system_prompt` 字段保存提示词。
+              列表字段支持英文逗号或换行分隔；编辑会通过企业 Agent upsert 接口保存定义。
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -285,14 +297,28 @@ onMounted(() => {
                 </Field>
 
                 <Field>
-                  <FieldLabel for="agent-type">类型</FieldLabel>
+                  <FieldLabel for="agent-type">节点类型</FieldLabel>
                   <Input
                     id="agent-type"
-                    v-model="manager.form.value.type"
-                    placeholder="analytics"
-                    :disabled="manager.formMode.value === 'edit'"
+                    v-model="manager.form.value.nodeClass"
+                    placeholder="gen_sql"
                   />
-                  <FieldDescription>编辑接口不支持修改类型；需要更换类型时请新建 Agent。</FieldDescription>
+                  <FieldDescription>对应企业接口的 node_class，例如 gen_sql 或 ask_report。</FieldDescription>
+                </Field>
+
+                <Field>
+                  <FieldLabel for="agent-status">状态</FieldLabel>
+                  <Select v-model="manager.form.value.status">
+                    <SelectTrigger id="agent-status">
+                      <SelectValue placeholder="选择状态" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="draft">draft</SelectItem>
+                      <SelectItem value="published">published</SelectItem>
+                      <SelectItem value="disabled">disabled</SelectItem>
+                      <SelectItem value="archived">archived</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </Field>
 
                 <Field>
@@ -365,14 +391,6 @@ onMounted(() => {
                       placeholder="8"
                     />
                   </Field>
-                  <Field>
-                    <FieldLabel for="agent-workspace-root">工作目录</FieldLabel>
-                    <Input
-                      id="agent-workspace-root"
-                      v-model="manager.form.value.workspaceRoot"
-                      placeholder="/srv/datus/workspaces/fund"
-                    />
-                  </Field>
                 </div>
               </FieldGroup>
 
@@ -413,7 +431,7 @@ onMounted(() => {
             <CardHeader>
               <CardTitle class="text-lg">可配置工具</CardTitle>
               <CardDescription class="text-sm">
-                来自 `/api/v1/agent/tools`，用于判断创建或编辑 Agent 时可绑定哪些工具。
+                来自 `/api/v1/admin/agents/tools`，用于判断创建或编辑 Agent 时可绑定哪些工具。
               </CardDescription>
             </CardHeader>
             <CardContent class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -453,7 +471,7 @@ onMounted(() => {
             <CardHeader>
               <CardTitle class="text-lg">当前 Agent 可用工具</CardTitle>
               <CardDescription class="text-sm">
-                来自 `/api/v1/agent/use_tools`，展示后端按 Agent 类型解析后的默认工具和分类工具。
+                来自 `/api/v1/admin/agents/tool-reference`，展示后端按节点类型解析后的默认工具和分类工具。
               </CardDescription>
             </CardHeader>
             <CardContent class="flex flex-col gap-4">

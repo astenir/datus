@@ -16,7 +16,8 @@ import type {
 export interface AgentFormState {
   id: string;
   name: string;
-  type: string;
+  nodeClass: string;
+  status: string;
   description: string;
   promptTemplate: string;
   toolsText: string;
@@ -24,7 +25,6 @@ export interface AgentFormState {
   subjectsText: string;
   rulesText: string;
   maxTurns: string;
-  workspaceRoot: string;
 }
 
 export type AgentFormMode = "create" | "edit";
@@ -33,7 +33,8 @@ function emptyForm(): AgentFormState {
   return {
     id: "",
     name: "",
-    type: "",
+    nodeClass: "gen_sql",
+    status: "draft",
     description: "",
     promptTemplate: "",
     toolsText: "",
@@ -41,7 +42,6 @@ function emptyForm(): AgentFormState {
     subjectsText: "",
     rulesText: "",
     maxTurns: "",
-    workspaceRoot: "",
   };
 }
 
@@ -60,6 +60,25 @@ function parseListText(value: string): string[] | undefined {
 
 function listText(value: string[] | undefined): string {
   return value?.join("\n") ?? "";
+}
+
+function listFromScopedContext(value: Record<string, unknown> | undefined, key: string): string[] | undefined {
+  const item = value?.[key];
+  if (!Array.isArray(item)) return undefined;
+
+  const strings = item.filter((entry): entry is string => typeof entry === "string" && entry.trim() !== "");
+  return strings.length > 0 ? strings : undefined;
+}
+
+function scopedContextFromForm(form: AgentFormState): Record<string, unknown> | undefined {
+  const catalogs = parseListText(form.catalogsText);
+  const subjects = parseListText(form.subjectsText);
+  if (!catalogs && !subjects) return undefined;
+
+  return {
+    ...(catalogs ? { catalogs } : {}),
+    ...(subjects ? { subjects } : {}),
+  };
 }
 
 function trimmedOptional(value: string): string | undefined {
@@ -81,52 +100,48 @@ function parsePositiveInteger(value: string): number | undefined {
 
 function formFromDetail(agent: AgentDetail): AgentFormState {
   return {
-    id: agent.name,
+    id: agent.agent_id,
     name: agent.name,
-    type: agent.type ?? "",
-    description: "",
-    promptTemplate: agent.system_prompt ?? agent.config_yaml ?? "",
+    nodeClass: agent.node_class || "gen_sql",
+    status: agent.status || "draft",
+    description: agent.description ?? "",
+    promptTemplate: agent.prompt_template ?? "",
     toolsText: listText(agent.tools),
-    catalogsText: listText(agent.catalogs),
-    subjectsText: listText(agent.subjects),
+    catalogsText: listText(listFromScopedContext(agent.scoped_context, "catalogs")),
+    subjectsText: listText(listFromScopedContext(agent.scoped_context, "subjects")),
     rulesText: listText(agent.rules),
-    maxTurns: "",
-    workspaceRoot: "",
+    maxTurns: String(agent.max_turns || ""),
   };
 }
 
 function createInputFromForm(form: AgentFormState): CreateAgentInput {
   return {
-    name: form.name.trim(),
-    type: trimmedOptional(form.type),
+    name: trimmedOptional(form.name),
+    node_class: trimmedOptional(form.nodeClass) ?? "gen_sql",
+    status: trimmedOptional(form.status) ?? "draft",
     description: trimmedOptional(form.description),
     prompt_template: trimmedOptional(form.promptTemplate),
+    prompt_language: "en",
+    prompt_version: "1.0",
     tools: parseListText(form.toolsText),
-    catalogs: parseListText(form.catalogsText),
-    subjects: parseListText(form.subjectsText),
+    scoped_context: scopedContextFromForm(form),
     rules: parseListText(form.rulesText),
-    max_turns: parsePositiveInteger(form.maxTurns),
-    workspace_root: trimmedOptional(form.workspaceRoot),
+    max_turns: parsePositiveInteger(form.maxTurns) ?? 30,
   };
 }
 
 function editInputFromForm(form: AgentFormState): EditAgentInput {
-  return {
-    id: form.id.trim() || form.name.trim(),
-    name: trimmedOptional(form.name),
-    description: trimmedOptional(form.description),
-    system_prompt: trimmedOptional(form.promptTemplate),
-    tools: parseListText(form.toolsText),
-    catalogs: parseListText(form.catalogsText),
-    subjects: parseListText(form.subjectsText),
-    rules: parseListText(form.rulesText),
-    max_turns: parsePositiveInteger(form.maxTurns),
-    workspace_root: trimmedOptional(form.workspaceRoot),
-  };
+  return createInputFromForm(form);
 }
 
-function normalizeAgentList(result: { agents?: AgentInfo[] } | null): AgentInfo[] {
-  return [...(result?.agents ?? [])].sort((left, right) => left.name.localeCompare(right.name));
+function agentIdentifier(agent: AgentInfo | AgentDetail): string {
+  return agent.agent_id;
+}
+
+function normalizeAgentList(result: AgentInfo[] | null): AgentInfo[] {
+  return [...(result ?? [])].sort((left, right) =>
+    left.name.localeCompare(right.name) || left.agent_id.localeCompare(right.agent_id)
+  );
 }
 
 function countToolCatalogEntries(catalog: AgentToolsData | null): number {
@@ -154,9 +169,10 @@ export function useAgentManager() {
   const deleting = shallowRef(false);
   const toolsLoading = shallowRef(false);
   const error = shallowRef<string | null>(null);
-  const legacyRoutesDisabled = shallowRef(false);
+  const enterpriseRoutesUnavailable = shallowRef(false);
 
   const agentCount = computed(() => agents.value.length);
+  const selectedAgentId = computed(() => selectedAgent.value?.agent_id ?? null);
   const selectedAgentName = computed(() => selectedAgent.value?.name ?? null);
   const toolCategoryCount = computed(() => Object.keys(toolCatalog.value?.tools ?? {}).length);
   const toolCount = computed(() => countToolCatalogEntries(toolCatalog.value));
@@ -170,8 +186,8 @@ export function useAgentManager() {
   function agentRouteErrorMessage(err: unknown, fallback: string): string {
     if (err instanceof ApiResultError) {
       if (err.errorCode === "ENTERPRISE_ROUTE_DISABLED" || err.errorCode === "ENTERPRISE_LEGACY_API_DISABLED") {
-        legacyRoutesDisabled.value = true;
-        return "当前企业后端已禁用 legacy Agent 配置接口，请等待企业 Agent 管理接口接入。";
+        enterpriseRoutesUnavailable.value = true;
+        return "当前企业 Agent 管理接口不可用，请确认后端企业接口已启用且当前用户具备管理权限。";
       }
       return err.message;
     }
@@ -184,9 +200,9 @@ export function useAgentManager() {
     error.value = null;
 
     try {
-      legacyRoutesDisabled.value = false;
+      enterpriseRoutesUnavailable.value = false;
       agents.value = normalizeAgentList(await agentApi.list(connection.effectiveBase()));
-      if (selectedAgent.value && !agents.value.some(agent => agent.name === selectedAgent.value?.name)) {
+      if (selectedAgent.value && !agents.value.some(agent => agentIdentifier(agent) === selectedAgent.value?.agent_id)) {
         selectedAgent.value = null;
         selectedUseTools.value = null;
         form.value = emptyForm();
@@ -230,7 +246,7 @@ export function useAgentManager() {
     try {
       const detail = await agentApi.get(connection.effectiveBase(), agentName);
       selectedAgent.value = detail;
-      selectedUseTools.value = await agentApi.useTools(connection.effectiveBase(), detail?.type || agentName);
+      selectedUseTools.value = await agentApi.useTools(connection.effectiveBase(), detail?.node_class || "gen_sql");
       if (detail) {
         form.value = formFromDetail(detail);
         formMode.value = "edit";
@@ -257,15 +273,16 @@ export function useAgentManager() {
     saving.value = true;
 
     try {
+      const agentId = form.value.id.trim() || form.value.name.trim();
       if (formMode.value === "edit") {
-        await agentApi.edit(connection.effectiveBase(), editInputFromForm(form.value));
+        await agentApi.edit(connection.effectiveBase(), agentId, editInputFromForm(form.value));
         toast.success("Agent 已保存");
       } else {
-        await agentApi.create(connection.effectiveBase(), createInputFromForm(form.value));
+        await agentApi.create(connection.effectiveBase(), agentId, createInputFromForm(form.value));
         toast.success("Agent 已创建");
       }
 
-      const nextSelection = form.value.name.trim();
+      const nextSelection = agentId;
       await loadAgents();
       await selectAgent(nextSelection);
     } catch (err) {
@@ -280,14 +297,14 @@ export function useAgentManager() {
     }
   }
 
-  async function deleteAgent(agentName: string) {
+  async function deleteAgent(agentId: string) {
     deleting.value = true;
 
     try {
-      await agentApi.delete(connection.effectiveBase(), agentName);
+      await agentApi.delete(connection.effectiveBase(), agentId);
       toast.success("Agent 已删除");
       await loadAgents();
-      if (selectedAgent.value?.name === agentName) {
+      if (selectedAgent.value?.agent_id === agentId) {
         startCreate();
       }
     } catch (err) {
@@ -320,8 +337,9 @@ export function useAgentManager() {
     deleting: readonly(deleting),
     toolsLoading: readonly(toolsLoading),
     error: readonly(error),
-    legacyRoutesDisabled: readonly(legacyRoutesDisabled),
+    enterpriseRoutesUnavailable: readonly(enterpriseRoutesUnavailable),
     agentCount,
+    selectedAgentId,
     selectedAgentName,
     toolCategoryCount,
     toolCount,
@@ -344,6 +362,8 @@ export const agentManagerInternals = {
   parseListText,
   parsePositiveInteger,
   normalizeAgentList,
+  agentIdentifier,
+  scopedContextFromForm,
   countToolCatalogEntries,
   countUseToolEntries,
   isRecord,

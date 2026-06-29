@@ -38,22 +38,29 @@ vi.mock("vue-sonner", () => ({
 describe("useAgentManager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    listAgents.mockResolvedValue({
-      agents: [
-        { name: "writer", type: "text" },
-        { name: "analyst", type: "analytics" },
-      ],
-    });
+    listAgents.mockResolvedValue([
+      { agent_id: "writer", name: "writer", node_class: "text", status: "published", source: "custom" },
+      { agent_id: "analyst", name: "analyst", node_class: "gen_sql", status: "draft", source: "custom" },
+    ]);
     getAgent.mockResolvedValue({
+      agent_id: "analyst",
       name: "analyst",
-      type: "analytics",
-      system_prompt: "Analyze data",
+      description: "Analysis helper",
+      node_class: "gen_sql",
+      status: "draft",
+      source: "custom",
+      prompt_template: "Analyze data",
+      prompt_language: "en",
+      prompt_version: "1.0",
       tools: ["read_query"],
-      catalogs: ["fund"],
-      subjects: ["portfolio"],
+      scoped_context: {
+        catalogs: ["fund"],
+        subjects: ["portfolio"],
+      },
       rules: ["cite sources"],
+      max_turns: 30,
     });
-    createAgent.mockResolvedValue({ name: "analyst" });
+    createAgent.mockResolvedValue({ agent_id: "analyst", name: "analyst" });
     editAgent.mockResolvedValue({});
     deleteAgent.mockResolvedValue({});
     agentTools.mockResolvedValue({
@@ -88,9 +95,9 @@ describe("useAgentManager", () => {
 
     await manager.loadAgents();
 
-    expect(manager.legacyRoutesDisabled.value).toBe(true);
-    expect(manager.error.value).toContain("legacy Agent 配置接口");
-    expect(toastError).toHaveBeenCalledWith(expect.stringContaining("legacy Agent 配置接口"));
+    expect(manager.enterpriseRoutesUnavailable.value).toBe(true);
+    expect(manager.error.value).toContain("企业 Agent 管理接口");
+    expect(toastError).toHaveBeenCalledWith(expect.stringContaining("企业 Agent 管理接口"));
   });
 
   it("loads selected agent detail and its usable tools", async () => {
@@ -100,7 +107,7 @@ describe("useAgentManager", () => {
     await manager.selectAgent("analyst");
 
     expect(getAgent).toHaveBeenCalledWith("http://api.test", "analyst");
-    expect(agentUseTools).toHaveBeenCalledWith("http://api.test", "analytics");
+    expect(agentUseTools).toHaveBeenCalledWith("http://api.test", "gen_sql");
     expect(manager.form.value).toMatchObject({
       id: "analyst",
       name: "analyst",
@@ -127,7 +134,8 @@ describe("useAgentManager", () => {
     manager.form.value = {
       id: "",
       name: "researcher",
-      type: "analytics",
+      nodeClass: "gen_sql",
+      status: "draft",
       description: "Research agent",
       promptTemplate: "Answer carefully",
       toolsText: "read_query, explain_query",
@@ -135,27 +143,30 @@ describe("useAgentManager", () => {
       subjectsText: "portfolio\nrisk",
       rulesText: "",
       maxTurns: "8",
-      workspaceRoot: "/tmp/workspace",
     };
 
     await manager.saveForm();
 
-    expect(createAgent).toHaveBeenCalledWith("http://api.test", {
+    expect(createAgent).toHaveBeenCalledWith("http://api.test", "researcher", {
       name: "researcher",
-      type: "analytics",
+      node_class: "gen_sql",
+      status: "draft",
       description: "Research agent",
       prompt_template: "Answer carefully",
+      prompt_language: "en",
+      prompt_version: "1.0",
       tools: ["read_query", "explain_query"],
-      catalogs: ["fund"],
-      subjects: ["portfolio", "risk"],
+      scoped_context: {
+        catalogs: ["fund"],
+        subjects: ["portfolio", "risk"],
+      },
       rules: undefined,
       max_turns: 8,
-      workspace_root: "/tmp/workspace",
     });
     expect(toastSuccess).toHaveBeenCalledWith("Agent 已创建");
   });
 
-  it("edits agents through the backend system_prompt field", async () => {
+  it("edits agents through the enterprise upsert payload", async () => {
     const { useAgentManager } = await import("./useAgentManager");
     const manager = useAgentManager();
     await manager.selectAgent("analyst");
@@ -163,10 +174,10 @@ describe("useAgentManager", () => {
 
     await manager.saveForm();
 
-    expect(editAgent).toHaveBeenCalledWith("http://api.test", expect.objectContaining({
-      id: "analyst",
+    expect(editAgent).toHaveBeenCalledWith("http://api.test", "analyst", expect.objectContaining({
       name: "analyst",
-      system_prompt: "Updated prompt",
+      node_class: "gen_sql",
+      prompt_template: "Updated prompt",
     }));
   });
 

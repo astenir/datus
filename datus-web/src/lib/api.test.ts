@@ -329,7 +329,7 @@ describe("api client", () => {
     expect("editKnowledge" in subjectApi).toBe(false);
   });
 
-  it("uses current subject metric and semantic model routes", async () => {
+  it("uses current enterprise subject-tree metric and semantic model routes", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(() =>
       Promise.resolve(mockJsonResponse({ success: true, data: {} }))
     );
@@ -355,22 +355,22 @@ describe("api client", () => {
       description: "基金净值表",
     });
 
-    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/subject/metric/dimensions");
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/subject-tree/metric/dimensions");
     expect(JSON.parse(String((vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit).body))).toEqual({
       subject_path: ["业务", "规模"],
     });
-    expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe("http://localhost:8000/api/v1/subject/metric/preview");
+    expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe("http://localhost:8000/api/v1/subject-tree/metric/preview");
     expect(JSON.parse(String((vi.mocked(fetch).mock.calls[1]?.[1] as RequestInit).body))).toMatchObject({
       subject_path: ["业务", "规模"],
       dimensions: ["fund_type"],
       limit: 20,
     });
-    expect(vi.mocked(fetch).mock.calls[2]?.[0]).toBe("http://localhost:8000/api/v1/subject/metric/create");
+    expect(vi.mocked(fetch).mock.calls[2]?.[0]).toBe("http://localhost:8000/api/v1/subject-tree/metric/create");
     expect(JSON.parse(String((vi.mocked(fetch).mock.calls[2]?.[1] as RequestInit).body))).toEqual({
       subject_path: ["业务", "规模"],
       yaml: "name: 规模",
     });
-    expect(vi.mocked(fetch).mock.calls[3]?.[0]).toBe("http://localhost:8000/api/v1/subject/reference_sql/create");
+    expect(vi.mocked(fetch).mock.calls[3]?.[0]).toBe("http://localhost:8000/api/v1/subject-tree/reference_sql/create");
     expect(JSON.parse(String((vi.mocked(fetch).mock.calls[3]?.[1] as RequestInit).body))).toEqual({
       subject_path: ["业务", "净值SQL"],
       name: "净值明细",
@@ -378,14 +378,14 @@ describe("api client", () => {
       summary: "查询基金净值",
       search_text: "基金 净值",
     });
-    expect(vi.mocked(fetch).mock.calls[4]?.[0]).toBe("http://localhost:8000/api/v1/subject/semantic_model/edit");
+    expect(vi.mocked(fetch).mock.calls[4]?.[0]).toBe("http://localhost:8000/api/v1/subject-tree/semantic_model/edit");
     expect(JSON.parse(String((vi.mocked(fetch).mock.calls[4]?.[1] as RequestInit).body))).toEqual({
       entry_id: "table:fund_nav",
       update_values: { description: "基金净值表" },
     });
   });
 
-  it("uses current subject tree mutation routes and payloads", async () => {
+  it("uses current enterprise subject-tree mutation routes and payloads", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(() =>
       Promise.resolve(mockJsonResponse({ success: true, data: {} }))
     );
@@ -394,17 +394,17 @@ describe("api client", () => {
     await subjectApi.rename("http://localhost:8000", "metric", ["业务", "规模"], ["业务", "规模2"]);
     await subjectApi.delete("http://localhost:8000", "reference_sql", ["业务", "净值SQL"]);
 
-    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/subject/create");
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/subject-tree/create");
     expect(JSON.parse(String((vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit).body))).toEqual({
       subject_path: ["业务", "风控"],
     });
-    expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe("http://localhost:8000/api/v1/subject/rename");
+    expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe("http://localhost:8000/api/v1/subject-tree/rename");
     expect(JSON.parse(String((vi.mocked(fetch).mock.calls[1]?.[1] as RequestInit).body))).toEqual({
       type: "metric",
       subject_path: ["业务", "规模"],
       new_subject_path: ["业务", "规模2"],
     });
-    expect(vi.mocked(fetch).mock.calls[2]?.[0]).toBe("http://localhost:8000/api/v1/subject/delete");
+    expect(vi.mocked(fetch).mock.calls[2]?.[0]).toBe("http://localhost:8000/api/v1/subject-tree/delete");
     const deleteInit = vi.mocked(fetch).mock.calls[2]?.[1] as RequestInit;
     expect(deleteInit.method).toBe("DELETE");
     expect(new Headers(deleteInit.headers).get("Content-Type")).toBe("application/json");
@@ -572,16 +572,41 @@ describe("api client", () => {
     });
   });
 
-  it("uses agent tool catalog helpers for configuration support APIs", async () => {
+  it("uses enterprise agent management helper routes", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(() =>
       Promise.resolve(mockJsonResponse({ success: true, data: { tools: {} } }))
     );
 
+    await agentApi.list("http://localhost:8000/");
+    await agentApi.get("http://localhost:8000/", "analyst");
+    await agentApi.create("http://localhost:8000/", "analyst", {
+      name: "Analyst",
+      node_class: "gen_sql",
+      status: "draft",
+      prompt_language: "en",
+      prompt_version: "1.0",
+      max_turns: 30,
+    });
     await agentApi.tools("http://localhost:8000/");
     await agentApi.useTools("http://localhost:8000/", "gen_sql");
+    await agentApi.delete("http://localhost:8000/", "analyst");
 
-    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/agent/tools");
-    expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe("http://localhost:8000/api/v1/agent/use_tools?agent_type=gen_sql");
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents");
+    expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/analyst");
+    expect(vi.mocked(fetch).mock.calls[2]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/analyst");
+    expect((vi.mocked(fetch).mock.calls[2]?.[1] as RequestInit).method).toBe("PUT");
+    expect(JSON.parse(String((vi.mocked(fetch).mock.calls[2]?.[1] as RequestInit).body))).toEqual({
+      name: "Analyst",
+      node_class: "gen_sql",
+      status: "draft",
+      prompt_language: "en",
+      prompt_version: "1.0",
+      max_turns: 30,
+    });
+    expect(vi.mocked(fetch).mock.calls[3]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/tools");
+    expect(vi.mocked(fetch).mock.calls[4]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/tool-reference?node_class=gen_sql");
+    expect(vi.mocked(fetch).mock.calls[5]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/analyst");
+    expect((vi.mocked(fetch).mock.calls[5]?.[1] as RequestInit).method).toBe("DELETE");
   });
 
   it("keeps legacy workflow helpers scoped to typed compatibility payloads", async () => {
