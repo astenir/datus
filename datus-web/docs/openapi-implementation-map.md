@@ -6,7 +6,7 @@ This document tracks frontend coverage for the backend route surface. It is a wo
 
 ## Summary
 
-Current OpenAPI surface: 146 operations.
+Current OpenAPI surface: 149 operations.
 
 Implemented as interactive workspace UI:
 - Workspace navigation is route-backed with Vue Router: `/chat`, `/chat/:sessionId`, `/catalog`, `/semantic`, `/knowledge`, `/sql`, `/mcp`, `/agents`, `/configuration`, `/artifacts/dashboards`, `/artifacts/dashboards/:slug`, `/artifacts/reports`, `/artifacts/reports/:slug`, `/profile`, and `/admin?tab=...`.
@@ -18,7 +18,7 @@ Implemented as interactive workspace UI:
 - Enterprise Agent list/detail/upsert/delete and agent tool catalog inspection through `src/features/agent/AgentManagerPanel.vue`, backed by `/api/v1/admin/agents*` rather than legacy `/api/v1/agent/*` routes.
 - Configuration display, model/datasource replacement saves, model catalog listing, and connectivity probes through `src/features/config/ConfigurationPanel.vue`.
 - Enterprise system status summary through the configuration summary tab.
-- Knowledge-base bootstrap and documentation bootstrap start/cancel/progress streams through `src/features/knowledge/KnowledgeBootstrapPanel.vue`.
+- Knowledge-base upload staging plus bootstrap and documentation bootstrap start/cancel/progress streams through `src/features/knowledge/KnowledgeBootstrapPanel.vue`.
 - Dashboard/report listing, route-backed detail browsing, dashboard template query execution, HTML preview URL construction, and creator-side artifact sharing API support through `src/features/artifacts/**` and `src/lib/api/artifacts.ts`.
 - Enterprise admin users, user details, roles, role details, audit, datasource grants, sessions, session details, quotas, secrets, and artifact ACLs including allowed user IDs through route-backed admin tabs and detail dialogs in `src/features/admin/AdminPanel.vue`.
 
@@ -48,7 +48,7 @@ Not suitable as standalone pages by default:
 | subject tree | 13 | Current `/api/v1/subject-tree*` helpers are used by the knowledge panel for subject tree listing, metric/reference SQL detail, and mutation support; legacy `/api/v1/subject/*` remains hidden. | `src/lib/api/knowledge.ts`, `src/features/knowledge/KnowledgeBasePanel.vue`, `src/lib/api.test.ts` |
 | configuration / models | 6 | Interactive configuration panel implemented | `src/lib/api/config.ts`, `src/composables/useConfigurationManager.ts`, `src/composables/useModels.ts`, `src/features/config/ConfigurationPanel.vue` |
 | mcp | 9 | Interactive panel implemented | `src/lib/api/mcp.ts`, `src/features/mcp/McpPanel.vue` |
-| knowledge-base bootstrap | 4 | Interactive operator panel implemented | `src/lib/api/chat.ts`, `src/composables/useKnowledgeBootstrap.ts`, `src/features/knowledge/KnowledgeBootstrapPanel.vue` |
+| knowledge-base bootstrap | 7 | Interactive operator panel implemented with browser upload staging for success-story CSVs, reference SQL files, and local platform docs | `src/lib/api/chat.ts`, `src/composables/useKnowledgeBootstrap.ts`, `src/features/knowledge/KnowledgeBootstrapPanel.vue`, `src/features/knowledge/KnowledgeUploadField.vue` |
 | enterprise agents | 12 | Route-backed Agent Manager implemented at `/agents` with `/api/v1/admin/agents*` list/detail/upsert/delete/tool-reference support; public `/api/v1/agents*` remains available-agent support for future chat selection. | `src/lib/api/agent.ts`, `src/composables/useAgentManager.ts`, `src/features/agent/AgentManagerPanel.vue`, `src/router/index.ts`, `src/composables/useAgentManager.test.ts` |
 | dashboard / report / visualization | 4 | Dashboard/report list, detail, preview, and dashboard template query execution implemented; visualization helper typed but hidden because the enterprise backend disables the legacy recommender route. | `src/lib/api/artifacts.ts`, `src/composables/useArtifacts.ts`, `src/features/artifacts/**` |
 | enterprise me | 6 | Profile, effective permissions, datasource grants, sessions, and usage implemented | `src/lib/api/profile.ts`, `src/composables/useProfileOverview.ts`, `src/features/profile/ProfilePanel.vue`, `src/composables/useAuth.ts`, `src/composables/usePermission.ts` |

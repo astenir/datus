@@ -6,6 +6,8 @@ import type {
   BootstrapKbInput,
   ChatSessionOption,
   CompactSessionData,
+  KbUploadCreateInput,
+  KbUploadRecord,
   SuccessStoryInput,
   SuccessStoryResult,
   UserInteractionInput,
@@ -70,6 +72,31 @@ export const chatApi = {
 };
 
 export const kbApi = {
+  async upload(baseUrl: string, input: KbUploadCreateInput): Promise<KbUploadRecord> {
+    const body = new FormData();
+    body.append("purpose", input.purpose);
+    for (const file of input.files) {
+      body.append("files", file);
+    }
+    if (input.platform?.trim()) body.append("platform", input.platform.trim());
+    if (input.datasourceId?.trim()) body.append("datasource_id", input.datasourceId.trim());
+    if (input.description?.trim()) body.append("description", input.description.trim());
+
+    const response = await request(apiUrl(baseUrl, "/api/v1/kb/uploads"), {
+      method: "POST",
+      body,
+    });
+    return response.json() as Promise<KbUploadRecord>;
+  },
+
+  uploadDetail(baseUrl: string, uploadId: string): Promise<KbUploadRecord | null> {
+    return apiResult(baseUrl, `/api/v1/kb/uploads/${encodeURIComponent(uploadId)}`);
+  },
+
+  deleteUpload(baseUrl: string, uploadId: string): Promise<unknown> {
+    return apiResult(baseUrl, `/api/v1/kb/uploads/${encodeURIComponent(uploadId)}`, { method: "DELETE" });
+  },
+
   bootstrap(baseUrl: string, input: BootstrapKbInput): Promise<ReadableStream<Uint8Array> | null> {
     return requestStream(baseUrl, "/api/v1/kb/bootstrap", input);
   },

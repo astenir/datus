@@ -13,6 +13,7 @@ import {
   chatApi,
   configApi,
   dashboardApi,
+  kbApi,
   mcpApi,
   meApi,
   reportApi,
@@ -67,6 +68,41 @@ describe("api client", () => {
       "http://localhost:8000/api/v1/chat/feedback",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("uploads KB source files as multipart form data", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      mockJsonResponse({
+        upload_id: "upload-1",
+        purpose: "success_story_csv",
+        files: [{
+          file_id: "file-1",
+          filename: "success.csv",
+          size: 24,
+          content_type: "text/csv",
+          relative_path: "uploads/project/alice/upload-1/success.csv",
+        }],
+        created_at: "2026-06-30T00:00:00Z",
+        status: "available",
+        project_id: "project",
+      }),
+    );
+
+    const file = new File(["question,sql\nq,select 1"], "success.csv", { type: "text/csv" });
+    const result = await kbApi.upload("http://localhost:8000/", {
+      purpose: "success_story_csv",
+      files: [file],
+      datasourceId: "fund",
+      description: "success_story_csv",
+    });
+
+    const init = vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit;
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/kb/uploads");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeInstanceOf(FormData);
+    expect(init.headers).toBeInstanceOf(Headers);
+    expect((init.headers as Headers).has("Content-Type")).toBe(false);
+    expect(result.upload_id).toBe("upload-1");
   });
 
   it("sends caller-provided SQL execute task ids so stop can target the same query", async () => {

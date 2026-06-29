@@ -8,6 +8,12 @@ import type {
   BootstrapComponent,
   BootstrapDocInput,
   BootstrapKbInput,
+  KbUploadCreateInput,
+  KbUploadRecord,
+  KnowledgeBootstrapUploadFiles,
+  KnowledgeBootstrapUploadPending,
+  KnowledgeBootstrapUploadSlot,
+  KnowledgeBootstrapUploads,
   KnowledgeBootstrapDocsForm,
   KnowledgeBootstrapForms,
   KnowledgeBootstrapKbForm,
@@ -19,9 +25,18 @@ import type {
 } from "@/types";
 
 const KB_COMPONENTS: readonly BootstrapComponent[] = ["metadata", "semantic_model", "metrics", "reference_sql"];
+const KB_UPLOAD_PURPOSE_BY_SLOT: Record<KnowledgeBootstrapUploadSlot, KbUploadCreateInput["purpose"]> = {
+  successStory: "success_story_csv",
+  referenceSql: "reference_sql",
+  docs: "platform_docs",
+};
 const SENSITIVE_KEY_PATTERN = /token|authorization|password|secret|api[_-]?key/i;
 const TERMINAL_EVENTS = new Set(["complete", "completed", "done", "end", "finish", "finished"]);
 const ERROR_EVENTS = new Set(["error", "failed", "failure"]);
+
+type UseKnowledgeBootstrapOptions = {
+  currentDatasource?: () => string | null | undefined;
+};
 
 function defaultKbForm(): KnowledgeBootstrapKbForm {
   return {
@@ -58,6 +73,30 @@ function defaultForms(): KnowledgeBootstrapForms {
   return {
     kb: defaultKbForm(),
     docs: defaultDocsForm(),
+  };
+}
+
+function defaultUploadFiles(): KnowledgeBootstrapUploadFiles {
+  return {
+    successStory: [],
+    referenceSql: [],
+    docs: [],
+  };
+}
+
+function defaultUploads(): KnowledgeBootstrapUploads {
+  return {
+    successStory: null,
+    referenceSql: null,
+    docs: null,
+  };
+}
+
+function defaultUploadPending(): KnowledgeBootstrapUploadPending {
+  return {
+    successStory: false,
+    referenceSql: false,
+    docs: false,
   };
 }
 
@@ -167,7 +206,19 @@ function isErrorEvent(eventName: string, payload: unknown): boolean {
   return eventLevel(eventName, payload) === "error";
 }
 
-function buildKbBootstrapInput(form: KnowledgeBootstrapKbForm): BootstrapKbInput {
+function uploadRef(record: KbUploadRecord | null): { uploadId: string; fileId?: string } | null {
+  if (!record) return null;
+  const firstFileId = record.files[0]?.file_id;
+  return firstFileId ? { uploadId: record.upload_id, fileId: firstFileId } : { uploadId: record.upload_id };
+}
+
+function buildKbBootstrapInput(
+  form: KnowledgeBootstrapKbForm,
+  uploads: Pick<KnowledgeBootstrapUploads, "successStory" | "referenceSql"> = {
+    successStory: null,
+    referenceSql: null,
+  },
+): BootstrapKbInput {
   const component = KB_COMPONENTS.includes(form.component) ? form.component : "metadata";
   const input: BootstrapKbInput = {
     components: [component],
@@ -182,6 +233,14 @@ function buildKbBootstrapInput(form: KnowledgeBootstrapKbForm): BootstrapKbInput
   }
 
   if (component === "semantic_model" || component === "metrics") {
+    const successStoryUpload = uploadRef(uploads.successStory);
+    if (successStoryUpload) {
+      input.success_story_upload_id = successStoryUpload.uploadId;
+      if (successStoryUpload.fileId) input.success_story_file_id = successStoryUpload.fileId;
+      if (component === "metrics") input.subject_tree = parseLines(form.subjectTreeText);
+      return input;
+    }
+
     const successStory = optionalString(form.successStory);
     if (!successStory) {
       throw new Error(component === "semantic_model" ? "请填写历史 SQL CSV 文件" : "请填写指标构建 CSV 文件");
@@ -194,6 +253,12 @@ function buildKbBootstrapInput(form: KnowledgeBootstrapKbForm): BootstrapKbInput
   }
 
   if (component === "reference_sql") {
+    if (uploads.referenceSql) {
+      input.reference_sql_upload_id = uploads.referenceSql.upload_id;
+      input.subject_tree = parseLines(form.subjectTreeText);
+      return input;
+    }
+
     const sqlDir = optionalString(form.sqlDir);
     if (!sqlDir) {
       throw new Error("请填写 SQL 文件目录");
@@ -205,18 +270,19 @@ function buildKbBootstrapInput(form: KnowledgeBootstrapKbForm): BootstrapKbInput
   return input;
 }
 
-function buildDocsBootstrapInput(form: KnowledgeBootstrapDocsForm): BootstrapDocInput {
+function buildDocsBootstrapInput(form: KnowledgeBootstrapDocsForm, upload: KbUploadRecord | null = null): BootstrapDocInput {
   const platform = form.platform.trim();
   if (!platform) {
     throw new Error("请填写文档平台");
   }
 
-  return {
+  const input: BootstrapDocInput = {
     platform,
     build_mode: form.buildMode,
     pool_size: normalizePoolSize(form.poolSize),
-    source_type: optionalString(form.sourceType),
-    source: optionalString(form.source),
+    source_type: upload ? "local" : optionalString(form.sourceType),
+    source: upload ? null : optionalString(form.source),
+    upload_id: upload?.upload_id ?? null,
     version: optionalString(form.version),
     github_ref: optionalString(form.githubRef),
     github_token: optionalString(form.githubToken),
@@ -226,6 +292,8 @@ function buildDocsBootstrapInput(form: KnowledgeBootstrapDocsForm): BootstrapDoc
     include_patterns: parseLines(form.includePatternsText),
     exclude_patterns: parseLines(form.excludePatternsText),
   };
+
+  return input;
 }
 
 function parseBootstrapEvent(event: SseEvent, mode: KnowledgeBootstrapMode): KnowledgeBootstrapLogEntry & { terminal: boolean } {
@@ -259,10 +327,13 @@ function formatLogLine(entry: KnowledgeBootstrapLogEntry): string {
   return `[${timestamp}] ${entry.level.toUpperCase()} ${scope}${suffix} ${entry.message}`;
 }
 
-export function useKnowledgeBootstrap() {
+export function useKnowledgeBootstrap(options: UseKnowledgeBootstrapOptions = {}) {
   const connection = useConnection();
 
   const forms = ref<KnowledgeBootstrapForms>(defaultForms());
+  const selectedUploadFiles = ref<KnowledgeBootstrapUploadFiles>(defaultUploadFiles());
+  const uploads = ref<KnowledgeBootstrapUploads>(defaultUploads());
+  const uploadPending = ref<KnowledgeBootstrapUploadPending>(defaultUploadPending());
   const logs = ref<KnowledgeBootstrapLogEntry[]>([]);
   const status = shallowRef<KnowledgeBootstrapStatus>("idle");
   const activeMode = shallowRef<KnowledgeBootstrapMode>("kb");
@@ -274,6 +345,7 @@ export function useKnowledgeBootstrap() {
   const canCancel = computed(() => isRunning.value);
   const terminalOutput = computed(() => logs.value.map(formatLogLine).join("\n"));
   const latestLog = computed(() => logs.value[logs.value.length - 1] ?? null);
+  const hasPendingUpload = computed(() => Object.values(uploadPending.value).some(Boolean));
 
   function appendEntry(entry: KnowledgeBootstrapLogEntry & { terminal?: boolean }) {
     const { terminal: _terminal, ...logEntry } = entry;
@@ -285,6 +357,86 @@ export function useKnowledgeBootstrap() {
 
   function clearLogs() {
     logs.value = [];
+  }
+
+  function setUploadFiles(slot: KnowledgeBootstrapUploadSlot, files: readonly File[]) {
+    selectedUploadFiles.value = {
+      ...selectedUploadFiles.value,
+      [slot]: [...files],
+    };
+    uploads.value = {
+      ...uploads.value,
+      [slot]: null,
+    };
+  }
+
+  function clearUpload(slot: KnowledgeBootstrapUploadSlot) {
+    selectedUploadFiles.value = {
+      ...selectedUploadFiles.value,
+      [slot]: [],
+    };
+    uploads.value = {
+      ...uploads.value,
+      [slot]: null,
+    };
+  }
+
+  function uploadMetadata(slot: KnowledgeBootstrapUploadSlot): Pick<KbUploadCreateInput, "platform" | "datasourceId" | "description"> {
+    const datasourceId = options.currentDatasource?.()?.trim() || null;
+    if (slot === "docs") {
+      return {
+        platform: forms.value.docs.platform.trim() || null,
+        ...(datasourceId ? { datasourceId } : {}),
+        description: "platform_docs",
+      };
+    }
+    return {
+      ...(datasourceId ? { datasourceId } : {}),
+      description: slot === "successStory" ? "success_story_csv" : "reference_sql",
+    };
+  }
+
+  async function uploadFiles(slot: KnowledgeBootstrapUploadSlot): Promise<KbUploadRecord | null> {
+    const files = selectedUploadFiles.value[slot];
+    if (files.length === 0) {
+      toast.error("请先选择要上传的文件");
+      return null;
+    }
+
+    uploadPending.value = {
+      ...uploadPending.value,
+      [slot]: true,
+    };
+
+    try {
+      const record = await kbApi.upload(connection.effectiveBase(), {
+        purpose: KB_UPLOAD_PURPOSE_BY_SLOT[slot],
+        files,
+        ...uploadMetadata(slot),
+      });
+      uploads.value = {
+        ...uploads.value,
+        [slot]: record,
+      };
+      toast.success("文件上传完成");
+      return record;
+    } catch (error) {
+      console.error("知识库文件上传失败:", error);
+      toast.error(error instanceof Error ? error.message : "文件上传失败");
+      return null;
+    } finally {
+      uploadPending.value = {
+        ...uploadPending.value,
+        [slot]: false,
+      };
+    }
+  }
+
+  async function ensureUpload(slot: KnowledgeBootstrapUploadSlot): Promise<KbUploadRecord | null> {
+    const currentUpload = uploads.value[slot];
+    if (currentUpload) return currentUpload;
+    if (selectedUploadFiles.value[slot].length === 0) return null;
+    return uploadFiles(slot);
   }
 
   function currentStatus(): KnowledgeBootstrapStatus {
@@ -377,9 +529,24 @@ export function useKnowledgeBootstrap() {
   }
 
   async function startKbBootstrap() {
+    const component = forms.value.kb.component;
+    const uploadSlot = component === "semantic_model" || component === "metrics"
+      ? "successStory"
+      : component === "reference_sql"
+        ? "referenceSql"
+        : null;
+
+    if (uploadSlot) {
+      const ensuredUpload = await ensureUpload(uploadSlot);
+      if (selectedUploadFiles.value[uploadSlot].length > 0 && !ensuredUpload) return;
+    }
+
     let input: BootstrapKbInput;
     try {
-      input = buildKbBootstrapInput(forms.value.kb);
+      input = buildKbBootstrapInput(forms.value.kb, {
+        successStory: uploads.value.successStory,
+        referenceSql: uploads.value.referenceSql,
+      });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "知识库构建参数无效");
       return;
@@ -388,9 +555,12 @@ export function useKnowledgeBootstrap() {
   }
 
   async function startDocsBootstrap() {
+    const ensuredUpload = await ensureUpload("docs");
+    if (selectedUploadFiles.value.docs.length > 0 && !ensuredUpload) return;
+
     let input: BootstrapDocInput;
     try {
-      input = buildDocsBootstrapInput(forms.value.docs);
+      input = buildDocsBootstrapInput(forms.value.docs, uploads.value.docs);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "文档构建参数无效");
       return;
@@ -422,6 +592,9 @@ export function useKnowledgeBootstrap() {
 
   return {
     forms,
+    selectedUploadFiles: readonly(selectedUploadFiles),
+    uploads: readonly(uploads),
+    uploadPending: readonly(uploadPending),
     logs: readonly(logs),
     status: readonly(status),
     activeMode: readonly(activeMode),
@@ -430,6 +603,10 @@ export function useKnowledgeBootstrap() {
     canCancel,
     terminalOutput,
     latestLog,
+    hasPendingUpload,
+    setUploadFiles,
+    clearUpload,
+    uploadFiles,
     startKbBootstrap,
     startDocsBootstrap,
     cancelActiveBootstrap,

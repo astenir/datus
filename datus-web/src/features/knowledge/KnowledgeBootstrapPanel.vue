@@ -35,6 +35,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { useKnowledgeBootstrap } from "@/composables/useKnowledgeBootstrap"
+import KnowledgeUploadField from "@/features/knowledge/KnowledgeUploadField.vue"
 import type {
   BootstrapBuildMode,
   BootstrapComponent,
@@ -48,7 +49,7 @@ const props = defineProps<{
   datasource?: string | null
 }>()
 
-const manager = useKnowledgeBootstrap()
+const manager = useKnowledgeBootstrap({ currentDatasource: () => props.datasource })
 
 const kbComponentOptions: ReadonlyArray<{ value: BootstrapComponent; label: string; description: string }> = [
   { value: "metadata", label: "元数据", description: "表、字段和目录索引" },
@@ -67,6 +68,10 @@ const buildModeOptions: ReadonlyArray<{ value: BootstrapBuildMode; label: string
   { value: "overwrite", label: "覆盖" },
   { value: "check", label: "检查" },
 ]
+
+const successStoryAccept = ".csv,text/csv,application/vnd.ms-excel"
+const referenceSqlAccept = ".sql,text/plain,application/sql"
+const docsAccept = ".md,.markdown,.txt,.rst,.html,.htm,.json,.yaml,.yml,text/plain,text/markdown,text/html,application/json"
 
 const statusLabel = computed(() => statusText(manager.status.value))
 const activeModeLabel = computed(() => manager.activeMode.value === "kb" ? "业务知识库" : "平台文档")
@@ -236,8 +241,21 @@ function updateBuildMode(value: unknown) {
                 </div>
 
                 <FieldGroup v-if="manager.forms.value.kb.component === 'semantic_model' || manager.forms.value.kb.component === 'metrics'">
+                  <KnowledgeUploadField
+                    id="kb-success-story-upload"
+                    label="上传历史 SQL CSV"
+                    description="上传后会使用 upload_id 构建；下方路径仅用于服务器已暂存文件。"
+                    :accept="successStoryAccept"
+                    :files="manager.selectedUploadFiles.value.successStory"
+                    :upload="manager.uploads.value.successStory"
+                    :uploading="manager.uploadPending.value.successStory"
+                    :disabled="manager.isRunning.value"
+                    @files-change="manager.setUploadFiles('successStory', $event)"
+                    @upload="manager.uploadFiles('successStory')"
+                    @clear="manager.clearUpload('successStory')"
+                  />
                   <Field>
-                    <FieldLabel for="kb-success-story">历史 SQL CSV</FieldLabel>
+                    <FieldLabel for="kb-success-story">服务器暂存 CSV</FieldLabel>
                     <Input
                       id="kb-success-story"
                       v-model="manager.forms.value.kb.successStory"
@@ -257,9 +275,23 @@ function updateBuildMode(value: unknown) {
                 </FieldGroup>
 
                 <FieldGroup v-if="manager.forms.value.kb.component === 'reference_sql'">
+                  <KnowledgeUploadField
+                    id="kb-reference-sql-upload"
+                    label="上传参考 SQL"
+                    description="可选择多个 .sql 文件；下方目录仅用于服务器已暂存文件。"
+                    :accept="referenceSqlAccept"
+                    multiple
+                    :files="manager.selectedUploadFiles.value.referenceSql"
+                    :upload="manager.uploads.value.referenceSql"
+                    :uploading="manager.uploadPending.value.referenceSql"
+                    :disabled="manager.isRunning.value"
+                    @files-change="manager.setUploadFiles('referenceSql', $event)"
+                    @upload="manager.uploadFiles('referenceSql')"
+                    @clear="manager.clearUpload('referenceSql')"
+                  />
                   <div class="grid gap-4 md:grid-cols-2">
                     <Field>
-                      <FieldLabel for="kb-sql-dir">SQL 文件目录</FieldLabel>
+                      <FieldLabel for="kb-sql-dir">服务器暂存 SQL 目录</FieldLabel>
                       <Input
                         id="kb-sql-dir"
                         v-model="manager.forms.value.kb.sqlDir"
@@ -354,6 +386,20 @@ function updateBuildMode(value: unknown) {
                 </div>
 
                 <div class="grid gap-4 md:grid-cols-2">
+                  <KnowledgeUploadField
+                    id="docs-upload"
+                    label="上传平台文档"
+                    description="上传后会按本地文档源构建；来源字段仍可用于 GitHub、网站或服务器暂存路径。"
+                    :accept="docsAccept"
+                    multiple
+                    :files="manager.selectedUploadFiles.value.docs"
+                    :upload="manager.uploads.value.docs"
+                    :uploading="manager.uploadPending.value.docs"
+                    :disabled="manager.isRunning.value"
+                    @files-change="manager.setUploadFiles('docs', $event)"
+                    @upload="manager.uploadFiles('docs')"
+                    @clear="manager.clearUpload('docs')"
+                  />
                   <Field>
                     <FieldLabel for="docs-source-type">来源类型</FieldLabel>
                     <Input

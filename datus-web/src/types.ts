@@ -404,8 +404,12 @@ export type BootstrapKbInput = {
   catalog?: string;
   database_name?: string;
   success_story?: string | null;
+  upload_id?: string | null;
+  success_story_upload_id?: string | null;
+  success_story_file_id?: string | null;
   subject_tree?: string[] | null;
   sql_dir?: string | null;
+  reference_sql_upload_id?: string | null;
 };
 
 export type BootstrapKbEvent = {
@@ -425,6 +429,7 @@ export type BootstrapDocInput = {
   pool_size?: number;
   source_type?: string | null;
   source?: string | null;
+  upload_id?: string | null;
   version?: string | null;
   github_ref?: string | null;
   github_token?: string | null;
@@ -434,6 +439,28 @@ export type BootstrapDocInput = {
   include_patterns?: string[] | null;
   exclude_patterns?: string[] | null;
 };
+
+export type KbUploadPurpose = components["schemas"]["KbUploadPurpose"];
+
+export type KbUploadedFile = components["schemas"]["KbUploadedFile"];
+
+export type KbUploadRecord = components["schemas"]["KbUploadRecord"];
+
+export type KbUploadCreateInput = {
+  purpose: KbUploadPurpose;
+  files: readonly File[];
+  platform?: string | null;
+  datasourceId?: string | null;
+  description?: string | null;
+};
+
+export type KnowledgeBootstrapUploadSlot = "successStory" | "referenceSql" | "docs";
+
+export type KnowledgeBootstrapUploadFiles = Record<KnowledgeBootstrapUploadSlot, File[]>;
+
+export type KnowledgeBootstrapUploads = Record<KnowledgeBootstrapUploadSlot, KbUploadRecord | null>;
+
+export type KnowledgeBootstrapUploadPending = Record<KnowledgeBootstrapUploadSlot, boolean>;
 
 export type KnowledgeBootstrapMode = "kb" | "docs";
 

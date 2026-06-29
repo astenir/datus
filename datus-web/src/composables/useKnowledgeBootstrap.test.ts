@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const bootstrap = vi.fn();
+const upload = vi.fn();
 const cancelBootstrap = vi.fn();
 const bootstrapDocs = vi.fn();
 const cancelBootstrapDocs = vi.fn();
@@ -9,6 +10,7 @@ const toastSuccess = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   kbApi: {
+    upload,
     bootstrap,
     cancelBootstrap,
     bootstrapDocs,
@@ -151,6 +153,7 @@ describe("knowledgeBootstrapInternals", () => {
       pool_size: 16,
       source_type: "github",
       source: "astenir/datus",
+      upload_id: null,
       version: "v1",
       github_ref: "main",
       github_token: "ghp_private",
@@ -203,6 +206,20 @@ describe("useKnowledgeBootstrap", () => {
     ].join("\n")));
     cancelBootstrap.mockResolvedValue({});
     cancelBootstrapDocs.mockResolvedValue({});
+    upload.mockResolvedValue({
+      upload_id: "upload-1",
+      purpose: "success_story_csv",
+      files: [{
+        file_id: "file-1",
+        filename: "success.csv",
+        size: 12,
+        content_type: "text/csv",
+        relative_path: "uploads/project/alice/upload-1/success.csv",
+      }],
+      created_at: "2026-06-30T00:00:00Z",
+      status: "available",
+      project_id: "project",
+    });
   });
 
   it("runs business KB bootstrap and captures stream state", async () => {
@@ -228,6 +245,82 @@ describe("useKnowledgeBootstrap", () => {
     expect(toastSuccess).toHaveBeenCalledWith("业务知识库构建完成");
   });
 
+  it("uploads selected success-story CSVs before bootstrap", async () => {
+    const { useKnowledgeBootstrap } = await import("./useKnowledgeBootstrap");
+    const manager = useKnowledgeBootstrap();
+    const file = new File(["question,sql\nq,select 1"], "success.csv", { type: "text/csv" });
+    manager.forms.value.kb.component = "semantic_model";
+    manager.setUploadFiles("successStory", [file]);
+
+    await manager.startKbBootstrap();
+
+    expect(upload).toHaveBeenCalledWith("http://api.test", {
+      purpose: "success_story_csv",
+      files: [file],
+      description: "success_story_csv",
+    });
+    expect(bootstrap).toHaveBeenCalledWith("http://api.test", {
+      components: ["semantic_model"],
+      strategy: "incremental",
+      success_story_upload_id: "upload-1",
+      success_story_file_id: "file-1",
+    });
+  });
+
+  it("passes the active datasource to KB uploads", async () => {
+    const { useKnowledgeBootstrap } = await import("./useKnowledgeBootstrap");
+    const manager = useKnowledgeBootstrap({ currentDatasource: () => "ccks_fund" });
+    const file = new File(["question,sql\nq,select 1"], "success.csv", { type: "text/csv" });
+    manager.forms.value.kb.component = "semantic_model";
+    manager.setUploadFiles("successStory", [file]);
+
+    await manager.startKbBootstrap();
+
+    expect(upload).toHaveBeenCalledWith("http://api.test", {
+      purpose: "success_story_csv",
+      files: [file],
+      datasourceId: "ccks_fund",
+      description: "success_story_csv",
+    });
+  });
+
+  it("uploads selected reference SQL files before bootstrap", async () => {
+    upload.mockResolvedValueOnce({
+      upload_id: "upload-sql",
+      purpose: "reference_sql",
+      files: [{
+        file_id: "file-sql",
+        filename: "daily.sql",
+        size: 21,
+        content_type: "text/plain",
+        relative_path: "uploads/project/alice/upload-sql/daily.sql",
+      }],
+      created_at: "2026-06-30T00:00:00Z",
+      status: "available",
+      project_id: "project",
+    });
+    const { useKnowledgeBootstrap } = await import("./useKnowledgeBootstrap");
+    const manager = useKnowledgeBootstrap();
+    const file = new File(["select 1"], "daily.sql", { type: "text/plain" });
+    manager.forms.value.kb.component = "reference_sql";
+    manager.forms.value.kb.subjectTreeText = "基金";
+    manager.setUploadFiles("referenceSql", [file]);
+
+    await manager.startKbBootstrap();
+
+    expect(upload).toHaveBeenCalledWith("http://api.test", {
+      purpose: "reference_sql",
+      files: [file],
+      description: "reference_sql",
+    });
+    expect(bootstrap).toHaveBeenCalledWith("http://api.test", {
+      components: ["reference_sql"],
+      strategy: "incremental",
+      reference_sql_upload_id: "upload-sql",
+      subject_tree: ["基金"],
+    });
+  });
+
   it("runs docs bootstrap without exposing tokens in logs", async () => {
     const { useKnowledgeBootstrap } = await import("./useKnowledgeBootstrap");
     const manager = useKnowledgeBootstrap();
@@ -242,6 +335,43 @@ describe("useKnowledgeBootstrap", () => {
     }));
     expect(manager.terminalOutput.value).not.toContain("ghp_private");
     expect(JSON.stringify(manager.logs.value)).not.toContain("ghp_private");
+  });
+
+  it("uploads selected platform docs before docs bootstrap", async () => {
+    upload.mockResolvedValueOnce({
+      upload_id: "upload-docs",
+      purpose: "platform_docs",
+      files: [{
+        file_id: "file-doc",
+        filename: "guide.md",
+        size: 15,
+        content_type: "text/markdown",
+        relative_path: "uploads/project/alice/upload-docs/guide.md",
+      }],
+      created_at: "2026-06-30T00:00:00Z",
+      status: "available",
+      project_id: "project",
+    });
+    const { useKnowledgeBootstrap } = await import("./useKnowledgeBootstrap");
+    const manager = useKnowledgeBootstrap();
+    const file = new File(["# Guide"], "guide.md", { type: "text/markdown" });
+    manager.forms.value.docs.platform = "datus";
+    manager.setUploadFiles("docs", [file]);
+
+    await manager.startDocsBootstrap();
+
+    expect(upload).toHaveBeenCalledWith("http://api.test", {
+      purpose: "platform_docs",
+      files: [file],
+      platform: "datus",
+      description: "platform_docs",
+    });
+    expect(bootstrapDocs).toHaveBeenCalledWith("http://api.test", expect.objectContaining({
+      platform: "datus",
+      source_type: "local",
+      source: null,
+      upload_id: "upload-docs",
+    }));
   });
 
   it("routes cancellation to the active KB stream endpoint", async () => {

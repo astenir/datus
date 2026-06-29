@@ -974,6 +974,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/kb/uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+
+        post: operations["create_kb_upload_api_v1_kb_uploads_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/kb/uploads/{upload_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["get_kb_upload_api_v1_kb_uploads__upload_id__get"];
+        put?: never;
+        post?: never;
+
+        delete: operations["delete_kb_upload_api_v1_kb_uploads__upload_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/kb/bootstrap": {
         parameters: {
             query?: never;
@@ -2506,6 +2541,19 @@ export interface components {
             };
         };
 
+        Body_create_kb_upload_api_v1_kb_uploads_post: {
+
+            purpose: components["schemas"]["KbUploadPurpose"];
+
+            files: string[];
+
+            platform?: string | null;
+
+            datasource_id?: string | null;
+
+            description?: string | null;
+        };
+
         BootstrapDocInput: {
 
             platform: string;
@@ -2517,6 +2565,8 @@ export interface components {
             source_type?: string | null;
 
             source?: string | null;
+
+            upload_id?: string | null;
 
             version?: string | null;
 
@@ -2549,9 +2599,17 @@ export interface components {
 
             success_story?: string | null;
 
+            upload_id?: string | null;
+
+            success_story_upload_id?: string | null;
+
+            success_story_file_id?: string | null;
+
             subject_tree?: string[] | null;
 
             sql_dir?: string | null;
+
+            reference_sql_upload_id?: string | null;
         };
 
         CallToolInput: {
@@ -3205,6 +3263,52 @@ export interface components {
         };
 
         KbComponent: "metadata" | "semantic_model" | "metrics" | "reference_sql";
+
+        KbUploadDeleteResponse: {
+
+            upload_id: string;
+
+            deleted: boolean;
+        };
+
+        KbUploadPurpose: "success_story_csv" | "reference_sql" | "platform_docs";
+
+        KbUploadRecord: {
+
+            upload_id: string;
+            purpose: components["schemas"]["KbUploadPurpose"];
+
+            files: components["schemas"]["KbUploadedFile"][];
+
+            created_at: string;
+
+            expires_at?: string | null;
+
+            status: components["schemas"]["KbUploadStatus"];
+
+            owner_user_id?: string | null;
+
+            project_id: string;
+
+            metadata?: {
+                [key: string]: string;
+            };
+        };
+
+        KbUploadStatus: "available" | "deleted" | "expired";
+
+        KbUploadedFile: {
+
+            file_id: string;
+
+            filename: string;
+
+            size: number;
+
+            content_type?: string | null;
+
+            relative_path: string;
+        };
 
         MeSummary: {
 
@@ -6615,6 +6719,101 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Result_Dict_str__Any__"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_kb_upload_api_v1_kb_uploads_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_create_kb_upload_api_v1_kb_uploads_post"];
+            };
+        };
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KbUploadRecord"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_kb_upload_api_v1_kb_uploads__upload_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KbUploadRecord"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_kb_upload_api_v1_kb_uploads__upload_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                upload_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KbUploadDeleteResponse"];
                 };
             };
 
