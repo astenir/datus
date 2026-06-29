@@ -215,6 +215,41 @@ async def test_body_store_scope_isolation_and_invalid_session_guard(tmp_path):
         alice.session_exists("../chat_session_shared")
 
 
+@pytest.mark.asyncio
+async def test_body_store_async_methods_do_not_use_run_async(tmp_path, monkeypatch):
+    import datus.models.session_manager as session_manager_module
+
+    def fail_run_async(*args, **kwargs):  # noqa: ARG001
+        raise AssertionError("async body-store methods must not use run_async")
+
+    monkeypatch.setattr(session_manager_module, "run_async", fail_run_async)
+    store = _MemoryBodyStore()
+    manager = SessionManager(
+        session_dir=str(tmp_path / "sessions"),
+        scope="alice",
+        project_id="enterprise",
+        body_store=store,
+    )
+    await manager.create_session("chat_session_async").add_items([{"role": "user", "content": "hello"}])
+
+    await manager.save_system_prompt_snapshot_async("chat_session_async", "prompt", {"node_name": "chat"})
+    snapshot = await manager.load_system_prompt_snapshot_async("chat_session_async")
+    assert snapshot["prompt"] == "prompt"
+
+    await manager.upsert_running_turn_usage_async("chat_session_async", 1, {"total_tokens": 7}, 128)
+    running = await manager.get_running_turn_usage_async("chat_session_async")
+    assert running["cumulative"]["total_tokens"] == 7
+    await manager.clear_running_turn_usage_async("chat_session_async")
+    assert await manager.get_running_turn_usage_async("chat_session_async") is None
+
+    copied = await manager.copy_session_async("chat_session_async", "feedback")
+    assert copied.startswith("feedback_session_")
+    assert await store.session_exists(project_id="enterprise", scope="alice", session_id=copied) is True
+
+    await manager.delete_system_prompt_snapshot_async("chat_session_async")
+    assert await manager.load_system_prompt_snapshot_async("chat_session_async") is None
+
+
 def test_body_store_running_usage_and_snapshot_round_trip(tmp_path):
     store = _MemoryBodyStore()
     manager = SessionManager(

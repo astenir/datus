@@ -27,6 +27,7 @@ The hook is a no-op when no ``ActionHistoryManager`` is bound on the node
 
 from __future__ import annotations
 
+import inspect
 import uuid
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
@@ -98,7 +99,7 @@ class TokenUsageHook(RunHooks):
         the standardized dict produced by ``_extract_usage_info``.
         """
         try:
-            self._publish(dict(usage_info or {}))
+            await self._publish(dict(usage_info or {}))
         except Exception:  # noqa: BLE001
             logger.debug("TokenUsageHook.emit_manual failed", exc_info=True)
 
@@ -119,9 +120,9 @@ class TokenUsageHook(RunHooks):
         except Exception:  # noqa: BLE001
             logger.debug("TokenUsageHook: _extract_usage_info failed", exc_info=True)
             return
-        self._publish(dict(cumulative))
+        await self._publish(dict(cumulative))
 
-    def _publish(self, cumulative: Dict[str, Any]) -> None:
+    async def _publish(self, cumulative: Dict[str, Any]) -> None:
         delta = _delta(cumulative, self._last_cumulative)
         self._last_cumulative = cumulative
 
@@ -129,7 +130,7 @@ class TokenUsageHook(RunHooks):
         last_call_input_tokens = int(cumulative.get("last_call_input_tokens", 0) or 0)
 
         self._update_node_snapshot(cumulative, context_length, last_call_input_tokens)
-        self._persist_snapshot(cumulative, context_length)
+        await self._persist_snapshot(cumulative, context_length)
         self._enqueue_action(cumulative, delta, context_length, last_call_input_tokens)
         self._notify_status_dirty()
 
@@ -157,7 +158,7 @@ class TokenUsageHook(RunHooks):
         except Exception:  # noqa: BLE001
             logger.debug("TokenUsageHook: failed to update node.running_turn_usage", exc_info=True)
 
-    def _persist_snapshot(self, cumulative: Dict[str, Any], context_length: int) -> None:
+    async def _persist_snapshot(self, cumulative: Dict[str, Any], context_length: int) -> None:
         session_id = getattr(self._node, "session_id", None)
         if not session_id:
             return
@@ -169,12 +170,21 @@ class TokenUsageHook(RunHooks):
             return
         turn_number = self._current_turn_number()
         try:
-            session_manager.upsert_running_turn_usage(
-                session_id=session_id,
-                user_turn_number=turn_number,
-                cumulative=cumulative,
-                context_length=context_length,
-            )
+            persist_async = getattr(session_manager, "upsert_running_turn_usage_async", None)
+            if inspect.iscoroutinefunction(persist_async):
+                await persist_async(
+                    session_id=session_id,
+                    user_turn_number=turn_number,
+                    cumulative=cumulative,
+                    context_length=context_length,
+                )
+            else:
+                session_manager.upsert_running_turn_usage(
+                    session_id=session_id,
+                    user_turn_number=turn_number,
+                    cumulative=cumulative,
+                    context_length=context_length,
+                )
         except Exception:  # noqa: BLE001
             logger.debug("TokenUsageHook: upsert_running_turn_usage failed", exc_info=True)
 

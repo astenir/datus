@@ -12,6 +12,7 @@ streaming interactions with tool integration and action history management.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import uuid
@@ -1008,6 +1009,51 @@ class AgenticNode(Node):
             sm.save_system_prompt_snapshot(session_id, prompt, meta)
         return prompt
 
+    async def _get_session_system_prompt_async(
+        self,
+        prompt_version: Optional[str] = None,
+        template_context: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Async request-path variant of :meth:`_get_session_system_prompt`.
+
+        PostgreSQL session body stores use asyncpg resources bound to the
+        current event loop. FastAPI/streaming paths must await them directly
+        instead of entering the synchronous ``run_async()`` bridge.
+        """
+        session_id = getattr(self, "session_id", "") or ""
+        meta = self._system_prompt_snapshot_meta(prompt_version)
+        sm = None
+        if session_id:
+            try:
+                sm = self.session_manager
+            except Exception as exc:  # session manager wiring is optional in some unit paths
+                logger.debug("System-prompt snapshot disabled (no session manager): %s", exc)
+                sm = None
+
+        if sm is not None:
+            load_snapshot = getattr(sm, "load_system_prompt_snapshot_async", None)
+            snapshot = (
+                await load_snapshot(session_id)
+                if inspect.iscoroutinefunction(load_snapshot)
+                else sm.load_system_prompt_snapshot(session_id)
+            )
+            if snapshot is not None and all(snapshot.get(k) == v for k, v in meta.items()):
+                self._ensure_lazy_tools_mounted()
+                return snapshot["prompt"]
+
+        if template_context:
+            prompt = self._get_system_prompt(prompt_version=prompt_version, template_context=template_context)
+        else:
+            prompt = self._get_system_prompt(prompt_version=prompt_version)
+
+        if sm is not None:
+            save_snapshot = getattr(sm, "save_system_prompt_snapshot_async", None)
+            if inspect.iscoroutinefunction(save_snapshot):
+                await save_snapshot(session_id, prompt, meta)
+            else:
+                sm.save_system_prompt_snapshot(session_id, prompt, meta)
+        return prompt
+
     def _get_system_prompt(
         self,
         prompt_version: Optional[str] = None,
@@ -1426,7 +1472,11 @@ class AgenticNode(Node):
                 # memory, skills) instead of replaying the pre-compact snapshot.
                 if result.get("success") and self.session_id:
                     try:
-                        self.session_manager.delete_system_prompt_snapshot(self.session_id)
+                        delete_snapshot = getattr(self.session_manager, "delete_system_prompt_snapshot_async", None)
+                        if inspect.iscoroutinefunction(delete_snapshot):
+                            await delete_snapshot(self.session_id)
+                        else:
+                            self.session_manager.delete_system_prompt_snapshot(self.session_id)
                     except Exception as exc:
                         logger.debug("Failed to drop system-prompt snapshot after compact: %s", exc)
                 # Always emit the terminal action — even on failure — so the
@@ -2636,7 +2686,7 @@ class AgenticNode(Node):
             prompt_version = getattr(self.input, "prompt_version", None)
             # Served from a per-session snapshot when available; rebuilt and
             # re-persisted on a cache miss or when the snapshot meta is stale.
-            ctx.system_instruction = self._get_session_system_prompt(
+            ctx.system_instruction = await self._get_session_system_prompt_async(
                 prompt_version=prompt_version,
                 template_context=template_context,
             )
@@ -2758,8 +2808,12 @@ class AgenticNode(Node):
                             sm = self.session_manager
                         except Exception:  # noqa: BLE001
                             sm = None
-                        if sm is not None and hasattr(sm, "clear_running_turn_usage"):
-                            sm.clear_running_turn_usage(session_id)
+                        if sm is not None:
+                            clear_running_usage = getattr(sm, "clear_running_turn_usage_async", None)
+                            if inspect.iscoroutinefunction(clear_running_usage):
+                                await clear_running_usage(session_id)
+                            elif hasattr(sm, "clear_running_turn_usage"):
+                                sm.clear_running_turn_usage(session_id)
                 except Exception:  # noqa: BLE001
                     logger.debug("Failed to drop running_turn_usage on turn end", exc_info=True)
 

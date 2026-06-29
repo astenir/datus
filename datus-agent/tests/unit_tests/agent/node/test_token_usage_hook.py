@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any, Dict, List, Tuple
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -208,6 +208,21 @@ async def test_emit_manual_uses_same_publish_pipeline():
     assert sm.upsert_running_turn_usage.called
     notify.assert_called_once()
     assert manager.added[0].output["cumulative"]["total_tokens"] == 15
+
+
+@pytest.mark.asyncio
+async def test_emit_manual_prefers_async_running_usage_persistence():
+    node, manager, bus, sm, notify = _fake_node([])
+    sm.upsert_running_turn_usage_async = AsyncMock()
+    hook = TokenUsageHook(node)
+
+    await hook.emit_manual({"input_tokens": 3, "output_tokens": 4, "total_tokens": 7})
+
+    sm.upsert_running_turn_usage_async.assert_awaited_once()
+    sm.upsert_running_turn_usage.assert_not_called()
+    assert len(manager.added) == 1
+    assert len(bus.published) == 1
+    notify.assert_called_once()
 
 
 @pytest.mark.asyncio

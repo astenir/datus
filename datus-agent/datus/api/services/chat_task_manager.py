@@ -35,7 +35,7 @@ from datus.schemas.action_history import ActionHistoryManager, ActionRole, Actio
 from datus.schemas.node_models import Metric, ReferenceSql, TableSchema
 from datus.tools.proxy.proxy_tool import apply_proxy_tools
 from datus.utils.loggings import get_logger
-from datus.utils.path_manager import set_current_path_manager
+from datus.utils.path_manager import get_path_manager, set_current_path_manager
 from datus.utils.time_utils import now_utc_iso
 from datus.utils.trace_context import build_chat_trace_context, reset_trace_context, set_trace_context
 
@@ -563,17 +563,27 @@ class ChatTaskManager:
             #    operations (psycopg ConnectionPool creation, PG DDL for table
             #    creation via get_storage()) that would freeze the event loop.
             interactive_enabled = request.interactive if request.interactive is not None else self._default_interactive
+            feedback_session_id: Optional[str] = None
+            if sub_agent_id == "feedback" and request.source_session_id and self._session_body_store is not None:
+                base_dir = getattr(agent_config, "session_dir", None) or str(
+                    get_path_manager(agent_config=agent_config).sessions_dir
+                )
+                sm = SessionManager(
+                    session_dir=base_dir,
+                    scope=session_scope_from_user_id(user_id),
+                    agent_config=agent_config,
+                    project_id=self._project_id,
+                    body_store=self._session_body_store,
+                )
+                feedback_session_id = await sm.copy_session_async(request.source_session_id, "feedback")
 
             def _init_node():
                 # Feedback runs triggered with a source_session_id pre-copy the
                 # source conversation into a fresh feedback session file BEFORE
                 # node construction. The node then opens that cloned id directly
                 # — no post-construction mutation needed.
-                feedback_session_id: Optional[str] = None
-                if sub_agent_id == "feedback" and request.source_session_id:
-                    from datus.models.session_manager import SessionManager
-                    from datus.utils.path_manager import get_path_manager
-
+                local_feedback_session_id = feedback_session_id
+                if sub_agent_id == "feedback" and request.source_session_id and self._session_body_store is None:
                     base_dir = getattr(agent_config, "session_dir", None) or str(
                         get_path_manager(agent_config=agent_config).sessions_dir
                     )
@@ -584,7 +594,7 @@ class ChatTaskManager:
                         project_id=self._project_id,
                         body_store=self._session_body_store,
                     )
-                    feedback_session_id = sm.copy_session(request.source_session_id, "feedback")
+                    local_feedback_session_id = sm.copy_session(request.source_session_id, "feedback")
 
                 return self._create_node(
                     agent_config,
@@ -592,7 +602,7 @@ class ChatTaskManager:
                     node_id=session_id,
                     user_id=user_id,
                     interactive=interactive_enabled,
-                    session_id=feedback_session_id,
+                    session_id=local_feedback_session_id,
                 )
 
             node = await asyncio.to_thread(_init_node)
