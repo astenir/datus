@@ -150,7 +150,7 @@ function tableFromColumnsAndRows(value: unknown): ToolTable | null {
   if (compressedRows) return compressedRows;
 
   const rows = rowsFromValue(source.rows);
-  if (!rows || rows.length === 0) return null;
+  if (!rows) return null;
 
   return {
     columns,

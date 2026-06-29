@@ -33,10 +33,9 @@ import {
   Tool,
   ToolContent,
   ToolHeader,
-  ToolInput,
-  ToolOutput,
 } from "@/components/ai-elements/tool"
 import { MessageResponse } from "@/components/ai-elements/message"
+import ToolPayloadView from "@/features/chat/ToolPayloadView.vue"
 import UserInteractionBlock from "@/features/chat/UserInteractionBlock.vue"
 import type { MessageDisplayBlock, ToolChildMessage } from "@/types"
 
@@ -126,20 +125,24 @@ function childMessageLabel(message: ToolChildMessage) {
       :title="block.toolName"
     />
     <ToolContent>
-      <ToolInput :input="block.params as never" />
+      <ToolPayloadView
+        mode="input"
+        :tool-name="block.toolName"
+        :value="block.params"
+      />
       <div
         v-if="block.childMessages?.length"
-        class="space-y-3 border-t border-border/70 p-4"
+        class="flex flex-col gap-3 border-t border-border/70 p-4"
       >
         <div
           v-for="child in block.childMessages"
           :key="child.id"
-          class="space-y-2 rounded-md bg-muted/40 p-3"
+          class="flex flex-col gap-2 rounded-md bg-muted/40 p-3"
         >
           <div class="text-xs font-medium text-muted-foreground">
             {{ childMessageLabel(child) }}
           </div>
-          <div class="space-y-2 text-sm leading-6">
+          <div class="flex flex-col gap-2 text-sm leading-6">
             <template v-if="child.blocks?.length">
               <ChatBlockRenderer
                 v-for="(childBlock, index) in child.blocks"
@@ -169,8 +172,10 @@ function childMessageLabel(message: ToolChildMessage) {
       :title="block.toolName"
     />
     <ToolContent>
-      <ToolOutput
-        :output="block.result as never"
+      <ToolPayloadView
+        mode="output"
+        :tool-name="block.toolName"
+        :value="block.result"
         :error-text="block.errorText"
       />
     </ToolContent>
@@ -183,20 +188,24 @@ function childMessageLabel(message: ToolChildMessage) {
       :title="block.toolName"
     />
     <ToolContent>
-      <ToolInput :input="block.params as never" />
+      <ToolPayloadView
+        mode="input"
+        :tool-name="block.toolName"
+        :value="block.params"
+      />
       <div
         v-if="block.childMessages?.length"
-        class="space-y-3 border-t border-border/70 p-4"
+        class="flex flex-col gap-3 border-t border-border/70 p-4"
       >
         <div
           v-for="child in block.childMessages"
           :key="child.id"
-          class="space-y-2 rounded-md bg-muted/40 p-3"
+          class="flex flex-col gap-2 rounded-md bg-muted/40 p-3"
         >
           <div class="text-xs font-medium text-muted-foreground">
             {{ childMessageLabel(child) }}
           </div>
-          <div class="space-y-2 text-sm leading-6">
+          <div class="flex flex-col gap-2 text-sm leading-6">
             <template v-if="child.blocks?.length">
               <ChatBlockRenderer
                 v-for="(childBlock, index) in child.blocks"
@@ -216,8 +225,10 @@ function childMessageLabel(message: ToolChildMessage) {
           </div>
         </div>
       </div>
-      <ToolOutput
-        :output="block.result as never"
+      <ToolPayloadView
+        mode="output"
+        :tool-name="block.toolName"
+        :value="block.result"
         :error-text="block.errorText"
       />
     </ToolContent>

@@ -79,6 +79,19 @@ describe("tableFromToolValue", () => {
     });
   });
 
+  it("keeps query result headers visible when there are no rows", () => {
+    expect(
+      tableFromToolValue({
+        columns: ["fund_code", "nav"],
+        rows: []
+      })
+    ).toEqual({
+      columns: ["fund_code", "nav"],
+      rows: [],
+      sourceLabel: "0 行"
+    });
+  });
+
   it("turns compressed read query payloads into a database table", () => {
     expect(
       tableFromToolValue({
