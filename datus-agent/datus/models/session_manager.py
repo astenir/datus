@@ -1277,6 +1277,210 @@ class SessionManager:
         current_assistant_group["content"] = last_assistant.messages
         return None
 
+    @staticmethod
+    def _message_rows_to_raw_messages(message_rows: List[Any]) -> List[Dict[str, Any]]:
+        """Convert persisted SDK message rows into API-ready raw chat messages."""
+        messages = []
+        current_assistant_group = None
+        assistant_progress = []
+        current_actions = []  # Collect ActionHistory objects for detailed view
+
+        for row in message_rows:
+            if isinstance(row, dict):
+                message_data = row.get("message_data")
+                created_at = row.get("created_at")
+            else:
+                message_data, created_at = row
+
+            # Normalize SQLite naive UTC timestamp for outward-facing fields.
+            created_at_iso = to_utc_iso(created_at)
+            try:
+                message_json = json.loads(message_data)
+                role = message_json.get("role", "")
+                msg_type = message_json.get("type", "")
+
+                # Handle user messages
+                if role == "user":
+                    # Before adding user message, flush any pending assistant group
+                    if current_assistant_group:
+                        final_action = SessionManager._parse_final_output(current_actions, current_assistant_group)
+                        if final_action:
+                            current_actions.append(final_action)
+
+                        # Add collected actions and progress to the assistant group
+                        if current_actions:
+                            current_assistant_group["actions"] = current_actions.copy()
+                        if assistant_progress:
+                            current_assistant_group["progress_messages"] = assistant_progress.copy()
+
+                        messages.append(current_assistant_group)
+                        current_assistant_group = None
+                        assistant_progress = []
+                        current_actions = []
+
+                    # Add user message (extract original user input from structured content)
+                    content = extract_user_input(message_json.get("content", ""))
+                    messages.append(
+                        {
+                            "role": "user",
+                            "content": content,
+                            "timestamp": created_at_iso,
+                            "created_at": created_at_iso,
+                        }
+                    )
+                    continue
+
+                # Handle function calls (tool calls)
+                if msg_type == "function_call":
+                    tool_name = message_json.get("name", "unknown")
+                    arguments = message_json.get("arguments", "{}")
+
+                    # Initialize assistant group if needed
+                    if not current_assistant_group:
+                        current_assistant_group = {
+                            "role": "assistant",
+                            "content": "",
+                            "timestamp": created_at_iso,
+                            "created_at": created_at_iso,
+                        }
+
+                    # Parse arguments
+                    try:
+                        args_dict = json.loads(arguments) if arguments else {}
+                        args_str = str(args_dict)[:60]
+                        assistant_progress.append(f"✓ Tool call: {tool_name}({args_str})")
+                    except (json.JSONDecodeError, ValueError, TypeError):
+                        assistant_progress.append(f"✓ Tool call: {tool_name}")
+
+                    # Create ActionHistory for tool call (use original call_id from SDK)
+                    action = ActionHistory(
+                        action_id=message_json.get("call_id", str(uuid.uuid4())),
+                        role=ActionRole.TOOL,
+                        messages=f"Tool call: {tool_name}",
+                        action_type=tool_name,
+                        input={"function_name": tool_name, "arguments": arguments},
+                        output=None,  # Will be filled by next function_call_output
+                        status=ActionStatus.PROCESSING,
+                        start_time=datetime.fromisoformat(str(created_at)) if created_at else datetime.now(),
+                    )
+                    current_actions.append(action)
+                    continue
+
+                # Handle function outputs (tool results)
+                if msg_type == "function_call_output":
+                    # Create a new SUCCESS action for the tool output
+                    if current_actions:
+                        # Pair with the matching PROCESSING call by call_id so that
+                        # interleaved tool calls are matched correctly on resume.
+                        output_call_id = message_json.get("call_id")
+                        last_action = None
+                        if output_call_id:
+                            for candidate in reversed(current_actions):
+                                if (
+                                    candidate.action_id == output_call_id
+                                    and candidate.status == ActionStatus.PROCESSING
+                                ):
+                                    last_action = candidate
+                                    break
+                        if last_action is None:
+                            last_action = current_actions[-1]
+
+                        # Extract output directly from message_json
+                        output_text = message_json.get("output", "")
+
+                        # Try to parse as Python literal (the output is stored as string repr of dict)
+                        output_data = {}
+                        if output_text:
+                            try:
+                                # Try ast.literal_eval first (safer than eval)
+                                output_data = ast.literal_eval(output_text)
+                            except (ValueError, SyntaxError):
+                                # If that fails, try json.loads
+                                try:
+                                    output_data = json.loads(output_text)
+                                except json.JSONDecodeError:
+                                    # Last resort: store as string
+                                    output_data = {"result": output_text}
+
+                        # Create a new SUCCESS action, prefix with "complete_" like openai_compatible.py
+                        call_id = message_json.get("call_id", last_action.action_id)
+                        success_action = ActionHistory(
+                            action_id="complete_" + call_id,
+                            role=ActionRole.TOOL,
+                            messages=f"Tool result: {last_action.action_type}",
+                            action_type=last_action.action_type,
+                            input=last_action.input,
+                            output=output_data,
+                            status=ActionStatus.SUCCESS,
+                            start_time=last_action.start_time,
+                            end_time=datetime.fromisoformat(str(created_at)) if created_at else datetime.now(),
+                        )
+                        current_actions.append(success_action)
+                    continue
+
+                # Handle assistant messages (thinking and final output)
+                if role == "assistant":
+                    # Assistant message - aggregate consecutive ones
+                    content_array = message_json.get("content", [])
+
+                    for item in content_array:
+                        if not isinstance(item, dict):
+                            continue
+
+                        item_type = item.get("type", "")
+                        text = item.get("text", "")
+
+                        # Accept both OpenAI-style ``output_text`` and Anthropic-style ``text`` blocks.
+                        if item_type in ("output_text", "text") and text:
+                            # Initialize assistant group if needed
+                            if not current_assistant_group:
+                                current_assistant_group = {
+                                    "role": "assistant",
+                                    "content": "",
+                                    "timestamp": created_at_iso,
+                                    "created_at": created_at_iso,
+                                }
+
+                            # Add to progress
+                            assistant_progress.append(f"💭Thinking: {text}")
+
+                            # Create ActionHistory for thinking (use response_id from provider)
+                            response_id = message_json.get("provider_data", {}).get(
+                                "response_id", message_json.get("id", str(uuid.uuid4()))
+                            )
+                            thinking_action = ActionHistory(
+                                action_id=response_id,
+                                role=ActionRole.ASSISTANT,
+                                messages=text,
+                                action_type="thinking",
+                                input=None,
+                                output={"raw_output": text},
+                                status=ActionStatus.SUCCESS,
+                                start_time=datetime.fromisoformat(str(created_at)) if created_at else datetime.now(),
+                                end_time=datetime.fromisoformat(str(created_at)) if created_at else datetime.now(),
+                            )
+                            current_actions.append(thinking_action)
+
+            except (json.JSONDecodeError, TypeError, ValueError) as e:
+                logger.debug(f"Skipping malformed message: {e}")
+                continue
+
+        # Flush any remaining assistant group
+        if current_assistant_group:
+            final_action = SessionManager._parse_final_output(current_actions, current_assistant_group)
+            if final_action:
+                current_actions.append(final_action)
+
+            if not current_assistant_group.get("content"):
+                current_assistant_group["content"] = "Processing completed"
+            if assistant_progress:
+                current_assistant_group["progress_messages"] = assistant_progress
+            if current_actions:
+                current_assistant_group["actions"] = current_actions.copy()
+            messages.append(current_assistant_group)
+
+        return messages
+
     def get_session_messages(self, session_id: str) -> List[Dict]:
         """
         Get all messages from a session stored in SQLite, aggregating consecutive assistant messages.
@@ -1296,8 +1500,7 @@ class SessionManager:
 
         try:
             if self._body_store is not None:
-                body_rows = run_async(self._body_store.get_session_messages(**self._store_kwargs(session_id)))
-                message_rows = [(row["message_data"], row["created_at"]) for row in body_rows]
+                message_rows = run_async(self._body_store.get_session_messages(**self._store_kwargs(session_id)))
             else:
                 # Build path with pathlib and resolve to absolute path
                 sessions_dir = Path(self.session_dir)
@@ -1327,200 +1530,7 @@ class SessionManager:
                     )
                     message_rows = cursor.fetchall()
 
-            # Aggregate consecutive assistant messages
-            current_assistant_group = None
-            assistant_progress = []
-            current_actions = []  # Collect ActionHistory objects for detailed view
-
-            for message_data, created_at in message_rows:
-                # Normalize SQLite naive UTC timestamp for outward-facing fields.
-                created_at_iso = to_utc_iso(created_at)
-                try:
-                    message_json = json.loads(message_data)
-                    role = message_json.get("role", "")
-                    msg_type = message_json.get("type", "")
-
-                    # Handle user messages
-                    if role == "user":
-                        # Before adding user message, flush any pending assistant group
-                        if current_assistant_group:
-                            final_action = self._parse_final_output(current_actions, current_assistant_group)
-                            if final_action:
-                                current_actions.append(final_action)
-
-                            # Add collected actions and progress to the assistant group
-                            if current_actions:
-                                current_assistant_group["actions"] = current_actions.copy()
-                            if assistant_progress:
-                                current_assistant_group["progress_messages"] = assistant_progress.copy()
-
-                            messages.append(current_assistant_group)
-                            current_assistant_group = None
-                            assistant_progress = []
-                            current_actions = []
-
-                        # Add user message (extract original user input from structured content)
-                        content = extract_user_input(message_json.get("content", ""))
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": content,
-                                "timestamp": created_at_iso,
-                                "created_at": created_at_iso,
-                            }
-                        )
-                        continue
-
-                    # Handle function calls (tool calls)
-                    if msg_type == "function_call":
-                        tool_name = message_json.get("name", "unknown")
-                        arguments = message_json.get("arguments", "{}")
-
-                        # Initialize assistant group if needed
-                        if not current_assistant_group:
-                            current_assistant_group = {
-                                "role": "assistant",
-                                "content": "",
-                                "timestamp": created_at_iso,
-                                "created_at": created_at_iso,
-                            }
-
-                        # Parse arguments
-                        try:
-                            args_dict = json.loads(arguments) if arguments else {}
-                            args_str = str(args_dict)[:60]
-                            assistant_progress.append(f"✓ Tool call: {tool_name}({args_str})")
-                        except (json.JSONDecodeError, ValueError, TypeError):
-                            assistant_progress.append(f"✓ Tool call: {tool_name}")
-
-                        # Create ActionHistory for tool call (use original call_id from SDK)
-                        action = ActionHistory(
-                            action_id=message_json.get("call_id", str(uuid.uuid4())),
-                            role=ActionRole.TOOL,
-                            messages=f"Tool call: {tool_name}",
-                            action_type=tool_name,
-                            input={"function_name": tool_name, "arguments": arguments},
-                            output=None,  # Will be filled by next function_call_output
-                            status=ActionStatus.PROCESSING,
-                            start_time=datetime.fromisoformat(str(created_at)) if created_at else datetime.now(),
-                        )
-                        current_actions.append(action)
-                        continue
-
-                    # Handle function outputs (tool results)
-                    if msg_type == "function_call_output":
-                        # Create a new SUCCESS action for the tool output
-                        if current_actions:
-                            # Pair with the matching PROCESSING call by call_id so that
-                            # interleaved tool calls are matched correctly on resume.
-                            output_call_id = message_json.get("call_id")
-                            last_action = None
-                            if output_call_id:
-                                for candidate in reversed(current_actions):
-                                    if (
-                                        candidate.action_id == output_call_id
-                                        and candidate.status == ActionStatus.PROCESSING
-                                    ):
-                                        last_action = candidate
-                                        break
-                            if last_action is None:
-                                last_action = current_actions[-1]
-
-                            # Extract output directly from message_json
-                            output_text = message_json.get("output", "")
-
-                            # Try to parse as Python literal (the output is stored as string repr of dict)
-                            output_data = {}
-                            if output_text:
-                                try:
-                                    # Try ast.literal_eval first (safer than eval)
-                                    output_data = ast.literal_eval(output_text)
-                                except (ValueError, SyntaxError):
-                                    # If that fails, try json.loads
-                                    try:
-                                        output_data = json.loads(output_text)
-                                    except json.JSONDecodeError:
-                                        # Last resort: store as string
-                                        output_data = {"result": output_text}
-
-                            # Create a new SUCCESS action, prefix with "complete_" like openai_compatible.py
-                            call_id = message_json.get("call_id", last_action.action_id)
-                            success_action = ActionHistory(
-                                action_id="complete_" + call_id,
-                                role=ActionRole.TOOL,
-                                messages=f"Tool result: {last_action.action_type}",
-                                action_type=last_action.action_type,
-                                input=last_action.input,
-                                output=output_data,
-                                status=ActionStatus.SUCCESS,
-                                start_time=last_action.start_time,
-                                end_time=datetime.fromisoformat(str(created_at)) if created_at else datetime.now(),
-                            )
-                            current_actions.append(success_action)
-                        continue
-
-                    # Handle assistant messages (thinking and final output)
-                    if role == "assistant":
-                        # Assistant message - aggregate consecutive ones
-                        content_array = message_json.get("content", [])
-
-                        for item in content_array:
-                            if not isinstance(item, dict):
-                                continue
-
-                            item_type = item.get("type", "")
-                            text = item.get("text", "")
-
-                            # Accept both OpenAI-style ``output_text`` and Anthropic-style ``text`` blocks.
-                            if item_type in ("output_text", "text") and text:
-                                # Initialize assistant group if needed
-                                if not current_assistant_group:
-                                    current_assistant_group = {
-                                        "role": "assistant",
-                                        "content": "",
-                                        "timestamp": created_at_iso,
-                                        "created_at": created_at_iso,
-                                    }
-
-                                # Add to progress
-                                assistant_progress.append(f"💭Thinking: {text}")
-
-                                # Create ActionHistory for thinking (use response_id from provider)
-                                response_id = message_json.get("provider_data", {}).get(
-                                    "response_id", message_json.get("id", str(uuid.uuid4()))
-                                )
-                                thinking_action = ActionHistory(
-                                    action_id=response_id,
-                                    role=ActionRole.ASSISTANT,
-                                    messages=text,
-                                    action_type="thinking",
-                                    input=None,
-                                    output={"raw_output": text},
-                                    status=ActionStatus.SUCCESS,
-                                    start_time=datetime.fromisoformat(str(created_at))
-                                    if created_at
-                                    else datetime.now(),
-                                    end_time=datetime.fromisoformat(str(created_at)) if created_at else datetime.now(),
-                                )
-                                current_actions.append(thinking_action)
-
-                except (json.JSONDecodeError, TypeError) as e:
-                    logger.debug(f"Skipping malformed message: {e}")
-                    continue
-
-            # Flush any remaining assistant group
-            if current_assistant_group:
-                final_action = self._parse_final_output(current_actions, current_assistant_group)
-                if final_action:
-                    current_actions.append(final_action)
-
-                if not current_assistant_group.get("content"):
-                    current_assistant_group["content"] = "Processing completed"
-                if assistant_progress:
-                    current_assistant_group["progress_messages"] = assistant_progress
-                if current_actions:
-                    current_assistant_group["actions"] = current_actions.copy()
-                messages.append(current_assistant_group)
+            messages = self._message_rows_to_raw_messages(message_rows)
 
         except Exception as e:
             logger.exception(f"Failed to load session messages for {session_id}: {e}")

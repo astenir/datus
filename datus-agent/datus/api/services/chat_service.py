@@ -396,6 +396,7 @@ class ChatService:
                 scope=session_scope_from_user_id(user_id),
                 session_id=session_id,
             )
+            raw_messages = SessionManager._message_rows_to_raw_messages(raw_messages)
             return self._history_result_from_raw_messages(session_id, raw_messages)
         except Exception as e:
             logger.error(f"Failed to get history for session {session_id}: {e}")

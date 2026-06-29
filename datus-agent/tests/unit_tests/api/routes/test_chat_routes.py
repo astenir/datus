@@ -1225,6 +1225,67 @@ class TestGetChatHistory:
         svc.chat.get_history_async.assert_awaited_once_with("sess1", user_id="user1")
 
     @pytest.mark.asyncio
+    async def test_pg_body_store_history_parses_raw_message_rows(self, monkeypatch, real_agent_config):
+        """GET history must aggregate PG body rows before serializing SSE history."""
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+        from datus.api.services.chat_service import ChatService
+
+        class BodyStore:
+            async def get_session_messages(self, **kwargs):
+                assert kwargs == {"project_id": "project-1", "scope": "alice", "session_id": "chat_session_pg"}
+                return [
+                    {
+                        "message_data": json.dumps({"role": "user", "content": "What is the answer?"}),
+                        "created_at": "2026-01-01T00:00:00Z",
+                    },
+                    {
+                        "message_data": json.dumps(
+                            {
+                                "role": "assistant",
+                                "content": [
+                                    {
+                                        "type": "output_text",
+                                        "text": json.dumps({"output": "The answer is 42."}),
+                                    }
+                                ],
+                            }
+                        ),
+                        "created_at": "2026-01-01T00:00:01Z",
+                    },
+                ]
+
+        owner_store = InMemorySessionOwnerStore()
+        await owner_store.set_owner("project-1", "chat_session_pg", "alice")
+        body_store = BodyStore()
+        _patch_owner_extensions(monkeypatch, owner_store, enabled=True, session_body_store=body_store)
+
+        task_manager = MagicMock()
+        task_manager.get_task.return_value = None
+        svc = SimpleNamespace(
+            project_id="project-1",
+            task_manager=task_manager,
+            chat=ChatService(
+                agent_config=real_agent_config,
+                task_manager=task_manager,
+                project_id="project-1",
+                session_body_store=body_store,
+            ),
+        )
+
+        result = await get_chat_history(svc, _mock_ctx(user_id="alice"), session_id="chat_session_pg")
+
+        assert result.success is True
+        assert result.data.messages
+        user_messages = [msg for msg in result.data.messages if msg.role == "user"]
+        assistant_messages = [msg for msg in result.data.messages if msg.role == "assistant"]
+        assert user_messages[0].content[0].payload["content"] == "What is the answer?"
+        assert any(
+            content.payload.get("content") == "The answer is 42."
+            for msg in assistant_messages
+            for content in msg.content
+        )
+
+    @pytest.mark.asyncio
     async def test_pg_body_store_history_denies_when_owner_index_missing(self, monkeypatch):
         from datus.api.enterprise.defaults import InMemorySessionOwnerStore
 
