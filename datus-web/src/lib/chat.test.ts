@@ -45,7 +45,6 @@ describe("buildChatStreamRequest", () => {
       database: null,
       db_schema: null,
       language: "zh",
-      source: "web",
       stream_response: true,
       plan_mode: true,
       permission_mode: null

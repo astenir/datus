@@ -47,7 +47,6 @@ export function buildChatStreamRequest({
     database: database || null,
     db_schema: schema || null,
     language: language || null,
-    source: "web",
     stream_response: true,
     plan_mode: planMode,
     permission_mode: permissionMode || null
