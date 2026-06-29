@@ -71,6 +71,7 @@
 - `enterprise.enabled=false` 只表示本地/开源兼容模式；允许 `NoAuthProvider`，但不得把该行为带入生产企业模式。
 - `enterprise.enabled=true` 时必须启用生产 auth provider、RBAC store、AuthorizationProvider、ConfigProjector 和 AuditSink。试点或生产配置必须显式配置 `enterprise.config_projector.class`；当前 loader 为兼容旧配置，在缺少该项时仍回退 passthrough skeleton，但该 fallback 只允许本地开发、历史配置升级或兼容验证使用，不能据此声明满足 datasource grant/request-level projection 门槛。
 - 生产企业模式不得信任裸 `X-Datus-User-Id`、前端传入的 roles、permissions、principal 或企业上下文字段。
+- 本地 dev admin 开关只允许用于开发联调，默认必须关闭；开启后可以把缺省请求或 Basic `admin/admin` 映射成本地 `admin` 并注入开发权限，但不得作为真实员工试点、生产身份边界或上线门槛的一部分。
 - 企业开关不引入 `tenant_id`，也不允许把企业上下文当作业务 API 参数由客户端提交。
 - MVP 身份方案优先适配当前企业环境：网关不可改时，实现 Bearer access token + userinfo `AuthProvider`，由 Datus 调企业用户信息接口换取身份；网关可改时可使用 `datus_enterprise.auth_provider.SignedHeaderAuthProvider`，只信任带 HMAC-SHA256 签名和时间戳的反向代理身份 header；直接 OIDC/JWKS 校验 provider、JWKS cache 和 key rotation 仍是后续切片。
 

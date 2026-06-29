@@ -114,6 +114,32 @@ async def test_datasource_grant_projector_selects_authorized_default_without_mut
 
 
 @pytest.mark.asyncio
+async def test_datasource_grant_projector_expands_wildcard_dev_grant_to_configured_datasources():
+    base_config = _agent_config(current_datasource="hr")
+
+    result = await DatasourceGrantConfigProjector().project(
+        ProjectionInput(
+            ctx=AppContext(
+                user_id="admin",
+                datasource_grants={"*": {"effect": "allow", "allow_catalog": True, "allow_sql": True}},
+            ),
+            base_config=base_config,
+            operation="chat.stream",
+            requested_datasource="hr",
+        )
+    )
+
+    assert result.denied_reason is None
+    assert set(result.config.services.datasources) == {"finance", "hr"}
+    assert result.config.current_datasource == "hr"
+    assert result.principal["allowed_datasources"] == ["finance", "hr"]
+    assert result.datasource_grants == {
+        "finance": {"effect": "allow", "allow_catalog": True, "allow_sql": True},
+        "hr": {"effect": "allow", "allow_catalog": True, "allow_sql": True},
+    }
+
+
+@pytest.mark.asyncio
 async def test_datasource_grant_projector_rejects_unknown_requested_datasource():
     with pytest.raises(DatusException):
         await DatasourceGrantConfigProjector().project(

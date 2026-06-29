@@ -36,6 +36,13 @@
 #     status_field: userStatus
 #     allowed_statuses: ["正常"]
 #     default_project_id: enterprise
+#     # Local development only. Keep disabled for production and real pilots.
+#     dev_admin_enabled: ${DATUS_DEV_ADMIN_AUTH:-false}
+#     dev_admin_require_basic_auth: ${DATUS_DEV_ADMIN_REQUIRE_BASIC_AUTH:-false}
+#     dev_admin_user_id: admin
+#     dev_admin_username: admin
+#     dev_admin_password: ${DATUS_DEV_ADMIN_PASSWORD:-admin}
+#     dev_admin_project_id: enterprise
 
 agent:
   home: /home/astenir/Code/personal/datus/datus-data

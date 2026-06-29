@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import hmac
 import json
 import os
 import time
+from base64 import b64decode
+from binascii import Error as BinasciiError
 from collections.abc import Iterable
 from typing import Any
 
@@ -42,6 +45,15 @@ class UserInfoBearerAuthProvider:
         allowed_statuses: list[str] | None = None,
         default_project_id: str | None = None,
         principal_fields: list[str] | None = None,
+        dev_admin_enabled: bool | str = False,
+        dev_admin_user_id: str = "admin",
+        dev_admin_username: str = "admin",
+        dev_admin_password: str = "admin",
+        dev_admin_require_basic_auth: bool | str = False,
+        dev_admin_project_id: str | None = None,
+        dev_admin_roles: list[str] | None = None,
+        dev_admin_permissions: list[str] | None = None,
+        dev_admin_datasource_grants: dict[str, Any] | None = None,
     ) -> None:
         normalized_url = userinfo_url.strip()
         if not normalized_url:
@@ -50,6 +62,13 @@ class UserInfoBearerAuthProvider:
             raise ValueError("timeout_seconds must be positive.")
         if default_project_id and not USER_ID_PATTERN.match(default_project_id):
             raise ValueError("default_project_id contains invalid characters.")
+        dev_admin_enabled_bool = _coerce_bool(dev_admin_enabled)
+        dev_admin_require_basic_auth_bool = _coerce_bool(dev_admin_require_basic_auth)
+        dev_admin_user_id = dev_admin_user_id.strip()
+        if dev_admin_enabled_bool and not USER_ID_PATTERN.match(dev_admin_user_id):
+            raise ValueError("dev_admin_user_id contains invalid characters.")
+        if dev_admin_project_id and not USER_ID_PATTERN.match(dev_admin_project_id):
+            raise ValueError("dev_admin_project_id contains invalid characters.")
 
         self._userinfo_url = normalized_url
         self._timeout_seconds = float(timeout_seconds)
@@ -75,9 +94,23 @@ class UserInfoBearerAuthProvider:
             status_field,
             "sortNumber",
         ]
+        self._dev_admin_enabled = dev_admin_enabled_bool
+        self._dev_admin_user_id = dev_admin_user_id
+        self._dev_admin_username = dev_admin_username
+        self._dev_admin_password = dev_admin_password
+        self._dev_admin_require_basic_auth = dev_admin_require_basic_auth_bool
+        self._dev_admin_project_id = dev_admin_project_id or default_project_id
+        self._dev_admin_roles = dev_admin_roles or ["local_admin", "enterprise_admin"]
+        self._dev_admin_permissions = set(dev_admin_permissions or ["module.*", "module.admin.*"])
+        self._dev_admin_datasource_grants = dev_admin_datasource_grants or {
+            "*": {"effect": "allow", "allow_catalog": True, "allow_sql": True}
+        }
         self._evict_callbacks: list[EvictCallback] = []
 
     async def authenticate(self, request: Request) -> AppContext:
+        if self._dev_admin_enabled and self._should_use_dev_admin(request):
+            return self._dev_admin_context(request)
+
         token = self._read_bearer_token(request)
         profile = await self._fetch_userinfo(token)
         user_id = _require_safe_user_id(_profile_str(profile, self._user_id_field))
@@ -108,6 +141,56 @@ class UserInfoBearerAuthProvider:
         if scheme.lower() != "bearer" or not token.strip():
             raise HTTPException(status_code=401, detail="AUTH_TOKEN_INVALID")
         return token.strip()
+
+    def _should_use_dev_admin(self, request: Request) -> bool:
+        raw = request.headers.get(self._authorization_header)
+        if raw is None or not raw.strip():
+            if self._dev_admin_require_basic_auth:
+                raise HTTPException(status_code=401, detail="AUTH_REQUIRED")
+            return True
+
+        scheme, _, _value = raw.strip().partition(" ")
+        return scheme.lower() == "basic"
+
+    def _dev_admin_context(self, request: Request) -> AppContext:
+        raw = request.headers.get(self._authorization_header)
+        if raw and raw.strip():
+            self._validate_dev_basic_auth(raw)
+
+        principal = {
+            "user_id": self._dev_admin_user_id,
+            "username": self._dev_admin_username,
+            "display_name": self._dev_admin_username,
+            "auth_mode": "dev_admin",
+            "_datus_dev_admin": True,
+        }
+        return AppContext(
+            user_id=self._dev_admin_user_id,
+            project_id=self._dev_admin_project_id,
+            config=None,
+            principal=principal,
+            roles=list(self._dev_admin_roles),
+            permissions=set(self._dev_admin_permissions),
+            datasource_grants=copy.deepcopy(self._dev_admin_datasource_grants),
+            is_admin=True,
+        )
+
+    def _validate_dev_basic_auth(self, raw: str) -> None:
+        scheme, _, payload = raw.strip().partition(" ")
+        if scheme.lower() != "basic" or not payload.strip():
+            raise HTTPException(status_code=401, detail="AUTH_TOKEN_INVALID")
+        try:
+            decoded = b64decode(payload.strip(), validate=True).decode("utf-8")
+        except (BinasciiError, UnicodeDecodeError) as e:
+            raise HTTPException(status_code=401, detail="AUTH_TOKEN_INVALID") from e
+
+        username, separator, password = decoded.partition(":")
+        if not separator:
+            raise HTTPException(status_code=401, detail="AUTH_TOKEN_INVALID")
+        if not hmac.compare_digest(username, self._dev_admin_username):
+            raise HTTPException(status_code=401, detail="AUTH_TOKEN_INVALID")
+        if not hmac.compare_digest(password, self._dev_admin_password):
+            raise HTTPException(status_code=401, detail="AUTH_TOKEN_INVALID")
 
     async def _fetch_userinfo(self, token: str) -> dict[str, Any]:
         headers = {
@@ -394,6 +477,18 @@ def _profile_str(profile: dict[str, Any], field: str) -> str:
 
 def _matches_admin(roles: list[str], permissions: set[str]) -> bool:
     return "enterprise_admin" in roles or "module.admin.*" in permissions or "module.*" in permissions
+
+
+def _coerce_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off", ""}:
+            return False
+    return bool(value)
 
 
 __all__ = ["SignedHeaderAuthProvider", "UserInfoBearerAuthProvider"]

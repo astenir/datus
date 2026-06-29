@@ -246,7 +246,7 @@ def test_chat_invalid_body_does_not_resolve_datus_service(monkeypatch, path):
 def test_chat_routes_allow_module_chat(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()
-    svc.chat.list_sessions.return_value = Result[ChatSessionData](success=True, data=ChatSessionData())
+    svc.chat.list_sessions_async = AsyncMock(return_value=Result[ChatSessionData](success=True, data=ChatSessionData()))
     ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
 
     with _client(chat_routes.router, ctx, svc) as client:
@@ -254,7 +254,7 @@ def test_chat_routes_allow_module_chat(monkeypatch):
 
     assert response.status_code == 200
     assert response.json()["success"] is True
-    svc.chat.list_sessions.assert_called_once_with(user_id="u1", subagent_id=None)
+    svc.chat.list_sessions_async.assert_awaited_once_with(user_id="u1", subagent_id=None)
 
 
 def test_chat_stream_denies_unauthorized_datasource_before_task_start(monkeypatch):

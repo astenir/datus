@@ -211,6 +211,7 @@ class TestGetRequestAppContext:
             roles=["stale_admin"],
             permissions={"module.admin.users"},
             datasource_grants={"legacy": {"effect": "allow"}},
+            is_admin=True,
         )
         mock_auth = MagicMock()
         mock_auth.authenticate = AsyncMock()
@@ -234,7 +235,54 @@ class TestGetRequestAppContext:
         assert cached_ctx.roles == ["viewer"]
         assert cached_ctx.permissions == {"module.report.view"}
         assert cached_ctx.datasource_grants == {}
+        assert cached_ctx.is_admin is False
         mock_auth.authenticate.assert_not_awaited()
+
+    async def test_enterprise_context_preserves_explicit_dev_admin_permissions_and_wildcard_grant(self):
+        from datus.api.enterprise.defaults import (
+            InMemoryEnterpriseDatasourceGrantStore,
+            InMemoryEnterpriseRoleStore,
+            InMemoryEnterpriseUserStore,
+            InMemorySessionOwnerStore,
+            LocalAuthorizationProvider,
+            NoopAuditSink,
+            PassthroughConfigProjector,
+        )
+        from datus.api.enterprise.loader import EnterpriseExtensions
+
+        ctx = AppContext(
+            user_id="admin",
+            project_id="enterprise",
+            principal={"_datus_dev_admin": True, "auth_mode": "dev_admin"},
+            roles=["enterprise_admin"],
+            permissions={"module.*", "module.admin.*"},
+            datasource_grants={"*": {"effect": "allow", "allow_catalog": True, "allow_sql": True}},
+            is_admin=True,
+        )
+        mock_auth = MagicMock()
+        mock_auth.authenticate = AsyncMock(return_value=ctx)
+        deps._auth_provider = mock_auth
+        deps._enterprise_extensions = EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+            user_store=InMemoryEnterpriseUserStore(),
+            role_store=InMemoryEnterpriseRoleStore(),
+            datasource_grant_store=InMemoryEnterpriseDatasourceGrantStore(),
+        )
+        request = SimpleNamespace(state=SimpleNamespace())
+
+        result = await get_request_app_context(request)
+
+        assert result is ctx
+        assert ctx.roles == ["enterprise_admin"]
+        assert ctx.permissions == {"module.*", "module.admin.*"}
+        assert ctx.datasource_grants == {"*": {"effect": "allow", "allow_catalog": True, "allow_sql": True}}
+        assert ctx.is_admin is True
+        assert ctx.principal["permissions"] == ["module.*", "module.admin.*"]
+        assert ctx.principal["datasource_grants"] == ctx.datasource_grants
 
     async def test_enterprise_context_missing_user_fails_before_service_cache(self):
         from datus.api.enterprise.defaults import (

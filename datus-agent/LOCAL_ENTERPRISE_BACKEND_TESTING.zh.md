@@ -205,6 +205,30 @@ API 地址：
 http://127.0.0.1:8000
 ```
 
+### 可选：开启 dev admin 默认登录
+
+只在本地开发需要跳过 mock userinfo / 前端 token 接线时启用：
+
+```bash
+export DATUS_DEV_ADMIN_AUTH=true
+```
+
+如果还希望浏览器或调试工具必须显式带 `admin/admin`，再打开 Basic 校验：
+
+```bash
+export DATUS_DEV_ADMIN_REQUIRE_BASIC_AUTH=true
+```
+
+此时请求可以不带 `Authorization`，默认进入 `admin`；如果启用了 Basic 校验，则使用：
+
+```bash
+curl -i \
+  -u admin:admin \
+  http://127.0.0.1:8000/api/v1/me
+```
+
+该开关由 `UserInfoBearerAuthProvider` 的 `dev_admin_enabled` 控制，默认关闭。开启后会给本地 `admin` 注入 `module.*`、`module.admin.*` 和所有已配置 datasource 的开发授权，只适合本地联调，不得用于真实企业试点或生产。
+
 ### 验证 Datus API
 
 管理员视角：

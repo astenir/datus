@@ -137,7 +137,14 @@ def _allowed_datasource_grants(
     configured_datasources: dict[str, Any],
 ) -> dict[str, Any]:
     allowed: dict[str, Any] = {}
+    wildcard_grant = _normalize_grant((raw_grants or {}).get("*"))
+    if wildcard_grant is not None and _grant_allows_operation(wildcard_grant, operation):
+        for datasource_key in configured_datasources:
+            allowed[datasource_key] = copy.deepcopy(wildcard_grant)
+
     for datasource_key, grant in (raw_grants or {}).items():
+        if datasource_key == "*":
+            continue
         if datasource_key not in configured_datasources:
             continue
         normalized = _normalize_grant(grant)

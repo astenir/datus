@@ -224,6 +224,11 @@ async def _validate_enterprise_context(ctx: AppContext, enterprise_extensions: E
 async def _refresh_enterprise_context(ctx: AppContext, enterprise_extensions: EnterpriseExtensions) -> None:
     """Merge request RBAC and datasource grants from enterprise metadata stores."""
 
+    is_dev_admin = _is_dev_admin_context(ctx)
+    provider_roles = list(ctx.roles or [])
+    provider_permissions = set(ctx.permissions or set())
+    provider_datasource_grants = copy.deepcopy(ctx.datasource_grants or {})
+
     try:
         stored_role_ids = await enterprise_extensions.role_store.list_user_roles(ctx.user_id or "")
         role_ids = _merge_string_lists(stored_role_ids)
@@ -252,9 +257,15 @@ async def _refresh_enterprise_context(ctx: AppContext, enterprise_extensions: En
         await _audit_enterprise_context_deny(ctx, enterprise_extensions, reason="datasource grants unavailable")
         raise HTTPException(status_code=403, detail="DATASOURCE_GRANTS_UNAVAILABLE") from e
 
+    if is_dev_admin:
+        role_ids = _merge_string_lists(role_ids + provider_roles)
+        role_permissions.update(provider_permissions)
+        datasource_grants = _merge_provider_datasource_grants(datasource_grants, provider_datasource_grants)
+
     ctx.roles = role_ids
     ctx.permissions = role_permissions
     ctx.datasource_grants = datasource_grants
+    ctx.is_admin = _matches_admin_context(ctx.roles, ctx.permissions)
     ctx.principal = dict(ctx.principal or {})
     ctx.principal["roles"] = list(ctx.roles)
     ctx.principal["permissions"] = sorted(ctx.permissions)
@@ -302,6 +313,30 @@ def _merge_grant_record(grants: dict[str, Any], record: dict[str, Any], *, mode:
         grants[datasource_key] = _intersect_allow_grants(existing, merged)
         return
     grants[datasource_key] = _union_allow_grants(existing, merged)
+
+
+def _merge_provider_datasource_grants(grants: dict[str, Any], provider_grants: dict[str, Any]) -> dict[str, Any]:
+    merged = copy.deepcopy(grants)
+    for datasource_key, grant in (provider_grants or {}).items():
+        key = str(datasource_key or "").strip()
+        if not key:
+            continue
+        if _grant_effect(grant) == "deny":
+            merged[key] = {"effect": "deny"}
+            continue
+        if grant is True:
+            provider_grant = {"effect": "allow"}
+        elif isinstance(grant, dict):
+            provider_grant = copy.deepcopy(grant)
+            provider_grant.setdefault("effect", "allow")
+        else:
+            continue
+        existing = merged.get(key)
+        if isinstance(existing, dict):
+            merged[key] = _union_allow_grants(existing, provider_grant)
+        else:
+            merged[key] = provider_grant
+    return merged
 
 
 def _union_allow_grants(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
@@ -426,6 +461,14 @@ def _string_set(raw: Any) -> set[str]:
     if isinstance(raw, list):
         return {item.strip() for item in raw if isinstance(item, str) and item.strip()}
     return set()
+
+
+def _is_dev_admin_context(ctx: AppContext) -> bool:
+    return bool((ctx.principal or {}).get("_datus_dev_admin") is True)
+
+
+def _matches_admin_context(roles: list[str], permissions: set[str]) -> bool:
+    return "enterprise_admin" in roles or "module.admin.*" in permissions or "module.*" in permissions
 
 
 async def _audit_enterprise_context_deny(

@@ -359,6 +359,7 @@ MVP 支持前两种形态，第三种作为后续扩展：
 | --- | --- | --- |
 | Bearer access token + userinfo | Datus 从请求读取 access token，并调用企业用户信息接口换取用户身份 | access token 不落日志；用户信息接口失败时 fail closed；Datus RBAC store 仍是授权事实来源。 |
 | 反向代理身份 | 网关完成 SSO 和 token 校验，Datus 只信任网关注入的签名 header | header 必须有 HMAC/签名或 mTLS 边界，禁止公网直接访问后端。 |
+| 本地 dev admin 开关 | 仅本地开发时可显式打开，让缺省请求或 Basic `admin/admin` 映射为 `admin` 并注入开发权限 | 默认关闭；只能用于跳过本地 mock userinfo / 前端 token 接线，不得用于真实员工试点或生产。 |
 | OIDC/JWKS | Datus 后端直接校验 JWT/JWKS | 后续 provider；需要校验 issuer/audience/kid/exp，缓存 JWKS，处理 key rotation。 |
 
 后续企业能力可增加 SAML、SCIM、服务账号/API token、MFA/IP allowlist、IdP group 到 Datus role 映射。
