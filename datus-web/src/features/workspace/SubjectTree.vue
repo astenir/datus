@@ -62,7 +62,7 @@ function handleExpandedChange(paths: Set<string>) {
       class="flex flex-row items-start justify-between gap-3"
     >
       <div class="min-w-0">
-        <CardTitle class="text-lg">Subject Tree</CardTitle>
+        <CardTitle class="text-lg">主题树</CardTitle>
         <CardDescription class="text-sm">
           点击主题、指标或参考 SQL 查看详情。
         </CardDescription>
@@ -100,7 +100,7 @@ function handleExpandedChange(paths: Set<string>) {
             v-else
             class="rounded-md border p-4 text-sm text-muted-foreground"
           >
-            暂无 Subject 数据，刷新或先运行知识构建。
+            暂无主题数据，刷新或先运行知识构建。
           </div>
         </FileTree>
       </ScrollArea>

@@ -68,9 +68,7 @@ const referenceSql = ref<ReferenceSQLInfo | null>(null)
 const loadingSubjectDetail = shallowRef(false)
 
 const selectedTable = computed(() => props.selectedTable?.trim() ?? "")
-const tableColumnCount = computed(() => semantic.tableDetail.value?.columns.length ?? 0)
 const tableIndexCount = computed(() => semantic.tableDetail.value?.indexes.length ?? 0)
-const tableRowCount = computed(() => formatRows(semantic.tableDetail.value?.rows))
 const schemaRows = computed(() => catalogSchemaRows(props.workspace.catalogEntries.value))
 const tableRows = computed(() => catalogTableRows(props.workspace.catalogEntries.value))
 const selectedTableRow = computed(() =>
@@ -81,7 +79,7 @@ const currentKnowledgeContextLabel = computed(() => {
   if (treeMode.value === "subject") {
     return selectedSubject.value
       ? selectedSubject.value.subjectPath.join(" / ")
-      : "未选择 Subject"
+      : "未选择主题"
   }
 
   return selectedTable.value || "未选择表"
@@ -100,11 +98,6 @@ const treePanelDescription = computed(() =>
 const treeRefreshing = computed(() =>
   treeMode.value === "catalog" ? props.workspace.isLoadingCatalog.value : loadingSubjects.value,
 )
-
-function formatRows(value: number | undefined) {
-  if (typeof value !== "number") return "-"
-  return value.toLocaleString("zh-CN")
-}
 
 function switchTreeMode(mode: KnowledgeTreeMode) {
   treeMode.value = mode
@@ -144,8 +137,8 @@ async function loadSubjects() {
     const result = await subjectApi.list(connection.effectiveBase())
     subjects.value = result?.subjects ?? []
   } catch (error) {
-    console.error("加载 Subject Tree 失败:", error)
-    toast.error("加载 Subject Tree 失败")
+    console.error("加载主题树失败:", error)
+    toast.error("加载主题树失败")
   } finally {
     loadingSubjects.value = false
   }
@@ -175,8 +168,8 @@ async function selectSubject(node: SubjectTreeNode) {
       referenceSql.value = await subjectApi.getReferenceSql(connection.effectiveBase(), node.subjectPath)
     }
   } catch (error) {
-    console.error("加载 Subject 详情失败:", error)
-    toast.error("加载 Subject 详情失败")
+    console.error("加载主题详情失败:", error)
+    toast.error("加载主题详情失败")
   } finally {
     loadingSubjectDetail.value = false
   }
@@ -208,11 +201,11 @@ onMounted(() => {
               {{ workspace.currentDatasource.value || "未选择" }}
             </span>
           </div>
-          <Badge variant="secondary">Schema {{ schemaRows.length }}</Badge>
-          <Badge variant="secondary">Tables {{ tableRows.length }}</Badge>
-          <Badge variant="secondary">Subjects {{ subjects.length }}</Badge>
+          <Badge variant="secondary">模式 {{ schemaRows.length }}</Badge>
+          <Badge variant="secondary">表 {{ tableRows.length }}</Badge>
+          <Badge variant="secondary">主题 {{ subjects.length }}</Badge>
           <Badge variant="outline">
-            {{ treeMode === "catalog" ? "目录 Tree" : "Subject Tree" }}
+            {{ treeMode === "catalog" ? "目录树" : "主题树" }}
           </Badge>
           <div class="flex min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground">
             <Table2Icon
@@ -239,44 +232,44 @@ onMounted(() => {
       <div class="-m-3 grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-4 overflow-hidden p-3 xl:grid-cols-[24rem_minmax(0,1fr)] xl:grid-rows-1">
         <Card class="flex min-h-0 min-w-0 flex-col">
           <CardHeader class="shrink-0">
-            <div class="flex flex-col gap-3">
-              <div class="min-w-0">
+            <div class="flex flex-col gap-2">
+              <div class="flex flex-wrap items-center justify-between gap-2">
                 <CardTitle class="text-lg">
-                  {{ treeMode === "catalog" ? "目录 Tree" : "Subject Tree" }}
+                  {{ treeMode === "catalog" ? "目录树" : "主题树" }}
                 </CardTitle>
-                <CardDescription class="text-sm">
-                  {{ treePanelDescription }}
-                </CardDescription>
-              </div>
-              <div class="flex shrink-0 flex-wrap items-center gap-2">
-                <ButtonGroup orientation="horizontal">
+                <div class="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                  <ButtonGroup orientation="horizontal">
+                    <Button
+                      size="sm"
+                      :variant="treeMode === 'catalog' ? 'default' : 'outline'"
+                      @click="switchTreeMode('catalog')"
+                    >
+                      <Table2Icon data-icon="inline-start" />
+                      目录树
+                    </Button>
+                    <Button
+                      size="sm"
+                      :variant="treeMode === 'subject' ? 'default' : 'outline'"
+                      @click="switchTreeMode('subject')"
+                    >
+                      <GitBranchIcon data-icon="inline-start" />
+                      主题树
+                    </Button>
+                  </ButtonGroup>
                   <Button
+                    variant="outline"
                     size="sm"
-                    :variant="treeMode === 'catalog' ? 'default' : 'outline'"
-                    @click="switchTreeMode('catalog')"
+                    :disabled="treeRefreshing"
+                    @click="refreshTree"
                   >
-                    <Table2Icon data-icon="inline-start" />
-                    目录 Tree
+                    <RefreshCwIcon data-icon="inline-start" />
+                    刷新
                   </Button>
-                  <Button
-                    size="sm"
-                    :variant="treeMode === 'subject' ? 'default' : 'outline'"
-                    @click="switchTreeMode('subject')"
-                  >
-                    <GitBranchIcon data-icon="inline-start" />
-                    Subject Tree
-                  </Button>
-                </ButtonGroup>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  :disabled="treeRefreshing"
-                  @click="refreshTree"
-                >
-                  <RefreshCwIcon data-icon="inline-start" />
-                  刷新
-                </Button>
+                </div>
               </div>
+              <CardDescription class="text-sm">
+                {{ treePanelDescription }}
+              </CardDescription>
             </div>
           </CardHeader>
           <CardContent class="flex min-h-0 flex-1 flex-col">
@@ -310,10 +303,10 @@ onMounted(() => {
           >
             <div class="min-w-0">
               <CardTitle class="truncate text-lg">
-                {{ selectedSubject?.name || "未选择 Subject" }}
+                {{ selectedSubject?.name || "未选择主题" }}
               </CardTitle>
               <CardDescription class="text-sm">
-                {{ selectedSubject ? selectedSubject.subjectPath.join(" / ") : "从 Subject Tree 选择节点后浏览详情" }}
+                {{ selectedSubject ? selectedSubject.subjectPath.join(" / ") : "从主题树选择节点后浏览详情" }}
               </CardDescription>
             </div>
             <Badge variant="outline">{{ loadingSubjectDetail ? "加载中" : subjectTypeLabel }}</Badge>
@@ -340,7 +333,7 @@ onMounted(() => {
                     v-if="!selectedSubject"
                     class="rounded-md border p-4 text-sm text-muted-foreground"
                   >
-                    选择左侧 Subject 节点后查看指标、维度或参考 SQL。
+                    选择左侧主题节点后查看指标、维度或参考 SQL。
                   </div>
 
                   <template v-else-if="selectedSubject.type === 'metric'">
@@ -414,21 +407,6 @@ onMounted(() => {
                 </template>
 
                 <template v-else>
-                  <div class="grid gap-2 sm:grid-cols-3">
-                    <div class="rounded-md border p-3">
-                      <div class="text-xs text-muted-foreground">Rows</div>
-                      <div class="mt-1 text-lg font-semibold">{{ tableRowCount }}</div>
-                    </div>
-                    <div class="rounded-md border p-3">
-                      <div class="text-xs text-muted-foreground">Columns</div>
-                      <div class="mt-1 text-lg font-semibold">{{ tableColumnCount }}</div>
-                    </div>
-                    <div class="rounded-md border p-3">
-                      <div class="text-xs text-muted-foreground">Indexes</div>
-                      <div class="mt-1 text-lg font-semibold">{{ tableIndexCount }}</div>
-                    </div>
-                  </div>
-
                   <div class="rounded-md border">
                     <Table>
                       <TableHeader>
@@ -451,7 +429,7 @@ onMounted(() => {
                               variant="secondary"
                               class="ml-2"
                             >
-                              PK
+                              主键
                             </Badge>
                           </TableCell>
                           <TableCell>{{ column.type }}</TableCell>

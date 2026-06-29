@@ -24,7 +24,7 @@ const props = withDefaults(defineProps<{
   loading: false,
   embedded: false,
   title: "目录树",
-  description: "按数据库、Schema 和表组织。",
+  description: "按数据库、模式和表组织。",
 })
 
 const emit = defineEmits<{

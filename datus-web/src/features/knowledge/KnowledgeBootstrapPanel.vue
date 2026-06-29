@@ -190,7 +190,7 @@ function updateComponent(component: BootstrapComponent, value: boolean) {
           </CardHeader>
           <CardContent class="flex min-w-0 items-end justify-between gap-3">
             <span class="min-w-0 truncate text-lg font-semibold">{{ streamLabel }}</span>
-            <span class="text-xs text-muted-foreground">stream_id</span>
+            <span class="text-xs text-muted-foreground">事件流 ID</span>
           </CardContent>
         </Card>
         <Card>
@@ -282,7 +282,7 @@ function updateComponent(component: BootstrapComponent, value: boolean) {
                       </Select>
                     </Field>
                     <Field>
-                      <FieldLabel for="kb-schema-linking">Schema Linking</FieldLabel>
+                      <FieldLabel for="kb-schema-linking">模式链接类型</FieldLabel>
                       <Select
                         :model-value="manager.forms.value.kb.schemaLinkingType"
                         @update:model-value="updateSchemaLinkingType"
@@ -307,7 +307,7 @@ function updateComponent(component: BootstrapComponent, value: boolean) {
 
                   <FieldGroup>
                     <Field>
-                      <FieldLabel for="kb-catalog">Catalog</FieldLabel>
+                      <FieldLabel for="kb-catalog">目录名</FieldLabel>
                       <Input
                         id="kb-catalog"
                         v-model="manager.forms.value.kb.catalog"
@@ -457,7 +457,7 @@ function updateComponent(component: BootstrapComponent, value: boolean) {
                     />
                   </Field>
                   <Field>
-                    <FieldLabel for="docs-github-ref">GitHub Ref</FieldLabel>
+                    <FieldLabel for="docs-github-ref">GitHub 引用</FieldLabel>
                     <Input
                       id="docs-github-ref"
                       v-model="manager.forms.value.docs.githubRef"
@@ -465,7 +465,7 @@ function updateComponent(component: BootstrapComponent, value: boolean) {
                     />
                   </Field>
                   <Field class="md:col-span-2">
-                    <FieldLabel for="docs-github-token">GitHub Token</FieldLabel>
+                    <FieldLabel for="docs-github-token">GitHub 令牌</FieldLabel>
                     <Input
                       id="docs-github-token"
                       v-model="manager.forms.value.docs.githubToken"
@@ -514,7 +514,7 @@ function updateComponent(component: BootstrapComponent, value: boolean) {
                       id="docs-include"
                       v-model="manager.forms.value.docs.includePatternsText"
                       class="min-h-24 text-sm leading-6"
-                      placeholder="每行一个 include pattern"
+                      placeholder="每行一个包含规则"
                     />
                   </Field>
                   <Field>
@@ -523,7 +523,7 @@ function updateComponent(component: BootstrapComponent, value: boolean) {
                       id="docs-exclude"
                       v-model="manager.forms.value.docs.excludePatternsText"
                       class="min-h-24 text-sm leading-6"
-                      placeholder="每行一个 exclude pattern"
+                      placeholder="每行一个排除规则"
                     />
                   </Field>
                 </div>
@@ -626,7 +626,7 @@ function updateComponent(component: BootstrapComponent, value: boolean) {
             </CardTitle>
           </CardHeader>
           <CardContent class="text-sm text-muted-foreground">
-            当前表单会提交组件、策略、catalog、database_name、subject_tree、success_story 和 sql_dir。
+            当前表单会提交组件、策略、目录名、数据库名、主题树、成功案例和 SQL 目录。
           </CardContent>
         </Card>
         <Card>
@@ -637,7 +637,7 @@ function updateComponent(component: BootstrapComponent, value: boolean) {
             </CardTitle>
           </CardHeader>
           <CardContent class="text-sm text-muted-foreground">
-            当前表单会提交平台、构建模式、来源、路径、分块和 GitHub ref；敏感 token 只随请求发送。
+            当前表单会提交平台、构建模式、来源、路径、分块和 GitHub 引用；敏感令牌只随请求发送。
           </CardContent>
         </Card>
       </div>
