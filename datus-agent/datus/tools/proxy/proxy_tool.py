@@ -25,6 +25,8 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+DEFAULT_PROXY_TOOL_RESULT_TIMEOUT_SECONDS = 120.0
+
 # Node types whose GenerationHooks depend on local filesystem tools (write_file, etc.)
 # Their filesystem_tools must NOT be proxied; other tools are still proxied.
 # gen_visual_report / gen_visual_dashboard author their render/*.jsx tree
@@ -40,14 +42,25 @@ _FS_DEPENDENT_NODES: Set[str] = {
 }
 
 
-def create_proxy_tool(original: FunctionTool, channel: ToolResultChannel) -> FunctionTool:
+def create_proxy_tool(
+    original: FunctionTool,
+    channel: ToolResultChannel,
+    timeout_seconds: float = DEFAULT_PROXY_TOOL_RESULT_TIMEOUT_SECONDS,
+) -> FunctionTool:
     """Wrap a FunctionTool so it awaits results from the channel instead of executing."""
 
     async def proxy_invoke(tool_ctx: ToolContext, args_str: str) -> dict:
         call_id = tool_ctx.tool_call_id
         logger.debug(f"Proxy tool '{original.name}' waiting for result, call_id={call_id}")
         try:
-            return await channel.wait_for(call_id)
+            return await channel.wait_for(call_id, timeout=timeout_seconds)
+        except TimeoutError:
+            error = (
+                f"Timed out waiting for external tool result for '{original.name}' "
+                f"after {timeout_seconds:g} seconds"
+            )
+            logger.warning("%s, call_id=%s", error, call_id)
+            return {"success": 0, "error": error, "result": None}
         except RuntimeError as e:
             logger.warning(f"Proxy tool '{original.name}' error: {e}, call_id={call_id}")
             return {"success": 0, "error": str(e), "result": None}

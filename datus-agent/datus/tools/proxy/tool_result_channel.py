@@ -35,11 +35,23 @@ class ToolResultChannel:
             self._futures[call_id] = fut
         return fut
 
-    async def wait_for(self, call_id: str) -> Any:
-        """Wait for a result to be published for the given call_id."""
+    async def wait_for(self, call_id: str, timeout: float | None = None) -> Any:
+        """Wait for a result to be published for the given call_id.
+
+        When ``timeout`` is provided, the pending future is removed on timeout so
+        a missing external callback does not leave stale state behind.
+        """
         async with self._lock:
             future = self._get_or_create_future(call_id)
-        return await future
+        if timeout is None:
+            return await future
+        try:
+            return await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+        except asyncio.TimeoutError:
+            async with self._lock:
+                if self._futures.get(call_id) is future and not future.done():
+                    self._futures.pop(call_id, None)
+            raise
 
     async def publish(self, call_id: str, result: Any) -> None:
         """Publish a result for the given call_id."""

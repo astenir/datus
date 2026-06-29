@@ -152,6 +152,25 @@ class TestCreateProxyTool:
         assert result["result"] is None
 
     @pytest.mark.asyncio
+    async def test_proxy_tool_returns_error_on_timeout(self):
+        channel = ToolResultChannel()
+        original = FunctionTool(
+            name="edit_file",
+            description="Edit a file",
+            params_json_schema={"type": "object", "properties": {}},
+            on_invoke_tool=lambda ctx, args: {"success": 1},
+        )
+        proxy = create_proxy_tool(original, channel, timeout_seconds=0.01)
+
+        ctx = SimpleNamespace(tool_call_id="call_timeout")
+        result = await proxy.on_invoke_tool(ctx, "{}")
+
+        assert result["success"] == 0
+        assert "Timed out waiting for external tool result for 'edit_file'" in result["error"]
+        assert result["result"] is None
+        assert "call_timeout" not in channel._futures
+
+    @pytest.mark.asyncio
     async def test_proxy_tool_uses_tool_call_id(self):
         channel = ToolResultChannel()
         original = FunctionTool(
