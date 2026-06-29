@@ -28,7 +28,15 @@ from datus.api.models.cli_models import ChatSessionData, ExecuteContextData, Exe
 from datus.api.models.dashboard_models import DashboardDetail, SqlQueryResultEnvelope
 from datus.api.models.database_models import DatabaseInfo, DatabasesData, ListDatabasesData
 from datus.api.models.report_models import ReportDetail
-from datus.api.routes import chat_routes, cli_routes, dashboard_routes, database_routes, report_routes, table_routes
+from datus.api.routes import (
+    chat_routes,
+    cli_routes,
+    dashboard_routes,
+    database_routes,
+    report_routes,
+    subject_routes,
+    table_routes,
+)
 from datus.api.services.cli_service import CLIService, _SQLTaskRecord
 from datus.api.services.dashboard_service import DashboardService
 from datus.schemas.artifact_manifest import ArtifactManifest
@@ -2107,6 +2115,39 @@ def test_cli_context_tables_passes_projected_config(monkeypatch):
     projected_config = svc.cli.execute_context.call_args.kwargs["agent_config"]
     assert projected_config.current_datasource == "finance"
     assert set(projected_config.services.datasources) == {"finance"}
+
+
+def test_subject_tree_requires_datasource_catalog(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    with _client(subject_routes.router, ctx, svc) as client:
+        response = client.get("/api/v1/subject-tree")
+
+    assert response.status_code == 403
+
+
+def test_subject_tree_rbac_denial_does_not_resolve_datus_service(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+    app = FastAPI()
+    app.include_router(subject_routes.router)
+
+    async def reject_service(request: Request):
+        raise AssertionError("RBAC denial resolved DatusService")
+
+    async def override_context(request: Request):
+        request.state.app_context = ctx
+        return ctx
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    app.dependency_overrides[deps.get_request_app_context] = override_context
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/api/v1/subject-tree")
+
+    assert response.status_code == 403
 
 
 def test_cli_internal_tables_rejects_missing_datasource_grant_before_execution(monkeypatch):

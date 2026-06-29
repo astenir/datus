@@ -170,6 +170,15 @@ _CATALOG_READ_POLICY = _policy(
     module_permission="module.datasource_catalog",
     data_boundaries={DATASOURCE_PROJECTION, DATASOURCE_GRANT, TABLE_SCOPE},
 )
+_SUBJECT_TREE_READ_POLICY = _policy(
+    MODULE_RBAC,
+    DATASOURCE_PROJECTION,
+    DATASOURCE_GRANT,
+    SYSTEM_READONLY,
+    module_permission="module.datasource_catalog",
+    data_boundaries={DATASOURCE_PROJECTION, DATASOURCE_GRANT},
+    note="Read-only subject library discovery for an authorized datasource.",
+)
 _ARTIFACT_DASHBOARD_VIEW_POLICY = _policy(
     MODULE_RBAC,
     ARTIFACT_ACL,
@@ -311,6 +320,7 @@ _add(
 
 _add("GET", "/api/v1/catalog/list", _CATALOG_READ_POLICY)
 _add_many("GET", ["/api/v1/table/detail", "/api/v1/semantic_model"], _CATALOG_READ_POLICY)
+_add("GET", "/api/v1/subject-tree", _SUBJECT_TREE_READ_POLICY)
 _add(
     "POST",
     "/api/v1/semantic_model",
