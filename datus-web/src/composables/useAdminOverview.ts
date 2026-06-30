@@ -75,11 +75,12 @@ function quotaSubjectTypeFromValue(value: string): QuotaSubjectType {
   return "user";
 }
 
-function commaList(value: string): string[] {
-  return value
-    .split(",")
-    .map(item => item.trim())
-    .filter(Boolean);
+function toggleListValue(values: readonly string[], value: string): string[] {
+  const normalizedValue = value.trim();
+  if (!normalizedValue) return [...values];
+  return values.includes(normalizedValue)
+    ? values.filter(item => item !== normalizedValue)
+    : [...values, normalizedValue];
 }
 
 function artifactKey(artifact: AdminArtifact): string {
@@ -198,9 +199,9 @@ export function useAdminOverview() {
   const artifactAclForm = ref<ArtifactAclFormData>({
     owner_user_id: "",
     visibility: "private",
-    allowed_roles_text: "",
-    allowed_user_ids_text: "",
-    datasources_text: "",
+    allowed_roles: [],
+    allowed_user_ids: [],
+    datasources: [],
   });
 
   const defaultDatasourceName = computed(() => data.value.datasources.find(item => item.is_default)?.name ?? "");
@@ -619,9 +620,9 @@ export function useAdminOverview() {
     artifactAclForm.value = {
       owner_user_id: "",
       visibility: "private",
-      allowed_roles_text: "",
-      allowed_user_ids_text: "",
-      datasources_text: editingArtifact.value?.manifest.datasources?.join(", ") ?? "",
+      allowed_roles: [],
+      allowed_user_ids: [],
+      datasources: [...(editingArtifact.value?.manifest.datasources ?? [])],
     };
     showArtifactAclDialog.value = true;
 
@@ -634,9 +635,9 @@ export function useAdminOverview() {
         artifactAclForm.value = {
           owner_user_id: acl.owner_user_id,
           visibility: acl.visibility,
-          allowed_roles_text: acl.allowed_roles?.join(", ") ?? "",
-          allowed_user_ids_text: acl.allowed_user_ids?.join(", ") ?? "",
-          datasources_text: acl.datasources?.join(", ") ?? "",
+          allowed_roles: acl.allowed_roles ?? [],
+          allowed_user_ids: acl.allowed_user_ids ?? [],
+          datasources: acl.datasources ?? [],
         };
       } else {
         artifactAclError.value = "未找到产物 ACL";
@@ -680,6 +681,14 @@ export function useAdminOverview() {
     loadingArtifactAcl.value = false;
   }
 
+  function toggleArtifactAclRole(roleId: string) {
+    artifactAclForm.value.allowed_roles = toggleListValue(artifactAclForm.value.allowed_roles, roleId);
+  }
+
+  function toggleArtifactAclUser(userId: string) {
+    artifactAclForm.value.allowed_user_ids = toggleListValue(artifactAclForm.value.allowed_user_ids, userId);
+  }
+
   async function saveArtifactAcl() {
     if (!editingArtifactAclTarget.value) return;
 
@@ -694,9 +703,9 @@ export function useAdminOverview() {
       await adminArtifactApi.putAcl(editingArtifactAclTarget.value.artifactType, editingArtifactAclTarget.value.slug, {
         owner_user_id: ownerUserId,
         visibility: artifactAclForm.value.visibility,
-        allowed_roles: commaList(artifactAclForm.value.allowed_roles_text),
-        allowed_user_ids: commaList(artifactAclForm.value.allowed_user_ids_text),
-        datasources: commaList(artifactAclForm.value.datasources_text),
+        allowed_roles: artifactAclForm.value.allowed_roles,
+        allowed_user_ids: artifactAclForm.value.allowed_user_ids,
+        datasources: artifactAclForm.value.datasources,
       });
       closeArtifactAclDialog();
       await loadOverview();
@@ -835,6 +844,8 @@ export function useAdminOverview() {
     openArtifactAclDialog,
     openArtifactAclDetail,
     closeArtifactAclDialog,
+    toggleArtifactAclRole,
+    toggleArtifactAclUser,
     saveArtifactAcl,
     openSessionDetail,
     closeSessionDetail,

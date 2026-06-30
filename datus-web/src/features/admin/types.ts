@@ -16,6 +16,12 @@ export type FormatScope = (scope: Record<string, unknown> | undefined) => string
 export type GrantKey = (subjectType: string, subjectId: string, datasourceKey: string) => string
 export type SetNumericField = (value: string | number) => void
 
+export interface AdminAclSelectOption {
+  value: string
+  label: string
+  description?: string
+}
+
 export type AdminGrantListItem = {
   subject_type: string
   subject_id: string

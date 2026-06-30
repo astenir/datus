@@ -28,8 +28,9 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import AdminAclMultiCombobox from "@/features/admin/AdminAclMultiCombobox.vue"
 import DatasourceGrantScopePicker from "@/features/admin/DatasourceGrantScopePicker.vue"
-import type { AdminDialogProps } from "@/features/admin/types"
+import type { AdminAclSelectOption, AdminDialogProps } from "@/features/admin/types"
 import { permissionBadgeItems } from "@/lib/permission-labels"
 import { quotaResourceOptionFor, quotaResourceOptions } from "@/lib/quota-options"
 
@@ -39,6 +40,11 @@ const quotaSubjectTypeOptions = [
   { value: "user", label: "用户" },
   { value: "role", label: "角色" },
   { value: "global", label: "全局" },
+] as const
+const artifactVisibilityOptions = [
+  { value: "private", label: "私有" },
+  { value: "role", label: "指定角色" },
+  { value: "enterprise", label: "企业可见" },
 ] as const
 const selectedUserPermissionBadges = computed(() =>
   permissionBadgeItems(props.users.selectedUserDetail.value?.effective_permissions),
@@ -107,6 +113,38 @@ const selectedQuotaResourceDescription = computed(() => {
   const currentResource = props.overview.quotaForm.value.resource.trim()
   return effectiveQuotaResourceOptions.value.find((option) => option.value === currentResource)?.description ?? ""
 })
+const artifactOwnerOptions = computed(() => {
+  const options = props.users.users.value.map((user) => ({
+    value: user.user_id,
+    label: user.display_name ? `${user.display_name} (${user.user_id})` : user.user_id,
+    description: user.email ?? undefined,
+  }))
+  return withSelectedFallbackOptions(options, [props.overview.artifactAclForm.value.owner_user_id])
+})
+const artifactRoleOptions = computed(() => {
+  const options = props.roles.roles.value.map((role) => ({
+    value: role.role_id,
+    label: role.name ? `${role.name} (${role.role_id})` : role.role_id,
+    description: role.description ?? undefined,
+  }))
+  return withSelectedFallbackOptions(options, props.overview.artifactAclForm.value.allowed_roles)
+})
+const artifactUserOptions = computed(() => {
+  const options = props.users.users.value.map((user) => ({
+    value: user.user_id,
+    label: user.display_name ? `${user.display_name} (${user.user_id})` : user.user_id,
+    description: user.email ?? undefined,
+  }))
+  return withSelectedFallbackOptions(options, props.overview.artifactAclForm.value.allowed_user_ids)
+})
+const selectedArtifactOwnerLabel = computed(() => {
+  const ownerId = props.overview.artifactAclForm.value.owner_user_id
+  return artifactOwnerOptions.value.find(option => option.value === ownerId)?.label ?? ownerId
+})
+const selectedArtifactVisibilityLabel = computed(() => {
+  const visibility = props.overview.artifactAclForm.value.visibility
+  return artifactVisibilityOptions.find(option => option.value === visibility)?.label ?? visibility
+})
 
 function formatScopeText(text: string): string {
   const trimmed = text.trim()
@@ -122,6 +160,25 @@ function formatScopeText(text: string): string {
   }
 
   return "无法解析自定义范围"
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+  return [...new Set(values.map(value => value.trim()).filter(Boolean))]
+}
+
+function withSelectedFallbackOptions(
+  options: readonly AdminAclSelectOption[],
+  selectedValues: readonly string[],
+): AdminAclSelectOption[] {
+  const selected = uniqueStrings(selectedValues)
+  const optionValues = new Set(options.map(option => option.value))
+  const fallbackOptions = selected
+    .filter(value => !optionValues.has(value))
+    .map((value) => ({
+      value,
+      label: `当前：${value}`,
+    }))
+  return [...fallbackOptions, ...options]
 }
 </script>
 
@@ -1100,49 +1157,73 @@ function formatScopeText(text: string): string {
       </p>
       <FieldGroup class="gap-4">
         <Field>
-          <FieldLabel for="artifact-owner">Owner User ID</FieldLabel>
-          <Input
-            id="artifact-owner"
-            v-model="overview.artifactAclForm.value.owner_user_id"
-          />
+          <FieldLabel>所有者</FieldLabel>
+          <Select v-model="overview.artifactAclForm.value.owner_user_id">
+            <SelectTrigger class="w-full">
+              <SelectValue placeholder="选择所有者">
+                {{ selectedArtifactOwnerLabel }}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem
+                  v-for="user in artifactOwnerOptions"
+                  :key="user.value"
+                  :value="user.value"
+                >
+                  {{ user.label }}
+                </SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <FieldDescription v-if="!artifactOwnerOptions.length">
+            当前没有可选用户。
+          </FieldDescription>
         </Field>
         <Field>
           <FieldLabel>可见性</FieldLabel>
           <Select v-model="overview.artifactAclForm.value.visibility">
             <SelectTrigger class="w-full">
-              <SelectValue placeholder="可见性" />
+              <SelectValue placeholder="可见性">
+                {{ selectedArtifactVisibilityLabel }}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>
-                <SelectItem value="private">private</SelectItem>
-                <SelectItem value="role">role</SelectItem>
-                <SelectItem value="enterprise">enterprise</SelectItem>
+                <SelectItem
+                  v-for="option in artifactVisibilityOptions"
+                  :key="option.value"
+                  :value="option.value"
+                >
+                  {{ option.label }}
+                </SelectItem>
               </SelectGroup>
             </SelectContent>
           </Select>
         </Field>
         <Field>
-          <FieldLabel for="artifact-roles">允许角色</FieldLabel>
-          <Input
-            id="artifact-roles"
-            v-model="overview.artifactAclForm.value.allowed_roles_text"
+          <FieldLabel>允许角色</FieldLabel>
+          <AdminAclMultiCombobox
+            :options="artifactRoleOptions"
+            :selected-values="overview.artifactAclForm.value.allowed_roles"
+            placeholder="选择角色"
+            search-placeholder="搜索角色..."
+            empty-text="未选择角色"
+            @toggle="overview.toggleArtifactAclRole"
           />
-          <FieldDescription>多个角色用英文逗号分隔。</FieldDescription>
+          <FieldDescription>可见性为指定角色时，这些角色可访问该产物。</FieldDescription>
         </Field>
         <Field>
-          <FieldLabel for="artifact-users">允许用户</FieldLabel>
-          <Input
-            id="artifact-users"
-            v-model="overview.artifactAclForm.value.allowed_user_ids_text"
+          <FieldLabel>允许用户</FieldLabel>
+          <AdminAclMultiCombobox
+            :options="artifactUserOptions"
+            :selected-values="overview.artifactAclForm.value.allowed_user_ids"
+            placeholder="选择用户"
+            search-placeholder="搜索用户..."
+            empty-text="未选择额外用户"
+            @toggle="overview.toggleArtifactAclUser"
           />
-          <FieldDescription>多个 User ID 用英文逗号分隔。</FieldDescription>
-        </Field>
-        <Field>
-          <FieldLabel for="artifact-datasources">关联数据源</FieldLabel>
-          <Input
-            id="artifact-datasources"
-            v-model="overview.artifactAclForm.value.datasources_text"
-          />
+          <FieldDescription>用于给所有者之外的指定用户开放访问。</FieldDescription>
         </Field>
       </FieldGroup>
       <DialogFooter>

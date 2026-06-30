@@ -418,13 +418,13 @@ describe("useAdminOverview", () => {
     expect(overview.artifactAclForm.value).toEqual({
       owner_user_id: "alice",
       visibility: "role",
-      allowed_roles_text: "analyst",
-      allowed_user_ids_text: "bob",
-      datasources_text: "fund",
+      allowed_roles: ["analyst"],
+      allowed_user_ids: ["bob"],
+      datasources: ["fund"],
     });
 
-    overview.artifactAclForm.value.allowed_roles_text = "analyst, admin";
-    overview.artifactAclForm.value.allowed_user_ids_text = "bob, charlie";
+    overview.toggleArtifactAclRole("admin");
+    overview.toggleArtifactAclUser("charlie");
 
     await overview.saveArtifactAcl();
 
