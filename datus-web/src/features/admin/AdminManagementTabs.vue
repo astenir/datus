@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { AdminManagementTabProps } from "@/features/admin/types"
+import { permissionBadgeItems } from "@/lib/permission-labels"
 
 defineProps<AdminManagementTabProps>()
 </script>
@@ -77,9 +78,11 @@ defineProps<AdminManagementTabProps>()
               <TableRow>
                 <TableHead>User ID</TableHead>
                 <TableHead>姓名</TableHead>
-                <TableHead>邮箱</TableHead>
+                <TableHead>部门</TableHead>
+                <TableHead>角色</TableHead>
+                <TableHead>直接授权</TableHead>
                 <TableHead>状态</TableHead>
-                <TableHead>更新时间</TableHead>
+                <TableHead>最近活跃</TableHead>
                 <TableHead class="text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
@@ -90,13 +93,19 @@ defineProps<AdminManagementTabProps>()
               >
                 <TableCell class="font-medium">{{ user.user_id }}</TableCell>
                 <TableCell>{{ user.display_name || "-" }}</TableCell>
-                <TableCell>{{ user.email || "-" }}</TableCell>
+                <TableCell>{{ user.department || "-" }}</TableCell>
+                <TableCell>
+                  <Badge variant="outline">{{ user.role_count }}</Badge>
+                </TableCell>
+                <TableCell>
+                  <Badge variant="outline">{{ user.direct_datasource_grant_count }}</Badge>
+                </TableCell>
                 <TableCell>
                   <Badge :variant="user.enabled ? 'default' : 'secondary'">
                     {{ user.enabled ? "启用" : "禁用" }}
                   </Badge>
                 </TableCell>
-                <TableCell>{{ formatOptionalDate(user.updated_at || user.created_at) }}</TableCell>
+                <TableCell>{{ formatOptionalDate(user.last_seen_at || user.updated_at || user.created_at) }}</TableCell>
                 <TableCell>
                   <div class="flex justify-end gap-2">
                     <Button
@@ -171,8 +180,23 @@ defineProps<AdminManagementTabProps>()
                   </Badge>
                 </TableCell>
                 <TableCell class="max-w-lg">
-                  <span class="text-sm leading-6">
-                    {{ role.permissions?.join(", ") || "-" }}
+                  <div
+                    v-if="role.permissions?.length"
+                    class="flex flex-wrap gap-2"
+                  >
+                    <Badge
+                      v-for="permission in permissionBadgeItems(role.permissions)"
+                      :key="permission.code"
+                      :variant="permission.kind === 'wildcard' ? 'destructive' : 'secondary'"
+                    >
+                      {{ permission.label }}
+                    </Badge>
+                  </div>
+                  <span
+                    v-else
+                    class="text-sm text-muted-foreground"
+                  >
+                    -
                   </span>
                 </TableCell>
                 <TableCell>{{ formatOptionalDate(role.updated_at || role.created_at) }}</TableCell>

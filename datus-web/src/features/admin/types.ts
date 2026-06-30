@@ -53,6 +53,7 @@ export interface AdminManagementTabProps {
 export interface AdminDialogProps {
   audits: AdminAuditController
   formatOptionalDate: FormatOptionalDate
+  formatScope: FormatScope
   overview: AdminOverviewController
   roles: AdminRoleController
   saveArtifactAclAndCloseRoute: () => Promise<void>

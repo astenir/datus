@@ -19,6 +19,9 @@ export type AdminUsage = components["schemas"]["AdminUsageSummary"];
 export type AdminSecret = components["schemas"]["AdminSecretSummary"];
 export type AdminArtifact = components["schemas"]["AdminArtifactSummary"];
 export type ArtifactAcl = components["schemas"]["ArtifactAcl"];
+export type AdminUserDatasourceGrant = components["schemas"]["AdminUserDatasourceGrantSummary"];
+export type AdminUserDetail = components["schemas"]["AdminUserDetail"];
+export type AdminUserRole = components["schemas"]["AdminUserRoleSummary"];
 
 export interface RoleListData {
   roles: Role[];
@@ -40,6 +43,10 @@ export interface AdminUserFormData {
   user_id: string;
   display_name: string;
   email: string;
+  external_user_id: string;
+  department: string;
+  title: string;
+  last_seen_at: string;
   enabled: boolean;
 }
 
@@ -181,6 +188,10 @@ export interface SecretListParams {
 export interface UpsertUserInput {
   display_name?: string | null;
   email?: string | null;
+  external_user_id?: string | null;
+  department?: string | null;
+  title?: string | null;
+  last_seen_at?: string | null;
   enabled: boolean;
 }
 

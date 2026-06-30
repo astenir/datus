@@ -456,9 +456,14 @@ describe("api client", () => {
     );
 
     await adminUserApi.listUsers({ enabled: false });
+    await adminUserApi.getUser("alice");
     await adminUserApi.upsertUser("alice", {
       display_name: "Alice",
       email: "alice@example.com",
+      external_user_id: "ext-alice",
+      department: "数据部",
+      title: "分析师",
+      last_seen_at: "2026-06-23T00:00:00Z",
       enabled: true,
     });
     await adminUserApi.disableUser("alice");
@@ -471,9 +476,19 @@ describe("api client", () => {
 
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("/api/v1/admin/users?enabled=false");
     expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe("/api/v1/admin/users/alice");
-    expect(vi.mocked(fetch).mock.calls[2]?.[0]).toBe("/api/v1/admin/users/alice/disable");
-    expect(vi.mocked(fetch).mock.calls[3]?.[0]).toBe("/api/v1/admin/users/alice/roles");
-    expect(vi.mocked(fetch).mock.calls[4]?.[0]).toBe("/api/v1/admin/roles/admin");
+    expect(vi.mocked(fetch).mock.calls[2]?.[0]).toBe("/api/v1/admin/users/alice");
+    expect(JSON.parse(String((vi.mocked(fetch).mock.calls[2]?.[1] as RequestInit).body))).toEqual({
+      display_name: "Alice",
+      email: "alice@example.com",
+      external_user_id: "ext-alice",
+      department: "数据部",
+      title: "分析师",
+      last_seen_at: "2026-06-23T00:00:00Z",
+      enabled: true,
+    });
+    expect(vi.mocked(fetch).mock.calls[3]?.[0]).toBe("/api/v1/admin/users/alice/disable");
+    expect(vi.mocked(fetch).mock.calls[4]?.[0]).toBe("/api/v1/admin/users/alice/roles");
+    expect(vi.mocked(fetch).mock.calls[5]?.[0]).toBe("/api/v1/admin/roles/admin");
   });
 
   it("uses current enterprise admin operations routes", async () => {

@@ -2374,6 +2374,77 @@ export interface components {
             updated_at?: string | null;
         };
 
+        AdminUserDatasourceGrantSummary: {
+
+            subject_type: string;
+
+            subject_id: string;
+
+            datasource_key: string;
+
+            effect: string;
+
+            scope?: {
+                [key: string]: unknown;
+            };
+
+            created_at?: string | null;
+
+            updated_at?: string | null;
+        };
+
+        AdminUserDetail: {
+
+            user_id: string;
+
+            display_name?: string | null;
+
+            email?: string | null;
+
+            enabled: boolean;
+
+            external_user_id?: string | null;
+
+            department?: string | null;
+
+            title?: string | null;
+
+            last_seen_at?: string | null;
+
+            role_ids?: string[];
+
+            role_count: number;
+
+            direct_datasource_grant_count: number;
+
+            created_at?: string | null;
+
+            updated_at?: string | null;
+
+            roles?: components["schemas"]["AdminUserRoleSummary"][];
+
+            effective_permissions?: string[];
+
+            direct_datasource_grants?: components["schemas"]["AdminUserDatasourceGrantSummary"][];
+
+            role_datasource_grants?: components["schemas"]["AdminUserDatasourceGrantSummary"][];
+
+            role_datasource_grant_count: number;
+
+            effective_datasource_grant_count: number;
+        };
+
+        AdminUserRoleSummary: {
+
+            role_id: string;
+
+            name?: string | null;
+
+            permissions?: string[];
+
+            built_in: boolean;
+        };
+
         AdminUserRolesSummary: {
 
             user_id: string;
@@ -2390,6 +2461,20 @@ export interface components {
             email?: string | null;
 
             enabled: boolean;
+
+            external_user_id?: string | null;
+
+            department?: string | null;
+
+            title?: string | null;
+
+            last_seen_at?: string | null;
+
+            role_ids?: string[];
+
+            role_count: number;
+
+            direct_datasource_grant_count: number;
 
             created_at?: string | null;
 
@@ -3603,6 +3688,17 @@ export interface components {
             errorMessage?: string | null;
         };
 
+        Result_AdminUserDetail_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["AdminUserDetail"] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
         Result_AdminUserRolesSummary_: {
 
             success: boolean;
@@ -4613,6 +4709,14 @@ export interface components {
             email?: string | null;
 
             enabled: boolean;
+
+            external_user_id?: string | null;
+
+            department?: string | null;
+
+            title?: string | null;
+
+            last_seen_at?: string | null;
         };
 
         UpsertDatasourceGrantRequest: {
@@ -8669,7 +8773,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Result_AdminUserSummary_"];
+                    "application/json": components["schemas"]["Result_AdminUserDetail_"];
                 };
             };
 

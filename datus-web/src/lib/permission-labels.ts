@@ -1,0 +1,78 @@
+export interface PermissionBadgeItem {
+  code: string;
+  kind: "regular" | "wildcard";
+  label: string;
+}
+
+const modulePermissionLabels: Array<Omit<PermissionBadgeItem, "kind">> = [
+  { code: "chat", label: "对话" },
+  { code: "sql_generation", label: "SQL 生成" },
+  { code: "report", label: "报表" },
+  { code: "dashboard", label: "仪表盘" },
+  { code: "admin", label: "管理" },
+  { code: "catalog", label: "数据目录" },
+  { code: "module.chat", label: "对话" },
+  { code: "module.sql_executor", label: "SQL 执行" },
+  { code: "module.datasource_catalog", label: "数据目录" },
+  { code: "module.report.view", label: "报表查看" },
+  { code: "module.report.query", label: "报表查询" },
+  { code: "module.dashboard.view", label: "仪表盘查看" },
+  { code: "module.dashboard.query", label: "仪表盘查询" },
+  { code: "module.kb", label: "知识库" },
+  { code: "module.mcp", label: "MCP" },
+  { code: "module.config.view", label: "配置查看" },
+  { code: "module.config.edit", label: "配置编辑" },
+  { code: "module.admin.users", label: "用户管理" },
+  { code: "module.admin.roles", label: "角色管理" },
+  { code: "module.admin.datasources", label: "数据授权管理" },
+  { code: "module.admin.sessions", label: "会话管理" },
+  { code: "module.admin.artifacts", label: "产物 ACL 管理" },
+  { code: "module.admin.audit", label: "审计查看" },
+  { code: "module.admin.audit.export", label: "审计导出" },
+  { code: "module.admin.quotas", label: "额度管理" },
+  { code: "module.admin.secrets", label: "密钥管理" },
+  { code: "module.admin.agents", label: "Agent 管理" },
+  { code: "module.system.status", label: "系统状态" },
+];
+
+const labelByCode = new Map(modulePermissionLabels.map((item) => [item.code, item.label]));
+
+const wildcardLabels: Record<string, string> = {
+  "*": "全部权限",
+  "module.*": "全部功能权限",
+  "module.admin.*": "全部管理权限",
+  "module.report.*": "全部报表权限",
+  "module.dashboard.*": "全部仪表盘权限",
+  "module.config.*": "全部配置权限",
+};
+
+function fallbackLabel(code: string): string {
+  if (code.startsWith("module.")) return code.slice("module.".length).replaceAll(".", " / ");
+  return code;
+}
+
+export function permissionBadgeItems(permissions: readonly string[] = []): PermissionBadgeItem[] {
+  const selected = new Map<string, PermissionBadgeItem>();
+
+  for (const permission of permissions) {
+    const code = permission.trim();
+    if (!code) continue;
+
+    if (code.includes("*")) {
+      selected.set(code, {
+        code,
+        kind: "wildcard",
+        label: wildcardLabels[code] ?? fallbackLabel(code),
+      });
+      continue;
+    }
+
+    selected.set(code, {
+      code,
+      kind: "regular",
+      label: labelByCode.get(code) ?? fallbackLabel(code),
+    });
+  }
+
+  return [...selected.values()];
+}

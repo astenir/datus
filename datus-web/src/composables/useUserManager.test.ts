@@ -36,6 +36,13 @@ const user = {
   display_name: "Alice",
   email: "alice@example.com",
   enabled: true,
+  external_user_id: "ext-alice",
+  department: "数据部",
+  title: "分析师",
+  last_seen_at: "2026-06-23T00:00:00Z",
+  role_ids: ["viewer"],
+  role_count: 1,
+  direct_datasource_grant_count: 2,
   created_at: "2026-06-22T00:00:00Z",
   updated_at: null,
 };
@@ -94,7 +101,24 @@ describe("useUserManager", () => {
   });
 
   it("opens user detail with a normalized route user id", async () => {
-    getUser.mockResolvedValue({ data: { ...user, display_name: "Alice Admin" } });
+    getUser.mockResolvedValue({
+      data: {
+        ...user,
+        display_name: "Alice Admin",
+        roles: [{ role_id: "viewer", name: "查看员", permissions: ["chat"], built_in: false }],
+        effective_permissions: ["module.chat"],
+        direct_datasource_grants: [{
+          subject_type: "user",
+          subject_id: "alice",
+          datasource_key: "fund",
+          effect: "allow",
+          scope: {},
+        }],
+        role_datasource_grants: [],
+        role_datasource_grant_count: 0,
+        effective_datasource_grant_count: 2,
+      },
+    });
 
     const { useUserManager } = await import("./useUserManager");
     const manager = useUserManager();
@@ -109,6 +133,8 @@ describe("useUserManager", () => {
 
     expect(getUser).toHaveBeenCalledWith("alice");
     expect(manager.selectedUserDetail.value?.display_name).toBe("Alice Admin");
+    expect(manager.selectedUserDetail.value?.effective_permissions).toEqual(["module.chat"]);
+    expect(manager.selectedUserDetail.value?.direct_datasource_grants?.[0]?.datasource_key).toBe("fund");
     expect(manager.userDetailError.value).toBeNull();
     expect(manager.loadingUserDetail.value).toBe(false);
 
@@ -150,6 +176,10 @@ describe("useUserManager", () => {
       user_id: " ",
       display_name: "",
       email: "",
+      external_user_id: "",
+      department: "",
+      title: "",
+      last_seen_at: "",
       enabled: true,
     };
 
@@ -157,5 +187,34 @@ describe("useUserManager", () => {
 
     expect(toastError).toHaveBeenCalledWith("请输入用户 ID");
     expect(upsertUser).not.toHaveBeenCalled();
+  });
+
+  it("sends enterprise identity metadata when adding a user", async () => {
+    const { useUserManager } = await import("./useUserManager");
+    const manager = useUserManager();
+    manager.newUserForm.value = {
+      user_id: " alice ",
+      display_name: " Alice ",
+      email: " alice@example.com ",
+      external_user_id: " ext-alice ",
+      department: " 数据部 ",
+      title: " 分析师 ",
+      last_seen_at: " 2026-06-23T00:00:00Z ",
+      enabled: true,
+    };
+
+    await manager.addUser();
+
+    expect(upsertUser).toHaveBeenCalledWith("alice", {
+      display_name: "Alice",
+      email: "alice@example.com",
+      external_user_id: "ext-alice",
+      department: "数据部",
+      title: "分析师",
+      last_seen_at: "2026-06-23T00:00:00Z",
+      enabled: true,
+    });
+    expect(manager.showAddUserDialog.value).toBe(false);
+    expect(listUsers).toHaveBeenCalled();
   });
 });

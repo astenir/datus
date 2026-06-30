@@ -2,7 +2,7 @@ import { computed, ref, shallowRef } from "vue";
 import { toast } from "vue-sonner";
 
 import { adminRoleApi, adminUserApi } from "@/lib/api";
-import type { AdminUser, AdminUserFormData, AdminUserSearchForm, AssignableRole } from "@/types/admin";
+import type { AdminUser, AdminUserDetail, AdminUserFormData, AdminUserSearchForm, AssignableRole } from "@/types/admin";
 
 export const userStatusOptions = [
   { value: "all", label: "全部状态" },
@@ -27,7 +27,7 @@ export function useUserManager() {
   const loadingUserDetail = shallowRef(false);
   const showUserDetailDialog = shallowRef(false);
   const selectedUserDetailId = shallowRef<string | null>(null);
-  const selectedUserDetail = shallowRef<AdminUser | null>(null);
+  const selectedUserDetail = shallowRef<AdminUserDetail | null>(null);
   const userDetailError = shallowRef<string | null>(null);
   let userDetailRequestId = 0;
 
@@ -42,6 +42,10 @@ export function useUserManager() {
     user_id: "",
     display_name: "",
     email: "",
+    external_user_id: "",
+    department: "",
+    title: "",
+    last_seen_at: "",
     enabled: true,
   });
   const savingUser = shallowRef(false);
@@ -188,6 +192,10 @@ export function useUserManager() {
       user_id: "",
       display_name: "",
       email: "",
+      external_user_id: "",
+      department: "",
+      title: "",
+      last_seen_at: "",
       enabled: true,
     };
     showAddUserDialog.value = true;
@@ -205,6 +213,10 @@ export function useUserManager() {
       await adminUserApi.upsertUser(userId, {
         display_name: newUserForm.value.display_name.trim() || null,
         email: newUserForm.value.email.trim() || null,
+        external_user_id: newUserForm.value.external_user_id.trim() || null,
+        department: newUserForm.value.department.trim() || null,
+        title: newUserForm.value.title.trim() || null,
+        last_seen_at: newUserForm.value.last_seen_at.trim() || null,
         enabled: newUserForm.value.enabled,
       });
       showAddUserDialog.value = false;

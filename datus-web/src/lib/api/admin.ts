@@ -7,6 +7,7 @@ import type {
   AdminSessionDetail,
   AdminUsage,
   AdminUser,
+  AdminUserDetail,
   AdminUserListParams,
   AdminUserRolesData,
   ApiResponse,
@@ -89,8 +90,8 @@ export const adminUserApi = {
     return get<ApiResponse<AdminUser[]>>(`/api/v1/admin/users${query}`);
   },
 
-  getUser(userId: string): Promise<ApiResponse<AdminUser>> {
-    return get<ApiResponse<AdminUser>>(`/api/v1/admin/users/${encodeURIComponent(userId)}`);
+  getUser(userId: string): Promise<ApiResponse<AdminUserDetail>> {
+    return get<ApiResponse<AdminUserDetail>>(`/api/v1/admin/users/${encodeURIComponent(userId)}`);
   },
 
   upsertUser(userId: string, input: UpsertUserInput): Promise<ApiResponse<AdminUser>> {

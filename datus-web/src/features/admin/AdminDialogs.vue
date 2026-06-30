@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from "vue"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -22,8 +23,16 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import type { AdminDialogProps } from "@/features/admin/types"
+import { permissionBadgeItems } from "@/lib/permission-labels"
 
-defineProps<AdminDialogProps>()
+const props = defineProps<AdminDialogProps>()
+
+const selectedUserPermissionBadges = computed(() =>
+  permissionBadgeItems(props.users.selectedUserDetail.value?.effective_permissions),
+)
+const selectedRolePermissionBadges = computed(() =>
+  permissionBadgeItems(props.roles.selectedRoleDetail.value?.permissions),
+)
 </script>
 
 <template>
@@ -31,7 +40,7 @@ defineProps<AdminDialogProps>()
     :open="users.showUserDetailDialog.value"
     @update:open="setUserDetailDialogOpen"
   >
-    <DialogContent class="sm:max-w-2xl">
+    <DialogContent class="sm:max-w-4xl">
       <DialogHeader>
         <DialogTitle>用户详情</DialogTitle>
         <DialogDescription>
@@ -53,33 +62,152 @@ defineProps<AdminDialogProps>()
       </div>
       <div
         v-else-if="users.selectedUserDetail.value"
-        class="grid gap-3 text-sm md:grid-cols-2"
+        class="flex max-h-[70vh] flex-col gap-4 overflow-y-auto pr-1 text-sm"
       >
-        <div class="rounded-md border p-3">
-          <div class="text-xs text-muted-foreground">User ID</div>
-          <div class="break-all font-medium">{{ users.selectedUserDetail.value.user_id }}</div>
+        <div class="grid gap-3 md:grid-cols-4">
+          <div class="rounded-md border p-3 md:col-span-2">
+            <div class="text-xs text-muted-foreground">User ID</div>
+            <div class="break-all font-medium">{{ users.selectedUserDetail.value.user_id }}</div>
+          </div>
+          <div class="rounded-md border p-3">
+            <div class="text-xs text-muted-foreground">状态</div>
+            <Badge :variant="users.selectedUserDetail.value.enabled ? 'default' : 'secondary'">
+              {{ users.selectedUserDetail.value.enabled ? "启用" : "禁用" }}
+            </Badge>
+          </div>
+          <div class="rounded-md border p-3">
+            <div class="text-xs text-muted-foreground">最近活跃</div>
+            <div class="font-medium">{{ formatOptionalDate(users.selectedUserDetail.value.last_seen_at) }}</div>
+          </div>
+          <div class="rounded-md border p-3">
+            <div class="text-xs text-muted-foreground">显示名</div>
+            <div class="font-medium">{{ users.selectedUserDetail.value.display_name || "-" }}</div>
+          </div>
+          <div class="rounded-md border p-3">
+            <div class="text-xs text-muted-foreground">邮箱</div>
+            <div class="break-all font-medium">{{ users.selectedUserDetail.value.email || "-" }}</div>
+          </div>
+          <div class="rounded-md border p-3">
+            <div class="text-xs text-muted-foreground">外部用户 ID</div>
+            <div class="break-all font-medium">{{ users.selectedUserDetail.value.external_user_id || "-" }}</div>
+          </div>
+          <div class="rounded-md border p-3">
+            <div class="text-xs text-muted-foreground">部门 / 职务</div>
+            <div class="font-medium">
+              {{ users.selectedUserDetail.value.department || "-" }}
+              <span class="text-muted-foreground">/</span>
+              {{ users.selectedUserDetail.value.title || "-" }}
+            </div>
+          </div>
         </div>
-        <div class="rounded-md border p-3">
-          <div class="text-xs text-muted-foreground">状态</div>
-          <Badge :variant="users.selectedUserDetail.value.enabled ? 'default' : 'secondary'">
-            {{ users.selectedUserDetail.value.enabled ? "启用" : "禁用" }}
-          </Badge>
+
+        <div class="grid gap-3 md:grid-cols-2">
+          <div class="rounded-md border p-3">
+            <div class="text-xs text-muted-foreground">创建时间</div>
+            <div class="font-medium">{{ formatOptionalDate(users.selectedUserDetail.value.created_at) }}</div>
+          </div>
+          <div class="rounded-md border p-3">
+            <div class="text-xs text-muted-foreground">更新时间</div>
+            <div class="font-medium">{{ formatOptionalDate(users.selectedUserDetail.value.updated_at) }}</div>
+          </div>
         </div>
+
         <div class="rounded-md border p-3">
-          <div class="text-xs text-muted-foreground">显示名</div>
-          <div class="font-medium">{{ users.selectedUserDetail.value.display_name || "-" }}</div>
+          <div class="mb-2 text-xs text-muted-foreground">角色</div>
+          <div
+            v-if="users.selectedUserDetail.value.roles?.length"
+            class="flex flex-wrap gap-2"
+          >
+            <Badge
+              v-for="role in users.selectedUserDetail.value.roles"
+              :key="role.role_id"
+              variant="outline"
+            >
+              {{ role.name || role.role_id }}
+            </Badge>
+          </div>
+          <div
+            v-else
+            class="text-sm text-muted-foreground"
+          >
+            未分配角色
+          </div>
         </div>
+
         <div class="rounded-md border p-3">
-          <div class="text-xs text-muted-foreground">邮箱</div>
-          <div class="break-all font-medium">{{ users.selectedUserDetail.value.email || "-" }}</div>
+          <div class="mb-2 text-xs text-muted-foreground">有效功能权限</div>
+          <div
+            v-if="selectedUserPermissionBadges.length"
+            class="flex flex-wrap gap-2"
+          >
+            <Badge
+              v-for="permission in selectedUserPermissionBadges"
+              :key="permission.code"
+              :variant="permission.kind === 'wildcard' ? 'destructive' : 'secondary'"
+            >
+              {{ permission.label }}
+            </Badge>
+          </div>
+          <div
+            v-else
+            class="text-sm text-muted-foreground"
+          >
+            无功能权限
+          </div>
         </div>
-        <div class="rounded-md border p-3">
-          <div class="text-xs text-muted-foreground">创建时间</div>
-          <div class="font-medium">{{ formatOptionalDate(users.selectedUserDetail.value.created_at) }}</div>
-        </div>
-        <div class="rounded-md border p-3">
-          <div class="text-xs text-muted-foreground">更新时间</div>
-          <div class="font-medium">{{ formatOptionalDate(users.selectedUserDetail.value.updated_at) }}</div>
+
+        <div class="grid gap-3 md:grid-cols-2">
+          <div class="rounded-md border p-3">
+            <div class="mb-2 text-xs text-muted-foreground">直接数据授权</div>
+            <div
+              v-if="users.selectedUserDetail.value.direct_datasource_grants?.length"
+              class="flex flex-col gap-2"
+            >
+              <div
+                v-for="grant in users.selectedUserDetail.value.direct_datasource_grants"
+                :key="`${grant.subject_type}:${grant.subject_id}:${grant.datasource_key}`"
+                class="rounded-md bg-muted p-2"
+              >
+                <div class="flex items-center justify-between gap-2">
+                  <span class="break-all font-medium">{{ grant.datasource_key }}</span>
+                  <Badge :variant="grant.effect === 'allow' ? 'default' : 'destructive'">{{ grant.effect }}</Badge>
+                </div>
+                <div class="mt-1 break-all text-xs text-muted-foreground">{{ formatScope(grant.scope) }}</div>
+              </div>
+            </div>
+            <div
+              v-else
+              class="text-sm text-muted-foreground"
+            >
+              无直接数据授权
+            </div>
+          </div>
+
+          <div class="rounded-md border p-3">
+            <div class="mb-2 text-xs text-muted-foreground">角色继承数据授权</div>
+            <div
+              v-if="users.selectedUserDetail.value.role_datasource_grants?.length"
+              class="flex flex-col gap-2"
+            >
+              <div
+                v-for="grant in users.selectedUserDetail.value.role_datasource_grants"
+                :key="`${grant.subject_type}:${grant.subject_id}:${grant.datasource_key}`"
+                class="rounded-md bg-muted p-2"
+              >
+                <div class="flex items-center justify-between gap-2">
+                  <span class="break-all font-medium">{{ grant.subject_id }} / {{ grant.datasource_key }}</span>
+                  <Badge :variant="grant.effect === 'allow' ? 'default' : 'destructive'">{{ grant.effect }}</Badge>
+                </div>
+                <div class="mt-1 break-all text-xs text-muted-foreground">{{ formatScope(grant.scope) }}</div>
+              </div>
+            </div>
+            <div
+              v-else
+              class="text-sm text-muted-foreground"
+            >
+              无角色继承数据授权
+            </div>
+          </div>
         </div>
       </div>
 
@@ -137,10 +265,6 @@ defineProps<AdminDialogProps>()
           <div class="font-medium">{{ roles.selectedRoleDetail.value.name }}</div>
         </div>
         <div class="rounded-md border p-3">
-          <div class="text-xs text-muted-foreground">权限数量</div>
-          <div class="font-medium">{{ roles.selectedRoleDetail.value.permissions?.length ?? 0 }}</div>
-        </div>
-        <div class="rounded-md border p-3">
           <div class="text-xs text-muted-foreground">创建时间</div>
           <div class="font-medium">{{ formatOptionalDate(roles.selectedRoleDetail.value.created_at) }}</div>
         </div>
@@ -154,7 +278,24 @@ defineProps<AdminDialogProps>()
         </div>
         <div class="rounded-md border p-3 md:col-span-2">
           <div class="text-xs text-muted-foreground">权限</div>
-          <pre class="mt-2 max-h-52 overflow-auto whitespace-pre-wrap rounded-md bg-muted p-3 font-mono text-xs">{{ (roles.selectedRoleDetail.value.permissions ?? []).join("\n") || "-" }}</pre>
+          <div
+            v-if="selectedRolePermissionBadges.length"
+            class="mt-2 flex flex-wrap gap-2"
+          >
+            <Badge
+              v-for="permission in selectedRolePermissionBadges"
+              :key="permission.code"
+              :variant="permission.kind === 'wildcard' ? 'destructive' : 'secondary'"
+            >
+              {{ permission.label }}
+            </Badge>
+          </div>
+          <div
+            v-else
+            class="mt-2 text-sm text-muted-foreground"
+          >
+            无功能权限
+          </div>
         </div>
       </div>
 
@@ -327,6 +468,35 @@ defineProps<AdminDialogProps>()
             id="admin-user-email"
             v-model="users.newUserForm.value.email"
           />
+        </Field>
+        <Field>
+          <FieldLabel for="admin-user-external-id">外部用户 ID</FieldLabel>
+          <Input
+            id="admin-user-external-id"
+            v-model="users.newUserForm.value.external_user_id"
+          />
+        </Field>
+        <Field>
+          <FieldLabel for="admin-user-department">部门</FieldLabel>
+          <Input
+            id="admin-user-department"
+            v-model="users.newUserForm.value.department"
+          />
+        </Field>
+        <Field>
+          <FieldLabel for="admin-user-title">职务</FieldLabel>
+          <Input
+            id="admin-user-title"
+            v-model="users.newUserForm.value.title"
+          />
+        </Field>
+        <Field>
+          <FieldLabel for="admin-user-last-seen">最近活跃时间</FieldLabel>
+          <Input
+            id="admin-user-last-seen"
+            v-model="users.newUserForm.value.last_seen_at"
+          />
+          <FieldDescription>可留空；用于导入或校正外部身份系统的最近活跃时间。</FieldDescription>
         </Field>
         <Field
           orientation="horizontal"

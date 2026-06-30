@@ -61,7 +61,8 @@ function loadAll() {
 
 function formatOptionalDate(value: string | null | undefined) {
   if (!value) return "-"
-  return new Date(value.endsWith("Z") ? value : `${value}Z`).toLocaleString("zh-CN", {
+  const dateValue = /(?:Z|[+-]\d{2}:?\d{2})$/.test(value) ? value : `${value}Z`
+  return new Date(dateValue).toLocaleString("zh-CN", {
     hour12: false,
     month: "2-digit",
     day: "2-digit",
@@ -379,6 +380,7 @@ watch(
     <AdminDialogs
       :audits="audits"
       :format-optional-date="formatOptionalDate"
+      :format-scope="formatScope"
       :overview="overview"
       :roles="roles"
       :save-artifact-acl-and-close-route="saveArtifactAclAndCloseRoute"
