@@ -42,7 +42,7 @@ defineProps<AdminManagementTabProps>()
 <template>
   <Tabs
     :model-value="activeTab"
-    class="flex flex-col gap-4"
+    class="flex min-h-0 flex-1 flex-col gap-4"
     @update:model-value="setActiveTab"
   >
     <TabsList class="flex h-auto !flex-row flex-wrap justify-start">
@@ -56,8 +56,11 @@ defineProps<AdminManagementTabProps>()
       <TabsTrigger value="audit">审计</TabsTrigger>
     </TabsList>
 
-    <TabsContent value="users">
-      <Card>
+    <TabsContent
+      value="users"
+      class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
+    >
+      <Card class="min-h-0 flex-1">
         <CardHeader class="flex flex-row items-center justify-between gap-3">
           <CardTitle class="text-lg">用户</CardTitle>
           <Button
@@ -68,7 +71,7 @@ defineProps<AdminManagementTabProps>()
             新增用户
           </Button>
         </CardHeader>
-        <CardContent>
+        <CardContent class="min-h-0 flex-1 overflow-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -128,8 +131,11 @@ defineProps<AdminManagementTabProps>()
       </Card>
     </TabsContent>
 
-    <TabsContent value="roles">
-      <Card>
+    <TabsContent
+      value="roles"
+      class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
+    >
+      <Card class="min-h-0 flex-1">
         <CardHeader class="flex flex-row items-center justify-between gap-3">
           <CardTitle class="text-lg">角色</CardTitle>
           <Button
@@ -140,7 +146,7 @@ defineProps<AdminManagementTabProps>()
             新增角色
           </Button>
         </CardHeader>
-        <CardContent>
+        <CardContent class="min-h-0 flex-1 overflow-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -206,8 +212,11 @@ defineProps<AdminManagementTabProps>()
       </Card>
     </TabsContent>
 
-    <TabsContent value="grants">
-      <Card>
+    <TabsContent
+      value="grants"
+      class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
+    >
+      <Card class="min-h-0 flex-1">
         <CardHeader class="flex flex-row items-center justify-between gap-3">
           <CardTitle class="text-lg">数据授权</CardTitle>
           <Button
@@ -218,7 +227,7 @@ defineProps<AdminManagementTabProps>()
             新增授权
           </Button>
         </CardHeader>
-        <CardContent>
+        <CardContent class="min-h-0 flex-1 overflow-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -272,12 +281,15 @@ defineProps<AdminManagementTabProps>()
       </Card>
     </TabsContent>
 
-    <TabsContent value="sessions">
-      <Card>
+    <TabsContent
+      value="sessions"
+      class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
+    >
+      <Card class="min-h-0 flex-1">
         <CardHeader>
           <CardTitle class="text-lg">会话</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent class="min-h-0 flex-1 overflow-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -340,8 +352,11 @@ defineProps<AdminManagementTabProps>()
       </Card>
     </TabsContent>
 
-    <TabsContent value="quotas">
-      <Card>
+    <TabsContent
+      value="quotas"
+      class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
+    >
+      <Card class="min-h-0 flex-1">
         <CardHeader class="flex flex-row items-center justify-between gap-3">
           <CardTitle class="text-lg">额度与用量</CardTitle>
           <Button
@@ -352,7 +367,7 @@ defineProps<AdminManagementTabProps>()
             新增额度
           </Button>
         </CardHeader>
-        <CardContent>
+        <CardContent class="min-h-0 flex-1 overflow-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -399,8 +414,11 @@ defineProps<AdminManagementTabProps>()
       </Card>
     </TabsContent>
 
-    <TabsContent value="secrets">
-      <Card>
+    <TabsContent
+      value="secrets"
+      class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
+    >
+      <Card class="min-h-0 flex-1">
         <CardHeader class="flex flex-row items-center justify-between gap-3">
           <CardTitle class="text-lg">密钥引用</CardTitle>
           <Button
@@ -411,7 +429,7 @@ defineProps<AdminManagementTabProps>()
             新增密钥
           </Button>
         </CardHeader>
-        <CardContent>
+        <CardContent class="min-h-0 flex-1 overflow-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -465,12 +483,15 @@ defineProps<AdminManagementTabProps>()
       </Card>
     </TabsContent>
 
-    <TabsContent value="artifacts">
-      <Card>
+    <TabsContent
+      value="artifacts"
+      class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
+    >
+      <Card class="min-h-0 flex-1">
         <CardHeader>
           <CardTitle class="text-lg">产物 ACL</CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent class="min-h-0 flex-1 overflow-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -511,8 +532,11 @@ defineProps<AdminManagementTabProps>()
       </Card>
     </TabsContent>
 
-    <TabsContent value="audit">
-      <Card>
+    <TabsContent
+      value="audit"
+      class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
+    >
+      <Card class="min-h-0 flex-1">
         <CardHeader class="flex flex-row items-center justify-between gap-3">
           <div class="min-w-0">
             <CardTitle class="text-lg">审计日志</CardTitle>
@@ -530,7 +554,7 @@ defineProps<AdminManagementTabProps>()
             导出 CSV
           </Button>
         </CardHeader>
-        <CardContent class="flex flex-col gap-4">
+        <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
           <FieldGroup class="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
             <Field>
               <FieldLabel for="audit-user-id">用户</FieldLabel>

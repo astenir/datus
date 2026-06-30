@@ -8,7 +8,6 @@ import { useRoleManager } from "@/composables/useRoleManager"
 import { useUserManager } from "@/composables/useUserManager"
 import AdminDialogs from "@/features/admin/AdminDialogs.vue"
 import AdminManagementTabs from "@/features/admin/AdminManagementTabs.vue"
-import AdminSummaryCards from "@/features/admin/AdminSummaryCards.vue"
 import type {
   AdminArtifactListItem,
   AdminGrantListItem,
@@ -335,8 +334,8 @@ watch(
 </script>
 
 <template>
-  <section class="min-h-0 flex-1 overflow-y-auto p-4">
-    <div class="flex flex-col gap-4">
+  <section class="flex min-h-0 flex-1 overflow-hidden p-4">
+    <div class="flex min-h-0 flex-1 flex-col gap-4">
       <div class="flex flex-wrap items-center gap-3">
         <div class="min-w-0 flex-1">
           <h1 class="text-lg font-semibold">权限与运营管理</h1>
@@ -354,12 +353,6 @@ watch(
           刷新
         </Button>
       </div>
-
-      <AdminSummaryCards
-        :overview="overview"
-        :roles="roles"
-        :users="users"
-      />
 
       <AdminManagementTabs
         :active-tab="props.activeTab"
