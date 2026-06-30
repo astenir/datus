@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted } from "vue"
 import {
-  KeyRoundIcon,
   RefreshCwIcon,
   ShieldCheckIcon,
   UserRoundIcon,
@@ -186,11 +185,11 @@ onMounted(loadProfile)
             <CardHeader class="px-4 py-3 xl:shrink-0">
               <CardTitle class="text-lg">功能与权限</CardTitle>
               <CardDescription class="text-sm">
-                后端由权限集投影出的 feature 可用性和原始权限码。
+                后端由权限集投影出的功能可用性。
               </CardDescription>
             </CardHeader>
-            <CardContent class="flex flex-col gap-3 px-4 pb-4 xl:min-h-0 xl:flex-1 xl:overflow-hidden">
-              <div class="rounded-md border xl:min-h-0 xl:overflow-y-auto">
+            <CardContent class="flex flex-col px-4 pb-4 xl:min-h-0 xl:flex-1 xl:overflow-hidden">
+              <div class="rounded-md border xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
                 <div
                   v-for="feature in profile.featureList.value"
                   :key="feature.code"
@@ -209,30 +208,6 @@ onMounted(loadProfile)
                   class="px-3 py-6 text-center text-sm text-muted-foreground"
                 >
                   没有功能开关数据。
-                </div>
-              </div>
-
-              <div class="flex shrink-0 flex-col gap-2">
-                <div class="flex items-center gap-2 text-sm font-medium">
-                  <KeyRoundIcon class="text-muted-foreground" />
-                  权限码
-                </div>
-                <div class="max-h-28 overflow-y-auto rounded-md border p-2">
-                  <div class="flex flex-wrap gap-1.5">
-                    <Badge
-                      v-for="permission in profile.permissions.value"
-                      :key="permission"
-                      variant="secondary"
-                    >
-                      {{ permission }}
-                    </Badge>
-                    <span
-                      v-if="profile.permissions.value.length === 0"
-                      class="text-sm text-muted-foreground"
-                    >
-                      无权限项
-                    </span>
-                  </div>
                 </div>
               </div>
             </CardContent>
