@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from types import SimpleNamespace
 
 import pytest
 
 from datus.api.enterprise.loader import load_enterprise_extensions
+from datus.models.session_manager import SessionManager
 from datus_enterprise.postgres_session_store import _SCHEMA_SQL, PgSessionBodyStore
 
 
@@ -189,3 +191,64 @@ async def test_pg_session_body_store_keeps_schema_lock_and_pool_per_event_loop(m
         id(loop_a): (loop_a, pool_a),
         id(loop_b): (loop_b, pool_b),
     }
+
+
+@pytest.mark.asyncio
+async def test_pg_session_body_store_sync_bridge_reuses_one_event_loop_pool(monkeypatch):
+    conn = FakeSessionConnection(["s1"])
+    created_pools = []
+
+    async def create_pool(**kwargs):
+        pool = FakePool(conn)
+        created_pools.append(pool)
+        return pool
+
+    monkeypatch.setitem(sys.modules, "asyncpg", SimpleNamespace(create_pool=create_pool))
+    store = PgSessionBodyStore(dsn="postgresql://session-body")
+    sync_thread = None
+
+    try:
+        assert store.run_sync(lambda: store.list_session_ids(project_id="project", scope="alice")) == ["s1"]
+        sync_thread = store._sync_thread
+        assert sync_thread is not None
+        assert sync_thread.is_alive()
+
+        assert store.run_sync(lambda: store.list_session_ids(project_id="project", scope="alice")) == ["s1"]
+
+        assert len(created_pools) == 1
+        assert len(store._pools_by_loop) == 1
+    finally:
+        await store.close()
+
+    assert sync_thread is not None
+    assert not sync_thread.is_alive()
+    assert created_pools[0].terminated is True
+
+
+def test_session_manager_uses_body_store_sync_bridge_for_sync_methods(monkeypatch, tmp_path):
+    class BridgeBodyStore:
+        def __init__(self):
+            self.calls = 0
+
+        def run_sync(self, operation):
+            self.calls += 1
+            return asyncio.run(operation())
+
+        async def list_session_ids(self, **kwargs):
+            return ["chat_session_1"]
+
+    def fail_run_async(coro, timeout=None):
+        raise AssertionError("SessionManager should use body_store.run_sync for sync body-store calls")
+
+    store = BridgeBodyStore()
+    monkeypatch.setattr("datus.models.session_manager.run_async", fail_run_async)
+
+    manager = SessionManager(
+        session_dir=str(tmp_path),
+        scope="alice",
+        project_id="project",
+        body_store=store,
+    )
+
+    assert manager.list_sessions() == ["chat_session_1"]
+    assert store.calls == 1

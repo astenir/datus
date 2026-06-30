@@ -16,8 +16,9 @@ import asyncio
 import importlib
 import json
 import logging
+import threading
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Awaitable, Callable, TypeVar
 
 from agents.items import TResponseInputItem
 
@@ -31,6 +32,7 @@ from datus_enterprise.postgres_stores import (
 )
 
 logger = logging.getLogger(__name__)
+_T = TypeVar("_T")
 
 
 class PgSessionBodyStore:
@@ -55,6 +57,9 @@ class PgSessionBodyStore:
         self._pools_by_loop: dict[int, tuple[asyncio.AbstractEventLoop, Any]] = {}
         self._schema_ready = False
         self._schema_locks_by_loop: dict[int, tuple[asyncio.AbstractEventLoop, asyncio.Lock]] = {}
+        self._sync_loop: asyncio.AbstractEventLoop | None = None
+        self._sync_thread: threading.Thread | None = None
+        self._sync_loop_lock = threading.Lock()
 
     def open_session(self, *, project_id: str, scope: str | None, session_id: str) -> "PgSessionBodySession":
         return PgSessionBodySession(
@@ -66,8 +71,6 @@ class PgSessionBodyStore:
 
     async def close(self) -> None:
         pools = list(self._pools_by_loop.values())
-        if not pools:
-            return
         current_loop = asyncio.get_running_loop()
         self._pools_by_loop.clear()
         self._schema_locks_by_loop.clear()
@@ -81,6 +84,72 @@ class PgSessionBodyStore:
                 continue
             seen.add(pool_id)
             await _close_pool_best_effort(pool, graceful=pool_loop is current_loop)
+        self._stop_sync_loop()
+
+    def run_sync(self, operation: Callable[[], Awaitable[_T]]) -> _T:
+        """Run a body-store coroutine on one persistent loop for sync callers.
+
+        ``SessionManager`` still exposes synchronous methods for CLI and legacy
+        call sites. Creating a fresh event loop for every call causes asyncpg to
+        create a fresh pool per loop. Keeping one bridge loop per store bounds
+        sync-path PostgreSQL usage to one pool instead of one pool per call.
+        """
+        loop = self._ensure_sync_loop()
+        future = asyncio.run_coroutine_threadsafe(operation(), loop)
+        return future.result()
+
+    def _ensure_sync_loop(self) -> asyncio.AbstractEventLoop:
+        with self._sync_loop_lock:
+            if self._sync_loop is not None and self._sync_loop.is_running():
+                return self._sync_loop
+
+            ready = threading.Event()
+            loop_holder: dict[str, asyncio.AbstractEventLoop] = {}
+
+            def _run_loop() -> None:
+                loop = asyncio.new_event_loop()
+                loop_holder["loop"] = loop
+                self._sync_loop = loop
+                asyncio.set_event_loop(loop)
+                ready.set()
+                try:
+                    loop.run_forever()
+                finally:
+                    pending = asyncio.all_tasks(loop)
+                    for task in pending:
+                        task.cancel()
+                    if pending:
+                        try:
+                            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                        except Exception as exc:
+                            logger.debug("Failed to drain PgSessionBodyStore sync loop tasks: %s", exc)
+                    loop.close()
+
+            thread = threading.Thread(
+                target=_run_loop,
+                name="pg-session-body-store-sync-loop",
+                daemon=True,
+            )
+            self._sync_thread = thread
+            thread.start()
+            ready.wait(timeout=2.0)
+            loop = loop_holder.get("loop")
+            if loop is None:
+                raise RuntimeError("Failed to start PgSessionBodyStore sync loop")
+            return loop
+
+    def _stop_sync_loop(self) -> None:
+        with self._sync_loop_lock:
+            loop = self._sync_loop
+            thread = self._sync_thread
+            self._sync_loop = None
+            self._sync_thread = None
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(loop.stop)
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=2.0)
+            if thread.is_alive():
+                logger.warning("PgSessionBodyStore sync loop thread did not stop within timeout")
 
     async def session_exists(self, *, project_id: str, scope: str | None, session_id: str) -> bool:
         row = await self._fetchrow(

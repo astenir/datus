@@ -13,7 +13,7 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, Dict, List, Optional, TypeVar
 
 from agents.extensions.memory import AdvancedSQLiteSession
 
@@ -26,6 +26,7 @@ from datus.utils.message_utils import extract_user_input
 from datus.utils.time_utils import to_utc_iso
 
 logger = get_logger(__name__)
+_T = TypeVar("_T")
 
 if TYPE_CHECKING:
     from datus.api.enterprise.protocols import SessionBodyStore
@@ -201,6 +202,14 @@ class SessionManager:
     def _store_kwargs(self, session_id: str) -> Dict[str, Any]:
         return {"project_id": self.project_id, "scope": self._scope, "session_id": session_id}
 
+    def _run_body_store_sync(self, operation: Callable[[], Coroutine[Any, Any, _T]]) -> _T:
+        if self._body_store is None:
+            raise RuntimeError("Session body store is not configured")
+        run_sync = getattr(self._body_store, "run_sync", None)
+        if callable(run_sync):
+            return run_sync(operation)
+        return run_async(operation())
+
     def create_session(self, session_id: str) -> AdvancedSQLiteSession:
         """
         Create a new session or get existing one.
@@ -223,7 +232,10 @@ class SessionManager:
         # Load session from disk if not in memory
         session = self.get_session(session_id) if self.session_exists(session_id) else self._sessions.get(session_id)
         if session:
-            run_async(session.clear_session())
+            if self._body_store is not None:
+                self._run_body_store_sync(lambda: session.clear_session())
+            else:
+                run_async(session.clear_session())
             logger.debug(f"Cleared session: {session_id}")
         else:
             logger.warning(f"Attempted to clear non-existent session: {session_id}")
@@ -269,7 +281,9 @@ class SessionManager:
         payload: Dict[str, Any] = {"schema_version": self._SNAPSHOT_SCHEMA_VERSION, "prompt": prompt, **meta}
         if self._body_store is not None:
             self._validate_session_id(session_id)
-            run_async(self._body_store.save_system_prompt_snapshot(**self._store_kwargs(session_id), payload=payload))
+            self._run_body_store_sync(
+                lambda: self._body_store.save_system_prompt_snapshot(**self._store_kwargs(session_id), payload=payload)
+            )
             return
         path = self._snapshot_path(session_id)
         tmp_path = f"{path}.tmp"
@@ -305,7 +319,9 @@ class SessionManager:
         """
         if self._body_store is not None:
             self._validate_session_id(session_id)
-            payload = run_async(self._body_store.load_system_prompt_snapshot(**self._store_kwargs(session_id)))
+            payload = self._run_body_store_sync(
+                lambda: self._body_store.load_system_prompt_snapshot(**self._store_kwargs(session_id))
+            )
             return self._validate_system_prompt_snapshot_payload(payload)
         path = self._snapshot_path(session_id)
         try:
@@ -330,7 +346,9 @@ class SessionManager:
         """Delete the snapshot file (best-effort, idempotent)."""
         if self._body_store is not None:
             self._validate_session_id(session_id)
-            run_async(self._body_store.delete_system_prompt_snapshot(**self._store_kwargs(session_id)))
+            self._run_body_store_sync(
+                lambda: self._body_store.delete_system_prompt_snapshot(**self._store_kwargs(session_id))
+            )
             return
         path = self._snapshot_path(session_id)
         try:
@@ -361,7 +379,7 @@ class SessionManager:
         self._sessions.pop(session_id, None)
 
         if self._body_store is not None:
-            run_async(self._body_store.delete_session(**self._store_kwargs(session_id)))
+            self._run_body_store_sync(lambda: self._body_store.delete_session(**self._store_kwargs(session_id)))
             logger.debug(f"Deleted session from body store: {session_id}")
             return
 
@@ -416,8 +434,8 @@ class SessionManager:
         new_session_id = f"{target_node_name}_session_{uuid.uuid4().hex[:8]}"
         if self._body_store is not None:
             if self.session_exists(source_session_id):
-                run_async(
-                    self._body_store.copy_session(
+                self._run_body_store_sync(
+                    lambda: self._body_store.copy_session(
                         project_id=self.project_id,
                         scope=self._scope,
                         source_session_id=source_session_id,
@@ -727,8 +745,8 @@ class SessionManager:
             List of session IDs sorted by modification time (newest first) if sort_by_modified is True
         """
         if self._body_store is not None:
-            return run_async(
-                self._body_store.list_session_ids(
+            return self._run_body_store_sync(
+                lambda: self._body_store.list_session_ids(
                     project_id=self.project_id,
                     scope=self._scope,
                     limit=limit,
@@ -783,7 +801,9 @@ class SessionManager:
         """
         self._validate_session_id(session_id)
         if self._body_store is not None:
-            return bool(run_async(self._body_store.session_exists(**self._store_kwargs(session_id))))
+            return bool(
+                self._run_body_store_sync(lambda: self._body_store.session_exists(**self._store_kwargs(session_id)))
+            )
         # Check if database file exists first (avoid listing all sessions)
         db_path = os.path.join(self.session_dir, f"{session_id}.db")
         if not os.path.exists(db_path):
@@ -829,7 +849,9 @@ class SessionManager:
         """
         self._validate_session_id(session_id)
         if self._body_store is not None:
-            return run_async(self._body_store.get_session_info(**self._store_kwargs(session_id)))
+            return self._run_body_store_sync(
+                lambda: self._body_store.get_session_info(**self._store_kwargs(session_id))
+            )
         db_path = os.path.join(self.session_dir, f"{session_id}.db")
 
         # Check if database file exists first
@@ -994,7 +1016,9 @@ class SessionManager:
         """
         self._validate_session_id(session_id)
         if self._body_store is not None:
-            return run_async(self._body_store.get_detailed_usage(**self._store_kwargs(session_id)))
+            return self._run_body_store_sync(
+                lambda: self._body_store.get_detailed_usage(**self._store_kwargs(session_id))
+            )
         db_path = os.path.join(self.session_dir, f"{session_id}.db")
         empty_result = {
             "total": {"requests": 0, "input_tokens": 0, "output_tokens": 0, "total_tokens": 0, "cached_tokens": 0},
@@ -1103,8 +1127,8 @@ class SessionManager:
         """
         self._validate_session_id(session_id)
         if self._body_store is not None:
-            run_async(
-                self._body_store.upsert_running_turn_usage(
+            self._run_body_store_sync(
+                lambda: self._body_store.upsert_running_turn_usage(
                     **self._store_kwargs(session_id),
                     user_turn_number=user_turn_number,
                     cumulative=cumulative,
@@ -1161,7 +1185,9 @@ class SessionManager:
         """Return the in-progress turn snapshot, or ``None`` when absent."""
         self._validate_session_id(session_id)
         if self._body_store is not None:
-            return run_async(self._body_store.get_running_turn_usage(**self._store_kwargs(session_id)))
+            return self._run_body_store_sync(
+                lambda: self._body_store.get_running_turn_usage(**self._store_kwargs(session_id))
+            )
         db_path = os.path.join(self.session_dir, f"{session_id}.db")
         return self._read_running_turn_usage(db_path)
 
@@ -1178,7 +1204,9 @@ class SessionManager:
         don't double-count the turn."""
         self._validate_session_id(session_id)
         if self._body_store is not None:
-            run_async(self._body_store.clear_running_turn_usage(**self._store_kwargs(session_id)))
+            self._run_body_store_sync(
+                lambda: self._body_store.clear_running_turn_usage(**self._store_kwargs(session_id))
+            )
             return
         db_path = os.path.join(self.session_dir, f"{session_id}.db")
         if not os.path.exists(db_path):
@@ -1500,7 +1528,9 @@ class SessionManager:
 
         try:
             if self._body_store is not None:
-                message_rows = run_async(self._body_store.get_session_messages(**self._store_kwargs(session_id)))
+                message_rows = self._run_body_store_sync(
+                    lambda: self._body_store.get_session_messages(**self._store_kwargs(session_id))
+                )
             else:
                 # Build path with pathlib and resolve to absolute path
                 sessions_dir = Path(self.session_dir)
