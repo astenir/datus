@@ -10,6 +10,12 @@ export interface PermissionOption {
   label: string;
 }
 
+export interface PermissionOptionGroup {
+  id: string;
+  label: string;
+  options: PermissionOption[];
+}
+
 const modulePermissionLabels: Array<Omit<PermissionBadgeItem, "kind">> = [
   { code: "chat", label: "对话" },
   { code: "sql_generation", label: "SQL 生成" },
@@ -82,6 +88,58 @@ const enterpriseRolePermissionCodes = [
   "module.system.status",
 ] as const;
 
+const enterpriseRolePermissionGroupCodes = [
+  {
+    id: "wildcard",
+    label: "特殊权限",
+    codes: [
+      "module.*",
+      "module.admin.*",
+      "module.report.*",
+      "module.dashboard.*",
+      "module.config.*",
+    ],
+  },
+  {
+    id: "core",
+    label: "核心功能",
+    codes: [
+      "module.chat",
+      "module.sql_executor",
+      "module.datasource_catalog",
+      "module.kb",
+      "module.mcp",
+      "module.system.status",
+    ],
+  },
+  {
+    id: "artifacts",
+    label: "报表与仪表盘",
+    codes: ["module.report.view", "module.report.query", "module.dashboard.view", "module.dashboard.query"],
+  },
+  {
+    id: "config",
+    label: "配置",
+    codes: ["module.config.view", "module.config.edit"],
+  },
+  {
+    id: "admin",
+    label: "管理后台",
+    codes: [
+      "module.admin.users",
+      "module.admin.roles",
+      "module.admin.datasources",
+      "module.admin.sessions",
+      "module.admin.artifacts",
+      "module.admin.audit",
+      "module.admin.audit.export",
+      "module.admin.quotas",
+      "module.admin.secrets",
+      "module.admin.agents",
+    ],
+  },
+] as const;
+
 function fallbackLabel(code: string): string {
   if (code.startsWith("module.")) return code.slice("module.".length).replaceAll(".", " / ");
   return code;
@@ -91,10 +149,24 @@ function permissionLabel(code: string): string {
   return wildcardLabels[code] ?? labelByCode.get(code) ?? fallbackLabel(code);
 }
 
-export const ROLE_PERMISSION_OPTIONS: PermissionOption[] = enterpriseRolePermissionCodes.map((code) => ({
-  value: code,
-  kind: code.includes("*") ? "wildcard" : "regular",
-  label: permissionLabel(code),
+function rolePermissionOption(code: string): PermissionOption {
+  return {
+    value: code,
+    kind: code.includes("*") ? "wildcard" : "regular",
+    label: permissionLabel(code),
+  };
+}
+
+export const ROLE_PERMISSION_OPTIONS: PermissionOption[] = enterpriseRolePermissionCodes.map((code) =>
+  rolePermissionOption(code)
+);
+
+const optionByValue = new Map(ROLE_PERMISSION_OPTIONS.map((option) => [option.value, option]));
+
+export const ROLE_PERMISSION_GROUPS: PermissionOptionGroup[] = enterpriseRolePermissionGroupCodes.map((group) => ({
+  id: group.id,
+  label: group.label,
+  options: group.codes.map((code) => optionByValue.get(code) ?? rolePermissionOption(code)),
 }));
 
 export function permissionBadgeItems(permissions: readonly string[] = []): PermissionBadgeItem[] {

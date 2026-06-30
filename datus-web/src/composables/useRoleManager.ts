@@ -2,11 +2,12 @@ import { computed, ref, shallowRef } from "vue";
 import { toast } from "vue-sonner";
 
 import { adminRoleApi } from "@/lib/api";
-import { ROLE_PERMISSION_OPTIONS } from "@/lib/permission-labels";
+import { ROLE_PERMISSION_GROUPS, ROLE_PERMISSION_OPTIONS } from "@/lib/permission-labels";
 import type { Role, RoleFormData, RoleSearchForm } from "@/types/admin";
 
 export function useRoleManager() {
   const featureOptions = ROLE_PERMISSION_OPTIONS;
+  const featureGroups = ROLE_PERMISSION_GROUPS;
 
   const searchForm = ref<RoleSearchForm>({
     keyword: "",
@@ -194,6 +195,7 @@ export function useRoleManager() {
 
   return {
     featureOptions,
+    featureGroups,
     searchForm,
     total,
     roles,

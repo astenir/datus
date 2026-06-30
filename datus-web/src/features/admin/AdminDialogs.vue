@@ -10,7 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -561,12 +561,12 @@ const selectedRolePermissionBadges = computed(() =>
   </Dialog>
 
   <Dialog v-model:open="roles.showDialog.value">
-    <DialogContent class="sm:max-w-2xl">
+    <DialogContent class="flex max-h-[90vh] flex-col overflow-hidden sm:max-w-2xl">
       <DialogHeader>
         <DialogTitle>{{ roles.dialogMode.value === "create" ? "新增角色" : "编辑角色" }}</DialogTitle>
         <DialogDescription>角色权限用于前端体验门控，后端仍是实际安全边界。</DialogDescription>
       </DialogHeader>
-      <FieldGroup class="gap-4">
+      <FieldGroup class="min-h-0 gap-4 overflow-y-auto pr-1">
         <Field>
           <FieldLabel for="admin-role-name">角色名称</FieldLabel>
           <Input
@@ -583,26 +583,40 @@ const selectedRolePermissionBadges = computed(() =>
         </Field>
         <Field>
           <FieldLabel>权限</FieldLabel>
-          <div class="flex flex-wrap gap-2">
-            <Button
-              v-for="option in roles.featureOptions"
-              :key="option.value"
-              :variant="
-                roles.selectedFeatures.value.includes(option.value)
-                  ? option.kind === 'wildcard'
-                    ? 'destructive'
-                    : 'default'
-                  : 'outline'
-              "
-              size="sm"
-              @click="roles.toggleSelectedFeature(option.value)"
+          <div class="flex flex-col gap-3">
+            <FieldSet
+              v-for="group in roles.featureGroups"
+              :key="group.id"
+              class="gap-2 rounded-md border p-3"
             >
-              {{ option.label }}
-            </Button>
+              <FieldLegend
+                variant="label"
+                class="mb-0 text-muted-foreground"
+              >
+                {{ group.label }}
+              </FieldLegend>
+              <div class="flex flex-wrap gap-2">
+                <Button
+                  v-for="option in group.options"
+                  :key="option.value"
+                  :variant="
+                    roles.selectedFeatures.value.includes(option.value)
+                      ? option.kind === 'wildcard'
+                        ? 'destructive'
+                        : 'default'
+                      : 'outline'
+                  "
+                  size="sm"
+                  @click="roles.toggleSelectedFeature(option.value)"
+                >
+                  {{ option.label }}
+                </Button>
+              </div>
+            </FieldSet>
           </div>
         </Field>
       </FieldGroup>
-      <DialogFooter>
+      <DialogFooter class="border-t pt-4">
         <Button
           variant="outline"
           @click="roles.showDialog.value = false"

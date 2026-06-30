@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ROLE_PERMISSION_OPTIONS, permissionBadgeItems } from "./permission-labels";
+import { ROLE_PERMISSION_GROUPS, ROLE_PERMISSION_OPTIONS, permissionBadgeItems } from "./permission-labels";
 
 describe("permission labels", () => {
   it("renders known module permissions as Chinese badge labels", () => {
@@ -43,5 +43,19 @@ describe("permission labels", () => {
         { value: "module.admin.audit.export", kind: "regular", label: "审计导出" },
       ])
     );
+  });
+
+  it("groups enterprise role permission options by product area", () => {
+    const groupedValues = ROLE_PERMISSION_GROUPS.flatMap((group) => group.options.map((option) => option.value));
+
+    expect(ROLE_PERMISSION_GROUPS.map((group) => group.label)).toEqual([
+      "特殊权限",
+      "核心功能",
+      "报表与仪表盘",
+      "配置",
+      "管理后台",
+    ]);
+    expect(groupedValues).toHaveLength(ROLE_PERMISSION_OPTIONS.length);
+    expect([...groupedValues].sort()).toEqual([...ROLE_PERMISSION_OPTIONS.map((option) => option.value)].sort());
   });
 });

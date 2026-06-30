@@ -67,6 +67,20 @@ describe("useRoleManager", () => {
     );
   });
 
+  it("exposes grouped enterprise permission options for role editing", async () => {
+    const { useRoleManager } = await import("./useRoleManager");
+    const manager = useRoleManager();
+
+    expect(manager.featureGroups.map((group) => group.label)).toEqual([
+      "特殊权限",
+      "核心功能",
+      "报表与仪表盘",
+      "配置",
+      "管理后台",
+    ]);
+    expect(manager.featureGroups.flatMap((group) => group.options).length).toBe(manager.featureOptions.length);
+  });
+
   it("filters roles locally by keyword", async () => {
     listRoles.mockResolvedValue({
       data: [
