@@ -10,14 +10,17 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
-from datus.api.enterprise.deps import project_request_config, require_module
+from datus.api.enterprise.deps import project_request_config, require_module, require_platform_active
 from datus.api.models.base_models import Result
 from datus.api.models.database_models import (
     DatabaseInfo,
     DatabasesData,
+    DatasourcePrewarmData,
+    DatasourceStatusData,
     ListDatabasesData,
     ListDatabasesInput,
 )
+from datus.api.services.background_drain import track_background_task
 from datus.utils.exceptions import DatusException
 
 router = APIRouter(prefix="/api/v1", tags=["databases"])
@@ -79,6 +82,7 @@ async def list_catalogs(
             timeout=_DB_IO_TIMEOUT,
         )
     except TimeoutError:
+        svc.datasource.record_datasource_timeout(request.datasource_id)
         return Result(success=False, errorCode="REQUEST_TIMEOUT", errorMessage="Datasource query timed out")
     if not databases.success or databases.data is None:
         return Result(
@@ -95,6 +99,81 @@ async def list_catalogs(
         datasource_grants=projection.datasource_grants,
     )
     return Result(success=True, data=DatabasesData(databases=visible_databases))
+
+
+@router.get(
+    "/catalog/status",
+    response_model=Result[DatasourceStatusData],
+    summary="Get Datasource Connection Status",
+    description="Return cached datasource connection status without opening new database connections.",
+    dependencies=[Depends(_require_catalog_module)],
+)
+async def datasource_status(
+    svc: ServiceDep,
+    _ctx: CatalogModuleCtx,
+    datasource_id: Optional[str] = DATASOURCE_QUERY,
+) -> Result[DatasourceStatusData]:
+    """Return cached connection status for authorized datasources."""
+    try:
+        projection = await project_request_config(
+            _ctx,
+            svc.agent_config,
+            operation="catalog.status",
+            requested_datasource=datasource_id or None,
+        )
+    except DatusException as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    datasource_ids = [datasource_id] if datasource_id else list(projection.config.services.datasources)
+    statuses = svc.datasource.datasource_statuses(datasource_ids)
+    return Result(success=True, data=DatasourceStatusData(statuses=statuses))
+
+
+@router.post(
+    "/catalog/prewarm",
+    response_model=Result[DatasourcePrewarmData],
+    summary="Prewarm Datasource Connection",
+    description="Queue a background connection prewarm for the selected datasource.",
+    dependencies=[
+        Depends(_require_catalog_module),
+        Depends(require_platform_active(operation="catalog.prewarm", resource_type="datasource")),
+    ],
+)
+async def prewarm_datasource(
+    svc: ServiceDep,
+    _ctx: CatalogModuleCtx,
+    datasource_id: Optional[str] = DATASOURCE_QUERY,
+) -> Result[DatasourcePrewarmData]:
+    """Queue a background prewarm for one authorized datasource."""
+    try:
+        projection = await project_request_config(
+            _ctx,
+            svc.agent_config,
+            operation="catalog.prewarm",
+            requested_datasource=datasource_id or None,
+        )
+    except DatusException as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    selected_datasource = datasource_id or projection.config.current_datasource
+    if not selected_datasource:
+        return Result(
+            success=False,
+            errorCode="DATASOURCE_REQUIRED",
+            errorMessage="Datasource is required for prewarm.",
+        )
+
+    scheduled = svc.datasource.start_prewarm(selected_datasource)
+    if scheduled:
+        task = asyncio.create_task(asyncio.to_thread(svc.datasource.prewarm_datasource, selected_datasource))
+        track_background_task(task)
+    return Result(
+        success=True,
+        data=DatasourcePrewarmData(
+            datasource_id=selected_datasource,
+            status="queued" if scheduled else "already_running",
+        ),
+    )
 
 
 def _prune_databases_for_datasource_grant(

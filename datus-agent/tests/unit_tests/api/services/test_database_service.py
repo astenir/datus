@@ -12,14 +12,17 @@ class TestDatasourceServiceInit:
     """Tests for DatasourceService initialization."""
 
     def test_init_with_real_config(self, real_agent_config):
-        """DatasourceService initializes with real agent config."""
+        """DatasourceService initializes with real agent config without opening a connector."""
         svc = DatasourceService(agent_config=real_agent_config)
         assert isinstance(svc, DatasourceService)
-        assert svc.current_db_connector.get_type() == "sqlite"
+        assert svc.current_db_connector is None
 
-    def test_init_sets_current_db_name(self, real_agent_config):
-        """Init resolves the current database name from the datasource."""
+    def test_current_db_name_is_resolved_lazily(self, real_agent_config):
+        """The current database name is resolved by the first datasource operation."""
         svc = DatasourceService(agent_config=real_agent_config)
+        assert svc.current_db_name is None
+        result = svc.list_databases(ListDatabasesInput())
+        assert result.success is True
         assert svc.current_db_name == "california_schools"
 
     def test_init_sets_datasource(self, real_agent_config):
@@ -161,6 +164,29 @@ class TestListDatabases:
         request = ListDatabasesInput()
         result = svc.list_databases(request)
         assert result.data.current_database == "california_schools"
+
+    def test_status_is_unknown_before_first_connection(self, real_agent_config):
+        """Status lookup does not open datasource connections."""
+        svc = DatasourceService(agent_config=real_agent_config)
+
+        statuses = svc.datasource_statuses(["california_schools"])
+
+        assert statuses[0].datasource_id == "california_schools"
+        assert statuses[0].status == "unknown"
+        assert statuses[0].cached is False
+        assert svc.current_db_connector is None
+
+    def test_status_updates_after_catalog_load(self, real_agent_config):
+        """Successful catalog loading records a cached connected status."""
+        svc = DatasourceService(agent_config=real_agent_config)
+
+        result = svc.list_databases(ListDatabasesInput())
+        statuses = svc.datasource_statuses(["california_schools"])
+
+        assert result.success is True
+        assert statuses[0].status == "connected"
+        assert statuses[0].cached is True
+        assert statuses[0].latency_ms is not None
 
 
 class TestGetTableSchema:

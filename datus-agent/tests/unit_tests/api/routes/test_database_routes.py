@@ -12,8 +12,16 @@ import pytest
 
 from datus.api.auth.context import AppContext
 from datus.api.models.base_models import Result
-from datus.api.models.database_models import DatabaseInfo, DatabasesData, ListDatabasesData, ListDatabasesInput
-from datus.api.routes.database_routes import _DB_IO_TIMEOUT, list_catalogs
+from datus.api.models.database_models import (
+    DatabaseInfo,
+    DatabasesData,
+    DatasourceConnectionStatus,
+    DatasourcePrewarmData,
+    DatasourceStatusData,
+    ListDatabasesData,
+    ListDatabasesInput,
+)
+from datus.api.routes.database_routes import _DB_IO_TIMEOUT, datasource_status, list_catalogs, prewarm_datasource
 
 
 def _make_db_info(name: str = "main") -> DatabaseInfo:
@@ -45,6 +53,10 @@ def _make_svc(
     svc.datasource.current_datasource = current_datasource
     if list_databases_return is not None:
         svc.datasource.list_databases.return_value = list_databases_return
+    svc.datasource.datasource_statuses.return_value = [
+        DatasourceConnectionStatus(datasource_id=current_datasource, status="unknown", cached=False)
+    ]
+    svc.datasource.start_prewarm.return_value = True
     return svc
 
 
@@ -118,6 +130,7 @@ class TestListCatalogs:
         assert result.success is False
         assert result.errorCode == "REQUEST_TIMEOUT"
         assert result.errorMessage == "Datasource query timed out"
+        svc.datasource.record_datasource_timeout.assert_called_once_with("default_ds")
         mock_wf.assert_called_once_with(ANY, timeout=_DB_IO_TIMEOUT)
 
     @pytest.mark.asyncio
@@ -198,3 +211,82 @@ class TestListCatalogs:
         assert len(result.data.databases) == 3
         assert result.data.databases[0].name == "db_0"
         assert result.data.databases[2].name == "db_2"
+
+
+class TestDatasourceStatus:
+    """datasource_status returns cached status without catalog loading."""
+
+    @pytest.mark.asyncio
+    async def test_status_uses_visible_datasources(self):
+        svc = _make_svc(current_datasource="my_ds")
+
+        result = await datasource_status(
+            svc,
+            AppContext(permissions={"module.datasource_catalog"}),
+            datasource_id="",
+        )
+
+        assert result.success is True
+        assert isinstance(result.data, DatasourceStatusData)
+        svc.datasource.datasource_statuses.assert_called_once_with(["my_ds", "explicit_ds"])
+
+    @pytest.mark.asyncio
+    async def test_status_uses_explicit_datasource(self):
+        svc = _make_svc()
+
+        result = await datasource_status(
+            svc,
+            AppContext(permissions={"module.datasource_catalog"}),
+            datasource_id="explicit_ds",
+        )
+
+        assert result.success is True
+        svc.datasource.datasource_statuses.assert_called_once_with(["explicit_ds"])
+
+
+class TestPrewarmDatasource:
+    """prewarm_datasource schedules a background prewarm instead of blocking the request."""
+
+    @pytest.mark.asyncio
+    async def test_prewarm_schedules_background_task(self):
+        svc = _make_svc()
+        fake_task = MagicMock()
+
+        def _fake_create_task(awaitable):
+            awaitable.close()
+            return fake_task
+
+        with (
+            patch("datus.api.routes.database_routes.asyncio.create_task") as mock_create_task,
+            patch("datus.api.routes.database_routes.track_background_task") as mock_track,
+        ):
+            mock_create_task.side_effect = _fake_create_task
+            result = await prewarm_datasource(
+                svc,
+                AppContext(permissions={"module.datasource_catalog"}),
+                datasource_id="explicit_ds",
+            )
+
+        assert result.success is True
+        assert isinstance(result.data, DatasourcePrewarmData)
+        assert result.data.datasource_id == "explicit_ds"
+        assert result.data.status == "queued"
+        svc.datasource.start_prewarm.assert_called_once_with("explicit_ds")
+        mock_create_task.assert_called_once()
+        mock_track.assert_called_once_with(fake_task)
+
+    @pytest.mark.asyncio
+    async def test_prewarm_reports_already_running_without_scheduling(self):
+        svc = _make_svc()
+        svc.datasource.start_prewarm.return_value = False
+
+        with patch("datus.api.routes.database_routes.asyncio.create_task") as mock_create_task:
+            result = await prewarm_datasource(
+                svc,
+                AppContext(permissions={"module.datasource_catalog"}),
+                datasource_id="explicit_ds",
+            )
+
+        assert result.success is True
+        assert result.data.status == "already_running"
+        mock_create_task.assert_not_called()

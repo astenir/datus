@@ -1,6 +1,6 @@
 """Pydantic models for Database Management API endpoints."""
 
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -43,3 +43,29 @@ class DatabasesData(BaseModel):
     """Data for database list."""
 
     databases: List[DatabaseInfo] = Field(..., description="List of databases data")
+
+
+class DatasourceConnectionStatus(BaseModel):
+    """Cached connection health for a configured datasource."""
+
+    datasource_id: str = Field(..., description="Datasource configuration key")
+    status: Literal["unknown", "connecting", "connected", "failed", "timeout"] = Field(
+        ..., description="Last known connection status"
+    )
+    last_checked: Optional[str] = Field(None, description="Last status update timestamp")
+    latency_ms: Optional[int] = Field(None, description="Last successful/failed check duration in milliseconds")
+    error_message: Optional[str] = Field(None, description="Last connection error, if any")
+    cached: bool = Field(..., description="Whether this status came from the in-process status cache")
+
+
+class DatasourceStatusData(BaseModel):
+    """Datasource connection status list."""
+
+    statuses: List[DatasourceConnectionStatus] = Field(..., description="Datasource connection statuses")
+
+
+class DatasourcePrewarmData(BaseModel):
+    """Result of enqueuing a datasource connection prewarm."""
+
+    datasource_id: str = Field(..., description="Datasource scheduled for background prewarm")
+    status: Literal["queued", "already_running"] = Field(..., description="Prewarm scheduling status")

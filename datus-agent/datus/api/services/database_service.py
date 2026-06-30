@@ -3,6 +3,7 @@ Service for handling Database Management operations.
 """
 
 import os
+import time
 from typing import List, Optional
 
 from datus_db_core import BaseSqlConnector
@@ -11,6 +12,7 @@ from datus.api.models.base_models import Result
 from datus.api.models.config_models import ErrorCode
 from datus.api.models.database_models import (
     DatabaseInfo,
+    DatasourceConnectionStatus,
     ListDatabasesData,
     ListDatabasesInput,
 )
@@ -54,7 +56,8 @@ class DatasourceService:
 
         self.current_db_connector = None
         self.current_db_name = None
-        self._initialize_connection()
+        self._connection_status: dict[str, DatasourceConnectionStatus] = {}
+        self._prewarm_in_progress: set[str] = set()
 
     def _ensure_semantic_rag(self) -> SemanticModelRAG:
         """Create semantic model storage only after a datasource is selected."""
@@ -107,6 +110,94 @@ class DatasourceService:
                 logger.warning(f"Failed to initialize database connection: {e}")
                 self.current_db_connector = None
                 self.current_db_name = None
+
+    def _ensure_current_connection(self) -> None:
+        """Create the current datasource connector lazily when an operation needs it."""
+
+        if self.current_db_connector is not None:
+            return
+        self._initialize_connection()
+
+    def _record_connection_status(
+        self,
+        datasource_id: str,
+        status: str,
+        *,
+        started_at: float | None = None,
+        error_message: str | None = None,
+    ) -> None:
+        if not datasource_id:
+            return
+        latency_ms = None
+        if started_at is not None:
+            latency_ms = max(0, int((time.perf_counter() - started_at) * 1000))
+        self._connection_status[datasource_id] = DatasourceConnectionStatus(
+            datasource_id=datasource_id,
+            status=status,
+            last_checked=now_utc_iso(),
+            latency_ms=latency_ms,
+            error_message=error_message,
+            cached=True,
+        )
+
+    def record_datasource_timeout(self, datasource_id: str) -> None:
+        """Record a route-level timeout for datasource operations."""
+
+        self._record_connection_status(datasource_id, "timeout", error_message="Datasource query timed out")
+
+    def datasource_statuses(self, datasource_ids: List[str] | None = None) -> List[DatasourceConnectionStatus]:
+        """Return cached datasource statuses without opening any database connection."""
+
+        configured = self.agent_config.datasource_configs if self.agent_config else {}
+        requested = datasource_ids if datasource_ids is not None else list(configured)
+        statuses: List[DatasourceConnectionStatus] = []
+        for datasource_id in requested:
+            cached = self._connection_status.get(datasource_id)
+            if cached is not None:
+                statuses.append(cached)
+                continue
+            statuses.append(
+                DatasourceConnectionStatus(
+                    datasource_id=datasource_id,
+                    status="unknown",
+                    last_checked=None,
+                    latency_ms=None,
+                    error_message=None,
+                    cached=False,
+                )
+            )
+        return statuses
+
+    def start_prewarm(self, datasource_id: str) -> bool:
+        """Mark a datasource as prewarming.
+
+        Returns True when a new background prewarm should be scheduled, or False
+        when another prewarm is already in progress for the datasource.
+        """
+
+        if datasource_id in self._prewarm_in_progress:
+            return False
+        self._prewarm_in_progress.add(datasource_id)
+        self._record_connection_status(datasource_id, "connecting")
+        return True
+
+    def prewarm_datasource(self, datasource_id: str) -> None:
+        """Open and test the selected datasource in the background."""
+
+        started_at = time.perf_counter()
+        try:
+            connections = self.db_manager.get_connections(datasource_id)
+            for connector in connections.values():
+                connect = getattr(connector, "connect", None)
+                if callable(connect):
+                    connect()
+                connector.test_connection()
+            self._record_connection_status(datasource_id, "connected", started_at=started_at)
+        except Exception as exc:
+            self._record_connection_status(datasource_id, "failed", started_at=started_at, error_message=str(exc))
+            logger.warning("Datasource prewarm failed for %s: %s", datasource_id, exc)
+        finally:
+            self._prewarm_in_progress.discard(datasource_id)
 
     def _get_connection_info(
         self,
@@ -285,16 +376,29 @@ class DatasourceService:
 
             # Get connections from the specified datasource
             datasource = request.datasource_id or self.current_datasource
+            started_at = time.perf_counter()
+            self._record_connection_status(datasource, "connecting")
             connections = self.db_manager.get_connections(datasource)
 
             databases = []
             # Handle both single connector and dictionary of connectors
             if isinstance(connections, dict):
+                first_item = next(iter(connections.items()), None)
+                if first_item is not None:
+                    first_db_name, first_connector = first_item
+                    if datasource == self.current_datasource and self.current_db_connector is None:
+                        self.current_db_connector = first_connector
+                    if not self.current_db_name:
+                        self.current_db_name = getattr(first_connector, "database_name", None) or first_db_name
                 for _ds_id, connector in connections.items():
                     db_info = self._get_connection_info(connector, _ds_id, request)
                     databases.extend(db_info)
             else:
                 # Single connector case
+                if datasource == self.current_datasource and self.current_db_connector is None:
+                    self.current_db_connector = connections
+                if not self.current_db_name:
+                    self.current_db_name = getattr(connections, "database_name", None) or datasource
                 db_info = self._get_connection_info(connections, datasource, request)
                 databases.extend(db_info)
 
@@ -304,10 +408,17 @@ class DatasourceService:
                 current_database=self.current_db_name,
             )
 
+            self._record_connection_status(datasource, "connected", started_at=started_at)
             return Result(success=True, data=data)
 
         except Exception as e:
             logger.error(f"Failed to list databases: {e}", exc_info=True)
+            self._record_connection_status(
+                request.datasource_id or self.current_datasource,
+                "failed",
+                started_at=locals().get("started_at"),
+                error_message=str(e),
+            )
             return Result(
                 success=False,
                 errorCode=ErrorCode.PROVIDER_CONFIG_ERROR,
@@ -325,6 +436,7 @@ class DatasourceService:
             GetTableSchemaResult with table schema
         """
         try:
+            self._ensure_current_connection()
             if not self.current_db_connector:
                 return Result(
                     success=False,
@@ -406,6 +518,9 @@ class DatasourceService:
             )
 
     def _get_semantic_model(self, full_name: str):
+        self._ensure_current_connection()
+        if self.current_db_connector is None:
+            raise RuntimeError("No database connection")
         # Parse table name parts
         name_parts = parse_table_name_parts(full_name, self.current_db_connector.get_type())
         current_db_config = self.agent_config.current_db_config()
