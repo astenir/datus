@@ -474,9 +474,7 @@ export type KnowledgeBootstrapKbForm = {
   schemaLinkingType: "table" | "view" | "mv" | "full";
   catalog: string;
   databaseName: string;
-  successStory: string;
   subjectTreeText: string;
-  sqlDir: string;
 };
 
 export type KnowledgeBootstrapDocsForm = {

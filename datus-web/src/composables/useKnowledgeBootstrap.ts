@@ -45,9 +45,7 @@ function defaultKbForm(): KnowledgeBootstrapKbForm {
     schemaLinkingType: "full",
     catalog: "",
     databaseName: "",
-    successStory: "",
     subjectTreeText: "",
-    sqlDir: "",
   };
 }
 
@@ -241,15 +239,7 @@ function buildKbBootstrapInput(
       return input;
     }
 
-    const successStory = optionalString(form.successStory);
-    if (!successStory) {
-      throw new Error(component === "semantic_model" ? "请填写历史 SQL CSV 文件" : "请填写指标构建 CSV 文件");
-    }
-    input.success_story = successStory;
-  }
-
-  if (component === "metrics") {
-    input.subject_tree = parseLines(form.subjectTreeText);
+    throw new Error(component === "semantic_model" ? "请上传历史 SQL CSV 文件" : "请上传指标构建 CSV 文件");
   }
 
   if (component === "reference_sql") {
@@ -259,12 +249,7 @@ function buildKbBootstrapInput(
       return input;
     }
 
-    const sqlDir = optionalString(form.sqlDir);
-    if (!sqlDir) {
-      throw new Error("请填写 SQL 文件目录");
-    }
-    input.sql_dir = sqlDir;
-    input.subject_tree = parseLines(form.subjectTreeText);
+    throw new Error("请上传参考 SQL 文件");
   }
 
   return input;

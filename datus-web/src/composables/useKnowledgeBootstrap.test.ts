@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { KbUploadPurpose, KbUploadRecord } from "@/types";
 
 const bootstrap = vi.fn();
 const upload = vi.fn();
@@ -68,6 +69,25 @@ async function waitForCondition(condition: () => boolean) {
   }
 }
 
+function makeUploadRecord(purpose: KbUploadPurpose, uploadId: string, fileId: string): KbUploadRecord {
+  return {
+    upload_id: uploadId,
+    purpose,
+    files: [{
+      file_id: fileId,
+      filename: `${fileId}.csv`,
+      size: 128,
+      content_type: "text/plain",
+      relative_path: `${fileId}.csv`,
+    }],
+    created_at: "2026-06-30T00:00:00Z",
+    expires_at: null,
+    status: "available",
+    owner_user_id: "user",
+    project_id: "project",
+  };
+}
+
 describe("knowledgeBootstrapInternals", () => {
   it("normalizes business KB bootstrap requests to the current OpenAPI contract", async () => {
     const { knowledgeBootstrapInternals } = await import("./useKnowledgeBootstrap");
@@ -78,9 +98,7 @@ describe("knowledgeBootstrapInternals", () => {
       schemaLinkingType: "full",
       catalog: "main",
       databaseName: "fund",
-      successStory: "success.csv",
       subjectTreeText: "基金\n风控\n",
-      sqlDir: "sql_examples",
     })).toEqual({
       components: ["metadata"],
       strategy: "incremental",
@@ -99,13 +117,15 @@ describe("knowledgeBootstrapInternals", () => {
       schemaLinkingType: "full",
       catalog: "ignored",
       databaseName: "ignored",
-      successStory: "success.csv",
       subjectTreeText: "基金\n风控\n",
-      sqlDir: "ignored",
+    }, {
+      successStory: makeUploadRecord("success_story_csv", "upload-success", "file-success"),
+      referenceSql: null,
     })).toEqual({
       components: ["metrics"],
       strategy: "overwrite",
-      success_story: "success.csv",
+      success_story_upload_id: "upload-success",
+      success_story_file_id: "file-success",
       subject_tree: ["基金", "风控"],
     });
   });
@@ -119,14 +139,15 @@ describe("knowledgeBootstrapInternals", () => {
       schemaLinkingType: "full",
       catalog: "ignored",
       databaseName: "ignored",
-      successStory: "ignored",
       subjectTreeText: "基金\n",
-      sqlDir: "sql_examples",
+    }, {
+      successStory: null,
+      referenceSql: makeUploadRecord("reference_sql", "upload-sql", "file-sql"),
     })).toEqual({
       components: ["reference_sql"],
       strategy: "check",
       subject_tree: ["基金"],
-      sql_dir: "sql_examples",
+      reference_sql_upload_id: "upload-sql",
     });
   });
 
@@ -229,7 +250,7 @@ describe("useKnowledgeBootstrap", () => {
     manager.forms.value.kb.catalog = "main";
     manager.forms.value.kb.databaseName = "fund";
     manager.forms.value.kb.subjectTreeText = "基金\n风控";
-    manager.forms.value.kb.sqlDir = "sql_examples";
+    manager.setUploadFiles("referenceSql", [new File(["select 1"], "sample.sql", { type: "text/plain" })]);
 
     await manager.startKbBootstrap();
 
@@ -237,7 +258,7 @@ describe("useKnowledgeBootstrap", () => {
       components: ["reference_sql"],
       strategy: "incremental",
       subject_tree: ["基金", "风控"],
-      sql_dir: "sql_examples",
+      reference_sql_upload_id: "upload-1",
     });
     expect(manager.status.value).toBe("completed");
     expect(manager.activeStreamId.value).toBe("stream-kb-1");

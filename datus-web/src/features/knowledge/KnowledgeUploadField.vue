@@ -69,7 +69,7 @@ function clearFiles() {
 </script>
 
 <template>
-  <Field>
+  <Field :data-disabled="disabled ? true : undefined">
     <div class="flex flex-wrap items-center justify-between gap-2">
       <FieldLabel :for="id">{{ label }}</FieldLabel>
       <div class="flex flex-wrap items-center gap-2">
