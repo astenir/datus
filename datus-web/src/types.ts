@@ -368,6 +368,7 @@ export type DatabaseInfo = {
 export type McpServerInfo = {
   name: string;
   type: string;
+  status?: string;
   command?: string;
   args?: string[];
   url?: string;
@@ -375,6 +376,15 @@ export type McpServerInfo = {
   timeout?: number;
   env?: Record<string, string>;
   cwd?: string;
+};
+
+export type McpConnectivityResult = {
+  server_name?: string;
+  status?: string;
+  message?: string;
+  tools_count?: number;
+  tools_available?: boolean;
+  connected?: boolean;
 };
 
 export type McpToolInfo = {

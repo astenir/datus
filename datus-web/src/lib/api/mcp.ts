@@ -1,5 +1,5 @@
 import { apiResult, jsonBody, putBody } from "./helpers";
-import type { McpServerInfo, McpToolFilter, McpToolInfo } from "@/types";
+import type { McpConnectivityResult, McpServerInfo, McpToolFilter, McpToolInfo } from "@/types";
 
 export const mcpApi = {
   listServers(baseUrl: string, serverType?: string): Promise<{ servers: McpServerInfo[] } | null> {
@@ -15,7 +15,7 @@ export const mcpApi = {
     return apiResult(baseUrl, `/api/v1/mcp/servers/${encodeURIComponent(serverName)}`, { method: "DELETE" });
   },
 
-  connectivity(baseUrl: string, serverName: string): Promise<{ ok: boolean; message?: string } | null> {
+  connectivity(baseUrl: string, serverName: string): Promise<McpConnectivityResult | null> {
     return apiResult(baseUrl, `/api/v1/mcp/servers/${encodeURIComponent(serverName)}/connectivity`);
   },
 
