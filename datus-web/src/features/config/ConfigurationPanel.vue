@@ -2,7 +2,6 @@
 import { computed, onMounted } from "vue"
 import {
   ActivityIcon,
-  BotIcon,
   CheckCircle2Icon,
   DatabaseIcon,
   PlugZapIcon,
@@ -41,8 +40,6 @@ import type { NormalizedProbeResult } from "@/types"
 const manager = useConfigurationManager()
 const systemStatus = useSystemStatus()
 
-const datasourceCount = computed(() => manager.configuredDatasourceEntries.value.length)
-const modelCount = computed(() => manager.configuredModelEntries.value.length)
 const currentDatasource = computed(() => manager.config.value?.current_datasource?.trim() || "未选择")
 const configHome = computed(() => manager.config.value?.home?.trim() || "-")
 const modelsSource = computed(() => manager.modelsData.value?.source || "-")
@@ -126,9 +123,9 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="min-h-0 flex-1 overflow-y-auto p-4">
-    <div class="flex flex-col gap-4">
-      <div class="flex flex-wrap items-center gap-3">
+  <section class="flex min-h-0 flex-1 overflow-hidden p-4">
+    <div class="flex min-h-0 flex-1 flex-col gap-4">
+      <div class="flex shrink-0 flex-wrap items-center gap-3">
         <div class="min-w-0 flex-1">
           <h1 class="text-lg font-semibold">配置中心</h1>
           <p class="text-sm text-muted-foreground">
@@ -146,65 +143,29 @@ onMounted(() => {
         </Button>
       </div>
 
-      <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <Card>
-          <CardHeader class="pb-2">
-            <CardTitle class="text-sm">目标模型</CardTitle>
-          </CardHeader>
-          <CardContent class="flex min-w-0 items-end justify-between gap-3">
-            <span class="min-w-0 truncate text-lg font-semibold">{{ manager.currentTarget.value || "-" }}</span>
-            <BotIcon class="shrink-0 text-muted-foreground" />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader class="pb-2">
-            <CardTitle class="text-sm">已配置模型</CardTitle>
-          </CardHeader>
-          <CardContent class="flex items-end justify-between gap-3">
-            <span class="text-lg font-semibold">{{ modelCount }}</span>
-            <span class="text-xs text-muted-foreground">Provider {{ manager.providerCount.value }}</span>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader class="pb-2">
-            <CardTitle class="text-sm">数据源</CardTitle>
-          </CardHeader>
-          <CardContent class="flex min-w-0 items-end justify-between gap-3">
-            <span class="min-w-0 truncate text-lg font-semibold">{{ currentDatasource }}</span>
-            <span class="text-xs text-muted-foreground">共 {{ datasourceCount }}</span>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader class="pb-2">
-            <CardTitle class="text-sm">模型目录</CardTitle>
-          </CardHeader>
-          <CardContent class="flex items-end justify-between gap-3">
-            <span class="text-lg font-semibold">{{ manager.availableModels.value.length }}</span>
-            <span class="text-xs text-muted-foreground">{{ modelsSource }}</span>
-          </CardContent>
-        </Card>
-      </div>
-
       <Tabs
         default-value="models"
-        class="flex flex-col gap-4"
+        class="flex min-h-0 flex-1 flex-col gap-4"
       >
-        <TabsList class="flex h-auto !flex-row flex-wrap justify-start">
+        <TabsList class="flex h-auto shrink-0 !flex-row flex-wrap justify-start">
           <TabsTrigger value="models">模型</TabsTrigger>
           <TabsTrigger value="datasources">数据源</TabsTrigger>
           <TabsTrigger value="summary">摘要</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="models">
-          <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_26rem]">
-            <Card>
-              <CardHeader>
+        <TabsContent
+          value="models"
+          class="m-0 min-h-0 flex-1 overflow-auto xl:overflow-visible"
+        >
+          <div class="grid min-h-full gap-4 xl:h-full xl:min-h-0 xl:grid-cols-[minmax(0,1fr)_26rem]">
+            <Card class="flex min-h-0 flex-col">
+              <CardHeader class="shrink-0">
                 <CardTitle class="text-lg">模型配置</CardTitle>
                 <CardDescription class="text-sm">
                   维护完整模型映射和目标模型；目标留空会清除后端 target。
                 </CardDescription>
               </CardHeader>
-              <CardContent class="flex flex-col gap-4">
+              <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
                 <FieldGroup>
                   <Field>
                     <FieldLabel for="config-target">目标模型</FieldLabel>
@@ -239,15 +200,15 @@ onMounted(() => {
               </CardContent>
             </Card>
 
-            <div class="flex flex-col gap-4">
-              <Card>
-                <CardHeader>
+            <div class="grid min-h-0 gap-4 xl:grid-rows-2">
+              <Card class="flex min-h-0 flex-col">
+                <CardHeader class="shrink-0">
                   <CardTitle class="text-lg">模型探测</CardTitle>
                   <CardDescription class="text-sm">
                     仅测试当前输入，不会保存 API Key 或 Base URL。
                   </CardDescription>
                 </CardHeader>
-                <CardContent class="flex flex-col gap-4">
+                <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
                   <FieldGroup>
                     <Field>
                       <FieldLabel for="model-probe-type">Provider</FieldLabel>
@@ -305,12 +266,12 @@ onMounted(() => {
                 </CardContent>
               </Card>
 
-              <Card>
-                <CardHeader>
+              <Card class="flex min-h-0 flex-col">
+                <CardHeader class="shrink-0">
                   <CardTitle class="text-lg">可用模型</CardTitle>
                 </CardHeader>
-                <CardContent>
-                  <div class="max-h-80 overflow-auto rounded-md border">
+                <CardContent class="min-h-0 flex-1">
+                  <div class="h-full min-h-64 overflow-auto rounded-md border xl:min-h-0">
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -345,16 +306,19 @@ onMounted(() => {
           </div>
         </TabsContent>
 
-        <TabsContent value="datasources">
-          <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_26rem]">
-            <Card>
-              <CardHeader>
+        <TabsContent
+          value="datasources"
+          class="m-0 min-h-0 flex-1 overflow-auto xl:overflow-visible"
+        >
+          <div class="grid min-h-full gap-4 xl:h-full xl:min-h-0 xl:grid-cols-[minmax(0,1fr)_26rem]">
+            <Card class="flex min-h-0 flex-col">
+              <CardHeader class="shrink-0">
                 <CardTitle class="text-lg">数据源配置</CardTitle>
                 <CardDescription class="text-sm">
                   编辑完整 datasources 映射；保存后会刷新连接状态。
                 </CardDescription>
               </CardHeader>
-              <CardContent class="flex flex-col gap-4">
+              <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
                 <div class="rounded-md border">
                   <Table>
                     <TableHeader>
@@ -410,14 +374,14 @@ onMounted(() => {
               </CardContent>
             </Card>
 
-            <Card>
-              <CardHeader>
+            <Card class="flex min-h-0 flex-col">
+              <CardHeader class="shrink-0">
                 <CardTitle class="text-lg">数据源探测</CardTitle>
                 <CardDescription class="text-sm">
                   可从现有数据源生成测试载荷，再按需调整 JSON。
                 </CardDescription>
               </CardHeader>
-              <CardContent class="flex flex-col gap-4">
+              <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
                 <FieldGroup>
                   <Field>
                     <FieldLabel>选择数据源</FieldLabel>
@@ -475,10 +439,13 @@ onMounted(() => {
           </div>
         </TabsContent>
 
-        <TabsContent value="summary">
-          <div class="grid gap-4 lg:grid-cols-2">
-            <Card>
-              <CardHeader class="flex flex-row items-start justify-between gap-3">
+        <TabsContent
+          value="summary"
+          class="m-0 min-h-0 flex-1 overflow-auto lg:overflow-visible"
+        >
+          <div class="grid min-h-full gap-4 lg:h-full lg:min-h-0 lg:grid-cols-2 lg:grid-rows-2">
+            <Card class="flex min-h-0 flex-col lg:row-span-2">
+              <CardHeader class="flex shrink-0 flex-row items-start justify-between gap-3">
                 <div class="min-w-0">
                   <CardTitle class="text-lg">平台状态</CardTitle>
                   <CardDescription class="text-sm">
@@ -495,7 +462,7 @@ onMounted(() => {
                   刷新
                 </Button>
               </CardHeader>
-              <CardContent class="flex flex-col gap-4">
+              <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
                 <div class="grid gap-3 sm:grid-cols-3">
                   <div class="rounded-md border p-3">
                     <div class="flex items-center justify-between gap-3">
@@ -545,11 +512,11 @@ onMounted(() => {
               </CardContent>
             </Card>
 
-            <Card>
-              <CardHeader>
+            <Card class="flex min-h-0 flex-col">
+              <CardHeader class="shrink-0">
                 <CardTitle class="text-lg">运行摘要</CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent class="min-h-0 flex-1 overflow-auto">
                 <dl class="grid gap-3 text-sm">
                   <div class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
                     <dt class="text-muted-foreground">Agent Home</dt>
@@ -571,12 +538,12 @@ onMounted(() => {
               </CardContent>
             </Card>
 
-            <Card>
-              <CardHeader>
+            <Card class="flex min-h-0 flex-col">
+              <CardHeader class="shrink-0">
                 <CardTitle class="text-lg">已配置模型</CardTitle>
               </CardHeader>
-              <CardContent>
-                <div class="rounded-md border">
+              <CardContent class="min-h-0 flex-1">
+                <div class="h-full min-h-64 overflow-auto rounded-md border lg:min-h-0">
                   <Table>
                     <TableHeader>
                       <TableRow>
