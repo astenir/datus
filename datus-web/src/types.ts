@@ -540,6 +540,30 @@ export type ArtifactShareUpdate = {
   allowed_user_ids?: string[];
 };
 
+export type ArtifactShareArtifactType = "report" | "dashboard";
+
+export type ArtifactShareUserSummary = {
+  user_id: string;
+  display_name?: string | null;
+  email?: string | null;
+  department?: string | null;
+  title?: string | null;
+};
+
+export type ArtifactShareRoleSummary = {
+  role_id: string;
+  name: string;
+  description?: string | null;
+  built_in?: boolean;
+};
+
+export type ArtifactShareDirectoryParams = {
+  artifactType: ArtifactShareArtifactType;
+  query?: string;
+  limit?: number;
+  includeSelf?: boolean;
+};
+
 export type ArtifactFile = {
   path: string;
   content: string;

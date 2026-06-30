@@ -2,11 +2,25 @@ import { computed, onScopeDispose, readonly, ref, shallowRef } from "vue";
 import { toast } from "vue-sonner";
 
 import { useConnection } from "@/composables/useConnection";
-import { dashboardApi, reportApi } from "@/lib/api";
-import type { ArtifactManifest, DashboardDetail, ReportDetail, SqlQueryResultEnvelope } from "@/types";
+import { artifactShareApi, dashboardApi, reportApi } from "@/lib/api";
+import type {
+  ArtifactManifest,
+  ArtifactShare,
+  ArtifactShareRoleSummary,
+  ArtifactShareUpdate,
+  ArtifactShareUserSummary,
+  DashboardDetail,
+  ReportDetail,
+  SqlQueryResultEnvelope,
+} from "@/types";
 import type { ArtifactViewTab } from "@/features/workspace/types";
 
 export type ArtifactDetail = DashboardDetail | ReportDetail;
+export type ArtifactSharePrincipalOption = {
+  value: string;
+  label: string;
+  description?: string;
+};
 
 function nonEmptySlug(value: string | null | undefined): string | null {
   const trimmed = value?.trim() ?? "";
@@ -33,8 +47,43 @@ export async function artifactHtml(baseUrl: string, tab: ArtifactViewTab, slug: 
     : dashboardApi.html(baseUrl, slug);
 }
 
+export function artifactShare(baseUrl: string, tab: ArtifactViewTab, slug: string): Promise<ArtifactShare | null> {
+  return tab === "report"
+    ? reportApi.getAcl(baseUrl, slug)
+    : dashboardApi.getAcl(baseUrl, slug);
+}
+
+export function putArtifactShare(
+  baseUrl: string,
+  tab: ArtifactViewTab,
+  slug: string,
+  share: ArtifactShareUpdate,
+): Promise<ArtifactShare | null> {
+  return tab === "report"
+    ? reportApi.putAcl(baseUrl, slug, share)
+    : dashboardApi.putAcl(baseUrl, slug, share);
+}
+
 export function createArtifactPreviewUrl(html: string): string {
   return URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
+}
+
+function userOption(user: ArtifactShareUserSummary): ArtifactSharePrincipalOption {
+  const userId = user.user_id;
+  const descriptionParts = [user.email, user.department, user.title].filter(Boolean);
+  return {
+    value: userId,
+    label: user.display_name ? `${user.display_name} (${userId})` : userId,
+    description: descriptionParts.length ? descriptionParts.join(" / ") : undefined,
+  };
+}
+
+function roleOption(role: ArtifactShareRoleSummary): ArtifactSharePrincipalOption {
+  return {
+    value: role.role_id,
+    label: role.name ? `${role.name} (${role.role_id})` : role.role_id,
+    description: role.description ?? undefined,
+  };
 }
 
 export function useArtifacts() {
@@ -58,6 +107,18 @@ export function useArtifacts() {
   const queryRequestId = shallowRef(0);
   const previewLoadingKey = shallowRef<string | null>(null);
   const previewError = shallowRef<string | null>(null);
+  const activeShare = ref<ArtifactShare | null>(null);
+  const activeShareTab = shallowRef<ArtifactViewTab | null>(null);
+  const activeShareSlug = shallowRef<string | null>(null);
+  const shareLoadingKey = shallowRef<string | null>(null);
+  const shareSaving = shallowRef(false);
+  const shareError = shallowRef<string | null>(null);
+  const shareRequestId = shallowRef(0);
+  const shareUserOptions = ref<ArtifactSharePrincipalOption[]>([]);
+  const shareRoleOptions = ref<ArtifactSharePrincipalOption[]>([]);
+  const shareDirectoryLoading = shallowRef(false);
+  const shareDirectoryError = shallowRef<string | null>(null);
+  const shareDirectoryRequestId = shallowRef(0);
   const previewUrls: string[] = [];
 
   const activeDetail = computed<ArtifactDetail | null>(() => {
@@ -135,6 +196,114 @@ export function useArtifacts() {
       if (previewLoadingKey.value === key) {
         previewLoadingKey.value = null;
       }
+    }
+  }
+
+  function clearShare() {
+    shareRequestId.value += 1;
+    shareDirectoryRequestId.value += 1;
+    activeShare.value = null;
+    activeShareTab.value = null;
+    activeShareSlug.value = null;
+    shareLoadingKey.value = null;
+    shareSaving.value = false;
+    shareError.value = null;
+    shareDirectoryLoading.value = false;
+    shareDirectoryError.value = null;
+  }
+
+  async function loadShare(tab: ArtifactViewTab, slugValue: string | null | undefined) {
+    const slug = nonEmptySlug(slugValue);
+    const requestId = shareRequestId.value + 1;
+    shareRequestId.value = requestId;
+    activeShare.value = null;
+    activeShareTab.value = tab;
+    activeShareSlug.value = slug;
+    shareError.value = null;
+
+    if (!slug) {
+      shareLoadingKey.value = null;
+      return null;
+    }
+
+    const key = artifactPreviewKey(tab, slug);
+    shareLoadingKey.value = key;
+
+    try {
+      const share = await artifactShare(connection.effectiveBase(), tab, slug);
+      if (shareRequestId.value !== requestId) return null;
+      activeShare.value = share;
+      return share;
+    } catch (err) {
+      if (shareRequestId.value !== requestId) return null;
+
+      console.error("读取产物分享设置失败:", err);
+      shareError.value = "读取分享设置失败";
+      toast.error("读取分享设置失败");
+      return null;
+    } finally {
+      if (shareRequestId.value === requestId) {
+        shareLoadingKey.value = null;
+      }
+    }
+  }
+
+  async function loadShareDirectory(tab: ArtifactViewTab) {
+    const requestId = shareDirectoryRequestId.value + 1;
+    shareDirectoryRequestId.value = requestId;
+    shareDirectoryLoading.value = true;
+    shareDirectoryError.value = null;
+
+    try {
+      const base = connection.effectiveBase();
+      const [usersResult, rolesResult] = await Promise.all([
+        artifactShareApi.listUsers(base, { artifactType: tab, limit: 100 }),
+        artifactShareApi.listRoles(base, { artifactType: tab, limit: 100 }),
+      ]);
+      if (shareDirectoryRequestId.value !== requestId) return;
+
+      shareUserOptions.value = (usersResult ?? []).map(userOption);
+      shareRoleOptions.value = (rolesResult ?? []).map(roleOption);
+    } catch (err) {
+      if (shareDirectoryRequestId.value !== requestId) return;
+
+      console.error("读取分享候选用户和角色失败:", err);
+      shareDirectoryError.value = "读取可分享用户和角色失败";
+      shareUserOptions.value = [];
+      shareRoleOptions.value = [];
+      toast.error("读取可分享用户和角色失败");
+    } finally {
+      if (shareDirectoryRequestId.value === requestId) {
+        shareDirectoryLoading.value = false;
+      }
+    }
+  }
+
+  async function saveShare(share: ArtifactShareUpdate): Promise<boolean> {
+    const tab = activeShareTab.value;
+    const slug = activeShareSlug.value;
+
+    if (!tab || !slug) {
+      shareError.value = "请选择要分享的产物";
+      toast.error("请选择要分享的产物");
+      return false;
+    }
+
+    shareSaving.value = true;
+    shareError.value = null;
+
+    try {
+      const nextShare = await putArtifactShare(connection.effectiveBase(), tab, slug, share);
+      activeShare.value = nextShare;
+      toast.success("分享设置已保存");
+      return true;
+    } catch (err) {
+      console.error("保存产物分享设置失败:", err);
+      shareError.value = "保存分享设置失败";
+      toast.error("保存分享设置失败");
+      return false;
+    } finally {
+      shareSaving.value = false;
     }
   }
 
@@ -260,10 +429,24 @@ export function useArtifacts() {
     activeQuerySlug: readonly(activeQuerySlug),
     previewLoadingKey: readonly(previewLoadingKey),
     previewError: readonly(previewError),
+    activeShare: readonly(activeShare),
+    activeShareTab: readonly(activeShareTab),
+    activeShareSlug: readonly(activeShareSlug),
+    shareLoadingKey: readonly(shareLoadingKey),
+    shareSaving: readonly(shareSaving),
+    shareError: readonly(shareError),
+    shareUserOptions: readonly(shareUserOptions),
+    shareRoleOptions: readonly(shareRoleOptions),
+    shareDirectoryLoading: readonly(shareDirectoryLoading),
+    shareDirectoryError: readonly(shareDirectoryError),
     loadArtifacts,
     loadDetail,
     runDashboardQuery,
     htmlUrl,
     openHtmlPreview,
+    loadShare,
+    loadShareDirectory,
+    saveShare,
+    clearShare,
   };
 }

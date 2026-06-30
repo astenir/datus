@@ -4,12 +4,19 @@ const dashboardList = vi.fn();
 const dashboardDetail = vi.fn();
 const dashboardHtmlUrl = vi.fn();
 const dashboardHtml = vi.fn();
+const dashboardGetAcl = vi.fn();
+const dashboardPutAcl = vi.fn();
 const dashboardQuery = vi.fn();
+const listShareUsers = vi.fn();
+const listShareRoles = vi.fn();
 const reportList = vi.fn();
 const reportDetail = vi.fn();
 const reportHtmlUrl = vi.fn();
 const reportHtml = vi.fn();
+const reportGetAcl = vi.fn();
+const reportPutAcl = vi.fn();
 const toastError = vi.fn();
+const toastSuccess = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   dashboardApi: {
@@ -17,13 +24,21 @@ vi.mock("@/lib/api", () => ({
     detail: dashboardDetail,
     htmlUrl: dashboardHtmlUrl,
     html: dashboardHtml,
+    getAcl: dashboardGetAcl,
+    putAcl: dashboardPutAcl,
     query: dashboardQuery,
+  },
+  artifactShareApi: {
+    listUsers: listShareUsers,
+    listRoles: listShareRoles,
   },
   reportApi: {
     list: reportList,
     detail: reportDetail,
     htmlUrl: reportHtmlUrl,
     html: reportHtml,
+    getAcl: reportGetAcl,
+    putAcl: reportPutAcl,
   },
 }));
 
@@ -36,6 +51,7 @@ vi.mock("@/composables/useConnection", () => ({
 vi.mock("vue-sonner", () => ({
   toast: {
     error: toastError,
+    success: toastSuccess,
   },
 }));
 
@@ -92,6 +108,54 @@ describe("useArtifacts", () => {
     reportHtmlUrl.mockReturnValue("http://api.test/api/v1/reports/fund-report/html");
     dashboardHtml.mockResolvedValue("<!doctype html><html><body>dashboard</body></html>");
     reportHtml.mockResolvedValue("<!doctype html><html><body>report</body></html>");
+    dashboardGetAcl.mockResolvedValue({
+      owner_user_id: "alice",
+      visibility: "private",
+      allowed_roles: [],
+      allowed_user_ids: [],
+    });
+    dashboardPutAcl.mockResolvedValue({
+      owner_user_id: "alice",
+      visibility: "enterprise",
+      allowed_roles: [],
+      allowed_user_ids: [],
+    });
+    reportGetAcl.mockResolvedValue({
+      owner_user_id: "alice",
+      visibility: "role",
+      allowed_roles: ["analyst"],
+      allowed_user_ids: ["bob"],
+    });
+    reportPutAcl.mockResolvedValue({
+      owner_user_id: "alice",
+      visibility: "role",
+      allowed_roles: ["analyst"],
+      allowed_user_ids: ["bob", "charlie"],
+    });
+    listShareUsers.mockResolvedValue([
+      {
+        user_id: "bob",
+        display_name: "Bob",
+        email: "bob@example.com",
+        department: "Data",
+        title: "Analyst",
+      },
+      {
+        user_id: "charlie",
+        display_name: "Charlie",
+        email: null,
+        department: null,
+        title: null,
+      },
+    ]);
+    listShareRoles.mockResolvedValue([
+      {
+        role_id: "analyst",
+        name: "分析师",
+        description: "分析角色",
+        built_in: false,
+      },
+    ]);
   });
 
   it("loads dashboard and report collections from the active connection", async () => {
@@ -161,6 +225,73 @@ describe("useArtifacts", () => {
     await expect(artifactHtml("http://api.test", "report", "fund-report")).resolves.toContain("report");
     expect(dashboardHtml).toHaveBeenCalledWith("http://api.test", "fund-overview");
     expect(reportHtml).toHaveBeenCalledWith("http://api.test", "fund-report");
+  });
+
+  it("loads artifact sharing ACL through the owning API helper", async () => {
+    const { useArtifacts } = await import("./useArtifacts");
+    const artifacts = useArtifacts();
+
+    const share = await artifacts.loadShare("report", "fund-report");
+
+    expect(reportGetAcl).toHaveBeenCalledWith("http://api.test", "fund-report");
+    expect(dashboardGetAcl).not.toHaveBeenCalled();
+    expect(share?.visibility).toBe("role");
+    expect(artifacts.activeShare.value?.allowed_user_ids).toEqual(["bob"]);
+    expect(artifacts.activeShareTab.value).toBe("report");
+    expect(artifacts.activeShareSlug.value).toBe("fund-report");
+    expect(artifacts.shareLoadingKey.value).toBeNull();
+  });
+
+  it("saves artifact sharing ACL for the active share target", async () => {
+    const { useArtifacts } = await import("./useArtifacts");
+    const artifacts = useArtifacts();
+
+    await artifacts.loadShare("report", "fund-report");
+    const saved = await artifacts.saveShare({
+      visibility: "role",
+      allowed_roles: ["analyst"],
+      allowed_user_ids: ["bob", "charlie"],
+    });
+
+    expect(saved).toBe(true);
+    expect(reportPutAcl).toHaveBeenCalledWith("http://api.test", "fund-report", {
+      visibility: "role",
+      allowed_roles: ["analyst"],
+      allowed_user_ids: ["bob", "charlie"],
+    });
+    expect(artifacts.activeShare.value?.allowed_user_ids).toEqual(["bob", "charlie"]);
+    expect(artifacts.shareSaving.value).toBe(false);
+    expect(toastSuccess).toHaveBeenCalledWith("分享设置已保存");
+  });
+
+  it("loads candidate users and roles for the share picker", async () => {
+    const { useArtifacts } = await import("./useArtifacts");
+    const artifacts = useArtifacts();
+
+    await artifacts.loadShareDirectory("report");
+
+    expect(listShareUsers).toHaveBeenCalledWith("http://api.test", { artifactType: "report", limit: 100 });
+    expect(listShareRoles).toHaveBeenCalledWith("http://api.test", { artifactType: "report", limit: 100 });
+    expect(artifacts.shareUserOptions.value).toEqual([
+      {
+        value: "bob",
+        label: "Bob (bob)",
+        description: "bob@example.com / Data / Analyst",
+      },
+      {
+        value: "charlie",
+        label: "Charlie (charlie)",
+        description: undefined,
+      },
+    ]);
+    expect(artifacts.shareRoleOptions.value).toEqual([
+      {
+        value: "analyst",
+        label: "分析师 (analyst)",
+        description: "分析角色",
+      },
+    ]);
+    expect(artifacts.shareDirectoryError.value).toBeNull();
   });
 
   it("opens artifact previews from authenticated HTML responses instead of raw backend URLs", async () => {

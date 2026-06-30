@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue"
-import { ExternalLinkIcon } from "@lucide/vue"
+import { ExternalLinkIcon, Share2Icon } from "@lucide/vue"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -17,6 +17,7 @@ const props = defineProps<{
   loading: boolean
   error: string | null
   previewOpening: boolean
+  shareLoading: boolean
   queryResult: SqlQueryResultEnvelope | null
   queryLoading: boolean
   queryError: string | null
@@ -25,6 +26,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   openPreview: []
+  share: []
   runDashboardQuery: [querySlug: string, params: Record<string, unknown>]
 }>()
 
@@ -166,15 +168,26 @@ const templates = computed(() => isDashboardDetail(props.detail) ? props.detail.
         @run="runDashboardQuery"
       />
 
-      <Button
-        variant="outline"
-        size="sm"
-        :disabled="props.previewOpening"
-        @click="emit('openPreview')"
-      >
-        <ExternalLinkIcon data-icon="inline-start" />
-        {{ props.previewOpening ? "打开中" : "打开 HTML 预览" }}
-      </Button>
+      <div class="flex flex-wrap gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          :disabled="props.previewOpening"
+          @click="emit('openPreview')"
+        >
+          <ExternalLinkIcon data-icon="inline-start" />
+          {{ props.previewOpening ? "打开中" : "打开 HTML 预览" }}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          :disabled="props.shareLoading"
+          @click="emit('share')"
+        >
+          <Share2Icon data-icon="inline-start" />
+          {{ props.shareLoading ? "加载中" : "分享设置" }}
+        </Button>
+      </div>
     </div>
   </div>
 </template>

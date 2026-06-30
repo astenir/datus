@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ExternalLinkIcon, FileSearchIcon } from "@lucide/vue"
+import { ExternalLinkIcon, FileSearchIcon, Share2Icon } from "@lucide/vue"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -18,11 +18,13 @@ const props = defineProps<{
   emptyTitle: string
   loading: boolean
   openingSlug: string | null
+  sharingSlug: string | null
 }>()
 
 const emit = defineEmits<{
   select: [slug: string]
   openPreview: [slug: string]
+  share: [slug: string]
 }>()
 </script>
 
@@ -85,6 +87,15 @@ const emit = defineEmits<{
           >
             <ExternalLinkIcon data-icon="inline-start" />
             {{ props.openingSlug === item.slug ? "打开中" : "打开" }}
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            :disabled="props.sharingSlug === item.slug"
+            @click="emit('share', item.slug)"
+          >
+            <Share2Icon data-icon="inline-start" />
+            {{ props.sharingSlug === item.slug ? "加载中" : "分享" }}
           </Button>
         </div>
       </CardContent>

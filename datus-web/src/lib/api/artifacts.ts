@@ -3,12 +3,24 @@ import { apiResult, apiUrl, jsonBody, putBody } from "./helpers";
 import type {
   ArtifactManifest,
   ArtifactShare,
+  ArtifactShareDirectoryParams,
+  ArtifactShareRoleSummary,
   ArtifactShareUpdate,
+  ArtifactShareUserSummary,
   DashboardDetail,
   ReportDetail,
   SqlQueryResultEnvelope,
   VisualizationResult,
 } from "@/types";
+
+function shareDirectoryQuery(params: ArtifactShareDirectoryParams): string {
+  const query = new URLSearchParams();
+  query.set("artifact_type", params.artifactType);
+  if (params.query !== undefined) query.set("query", params.query);
+  if (params.limit !== undefined) query.set("limit", String(params.limit));
+  if (params.includeSelf !== undefined) query.set("include_self", String(params.includeSelf));
+  return query.toString();
+}
 
 export const dashboardApi = {
   list(baseUrl: string): Promise<ArtifactManifest[] | null> {
@@ -72,6 +84,16 @@ export const reportApi = {
 
   putAcl(baseUrl: string, slug: string, share: ArtifactShareUpdate): Promise<ArtifactShare | null> {
     return apiResult(baseUrl, `/api/v1/reports/${encodeURIComponent(slug)}/acl`, putBody(share));
+  },
+};
+
+export const artifactShareApi = {
+  listUsers(baseUrl: string, params: ArtifactShareDirectoryParams): Promise<ArtifactShareUserSummary[] | null> {
+    return apiResult(baseUrl, `/api/v1/artifact-share/users?${shareDirectoryQuery(params)}`);
+  },
+
+  listRoles(baseUrl: string, params: ArtifactShareDirectoryParams): Promise<ArtifactShareRoleSummary[] | null> {
+    return apiResult(baseUrl, `/api/v1/artifact-share/roles?${shareDirectoryQuery(params)}`);
   },
 };
 

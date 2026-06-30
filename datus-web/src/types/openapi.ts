@@ -1538,6 +1538,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/artifact-share/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["list_artifact_share_users_api_v1_artifact_share_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/artifact-share/roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["list_artifact_share_roles_api_v1_artifact_share_roles_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/artifacts": {
         parameters: {
             query?: never;
@@ -2596,6 +2630,17 @@ export interface components {
             allowed_user_ids?: string[];
         };
 
+        ArtifactShareRoleSummary: {
+
+            role_id: string;
+
+            name: string;
+
+            description?: string | null;
+
+            built_in: boolean;
+        };
+
         ArtifactShareUpdate: {
 
             visibility: "private" | "role" | "enterprise";
@@ -2603,6 +2648,19 @@ export interface components {
             allowed_roles?: string[];
 
             allowed_user_ids?: string[];
+        };
+
+        ArtifactShareUserSummary: {
+
+            user_id: string;
+
+            display_name?: string | null;
+
+            email?: string | null;
+
+            department?: string | null;
+
+            title?: string | null;
         };
 
         AuditLogEntry: {
@@ -4003,6 +4061,28 @@ export interface components {
             success: boolean;
 
             data?: components["schemas"]["ArtifactManifest"][] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
+        Result_List_ArtifactShareRoleSummary__: {
+
+            success: boolean;
+
+            data?: components["schemas"]["ArtifactShareRoleSummary"][] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
+        Result_List_ArtifactShareUserSummary__: {
+
+            success: boolean;
+
+            data?: components["schemas"]["ArtifactShareUserSummary"][] | null;
 
             errorCode?: string | null;
 
@@ -7870,6 +7950,78 @@ export interface operations {
                 };
                 content: {
                     "text/html": string;
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_artifact_share_users_api_v1_artifact_share_users_get: {
+        parameters: {
+            query: {
+
+                artifact_type: "report" | "dashboard";
+
+                query?: string;
+                limit?: number;
+
+                include_self?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_List_ArtifactShareUserSummary__"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_artifact_share_roles_api_v1_artifact_share_roles_get: {
+        parameters: {
+            query: {
+
+                artifact_type: "report" | "dashboard";
+
+                query?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_List_ArtifactShareRoleSummary__"];
                 };
             };
 

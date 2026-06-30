@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, watch } from "vue"
+import { computed, onMounted, shallowRef, watch } from "vue"
 import { RefreshCwIcon } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import {
@@ -12,6 +12,8 @@ import {
 import { artifactPreviewKey, useArtifacts } from "@/composables/useArtifacts"
 import ArtifactCollectionGrid from "@/features/artifacts/ArtifactCollectionGrid.vue"
 import ArtifactDetailPanel from "@/features/artifacts/ArtifactDetailPanel.vue"
+import ArtifactShareDialog from "@/features/artifacts/ArtifactShareDialog.vue"
+import type { ArtifactShareUpdate } from "@/types"
 import type { ArtifactViewTab } from "@/features/workspace/types"
 
 const props = withDefaults(defineProps<{
@@ -27,6 +29,9 @@ const emit = defineEmits<{
 }>()
 
 const artifacts = useArtifacts()
+const shareDialogOpen = shallowRef(false)
+const shareTargetTab = shallowRef<ArtifactViewTab>("dashboard")
+const shareTargetSlug = shallowRef<string | null>(null)
 
 const selectedDetailSlug = computed(() => props.selectedSlug?.trim() || null)
 const detailDialogOpen = computed(() => Boolean(selectedDetailSlug.value))
@@ -39,12 +44,23 @@ const selectedPreviewKey = computed(() => {
 const selectedPreviewOpening = computed(() => {
   return Boolean(selectedPreviewKey.value && artifacts.previewLoadingKey.value === selectedPreviewKey.value)
 })
+const selectedShareLoading = computed(() => {
+  return Boolean(selectedPreviewKey.value && artifacts.shareLoadingKey.value === selectedPreviewKey.value)
+})
 
 const dashboardOpeningSlug = computed(() => loadingSlugFor("dashboard"))
 const reportOpeningSlug = computed(() => loadingSlugFor("report"))
+const dashboardSharingSlug = computed(() => sharingSlugFor("dashboard"))
+const reportSharingSlug = computed(() => sharingSlugFor("report"))
 
 function loadingSlugFor(tab: ArtifactViewTab): string | null {
   const key = artifacts.previewLoadingKey.value
+  const prefix = `${tab}:`
+  return key?.startsWith(prefix) ? key.slice(prefix.length) : null
+}
+
+function sharingSlugFor(tab: ArtifactViewTab): string | null {
+  const key = artifacts.shareLoadingKey.value
   const prefix = `${tab}:`
   return key?.startsWith(prefix) ? key.slice(prefix.length) : null
 }
@@ -60,6 +76,33 @@ function runDashboardQuery(querySlug: string, params: Record<string, unknown>) {
 
 function openPreview(tab: ArtifactViewTab, slug: string | null | undefined) {
   void artifacts.openHtmlPreview(tab, slug)
+}
+
+function openShare(tab: ArtifactViewTab, slug: string | null | undefined) {
+  const normalizedSlug = slug?.trim() || null
+  if (!normalizedSlug) return
+
+  shareTargetTab.value = tab
+  shareTargetSlug.value = normalizedSlug
+  shareDialogOpen.value = true
+  void artifacts.loadShare(tab, normalizedSlug)
+  void artifacts.loadShareDirectory(tab)
+}
+
+async function saveShare(share: ArtifactShareUpdate) {
+  const saved = await artifacts.saveShare(share)
+  if (saved) {
+    shareDialogOpen.value = false
+    artifacts.clearShare()
+  }
+}
+
+function handleShareDialogOpen(open: boolean) {
+  shareDialogOpen.value = open
+  if (!open) {
+    artifacts.clearShare()
+    shareTargetSlug.value = null
+  }
 }
 
 function handleDetailDialogOpen(open: boolean) {
@@ -99,9 +142,11 @@ watch(
           :items="artifacts.dashboards.value"
           :loading="artifacts.listLoading.value"
           :opening-slug="dashboardOpeningSlug"
+          :sharing-slug="dashboardSharingSlug"
           empty-title="暂无仪表盘"
           @select="openArtifact('dashboard', $event)"
           @open-preview="openPreview('dashboard', $event)"
+          @share="openShare('dashboard', $event)"
         />
       </template>
 
@@ -110,9 +155,11 @@ watch(
           :items="artifacts.reports.value"
           :loading="artifacts.listLoading.value"
           :opening-slug="reportOpeningSlug"
+          :sharing-slug="reportSharingSlug"
           empty-title="暂无报表"
           @select="openArtifact('report', $event)"
           @open-preview="openPreview('report', $event)"
+          @share="openShare('report', $event)"
         />
       </template>
     </div>
@@ -137,15 +184,33 @@ watch(
             :loading="artifacts.detailLoading.value"
             :error="artifacts.detailError.value"
             :preview-opening="selectedPreviewOpening"
+            :share-loading="selectedShareLoading"
             :query-result="artifacts.queryResult.value"
             :query-loading="artifacts.queryLoading.value"
             :query-error="artifacts.queryError.value"
             :active-query-slug="artifacts.activeQuerySlug.value"
             @open-preview="openPreview(props.tab, selectedDetailSlug)"
+            @share="openShare(props.tab, selectedDetailSlug)"
             @run-dashboard-query="runDashboardQuery"
           />
         </div>
       </DialogScrollContent>
     </Dialog>
+
+    <ArtifactShareDialog
+      :open="shareDialogOpen"
+      :tab="shareTargetTab"
+      :slug="shareTargetSlug"
+      :share="artifacts.activeShare.value"
+      :user-options="artifacts.shareUserOptions.value"
+      :role-options="artifacts.shareRoleOptions.value"
+      :loading="Boolean(artifacts.shareLoadingKey.value)"
+      :directory-loading="artifacts.shareDirectoryLoading.value"
+      :saving="artifacts.shareSaving.value"
+      :error="artifacts.shareError.value"
+      :directory-error="artifacts.shareDirectoryError.value"
+      @update:open="handleShareDialogOpen"
+      @save="saveShare"
+    />
   </section>
 </template>
