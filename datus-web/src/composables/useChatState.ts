@@ -1,4 +1,4 @@
-import { readonly, ref, shallowRef } from "vue";
+import { readonly, shallowRef } from "vue";
 import { chatApi } from "@/lib/api";
 import {
   buildChatStreamRequest,
@@ -15,14 +15,14 @@ import {
   normalizeBaseUrl,
 } from "@/lib/chat";
 import { request } from "@/lib/request";
-import type { ChatMessage, ChatSessionOption } from "@/types";
+import type { ChatMessage, ChatSessionOption, ParsedMessage } from "@/types";
 import { useConnection } from "./useConnection";
 import { useChatSettings } from "./useChatSettings";
 
 const { effectiveBase } = useConnection();
 
-const messages = ref<ChatMessage[]>([]);
-const sessions = ref<ChatSessionOption[]>([]);
+const messages = shallowRef<ChatMessage[]>([]);
+const sessions = shallowRef<ChatSessionOption[]>([]);
 const selectedSession = shallowRef<string | null>(null);
 const isStreaming = shallowRef(false);
 const isLoadingSessions = shallowRef(false);
@@ -36,6 +36,16 @@ function cacheSet(key: string, value: ChatMessage[]) {
     if (oldest) messageCache.delete(oldest);
   }
   messageCache.set(key, value);
+}
+
+function applyIncomingMessages(incomingMessages: ParsedMessage[]) {
+  if (incomingMessages.length === 0) return;
+
+  let nextMessages = messages.value;
+  for (const incoming of incomingMessages) {
+    nextMessages = mergeMessage(nextMessages, incoming);
+  }
+  messages.value = nextMessages;
 }
 
 /** Try to extract session_id from an SSE event, checking all known locations. */
@@ -166,23 +176,27 @@ async function sendMessage(opts: {
       const parsed = parseSseBuffer(buffer);
       buffer = parsed.rest;
 
+      const incomingMessages: ParsedMessage[] = [];
       for (const event of parsed.events) {
         // Capture session ID from ALL events, before type filtering
         captureSessionId(event);
 
         const incoming = messageFromEvent(event);
         if (!incoming) continue;
-        messages.value = mergeMessage(messages.value, incoming);
+        incomingMessages.push(incoming);
       }
+      applyIncomingMessages(incomingMessages);
     }
 
     if (buffer) {
       const parsed = parseSseBuffer(buffer, { flush: true });
+      const incomingMessages: ParsedMessage[] = [];
       for (const event of parsed.events) {
         captureSessionId(event);
         const incoming = messageFromEvent(event);
-        if (incoming) messages.value = mergeMessage(messages.value, incoming);
+        if (incoming) incomingMessages.push(incoming);
       }
+      applyIncomingMessages(incomingMessages);
     }
   } catch (error) {
     if ((error as Error).name !== "AbortError") {
@@ -273,18 +287,25 @@ async function resumeSession(sessionId?: string) {
       body: JSON.stringify({ session_id: targetSession }),
       signal: controller.signal,
     });
+    const pendingMessages: ParsedMessage[] = [];
+    const flushPendingMessages = () => {
+      applyIncomingMessages(pendingMessages.splice(0));
+    };
     const tail = await consumeSseStream(response, (event) => {
       captureSessionId(event);
       const incoming = messageFromEvent(event);
-      if (incoming) messages.value = mergeMessage(messages.value, incoming);
+      if (incoming) pendingMessages.push(incoming);
+      flushPendingMessages();
     });
     if (tail) {
       const parsed = parseSseBuffer(tail, { flush: true });
+      const incomingMessages: ParsedMessage[] = [];
       for (const event of parsed.events) {
         captureSessionId(event);
         const incoming = messageFromEvent(event);
-        if (incoming) messages.value = mergeMessage(messages.value, incoming);
+        if (incoming) incomingMessages.push(incoming);
       }
+      applyIncomingMessages(incomingMessages);
     }
   } catch (error) {
     if ((error as Error).name !== "AbortError") {

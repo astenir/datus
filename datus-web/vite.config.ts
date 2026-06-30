@@ -12,10 +12,17 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (!id.includes('node_modules')) return undefined
-          if (id.includes('markdown-it') || id.includes('vue-stream-markdown')) return 'vendor-markdown'
-          if (id.includes('@lucide/vue')) return 'vendor-icons'
-          if (id.includes('reka-ui')) return 'vendor-ui'
-          if (id.includes('vue')) return 'vendor-vue'
+
+          const normalizedId = id.split(path.sep).join('/')
+          if (normalizedId.includes('/node_modules/markdown-it/')
+            || normalizedId.includes('/node_modules/vue-stream-markdown/')) return 'vendor-markdown'
+          if (normalizedId.includes('/node_modules/@lucide/vue/')) return 'vendor-icons'
+          if (normalizedId.includes('/node_modules/reka-ui/')) return 'vendor-ui'
+          if (normalizedId.includes('/node_modules/@vueuse/')) return 'vendor-vueuse'
+          if (normalizedId.includes('/node_modules/vue-stick-to-bottom/')) return 'vendor-scroll'
+          if (normalizedId.includes('/node_modules/vue/')
+            || normalizedId.includes('/node_modules/@vue/')
+            || normalizedId.includes('/node_modules/vue-router/')) return 'vendor-vue'
           return undefined
         },
       },

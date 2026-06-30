@@ -523,6 +523,7 @@ async function deleteSession(sessionId: string) {
               <SidebarMenuItem
                 v-for="session in visibleSessions"
                 :key="session.session_id"
+                v-memo="[session, session.session_id === workspace.selectedSession.value]"
               >
                 <SidebarMenuButton
                   :is-active="session.session_id === workspace.selectedSession.value"

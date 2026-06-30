@@ -136,8 +136,8 @@ export function useChatWorkspace() {
       await Promise.all([
         loadSessions(),
         loadModels(),
-        loadCatalog(undefined, currentDatasource.value),
       ]);
+      void loadCatalog(undefined, currentDatasource.value);
       initialized.value = true;
     })();
 
