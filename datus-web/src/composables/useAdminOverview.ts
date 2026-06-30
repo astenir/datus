@@ -5,7 +5,6 @@ import {
   adminArtifactApi,
   adminDatasourceApi,
   adminQuotaApi,
-  adminSecretApi,
   adminSessionApi,
   catalogApi,
 } from "@/lib/api";
@@ -22,14 +21,12 @@ import type {
   AdminDatasourceGrant,
   AdminOverviewData,
   AdminQuota,
-  AdminSecret,
   AdminSession,
   AdminSessionDetail,
   ArtifactAclFormData,
   DatasourceGrantFormData,
   QuotaSubjectType,
   QuotaFormData,
-  SecretFormData,
 } from "@/types/admin";
 import type { CatalogDatabase } from "@/types/admin";
 import type { DatabaseInfo } from "@/types";
@@ -148,19 +145,14 @@ export function useAdminOverview() {
   const loading = shallowRef(false);
   const savingGrant = shallowRef(false);
   const savingQuota = shallowRef(false);
-  const savingSecret = shallowRef(false);
   const savingArtifactAcl = shallowRef(false);
   const actingSessionId = shallowRef<string | null>(null);
   const deletingGrantKey = shallowRef<string | null>(null);
-  const deletingSecretName = shallowRef<string | null>(null);
   const loadingGrantDetail = shallowRef(false);
   const loadingGrantCatalog = shallowRef(false);
   const selectedGrantRouteKey = shallowRef<string | null>(null);
   const grantDetailError = shallowRef<string | null>(null);
   const grantCatalogError = shallowRef<string | null>(null);
-  const loadingSecretDetail = shallowRef(false);
-  const selectedSecretName = shallowRef<string | null>(null);
-  const secretDetailError = shallowRef<string | null>(null);
   const loadingArtifactAcl = shallowRef(false);
   const selectedArtifactAclKey = shallowRef<string | null>(null);
   const artifactAclError = shallowRef<string | null>(null);
@@ -171,7 +163,6 @@ export function useAdminOverview() {
   const sessionDetailError = shallowRef<string | null>(null);
   let grantDetailRequestId = 0;
   let grantCatalogRequestId = 0;
-  let secretDetailRequestId = 0;
   let artifactAclRequestId = 0;
   let sessionDetailRequestId = 0;
 
@@ -201,16 +192,6 @@ export function useAdminOverview() {
     enabled: true,
   });
 
-  const showSecretDialog = shallowRef(false);
-  const editingSecret = shallowRef<AdminSecret | null>(null);
-  const secretForm = ref<SecretFormData>({
-    name: "",
-    provider: "env",
-    reference: "",
-    description: "",
-    enabled: true,
-  });
-
   const showArtifactAclDialog = shallowRef(false);
   const editingArtifact = shallowRef<AdminArtifact | null>(null);
   const editingArtifactAclTarget = shallowRef<ArtifactAclTarget | null>(null);
@@ -226,7 +207,6 @@ export function useAdminOverview() {
   const runningSessionCount = computed(() => data.value.sessions.filter(session => session.is_running).length);
   const grantCount = computed(() => data.value.datasourceGrants.length);
   const quotaCount = computed(() => data.value.quotas.length);
-  const secretCount = computed(() => data.value.secrets.length);
   const grantCatalogTree = computed(() => buildDatasourceTreeOptions(grantCatalogDatabases.value));
   const grantSelectedScopePreview = computed(() => {
     if (grantScopeMode.value === "all") return "{}";
@@ -254,17 +234,6 @@ export function useAdminOverview() {
       : [];
   }
 
-  function setSecretFormFromSecret(secret: AdminSecret) {
-    editingSecret.value = secret;
-    secretForm.value = {
-      name: secret.name,
-      provider: secret.provider,
-      reference: secret.ref_hint,
-      description: secret.description ?? "",
-      enabled: secret.enabled,
-    };
-  }
-
   async function loadOverview() {
     loading.value = true;
     try {
@@ -273,7 +242,6 @@ export function useAdminOverview() {
         grantResult,
         quotaResult,
         usageResult,
-        secretResult,
         sessionResult,
         artifactResult,
       ] = await Promise.all([
@@ -281,7 +249,6 @@ export function useAdminOverview() {
         adminDatasourceApi.listGrants(),
         adminQuotaApi.listQuotas(),
         adminQuotaApi.listUsage(),
-        adminSecretApi.listSecrets(),
         adminSessionApi.listSessions(),
         adminArtifactApi.listArtifacts(),
       ]);
@@ -291,7 +258,7 @@ export function useAdminOverview() {
         datasourceGrants: grantResult.data ?? [],
         quotas: quotaResult.data ?? [],
         usage: usageResult.data ?? [],
-        secrets: secretResult.data ?? [],
+        secrets: [],
         sessions: sessionResult.data ?? [],
         artifacts: artifactResult.data ?? [],
       };
@@ -635,120 +602,6 @@ export function useAdminOverview() {
     }
   }
 
-  function openCreateSecretDialog() {
-    secretDetailRequestId += 1;
-    selectedSecretName.value = null;
-    secretDetailError.value = null;
-    loadingSecretDetail.value = false;
-    editingSecret.value = null;
-    secretForm.value = {
-      name: "",
-      provider: "env",
-      reference: "",
-      description: "",
-      enabled: true,
-    };
-    showSecretDialog.value = true;
-  }
-
-  function openEditSecretDialog(secret: AdminSecret) {
-    secretDetailRequestId += 1;
-    selectedSecretName.value = secret.name;
-    secretDetailError.value = null;
-    loadingSecretDetail.value = false;
-    setSecretFormFromSecret(secret);
-    showSecretDialog.value = true;
-  }
-
-  async function openSecretDetail(name: string) {
-    const normalizedName = name.trim();
-    if (!normalizedName) return;
-
-    const requestId = secretDetailRequestId + 1;
-    secretDetailRequestId = requestId;
-    selectedSecretName.value = normalizedName;
-    editingSecret.value = null;
-    secretDetailError.value = null;
-    loadingSecretDetail.value = true;
-    secretForm.value = {
-      name: normalizedName,
-      provider: "",
-      reference: "",
-      description: "",
-      enabled: true,
-    };
-    showSecretDialog.value = true;
-
-    try {
-      const result = await adminSecretApi.getSecret(normalizedName);
-      if (requestId !== secretDetailRequestId) return;
-
-      if (result.data) {
-        setSecretFormFromSecret(result.data);
-      } else {
-        secretDetailError.value = "未找到密钥引用详情";
-      }
-    } catch (err) {
-      if (requestId !== secretDetailRequestId) return;
-      console.error("加载密钥引用详情失败:", err);
-      secretDetailError.value = "加载密钥引用详情失败";
-      toast.error("加载密钥引用详情失败");
-    } finally {
-      if (requestId === secretDetailRequestId) {
-        loadingSecretDetail.value = false;
-      }
-    }
-  }
-
-  function closeSecretDialog() {
-    secretDetailRequestId += 1;
-    showSecretDialog.value = false;
-    selectedSecretName.value = null;
-    editingSecret.value = null;
-    secretDetailError.value = null;
-    loadingSecretDetail.value = false;
-  }
-
-  async function saveSecret() {
-    const name = secretForm.value.name.trim();
-    const provider = secretForm.value.provider.trim();
-    const reference = secretForm.value.reference.trim();
-    if (!name || !provider || !reference) {
-      toast.error("请填写密钥名称、Provider 和引用");
-      return;
-    }
-
-    savingSecret.value = true;
-    try {
-      await adminSecretApi.upsertSecret(name, {
-        provider,
-        reference,
-        description: secretForm.value.description.trim() || null,
-        enabled: secretForm.value.enabled,
-      });
-      closeSecretDialog();
-      await loadOverview();
-    } catch (err) {
-      console.error("保存密钥引用失败:", err);
-      toast.error("保存密钥引用失败");
-    } finally {
-      savingSecret.value = false;
-    }
-  }
-
-  async function deleteSecret(secret: AdminSecret) {
-    deletingSecretName.value = secret.name;
-    try {
-      await adminSecretApi.deleteSecret(secret.name);
-      await loadOverview();
-    } catch (err) {
-      console.error("删除密钥引用失败:", err);
-      toast.error("删除密钥引用失败");
-    } finally {
-      deletingSecretName.value = null;
-    }
-  }
-
   function setArtifactAclTarget(target: ArtifactAclTarget) {
     editingArtifactAclTarget.value = target;
     selectedArtifactAclKey.value = artifactAclTargetKey(target);
@@ -925,19 +778,14 @@ export function useAdminOverview() {
     loading,
     savingGrant,
     savingQuota,
-    savingSecret,
     savingArtifactAcl,
     actingSessionId,
     deletingGrantKey,
-    deletingSecretName,
     loadingGrantDetail,
     loadingGrantCatalog,
     selectedGrantRouteKey,
     grantDetailError,
     grantCatalogError,
-    loadingSecretDetail,
-    selectedSecretName,
-    secretDetailError,
     loadingArtifactAcl,
     selectedArtifactAclKey,
     artifactAclError,
@@ -954,9 +802,6 @@ export function useAdminOverview() {
     showQuotaDialog,
     editingQuota,
     quotaForm,
-    showSecretDialog,
-    editingSecret,
-    secretForm,
     showArtifactAclDialog,
     editingArtifact,
     editingArtifactAclTarget,
@@ -969,7 +814,6 @@ export function useAdminOverview() {
     runningSessionCount,
     grantCount,
     quotaCount,
-    secretCount,
     loadOverview,
     loadGrantCatalog,
     openCreateGrantDialog,
@@ -988,12 +832,6 @@ export function useAdminOverview() {
     setQuotaSubjectId,
     setQuotaResource,
     saveQuota,
-    openCreateSecretDialog,
-    openEditSecretDialog,
-    openSecretDetail,
-    closeSecretDialog,
-    saveSecret,
-    deleteSecret,
     openArtifactAclDialog,
     openArtifactAclDetail,
     closeArtifactAclDialog,

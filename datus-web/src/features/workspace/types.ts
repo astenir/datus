@@ -2,7 +2,7 @@ import type { Component } from "vue"
 
 export const workspaceViews = ["chat", "catalog", "semantic", "knowledge", "mcp", "agents", "configuration", "artifacts", "profile", "admin"] as const
 export const artifactViewTabs = ["dashboard", "report"] as const
-export const adminViewTabs = ["users", "roles", "grants", "sessions", "quotas", "secrets", "artifacts", "audit"] as const
+export const adminViewTabs = ["users", "roles", "grants", "sessions", "quotas", "artifacts", "audit"] as const
 
 export type WorkspaceView = (typeof workspaceViews)[number]
 export type ArtifactViewTab = (typeof artifactViewTabs)[number]

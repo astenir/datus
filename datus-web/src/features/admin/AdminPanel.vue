@@ -28,7 +28,6 @@ const props = withDefaults(defineProps<AdminPanelProps>(), {
   activeUserId: null,
   activeRoleId: null,
   activeGrant: null,
-  activeSecretName: null,
   activeSessionId: null,
   activeArtifact: null,
   activeAudit: null,
@@ -38,7 +37,6 @@ const emit = defineEmits<{
   "update:activeUserId": [value: string | null]
   "update:activeRoleId": [value: string | null]
   "update:activeGrant": [value: AdminGrantRouteState | null]
-  "update:activeSecretName": [value: string | null]
   "update:activeSessionId": [value: string | null]
   "update:activeArtifact": [value: AdminArtifactRouteState | null]
   "update:activeAudit": [value: AdminAuditRouteState]
@@ -114,10 +112,6 @@ function requestGrantDetail(grant: AdminGrantListItem) {
   emit("update:activeGrant", grantRouteState(grant))
 }
 
-function requestSecretDetail(name: string) {
-  emit("update:activeSecretName", name)
-}
-
 function requestArtifactAcl(artifact: AdminArtifactListItem) {
   emit("update:activeArtifact", {
     artifactType: artifact.artifact_type,
@@ -164,19 +158,6 @@ async function saveGrantAndCloseRoute() {
   }
 }
 
-function setSecretDialogOpen(open: boolean) {
-  if (open) return
-  overview.closeSecretDialog()
-  emit("update:activeSecretName", null)
-}
-
-async function saveSecretAndCloseRoute() {
-  await overview.saveSecret()
-  if (!overview.showSecretDialog.value) {
-    emit("update:activeSecretName", null)
-  }
-}
-
 function setUserDetailDialogOpen(open: boolean) {
   if (open) return
   users.closeUserDetail()
@@ -216,11 +197,10 @@ watch(
     props.activeUserId,
     props.activeRoleId,
     props.activeGrant,
-    props.activeSecretName,
     props.activeSessionId,
     props.activeArtifact,
   ] as const,
-  ([tab, userId, roleId, grant, secretName, sessionId, artifact]) => {
+  ([tab, userId, roleId, grant, sessionId, artifact]) => {
     const normalizedUserId = userId?.trim() ?? ""
     if (tab !== "users" || !normalizedUserId) {
       if (users.selectedUserDetailId.value) {
@@ -264,18 +244,6 @@ watch(
         normalizedGrantSubjectId,
         normalizedGrantDatasourceKey,
       )
-    }
-
-    const normalizedSecretName = secretName?.trim() ?? ""
-    if (tab !== "secrets" || !normalizedSecretName) {
-      if (overview.selectedSecretName.value) {
-        overview.closeSecretDialog()
-      }
-    } else if (
-      overview.selectedSecretName.value !== normalizedSecretName
-      || !overview.showSecretDialog.value
-    ) {
-      void overview.openSecretDetail(normalizedSecretName)
     }
 
     const normalizedSessionId = sessionId?.trim() ?? ""
@@ -337,7 +305,7 @@ watch(
         <div class="min-w-0 flex-1">
           <h1 class="text-lg font-semibold">权限与运营管理</h1>
           <p class="text-sm text-muted-foreground">
-            用户、角色、数据授权、运行会话、额度、密钥和审计事件。
+            用户、角色、数据授权、运行会话、额度、产物 ACL 和审计事件。
           </p>
         </div>
         <Button
@@ -363,7 +331,6 @@ watch(
         :request-audit-search="requestAuditSearch"
         :request-grant-detail="requestGrantDetail"
         :request-role-detail="requestRoleDetail"
-        :request-secret-detail="requestSecretDetail"
         :request-session-detail="requestSessionDetail"
         :request-user-detail="requestUserDetail"
         :roles="roles"
@@ -381,13 +348,11 @@ watch(
       :roles="roles"
       :save-artifact-acl-and-close-route="saveArtifactAclAndCloseRoute"
       :save-grant-and-close-route="saveGrantAndCloseRoute"
-      :save-secret-and-close-route="saveSecretAndCloseRoute"
       :set-artifact-acl-dialog-open="setArtifactAclDialogOpen"
       :set-grant-dialog-open="setGrantDialogOpen"
       :set-quota-limit="setQuotaLimit"
       :set-quota-window="setQuotaWindow"
       :set-role-detail-dialog-open="setRoleDetailDialogOpen"
-      :set-secret-dialog-open="setSecretDialogOpen"
       :set-session-detail-dialog-open="setSessionDetailDialogOpen"
       :set-user-detail-dialog-open="setUserDetailDialogOpen"
       :users="users"

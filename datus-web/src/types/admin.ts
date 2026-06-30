@@ -136,14 +136,6 @@ export interface QuotaFormData {
   enabled: boolean;
 }
 
-export interface SecretFormData {
-  name: string;
-  provider: string;
-  reference: string;
-  description: string;
-  enabled: boolean;
-}
-
 export interface ArtifactAclFormData {
   owner_user_id: string;
   visibility: "private" | "role" | "enterprise";

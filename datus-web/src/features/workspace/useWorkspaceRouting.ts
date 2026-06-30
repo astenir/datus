@@ -9,7 +9,6 @@ import {
   adminArtifactFromQuery,
   adminGrantFromQuery,
   adminRoleFromQuery,
-  adminSecretFromQuery,
   adminSessionFromQuery,
   adminTabFromQuery,
   adminUserFromQuery,
@@ -52,7 +51,6 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
   const adminUserId = computed(() => adminTab.value === "users" ? adminUserFromQuery(route.query) : null)
   const adminRoleId = computed(() => adminTab.value === "roles" ? adminRoleFromQuery(route.query) : null)
   const adminGrant = computed(() => adminTab.value === "grants" ? adminGrantFromQuery(route.query) : null)
-  const adminSecretName = computed(() => adminTab.value === "secrets" ? adminSecretFromQuery(route.query) : null)
   const adminArtifact = computed(() => adminTab.value === "artifacts" ? adminArtifactFromQuery(route.query) : null)
   const adminAudit = computed(() => adminTab.value === "audit" ? adminAuditFromQuery(route.query) : null)
   const semanticTable = computed(() => semanticTableFromQuery(route.query))
@@ -99,7 +97,6 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
           user: adminTab.value === "users" ? adminUserId.value : null,
           role: adminTab.value === "roles" ? adminRoleId.value : null,
           session: adminTab.value === "sessions" ? adminSessionId.value : null,
-          secret: adminTab.value === "secrets" ? adminSecretName.value : null,
           artifact_type: adminTab.value === "artifacts" ? adminArtifact.value?.artifactType ?? null : null,
           artifact_slug: adminTab.value === "artifacts" ? adminArtifact.value?.slug ?? null : null,
           audit_user: adminTab.value === "audit" ? adminAudit.value?.userId ?? null : null,
@@ -201,7 +198,6 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
         user: tab === "users" ? adminUserId.value : null,
         role: tab === "roles" ? adminRoleId.value : null,
         session: tab === "sessions" ? adminSessionId.value : null,
-        secret: tab === "secrets" ? adminSecretName.value : null,
         artifact_type: tab === "artifacts" ? adminArtifact.value?.artifactType ?? null : null,
         artifact_slug: tab === "artifacts" ? adminArtifact.value?.slug ?? null : null,
         audit_user: tab === "audit" ? adminAudit.value?.userId ?? null : null,
@@ -244,13 +240,6 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
     openAdminDetail({
       tab: "sessions",
       session: sessionId,
-    })
-  }
-
-  function openAdminSecret(secretName: string | null) {
-    openAdminDetail({
-      tab: "secrets",
-      secret: secretName,
     })
   }
 
@@ -446,7 +435,6 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
     adminUserId,
     adminRoleId,
     adminGrant,
-    adminSecretName,
     adminArtifact,
     adminAudit,
     semanticTable,
@@ -466,7 +454,6 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
     openAdminRole,
     openAdminGrant,
     openAdminSession,
-    openAdminSecret,
     openAdminArtifact,
     openAdminAudit,
   }

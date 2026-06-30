@@ -61,7 +61,6 @@ const {
   adminUserId,
   adminRoleId,
   adminGrant,
-  adminSecretName,
   adminArtifact,
   adminAudit,
   knowledgeTable,
@@ -77,7 +76,6 @@ const {
   openAdminRole,
   openAdminGrant,
   openAdminSession,
-  openAdminSecret,
   openAdminArtifact,
   openAdminAudit,
 } = useWorkspaceRouting({
@@ -290,7 +288,6 @@ function openSqlDialog() {
             :active-user-id="adminUserId"
             :active-role-id="adminRoleId"
             :active-grant="adminGrant"
-            :active-secret-name="adminSecretName"
             :active-session-id="adminSessionId"
             :active-artifact="adminArtifact"
             :active-audit="adminAudit"
@@ -298,7 +295,6 @@ function openSqlDialog() {
             @update:active-user-id="openAdminUser"
             @update:active-role-id="openAdminRole"
             @update:active-grant="openAdminGrant"
-            @update:active-secret-name="openAdminSecret"
             @update:active-session-id="openAdminSession"
             @update:active-artifact="openAdminArtifact"
             @update:active-audit="openAdminAudit"

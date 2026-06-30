@@ -138,12 +138,6 @@ describe("workspace router", () => {
       meta: { workspaceView: "admin", requiresAdmin: true },
     })
 
-    await expect(routeTo("/admin?tab=secrets&secret=openai.default")).resolves.toMatchObject({
-      name: workspaceRouteNames.admin,
-      query: { tab: "secrets", secret: "openai.default" },
-      meta: { workspaceView: "admin", requiresAdmin: true },
-    })
-
     await expect(routeTo("/admin?tab=artifacts&artifact_type=dashboard&artifact_slug=fund-overview")).resolves.toMatchObject({
       name: workspaceRouteNames.admin,
       query: {

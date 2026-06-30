@@ -65,10 +65,6 @@ export function adminRoleFromQuery(query: LocationQuery): string | null {
   return routeQueryStringParam(query.role)
 }
 
-export function adminSecretFromQuery(query: LocationQuery): string | null {
-  return routeQueryStringParam(query.secret)
-}
-
 export function adminArtifactFromQuery(query: LocationQuery): AdminArtifactRouteState | null {
   const artifactType = routeQueryStringParam(query.artifact_type)
   const slug = routeQueryStringParam(query.artifact_slug)

@@ -2,7 +2,6 @@
 import {
   DownloadIcon,
   EyeIcon,
-  KeyRoundIcon,
   PencilIcon,
   PlusIcon,
   SearchIcon,
@@ -52,7 +51,6 @@ defineProps<AdminManagementTabProps>()
       <TabsTrigger value="grants">数据授权</TabsTrigger>
       <TabsTrigger value="sessions">会话</TabsTrigger>
       <TabsTrigger value="quotas">额度</TabsTrigger>
-      <TabsTrigger value="secrets">密钥</TabsTrigger>
       <TabsTrigger value="artifacts">产物 ACL</TabsTrigger>
       <TabsTrigger value="audit">审计</TabsTrigger>
     </TabsList>
@@ -430,75 +428,6 @@ defineProps<AdminManagementTabProps>()
                     <PencilIcon data-icon="inline-start" />
                     编辑
                   </Button>
-                </TableCell>
-              </TableRow>
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-    </TabsContent>
-
-    <TabsContent
-      value="secrets"
-      class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
-    >
-      <Card class="min-h-0 flex-1">
-        <CardHeader class="flex flex-row items-center justify-between gap-3">
-          <CardTitle class="text-lg">密钥引用</CardTitle>
-          <Button
-            size="sm"
-            @click="overview.openCreateSecretDialog"
-          >
-            <KeyRoundIcon data-icon="inline-start" />
-            新增密钥
-          </Button>
-        </CardHeader>
-        <CardContent class="min-h-0 flex-1 overflow-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>名称</TableHead>
-                <TableHead>Provider</TableHead>
-                <TableHead>引用</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead>说明</TableHead>
-                <TableHead class="text-right">操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              <TableRow
-                v-for="secret in overview.data.value.secrets"
-                :key="secret.name"
-              >
-                <TableCell class="font-medium">{{ secret.name }}</TableCell>
-                <TableCell>{{ secret.provider }}</TableCell>
-                <TableCell>{{ secret.ref_hint }}</TableCell>
-                <TableCell>
-                  <Badge :variant="secret.enabled ? 'default' : 'secondary'">
-                    {{ secret.enabled ? "启用" : "停用" }}
-                  </Badge>
-                </TableCell>
-                <TableCell>{{ secret.description || "-" }}</TableCell>
-                <TableCell>
-                  <div class="flex justify-end gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      @click="requestSecretDetail(secret.name)"
-                    >
-                      <EyeIcon data-icon="inline-start" />
-                      详情
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      :disabled="overview.deletingSecretName.value === secret.name"
-                      @click="overview.deleteSecret(secret)"
-                    >
-                      <Trash2Icon data-icon="inline-start" />
-                      删除
-                    </Button>
-                  </div>
                 </TableCell>
               </TableRow>
             </TableBody>

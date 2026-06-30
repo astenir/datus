@@ -5,7 +5,6 @@ import {
   adminArtifactFromQuery,
   adminGrantFromQuery,
   adminRoleFromQuery,
-  adminSecretFromQuery,
   adminTabFromQuery,
   adminSessionFromQuery,
   adminUserFromQuery,
@@ -38,6 +37,7 @@ describe("workspace route state", () => {
   it("reads admin tab query state with a stable fallback", () => {
     expect(adminTabFromQuery({ tab: "sessions" })).toBe("sessions")
     expect(adminTabFromQuery({ tab: ["", "artifacts"] })).toBe("artifacts")
+    expect(adminTabFromQuery({ tab: "secrets" })).toBe("users")
     expect(adminTabFromQuery({ tab: "legacy-permissions" })).toBe("users")
     expect(adminTabFromQuery({ tab: " " })).toBe("users")
   })
@@ -84,12 +84,6 @@ describe("workspace route state", () => {
       grant_subject_id: "analyst",
       grant_datasource: " ",
     })).toBeNull()
-  })
-
-  it("reads admin secret detail query state", () => {
-    expect(adminSecretFromQuery({ secret: " openai.default " })).toBe("openai.default")
-    expect(adminSecretFromQuery({ secret: ["", "anthropic.prod"] })).toBe("anthropic.prod")
-    expect(adminSecretFromQuery({ secret: " " })).toBeNull()
   })
 
   it("reads admin artifact ACL query state", () => {
