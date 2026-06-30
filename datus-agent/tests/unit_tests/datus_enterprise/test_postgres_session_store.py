@@ -2,10 +2,61 @@
 
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
+
+import pytest
 
 from datus.api.enterprise.loader import load_enterprise_extensions
 from datus_enterprise.postgres_session_store import _SCHEMA_SQL, PgSessionBodyStore
+
+
+class Row(dict):
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return list(self.values())[key]
+        return super().__getitem__(key)
+
+
+class FakeAcquire:
+    def __init__(self, conn):
+        self.conn = conn
+
+    async def __aenter__(self):
+        return self.conn
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
+
+
+class FakePool:
+    def __init__(self, conn):
+        self.conn = conn
+        self.closed = False
+        self.terminated = False
+
+    def acquire(self):
+        return FakeAcquire(self.conn)
+
+    async def close(self):
+        self.closed = True
+
+    def terminate(self):
+        self.terminated = True
+
+
+class FakeSessionConnection:
+    def __init__(self, session_ids):
+        self.session_ids = session_ids
+        self.queries = []
+
+    async def execute(self, query, *args):
+        self.queries.append(("execute", query, args))
+        return "CREATE"
+
+    async def fetch(self, query, *args):
+        self.queries.append(("fetch", query, args))
+        return [Row(session_id=session_id) for session_id in self.session_ids]
 
 
 def test_session_body_store_loader_wires_optional_provider(monkeypatch):
@@ -96,3 +147,45 @@ def test_pg_session_body_store_rejects_empty_dsn():
         assert "PostgreSQL DSN is required" in str(exc)
     else:  # pragma: no cover - defensive
         raise AssertionError("empty DSN should fail")
+
+
+@pytest.mark.asyncio
+async def test_pg_session_body_store_keeps_schema_lock_and_pool_per_event_loop(monkeypatch):
+    loop_a = object()
+    loop_b = object()
+    active_loop = {"value": loop_a}
+
+    conn_a = FakeSessionConnection(["s1"])
+    conn_b = FakeSessionConnection(["s2"])
+    pool_a = FakePool(conn_a)
+    pool_b = FakePool(conn_b)
+    pools = [pool_a, pool_b]
+
+    async def create_pool(**kwargs):
+        return pools.pop(0)
+
+    monkeypatch.setattr(
+        "datus_enterprise.postgres_session_store.asyncio.get_running_loop",
+        lambda: active_loop["value"],
+    )
+    monkeypatch.setitem(sys.modules, "asyncpg", SimpleNamespace(create_pool=create_pool))
+
+    store = PgSessionBodyStore(dsn="postgresql://session-body")
+
+    assert await store.list_session_ids(project_id="project", scope="alice") == ["s1"]
+    lock_a = store._schema_locks_by_loop[id(loop_a)][1]
+
+    active_loop["value"] = loop_b
+    store._schema_ready = False
+
+    assert await store.list_session_ids(project_id="project", scope="alice") == ["s2"]
+    lock_b = store._schema_locks_by_loop[id(loop_b)][1]
+
+    assert lock_a is not lock_b
+    assert pool_a.closed is False
+    assert pool_a.terminated is False
+    assert store._pool is pool_b
+    assert store._pools_by_loop == {
+        id(loop_a): (loop_a, pool_a),
+        id(loop_b): (loop_b, pool_b),
+    }

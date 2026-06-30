@@ -48,13 +48,15 @@ class _PgStoreBase:
         self._command_timeout = command_timeout
         self._pool: Any | None = None
         self._pool_loop: asyncio.AbstractEventLoop | None = None
+        self._pools_by_loop: dict[int, tuple[asyncio.AbstractEventLoop, Any]] = {}
         self._schema_ready = False
-        self._schema_lock = asyncio.Lock()
+        self._schema_locks_by_loop: dict[int, tuple[asyncio.AbstractEventLoop, asyncio.Lock]] = {}
 
     async def _ensure_schema(self) -> None:
         if self._schema_ready:
             return
-        async with self._schema_lock:
+        schema_lock = self._schema_lock_for_current_loop()
+        async with schema_lock:
             if self._schema_ready:
                 return
             for attempt in range(2):
@@ -72,40 +74,56 @@ class _PgStoreBase:
 
     async def _get_pool(self) -> Any:
         current_loop = asyncio.get_running_loop()
-        if self._pool is not None and self._pool_loop is not current_loop:
-            await self._reset_pool_after_connection_error(
-                RuntimeError("asyncpg pool is bound to a different event loop"),
-                operation="event_loop_changed",
-                graceful=False,
-            )
-        if self._pool is None:
-            asyncpg = importlib.import_module("asyncpg")
-            self._pool = await asyncpg.create_pool(
-                dsn=self._dsn,
-                min_size=self._min_size,
-                max_size=self._max_size,
-                command_timeout=self._command_timeout,
-            )
-            self._pool_loop = current_loop
-        return self._pool
+        loop_key = id(current_loop)
+        entry = self._pools_by_loop.get(loop_key)
+        if entry is not None and entry[0] is current_loop:
+            self._pool_loop, self._pool = entry
+            return self._pool
+        if entry is not None:
+            stale_loop, stale_pool = entry
+            del self._pools_by_loop[loop_key]
+            await _close_pool_best_effort(stale_pool, graceful=stale_loop is current_loop)
+
+        asyncpg = importlib.import_module("asyncpg")
+        pool = await asyncpg.create_pool(
+            dsn=self._dsn,
+            min_size=self._min_size,
+            max_size=self._max_size,
+            command_timeout=self._command_timeout,
+        )
+        self._pools_by_loop[loop_key] = (current_loop, pool)
+        self._pool = pool
+        self._pool_loop = current_loop
+        return pool
 
     async def close(self) -> None:
         """Close the owned asyncpg pool."""
-        pool = self._pool
-        if pool is None:
+        pools = list(self._pools_by_loop.values())
+        if not pools:
             return
-        pool_loop = self._pool_loop
+        current_loop = asyncio.get_running_loop()
+        self._pools_by_loop.clear()
+        self._schema_locks_by_loop.clear()
         self._pool = None
         self._pool_loop = None
         self._schema_ready = False
-        await _close_pool_best_effort(pool, graceful=pool_loop is asyncio.get_running_loop())
+        seen: set[int] = set()
+        for pool_loop, pool in pools:
+            pool_id = id(pool)
+            if pool_id in seen:
+                continue
+            seen.add(pool_id)
+            await _close_pool_best_effort(pool, graceful=pool_loop is current_loop)
 
     async def _reset_pool_after_connection_error(
         self, exc: BaseException, *, operation: str, graceful: bool = True
     ) -> None:
-        pool = self._pool
-        self._pool = None
-        self._pool_loop = None
+        current_loop = asyncio.get_running_loop()
+        entry = self._pools_by_loop.pop(id(current_loop), None)
+        pool_loop, pool = entry if entry is not None else (self._pool_loop, self._pool)
+        if self._pool is pool:
+            self._pool = None
+            self._pool_loop = None
         self._schema_ready = False
         log = logger.debug if operation == "event_loop_changed" else logger.warning
         log(
@@ -115,7 +133,17 @@ class _PgStoreBase:
             exc,
         )
         if pool is not None:
-            await _close_pool_best_effort(pool, graceful=graceful)
+            await _close_pool_best_effort(pool, graceful=graceful and pool_loop is current_loop)
+
+    def _schema_lock_for_current_loop(self) -> asyncio.Lock:
+        current_loop = asyncio.get_running_loop()
+        loop_key = id(current_loop)
+        entry = self._schema_locks_by_loop.get(loop_key)
+        if entry is not None and entry[0] is current_loop:
+            return entry[1]
+        lock = asyncio.Lock()
+        self._schema_locks_by_loop[loop_key] = (current_loop, lock)
+        return lock
 
     async def _fetch(self, query: str, *args: Any) -> list[Any]:
         for attempt in range(2):

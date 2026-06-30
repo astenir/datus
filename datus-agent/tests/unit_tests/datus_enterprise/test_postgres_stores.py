@@ -425,7 +425,7 @@ async def test_pg_store_recovers_once_when_connection_closes_during_query(monkey
 
 
 @pytest.mark.asyncio
-async def test_pg_store_rebuilds_pool_when_event_loop_changes(monkeypatch):
+async def test_pg_store_keeps_pool_per_event_loop(monkeypatch):
     loop_a = object()
     loop_b = object()
     active_loop = {"value": loop_a}
@@ -482,9 +482,13 @@ async def test_pg_store_rebuilds_pool_when_event_loop_changes(monkeypatch):
     active_loop["value"] = loop_b
 
     assert [user["user_id"] for user in await store.list_users(enabled=True)] == ["alice"]
-    assert stale_pool.terminated is True
+    assert stale_pool.terminated is False
     assert stale_pool.closed is False
     assert store._pool is healthy_pool
+    assert store._pools_by_loop == {
+        id(loop_a): (loop_a, stale_pool),
+        id(loop_b): (loop_b, healthy_pool),
+    }
 
 
 @pytest.mark.asyncio
