@@ -273,6 +273,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/catalog/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["datasource_status_api_v1_catalog_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalog/prewarm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+
+        post: operations["prewarm_datasource_api_v1_catalog_prewarm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/table/detail": {
         parameters: {
             query?: never;
@@ -3014,6 +3048,33 @@ export interface components {
             databases: components["schemas"]["DatabaseInfo"][];
         };
 
+        DatasourceConnectionStatus: {
+
+            datasource_id: string;
+
+            status: "unknown" | "connecting" | "connected" | "failed" | "timeout";
+
+            last_checked?: string | null;
+
+            latency_ms?: number | null;
+
+            error_message?: string | null;
+
+            cached: boolean;
+        };
+
+        DatasourcePrewarmData: {
+
+            datasource_id: string;
+
+            status: "queued" | "already_running";
+        };
+
+        DatasourceStatusData: {
+
+            statuses: components["schemas"]["DatasourceConnectionStatus"][];
+        };
+
         DeleteSubjectInput: {
 
             type: components["schemas"]["SubjectNodeType"];
@@ -3927,6 +3988,28 @@ export interface components {
             success: boolean;
 
             data?: components["schemas"]["DatabasesData"] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
+        Result_DatasourcePrewarmData_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["DatasourcePrewarmData"] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
+        Result_DatasourceStatusData_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["DatasourceStatusData"] | null;
 
             errorCode?: string | null;
 
@@ -5430,6 +5513,70 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Result_DatabasesData_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    datasource_status_api_v1_catalog_status_get: {
+        parameters: {
+            query?: {
+
+                datasource_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_DatasourceStatusData_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    prewarm_datasource_api_v1_catalog_prewarm_post: {
+        parameters: {
+            query?: {
+
+                datasource_id?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_DatasourcePrewarmData_"];
                 };
             };
 

@@ -21,11 +21,13 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "@/components/ui/popover"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
+import { datasourceStatusLabel, datasourceStatusToneClass } from "@/lib/datasource-status"
 import { cn } from "@/lib/utils"
-import type { SelectOption } from "@/types"
+import type { DatasourceStatusItem, SelectOption } from "@/types"
 
 type ContextPanelView = "root" | "datasource" | "data-scope" | "agent"
 
@@ -35,6 +37,7 @@ const props = defineProps<{
   schema: string
   selectedAgent: string
   datasourceOptions: readonly SelectOption[]
+  datasourceStatuses: Readonly<Record<string, DatasourceStatusItem>>
   databaseOptions: readonly SelectOption[]
   schemaOptions: readonly SelectOption[]
   agentOptions: readonly SelectOption[]
@@ -47,9 +50,11 @@ const emit = defineEmits<{
   updateDatabase: [value: string]
   updateSchema: [value: string]
   updateAgent: [value: string]
+  requestCatalog: []
 }>()
 
 const datasourceLabel = computed(() => optionLabel(props.datasource, props.datasourceOptions) || "未选择数据源")
+const currentDatasourceStatus = computed(() => statusForDatasource(props.datasource))
 const databaseLabel = computed(() => optionLabel(props.database, props.databaseOptions) || "全部")
 const schemaLabel = computed(() => {
   if (!props.database) return "先选择数据库"
@@ -94,6 +99,14 @@ function optionLabel(value: string, options: readonly SelectOption[]) {
   return options.find((option) => option.value === value)?.label ?? value
 }
 
+function statusForDatasource(value: string) {
+  return value ? props.datasourceStatuses[value] ?? null : null
+}
+
+function statusBadgeClass(status: DatasourceStatusItem | null) {
+  return cn("h-5 shrink-0 rounded-md px-1.5 text-xs font-medium", datasourceStatusToneClass(status?.status))
+}
+
 function rowClass(isSelected = false, disabled = false) {
   return cn(
     "h-auto min-h-10 w-full justify-start rounded-xl px-3 py-2 text-sm",
@@ -108,6 +121,11 @@ function selectDatasource(value: string) {
     emit("updateDatasource", value)
   }
   panelView.value = "root"
+}
+
+function openDataScope() {
+  emit("requestCatalog")
+  panelView.value = "data-scope"
 }
 
 function selectDatabase(value: string) {
@@ -180,8 +198,16 @@ function resetContext() {
                 class="text-muted-foreground"
               />
               <div class="min-w-0 flex-1">
-                <div class="text-xs font-medium text-muted-foreground">
-                  数据源
+                <div class="flex items-center gap-2">
+                  <div class="text-xs font-medium text-muted-foreground">
+                    数据源
+                  </div>
+                  <Badge
+                    variant="outline"
+                    :class="statusBadgeClass(currentDatasourceStatus)"
+                  >
+                    {{ datasourceStatusLabel(currentDatasourceStatus?.status) }}
+                  </Badge>
                 </div>
                 <div class="truncate text-sm font-medium text-foreground">
                   {{ datasourceLabel }}
@@ -204,7 +230,7 @@ function resetContext() {
             type="button"
             variant="ghost"
             :class="rowClass()"
-            @click="panelView = 'data-scope'"
+            @click="openDataScope"
           >
             <div class="flex min-w-0 flex-1 items-center gap-3 text-left">
               <DatabaseIcon
@@ -306,6 +332,12 @@ function resetContext() {
                 class="text-muted-foreground"
               />
               <span class="min-w-0 flex-1 truncate text-sm">{{ datasourceOption.label }}</span>
+              <Badge
+                variant="outline"
+                :class="statusBadgeClass(statusForDatasource(datasourceOption.value))"
+              >
+                {{ datasourceStatusLabel(statusForDatasource(datasourceOption.value)?.status) }}
+              </Badge>
               <CheckIcon
                 v-if="datasource === datasourceOption.value"
                 data-icon="inline-end"

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, shallowRef, watch } from "vue"
-import { RefreshCwIcon } from "@lucide/vue"
+import { Loader2Icon, RefreshCwIcon } from "@lucide/vue"
 import {
   FileTree,
   FileTreeFile,
@@ -92,7 +92,17 @@ function handleExpandedChange(paths: Set<string>) {
           @expanded-change="handleExpandedChange"
           @update:selected-path="handleSelectedPath"
         >
-          <template v-if="treeData.databases.length > 0">
+          <div
+            v-if="loading"
+            class="flex min-h-24 items-center gap-3 rounded-md border p-4 text-sm text-muted-foreground"
+          >
+            <Loader2Icon
+              data-icon="inline-start"
+              class="animate-spin"
+            />
+            正在加载目录...
+          </div>
+          <template v-else-if="treeData.databases.length > 0">
             <FileTreeFolder
               v-for="database in treeData.databases"
               :key="database.key"

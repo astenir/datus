@@ -11,6 +11,7 @@ import {
   adminSessionApi,
   adminUserApi,
   artifactShareApi,
+  catalogApi,
   chatApi,
   configApi,
   dashboardApi,
@@ -285,6 +286,39 @@ describe("api client", () => {
         body: JSON.stringify({ name: "fund" }),
       }),
     );
+  });
+
+  it("uses catalog status cache and prewarm routes without listing metadata", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(mockJsonResponse({
+        success: true,
+        data: {
+          statuses: [{
+            datasource_id: "fund",
+            status: "connected",
+            last_checked: "2026-06-30T00:00:00Z",
+            latency_ms: 12,
+            error_message: null,
+            cached: true,
+          }],
+        },
+      }))
+      .mockResolvedValueOnce(mockJsonResponse({
+        success: true,
+        data: {
+          datasource_id: "fund",
+          status: "queued",
+        },
+      }));
+
+    const status = await catalogApi.status("http://localhost:8000", "fund");
+    const prewarm = await catalogApi.prewarm("http://localhost:8000", "fund");
+
+    expect(status?.statuses[0]?.status).toBe("connected");
+    expect(prewarm).toEqual({ datasource_id: "fund", status: "queued" });
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/catalog/status?datasource_id=fund");
+    expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe("http://localhost:8000/api/v1/catalog/prewarm?datasource_id=fund");
+    expect((vi.mocked(fetch).mock.calls[1]?.[1] as RequestInit).method).toBe("POST");
   });
 
   it("sends full configuration replacement payloads for models and datasources", async () => {

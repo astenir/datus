@@ -9,6 +9,8 @@ import { usePermission } from "@/composables/usePermission";
 import { useTheme } from "@/composables/useTheme";
 import type { SelectOption } from "@/types";
 
+const STATUS_REFRESH_DELAYS = [1500, 5000] as const;
+
 export function useChatWorkspace() {
   useTheme();
 
@@ -57,7 +59,13 @@ export function useChatWorkspace() {
     schema,
     schemaOptions,
     isLoadingCatalog,
+    datasourceStatuses,
+    prewarmingDatasources,
+    selectCatalogDatasource,
+    hasCatalogSnapshot,
     loadCatalog,
+    loadDatasourceStatuses,
+    prewarmDatasource,
     setDatabase,
     setSchema,
   } = useCatalog();
@@ -73,7 +81,44 @@ export function useChatWorkspace() {
     datasourceOptions.value.filter((option) => permission.hasDatasourcePermission(option.value))
   );
   const initialized = shallowRef(false);
+  const currentDatasourceStatus = computed(() => {
+    const datasource = currentDatasource.value.trim();
+    return datasource ? (datasourceStatuses.value[datasource] ?? null) : null;
+  });
+  const isPrewarmingCurrentDatasource = computed(() => {
+    const datasource = currentDatasource.value.trim();
+    return Boolean(datasource && prewarmingDatasources.value.has(datasource));
+  });
   let initializePromise: Promise<void> | null = null;
+  const statusRefreshTimers = new Set<ReturnType<typeof setTimeout>>();
+
+  function clearStatusRefreshTimers() {
+    for (const timer of statusRefreshTimers) {
+      clearTimeout(timer);
+    }
+    statusRefreshTimers.clear();
+  }
+
+  function scheduleDatasourceStatusRefresh(datasource: string) {
+    for (const delay of STATUS_REFRESH_DELAYS) {
+      const timer = setTimeout(() => {
+        statusRefreshTimers.delete(timer);
+        void loadDatasourceStatuses(datasource);
+      }, delay);
+      statusRefreshTimers.add(timer);
+    }
+  }
+
+  function warmDatasource(datasource: string) {
+    const datasourceName = datasource.trim();
+    if (!datasourceName) return;
+    void loadDatasourceStatuses(datasourceName);
+    void prewarmDatasource(datasourceName).then((started) => {
+      if (started) {
+        scheduleDatasourceStatusRefresh(datasourceName);
+      }
+    });
+  }
 
   function handleSend(message: string) {
     sendMessage({
@@ -96,9 +141,8 @@ export function useChatWorkspace() {
 
   function handleDatasourceSwitched() {
     selectedDatasource.value = defaultDatasource.value;
-    setDatabase("");
-    setSchema("");
-    loadCatalog(undefined, currentDatasource.value);
+    selectCatalogDatasource(currentDatasource.value);
+    warmDatasource(currentDatasource.value);
   }
 
   async function handleDatasourceTest(name?: string) {
@@ -107,6 +151,13 @@ export function useChatWorkspace() {
 
   function refreshCatalog(databaseName?: string) {
     return loadCatalog(databaseName, currentDatasource.value);
+  }
+
+  function ensureCatalogLoaded() {
+    if (isLoadingCatalog.value || hasCatalogSnapshot(currentDatasource.value)) {
+      return Promise.resolve(true);
+    }
+    return refreshCatalog();
   }
 
   function canUseDatasource(name: string) {
@@ -120,9 +171,9 @@ export function useChatWorkspace() {
     if (datasourceName === currentDatasource.value) return true;
 
     selectedDatasource.value = datasourceName;
-    setDatabase("");
-    setSchema("");
-    await loadCatalog(undefined, datasourceName);
+    selectCatalogDatasource(datasourceName);
+    warmDatasource(datasourceName);
+    void loadCatalog(undefined, datasourceName);
     return true;
   }
 
@@ -133,11 +184,13 @@ export function useChatWorkspace() {
     initializePromise = (async () => {
       await checkConnection();
       selectedDatasource.value = defaultDatasource.value;
+      selectCatalogDatasource(currentDatasource.value);
       await Promise.all([
         loadSessions(),
         loadModels(),
       ]);
-      void loadCatalog(undefined, currentDatasource.value);
+      void loadDatasourceStatuses();
+      warmDatasource(currentDatasource.value);
       initialized.value = true;
     })();
 
@@ -148,7 +201,10 @@ export function useChatWorkspace() {
     }
   }
 
-  onBeforeUnmount(dispose);
+  onBeforeUnmount(() => {
+    clearStatusRefreshTimers();
+    dispose();
+  });
 
   watch(database, (db) => {
     if (db) {
@@ -188,8 +244,14 @@ export function useChatWorkspace() {
     catalogEntries,
     schemaOptions,
     isLoadingCatalog,
+    datasourceStatuses,
+    currentDatasourceStatus,
+    isPrewarmingCurrentDatasource,
     loadSessions,
     loadCatalog: refreshCatalog,
+    ensureCatalogLoaded,
+    loadDatasourceStatuses,
+    prewarmDatasource,
     selectedAgent,
     selectedModel,
     database,

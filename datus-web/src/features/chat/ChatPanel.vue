@@ -269,15 +269,17 @@ async function openArtifact(kind: string, slug: string) {
                 :schema="workspace.schema.value"
                 :selected-agent="workspace.selectedAgent.value"
                 :datasource-options="workspace.visibleDatasourceOptions.value"
+                :datasource-statuses="workspace.datasourceStatuses.value"
                 :database-options="workspace.databaseOptions.value"
                 :schema-options="schemaOptions"
                 :agent-options="workspace.agentOptions.value"
                 :loading-catalog="workspace.isLoadingCatalog.value"
-                :switching-datasource="workspace.isLoadingCatalog.value"
+                :switching-datasource="workspace.isPrewarmingCurrentDatasource.value"
                 @update-datasource="workspace.handleDatasourceSwitch"
                 @update-database="workspace.setDatabase"
                 @update-schema="workspace.setSchema"
                 @update-agent="(value) => { workspace.selectedAgent.value = value }"
+                @request-catalog="workspace.ensureCatalogLoaded"
               />
             </PromptInputTools>
 

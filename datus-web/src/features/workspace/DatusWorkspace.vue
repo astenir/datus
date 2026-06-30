@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, shallowRef } from "vue"
+import { computed, defineAsyncComponent, shallowRef, watch } from "vue"
 import {
   BarChart3Icon,
   BotIcon,
@@ -84,6 +84,21 @@ const {
   canManagePermissions,
   checkAuth,
 })
+
+watch(
+  () => [
+    activeView.value,
+    authState.value.loading,
+    authState.value.authenticated,
+    workspace.connection.value,
+  ] as const,
+  ([view, loading, authenticated, connection]) => {
+    if (authenticated && !loading && connection === "online" && (view === "knowledge" || view === "catalog" || view === "semantic")) {
+      void workspace.ensureCatalogLoaded()
+    }
+  },
+  { immediate: true },
+)
 
 const chatNavItem: WorkspaceNavItem = { value: "chat", label: "新对话", icon: MessageSquareIcon }
 

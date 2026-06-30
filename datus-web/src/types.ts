@@ -107,6 +107,14 @@ export type SystemStatusSummary = {
 
 export type DatasourceConfigMap = Record<string, Record<string, unknown>>;
 
+export type DatasourceStatusItem = components["schemas"]["DatasourceConnectionStatus"];
+
+export type DatasourceConnectionStatus = DatasourceStatusItem["status"];
+
+export type DatasourceStatusData = components["schemas"]["DatasourceStatusData"];
+
+export type DatasourcePrewarmData = components["schemas"]["DatasourcePrewarmData"];
+
 export type ModelConfigMap = Record<string, Record<string, unknown>>;
 
 export type ModelProbeInput = {

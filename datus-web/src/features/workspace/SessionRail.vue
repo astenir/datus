@@ -77,6 +77,7 @@ import { Switch } from "@/components/ui/switch"
 import type { AuthState } from "@/composables/useAuth"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import type { ArtifactViewTab, WorkspaceView } from "@/features/workspace/types"
+import { datasourceStatusDescription, datasourceStatusLabel, datasourceStatusToneClass } from "@/lib/datasource-status"
 import { cn } from "@/lib/utils"
 import { toast } from "vue-sonner"
 
@@ -141,6 +142,7 @@ const userStatusLabel = computed(() => props.auth.user?.userStatus || "已登录
 const datasourceTestOk = shallowRef<boolean | null>(null)
 const datasourceTestMessage = shallowRef("")
 const datasourceOptions = computed(() => props.workspace.visibleDatasourceOptions.value)
+const currentDatasourceStatus = computed(() => props.workspace.currentDatasourceStatus.value)
 const hasDatasourceOptions = computed(() => datasourceOptions.value.length > 0)
 const canTestDatasource = computed(() => Boolean(currentDatasourceName.value) && !props.workspace.isTestingDatasource.value)
 const datasourceTestActionLabel = computed(() => {
@@ -156,24 +158,48 @@ const workspaceStatusLabel = computed(() => {
 const datasourceConnectionStatusLabel = computed(() => {
   if (props.workspace.isTestingDatasource.value) return "正在测试连接"
   if (datasourceTestMessage.value) return datasourceTestMessage.value
-  if (currentDatasourceName.value) return "连接状态未测试"
+  if (currentDatasourceName.value) return datasourceStatusDescription(currentDatasourceStatus.value)
   return "未选择数据源"
 })
-const datasourceConnectionStatusDisplayLabel = computed(() => {
+const datasourceStatusDisplayLabel = computed(() => {
+  if (props.workspace.isPrewarmingCurrentDatasource.value) return "预热中"
+  return datasourceStatusLabel(currentDatasourceStatus.value?.status)
+})
+const datasourceStatusDisplayClass = computed(() =>
+  datasourceStatusToneClass(currentDatasourceStatus.value?.status)
+)
+const datasourceStatusConnecting = computed(() =>
+  props.workspace.isPrewarmingCurrentDatasource.value || currentDatasourceStatus.value?.status === "connecting"
+)
+const datasourceStatusFailed = computed(() =>
+  currentDatasourceStatus.value?.status === "failed" || currentDatasourceStatus.value?.status === "timeout"
+)
+const datasourceTestDisplayLabel = computed(() => {
   if (props.workspace.isTestingDatasource.value) return "测试中"
   if (datasourceTestOk.value === true) return "连接正常"
   if (datasourceTestOk.value === false) return "连接失败"
-  if (currentDatasourceName.value) return "未测试"
-  return "未选择"
+  return datasourceStatusDisplayLabel.value
+})
+const datasourceTestDisplayClass = computed(() => {
+  if (props.workspace.isTestingDatasource.value || datasourceTestOk.value === null) {
+    return datasourceTestOk.value === null ? datasourceStatusDisplayClass.value : "bg-muted text-muted-foreground"
+  }
+  return datasourceTestOk.value ? "bg-primary/10 text-primary" : "bg-destructive/10 text-destructive"
+})
+const datasourceTestIconState = computed<"loading" | "success" | "failed" | "unknown">(() => {
+  if (props.workspace.isTestingDatasource.value || datasourceStatusConnecting.value) return "loading"
+  if (datasourceTestOk.value === true || currentDatasourceStatus.value?.status === "connected") return "success"
+  if (datasourceTestOk.value === false || datasourceStatusFailed.value) return "failed"
+  return "unknown"
+})
+const datasourceConnectionStatusDisplayLabel = computed(() => {
+  if (!currentDatasourceName.value) return "未选择"
+  return datasourceTestDisplayLabel.value
 })
 const datasourceTestResultClass = computed(() => cn(
   "h-7 max-w-28 shrink-0 justify-start gap-1.5 rounded-full px-2.5 text-xs font-medium tracking-normal",
   "bg-background/75 text-muted-foreground hover:bg-background hover:text-foreground",
-  props.workspace.isTestingDatasource.value || datasourceTestOk.value === null
-    ? "bg-muted text-muted-foreground"
-    : datasourceTestOk.value
-      ? "bg-primary/10 text-primary"
-      : "bg-destructive/10 text-destructive",
+  datasourceTestDisplayClass.value,
 ))
 const languageLabel = computed(() => props.workspace.language.value === "en" ? "英文" : "中文")
 const permissionModeLabel = computed(() => {
@@ -653,17 +679,17 @@ async function deleteSession(sessionId: string) {
                       @click.stop="runDatasourceTest"
                     >
                       <LoaderCircleIcon
-                        v-if="props.workspace.isTestingDatasource.value"
+                        v-if="datasourceTestIconState === 'loading'"
                         :class="[datasourceTestStatusIconClass, 'animate-spin']"
                         data-icon="inline-start"
                       />
                       <CircleCheckIcon
-                        v-else-if="datasourceTestOk === true"
+                        v-else-if="datasourceTestIconState === 'success'"
                         :class="datasourceTestStatusIconClass"
                         data-icon="inline-start"
                       />
                       <CircleXIcon
-                        v-else-if="datasourceTestOk === false"
+                        v-else-if="datasourceTestIconState === 'failed'"
                         :class="datasourceTestStatusIconClass"
                         data-icon="inline-start"
                       />

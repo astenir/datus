@@ -3,7 +3,9 @@ import type {
   ConfigSummary,
   DatabaseInfo,
   DatasourceConfigMap,
+  DatasourcePrewarmData,
   DatasourceProbeInput,
+  DatasourceStatusData,
   ModelConfigMap,
   ModelProbeInput,
   ModelsData,
@@ -47,6 +49,16 @@ export const modelsApi = {
 };
 
 export const catalogApi = {
+  status(baseUrl: string, datasourceId?: string): Promise<DatasourceStatusData | null> {
+    const query = datasourceQuery(datasourceId);
+    return apiResult(baseUrl, `/api/v1/catalog/status${query}`);
+  },
+
+  prewarm(baseUrl: string, datasourceId?: string): Promise<DatasourcePrewarmData | null> {
+    const query = datasourceQuery(datasourceId);
+    return apiResult(baseUrl, `/api/v1/catalog/prewarm${query}`, { method: "POST" });
+  },
+
   list(
     baseUrl: string,
     params?: { datasource_id?: string; catalog_name?: string; database_name?: string; schema_name?: string; include_sys_schemas?: boolean }
@@ -61,3 +73,9 @@ export const catalogApi = {
     return apiResult(baseUrl, `/api/v1/catalog/list${query ? `?${query}` : ""}`);
   },
 };
+
+function datasourceQuery(datasourceId?: string): string {
+  const datasource = datasourceId?.trim();
+  if (!datasource) return "";
+  return `?datasource_id=${encodeURIComponent(datasource)}`;
+}

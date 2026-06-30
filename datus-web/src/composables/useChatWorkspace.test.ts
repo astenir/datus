@@ -20,6 +20,8 @@ describe("useChatWorkspace", () => {
     const loadSessions = vi.fn(async () => {});
     const loadModels = vi.fn(async () => {});
     const loadCatalog = vi.fn(async () => {});
+    const loadDatasourceStatuses = vi.fn(async () => true);
+    const prewarmDatasource = vi.fn(async () => false);
     const compactSession = vi.fn(async () => ({ session_id: "s1", success: true }));
 
     vi.doMock("@/composables/useTheme", () => ({
@@ -93,7 +95,13 @@ describe("useChatWorkspace", () => {
         schema: shallowRef(""),
         schemaOptions: readonly(ref([])),
         isLoadingCatalog: readonly(shallowRef(false)),
+        datasourceStatuses: readonly(ref({})),
+        prewarmingDatasources: readonly(shallowRef(new Set<string>())),
+        selectCatalogDatasource: vi.fn(),
+        hasCatalogSnapshot: vi.fn(() => false),
         loadCatalog,
+        loadDatasourceStatuses,
+        prewarmDatasource,
         setDatabase: vi.fn(),
         setSchema: vi.fn(),
       }),
@@ -111,7 +119,9 @@ describe("useChatWorkspace", () => {
     expect(checkConnection).toHaveBeenCalledTimes(1);
     expect(loadSessions).toHaveBeenCalledTimes(1);
     expect(loadModels).toHaveBeenCalledTimes(1);
-    expect(loadCatalog).toHaveBeenCalledTimes(1);
+    expect(loadCatalog).not.toHaveBeenCalled();
+    expect(loadDatasourceStatuses).toHaveBeenCalledTimes(1);
+    expect(prewarmDatasource).not.toHaveBeenCalled();
     expect(workspace.agentOptions.value).toEqual([]);
 
     await expect(workspace.compactSession("s1")).resolves.toEqual({ session_id: "s1", success: true });
@@ -143,6 +153,9 @@ describe("useChatWorkspace", () => {
     ]);
     const switchDatasource = vi.fn();
     const loadCatalog = vi.fn(async () => {});
+    const loadDatasourceStatuses = vi.fn(async () => true);
+    const prewarmDatasource = vi.fn(async () => true);
+    const selectCatalogDatasource = vi.fn();
     const setDatabase = vi.fn();
     const setSchema = vi.fn();
 
@@ -218,7 +231,13 @@ describe("useChatWorkspace", () => {
         schema: shallowRef("public"),
         schemaOptions: readonly(ref([])),
         isLoadingCatalog: readonly(shallowRef(false)),
+        datasourceStatuses: readonly(ref({})),
+        prewarmingDatasources: readonly(shallowRef(new Set<string>())),
+        selectCatalogDatasource,
+        hasCatalogSnapshot: vi.fn(() => false),
         loadCatalog,
+        loadDatasourceStatuses,
+        prewarmDatasource,
         setDatabase,
         setSchema,
       }),
@@ -238,8 +257,11 @@ describe("useChatWorkspace", () => {
 
     await expect(workspace.handleDatasourceSwitch("demo")).resolves.toBe(true);
     expect(switchDatasource).not.toHaveBeenCalled();
-    expect(setDatabase).toHaveBeenCalledWith("");
-    expect(setSchema).toHaveBeenCalledWith("");
+    expect(selectCatalogDatasource).toHaveBeenCalledWith("demo");
+    expect(setDatabase).not.toHaveBeenCalled();
+    expect(setSchema).not.toHaveBeenCalled();
+    expect(loadDatasourceStatuses).toHaveBeenCalledWith("demo");
+    expect(prewarmDatasource).toHaveBeenCalledWith("demo");
     expect(loadCatalog).toHaveBeenCalledWith(undefined, "demo");
     expect(workspace.currentDatasource.value).toBe("demo");
   });
