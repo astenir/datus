@@ -9,12 +9,24 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import inspect
 import json
 from datetime import datetime, timezone
 from typing import Any
 
 from datus.api.enterprise.models import AuditEvent
 from datus.utils.exceptions import DatusException, ErrorCode
+from datus.utils.loggings import get_logger
+
+logger = get_logger(__name__)
+
+_TRANSIENT_CONNECTION_ERROR_NAMES = {
+    "ConnectionDoesNotExistError",
+    "ConnectionResetError",
+    "ConnectionFailureError",
+    "ConnectionError",
+    "InterfaceError",
+}
 
 
 class _PgStoreBase:
@@ -35,6 +47,7 @@ class _PgStoreBase:
         self._max_size = int(max_size)
         self._command_timeout = command_timeout
         self._pool: Any | None = None
+        self._pool_loop: asyncio.AbstractEventLoop | None = None
         self._schema_ready = False
         self._schema_lock = asyncio.Lock()
 
@@ -44,12 +57,27 @@ class _PgStoreBase:
         async with self._schema_lock:
             if self._schema_ready:
                 return
-            pool = await self._get_pool()
-            async with pool.acquire() as conn:
-                await conn.execute(_SCHEMA_SQL)
-            self._schema_ready = True
+            for attempt in range(2):
+                try:
+                    pool = await self._get_pool()
+                    async with pool.acquire() as conn:
+                        await conn.execute(_SCHEMA_SQL)
+                    self._schema_ready = True
+                    return
+                except Exception as exc:
+                    if attempt == 0 and _is_transient_pg_connection_error(exc):
+                        await self._reset_pool_after_connection_error(exc, operation="ensure_schema")
+                        continue
+                    raise
 
     async def _get_pool(self) -> Any:
+        current_loop = asyncio.get_running_loop()
+        if self._pool is not None and self._pool_loop is not current_loop:
+            await self._reset_pool_after_connection_error(
+                RuntimeError("asyncpg pool is bound to a different event loop"),
+                operation="event_loop_changed",
+                graceful=False,
+            )
         if self._pool is None:
             asyncpg = importlib.import_module("asyncpg")
             self._pool = await asyncpg.create_pool(
@@ -58,6 +86,7 @@ class _PgStoreBase:
                 max_size=self._max_size,
                 command_timeout=self._command_timeout,
             )
+            self._pool_loop = current_loop
         return self._pool
 
     async def close(self) -> None:
@@ -65,27 +94,73 @@ class _PgStoreBase:
         pool = self._pool
         if pool is None:
             return
-        await pool.close()
+        pool_loop = self._pool_loop
         self._pool = None
+        self._pool_loop = None
         self._schema_ready = False
+        await _close_pool_best_effort(pool, graceful=pool_loop is asyncio.get_running_loop())
+
+    async def _reset_pool_after_connection_error(
+        self, exc: BaseException, *, operation: str, graceful: bool = True
+    ) -> None:
+        pool = self._pool
+        self._pool = None
+        self._pool_loop = None
+        self._schema_ready = False
+        log = logger.debug if operation == "event_loop_changed" else logger.warning
+        log(
+            "%s %s resetting asyncpg pool: %s",
+            self.__class__.__name__,
+            operation,
+            exc,
+        )
+        if pool is not None:
+            await _close_pool_best_effort(pool, graceful=graceful)
 
     async def _fetch(self, query: str, *args: Any) -> list[Any]:
-        await self._ensure_schema()
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            return list(await conn.fetch(query, *args))
+        for attempt in range(2):
+            await self._ensure_schema()
+            pool = await self._get_pool()
+            try:
+                async with pool.acquire() as conn:
+                    return list(await conn.fetch(query, *args))
+            except Exception as exc:
+                if attempt == 0 and _is_transient_pg_connection_error(exc):
+                    await self._reset_pool_after_connection_error(exc, operation=f"fetch {_query_summary(query)}")
+                    continue
+                logger.exception("%s fetch failed for query: %s", self.__class__.__name__, _query_summary(query))
+                raise
+        raise RuntimeError("unreachable PostgreSQL fetch retry state")
 
     async def _fetchrow(self, query: str, *args: Any) -> Any | None:
-        await self._ensure_schema()
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            return await conn.fetchrow(query, *args)
+        for attempt in range(2):
+            await self._ensure_schema()
+            pool = await self._get_pool()
+            try:
+                async with pool.acquire() as conn:
+                    return await conn.fetchrow(query, *args)
+            except Exception as exc:
+                if attempt == 0 and _is_transient_pg_connection_error(exc):
+                    await self._reset_pool_after_connection_error(exc, operation=f"fetchrow {_query_summary(query)}")
+                    continue
+                logger.exception("%s fetchrow failed for query: %s", self.__class__.__name__, _query_summary(query))
+                raise
+        raise RuntimeError("unreachable PostgreSQL fetchrow retry state")
 
     async def _execute(self, query: str, *args: Any) -> str:
-        await self._ensure_schema()
-        pool = await self._get_pool()
-        async with pool.acquire() as conn:
-            return str(await conn.execute(query, *args))
+        for attempt in range(2):
+            await self._ensure_schema()
+            pool = await self._get_pool()
+            try:
+                async with pool.acquire() as conn:
+                    return str(await conn.execute(query, *args))
+            except Exception as exc:
+                if attempt == 0 and _is_transient_pg_connection_error(exc):
+                    await self._reset_pool_after_connection_error(exc, operation=f"execute {_query_summary(query)}")
+                    continue
+                logger.exception("%s execute failed for query: %s", self.__class__.__name__, _query_summary(query))
+                raise
+        raise RuntimeError("unreachable PostgreSQL execute retry state")
 
 
 class PgEnterpriseUserStore(_PgStoreBase):
@@ -1143,6 +1218,71 @@ class PgEnterpriseSecretStore(_PgStoreBase):
     async def delete_secret(self, name: str) -> bool:
         result = await self._execute("DELETE FROM enterprise_secrets WHERE name = $1", name)
         return _affected_rows(result) > 0
+
+
+async def _close_pool_best_effort(pool: Any, *, graceful: bool = True) -> None:
+    if not graceful:
+        terminate = getattr(pool, "terminate", None)
+        if terminate is not None:
+            try:
+                result = terminate()
+                if inspect.isawaitable(result):
+                    await result
+                return
+            except Exception as exc:
+                if _is_event_loop_closed_error(exc):
+                    logger.debug("Discarded asyncpg pool after its event loop was already closed")
+                    return
+                logger.warning("Failed to terminate asyncpg pool: %s", exc)
+                return
+
+    close = getattr(pool, "close", None)
+    if close is not None:
+        try:
+            result = close()
+            if inspect.isawaitable(result):
+                await asyncio.wait_for(result, timeout=2.0)
+            return
+        except Exception as exc:
+            logger.warning("Failed to close asyncpg pool cleanly; terminating if supported: %s", exc)
+
+    terminate = getattr(pool, "terminate", None)
+    if terminate is None:
+        return
+    try:
+        result = terminate()
+        if inspect.isawaitable(result):
+            await result
+    except Exception as exc:
+        if _is_event_loop_closed_error(exc):
+            logger.debug("Discarded asyncpg pool after its event loop was already closed")
+            return
+        logger.warning("Failed to terminate asyncpg pool: %s", exc)
+
+
+def _is_event_loop_closed_error(exc: BaseException) -> bool:
+    return isinstance(exc, RuntimeError) and "event loop is closed" in str(exc).lower()
+
+
+def _is_transient_pg_connection_error(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    while current is not None:
+        exc_type = type(current)
+        name = exc_type.__name__
+        module = exc_type.__module__
+        if name in _TRANSIENT_CONNECTION_ERROR_NAMES:
+            return True
+        if module.startswith("asyncpg.") and "connection" in str(current).lower() and "closed" in str(current).lower():
+            return True
+        if isinstance(current, (ConnectionError, OSError)):
+            return True
+        current = current.__cause__ or current.__context__
+    message = str(exc).lower()
+    return "connection was closed" in message or "connection is closed" in message or "pool is closed" in message
+
+
+def _query_summary(query: str) -> str:
+    return " ".join(str(query).split())[:160]
 
 
 async def _replace_role_permissions(conn: Any, role_id: str, permissions: list[str]) -> None:

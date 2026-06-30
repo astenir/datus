@@ -55,9 +55,17 @@ class FakeAcquire:
 class FakePool:
     def __init__(self, conn):
         self.conn = conn
+        self.closed = False
+        self.terminated = False
 
     def acquire(self):
         return FakeAcquire(self.conn)
+
+    async def close(self):
+        self.closed = True
+
+    def terminate(self):
+        self.terminated = True
 
 
 class FakeConnection:
@@ -363,6 +371,113 @@ def fake_pg(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "asyncpg", SimpleNamespace(create_pool=create_pool))
     return conn
+
+
+@pytest.mark.asyncio
+async def test_pg_store_recovers_once_when_connection_closes_during_query(monkeypatch):
+    class ConnectionDoesNotExistError(Exception):
+        pass
+
+    class ClosingFetchConnection(FakeConnection):
+        async def fetch(self, query, *args):
+            raise ConnectionDoesNotExistError("connection was closed in the middle of operation")
+
+    stale_pool = FakePool(ClosingFetchConnection())
+    healthy_conn = FakeConnection()
+    healthy_pool = FakePool(healthy_conn)
+    pools = [stale_pool, healthy_pool]
+
+    async def create_pool(**kwargs):
+        pool = pools.pop(0)
+        pool.conn.pool_kwargs = kwargs
+        return pool
+
+    monkeypatch.setitem(sys.modules, "asyncpg", SimpleNamespace(create_pool=create_pool))
+
+    store = PgEnterpriseUserStore(dsn="postgresql://metadata")
+    await healthy_conn.fetchrow(
+        """
+        INSERT INTO enterprise_users (user_id, display_name, email, enabled, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, now(), now())
+        ON CONFLICT(user_id) DO UPDATE SET
+            display_name = excluded.display_name,
+            email = excluded.email,
+            enabled = excluded.enabled,
+            updated_at = now()
+        RETURNING user_id, display_name, email, enabled, created_at, updated_at
+        """,
+        "alice",
+        "Alice",
+        "a@example.com",
+        True,
+    )
+
+    assert [user["user_id"] for user in await store.list_users(enabled=True)] == ["alice"]
+    assert stale_pool.closed is True
+    assert store._pool is healthy_pool
+
+
+@pytest.mark.asyncio
+async def test_pg_store_rebuilds_pool_when_event_loop_changes(monkeypatch):
+    loop_a = object()
+    loop_b = object()
+    active_loop = {"value": loop_a}
+
+    stale_conn = FakeConnection()
+    stale_pool = FakePool(stale_conn)
+    healthy_conn = FakeConnection()
+    healthy_pool = FakePool(healthy_conn)
+    pools = [stale_pool, healthy_pool]
+
+    async def create_pool(**kwargs):
+        pool = pools.pop(0)
+        pool.conn.pool_kwargs = kwargs
+        return pool
+
+    monkeypatch.setattr("datus_enterprise.postgres_stores.asyncio.get_running_loop", lambda: active_loop["value"])
+    monkeypatch.setitem(sys.modules, "asyncpg", SimpleNamespace(create_pool=create_pool))
+
+    store = PgEnterpriseUserStore(dsn="postgresql://metadata")
+    await stale_conn.fetchrow(
+        """
+        INSERT INTO enterprise_users (user_id, display_name, email, enabled, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, now(), now())
+        ON CONFLICT(user_id) DO UPDATE SET
+            display_name = excluded.display_name,
+            email = excluded.email,
+            enabled = excluded.enabled,
+            updated_at = now()
+        RETURNING user_id, display_name, email, enabled, created_at, updated_at
+        """,
+        "alice",
+        "Alice",
+        "a@example.com",
+        True,
+    )
+    await healthy_conn.fetchrow(
+        """
+        INSERT INTO enterprise_users (user_id, display_name, email, enabled, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, now(), now())
+        ON CONFLICT(user_id) DO UPDATE SET
+            display_name = excluded.display_name,
+            email = excluded.email,
+            enabled = excluded.enabled,
+            updated_at = now()
+        RETURNING user_id, display_name, email, enabled, created_at, updated_at
+        """,
+        "alice",
+        "Alice",
+        "a@example.com",
+        True,
+    )
+
+    assert [user["user_id"] for user in await store.list_users(enabled=True)] == ["alice"]
+    active_loop["value"] = loop_b
+
+    assert [user["user_id"] for user in await store.list_users(enabled=True)] == ["alice"]
+    assert stale_pool.terminated is True
+    assert stale_pool.closed is False
+    assert store._pool is healthy_pool
 
 
 @pytest.mark.asyncio
