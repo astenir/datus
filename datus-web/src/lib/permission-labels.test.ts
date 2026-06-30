@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { permissionBadgeItems } from "./permission-labels";
+import { ROLE_PERMISSION_OPTIONS, permissionBadgeItems } from "./permission-labels";
 
 describe("permission labels", () => {
   it("renders known module permissions as Chinese badge labels", () => {
@@ -30,5 +30,18 @@ describe("permission labels", () => {
       { code: "module.*", kind: "wildcard", label: "全部功能权限" },
       { code: "module.admin.*", kind: "wildcard", label: "全部管理权限" },
     ]);
+  });
+
+  it("exposes enterprise role permission options for the role editor", () => {
+    expect(ROLE_PERMISSION_OPTIONS.length).toBeGreaterThan(5);
+    expect(ROLE_PERMISSION_OPTIONS).toEqual(
+      expect.arrayContaining([
+        { value: "module.*", kind: "wildcard", label: "全部功能权限" },
+        { value: "module.admin.*", kind: "wildcard", label: "全部管理权限" },
+        { value: "module.sql_executor", kind: "regular", label: "SQL 执行" },
+        { value: "module.admin.users", kind: "regular", label: "用户管理" },
+        { value: "module.admin.audit.export", kind: "regular", label: "审计导出" },
+      ])
+    );
   });
 });

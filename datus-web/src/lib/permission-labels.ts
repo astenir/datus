@@ -4,6 +4,12 @@ export interface PermissionBadgeItem {
   label: string;
 }
 
+export interface PermissionOption {
+  value: string;
+  kind: PermissionBadgeItem["kind"];
+  label: string;
+}
+
 const modulePermissionLabels: Array<Omit<PermissionBadgeItem, "kind">> = [
   { code: "chat", label: "对话" },
   { code: "sql_generation", label: "SQL 生成" },
@@ -46,10 +52,50 @@ const wildcardLabels: Record<string, string> = {
   "module.config.*": "全部配置权限",
 };
 
+const enterpriseRolePermissionCodes = [
+  "module.*",
+  "module.admin.*",
+  "module.report.*",
+  "module.dashboard.*",
+  "module.config.*",
+  "module.chat",
+  "module.sql_executor",
+  "module.datasource_catalog",
+  "module.report.view",
+  "module.report.query",
+  "module.dashboard.view",
+  "module.dashboard.query",
+  "module.kb",
+  "module.mcp",
+  "module.config.view",
+  "module.config.edit",
+  "module.admin.users",
+  "module.admin.roles",
+  "module.admin.datasources",
+  "module.admin.sessions",
+  "module.admin.artifacts",
+  "module.admin.audit",
+  "module.admin.audit.export",
+  "module.admin.quotas",
+  "module.admin.secrets",
+  "module.admin.agents",
+  "module.system.status",
+] as const;
+
 function fallbackLabel(code: string): string {
   if (code.startsWith("module.")) return code.slice("module.".length).replaceAll(".", " / ");
   return code;
 }
+
+function permissionLabel(code: string): string {
+  return wildcardLabels[code] ?? labelByCode.get(code) ?? fallbackLabel(code);
+}
+
+export const ROLE_PERMISSION_OPTIONS: PermissionOption[] = enterpriseRolePermissionCodes.map((code) => ({
+  value: code,
+  kind: code.includes("*") ? "wildcard" : "regular",
+  label: permissionLabel(code),
+}));
 
 export function permissionBadgeItems(permissions: readonly string[] = []): PermissionBadgeItem[] {
   const selected = new Map<string, PermissionBadgeItem>();
@@ -62,7 +108,7 @@ export function permissionBadgeItems(permissions: readonly string[] = []): Permi
       selected.set(code, {
         code,
         kind: "wildcard",
-        label: wildcardLabels[code] ?? fallbackLabel(code),
+        label: permissionLabel(code),
       });
       continue;
     }
@@ -70,7 +116,7 @@ export function permissionBadgeItems(permissions: readonly string[] = []): Permi
     selected.set(code, {
       code,
       kind: "regular",
-      label: labelByCode.get(code) ?? fallbackLabel(code),
+      label: permissionLabel(code),
     });
   }
 

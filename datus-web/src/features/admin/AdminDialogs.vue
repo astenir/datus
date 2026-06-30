@@ -587,7 +587,13 @@ const selectedRolePermissionBadges = computed(() =>
             <Button
               v-for="option in roles.featureOptions"
               :key="option.value"
-              :variant="roles.selectedFeatures.value.includes(option.value) ? 'default' : 'outline'"
+              :variant="
+                roles.selectedFeatures.value.includes(option.value)
+                  ? option.kind === 'wildcard'
+                    ? 'destructive'
+                    : 'default'
+                  : 'outline'
+              "
               size="sm"
               @click="roles.toggleSelectedFeature(option.value)"
             >

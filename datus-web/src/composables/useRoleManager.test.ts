@@ -25,7 +25,7 @@ const role = {
   role_id: "resource_admin",
   name: "资源管理员",
   description: "desc",
-  permissions: ["dashboard"],
+  permissions: ["module.dashboard.view"],
   built_in: false,
   created_at: "2026-06-22T00:00:00Z",
   updated_at: null,
@@ -51,11 +51,27 @@ describe("useRoleManager", () => {
     expect(manager.total.value).toBe(1);
   });
 
+  it("exposes the full enterprise permission option set for role editing", async () => {
+    const { useRoleManager } = await import("./useRoleManager");
+    const manager = useRoleManager();
+    const optionValues = manager.featureOptions.map((option) => option.value);
+
+    expect(optionValues.length).toBeGreaterThan(5);
+    expect(optionValues).toEqual(
+      expect.arrayContaining([
+        "module.*",
+        "module.admin.*",
+        "module.sql_executor",
+        "module.admin.users",
+      ])
+    );
+  });
+
   it("filters roles locally by keyword", async () => {
     listRoles.mockResolvedValue({
       data: [
         role,
-        { ...role, role_id: "viewer", name: "查看员", permissions: ["report"] },
+        { ...role, role_id: "viewer", name: "查看员", permissions: ["module.report.view"] },
       ],
     });
 
@@ -69,7 +85,7 @@ describe("useRoleManager", () => {
 
   it("opens role detail with a normalized route role id", async () => {
     getRole.mockResolvedValue({
-      data: { ...role, name: "分析师", permissions: ["catalog", "dashboard"] },
+      data: { ...role, name: "分析师", permissions: ["module.datasource_catalog", "module.dashboard.view"] },
     });
 
     const { useRoleManager } = await import("./useRoleManager");
@@ -85,7 +101,10 @@ describe("useRoleManager", () => {
 
     expect(getRole).toHaveBeenCalledWith("analyst");
     expect(manager.selectedRoleDetail.value?.name).toBe("分析师");
-    expect(manager.selectedRoleDetail.value?.permissions).toEqual(["catalog", "dashboard"]);
+    expect(manager.selectedRoleDetail.value?.permissions).toEqual([
+      "module.datasource_catalog",
+      "module.dashboard.view",
+    ]);
     expect(manager.roleDetailError.value).toBeNull();
     expect(manager.loadingRoleDetail.value).toBe(false);
 
@@ -104,14 +123,14 @@ describe("useRoleManager", () => {
       description: "read only",
       permissions: [],
     };
-    manager.selectedFeatures.value = ["dashboard"];
+    manager.selectedFeatures.value = ["module.dashboard.view"];
 
     await manager.saveRole();
 
     expect(upsertRole).toHaveBeenCalledWith("资源查看员", {
       name: "资源查看员",
       description: "read only",
-      permissions: ["dashboard"],
+      permissions: ["module.dashboard.view"],
     });
     expect(manager.showDialog.value).toBe(false);
   });

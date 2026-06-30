@@ -2,11 +2,11 @@ import { computed, ref, shallowRef } from "vue";
 import { toast } from "vue-sonner";
 
 import { adminRoleApi } from "@/lib/api";
-import { ROLE_FEATURE_OPTIONS } from "@/lib/navigation";
+import { ROLE_PERMISSION_OPTIONS } from "@/lib/permission-labels";
 import type { Role, RoleFormData, RoleSearchForm } from "@/types/admin";
 
 export function useRoleManager() {
-  const featureOptions = ROLE_FEATURE_OPTIONS;
+  const featureOptions = ROLE_PERMISSION_OPTIONS;
 
   const searchForm = ref<RoleSearchForm>({
     keyword: "",
