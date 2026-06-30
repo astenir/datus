@@ -6,7 +6,7 @@ from inspect import isawaitable
 from pathlib import Path
 from typing import Annotated, Any, List, Literal
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -33,6 +33,8 @@ _require_admin_artifacts = require_module("module.admin.artifacts")
 DashboardViewCtx = Annotated[AppContext, Depends(_require_dashboard_view)]
 ReportViewCtx = Annotated[AppContext, Depends(_require_report_view)]
 AdminArtifactsCtx = Annotated[AppContext, Depends(_require_admin_artifacts)]
+ShareDirectoryCtx = Annotated[AppContext, Depends(deps.get_request_app_context)]
+ShareArtifactType = Literal["report", "dashboard"]
 
 
 class AdminArtifactSummary(BaseModel):
@@ -67,6 +69,25 @@ class ArtifactShare(BaseModel):
     visibility: Literal["private", "role", "enterprise"]
     allowed_roles: list[str] = Field(default_factory=list)
     allowed_user_ids: list[str] = Field(default_factory=list)
+
+
+class ArtifactShareUserSummary(BaseModel):
+    """Sanitized user directory item for artifact sharing selectors."""
+
+    user_id: str
+    display_name: str | None = None
+    email: str | None = None
+    department: str | None = None
+    title: str | None = None
+
+
+class ArtifactShareRoleSummary(BaseModel):
+    """Sanitized role directory item for artifact sharing selectors."""
+
+    role_id: str
+    name: str
+    description: str | None = None
+    built_in: bool = False
 
 
 def _project_files_root(svc: ServiceDep) -> Path:
@@ -205,6 +226,120 @@ async def put_report_share_acl(
 )
 async def get_report_html_by_path(svc: ServiceDep, ctx: ReportViewCtx, slug: str) -> Response:
     return await _render_report_html(svc, ctx, slug)
+
+
+@router.get(
+    "/artifact-share/users",
+    response_model=Result[List[ArtifactShareUserSummary]],
+    summary="List Artifact Share Users",
+)
+async def list_artifact_share_users(
+    ctx: ShareDirectoryCtx,
+    artifact_type: Annotated[ShareArtifactType, Query(description="Artifact kind the selector is used for.")],
+    query: Annotated[str, Query(max_length=200, description="Case-insensitive user search text.")] = "",
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    include_self: Annotated[bool, Query(description="Include the current user in selector results.")] = False,
+) -> Result[List[ArtifactShareUserSummary]]:
+    """Return a sanitized enabled-user directory for creator self-service sharing."""
+
+    await _require_share_directory_access(ctx, artifact_type=artifact_type, target_type="user")
+    try:
+        records = await deps.get_enterprise_extensions().user_store.list_users(enabled=True)
+    except Exception:
+        await _audit_share_directory_best_effort(
+            ctx,
+            artifact_type=artifact_type,
+            target_type="user",
+            decision="deny",
+            reason="user directory query failed",
+            metadata={"query_present": bool(query.strip())},
+        )
+        return Result(
+            success=False,
+            errorCode="ARTIFACT_SHARE_USER_DIRECTORY_FAILED",
+            errorMessage="Artifact share user directory query failed.",
+        )
+
+    normalized_query = query.strip()
+    users: list[ArtifactShareUserSummary] = []
+    for record in records:
+        summary = _share_user_summary(record)
+        if not include_self and ctx.user_id and summary.user_id == ctx.user_id:
+            continue
+        if not _matches_directory_query(
+            normalized_query,
+            summary.user_id,
+            summary.display_name,
+            summary.email,
+            summary.department,
+            summary.title,
+        ):
+            continue
+        users.append(summary)
+        if len(users) >= limit:
+            break
+
+    await _audit_share_directory_best_effort(
+        ctx,
+        artifact_type=artifact_type,
+        target_type="user",
+        decision="allow",
+        reason=None,
+        metadata={"query_present": bool(normalized_query), "count": len(users), "include_self": include_self},
+    )
+    return Result(success=True, data=users)
+
+
+@router.get(
+    "/artifact-share/roles",
+    response_model=Result[List[ArtifactShareRoleSummary]],
+    summary="List Artifact Share Roles",
+)
+async def list_artifact_share_roles(
+    ctx: ShareDirectoryCtx,
+    artifact_type: Annotated[ShareArtifactType, Query(description="Artifact kind the selector is used for.")],
+    query: Annotated[str, Query(max_length=200, description="Case-insensitive role search text.")] = "",
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+) -> Result[List[ArtifactShareRoleSummary]]:
+    """Return a sanitized role directory for creator self-service sharing."""
+
+    await _require_share_directory_access(ctx, artifact_type=artifact_type, target_type="role")
+    try:
+        records = await deps.get_enterprise_extensions().role_store.list_roles()
+    except Exception:
+        await _audit_share_directory_best_effort(
+            ctx,
+            artifact_type=artifact_type,
+            target_type="role",
+            decision="deny",
+            reason="role directory query failed",
+            metadata={"query_present": bool(query.strip())},
+        )
+        return Result(
+            success=False,
+            errorCode="ARTIFACT_SHARE_ROLE_DIRECTORY_FAILED",
+            errorMessage="Artifact share role directory query failed.",
+        )
+
+    normalized_query = query.strip()
+    roles: list[ArtifactShareRoleSummary] = []
+    for record in records:
+        summary = _share_role_summary(record)
+        if not _matches_directory_query(normalized_query, summary.role_id, summary.name, summary.description):
+            continue
+        roles.append(summary)
+        if len(roles) >= limit:
+            break
+
+    await _audit_share_directory_best_effort(
+        ctx,
+        artifact_type=artifact_type,
+        target_type="role",
+        decision="allow",
+        reason=None,
+        metadata={"query_present": bool(normalized_query), "count": len(roles)},
+    )
+    return Result(success=True, data=roles)
 
 
 @router.get(
@@ -575,6 +710,75 @@ async def _can_manage_artifact_share(ctx: AppContext, acl: ArtifactAcl) -> bool:
     return decision.allowed
 
 
+async def _require_share_directory_access(
+    ctx: AppContext,
+    *,
+    artifact_type: ShareArtifactType,
+    target_type: Literal["user", "role"],
+) -> None:
+    permission_key = _share_directory_permission(artifact_type)
+    decision = await authorize(
+        ctx,
+        action=permission_key,
+        resource=ResourceRef(
+            type="artifact_share_directory",
+            id=f"{artifact_type}:{target_type}",
+            attributes={"artifact_type": artifact_type, "target_type": target_type},
+        ),
+    )
+    if decision.allowed:
+        return
+
+    await _audit_share_directory_best_effort(
+        ctx,
+        artifact_type=artifact_type,
+        target_type=target_type,
+        decision="deny",
+        reason=decision.reason,
+        metadata={"required_permission": permission_key},
+    )
+    raise HTTPException(status_code=403, detail=decision.reason or "Permission denied.")
+
+
+def _share_directory_permission(artifact_type: ShareArtifactType) -> str:
+    if artifact_type == "report":
+        return "module.report.view"
+    return "module.dashboard.view"
+
+
+def _share_user_summary(record: dict[str, Any]) -> ArtifactShareUserSummary:
+    return ArtifactShareUserSummary(
+        user_id=str(record["user_id"]),
+        display_name=_optional_str(record.get("display_name")),
+        email=_optional_str(record.get("email")),
+        department=_optional_str(record.get("department")),
+        title=_optional_str(record.get("title")),
+    )
+
+
+def _share_role_summary(record: dict[str, Any]) -> ArtifactShareRoleSummary:
+    return ArtifactShareRoleSummary(
+        role_id=str(record["role_id"]),
+        name=str(record.get("name") or record["role_id"]),
+        description=_optional_str(record.get("description")),
+        built_in=bool(record.get("built_in")),
+    )
+
+
+def _matches_directory_query(query: str, *values: str | None) -> bool:
+    needle = query.strip().casefold()
+    if not needle:
+        return True
+    return any(needle in value.casefold() for value in values if value)
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _share_from_acl(acl: ArtifactAcl) -> ArtifactShare:
     return ArtifactShare(
         owner_user_id=acl.owner_user_id,
@@ -759,6 +963,36 @@ async def _audit_artifact_share_best_effort(
         logger.warning(
             "Artifact share audit write failed for operation '%s' decision '%s': %s",
             operation,
+            decision,
+            exc,
+        )
+
+
+async def _audit_share_directory_best_effort(
+    ctx: AppContext,
+    *,
+    artifact_type: str,
+    target_type: str,
+    decision: str,
+    reason: str | None,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    try:
+        await audit_decision(
+            ctx,
+            AuditEvent(
+                action="artifact.share.lookup",
+                resource_type="artifact_share_directory",
+                resource_id=f"{artifact_type}:{target_type}",
+                decision=decision,
+                reason=reason,
+                metadata={"artifact_type": artifact_type, "target_type": target_type, **(metadata or {})},
+            ),
+        )
+    except Exception as exc:
+        logger.warning(
+            "Artifact share directory audit write failed for target '%s' decision '%s': %s",
+            target_type,
             decision,
             exc,
         )

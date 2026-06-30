@@ -26,7 +26,7 @@
 | SQL policy 预检查 | `datus/api/routes/chat_routes.py` | chat 入口已有 principal 必填字段预检查，但它只覆盖启用 SQL policy 的 chat 路径。 |
 | SQL 执行工具 | `datus/tools/func_tool/database.py`、`datus/api/routes/cli_routes.py` | `DBFuncTool.read_query()` 保留只读、scoped context 和 SQL policy 入口；`/api/v1/sql/execute` 已接入 `module.sql_executor`、datasource projection、grant scope 校验、quota、审计和 active platform status gate。 |
 | 工具权限 | `datus/tools/permission/*` | 控制 agent 内部工具的 `allow` / `ask` / `deny`，不等价于业务模块 RBAC。 |
-| 报表/仪表盘 | `datus/api/routes/report_routes.py`、`datus/api/routes/dashboard_routes.py`、`datus_enterprise/api/artifact_routes.py` | report/dashboard 静态 artifact 已接入 view 权限和 artifact ACL；`/api/v1/dashboard/query` 已接入 query 权限、datasource/table grant、SQL policy principal、quota、审计和 active platform status gate；report 当前仍是预渲染静态 bundle，没有 live query endpoint。 |
+| 报表/仪表盘 | `datus/api/routes/report_routes.py`、`datus/api/routes/dashboard_routes.py`、`datus_enterprise/api/artifact_routes.py` | report/dashboard 静态 artifact 已接入 view 权限和 artifact ACL；创建者自助分享使用脱敏用户/角色目录，不复用 admin 用户/角色接口；`/api/v1/dashboard/query` 已接入 query 权限、datasource/table grant、SQL policy principal、quota、审计和 active platform status gate；report 当前仍是预渲染静态 bundle，没有 live query endpoint。 |
 | 数据源目录 | `datus/api/routes/database_routes.py`、`datus/api/services/database_service.py` | `/api/v1/catalog/list` 已接入 `module.datasource_catalog` 和 request-level projection，并按 datasource/catalog/database/schema/table grant 裁剪目录结果。 |
 | 表和语义模型 | `datus/api/routes/table_routes.py` | `/api/v1/table/detail`、`/api/v1/semantic_model` 读取已接入 `module.datasource_catalog` 和 table grant，metadata projection 使用 `catalog.*` 操作语义，由 `allow_catalog` 控制而不是被 `allow_sql` 误放行；table scope 使用当前连接器 dialect 解析 catalog/database/schema/table，避免 StarRocks `catalog.database.table` 被误判成 `database.schema.table`；datasource/table scope 拒绝会写入审计。语义模型保存/校验使用 `module.config.edit`，保存另受 active platform status gate 约束，且 platform status gate 在 `DatusService` 解析前执行。 |
 | 旧兼容 API 面 | `datus/api/routes/explorer_routes.py`、`agent_routes.py`、`visualization_routes.py`、`tool_routes.py`、`success_story_routes.py` | 这些旧 route 尚未进入完整企业安全链；`enterprise.enabled=true` 下统一返回 `ENTERPRISE_ROUTE_DISABLED` 并写入 `system.route_disabled` 审计，本地兼容模式先检查开关并保持原行为，不因禁用依赖额外初始化 `DatusService`。 |
@@ -853,6 +853,7 @@ chat 请求投影流程：
 
 - list 接口只返回当前用户可见产物。
 - html/detail 接口必须二次校验 slug 权限。
+- 创建者自助分享选择用户/角色时，使用脱敏分享目录接口，不复用 `/admin/users` 或 `/admin/roles`，且目录查询只返回分享所需字段。
 - query 接口必须同时满足产物权限、模块 query 权限和 datasource/table grant。
 - 产物不存在和无权限建议统一返回 404 或通用 403，避免泄漏 slug。
 - 产物依赖的数据源授权变化后，需要重新评估 query 权限；仅历史静态 HTML 可见不代表实时查询仍可执行。
@@ -1075,8 +1076,8 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - datasource catalog route 已接入 `module.datasource_catalog`，覆盖当前 `/api/v1/catalog/list`。
 - table/semantic model 读取 route 已接入 `module.datasource_catalog`，覆盖 `/api/v1/table/detail` 和 `GET /api/v1/semantic_model`；语义模型保存/校验已接入 `module.config.edit`，其中保存 route 的 platform status gate 位于 route decorator dependency，保证 readonly/maintenance 拒绝发生在 `DatusService` 解析前。
 - 直接 SQL executor route 已接入 `module.sql_executor`，覆盖 `/api/v1/sql/execute` 和 `/api/v1/sql/stop_execute`。
-- report route 已接入 `module.report.view`，覆盖当前 `/api/v1/report/detail`，并通过 enterprise artifact route 覆盖 `/api/v1/reports`、`/api/v1/reports/{slug}`、`/api/v1/reports/{slug}/acl`、`/api/v1/reports/{slug}/html`。
-- dashboard route 已接入 `module.dashboard.view` 和 `module.dashboard.query`，覆盖当前 `/api/v1/dashboard/detail`、`/api/v1/dashboard/query`，并通过 enterprise artifact route 覆盖 `/api/v1/dashboards`、`/api/v1/dashboards/{slug}`、`/api/v1/dashboards/{slug}/acl`、`/api/v1/dashboards/{slug}/html`。
+- report route 已接入 `module.report.view`，覆盖当前 `/api/v1/report/detail`，并通过 enterprise artifact route 覆盖 `/api/v1/reports`、`/api/v1/reports/{slug}`、`/api/v1/reports/{slug}/acl`、`/api/v1/reports/{slug}/html`，以及 `artifact_type=report` 的 `/api/v1/artifact-share/users` 和 `/api/v1/artifact-share/roles` 脱敏分享选择目录。
+- dashboard route 已接入 `module.dashboard.view` 和 `module.dashboard.query`，覆盖当前 `/api/v1/dashboard/detail`、`/api/v1/dashboard/query`，并通过 enterprise artifact route 覆盖 `/api/v1/dashboards`、`/api/v1/dashboards/{slug}`、`/api/v1/dashboards/{slug}/acl`、`/api/v1/dashboards/{slug}/html`，以及 `artifact_type=dashboard` 的 `/api/v1/artifact-share/users` 和 `/api/v1/artifact-share/roles` 脱敏分享选择目录。
 - config/model route 已接入 `module.config.view` 和 `module.config.edit`，覆盖 `/api/v1/config/agent`、`/api/v1/models`、配置更新接口和连接探测接口。
 - KB route 已接入 `module.kb`，覆盖 KB bootstrap、platform docs bootstrap 和对应 cancel 接口。
 - MCP route 已接入 `module.mcp` + 细粒度 `mcp.*` 权限，覆盖 MCP server/tool/filter 的列表、管理和调用接口。

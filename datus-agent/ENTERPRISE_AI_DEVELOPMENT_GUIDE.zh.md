@@ -323,8 +323,8 @@ MVP 中 `datasource_grants` 采用每个 `(subject_type, subject_id, datasource_
 - chat subagent dispatch：`gen_sql` 使用 `module.sql_executor`，report 类 subagent 使用 `module.report.query`，dashboard 类 subagent 使用 `module.dashboard.query`。
 - datasource catalog route：`/api/v1/catalog/list` 使用 `module.datasource_catalog`。
 - direct SQL executor route：`/api/v1/sql/execute` 和 `/api/v1/sql/stop_execute` 使用 `module.sql_executor`。
-- report route：`/api/v1/report/detail`、`/api/v1/reports`、`/api/v1/reports/{slug}`、`/api/v1/reports/{slug}/acl` 和 `/api/v1/reports/{slug}/html` 使用 `module.report.view`；`{slug}/acl` 额外要求 artifact owner 或 `module.admin.artifacts`，只允许创建者自助修改分享字段。
-- dashboard route：`/api/v1/dashboard/detail`、`/api/v1/dashboards`、`/api/v1/dashboards/{slug}`、`/api/v1/dashboards/{slug}/acl` 和 `/api/v1/dashboards/{slug}/html` 使用 `module.dashboard.view`，`/api/v1/dashboard/query` 使用 `module.dashboard.query`；`{slug}/acl` 额外要求 artifact owner 或 `module.admin.artifacts`，只允许创建者自助修改分享字段。
+- report route：`/api/v1/report/detail`、`/api/v1/reports`、`/api/v1/reports/{slug}`、`/api/v1/reports/{slug}/acl` 和 `/api/v1/reports/{slug}/html` 使用 `module.report.view`；`{slug}/acl` 额外要求 artifact owner 或 `module.admin.artifacts`，只允许创建者自助修改分享字段；`/api/v1/artifact-share/users?artifact_type=report` 和 `/api/v1/artifact-share/roles?artifact_type=report` 使用同一 report view 权限返回脱敏分享选择目录，不暴露 admin 用户/角色详情。
+- dashboard route：`/api/v1/dashboard/detail`、`/api/v1/dashboards`、`/api/v1/dashboards/{slug}`、`/api/v1/dashboards/{slug}/acl` 和 `/api/v1/dashboards/{slug}/html` 使用 `module.dashboard.view`，`/api/v1/dashboard/query` 使用 `module.dashboard.query`；`{slug}/acl` 额外要求 artifact owner 或 `module.admin.artifacts`，只允许创建者自助修改分享字段；`/api/v1/artifact-share/users?artifact_type=dashboard` 和 `/api/v1/artifact-share/roles?artifact_type=dashboard` 使用同一 dashboard view 权限返回脱敏分享选择目录，不暴露 admin 用户/角色详情。
 - config/model route：`/api/v1/config/agent` 和 `/api/v1/models` 使用 `module.config.view`，配置更新和连接探测接口使用 `module.config.edit`。
 - KB route：KB bootstrap、platform docs bootstrap 和 cancel 接口使用 `module.kb`。
 - MCP route：MCP server/tool/filter 的列表、管理和调用接口使用 `module.mcp` + 细粒度 `mcp.*` 权限。

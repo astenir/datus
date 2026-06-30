@@ -635,6 +635,18 @@ _add(
         note="Creator/admin self-service sharing mutation; owner check is enforced through artifact ACL.",
     ),
 )
+_add_many(
+    "GET",
+    ["/api/v1/artifact-share/users", "/api/v1/artifact-share/roles"],
+    _policy(
+        MODULE_RBAC,
+        AUDIT,
+        SYSTEM_READONLY,
+        module_permission="module.report.view or module.dashboard.view",
+        audit_action="artifact.share.lookup",
+        note="Sanitized share selector directory; requires view permission matching the requested artifact_type.",
+    ),
+)
 _add(
     "GET",
     "/api/v1/admin/artifacts",
