@@ -172,13 +172,20 @@ class FakeConnection:
         self.queries.append(("fetchrow", query, args))
         normalized = " ".join(query.split())
         if "INSERT INTO enterprise_users" in normalized:
-            user_id, display_name, email, enabled = args
+            user_id, display_name, email, enabled = args[:4]
+            external_user_id, department, title, last_seen_at = (
+                args[4:8] if len(args) >= 8 else (None, None, None, None)
+            )
             existing = self.users.get(user_id, {})
             self.users[user_id] = Row(
                 user_id=user_id,
                 display_name=display_name,
                 email=email,
                 enabled=enabled,
+                external_user_id=external_user_id,
+                department=department,
+                title=title,
+                last_seen_at=last_seen_at,
                 created_at=existing.get("created_at", NOW),
                 updated_at=NOW,
             )

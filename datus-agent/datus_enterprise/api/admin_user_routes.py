@@ -29,6 +29,31 @@ class UpsertAdminUserRequest(BaseModel):
     display_name: str | None = Field(default=None, max_length=200)
     email: str | None = Field(default=None, max_length=320)
     enabled: bool = True
+    external_user_id: str | None = Field(default=None, max_length=200)
+    department: str | None = Field(default=None, max_length=200)
+    title: str | None = Field(default=None, max_length=200)
+    last_seen_at: str | None = Field(default=None, max_length=100)
+
+
+class AdminUserRoleSummary(BaseModel):
+    """Sanitized role summary embedded in admin user details."""
+
+    role_id: str
+    name: str | None = None
+    permissions: list[str] = Field(default_factory=list)
+    built_in: bool = False
+
+
+class AdminUserDatasourceGrantSummary(BaseModel):
+    """Sanitized datasource grant summary embedded in admin user details."""
+
+    subject_type: str
+    subject_id: str
+    datasource_key: str
+    effect: str
+    scope: dict[str, Any] = Field(default_factory=dict)
+    created_at: str | None = None
+    updated_at: str | None = None
 
 
 class AdminUserSummary(BaseModel):
@@ -38,8 +63,26 @@ class AdminUserSummary(BaseModel):
     display_name: str | None = None
     email: str | None = None
     enabled: bool
+    external_user_id: str | None = None
+    department: str | None = None
+    title: str | None = None
+    last_seen_at: str | None = None
+    role_ids: list[str] = Field(default_factory=list)
+    role_count: int = 0
+    direct_datasource_grant_count: int = 0
     created_at: str | None = None
     updated_at: str | None = None
+
+
+class AdminUserDetail(AdminUserSummary):
+    """Detailed enterprise user metadata for one admin user profile."""
+
+    roles: list[AdminUserRoleSummary] = Field(default_factory=list)
+    effective_permissions: list[str] = Field(default_factory=list)
+    direct_datasource_grants: list[AdminUserDatasourceGrantSummary] = Field(default_factory=list)
+    role_datasource_grants: list[AdminUserDatasourceGrantSummary] = Field(default_factory=list)
+    role_datasource_grant_count: int = 0
+    effective_datasource_grant_count: int = 0
 
 
 @router.get("/admin/users", response_model=Result[list[AdminUserSummary]], summary="List Admin Users")
@@ -61,7 +104,17 @@ async def list_admin_users(
         )
         return _user_error("USER_LIST_FAILED", "User list failed.")
 
-    users = [_summary_from_record(record) for record in records]
+    try:
+        users = await _list_summaries_from_records(records)
+    except Exception:
+        await _audit_user_mutation(
+            ctx,
+            user_id=None,
+            operation="list_admin_users",
+            decision="deny",
+            reason="user list enrichment failed",
+        )
+        return _user_error("USER_LIST_FAILED", "User list failed.")
     await _audit_user_mutation(
         ctx,
         user_id=None,
@@ -72,8 +125,8 @@ async def list_admin_users(
     return Result(success=True, data=users)
 
 
-@router.get("/admin/users/{user_id}", response_model=Result[AdminUserSummary], summary="Get Admin User")
-async def get_admin_user(user_id: str, ctx: AdminUsersCtx) -> Result[AdminUserSummary]:
+@router.get("/admin/users/{user_id}", response_model=Result[AdminUserDetail], summary="Get Admin User")
+async def get_admin_user(user_id: str, ctx: AdminUsersCtx) -> Result[AdminUserDetail]:
     """Return sanitized metadata for one enterprise user."""
 
     invalid = _validate_user_id(user_id)
@@ -102,6 +155,17 @@ async def get_admin_user(user_id: str, ctx: AdminUsersCtx) -> Result[AdminUserSu
         )
         return _user_error("RESOURCE_NOT_FOUND", "User not found.")
 
+    try:
+        detail = await _detail_from_record(record)
+    except Exception:
+        await _audit_user_mutation(
+            ctx,
+            user_id=user_id,
+            operation="get_admin_user",
+            decision="deny",
+            reason="user read enrichment failed",
+        )
+        return _user_error("USER_READ_FAILED", "User read failed.")
     summary = _summary_from_record(record)
     await _audit_user_mutation(
         ctx,
@@ -110,7 +174,7 @@ async def get_admin_user(user_id: str, ctx: AdminUsersCtx) -> Result[AdminUserSu
         decision="allow",
         old_summary=_summary_for_audit(summary),
     )
-    return Result(success=True, data=summary)
+    return Result(success=True, data=detail)
 
 
 @router.put(
@@ -152,6 +216,10 @@ async def upsert_admin_user(
             display_name=_optional_str(body.display_name),
             email=_optional_str(body.email),
             enabled=body.enabled,
+            external_user_id=_optional_str(body.external_user_id),
+            department=_optional_str(body.department),
+            title=_optional_str(body.title),
+            last_seen_at=_optional_str(body.last_seen_at),
         )
     except Exception:
         await _audit_user_mutation(
@@ -326,6 +394,101 @@ def _summary_from_record(record: dict[str, Any]) -> AdminUserSummary:
         display_name=_optional_str(record.get("display_name")),
         email=_optional_str(record.get("email")),
         enabled=bool(record.get("enabled", True)),
+        external_user_id=_optional_str(record.get("external_user_id")),
+        department=_optional_str(record.get("department")),
+        title=_optional_str(record.get("title")),
+        last_seen_at=_optional_str(record.get("last_seen_at")),
+        created_at=_optional_str(record.get("created_at")),
+        updated_at=_optional_str(record.get("updated_at")),
+    )
+
+
+async def _list_summaries_from_records(records: list[dict[str, Any]]) -> list[AdminUserSummary]:
+    summaries = [_summary_from_record(record) for record in records]
+    extensions = deps.get_enterprise_extensions()
+    direct_grants = await extensions.datasource_grant_store.list_grants(subject_type="user")
+    direct_grant_counts: dict[str, int] = {}
+    for grant in direct_grants:
+        subject_id = _optional_str(grant.get("subject_id"))
+        if subject_id is None:
+            continue
+        direct_grant_counts[subject_id] = direct_grant_counts.get(subject_id, 0) + 1
+
+    for summary in summaries:
+        role_ids = sorted(await extensions.role_store.list_user_roles(summary.user_id))
+        summary.role_ids = role_ids
+        summary.role_count = len(role_ids)
+        summary.direct_datasource_grant_count = direct_grant_counts.get(summary.user_id, 0)
+    return summaries
+
+
+async def _detail_from_record(record: dict[str, Any]) -> AdminUserDetail:
+    summary = _summary_from_record(record)
+    extensions = deps.get_enterprise_extensions()
+    role_ids = sorted(await extensions.role_store.list_user_roles(summary.user_id))
+    role_records = {str(role["role_id"]): role for role in await extensions.role_store.list_roles()}
+    roles = [_role_summary_from_record(role_records.get(role_id), role_id=role_id) for role_id in role_ids]
+    direct_grant_records = await extensions.datasource_grant_store.list_grants(
+        subject_type="user",
+        subject_id=summary.user_id,
+    )
+    role_grant_records: list[dict[str, Any]] = []
+    for role_id in role_ids:
+        role_grant_records.extend(
+            await extensions.datasource_grant_store.list_grants(subject_type="role", subject_id=role_id)
+        )
+
+    direct_grants = [_datasource_grant_summary_from_record(record) for record in direct_grant_records]
+    role_grants = [_datasource_grant_summary_from_record(record) for record in role_grant_records]
+    effective_grant_keys = {
+        str(grant["datasource_key"])
+        for grant in [*direct_grant_records, *role_grant_records]
+        if grant.get("datasource_key") is not None
+    }
+    permissions = sorted({permission for role in roles for permission in role.permissions})
+
+    return AdminUserDetail(
+        user_id=summary.user_id,
+        display_name=summary.display_name,
+        email=summary.email,
+        enabled=summary.enabled,
+        external_user_id=summary.external_user_id,
+        department=summary.department,
+        title=summary.title,
+        last_seen_at=summary.last_seen_at,
+        role_ids=role_ids,
+        role_count=len(role_ids),
+        direct_datasource_grant_count=len(direct_grants),
+        created_at=summary.created_at,
+        updated_at=summary.updated_at,
+        roles=roles,
+        effective_permissions=permissions,
+        direct_datasource_grants=direct_grants,
+        role_datasource_grants=role_grants,
+        role_datasource_grant_count=len(role_grants),
+        effective_datasource_grant_count=len(effective_grant_keys),
+    )
+
+
+def _role_summary_from_record(record: dict[str, Any] | None, *, role_id: str) -> AdminUserRoleSummary:
+    if record is None:
+        return AdminUserRoleSummary(role_id=role_id)
+    return AdminUserRoleSummary(
+        role_id=str(record["role_id"]),
+        name=_optional_str(record.get("name")),
+        permissions=sorted({str(permission) for permission in record.get("permissions") or [] if str(permission)}),
+        built_in=bool(record.get("built_in", False)),
+    )
+
+
+def _datasource_grant_summary_from_record(record: dict[str, Any]) -> AdminUserDatasourceGrantSummary:
+    scope = record.get("scope")
+    return AdminUserDatasourceGrantSummary(
+        subject_type=str(record["subject_type"]),
+        subject_id=str(record["subject_id"]),
+        datasource_key=str(record["datasource_key"]),
+        effect=str(record.get("effect") or "allow"),
+        scope=dict(scope) if isinstance(scope, dict) else {},
         created_at=_optional_str(record.get("created_at")),
         updated_at=_optional_str(record.get("updated_at")),
     )
@@ -337,6 +500,9 @@ def _summary_for_audit(summary: AdminUserSummary) -> dict[str, Any]:
         "display_name": summary.display_name,
         "email": summary.email,
         "enabled": summary.enabled,
+        "external_user_id": summary.external_user_id,
+        "department": summary.department,
+        "title": summary.title,
     }
 
 

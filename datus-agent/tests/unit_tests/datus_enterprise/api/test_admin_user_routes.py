@@ -8,6 +8,8 @@ from fastapi.testclient import TestClient
 from datus.api import deps
 from datus.api.auth.context import AppContext
 from datus.api.enterprise.defaults import (
+    InMemoryEnterpriseDatasourceGrantStore,
+    InMemoryEnterpriseRoleStore,
     InMemoryEnterpriseUserStore,
     InMemorySessionOwnerStore,
     LocalAuthorizationProvider,
@@ -31,7 +33,7 @@ class FailingAuditSink:
         raise RuntimeError("audit down")
 
 
-def _install_extensions(monkeypatch, user_store, audit_sink=None, *, enabled=False):
+def _install_extensions(monkeypatch, user_store, audit_sink=None, *, role_store=None, grant_store=None, enabled=False):
     monkeypatch.setattr(
         admin_user_routes.deps,
         "_enterprise_extensions",
@@ -42,6 +44,8 @@ def _install_extensions(monkeypatch, user_store, audit_sink=None, *, enabled=Fal
             session_owner_store=InMemorySessionOwnerStore(),
             audit_sink=audit_sink or NoopAuditSink(),
             user_store=user_store,
+            role_store=role_store or InMemoryEnterpriseRoleStore(),
+            datasource_grant_store=grant_store or InMemoryEnterpriseDatasourceGrantStore(),
         ),
     )
 
@@ -76,14 +80,45 @@ def test_admin_users_rejects_without_permission(monkeypatch):
 
 def test_admin_user_upsert_get_and_list_audit_sanitized(monkeypatch):
     user_store = InMemoryEnterpriseUserStore()
+    role_store = InMemoryEnterpriseRoleStore()
+    grant_store = InMemoryEnterpriseDatasourceGrantStore()
     audit_sink = CollectingAuditSink()
-    _install_extensions(monkeypatch, user_store, audit_sink)
+    _install_extensions(monkeypatch, user_store, audit_sink, role_store=role_store, grant_store=grant_store)
     ctx = AppContext(user_id="operator", permissions={"module.admin.users"})
+    asyncio.run(role_store.upsert_role(role_id="analyst", name="Analyst", permissions=["module.chat"]))
+    asyncio.run(role_store.upsert_role(role_id="viewer", name="Viewer", permissions=["module.report.view"]))
+    asyncio.run(role_store.set_user_roles("alice", ["viewer", "analyst"]))
+    asyncio.run(
+        grant_store.put_grant(
+            subject_type="user",
+            subject_id="alice",
+            datasource_key="db_a",
+            effect="allow",
+            scope={"tables": ["orders"]},
+        )
+    )
+    asyncio.run(
+        grant_store.put_grant(
+            subject_type="role",
+            subject_id="analyst",
+            datasource_key="db_b",
+            effect="allow",
+            scope={},
+        )
+    )
 
     with _client(ctx) as client:
         upsert_response = client.put(
             "/api/v1/admin/users/alice",
-            json={"display_name": "Alice", "email": "alice@example.com", "enabled": True},
+            json={
+                "display_name": "Alice",
+                "email": "alice@example.com",
+                "enabled": True,
+                "external_user_id": "698",
+                "department": "fund",
+                "title": "analyst",
+                "last_seen_at": "2026-01-01T00:00:00+00:00",
+            },
         )
         get_response = client.get("/api/v1/admin/users/alice")
         list_response = client.get("/api/v1/admin/users")
@@ -97,10 +132,41 @@ def test_admin_user_upsert_get_and_list_audit_sanitized(monkeypatch):
         "email": "alice@example.com",
         "enabled": True,
     }
+    assert {key: upsert_data[key] for key in ("external_user_id", "department", "title", "last_seen_at")} == {
+        "external_user_id": "698",
+        "department": "fund",
+        "title": "analyst",
+        "last_seen_at": "2026-01-01T00:00:00+00:00",
+    }
     assert isinstance(upsert_data["created_at"], str)
     assert isinstance(upsert_data["updated_at"], str)
-    assert get_response.json()["data"]["user_id"] == "alice"
-    assert list_response.json()["data"][0]["user_id"] == "alice"
+    detail = get_response.json()["data"]
+    assert detail["user_id"] == "alice"
+    assert detail["role_ids"] == ["analyst", "viewer"]
+    assert detail["role_count"] == 2
+    assert detail["roles"] == [
+        {"role_id": "analyst", "name": "Analyst", "permissions": ["module.chat"], "built_in": False},
+        {"role_id": "viewer", "name": "Viewer", "permissions": ["module.report.view"], "built_in": False},
+    ]
+    assert detail["effective_permissions"] == ["module.chat", "module.report.view"]
+    assert detail["direct_datasource_grant_count"] == 1
+    assert detail["direct_datasource_grants"][0]["subject_type"] == "user"
+    assert detail["direct_datasource_grants"][0]["subject_id"] == "alice"
+    assert detail["direct_datasource_grants"][0]["datasource_key"] == "db_a"
+    assert detail["direct_datasource_grants"][0]["scope"] == {"tables": ["orders"]}
+    assert detail["role_datasource_grant_count"] == 1
+    assert detail["role_datasource_grants"][0]["subject_type"] == "role"
+    assert detail["role_datasource_grants"][0]["subject_id"] == "analyst"
+    assert detail["role_datasource_grants"][0]["datasource_key"] == "db_b"
+    assert detail["effective_datasource_grant_count"] == 2
+
+    list_user = list_response.json()["data"][0]
+    assert list_user["user_id"] == "alice"
+    assert list_user["role_ids"] == ["analyst", "viewer"]
+    assert list_user["role_count"] == 2
+    assert list_user["direct_datasource_grant_count"] == 1
+    assert "roles" not in list_user
+    assert "direct_datasource_grants" not in list_user
     assert "password" not in list_response.text
 
     assert audit_sink.events[-3].action == "module.admin.users"
@@ -113,6 +179,9 @@ def test_admin_user_upsert_get_and_list_audit_sanitized(monkeypatch):
         "display_name": "Alice",
         "email": "alice@example.com",
         "enabled": True,
+        "external_user_id": "698",
+        "department": "fund",
+        "title": "analyst",
     }
 
 

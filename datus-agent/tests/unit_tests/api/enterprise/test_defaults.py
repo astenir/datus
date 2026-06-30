@@ -87,10 +87,22 @@ async def test_in_memory_session_owner_store_supports_delete_and_user_listing():
 async def test_in_memory_enterprise_user_store_supports_upsert_and_enabled_filter():
     store = InMemoryEnterpriseUserStore()
 
-    alice = await store.upsert_user(user_id="alice", display_name="Alice", email="alice@example.com")
+    alice = await store.upsert_user(
+        user_id="alice",
+        display_name="Alice",
+        email="alice@example.com",
+        external_user_id="698",
+        department="fund",
+        title="analyst",
+        last_seen_at="2026-01-01T00:00:00+00:00",
+    )
     await store.upsert_user(user_id="bob", display_name="Bob", enabled=False)
 
     assert alice["enabled"] is True
+    assert alice["external_user_id"] == "698"
+    assert alice["department"] == "fund"
+    assert alice["title"] == "analyst"
+    assert alice["last_seen_at"] == "2026-01-01T00:00:00+00:00"
     assert await store.get_user("alice") == alice
     assert [user["user_id"] for user in await store.list_users()] == ["alice", "bob"]
     assert [user["user_id"] for user in await store.list_users(enabled=True)] == ["alice"]
@@ -334,7 +346,15 @@ async def test_sqlite_enterprise_user_store_persists_users(tmp_path):
     db_path = tmp_path / "enterprise_users.db"
     store = SqliteEnterpriseUserStore(str(db_path))
 
-    await store.upsert_user(user_id="alice", display_name="Alice", email="alice@example.com")
+    await store.upsert_user(
+        user_id="alice",
+        display_name="Alice",
+        email="alice@example.com",
+        external_user_id="698",
+        department="fund",
+        title="analyst",
+        last_seen_at="2026-01-01T00:00:00+00:00",
+    )
     await store.upsert_user(user_id="bob", display_name="Bob", enabled=False)
     await store.upsert_user(user_id="alice", display_name="Alice A", enabled=False)
 
@@ -343,6 +363,10 @@ async def test_sqlite_enterprise_user_store_persists_users(tmp_path):
     assert alice["display_name"] == "Alice A"
     assert alice["email"] is None
     assert alice["enabled"] is False
+    assert alice["external_user_id"] is None
+    assert alice["department"] is None
+    assert alice["title"] is None
+    assert alice["last_seen_at"] is None
     assert alice["created_at"]
     assert alice["updated_at"]
     assert [user["user_id"] for user in await reopened.list_users(enabled=False)] == ["alice", "bob"]

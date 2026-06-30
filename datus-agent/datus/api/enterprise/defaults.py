@@ -82,6 +82,10 @@ class InMemoryEnterpriseUserStore:
         display_name: str | None = None,
         email: str | None = None,
         enabled: bool = True,
+        external_user_id: str | None = None,
+        department: str | None = None,
+        title: str | None = None,
+        last_seen_at: str | None = None,
     ) -> dict[str, Any]:
         existing = self._users.get(user_id)
         now = _sqlite_now()
@@ -91,6 +95,10 @@ class InMemoryEnterpriseUserStore:
             "display_name": display_name,
             "email": email,
             "enabled": bool(enabled),
+            "external_user_id": external_user_id,
+            "department": department,
+            "title": title,
+            "last_seen_at": last_seen_at,
             "created_at": created_at,
             "updated_at": now,
         }
@@ -121,14 +129,34 @@ class SqliteEnterpriseUserStore:
     async def list_users(self, *, enabled: bool | None = None) -> list[dict[str, Any]]:
         if enabled is None:
             query = """
-                SELECT user_id, display_name, email, enabled, created_at, updated_at
+                SELECT
+                    user_id,
+                    display_name,
+                    email,
+                    enabled,
+                    external_user_id,
+                    department,
+                    title,
+                    last_seen_at,
+                    created_at,
+                    updated_at
                 FROM enterprise_users
                 ORDER BY user_id ASC
                 """
             params: tuple[Any, ...] = ()
         else:
             query = """
-                SELECT user_id, display_name, email, enabled, created_at, updated_at
+                SELECT
+                    user_id,
+                    display_name,
+                    email,
+                    enabled,
+                    external_user_id,
+                    department,
+                    title,
+                    last_seen_at,
+                    created_at,
+                    updated_at
                 FROM enterprise_users
                 WHERE enabled = ?
                 ORDER BY user_id ASC
@@ -143,7 +171,17 @@ class SqliteEnterpriseUserStore:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT user_id, display_name, email, enabled, created_at, updated_at
+                SELECT
+                    user_id,
+                    display_name,
+                    email,
+                    enabled,
+                    external_user_id,
+                    department,
+                    title,
+                    last_seen_at,
+                    created_at,
+                    updated_at
                 FROM enterprise_users
                 WHERE user_id = ?
                 """,
@@ -158,19 +196,38 @@ class SqliteEnterpriseUserStore:
         display_name: str | None = None,
         email: str | None = None,
         enabled: bool = True,
+        external_user_id: str | None = None,
+        department: str | None = None,
+        title: str | None = None,
+        last_seen_at: str | None = None,
     ) -> dict[str, Any]:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO enterprise_users (user_id, display_name, email, enabled, created_at, updated_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                INSERT INTO enterprise_users (
+                    user_id,
+                    display_name,
+                    email,
+                    enabled,
+                    external_user_id,
+                    department,
+                    title,
+                    last_seen_at,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 ON CONFLICT(user_id) DO UPDATE SET
                     display_name = excluded.display_name,
                     email = excluded.email,
                     enabled = excluded.enabled,
+                    external_user_id = excluded.external_user_id,
+                    department = excluded.department,
+                    title = excluded.title,
+                    last_seen_at = excluded.last_seen_at,
                     updated_at = CURRENT_TIMESTAMP
                 """,
-                (user_id, display_name, email, 1 if enabled else 0),
+                (user_id, display_name, email, 1 if enabled else 0, external_user_id, department, title, last_seen_at),
             )
             conn.commit()
         record = await self.get_user(user_id)
@@ -205,10 +262,24 @@ class SqliteEnterpriseUserStore:
                     display_name TEXT,
                     email TEXT,
                     enabled INTEGER NOT NULL DEFAULT 1,
+                    external_user_id TEXT,
+                    department TEXT,
+                    title TEXT,
+                    last_seen_at TEXT,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
                 """
+            )
+            _ensure_sqlite_columns(
+                conn,
+                "enterprise_users",
+                {
+                    "external_user_id": "TEXT",
+                    "department": "TEXT",
+                    "title": "TEXT",
+                    "last_seen_at": "TEXT",
+                },
             )
             conn.execute(
                 """
@@ -1230,6 +1301,13 @@ def _sqlite_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _ensure_sqlite_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    existing = {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    for name, column_type in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {column_type}")
+
+
 def _audit_event_from_row(row) -> AuditEvent:
     metadata: dict[str, Any]
     try:
@@ -1255,6 +1333,10 @@ def _copy_user_record(record: dict[str, Any]) -> dict[str, Any]:
         "display_name": _optional_str(record.get("display_name")),
         "email": _optional_str(record.get("email")),
         "enabled": bool(record.get("enabled")),
+        "external_user_id": _optional_str(record.get("external_user_id")),
+        "department": _optional_str(record.get("department")),
+        "title": _optional_str(record.get("title")),
+        "last_seen_at": _optional_str(record.get("last_seen_at")),
         "created_at": _optional_str(record.get("created_at")),
         "updated_at": _optional_str(record.get("updated_at")),
     }
@@ -1266,8 +1348,12 @@ def _user_record_from_row(row) -> dict[str, Any]:
         "display_name": _optional_str(row[1]),
         "email": _optional_str(row[2]),
         "enabled": bool(row[3]),
-        "created_at": _optional_str(row[4]),
-        "updated_at": _optional_str(row[5]),
+        "external_user_id": _optional_str(row[4]),
+        "department": _optional_str(row[5]),
+        "title": _optional_str(row[6]),
+        "last_seen_at": _optional_str(row[7]),
+        "created_at": _optional_str(row[8]),
+        "updated_at": _optional_str(row[9]),
     }
 
 

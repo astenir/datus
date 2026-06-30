@@ -38,7 +38,18 @@ class _UserStore:
     async def get_user(self, user_id):
         return None
 
-    async def upsert_user(self, *, user_id, display_name=None, email=None, enabled=True):
+    async def upsert_user(
+        self,
+        *,
+        user_id,
+        display_name=None,
+        email=None,
+        enabled=True,
+        external_user_id=None,
+        department=None,
+        title=None,
+        last_seen_at=None,
+    ):
         return {}
 
     async def set_user_enabled(self, user_id, enabled):

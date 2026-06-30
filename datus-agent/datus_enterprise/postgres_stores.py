@@ -170,7 +170,17 @@ class PgEnterpriseUserStore(_PgStoreBase):
         if enabled is None:
             rows = await self._fetch(
                 """
-                SELECT user_id, display_name, email, enabled, created_at, updated_at
+                SELECT
+                    user_id,
+                    display_name,
+                    email,
+                    enabled,
+                    external_user_id,
+                    department,
+                    title,
+                    last_seen_at,
+                    created_at,
+                    updated_at
                 FROM enterprise_users
                 ORDER BY user_id ASC
                 """
@@ -178,7 +188,17 @@ class PgEnterpriseUserStore(_PgStoreBase):
         else:
             rows = await self._fetch(
                 """
-                SELECT user_id, display_name, email, enabled, created_at, updated_at
+                SELECT
+                    user_id,
+                    display_name,
+                    email,
+                    enabled,
+                    external_user_id,
+                    department,
+                    title,
+                    last_seen_at,
+                    created_at,
+                    updated_at
                 FROM enterprise_users
                 WHERE enabled = $1
                 ORDER BY user_id ASC
@@ -190,7 +210,17 @@ class PgEnterpriseUserStore(_PgStoreBase):
     async def get_user(self, user_id: str) -> dict[str, Any] | None:
         row = await self._fetchrow(
             """
-            SELECT user_id, display_name, email, enabled, created_at, updated_at
+            SELECT
+                user_id,
+                display_name,
+                email,
+                enabled,
+                external_user_id,
+                department,
+                title,
+                last_seen_at,
+                created_at,
+                updated_at
             FROM enterprise_users
             WHERE user_id = $1
             """,
@@ -205,22 +235,55 @@ class PgEnterpriseUserStore(_PgStoreBase):
         display_name: str | None = None,
         email: str | None = None,
         enabled: bool = True,
+        external_user_id: str | None = None,
+        department: str | None = None,
+        title: str | None = None,
+        last_seen_at: str | None = None,
     ) -> dict[str, Any]:
         row = await self._fetchrow(
             """
-            INSERT INTO enterprise_users (user_id, display_name, email, enabled, created_at, updated_at)
-            VALUES ($1, $2, $3, $4, now(), now())
+            INSERT INTO enterprise_users (
+                user_id,
+                display_name,
+                email,
+                enabled,
+                external_user_id,
+                department,
+                title,
+                last_seen_at,
+                created_at,
+                updated_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
             ON CONFLICT(user_id) DO UPDATE SET
                 display_name = excluded.display_name,
                 email = excluded.email,
                 enabled = excluded.enabled,
+                external_user_id = excluded.external_user_id,
+                department = excluded.department,
+                title = excluded.title,
+                last_seen_at = excluded.last_seen_at,
                 updated_at = now()
-            RETURNING user_id, display_name, email, enabled, created_at, updated_at
+            RETURNING
+                user_id,
+                display_name,
+                email,
+                enabled,
+                external_user_id,
+                department,
+                title,
+                last_seen_at,
+                created_at,
+                updated_at
             """,
             user_id,
             display_name,
             email,
             bool(enabled),
+            external_user_id,
+            department,
+            title,
+            last_seen_at,
         )
         if row is None:
             raise DatusException(ErrorCode.COMMON_UNKNOWN, message="Failed to persist enterprise user.")
@@ -232,7 +295,17 @@ class PgEnterpriseUserStore(_PgStoreBase):
             UPDATE enterprise_users
             SET enabled = $2, updated_at = now()
             WHERE user_id = $1
-            RETURNING user_id, display_name, email, enabled, created_at, updated_at
+            RETURNING
+                user_id,
+                display_name,
+                email,
+                enabled,
+                external_user_id,
+                department,
+                title,
+                last_seen_at,
+                created_at,
+                updated_at
             """,
             user_id,
             bool(enabled),
@@ -1493,6 +1566,10 @@ def _user_record(row: Any) -> dict[str, Any]:
         "display_name": _optional_str(row["display_name"]),
         "email": _optional_str(row["email"]),
         "enabled": bool(row["enabled"]),
+        "external_user_id": _optional_str(row["external_user_id"]),
+        "department": _optional_str(row["department"]),
+        "title": _optional_str(row["title"]),
+        "last_seen_at": _iso(row["last_seen_at"]),
         "created_at": _iso(row["created_at"]),
         "updated_at": _iso(row["updated_at"]),
     }
@@ -1643,9 +1720,25 @@ CREATE TABLE IF NOT EXISTS enterprise_users (
     display_name text,
     email text,
     enabled boolean NOT NULL DEFAULT true,
+    external_user_id text,
+    department text,
+    title text,
+    last_seen_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE enterprise_users
+ADD COLUMN IF NOT EXISTS external_user_id text;
+
+ALTER TABLE enterprise_users
+ADD COLUMN IF NOT EXISTS department text;
+
+ALTER TABLE enterprise_users
+ADD COLUMN IF NOT EXISTS title text;
+
+ALTER TABLE enterprise_users
+ADD COLUMN IF NOT EXISTS last_seen_at timestamptz;
 
 CREATE INDEX IF NOT EXISTS idx_enterprise_users_enabled
 ON enterprise_users (enabled, user_id);

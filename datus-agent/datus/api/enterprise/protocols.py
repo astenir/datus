@@ -49,6 +49,10 @@ class EnterpriseUserStore(Protocol):
         display_name: str | None = None,
         email: str | None = None,
         enabled: bool = True,
+        external_user_id: str | None = None,
+        department: str | None = None,
+        title: str | None = None,
+        last_seen_at: str | None = None,
     ) -> dict[str, Any]:
         """Create or update a user record."""
         ...
