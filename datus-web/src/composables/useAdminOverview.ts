@@ -7,7 +7,15 @@ import {
   adminQuotaApi,
   adminSecretApi,
   adminSessionApi,
+  catalogApi,
 } from "@/lib/api";
+import {
+  buildDatasourceTreeOptions,
+  datasourceNodeIdsFromScope,
+  datasourceScopeFromNodeIds,
+  isStandardDatasourceGrantScope,
+} from "@/lib/role-permissions";
+import { useConnection } from "@/composables/useConnection";
 import type {
   AdminArtifact,
   AdminDatasourceGrant,
@@ -21,6 +29,9 @@ import type {
   QuotaFormData,
   SecretFormData,
 } from "@/types/admin";
+import type { CatalogDatabase } from "@/types/admin";
+import type { DatabaseInfo } from "@/types";
+import type { RoleDatasourceTreeNode } from "@/lib/role-permissions";
 
 type ArtifactAclTarget = {
   artifactType: AdminArtifact["artifact_type"];
@@ -55,6 +66,11 @@ function parseScope(text: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
+function standardGrantScopeMode(scope: Record<string, unknown> | undefined): DatasourceScopeMode {
+  if (!scope || Object.keys(scope).length === 0) return "all";
+  return isStandardDatasourceGrantScope(scope) ? "picker" : "json";
+}
+
 function commaList(value: string): string[] {
   return value
     .split(",")
@@ -70,7 +86,58 @@ function artifactAclTargetKey(target: ArtifactAclTarget): string {
   return `${target.artifactType}:${target.slug}`;
 }
 
+function catalogDatabasesForDatasource(datasourceKey: string, databases: readonly DatabaseInfo[]): CatalogDatabase[] {
+  return databases.map((database) => ({
+    datasourceName: datasourceKey,
+    name: database.name,
+    type: database.type ?? "",
+    catalogName: database.catalog_name,
+    schemaName: database.schema_name,
+    tables: Array.isArray(database.tables)
+      ? database.tables.filter((table): table is string => typeof table === "string" && table.trim().length > 0)
+      : [],
+  }));
+}
+
+function findAncestorNodeIds(
+  nodes: readonly RoleDatasourceTreeNode[],
+  nodeId: string,
+  ancestors: readonly string[] = []
+): string[] {
+  for (const node of nodes) {
+    if (node.id === nodeId) {
+      return [...ancestors];
+    }
+
+    const childAncestors = findAncestorNodeIds(node.children ?? [], nodeId, [...ancestors, node.id]);
+    if (childAncestors.length > 0) {
+      return childAncestors;
+    }
+  }
+
+  return [];
+}
+
+function findTreeNode(nodes: readonly RoleDatasourceTreeNode[], nodeId: string): RoleDatasourceTreeNode | null {
+  for (const node of nodes) {
+    if (node.id === nodeId) return node;
+    const childNode = findTreeNode(node.children ?? [], nodeId);
+    if (childNode) return childNode;
+  }
+  return null;
+}
+
+function collectDescendantNodeIds(node: RoleDatasourceTreeNode): string[] {
+  return (node.children ?? []).flatMap((child) => [
+    child.id,
+    ...collectDescendantNodeIds(child),
+  ]);
+}
+
+export type DatasourceScopeMode = "all" | "picker" | "json";
+
 export function useAdminOverview() {
+  const connection = useConnection();
   const loading = shallowRef(false);
   const savingGrant = shallowRef(false);
   const savingQuota = shallowRef(false);
@@ -80,8 +147,10 @@ export function useAdminOverview() {
   const deletingGrantKey = shallowRef<string | null>(null);
   const deletingSecretName = shallowRef<string | null>(null);
   const loadingGrantDetail = shallowRef(false);
+  const loadingGrantCatalog = shallowRef(false);
   const selectedGrantRouteKey = shallowRef<string | null>(null);
   const grantDetailError = shallowRef<string | null>(null);
+  const grantCatalogError = shallowRef<string | null>(null);
   const loadingSecretDetail = shallowRef(false);
   const selectedSecretName = shallowRef<string | null>(null);
   const secretDetailError = shallowRef<string | null>(null);
@@ -94,6 +163,7 @@ export function useAdminOverview() {
   const selectedSessionDetail = shallowRef<AdminSessionDetail | null>(null);
   const sessionDetailError = shallowRef<string | null>(null);
   let grantDetailRequestId = 0;
+  let grantCatalogRequestId = 0;
   let secretDetailRequestId = 0;
   let artifactAclRequestId = 0;
   let sessionDetailRequestId = 0;
@@ -109,6 +179,9 @@ export function useAdminOverview() {
     effect: "allow",
     scope_text: "{}",
   });
+  const grantScopeMode = shallowRef<DatasourceScopeMode>("all");
+  const selectedGrantNodes = ref<string[]>([]);
+  const grantCatalogDatabases = ref<CatalogDatabase[]>([]);
 
   const showQuotaDialog = shallowRef(false);
   const editingQuota = shallowRef<AdminQuota | null>(null);
@@ -147,20 +220,31 @@ export function useAdminOverview() {
   const grantCount = computed(() => data.value.datasourceGrants.length);
   const quotaCount = computed(() => data.value.quotas.length);
   const secretCount = computed(() => data.value.secrets.length);
+  const grantCatalogTree = computed(() => buildDatasourceTreeOptions(grantCatalogDatabases.value));
+  const grantSelectedScopePreview = computed(() => {
+    if (grantScopeMode.value === "all") return "{}";
+    if (grantScopeMode.value === "json") return grantForm.value.scope_text.trim() || "{}";
+    return JSON.stringify(datasourceScopeFromNodeIds(grantForm.value.datasource_key, selectedGrantNodes.value), null, 2);
+  });
 
   function grantRouteKey(subjectType: string, subjectId: string, datasourceKey: string): string {
     return `${subjectType}:${subjectId}:${datasourceKey}`;
   }
 
   function setGrantFormFromGrant(grant: AdminDatasourceGrant) {
+    const scope = grant.scope ?? {};
     editingGrant.value = grant;
     grantForm.value = {
       subject_type: grant.subject_type,
       subject_id: grant.subject_id,
       datasource_key: grant.datasource_key,
       effect: grant.effect === "deny" ? "deny" : "allow",
-      scope_text: scopeText(grant.scope),
+      scope_text: scopeText(scope),
     };
+    grantScopeMode.value = standardGrantScopeMode(scope);
+    selectedGrantNodes.value = grantScopeMode.value === "picker"
+      ? datasourceNodeIdsFromScope(grant.datasource_key, scope, grantCatalogDatabases.value)
+      : [];
   }
 
   function setSecretFormFromSecret(secret: AdminSecret) {
@@ -213,6 +297,44 @@ export function useAdminOverview() {
     }
   }
 
+  async function loadGrantCatalog(datasourceKey = grantForm.value.datasource_key) {
+    const normalizedDatasourceKey = datasourceKey.trim();
+    grantCatalogError.value = null;
+    grantCatalogDatabases.value = [];
+    if (!normalizedDatasourceKey) return;
+
+    const requestId = grantCatalogRequestId + 1;
+    grantCatalogRequestId = requestId;
+    loadingGrantCatalog.value = true;
+    try {
+      const result = await catalogApi.list(connection.effectiveBase(), {
+        datasource_id: normalizedDatasourceKey,
+      });
+      if (requestId !== grantCatalogRequestId) return;
+
+      grantCatalogDatabases.value = catalogDatabasesForDatasource(
+        normalizedDatasourceKey,
+        result?.databases ?? [],
+      );
+      if (editingGrant.value?.datasource_key === normalizedDatasourceKey && grantScopeMode.value === "picker") {
+        selectedGrantNodes.value = datasourceNodeIdsFromScope(
+          normalizedDatasourceKey,
+          editingGrant.value.scope ?? {},
+          grantCatalogDatabases.value,
+        );
+      }
+    } catch (err) {
+      if (requestId !== grantCatalogRequestId) return;
+      console.error("加载数据源目录失败:", err);
+      grantCatalogError.value = "加载数据源目录失败";
+      grantCatalogDatabases.value = [];
+    } finally {
+      if (requestId === grantCatalogRequestId) {
+        loadingGrantCatalog.value = false;
+      }
+    }
+  }
+
   function openCreateGrantDialog() {
     grantDetailRequestId += 1;
     selectedGrantRouteKey.value = null;
@@ -226,7 +348,10 @@ export function useAdminOverview() {
       effect: "allow",
       scope_text: "{}",
     };
+    grantScopeMode.value = "all";
+    selectedGrantNodes.value = [];
     showGrantDialog.value = true;
+    void loadGrantCatalog();
   }
 
   function openEditGrantDialog(grant: AdminDatasourceGrant) {
@@ -236,6 +361,7 @@ export function useAdminOverview() {
     loadingGrantDetail.value = false;
     setGrantFormFromGrant(grant);
     showGrantDialog.value = true;
+    void loadGrantCatalog(grant.datasource_key);
   }
 
   async function openGrantDetail(subjectType: string, subjectId: string, datasourceKey: string) {
@@ -257,7 +383,10 @@ export function useAdminOverview() {
       effect: "allow",
       scope_text: "{}",
     };
+    grantScopeMode.value = "all";
+    selectedGrantNodes.value = [];
     showGrantDialog.value = true;
+    void loadGrantCatalog(normalizedDatasourceKey);
 
     try {
       const result = await adminDatasourceApi.getGrant(
@@ -286,11 +415,87 @@ export function useAdminOverview() {
 
   function closeGrantDialog() {
     grantDetailRequestId += 1;
+    grantCatalogRequestId += 1;
     showGrantDialog.value = false;
     selectedGrantRouteKey.value = null;
     editingGrant.value = null;
     grantDetailError.value = null;
+    grantCatalogError.value = null;
     loadingGrantDetail.value = false;
+    loadingGrantCatalog.value = false;
+    selectedGrantNodes.value = [];
+    grantCatalogDatabases.value = [];
+  }
+
+  function setGrantSubjectType(value: unknown) {
+    if (value !== "user" && value !== "role") return;
+    if (grantForm.value.subject_type !== value) {
+      grantForm.value.subject_id = "";
+    }
+    grantForm.value.subject_type = value;
+  }
+
+  function setGrantDatasource(value: unknown) {
+    if (typeof value !== "string") return;
+    const normalizedDatasourceKey = value.trim();
+    if (!normalizedDatasourceKey) return;
+    grantForm.value.datasource_key = normalizedDatasourceKey;
+    selectedGrantNodes.value = [];
+    grantCatalogDatabases.value = [];
+    void loadGrantCatalog(normalizedDatasourceKey);
+  }
+
+  function setGrantScopeMode(value: unknown) {
+    if (value !== "all" && value !== "picker" && value !== "json") return;
+    grantScopeMode.value = value;
+    if (value === "all") {
+      selectedGrantNodes.value = [];
+      grantForm.value.scope_text = "{}";
+      return;
+    }
+    if (value === "picker") {
+      if (!grantCatalogDatabases.value.length) {
+        void loadGrantCatalog();
+      }
+      return;
+    }
+    if (!grantForm.value.scope_text.trim()) {
+      grantForm.value.scope_text = "{}";
+    }
+  }
+
+  function toggleGrantNode(nodeId: string) {
+    const selected = new Set(selectedGrantNodes.value);
+    const treeNode = findTreeNode(grantCatalogTree.value, nodeId);
+    const descendantIds = treeNode ? collectDescendantNodeIds(treeNode) : [];
+
+    if (selected.has(nodeId)) {
+      selected.delete(nodeId);
+      for (const descendantId of descendantIds) {
+        selected.delete(descendantId);
+      }
+    } else {
+      for (const ancestorId of findAncestorNodeIds(grantCatalogTree.value, nodeId)) {
+        selected.delete(ancestorId);
+      }
+      for (const descendantId of descendantIds) {
+        selected.delete(descendantId);
+      }
+      selected.add(nodeId);
+    }
+
+    selectedGrantNodes.value = Array.from(selected);
+  }
+
+  function grantScopeFromForm(): Record<string, unknown> | null {
+    if (grantScopeMode.value === "all") return {};
+    if (grantScopeMode.value === "json") return parseScope(grantForm.value.scope_text);
+
+    if (selectedGrantNodes.value.length === 0) {
+      toast.error("请选择库、Schema 或表，或切换为全量授权");
+      return null;
+    }
+    return datasourceScopeFromNodeIds(grantForm.value.datasource_key, selectedGrantNodes.value);
   }
 
   async function saveGrant() {
@@ -302,13 +507,14 @@ export function useAdminOverview() {
       return;
     }
 
-    let scope: Record<string, unknown>;
+    let scope: Record<string, unknown> | null;
     try {
-      scope = parseScope(grantForm.value.scope_text);
+      scope = grantScopeFromForm();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Scope JSON 无效");
       return;
     }
+    if (!scope) return;
 
     savingGrant.value = true;
     try {
@@ -690,8 +896,10 @@ export function useAdminOverview() {
     deletingGrantKey,
     deletingSecretName,
     loadingGrantDetail,
+    loadingGrantCatalog,
     selectedGrantRouteKey,
     grantDetailError,
+    grantCatalogError,
     loadingSecretDetail,
     selectedSecretName,
     secretDetailError,
@@ -703,6 +911,11 @@ export function useAdminOverview() {
     showGrantDialog,
     editingGrant,
     grantForm,
+    grantScopeMode,
+    selectedGrantNodes,
+    grantCatalogDatabases,
+    grantCatalogTree,
+    grantSelectedScopePreview,
     showQuotaDialog,
     editingQuota,
     quotaForm,
@@ -723,10 +936,15 @@ export function useAdminOverview() {
     quotaCount,
     secretCount,
     loadOverview,
+    loadGrantCatalog,
     openCreateGrantDialog,
     openEditGrantDialog,
     openGrantDetail,
     closeGrantDialog,
+    setGrantSubjectType,
+    setGrantDatasource,
+    setGrantScopeMode,
+    toggleGrantNode,
     saveGrant,
     deleteGrant,
     openCreateQuotaDialog,

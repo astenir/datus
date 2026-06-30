@@ -8,6 +8,7 @@ import { useRoleManager } from "@/composables/useRoleManager"
 import { useUserManager } from "@/composables/useUserManager"
 import AdminDialogs from "@/features/admin/AdminDialogs.vue"
 import AdminManagementTabs from "@/features/admin/AdminManagementTabs.vue"
+import { formatDatasourceScope } from "@/lib/datasource-scope-labels"
 import type {
   AdminArtifactListItem,
   AdminGrantListItem,
@@ -69,11 +70,6 @@ function formatOptionalDate(value: string | null | undefined) {
     hour: "2-digit",
     minute: "2-digit",
   })
-}
-
-function formatScope(scope: Record<string, unknown> | undefined) {
-  if (!scope || Object.keys(scope).length === 0) return "全量"
-  return JSON.stringify(scope)
 }
 
 function grantKey(subjectType: string, subjectId: string, datasourceKey: string) {
@@ -359,7 +355,7 @@ watch(
         :active-tab="props.activeTab"
         :audits="audits"
         :format-optional-date="formatOptionalDate"
-        :format-scope="formatScope"
+        :format-scope="formatDatasourceScope"
         :grant-key="grantKey"
         :overview="overview"
         :request-artifact-acl="requestArtifactAcl"
@@ -380,7 +376,7 @@ watch(
     <AdminDialogs
       :audits="audits"
       :format-optional-date="formatOptionalDate"
-      :format-scope="formatScope"
+      :format-scope="formatDatasourceScope"
       :overview="overview"
       :roles="roles"
       :save-artifact-acl-and-close-route="saveArtifactAclAndCloseRoute"

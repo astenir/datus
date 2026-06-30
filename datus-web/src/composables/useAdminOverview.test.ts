@@ -20,6 +20,7 @@ const listArtifacts = vi.fn();
 const getAcl = vi.fn();
 const putAcl = vi.fn();
 const toastError = vi.fn();
+const listCatalog = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   adminDatasourceApi: {
@@ -28,6 +29,9 @@ vi.mock("@/lib/api", () => ({
     getGrant,
     upsertGrant,
     deleteGrant,
+  },
+  catalogApi: {
+    list: listCatalog,
   },
   adminQuotaApi: {
     listQuotas,
@@ -126,6 +130,16 @@ describe("useAdminOverview", () => {
     listArtifacts.mockResolvedValue({ data: [artifact] });
     getAcl.mockResolvedValue({ data: artifactAcl });
     putAcl.mockResolvedValue({ data: artifactAcl });
+    listCatalog.mockResolvedValue({
+      databases: [
+        {
+          name: "analytics",
+          type: "postgres",
+          schema_name: "public",
+          tables: ["orders", "accounts"],
+        },
+      ],
+    });
   });
 
   it("loads the enterprise admin overview resources together", async () => {
@@ -155,6 +169,7 @@ describe("useAdminOverview", () => {
       effect: "allow",
       scope_text: "{\"schemas\":[\"public\"]}",
     };
+    overview.setGrantScopeMode("json");
 
     await overview.saveGrant();
 
@@ -163,6 +178,91 @@ describe("useAdminOverview", () => {
       scope: { schemas: ["public"] },
     });
     expect(listDatasources).toHaveBeenCalled();
+  });
+
+  it("saves datasource grants from selected catalog nodes", async () => {
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+    overview.grantForm.value = {
+      subject_type: "role",
+      subject_id: "analyst",
+      datasource_key: "fund",
+      effect: "allow",
+      scope_text: "{}",
+    };
+    overview.setGrantScopeMode("picker");
+    overview.toggleGrantNode("table:fund:analytics:public:orders");
+
+    await overview.saveGrant();
+
+    expect(upsertGrant).toHaveBeenCalledWith("role", "analyst", "fund", {
+      effect: "allow",
+      scope: {
+        databases: [],
+        schemas: [],
+        tables: ["analytics.public.orders"],
+      },
+    });
+  });
+
+  it("narrows an inherited parent selection when a child node is selected", async () => {
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+    overview.grantForm.value = {
+      subject_type: "role",
+      subject_id: "analyst",
+      datasource_key: "fund",
+      effect: "allow",
+      scope_text: "{}",
+    };
+    overview.setGrantScopeMode("picker");
+    await overview.loadGrantCatalog("fund");
+
+    overview.toggleGrantNode("schema:fund:analytics:public");
+    overview.toggleGrantNode("table:fund:analytics:public:orders");
+
+    expect(overview.selectedGrantNodes.value).toEqual(["table:fund:analytics:public:orders"]);
+
+    await overview.saveGrant();
+
+    expect(upsertGrant).toHaveBeenCalledWith("role", "analyst", "fund", {
+      effect: "allow",
+      scope: {
+        databases: [],
+        schemas: [],
+        tables: ["analytics.public.orders"],
+      },
+    });
+  });
+
+  it("promotes child selections into the selected parent node", async () => {
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+    overview.grantForm.value = {
+      subject_type: "role",
+      subject_id: "analyst",
+      datasource_key: "fund",
+      effect: "allow",
+      scope_text: "{}",
+    };
+    overview.setGrantScopeMode("picker");
+    await overview.loadGrantCatalog("fund");
+
+    overview.toggleGrantNode("table:fund:analytics:public:orders");
+    overview.toggleGrantNode("schema:fund:analytics:public");
+
+    expect(overview.selectedGrantNodes.value).toEqual(["schema:fund:analytics:public"]);
+
+    await overview.saveGrant();
+
+    expect(upsertGrant).toHaveBeenCalledWith("role", "analyst", "fund", {
+      effect: "allow",
+      scope: {
+        databases: [],
+        schemas: ["analytics.public"],
+        tables: [],
+      },
+    });
   });
 
   it("loads datasource grant detail into the edit form", async () => {
@@ -186,6 +286,7 @@ describe("useAdminOverview", () => {
       effect: "allow",
       scope_text: "{\n  \"schemas\": [\n    \"public\"\n  ]\n}",
     });
+    expect(overview.grantScopeMode.value).toBe("picker");
     expect(overview.grantDetailError.value).toBeNull();
 
     overview.closeGrantDialog();
@@ -205,6 +306,7 @@ describe("useAdminOverview", () => {
       effect: "allow",
       scope_text: "[]",
     };
+    overview.setGrantScopeMode("json");
 
     await overview.saveGrant();
 

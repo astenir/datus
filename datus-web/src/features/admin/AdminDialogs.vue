@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { computed } from "vue"
+import { ChevronDownIcon } from "@lucide/vue"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 import {
   Dialog,
   DialogContent,
@@ -22,6 +28,7 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import DatasourceGrantScopePicker from "@/features/admin/DatasourceGrantScopePicker.vue"
 import type { AdminDialogProps } from "@/features/admin/types"
 import { permissionBadgeItems } from "@/lib/permission-labels"
 
@@ -33,6 +40,37 @@ const selectedUserPermissionBadges = computed(() =>
 const selectedRolePermissionBadges = computed(() =>
   permissionBadgeItems(props.roles.selectedRoleDetail.value?.permissions),
 )
+const grantScopeTextSummary = computed(() =>
+  formatScopeText(props.overview.grantForm.value.scope_text),
+)
+const grantSubjectOptions = computed(() => {
+  if (props.overview.grantForm.value.subject_type === "role") {
+    return props.roles.roles.value.map((role) => ({
+      value: role.role_id,
+      label: role.name ? `${role.name} (${role.role_id})` : role.role_id,
+    }))
+  }
+  return props.users.users.value.map((user) => ({
+    value: user.user_id,
+    label: user.display_name ? `${user.display_name} (${user.user_id})` : user.user_id,
+  }))
+})
+
+function formatScopeText(text: string): string {
+  const trimmed = text.trim()
+  if (!trimmed) return props.formatScope({})
+
+  try {
+    const parsed: unknown = JSON.parse(trimmed)
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return props.formatScope(parsed as Record<string, unknown>)
+    }
+  } catch {
+    return "无法解析自定义范围"
+  }
+
+  return "无法解析自定义范围"
+}
 </script>
 
 <template>
@@ -172,7 +210,7 @@ const selectedRolePermissionBadges = computed(() =>
                   <span class="break-all font-medium">{{ grant.datasource_key }}</span>
                   <Badge :variant="grant.effect === 'allow' ? 'default' : 'destructive'">{{ grant.effect }}</Badge>
                 </div>
-                <div class="mt-1 break-all text-xs text-muted-foreground">{{ formatScope(grant.scope) }}</div>
+                <div class="mt-1 text-xs text-muted-foreground">{{ formatScope(grant.scope) }}</div>
               </div>
             </div>
             <div
@@ -198,7 +236,7 @@ const selectedRolePermissionBadges = computed(() =>
                   <span class="break-all font-medium">{{ grant.subject_id }} / {{ grant.datasource_key }}</span>
                   <Badge :variant="grant.effect === 'allow' ? 'default' : 'destructive'">{{ grant.effect }}</Badge>
                 </div>
-                <div class="mt-1 break-all text-xs text-muted-foreground">{{ formatScope(grant.scope) }}</div>
+                <div class="mt-1 text-xs text-muted-foreground">{{ formatScope(grant.scope) }}</div>
               </div>
             </div>
             <div
@@ -662,7 +700,7 @@ const selectedRolePermissionBadges = computed(() =>
     :open="overview.showGrantDialog.value"
     @update:open="setGrantDialogOpen"
   >
-    <DialogContent class="sm:max-w-2xl">
+    <DialogContent class="flex max-h-[90vh] flex-col overflow-hidden sm:max-w-3xl">
       <DialogHeader>
         <DialogTitle>{{ overview.editingGrant.value ? "编辑数据授权" : "新增数据授权" }}</DialogTitle>
         <DialogDescription>按用户或角色授予指定数据源的访问范围。</DialogDescription>
@@ -679,11 +717,14 @@ const selectedRolePermissionBadges = computed(() =>
       >
         {{ overview.grantDetailError.value }}
       </div>
-      <FieldGroup class="gap-4">
+      <FieldGroup class="min-h-0 gap-4 overflow-y-auto pr-1">
         <div class="grid gap-4 md:grid-cols-3">
           <Field>
             <FieldLabel>主体类型</FieldLabel>
-            <Select v-model="overview.grantForm.value.subject_type">
+            <Select
+              :model-value="overview.grantForm.value.subject_type"
+              @update:model-value="overview.setGrantSubjectType"
+            >
               <SelectTrigger class="w-full">
                 <SelectValue placeholder="主体类型" />
               </SelectTrigger>
@@ -696,15 +737,33 @@ const selectedRolePermissionBadges = computed(() =>
             </Select>
           </Field>
           <Field>
-            <FieldLabel for="grant-subject-id">主体 ID</FieldLabel>
-            <Input
-              id="grant-subject-id"
-              v-model="overview.grantForm.value.subject_id"
-            />
+            <FieldLabel>主体</FieldLabel>
+            <Select v-model="overview.grantForm.value.subject_id">
+              <SelectTrigger class="w-full">
+                <SelectValue placeholder="选择用户或角色" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem
+                    v-for="subject in grantSubjectOptions"
+                    :key="subject.value"
+                    :value="subject.value"
+                  >
+                    {{ subject.label }}
+                  </SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <FieldDescription v-if="!grantSubjectOptions.length">
+              当前没有可选{{ overview.grantForm.value.subject_type === "role" ? "角色" : "用户" }}。
+            </FieldDescription>
           </Field>
           <Field>
             <FieldLabel>数据源</FieldLabel>
-            <Select v-model="overview.grantForm.value.datasource_key">
+            <Select
+              :model-value="overview.grantForm.value.datasource_key"
+              @update:model-value="overview.setGrantDatasource"
+            >
               <SelectTrigger class="w-full">
                 <SelectValue placeholder="选择数据源" />
               </SelectTrigger>
@@ -722,27 +781,105 @@ const selectedRolePermissionBadges = computed(() =>
             </Select>
           </Field>
         </div>
-        <Field>
-          <FieldLabel>效果</FieldLabel>
-          <Select v-model="overview.grantForm.value.effect">
-            <SelectTrigger class="w-full">
-              <SelectValue placeholder="效果" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                <SelectItem value="allow">allow</SelectItem>
-                <SelectItem value="deny">deny</SelectItem>
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+        <div class="grid gap-4 md:grid-cols-[10rem_minmax(0,1fr)]">
+          <Field>
+            <FieldLabel>效果</FieldLabel>
+            <Select v-model="overview.grantForm.value.effect">
+              <SelectTrigger class="w-full">
+                <SelectValue placeholder="效果" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="allow">允许访问</SelectItem>
+                  <SelectItem value="deny">拒绝访问</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field>
+            <FieldLabel>授权范围</FieldLabel>
+            <Select
+              v-if="overview.grantScopeMode.value !== 'json'"
+              :model-value="overview.grantScopeMode.value"
+              @update:model-value="overview.setGrantScopeMode"
+            >
+              <SelectTrigger class="w-full">
+                <SelectValue placeholder="选择授权范围" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="all">整个数据源</SelectItem>
+                  <SelectItem value="picker">选择库、Schema 或表</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <div
+              v-else
+              class="rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground"
+            >
+              当前授权使用自定义范围。新建授权请使用整个数据源或目录选择器。
+            </div>
+          </Field>
+        </div>
+        <Field
+          v-if="overview.grantScopeMode.value === 'picker'"
+          class="gap-3"
+        >
+          <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(20rem,0.8fr)]">
+            <DatasourceGrantScopePicker
+              :nodes="overview.grantCatalogTree.value"
+              :selected-node-ids="overview.selectedGrantNodes.value"
+              :loading="overview.loadingGrantCatalog.value"
+              :error="overview.grantCatalogError.value"
+              :disabled="overview.savingGrant.value || overview.loadingGrantDetail.value"
+              @toggle-node="overview.toggleGrantNode"
+              @reload="overview.loadGrantCatalog"
+            />
+            <div class="flex min-h-0 flex-col gap-2">
+              <FieldLabel>Scope 预览</FieldLabel>
+              <pre class="h-56 overflow-auto whitespace-pre rounded-md bg-muted p-3 font-mono text-xs leading-6 lg:h-72">{{ overview.grantSelectedScopePreview.value }}</pre>
+              <FieldDescription>
+                这是最终提交给后端的 scope 内容，可用于保存前核对授权范围。
+              </FieldDescription>
+            </div>
+          </div>
         </Field>
-        <Field>
-          <FieldLabel for="grant-scope">Scope JSON</FieldLabel>
-          <Textarea
-            id="grant-scope"
-            v-model="overview.grantForm.value.scope_text"
-            class="min-h-28 font-mono text-xs"
-          />
+        <Field
+          v-else-if="overview.grantScopeMode.value === 'json'"
+          class="gap-3"
+        >
+          <FieldLabel>高级范围摘要</FieldLabel>
+          <div class="rounded-md border bg-muted/40 p-3 text-sm leading-6 text-muted-foreground">
+            {{ grantScopeTextSummary }}
+          </div>
+          <FieldDescription>
+            这是历史自定义授权范围。保存时会原样保留；如需调整范围，建议删除后用目录选择器重新创建。
+          </FieldDescription>
+          <Collapsible v-slot="{ open }">
+            <CollapsibleTrigger as-child>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                class="w-fit px-0 text-muted-foreground"
+              >
+                <ChevronDownIcon
+                  data-icon="inline-start"
+                  class="transition-transform"
+                  :class="{ 'rotate-180': open }"
+                />
+                查看原始 JSON
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <pre class="max-h-48 overflow-auto whitespace-pre rounded-md bg-muted p-3 font-mono text-xs leading-6">{{ overview.grantForm.value.scope_text.trim() || "{}" }}</pre>
+            </CollapsibleContent>
+          </Collapsible>
+        </Field>
+        <Field v-else>
+          <div class="rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">
+            当前授权范围为整个数据源。保存后后端仍会按实际权限策略和数据库账号限制执行访问控制。
+          </div>
         </Field>
       </FieldGroup>
       <DialogFooter>

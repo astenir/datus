@@ -2,6 +2,7 @@ import { computed, ref, shallowRef } from "vue";
 import { toast } from "vue-sonner";
 
 import { meApi } from "@/lib/api";
+import { formatDatasourceScope } from "@/lib/datasource-scope-labels";
 import type {
   MeDatasourceGrantView,
   MeFeatureView,
@@ -48,27 +49,33 @@ function nullableStringField(source: Record<string, unknown>, key: string): stri
   return typeof value === "string" && value.trim() ? value : null;
 }
 
+const datasourceScopeKeys = [
+  "allow_catalog",
+  "allow_sql",
+  "allow_report",
+  "allow_dashboard",
+  "catalogs",
+  "databases",
+  "schemas",
+  "tables",
+] as const;
+
 function summarizeGrantScope(value: unknown): string {
   if (value === true) return "全量";
   if (value === false || value === null || value === undefined) return "-";
   if (!isRecord(value)) return String(value);
 
-  const parts: string[] = [];
-  for (const key of ["catalogs", "databases", "schemas", "tables"]) {
-    const item = value[key];
-    if (Array.isArray(item) && item.length > 0) {
-      parts.push(`${key}: ${item.map(String).join(", ")}`);
-    }
+  if (isRecord(value.scope)) {
+    return formatDatasourceScope(value.scope);
   }
 
-  for (const key of ["allow_catalog", "allow_sql", "allow_report", "allow_dashboard"]) {
-    if (typeof value[key] === "boolean") {
-      parts.push(`${key}: ${value[key] ? "是" : "否"}`);
+  const scope: Record<string, unknown> = {};
+  for (const key of datasourceScopeKeys) {
+    if (key in value) {
+      scope[key] = value[key];
     }
   }
-
-  if (parts.length > 0) return parts.join("；");
-  return JSON.stringify(value);
+  return formatDatasourceScope(scope);
 }
 
 function normalizeGrant(datasource: string, raw: unknown): MeDatasourceGrantView {

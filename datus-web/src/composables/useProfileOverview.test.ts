@@ -104,14 +104,14 @@ describe("useProfileOverview", () => {
         datasource: "blocked",
         enabled: false,
         effect: "deny",
-        scopeText: "{\"effect\":\"deny\"}",
+        scopeText: "全量访问",
         raw: { effect: "deny" },
       },
       {
         datasource: "finance",
         enabled: true,
         effect: "allow",
-        scopeText: "tables: public.accounts；allow_sql: 是",
+        scopeText: "表: public.accounts",
         raw: { effect: "allow", tables: ["public.accounts"], allow_sql: true },
       },
     ]);

@@ -14,6 +14,12 @@ type DatasourceGrant = {
   tables: Set<string>;
 };
 
+export type DatasourceGrantScope = {
+  databases?: string[];
+  schemas?: string[];
+  tables?: string[];
+};
+
 export function buildDatasourceTreeOptions(catalogDatabases: readonly CatalogDatabase[]): RoleDatasourceTreeNode[] {
   const datasourceMap = new Map<string, CatalogDatabase[]>();
   for (const db of catalogDatabases) {
@@ -136,6 +142,35 @@ export function datasourceNodeIdsFromPermissions(
   return nodeIds;
 }
 
+export function isStandardDatasourceGrantScope(scope: Record<string, unknown> | undefined): boolean {
+  if (!scope || Object.keys(scope).length === 0) return true;
+
+  return Object.entries(scope).every(([key, value]) =>
+    (key === "databases" || key === "schemas" || key === "tables")
+    && (value === undefined || isStringArray(value))
+  );
+}
+
+export function datasourceNodeIdsFromScope(
+  datasourceName: string,
+  scope: Record<string, unknown> | undefined,
+  catalogDatabases: readonly CatalogDatabase[]
+): string[] {
+  if (!scope || Object.keys(scope).length === 0) {
+    return [`ds:${datasourceName}`];
+  }
+
+  const normalizedScope = normalizeDatasourceGrantScope(scope);
+  return datasourceNodeIdsFromPermissions(
+    [{
+      permission_type: "datasource",
+      resource_code: datasourceName,
+      permission_value: JSON.stringify(normalizedScope),
+    }],
+    catalogDatabases,
+  );
+}
+
 export function rolePermissionsFromSelections(
   roleType: string,
   selectedFeatures: readonly string[],
@@ -208,6 +243,22 @@ export function rolePermissionsFromSelections(
     }
   }
   return permissions;
+}
+
+export function datasourceScopeFromNodeIds(
+  datasourceName: string,
+  selectedDatasourceNodes: readonly string[]
+): Record<string, unknown> {
+  const permission = rolePermissionsFromSelections("datasource", [], selectedDatasourceNodes)
+    .find((item) => item.resource_code === datasourceName);
+  if (!permission) return {};
+
+  const scope = parseDatasourceGrantScope(permission.permission_value);
+  const hasSpecificScope =
+    (scope.databases?.length ?? 0) > 0
+    || (scope.schemas?.length ?? 0) > 0
+    || (scope.tables?.length ?? 0) > 0;
+  return hasSpecificScope ? scope : {};
 }
 
 function pruneBroaderDatasourceGrants(grant: DatasourceGrant) {
@@ -288,4 +339,31 @@ function ensureDatasourceGrant(grants: Map<string, DatasourceGrant>, datasourceN
   };
   grants.set(datasourceName, next);
   return next;
+}
+
+function parseDatasourceGrantScope(value: string): DatasourceGrantScope {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return normalizeDatasourceGrantScope(parsed as Record<string, unknown>);
+  } catch {
+    return {};
+  }
+}
+
+function normalizeDatasourceGrantScope(scope: Record<string, unknown>): DatasourceGrantScope {
+  return {
+    databases: stringArray(scope.databases),
+    schemas: stringArray(scope.schemas),
+    tables: stringArray(scope.tables),
+  };
+}
+
+function stringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+}
+
+function isStringArray(value: unknown): boolean {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
 }

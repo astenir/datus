@@ -3,7 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildDatasourceTreeOptions,
   datasourceNodeIdsFromPermissions,
+  datasourceNodeIdsFromScope,
+  datasourceScopeFromNodeIds,
   featurePermissionCodes,
+  isStandardDatasourceGrantScope,
   rolePermissionsFromSelections,
 } from "./role-permissions";
 import type { CatalogDatabase, RolePermissionRecord } from "@/types/admin";
@@ -88,6 +91,18 @@ describe("role permission helpers", () => {
     ]);
   });
 
+  it("converts datasource grant scopes to tree node ids", () => {
+    expect(datasourceNodeIdsFromScope("fund", {
+      databases: ["analytics"],
+      schemas: ["analytics.public"],
+      tables: ["analytics.risk.limits"],
+    }, catalog)).toEqual([
+      "db:fund:analytics",
+      "schema:fund:analytics:public",
+      "table:fund:analytics:risk:limits",
+    ]);
+  });
+
   it("drops broader datasource selections when child nodes are selected", () => {
     const permissions = rolePermissionsFromSelections("datasource", [], [
       "ds:fund",
@@ -108,6 +123,24 @@ describe("role permission helpers", () => {
         }),
       },
     ]);
+  });
+
+  it("builds direct datasource grant scopes from selected nodes", () => {
+    expect(datasourceScopeFromNodeIds("fund", [
+      "db:fund:analytics",
+      "schema:fund:analytics:public",
+      "table:fund:analytics:public:orders",
+    ])).toEqual({
+      databases: [],
+      schemas: [],
+      tables: ["analytics.public.orders"],
+    });
+  });
+
+  it("keeps advanced grant scopes in JSON mode when keys are not standard", () => {
+    expect(isStandardDatasourceGrantScope({ tables: ["analytics.public.orders"] })).toBe(true);
+    expect(isStandardDatasourceGrantScope({ tables: [1] })).toBe(false);
+    expect(isStandardDatasourceGrantScope({ allow_sql: true })).toBe(false);
   });
 
   it("builds resource feature permissions", () => {
