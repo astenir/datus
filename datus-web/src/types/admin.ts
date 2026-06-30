@@ -125,8 +125,10 @@ export interface DatasourceGrantFormData {
   scope_text: string;
 }
 
+export type QuotaSubjectType = "global" | "role" | "user";
+
 export interface QuotaFormData {
-  subject_type: string;
+  subject_type: QuotaSubjectType;
   subject_id: string;
   resource: string;
   limit: number;
@@ -207,8 +209,8 @@ export interface UpsertDatasourceGrantInput {
 }
 
 export interface UpsertQuotaInput {
-  subject_type: string;
-  subject_id?: string | null;
+  subject_type: QuotaSubjectType;
+  subject_id: string;
   resource: string;
   limit: number;
   window_seconds: number;

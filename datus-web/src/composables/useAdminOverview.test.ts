@@ -314,13 +314,13 @@ describe("useAdminOverview", () => {
     expect(toastError).toHaveBeenCalledWith("Scope 必须是 JSON 对象");
   });
 
-  it("saves quotas with numeric limits and nullable subject ids", async () => {
+  it("saves quotas with selected subjects and supported resources", async () => {
     const { useAdminOverview } = await import("./useAdminOverview");
     const overview = useAdminOverview();
     overview.quotaForm.value = {
-      subject_type: "project",
-      subject_id: "",
-      resource: "chat_tokens",
+      subject_type: "role",
+      subject_id: "analyst",
+      resource: "chat.stream",
       limit: 5000,
       window_seconds: 3600,
       enabled: true,
@@ -329,13 +329,51 @@ describe("useAdminOverview", () => {
     await overview.saveQuota();
 
     expect(upsertQuota).toHaveBeenCalledWith({
-      subject_type: "project",
-      subject_id: null,
-      resource: "chat_tokens",
+      subject_type: "role",
+      subject_id: "analyst",
+      resource: "chat.stream",
       limit: 5000,
       window_seconds: 3600,
       enabled: true,
     });
+  });
+
+  it("saves global quotas with wildcard subject id", async () => {
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+    overview.setQuotaSubjectType("global");
+    overview.setQuotaResource("sql.execute");
+    overview.quotaForm.value.limit = 50;
+    overview.quotaForm.value.window_seconds = 86400;
+
+    await overview.saveQuota();
+
+    expect(upsertQuota).toHaveBeenCalledWith({
+      subject_type: "global",
+      subject_id: "*",
+      resource: "sql.execute",
+      limit: 50,
+      window_seconds: 86400,
+      enabled: true,
+    });
+  });
+
+  it("rejects quota resources that are not consumed by the backend", async () => {
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+    overview.quotaForm.value = {
+      subject_type: "user",
+      subject_id: "alice",
+      resource: "chat_tokens",
+      limit: 5000,
+      window_seconds: 3600,
+      enabled: true,
+    };
+
+    await overview.saveQuota();
+
+    expect(upsertQuota).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith("请填写有效的额度主体、资源、限制和窗口");
   });
 
   it("loads secret detail into the edit form", async () => {

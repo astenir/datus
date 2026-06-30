@@ -31,9 +31,15 @@ import { Textarea } from "@/components/ui/textarea"
 import DatasourceGrantScopePicker from "@/features/admin/DatasourceGrantScopePicker.vue"
 import type { AdminDialogProps } from "@/features/admin/types"
 import { permissionBadgeItems } from "@/lib/permission-labels"
+import { quotaResourceOptionFor, quotaResourceOptions } from "@/lib/quota-options"
 
 const props = defineProps<AdminDialogProps>()
 
+const quotaSubjectTypeOptions = [
+  { value: "user", label: "用户" },
+  { value: "role", label: "角色" },
+  { value: "global", label: "全局" },
+] as const
 const selectedUserPermissionBadges = computed(() =>
   permissionBadgeItems(props.users.selectedUserDetail.value?.effective_permissions),
 )
@@ -54,6 +60,52 @@ const grantSubjectOptions = computed(() => {
     value: user.user_id,
     label: user.display_name ? `${user.display_name} (${user.user_id})` : user.user_id,
   }))
+})
+const quotaSubjectOptions = computed(() => {
+  const subjectType = props.overview.quotaForm.value.subject_type
+  if (subjectType === "global") return []
+
+  const options = subjectType === "role"
+    ? props.roles.roles.value.map((role) => ({
+        value: role.role_id,
+        label: role.name ? `${role.name} (${role.role_id})` : role.role_id,
+      }))
+    : props.users.users.value.map((user) => ({
+        value: user.user_id,
+        label: user.display_name ? `${user.display_name} (${user.user_id})` : user.user_id,
+      }))
+  const currentSubjectId = props.overview.quotaForm.value.subject_id.trim()
+  if (currentSubjectId && !options.some((option) => option.value === currentSubjectId)) {
+    return [
+      {
+        value: currentSubjectId,
+        label: `当前：${currentSubjectId}`,
+      },
+      ...options,
+    ]
+  }
+  return options
+})
+const quotaSubjectPlaceholder = computed(() =>
+  props.overview.quotaForm.value.subject_type === "role" ? "选择角色" : "选择用户",
+)
+const effectiveQuotaResourceOptions = computed(() => {
+  const currentResource = props.overview.quotaForm.value.resource.trim()
+  if (!currentResource || quotaResourceOptionFor(currentResource)) {
+    return quotaResourceOptions
+  }
+  return [
+    {
+      value: currentResource,
+      label: `当前未接入：${currentResource}`,
+      description: "后端当前不会消费这个资源，建议切换到已接入资源。",
+    },
+    ...quotaResourceOptions,
+  ]
+})
+const selectedQuotaResourceDescription = computed(() => {
+  const currentResource = props.overview.quotaForm.value.resource.trim()
+  return effectiveQuotaResourceOptions.value.find((option) => option.value === currentResource)?.description ?? ""
 })
 
 function formatScopeText(text: string): string {
@@ -908,32 +960,81 @@ function formatScopeText(text: string): string {
       <FieldGroup class="gap-4">
         <Field>
           <FieldLabel>主体类型</FieldLabel>
-          <Select v-model="overview.quotaForm.value.subject_type">
+          <Select
+            :model-value="overview.quotaForm.value.subject_type"
+            @update:model-value="overview.setQuotaSubjectType"
+          >
             <SelectTrigger class="w-full">
               <SelectValue placeholder="主体类型" />
             </SelectTrigger>
             <SelectContent>
               <SelectGroup>
-                <SelectItem value="user">user</SelectItem>
-                <SelectItem value="role">role</SelectItem>
-                <SelectItem value="project">project</SelectItem>
+                <SelectItem
+                  v-for="option in quotaSubjectTypeOptions"
+                  :key="option.value"
+                  :value="option.value"
+                >
+                  {{ option.label }}
+                </SelectItem>
               </SelectGroup>
             </SelectContent>
           </Select>
         </Field>
-        <Field>
-          <FieldLabel for="quota-subject-id">主体 ID</FieldLabel>
-          <Input
-            id="quota-subject-id"
-            v-model="overview.quotaForm.value.subject_id"
-          />
+        <Field v-if="overview.quotaForm.value.subject_type === 'global'">
+          <FieldLabel>主体</FieldLabel>
+          <div class="rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+            全局额度会应用到所有用户请求。
+          </div>
+        </Field>
+        <Field v-else>
+          <FieldLabel>主体</FieldLabel>
+          <Select
+            :model-value="overview.quotaForm.value.subject_id"
+            @update:model-value="overview.setQuotaSubjectId"
+          >
+            <SelectTrigger class="w-full">
+              <SelectValue :placeholder="quotaSubjectPlaceholder" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem
+                  v-for="subject in quotaSubjectOptions"
+                  :key="subject.value"
+                  :value="subject.value"
+                >
+                  {{ subject.label }}
+                </SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <FieldDescription v-if="!quotaSubjectOptions.length">
+            当前没有可选{{ overview.quotaForm.value.subject_type === "role" ? "角色" : "用户" }}。
+          </FieldDescription>
         </Field>
         <Field>
-          <FieldLabel for="quota-resource">资源</FieldLabel>
-          <Input
-            id="quota-resource"
-            v-model="overview.quotaForm.value.resource"
-          />
+          <FieldLabel>资源</FieldLabel>
+          <Select
+            :model-value="overview.quotaForm.value.resource"
+            @update:model-value="overview.setQuotaResource"
+          >
+            <SelectTrigger class="w-full">
+              <SelectValue placeholder="选择资源" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                <SelectItem
+                  v-for="option in effectiveQuotaResourceOptions"
+                  :key="option.value"
+                  :value="option.value"
+                >
+                  {{ option.label }}
+                </SelectItem>
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+          <FieldDescription v-if="selectedQuotaResourceDescription">
+            {{ selectedQuotaResourceDescription }}
+          </FieldDescription>
         </Field>
         <div class="grid gap-4 md:grid-cols-2">
           <Field>

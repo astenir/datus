@@ -9,6 +9,7 @@ import {
   adminSessionApi,
   catalogApi,
 } from "@/lib/api";
+import { quotaResourceOptionFor } from "@/lib/quota-options";
 import {
   buildDatasourceTreeOptions,
   datasourceNodeIdsFromScope,
@@ -26,6 +27,7 @@ import type {
   AdminSessionDetail,
   ArtifactAclFormData,
   DatasourceGrantFormData,
+  QuotaSubjectType,
   QuotaFormData,
   SecretFormData,
 } from "@/types/admin";
@@ -69,6 +71,11 @@ function parseScope(text: string): Record<string, unknown> {
 function standardGrantScopeMode(scope: Record<string, unknown> | undefined): DatasourceScopeMode {
   if (!scope || Object.keys(scope).length === 0) return "all";
   return isStandardDatasourceGrantScope(scope) ? "picker" : "json";
+}
+
+function quotaSubjectTypeFromValue(value: string): QuotaSubjectType {
+  if (value === "global" || value === "role" || value === "user") return value;
+  return "user";
 }
 
 function commaList(value: string): string[] {
@@ -188,7 +195,7 @@ export function useAdminOverview() {
   const quotaForm = ref<QuotaFormData>({
     subject_type: "user",
     subject_id: "",
-    resource: "chat_tokens",
+    resource: "chat.stream",
     limit: 100000,
     window_seconds: 86400,
     enabled: true,
@@ -551,7 +558,7 @@ export function useAdminOverview() {
     quotaForm.value = {
       subject_type: "user",
       subject_id: "",
-      resource: "chat_tokens",
+      resource: "chat.stream",
       limit: 100000,
       window_seconds: 86400,
       enabled: true,
@@ -561,9 +568,10 @@ export function useAdminOverview() {
 
   function openEditQuotaDialog(quota: AdminQuota) {
     editingQuota.value = quota;
+    const subjectType = quotaSubjectTypeFromValue(quota.subject_type);
     quotaForm.value = {
-      subject_type: quota.subject_type,
-      subject_id: quota.subject_id,
+      subject_type: subjectType,
+      subject_id: subjectType === "global" ? "*" : quota.subject_id,
       resource: quota.resource,
       limit: quota.limit,
       window_seconds: quota.window_seconds,
@@ -572,10 +580,37 @@ export function useAdminOverview() {
     showQuotaDialog.value = true;
   }
 
+  function setQuotaSubjectType(value: unknown) {
+    if (value !== "global" && value !== "role" && value !== "user") return;
+    const subjectType: QuotaSubjectType = value;
+    if (quotaForm.value.subject_type !== subjectType) {
+      quotaForm.value.subject_id = subjectType === "global" ? "*" : "";
+    }
+    quotaForm.value.subject_type = subjectType;
+  }
+
+  function setQuotaSubjectId(value: unknown) {
+    if (typeof value !== "string") return;
+    quotaForm.value.subject_id = value.trim();
+  }
+
+  function setQuotaResource(value: unknown) {
+    if (typeof value !== "string") return;
+    const resource = value.trim();
+    if (!resource) return;
+    quotaForm.value.resource = resource;
+  }
+
   async function saveQuota() {
-    const subjectType = quotaForm.value.subject_type.trim();
+    const subjectType = quotaSubjectTypeFromValue(quotaForm.value.subject_type);
+    const subjectId = subjectType === "global" ? "*" : quotaForm.value.subject_id.trim();
     const resource = quotaForm.value.resource.trim();
-    if (!subjectType || !resource || quotaForm.value.limit < 0 || quotaForm.value.window_seconds <= 0) {
+    if (
+      (subjectType !== "global" && !subjectId)
+      || !quotaResourceOptionFor(resource)
+      || quotaForm.value.limit <= 0
+      || quotaForm.value.window_seconds <= 0
+    ) {
       toast.error("请填写有效的额度主体、资源、限制和窗口");
       return;
     }
@@ -584,7 +619,7 @@ export function useAdminOverview() {
     try {
       await adminQuotaApi.upsertQuota({
         subject_type: subjectType,
-        subject_id: quotaForm.value.subject_id.trim() || null,
+        subject_id: subjectId,
         resource,
         limit: Number(quotaForm.value.limit),
         window_seconds: Number(quotaForm.value.window_seconds),
@@ -949,6 +984,9 @@ export function useAdminOverview() {
     deleteGrant,
     openCreateQuotaDialog,
     openEditQuotaDialog,
+    setQuotaSubjectType,
+    setQuotaSubjectId,
+    setQuotaResource,
     saveQuota,
     openCreateSecretDialog,
     openEditSecretDialog,

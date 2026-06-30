@@ -515,7 +515,7 @@ describe("api client", () => {
     await adminSessionApi.stopSession("session-1");
     await adminDatasourceApi.listGrants({ subjectType: "role", subjectId: "admin" });
     await adminDatasourceApi.getGrant("role", "admin", "fund");
-    await adminQuotaApi.listUsage({ resource: "chat_tokens" });
+    await adminQuotaApi.listUsage({ resource: "chat.stream" });
     await adminSecretApi.listSecrets({ prefix: "openai" });
     await adminSecretApi.getSecret("openai.default");
     await adminArtifactApi.putAcl("dashboard", "fund-overview", {
@@ -538,7 +538,7 @@ describe("api client", () => {
     expect(vi.mocked(fetch).mock.calls[2]?.[0]).toBe("/api/v1/admin/sessions/session-1/stop");
     expect(vi.mocked(fetch).mock.calls[3]?.[0]).toBe("/api/v1/admin/datasource-grants?subject_type=role&subject_id=admin");
     expect(vi.mocked(fetch).mock.calls[4]?.[0]).toBe("/api/v1/admin/datasource-grants/role/admin/fund");
-    expect(vi.mocked(fetch).mock.calls[5]?.[0]).toBe("/api/v1/admin/usage?resource=chat_tokens");
+    expect(vi.mocked(fetch).mock.calls[5]?.[0]).toBe("/api/v1/admin/usage?resource=chat.stream");
     expect(vi.mocked(fetch).mock.calls[6]?.[0]).toBe("/api/v1/admin/secrets?prefix=openai");
     expect(vi.mocked(fetch).mock.calls[7]?.[0]).toBe("/api/v1/admin/secrets/openai.default");
     expect(vi.mocked(fetch).mock.calls[8]?.[0]).toBe("/api/v1/admin/artifacts/dashboard/fund-overview/acl");
