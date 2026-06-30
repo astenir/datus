@@ -267,8 +267,8 @@ export function useAgentManager() {
     formMode.value = "create";
   }
 
-  async function saveForm() {
-    if (!canSubmitForm.value) return;
+  async function saveForm(): Promise<boolean> {
+    if (!canSubmitForm.value) return false;
 
     saving.value = true;
 
@@ -285,6 +285,7 @@ export function useAgentManager() {
       const nextSelection = agentId;
       await loadAgents();
       await selectAgent(nextSelection);
+      return true;
     } catch (err) {
       const message = agentRouteErrorMessage(
         err,
@@ -292,6 +293,7 @@ export function useAgentManager() {
       );
       console.error("保存 Agent 失败:", err);
       toast.error(message);
+      return false;
     } finally {
       saving.value = false;
     }

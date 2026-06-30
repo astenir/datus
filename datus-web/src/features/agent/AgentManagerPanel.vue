@@ -24,15 +24,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Table,
   TableBody,
@@ -50,6 +52,7 @@ const manager = useAgentManager()
 type AgentRow = (typeof manager.agents.value)[number]
 
 const deleteTarget = shallowRef<AgentRow | null>(null)
+const formDialogOpen = shallowRef(false)
 
 const selectedTitle = computed(() => manager.selectedAgentName.value ?? "新建 Agent")
 const selectedTypeLabel = computed(() => manager.selectedAgent.value?.node_class || manager.form.value.nodeClass || "未指定")
@@ -64,18 +67,32 @@ const deleteDialogOpen = computed({
 })
 const formModeLabel = computed(() => manager.formMode.value === "edit" ? "编辑" : "新建")
 const saveLabel = computed(() => manager.formMode.value === "edit" ? "保存 Agent" : "创建 Agent")
+const formDialogDescription = computed(() => {
+  return manager.formMode.value === "edit"
+    ? "编辑当前 Agent 的节点类型、工具、约束和作用域，保存后会同步到企业 Agent 接口。"
+    : "创建新的可复用 Agent；列表字段支持英文逗号或换行分隔。"
+})
 
 function systemPromptSummary(agent: AgentRow) {
   const text = agent.description || ""
   return text.trim() || "-"
 }
 
-function selectAgent(agent: AgentRow) {
-  void manager.selectAgent(agent.agent_id)
+async function selectAgent(agent: AgentRow) {
+  await manager.selectAgent(agent.agent_id)
+  formDialogOpen.value = true
 }
 
 function startCreate() {
   manager.startCreate()
+  formDialogOpen.value = true
+}
+
+async function submitForm() {
+  const saved = await manager.saveForm()
+  if (saved) {
+    formDialogOpen.value = false
+  }
 }
 
 async function refreshAll() {
@@ -99,14 +116,19 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="min-h-0 flex-1 overflow-y-auto p-4">
-    <div class="flex flex-col gap-4">
-      <div class="flex flex-wrap items-center gap-3">
+  <section class="flex min-h-0 flex-1 overflow-hidden p-3">
+    <div class="flex min-h-0 flex-1 flex-col gap-3">
+      <div class="flex shrink-0 flex-wrap items-center gap-3">
         <div class="min-w-0 flex-1">
           <h1 class="text-lg font-semibold">Agent 管理</h1>
-          <p class="text-sm text-muted-foreground">
-            管理后端 Agent、可用工具目录和默认工具组合，聊天工作区会复用这些配置。
-          </p>
+          <div class="mt-1 flex flex-wrap items-center gap-2">
+            <Badge variant="secondary">{{ manager.agentCount.value }} 个 Agent</Badge>
+            <Badge variant="outline">{{ manager.toolCategoryCount.value }} 类 / {{ manager.toolCount.value }} 个工具</Badge>
+            <span class="min-w-0 truncate text-xs text-muted-foreground">
+              当前：<span class="font-medium text-foreground">{{ selectedTitle }}</span>
+            </span>
+            <Badge variant="outline">{{ selectedTypeLabel }}</Badge>
+          </div>
         </div>
         <div class="flex items-center gap-2">
           <Button
@@ -123,7 +145,7 @@ onMounted(() => {
             @click="startCreate"
           >
             <PlusIcon data-icon="inline-start" />
-            新建
+            新建 Agent
           </Button>
         </div>
       </div>
@@ -131,6 +153,7 @@ onMounted(() => {
       <Alert
         v-if="manager.enterpriseRoutesUnavailable.value"
         variant="destructive"
+        class="shrink-0"
       >
         <BotIcon />
         <AlertTitle>企业 Agent 管理接口不可用</AlertTitle>
@@ -139,54 +162,16 @@ onMounted(() => {
         </AlertDescription>
       </Alert>
 
-      <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <Card>
-          <CardHeader class="pb-2">
-            <CardTitle class="text-sm">Agent</CardTitle>
-          </CardHeader>
-          <CardContent class="flex items-end justify-between gap-3">
-            <span class="text-lg font-semibold">{{ manager.agentCount.value }}</span>
-            <BotIcon class="shrink-0 text-muted-foreground" />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader class="pb-2">
-            <CardTitle class="text-sm">工具分类</CardTitle>
-          </CardHeader>
-          <CardContent class="flex items-end justify-between gap-3">
-            <span class="text-lg font-semibold">{{ manager.toolCategoryCount.value }}</span>
-            <span class="text-xs text-muted-foreground">共 {{ manager.toolCount.value }} 个工具</span>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader class="pb-2">
-            <CardTitle class="text-sm">当前选择</CardTitle>
-          </CardHeader>
-          <CardContent class="flex min-w-0 items-end justify-between gap-3">
-            <span class="min-w-0 truncate text-lg font-semibold">{{ selectedTitle }}</span>
-            <Badge variant="outline">{{ selectedTypeLabel }}</Badge>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader class="pb-2">
-            <CardTitle class="text-sm">可用工具</CardTitle>
-          </CardHeader>
-          <CardContent class="flex items-end justify-between gap-3">
-            <span class="text-lg font-semibold">{{ manager.selectedUseToolCount.value }}</span>
-            <span class="text-xs text-muted-foreground">当前 Agent</span>
-          </CardContent>
-        </Card>
-      </div>
-
-      <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_28rem]">
-        <Card class="min-w-0">
-          <CardHeader>
+      <div class="grid min-h-0 flex-1 auto-cols-[calc(100vw-1.5rem)] grid-flow-col gap-3 overflow-x-auto xl:auto-cols-auto xl:grid-flow-row xl:grid-cols-[minmax(28rem,1fr)_minmax(22rem,0.6fr)] xl:overflow-visible">
+        <Card
+          size="sm"
+          class="min-h-0 min-w-0"
+        >
+          <CardHeader class="shrink-0">
             <div class="flex flex-wrap items-start gap-3">
               <div class="min-w-0 flex-1">
                 <CardTitle class="text-lg">Agent 列表</CardTitle>
-                <CardDescription class="text-sm">
-                  选择一行查看详情并编辑；删除操作会立即同步到后端配置。
-                </CardDescription>
+                <CardDescription class="text-sm">选择一行查看详情并编辑。</CardDescription>
               </div>
               <Badge
                 v-if="manager.loading.value"
@@ -200,27 +185,23 @@ onMounted(() => {
               </Badge>
             </div>
           </CardHeader>
-          <CardContent class="min-w-0">
+          <CardContent class="flex min-h-0 flex-1 flex-col gap-3">
             <Alert
               v-if="manager.error.value"
               variant="destructive"
-              class="mb-4"
             >
               <BotIcon />
               <AlertTitle>读取失败</AlertTitle>
               <AlertDescription>{{ manager.error.value }}</AlertDescription>
             </Alert>
 
-            <div class="overflow-x-auto">
+            <ScrollArea class="min-h-0 flex-1 rounded-lg border">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>名称</TableHead>
-                    <TableHead>节点类型</TableHead>
+                    <TableHead>Agent</TableHead>
                     <TableHead>状态</TableHead>
-                    <TableHead>描述</TableHead>
-                    <TableHead>创建时间</TableHead>
-                    <TableHead class="w-24 text-right">操作</TableHead>
+                    <TableHead class="w-12 text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -230,25 +211,27 @@ onMounted(() => {
                     class="cursor-pointer"
                     @click="selectAgent(agent)"
                   >
-                    <TableCell class="font-medium">
-                      <div class="flex min-w-0 items-center gap-2">
-                        <CheckCircle2Icon
-                          v-if="agent.agent_id === manager.selectedAgentId.value"
-                          class="shrink-0 text-primary"
-                        />
-                        <span class="truncate">{{ agent.name }}</span>
+                    <TableCell>
+                      <div class="flex min-w-0 flex-col gap-1">
+                        <div class="flex min-w-0 items-center gap-2 font-medium">
+                          <CheckCircle2Icon
+                            v-if="agent.agent_id === manager.selectedAgentId.value"
+                            class="shrink-0 text-primary"
+                          />
+                          <span class="truncate">{{ agent.name }}</span>
+                        </div>
+                        <div class="flex min-w-0 flex-wrap items-center gap-1.5">
+                          <Badge variant="secondary">{{ agent.node_class || "gen_sql" }}</Badge>
+                          <span class="min-w-0 truncate text-xs text-muted-foreground">{{ systemPromptSummary(agent) }}</span>
+                        </div>
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge variant="secondary">{{ agent.node_class || "gen_sql" }}</Badge>
+                      <div class="flex flex-col items-start gap-1">
+                        <Badge variant="outline">{{ agent.status || "draft" }}</Badge>
+                        <span class="text-xs text-muted-foreground">{{ formatDate(agent.created_at) || "-" }}</span>
+                      </div>
                     </TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{{ agent.status || "draft" }}</Badge>
-                    </TableCell>
-                    <TableCell class="max-w-md">
-                      <span class="line-clamp-2 text-sm text-muted-foreground">{{ systemPromptSummary(agent) }}</span>
-                    </TableCell>
-                    <TableCell class="text-sm text-muted-foreground">{{ formatDate(agent.created_at) || "-" }}</TableCell>
                     <TableCell class="text-right">
                       <Button
                         variant="ghost"
@@ -262,7 +245,7 @@ onMounted(() => {
                   </TableRow>
                   <TableRow v-if="manager.agents.value.length === 0">
                     <TableCell
-                      colspan="6"
+                      colspan="3"
                       class="h-24 text-center text-sm text-muted-foreground"
                     >
                       暂无 Agent。点击新建创建第一个可复用 Agent。
@@ -270,23 +253,142 @@ onMounted(() => {
                   </TableRow>
                 </TableBody>
               </Table>
-            </div>
+            </ScrollArea>
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader>
-            <CardTitle class="text-lg">{{ formModeLabel }} Agent</CardTitle>
-            <CardDescription class="text-sm">
-              列表字段支持英文逗号或换行分隔；编辑会通过企业 Agent upsert 接口保存定义。
-            </CardDescription>
+        <Card
+          size="sm"
+          class="min-h-0 min-w-0"
+        >
+          <CardHeader class="shrink-0">
+            <div class="flex flex-wrap items-start gap-3">
+              <div class="min-w-0 flex-1">
+                <CardTitle class="text-lg">工具</CardTitle>
+                <CardDescription class="text-sm">目录与当前 Agent 默认工具。</CardDescription>
+              </div>
+              <Badge variant="outline">{{ manager.selectedUseToolCount.value }}</Badge>
+            </div>
           </CardHeader>
-          <CardContent>
-            <form
-              class="flex flex-col gap-4"
-              @submit.prevent="manager.saveForm"
+          <CardContent class="min-h-0 flex-1">
+            <Tabs
+              default-value="catalog"
+              class="flex h-full min-h-0 flex-col gap-3"
             >
-              <FieldGroup>
+              <TabsList class="grid h-auto shrink-0 grid-cols-2">
+                <TabsTrigger value="catalog">工具目录</TabsTrigger>
+                <TabsTrigger value="selection">当前工具</TabsTrigger>
+              </TabsList>
+
+              <TabsContent
+                value="catalog"
+                class="m-0 min-h-0"
+              >
+                <ScrollArea class="h-full min-h-0">
+                  <div class="flex flex-col gap-3 pr-3">
+                    <div
+                      v-for="[category, tools] in toolCatalogEntries"
+                      :key="category"
+                      class="rounded-lg border bg-muted/20 p-3"
+                    >
+                      <div class="mb-2 flex items-center justify-between gap-2">
+                        <div class="flex min-w-0 items-center gap-2">
+                          <WrenchIcon class="shrink-0 text-muted-foreground" />
+                          <span class="truncate text-sm font-medium">{{ category }}</span>
+                        </div>
+                        <Badge variant="outline">{{ tools.length }}</Badge>
+                      </div>
+                      <div class="flex flex-wrap gap-1.5">
+                        <Badge
+                          v-for="tool in tools"
+                          :key="tool"
+                          variant="secondary"
+                        >
+                          {{ tool }}
+                        </Badge>
+                      </div>
+                    </div>
+                    <Alert v-if="toolCatalogEntries.length === 0">
+                      <BracesIcon />
+                      <AlertTitle>暂无工具目录</AlertTitle>
+                      <AlertDescription>后端没有返回可配置工具，或当前用户没有读取权限。</AlertDescription>
+                    </Alert>
+                  </div>
+                </ScrollArea>
+              </TabsContent>
+
+              <TabsContent
+                value="selection"
+                class="m-0 min-h-0"
+              >
+                <ScrollArea class="h-full min-h-0">
+                  <div class="flex flex-col gap-3 pr-3">
+                    <div class="rounded-lg border bg-muted/20 p-3">
+                      <div class="mb-2 flex items-center gap-2">
+                        <ListChecksIcon class="text-muted-foreground" />
+                        <span class="text-sm font-medium">默认工具</span>
+                        <Badge variant="outline">{{ defaultUseTools.length }}</Badge>
+                      </div>
+                      <div class="flex flex-wrap gap-1.5">
+                        <Badge
+                          v-for="tool in defaultUseTools"
+                          :key="tool"
+                          variant="secondary"
+                        >
+                          {{ tool }}
+                        </Badge>
+                        <span
+                          v-if="defaultUseTools.length === 0"
+                          class="text-sm text-muted-foreground"
+                        >
+                          未返回默认工具。
+                        </span>
+                      </div>
+                    </div>
+
+                    <div
+                      v-for="[category, tools] in useToolTypeEntries"
+                      :key="category"
+                      class="rounded-lg border bg-muted/20 p-3"
+                    >
+                      <div class="mb-2 flex items-center justify-between gap-2">
+                        <span class="truncate text-sm font-medium">{{ category }}</span>
+                        <Badge variant="outline">{{ tools.length }}</Badge>
+                      </div>
+                      <div class="flex flex-wrap gap-1.5">
+                        <Badge
+                          v-for="tool in tools"
+                          :key="tool"
+                          variant="secondary"
+                        >
+                          {{ tool }}
+                        </Badge>
+                      </div>
+                    </div>
+                  </div>
+                </ScrollArea>
+              </TabsContent>
+            </Tabs>
+          </CardContent>
+        </Card>
+      </div>
+
+    </div>
+
+    <Dialog v-model:open="formDialogOpen">
+      <DialogContent class="max-h-[calc(100vh-2rem)] grid-rows-[auto_minmax(0,1fr)] sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>{{ formModeLabel }} Agent</DialogTitle>
+          <DialogDescription>{{ formDialogDescription }}</DialogDescription>
+        </DialogHeader>
+
+        <form
+          class="flex min-h-0 flex-col gap-4"
+          @submit.prevent="submitForm"
+        >
+          <ScrollArea class="min-h-0 flex-1">
+            <FieldGroup class="gap-4 pr-3">
+              <div class="grid gap-4 md:grid-cols-2">
                 <Field>
                   <FieldLabel for="agent-name">名称</FieldLabel>
                   <Input
@@ -303,9 +405,10 @@ onMounted(() => {
                     v-model="manager.form.value.nodeClass"
                     placeholder="gen_sql"
                   />
-                  <FieldDescription>对应企业接口的 node_class，例如 gen_sql 或 ask_report。</FieldDescription>
                 </Field>
+              </div>
 
+              <div class="grid gap-4 md:grid-cols-2">
                 <Field>
                   <FieldLabel for="agent-status">状态</FieldLabel>
                   <Select v-model="manager.form.value.status">
@@ -313,217 +416,109 @@ onMounted(() => {
                       <SelectValue placeholder="选择状态" />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="draft">draft</SelectItem>
-                      <SelectItem value="published">published</SelectItem>
-                      <SelectItem value="disabled">disabled</SelectItem>
-                      <SelectItem value="archived">archived</SelectItem>
+                      <SelectGroup>
+                        <SelectItem value="draft">draft</SelectItem>
+                        <SelectItem value="published">published</SelectItem>
+                        <SelectItem value="disabled">disabled</SelectItem>
+                        <SelectItem value="archived">archived</SelectItem>
+                      </SelectGroup>
                     </SelectContent>
                   </Select>
                 </Field>
 
                 <Field>
-                  <FieldLabel for="agent-description">描述</FieldLabel>
-                  <Textarea
-                    id="agent-description"
-                    v-model="manager.form.value.description"
-                    class="min-h-20"
-                    placeholder="这个 Agent 的职责范围"
+                  <FieldLabel for="agent-max-turns">最大轮次</FieldLabel>
+                  <Input
+                    id="agent-max-turns"
+                    v-model="manager.form.value.maxTurns"
+                    inputmode="numeric"
+                    placeholder="8"
                   />
                 </Field>
+              </div>
 
+              <Field>
+                <FieldLabel for="agent-description">描述</FieldLabel>
+                <Textarea
+                  id="agent-description"
+                  v-model="manager.form.value.description"
+                  class="min-h-16"
+                  placeholder="这个 Agent 的职责范围"
+                />
+              </Field>
+
+              <Field>
+                <FieldLabel for="agent-prompt">系统提示词</FieldLabel>
+                <Textarea
+                  id="agent-prompt"
+                  v-model="manager.form.value.promptTemplate"
+                  class="min-h-32 font-mono text-xs leading-6"
+                  spellcheck="false"
+                />
+              </Field>
+
+              <div class="grid gap-4 md:grid-cols-2">
                 <Field>
-                  <FieldLabel for="agent-prompt">系统提示词</FieldLabel>
+                  <FieldLabel for="agent-tools">工具</FieldLabel>
                   <Textarea
-                    id="agent-prompt"
-                    v-model="manager.form.value.promptTemplate"
-                    class="min-h-32 font-mono text-xs leading-6"
-                    spellcheck="false"
+                    id="agent-tools"
+                    v-model="manager.form.value.toolsText"
+                    class="min-h-24 font-mono text-xs leading-6"
+                    placeholder="read_query"
                   />
                 </Field>
-
-                <div class="grid gap-4 md:grid-cols-2">
-                  <Field>
-                    <FieldLabel for="agent-tools">工具</FieldLabel>
-                    <Textarea
-                      id="agent-tools"
-                      v-model="manager.form.value.toolsText"
-                      class="min-h-24 font-mono text-xs leading-6"
-                      placeholder="read_query"
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel for="agent-rules">规则</FieldLabel>
-                    <Textarea
-                      id="agent-rules"
-                      v-model="manager.form.value.rulesText"
-                      class="min-h-24 font-mono text-xs leading-6"
-                      placeholder="仅查询授权数据源"
-                    />
-                  </Field>
-                </div>
-
-                <div class="grid gap-4 md:grid-cols-2">
-                  <Field>
-                    <FieldLabel for="agent-catalogs">数据目录</FieldLabel>
-                    <Input
-                      id="agent-catalogs"
-                      v-model="manager.form.value.catalogsText"
-                      placeholder="fund, market"
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel for="agent-subjects">主题域</FieldLabel>
-                    <Input
-                      id="agent-subjects"
-                      v-model="manager.form.value.subjectsText"
-                      placeholder="portfolio, risk"
-                    />
-                  </Field>
-                </div>
-
-                <div class="grid gap-4 md:grid-cols-2">
-                  <Field>
-                    <FieldLabel for="agent-max-turns">最大轮次</FieldLabel>
-                    <Input
-                      id="agent-max-turns"
-                      v-model="manager.form.value.maxTurns"
-                      inputmode="numeric"
-                      placeholder="8"
-                    />
-                  </Field>
-                </div>
-              </FieldGroup>
-
-              <div class="flex flex-wrap justify-end gap-2">
-                <Button
-                  variant="outline"
-                  type="button"
-                  :disabled="manager.saving.value"
-                  @click="startCreate"
-                >
-                  <PlusIcon data-icon="inline-start" />
-                  重置新建
-                </Button>
-                <Button
-                  type="submit"
-                  :disabled="!manager.canSubmitForm.value"
-                >
-                  <SaveIcon data-icon="inline-start" />
-                  {{ saveLabel }}
-                </Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-      </div>
-
-      <Tabs
-        default-value="catalog"
-        class="flex flex-col gap-4"
-      >
-        <TabsList class="flex h-auto !flex-row flex-wrap justify-start">
-          <TabsTrigger value="catalog">工具目录</TabsTrigger>
-          <TabsTrigger value="selection">当前 Agent 工具</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="catalog">
-          <Card>
-            <CardHeader>
-              <CardTitle class="text-lg">可配置工具</CardTitle>
-              <CardDescription class="text-sm">
-                来自 `/api/v1/admin/agents/tools`，用于判断创建或编辑 Agent 时可绑定哪些工具。
-              </CardDescription>
-            </CardHeader>
-            <CardContent class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              <div
-                v-for="[category, tools] in toolCatalogEntries"
-                :key="category"
-                class="rounded-lg border bg-muted/20 p-3"
-              >
-                <div class="mb-2 flex items-center justify-between gap-2">
-                  <div class="flex min-w-0 items-center gap-2">
-                    <WrenchIcon class="shrink-0 text-muted-foreground" />
-                    <span class="truncate text-sm font-medium">{{ category }}</span>
-                  </div>
-                  <Badge variant="outline">{{ tools.length }}</Badge>
-                </div>
-                <div class="flex flex-wrap gap-1.5">
-                  <Badge
-                    v-for="tool in tools"
-                    :key="tool"
-                    variant="secondary"
-                  >
-                    {{ tool }}
-                  </Badge>
-                </div>
-              </div>
-              <Alert v-if="toolCatalogEntries.length === 0">
-                <BracesIcon />
-                <AlertTitle>暂无工具目录</AlertTitle>
-                <AlertDescription>后端没有返回可配置工具，或当前用户没有读取权限。</AlertDescription>
-              </Alert>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        <TabsContent value="selection">
-          <Card>
-            <CardHeader>
-              <CardTitle class="text-lg">当前 Agent 可用工具</CardTitle>
-              <CardDescription class="text-sm">
-                来自 `/api/v1/admin/agents/tool-reference`，展示后端按节点类型解析后的默认工具和分类工具。
-              </CardDescription>
-            </CardHeader>
-            <CardContent class="flex flex-col gap-4">
-              <div class="rounded-lg border bg-muted/20 p-3">
-                <div class="mb-2 flex items-center gap-2">
-                  <ListChecksIcon class="text-muted-foreground" />
-                  <span class="text-sm font-medium">默认工具</span>
-                  <Badge variant="outline">{{ defaultUseTools.length }}</Badge>
-                </div>
-                <div class="flex flex-wrap gap-1.5">
-                  <Badge
-                    v-for="tool in defaultUseTools"
-                    :key="tool"
-                    variant="secondary"
-                  >
-                    {{ tool }}
-                  </Badge>
-                  <span
-                    v-if="defaultUseTools.length === 0"
-                    class="text-sm text-muted-foreground"
-                  >
-                    未返回默认工具。
-                  </span>
-                </div>
+                <Field>
+                  <FieldLabel for="agent-rules">规则</FieldLabel>
+                  <Textarea
+                    id="agent-rules"
+                    v-model="manager.form.value.rulesText"
+                    class="min-h-24 font-mono text-xs leading-6"
+                    placeholder="仅查询授权数据源"
+                  />
+                </Field>
               </div>
 
-              <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                <div
-                  v-for="[category, tools] in useToolTypeEntries"
-                  :key="category"
-                  class="rounded-lg border bg-muted/20 p-3"
-                >
-                  <div class="mb-2 flex items-center justify-between gap-2">
-                    <span class="truncate text-sm font-medium">{{ category }}</span>
-                    <Badge variant="outline">{{ tools.length }}</Badge>
-                  </div>
-                  <div class="flex flex-wrap gap-1.5">
-                    <Badge
-                      v-for="tool in tools"
-                      :key="tool"
-                      variant="secondary"
-                    >
-                      {{ tool }}
-                    </Badge>
-                  </div>
-                </div>
+              <div class="grid gap-4 md:grid-cols-2">
+                <Field>
+                  <FieldLabel for="agent-catalogs">数据目录</FieldLabel>
+                  <Input
+                    id="agent-catalogs"
+                    v-model="manager.form.value.catalogsText"
+                    placeholder="fund, market"
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel for="agent-subjects">主题域</FieldLabel>
+                  <Input
+                    id="agent-subjects"
+                    v-model="manager.form.value.subjectsText"
+                    placeholder="portfolio, risk"
+                  />
+                </Field>
               </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
-    </div>
+            </FieldGroup>
+          </ScrollArea>
+
+          <DialogFooter class="shrink-0">
+            <Button
+              variant="outline"
+              type="button"
+              :disabled="manager.saving.value"
+              @click="formDialogOpen = false"
+            >
+              取消
+            </Button>
+            <Button
+              type="submit"
+              :disabled="!manager.canSubmitForm.value"
+            >
+              <SaveIcon data-icon="inline-start" />
+              {{ saveLabel }}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
 
     <Dialog v-model:open="deleteDialogOpen">
       <DialogContent>
