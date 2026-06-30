@@ -54,16 +54,8 @@ function defaultDocsForm(): KnowledgeBootstrapDocsForm {
     platform: "",
     buildMode: "overwrite",
     poolSize: 4,
-    sourceType: "",
-    source: "",
     version: "",
-    githubRef: "",
-    githubToken: "",
-    pathsText: "",
     chunkSize: "",
-    maxDepth: "",
-    includePatternsText: "",
-    excludePatternsText: "",
   };
 }
 
@@ -255,27 +247,24 @@ function buildKbBootstrapInput(
   return input;
 }
 
-function buildDocsBootstrapInput(form: KnowledgeBootstrapDocsForm, upload: KbUploadRecord | null = null): BootstrapDocInput {
+function buildDocsBootstrapInput(form: KnowledgeBootstrapDocsForm, upload: KbUploadRecord | null): BootstrapDocInput {
   const platform = form.platform.trim();
   if (!platform) {
     throw new Error("请填写文档平台");
+  }
+  if (!upload) {
+    throw new Error("请上传平台文档文件");
   }
 
   const input: BootstrapDocInput = {
     platform,
     build_mode: form.buildMode,
     pool_size: normalizePoolSize(form.poolSize),
-    source_type: upload ? "local" : optionalString(form.sourceType),
-    source: upload ? null : optionalString(form.source),
-    upload_id: upload?.upload_id ?? null,
+    source_type: "local",
+    source: null,
+    upload_id: upload.upload_id,
     version: optionalString(form.version),
-    github_ref: optionalString(form.githubRef),
-    github_token: optionalString(form.githubToken),
-    paths: parseLines(form.pathsText),
     chunk_size: parseOptionalPositiveInteger(form.chunkSize, "分块大小"),
-    max_depth: parseOptionalPositiveInteger(form.maxDepth, "最大深度"),
-    include_patterns: parseLines(form.includePatternsText),
-    exclude_patterns: parseLines(form.excludePatternsText),
   };
 
   return input;

@@ -86,7 +86,7 @@ function clearFiles() {
       <Input
         :key="inputVersion"
         :id="id"
-        class="sr-only"
+        class="pointer-events-none absolute !size-px !min-w-0 overflow-hidden !border-0 !p-0 opacity-0"
         type="file"
         :accept="accept"
         :multiple="multiple"

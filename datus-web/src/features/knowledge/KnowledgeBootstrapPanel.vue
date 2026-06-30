@@ -23,7 +23,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import {
   Tooltip,
   TooltipContent,
@@ -188,7 +188,10 @@ function updateBuildMode(value: unknown) {
           </TabsList>
 
           <TabsContent value="kb">
-            <Card size="sm">
+            <Card
+              size="sm"
+              class="flex h-[29rem] flex-col"
+            >
               <CardHeader class="!flex flex-row items-center justify-between gap-3">
                 <CardTitle class="text-lg">业务知识库构建</CardTitle>
                 <Tooltip>
@@ -208,7 +211,7 @@ function updateBuildMode(value: unknown) {
                   </TooltipContent>
                 </Tooltip>
               </CardHeader>
-              <CardContent class="flex flex-col gap-3">
+              <CardContent class="flex flex-1 flex-col gap-3 overflow-y-auto">
                 <div class="grid gap-3 md:grid-cols-3">
                   <Field>
                     <div class="flex items-center gap-2">
@@ -401,7 +404,7 @@ function updateBuildMode(value: unknown) {
                   </Field>
                 </div>
 
-                <div class="flex flex-wrap justify-end gap-2">
+                <div class="mt-auto flex flex-wrap justify-end gap-2">
                   <Button
                     variant="outline"
                     size="sm"
@@ -425,7 +428,10 @@ function updateBuildMode(value: unknown) {
           </TabsContent>
 
           <TabsContent value="docs">
-            <Card size="sm">
+            <Card
+              size="sm"
+              class="flex h-[29rem] flex-col"
+            >
               <CardHeader class="!flex flex-row items-center justify-between gap-3">
                 <CardTitle class="text-lg">平台文档构建</CardTitle>
                 <Tooltip>
@@ -445,8 +451,8 @@ function updateBuildMode(value: unknown) {
                   </TooltipContent>
                 </Tooltip>
               </CardHeader>
-              <CardContent class="flex flex-col gap-4">
-                <div class="grid gap-4 md:grid-cols-3">
+              <CardContent class="flex flex-1 flex-col gap-4 overflow-y-auto">
+                <div class="grid gap-4 md:grid-cols-4">
                   <Field>
                     <FieldLabel for="docs-platform">平台</FieldLabel>
                     <Input
@@ -487,6 +493,14 @@ function updateBuildMode(value: unknown) {
                       max="16"
                     />
                   </Field>
+                  <Field>
+                    <FieldLabel for="docs-version">版本</FieldLabel>
+                    <Input
+                      id="docs-version"
+                      v-model="manager.forms.value.docs.version"
+                      placeholder="v1"
+                    />
+                  </Field>
                 </div>
 
                 <div class="grid gap-4 md:grid-cols-2">
@@ -504,52 +518,6 @@ function updateBuildMode(value: unknown) {
                     @clear="manager.clearUpload('docs')"
                   />
                   <Field>
-                    <FieldLabel for="docs-source-type">来源类型</FieldLabel>
-                    <Input
-                      id="docs-source-type"
-                      v-model="manager.forms.value.docs.sourceType"
-                      placeholder="github / local / url"
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel for="docs-source">来源</FieldLabel>
-                    <Input
-                      id="docs-source"
-                      v-model="manager.forms.value.docs.source"
-                      placeholder="仓库、目录或 URL"
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel for="docs-version">版本</FieldLabel>
-                    <Input
-                      id="docs-version"
-                      v-model="manager.forms.value.docs.version"
-                      placeholder="v1"
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel for="docs-github-ref">GitHub 引用</FieldLabel>
-                    <Input
-                      id="docs-github-ref"
-                      v-model="manager.forms.value.docs.githubRef"
-                      placeholder="main"
-                    />
-                  </Field>
-                  <Field class="md:col-span-2">
-                    <FieldLabel for="docs-github-token">GitHub 令牌</FieldLabel>
-                    <Input
-                      id="docs-github-token"
-                      v-model="manager.forms.value.docs.githubToken"
-                      type="password"
-                      autocomplete="off"
-                      placeholder="仅本次请求使用"
-                    />
-                    <FieldDescription>不会写入浏览器存储，日志输出会脱敏 token 字段。</FieldDescription>
-                  </Field>
-                </div>
-
-                <div class="grid gap-4 md:grid-cols-3">
-                  <Field>
                     <FieldLabel for="docs-chunk-size">分块大小</FieldLabel>
                     <Input
                       id="docs-chunk-size"
@@ -558,48 +526,9 @@ function updateBuildMode(value: unknown) {
                       placeholder="可选"
                     />
                   </Field>
-                  <Field>
-                    <FieldLabel for="docs-max-depth">最大深度</FieldLabel>
-                    <Input
-                      id="docs-max-depth"
-                      v-model="manager.forms.value.docs.maxDepth"
-                      inputmode="numeric"
-                      placeholder="可选"
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel for="docs-paths">路径</FieldLabel>
-                    <Textarea
-                      id="docs-paths"
-                      v-model="manager.forms.value.docs.pathsText"
-                      class="min-h-24 text-sm leading-6"
-                      placeholder="每行一个路径"
-                    />
-                  </Field>
                 </div>
 
-                <div class="grid gap-4 md:grid-cols-2">
-                  <Field>
-                    <FieldLabel for="docs-include">包含规则</FieldLabel>
-                    <Textarea
-                      id="docs-include"
-                      v-model="manager.forms.value.docs.includePatternsText"
-                      class="min-h-24 text-sm leading-6"
-                      placeholder="每行一个包含规则"
-                    />
-                  </Field>
-                  <Field>
-                    <FieldLabel for="docs-exclude">排除规则</FieldLabel>
-                    <Textarea
-                      id="docs-exclude"
-                      v-model="manager.forms.value.docs.excludePatternsText"
-                      class="min-h-24 text-sm leading-6"
-                      placeholder="每行一个排除规则"
-                    />
-                  </Field>
-                </div>
-
-                <div class="flex flex-wrap justify-end gap-2">
+                <div class="mt-auto flex flex-wrap justify-end gap-2">
                   <Button
                     variant="outline"
                     size="sm"

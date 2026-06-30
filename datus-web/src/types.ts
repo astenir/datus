@@ -481,16 +481,8 @@ export type KnowledgeBootstrapDocsForm = {
   platform: string;
   buildMode: BootstrapBuildMode;
   poolSize: number;
-  sourceType: string;
-  source: string;
   version: string;
-  githubRef: string;
-  githubToken: string;
-  pathsText: string;
   chunkSize: string;
-  maxDepth: string;
-  includePatternsText: string;
-  excludePatternsText: string;
 };
 
 export type KnowledgeBootstrapForms = {

@@ -151,39 +151,37 @@ describe("knowledgeBootstrapInternals", () => {
     });
   });
 
-  it("normalizes docs requests and keeps transient tokens in the request body only", async () => {
+  it("normalizes uploaded docs requests to local upload imports only", async () => {
     const { knowledgeBootstrapInternals } = await import("./useKnowledgeBootstrap");
 
     expect(knowledgeBootstrapInternals.buildDocsBootstrapInput({
       platform: "datus",
       buildMode: "overwrite",
       poolSize: 20,
-      sourceType: "github",
-      source: "astenir/datus",
       version: "v1",
-      githubRef: "main",
-      githubToken: "ghp_private",
-      pathsText: "docs\nREADME.md",
       chunkSize: "800",
-      maxDepth: "",
-      includePatternsText: "*.md",
-      excludePatternsText: "dist\nnode_modules",
-    })).toEqual({
+    }, makeUploadRecord("platform_docs", "upload-docs", "file-doc"))).toEqual({
       platform: "datus",
       build_mode: "overwrite",
       pool_size: 16,
-      source_type: "github",
-      source: "astenir/datus",
-      upload_id: null,
+      source_type: "local",
+      source: null,
+      upload_id: "upload-docs",
       version: "v1",
-      github_ref: "main",
-      github_token: "ghp_private",
-      paths: ["docs", "README.md"],
       chunk_size: 800,
-      max_depth: null,
-      include_patterns: ["*.md"],
-      exclude_patterns: ["dist", "node_modules"],
     });
+  });
+
+  it("rejects docs bootstrap input without an uploaded file", async () => {
+    const { knowledgeBootstrapInternals } = await import("./useKnowledgeBootstrap");
+
+    expect(() => knowledgeBootstrapInternals.buildDocsBootstrapInput({
+      platform: "datus",
+      buildMode: "overwrite",
+      poolSize: 4,
+      version: "",
+      chunkSize: "",
+    }, null)).toThrow("请上传平台文档文件");
   });
 
   it("redacts sensitive values from stream payload logs", async () => {
@@ -342,20 +340,15 @@ describe("useKnowledgeBootstrap", () => {
     });
   });
 
-  it("runs docs bootstrap without exposing tokens in logs", async () => {
+  it("does not run docs bootstrap without uploaded files", async () => {
     const { useKnowledgeBootstrap } = await import("./useKnowledgeBootstrap");
     const manager = useKnowledgeBootstrap();
     manager.forms.value.docs.platform = "datus";
-    manager.forms.value.docs.githubToken = "ghp_private";
 
     await manager.startDocsBootstrap();
 
-    expect(bootstrapDocs).toHaveBeenCalledWith("http://api.test", expect.objectContaining({
-      platform: "datus",
-      github_token: "ghp_private",
-    }));
-    expect(manager.terminalOutput.value).not.toContain("ghp_private");
-    expect(JSON.stringify(manager.logs.value)).not.toContain("ghp_private");
+    expect(bootstrapDocs).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith("请上传平台文档文件");
   });
 
   it("uploads selected platform docs before docs bootstrap", async () => {
