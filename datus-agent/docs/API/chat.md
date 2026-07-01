@@ -347,6 +347,36 @@ Notes on `requests`:
 - `allowFreeText: true` means the user may type a custom answer even when `options` is non-empty.
 - `contentType` is usually `markdown`.
 
+#### `interaction-summary`
+
+Returned only by persisted history (`GET /chat/history`) for an `ask_user` interaction that already happened.
+This is a read-only transcript block: it intentionally has no `interactionKey`, and clients must not submit it to
+`POST /chat/user_interaction`.
+
+```json
+{
+  "type": "interaction-summary",
+  "payload": {
+    "status": "answered",
+    "actionType": "ask_user",
+    "requests": [
+      {
+        "title": "County",
+        "content": "Which county?",
+        "contentType": "markdown",
+        "options": [
+          { "key": "1", "title": "Los Angeles" },
+          { "key": "2", "title": "San Francisco" }
+        ],
+        "allowFreeText": true,
+        "multiSelect": false
+      }
+    ],
+    "answers": [{ "question": "Which county?", "answer": "Los Angeles" }]
+  }
+}
+```
+
 #### `user_insert` {#user_insert}
 
 Emitted whenever a free-text user message is injected mid-run via [`POST /chat/insert`](#post-apiv1chatinsert) or the TUI's "Enter while running" handler. The enclosing `MessageData.role` is `"user"`, and the event is **always** sent to SSE clients regardless of the `include_user_message` flag — it represents text the client may not yet know about.

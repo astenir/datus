@@ -278,6 +278,82 @@ class TestChatServiceGetHistory:
         result = chat_svc.get_history("empty-hist")
         assert result.success is True
 
+    def test_get_history_renders_ask_user_as_read_only_summary(self, chat_svc):
+        """Persisted ask_user tool calls render as history summaries, not live controls."""
+        import json
+        import os
+        import sqlite3
+
+        session_id = "history-ask-user-summary"
+        sm = SessionManager(session_dir=chat_svc._session_dir)
+        sm.create_session(session_id)
+        db_path = os.path.join(chat_svc._session_dir, f"{session_id}.db")
+        question_args = {
+            "questions": [
+                {
+                    "title": "County",
+                    "question": "Which county?",
+                    "options": ["Los Angeles", "San Francisco"],
+                }
+            ]
+        }
+        answer_result = [{"question": "Which county?", "answer": "Los Angeles"}]
+
+        rows = [
+            (json.dumps({"role": "user", "content": "Ask me for a county"}), "2026-01-01T00:00:00"),
+            (
+                json.dumps(
+                    {
+                        "type": "function_call",
+                        "call_id": "call_ask_user",
+                        "name": "ask_user",
+                        "arguments": json.dumps(question_args),
+                    }
+                ),
+                "2026-01-01T00:00:01",
+            ),
+            (
+                json.dumps(
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call_ask_user",
+                        "output": json.dumps({"success": 1, "result": json.dumps(answer_result)}),
+                    }
+                ),
+                "2026-01-01T00:00:02",
+            ),
+            (
+                json.dumps(
+                    {
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "Great, I will use Los Angeles."}],
+                    }
+                ),
+                "2026-01-01T00:00:03",
+            ),
+        ]
+        with sqlite3.connect(db_path) as conn:
+            conn.executemany(
+                "INSERT INTO agent_messages (session_id, message_data, created_at) VALUES (?, ?, ?)",
+                [(session_id, data, created_at) for data, created_at in rows],
+            )
+
+        result = chat_svc.get_history(session_id)
+
+        assert result.success is True
+        content_types = [content.type for message in result.data.messages for content in message.content]
+        assert "interaction-summary" in content_types
+        assert "user-interaction" not in content_types
+        summary = next(
+            content
+            for message in result.data.messages
+            for content in message.content
+            if content.type == "interaction-summary"
+        )
+        assert "interactionKey" not in summary.payload
+        assert summary.payload["requests"][0]["content"] == "Which county?"
+        assert summary.payload["answers"][0]["answer"] == "Los Angeles"
+
 
 class TestChatServiceScopePropagation:
     """user_id is propagated as SessionManager.scope for isolation."""

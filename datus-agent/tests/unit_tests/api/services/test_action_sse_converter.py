@@ -14,6 +14,7 @@ from datus.api.services.action_sse_converter import (
     _build_tool_result_content,
     _build_user_content,
     _extract_function,
+    action_to_history_sse_event,
     action_to_sse_event,
 )
 from datus.schemas.action_history import SUBAGENT_COMPLETE_ACTION_TYPE, ActionHistory, ActionRole, ActionStatus
@@ -802,6 +803,79 @@ class TestBuildInteractionContent:
         assert requests[0]["multiSelect"] is False
         assert requests[1]["multiSelect"] is True
         assert requests[2]["multiSelect"] is False
+
+
+class TestActionToHistorySseEvent:
+    """Tests for persisted-history-only action conversion."""
+
+    def test_ask_user_result_becomes_read_only_summary(self):
+        action = _make_action(
+            role=ActionRole.TOOL,
+            status=ActionStatus.SUCCESS,
+            action_type="ask_user",
+            input={
+                "function_name": "ask_user",
+                "arguments": json.dumps(
+                    {
+                        "questions": [
+                            {
+                                "title": "County",
+                                "question": "Which county?",
+                                "options": ["Los Angeles", "San Francisco"],
+                                "multi_select": False,
+                            }
+                        ]
+                    }
+                ),
+            },
+            output={
+                "success": 1,
+                "result": json.dumps([{"question": "Which county?", "answer": "Los Angeles"}]),
+            },
+        )
+
+        event = action_to_history_sse_event(action, event_id=1, message_id="msg-1")
+
+        event = _assert_sse_event(event)
+        content = event.data.payload.content[0]
+        assert content.type == "interaction-summary"
+        assert "interactionKey" not in content.payload
+        assert content.payload["status"] == "answered"
+        assert content.payload["requests"][0]["content"] == "Which county?"
+        assert content.payload["requests"][0]["options"] == [
+            {"key": "1", "title": "Los Angeles"},
+            {"key": "2", "title": "San Francisco"},
+        ]
+        assert content.payload["answers"] == [{"question": "Which county?", "answer": "Los Angeles"}]
+
+    def test_history_does_not_replay_live_interaction_control(self):
+        action = _make_action(
+            role=ActionRole.INTERACTION,
+            status=ActionStatus.PROCESSING,
+            action_type="request_choice",
+            input={"events": [{"content": "Choose"}]},
+        )
+
+        assert action_to_history_sse_event(action, event_id=1, message_id="msg-1") is None
+
+    def test_cancelled_ask_user_result_is_read_only_summary(self):
+        action = _make_action(
+            role=ActionRole.TOOL,
+            status=ActionStatus.SUCCESS,
+            action_type="ask_user",
+            input={
+                "function_name": "ask_user",
+                "arguments": {"questions": [{"question": "Continue?"}]},
+            },
+            output={"success": 0, "error": "User cancelled the question"},
+        )
+
+        event = _assert_sse_event(action_to_history_sse_event(action, event_id=1, message_id="msg-1"))
+        content = event.data.payload.content[0]
+
+        assert content.type == "interaction-summary"
+        assert content.payload["status"] == "cancelled"
+        assert content.payload["error"] == "User cancelled the question"
 
 
 class TestBuildInteractionResultContent:

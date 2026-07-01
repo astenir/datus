@@ -25,7 +25,7 @@ from datus.api.models.cli_models import (
     SSEMessagePayload,
     StreamChatInput,
 )
-from datus.api.services.action_sse_converter import action_to_sse_event
+from datus.api.services.action_sse_converter import action_to_history_sse_event
 from datus.api.services.chat_task_manager import (
     _is_visible_assistant_response,
     _remember_assistant_message,
@@ -437,7 +437,7 @@ class ChatService:
                     seen_assistant_message_fingerprints: set[str] = set()
                     for action in messages:
                         include_final_response = _should_include_final_response(action, assistant_response_seen)
-                        sse_event = action_to_sse_event(
+                        sse_event = action_to_history_sse_event(
                             action,
                             event_id,
                             str(uuid.uuid4()),

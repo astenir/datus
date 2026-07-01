@@ -336,6 +336,35 @@ Agent 需要用户做决策才能继续时下发。SSE 流随后暂停,直到通
 - `allowFreeText: true` 表示即使有 `options`,也允许用户输入自定义答案。
 - `contentType` 通常为 `markdown`。
 
+#### `interaction-summary`
+
+只会在持久化历史(`GET /chat/history`)中返回,用于展示已经发生过的 `ask_user` 交互。这是只读 transcript
+块:后端会刻意不返回 `interactionKey`,客户端也不应把它提交到 `POST /chat/user_interaction`。
+
+```json
+{
+  "type": "interaction-summary",
+  "payload": {
+    "status": "answered",
+    "actionType": "ask_user",
+    "requests": [
+      {
+        "title": "County",
+        "content": "Which county?",
+        "contentType": "markdown",
+        "options": [
+          { "key": "1", "title": "Los Angeles" },
+          { "key": "2", "title": "San Francisco" }
+        ],
+        "allowFreeText": true,
+        "multiSelect": false
+      }
+    ],
+    "answers": [{ "question": "Which county?", "answer": "Los Angeles" }]
+  }
+}
+```
+
 #### `user_insert` {#user_insert}
 
 当用户通过 [`POST /chat/insert`](#post-apiv1chatinsert) 或 TUI 的"运行时按 Enter"在运行中注入自由文本消息时下发。外层 `MessageData.role` 为 `"user"`，且**始终**会下发给 SSE 客户端，不受 `include_user_message` 标志影响——它代表客户端可能尚未感知的文本。
