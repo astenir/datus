@@ -5,7 +5,7 @@ This file is the durable project rulebook for Codex work in this repository.
 ## Project Intent
 
 - This repository is the new Vue/Vite frontend for Datus.
-- The app should keep the old `legacy Datus frontend` frontend's functional behavior where useful, but not its visual system.
+- The app should keep useful behavior from the legacy Datus frontend where relevant, but not its visual system.
 - Treat this project as a shadcn-vue + AI Elements implementation, not as a direct copy of the old frontend.
 
 ## Migration Boundary

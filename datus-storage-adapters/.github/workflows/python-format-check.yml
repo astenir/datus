@@ -41,7 +41,6 @@ jobs:
               ruff format --check "$dir"
             fi
           done
-
       - name: Lint with ruff
         run: |
           for dir in datus-*/; do
@@ -50,4 +49,3 @@ jobs:
               ruff check "$dir"
             fi
           done
-
