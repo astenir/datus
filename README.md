@@ -11,6 +11,12 @@
 
 ## 常用入口
 
+### 开发部署和联调
+
+前后端本地开发部署、企业模式联调、mock userinfo、Bearer token、API smoke 和常见故障处理见：
+
+- [Datus 开发部署手册](./DEVELOPMENT_DEPLOYMENT_GUIDE.zh.md)
+
 ### 后端
 
 ```bash
