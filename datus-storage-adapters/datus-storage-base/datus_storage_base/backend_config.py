@@ -1,0 +1,85 @@
+# Copyright 2025-present DatusAI, Inc.
+# Licensed under the Apache License, Version 2.0.
+# See http://www.apache.org/licenses/LICENSE-2.0 for details.
+
+"""Configuration dataclasses for storage backends."""
+
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any, Dict
+
+
+class IsolationType(str, Enum):
+    """Controls how multi-tenant data isolation is implemented."""
+
+    PHYSICAL = "physical"
+    LOGICAL = "logical"
+
+
+DATASOURCE_ID_COLUMN = "datasource_id"
+LOGICAL_NAMESPACE_COLUMN = "_datus_namespace"
+
+
+@dataclass
+class RdbBackendConfig:
+    """Configuration for the relational database backend."""
+
+    type: str = "sqlite"
+    params: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class VectorBackendConfig:
+    """Configuration for the vector database backend."""
+
+    type: str = "lance"
+    params: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class StorageBackendConfig:
+    """Unified configuration for all storage backends."""
+
+    isolation: IsolationType = IsolationType.PHYSICAL
+    rdb: RdbBackendConfig = field(default_factory=RdbBackendConfig)
+    vector: VectorBackendConfig = field(default_factory=VectorBackendConfig)
+
+    @staticmethod
+    def from_dict(storage_config: Dict[str, Any]) -> "StorageBackendConfig":
+        """Parse storage backend configuration from a dict.
+
+        Expected format:
+            storage:
+              rdb:
+                type: sqlite  # or mysql, postgresql
+                # ... backend-specific params
+              vector:
+                type: lance  # or pgvector, milvus
+                # ... backend-specific params
+        """
+        rdb_section = dict(storage_config.get("rdb", {})) if isinstance(storage_config.get("rdb", {}), dict) else {}
+        vector_section = (
+            dict(storage_config.get("vector", {})) if isinstance(storage_config.get("vector", {}), dict) else {}
+        )
+
+        rdb_default = RdbBackendConfig().type
+        vector_default = VectorBackendConfig().type
+
+        rdb_type = rdb_section.pop("type", rdb_default)
+        vector_type = vector_section.pop("type", vector_default)
+
+        isolation_raw = storage_config.get("isolation", IsolationType.PHYSICAL.value)
+        if isinstance(isolation_raw, str):
+            isolation = IsolationType(isolation_raw)
+        elif isinstance(isolation_raw, IsolationType):
+            isolation = isolation_raw
+        else:
+            raise TypeError(
+                f"isolation must be a str or IsolationType, got {type(isolation_raw).__name__}: {isolation_raw!r}"
+            )
+
+        return StorageBackendConfig(
+            isolation=isolation,
+            rdb=RdbBackendConfig(type=rdb_type, params=rdb_section),
+            vector=VectorBackendConfig(type=vector_type, params=vector_section),
+        )

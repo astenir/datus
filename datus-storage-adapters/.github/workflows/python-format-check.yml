@@ -1,0 +1,53 @@
+name: "Python Format Check"
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+concurrency:
+  group: format-check-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  format-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Debug - Show current commit
+        run: |
+          echo "Current HEAD: $(git rev-parse HEAD)"
+          echo "Expected PR head: ${{ github.event.pull_request.head.sha }}"
+
+      - name: Set up python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install ruff
+        run: pip install "ruff==0.15.6"
+
+      - name: Check formatting with ruff
+        run: |
+          for dir in datus-*/; do
+            if [ -d "$dir" ]; then
+              echo "Checking $dir with ruff format..."
+              ruff format --check "$dir"
+            fi
+          done
+
+      - name: Lint with ruff
+        run: |
+          for dir in datus-*/; do
+            if [ -d "$dir" ]; then
+              echo "Linting $dir with ruff..."
+              ruff check "$dir"
+            fi
+          done
+
