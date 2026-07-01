@@ -63,4 +63,6 @@ class AuditEvent:
     decision: str
     reason: str | None = None
     request_id: str | None = None
+    id: int | None = None
+    created_at: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)

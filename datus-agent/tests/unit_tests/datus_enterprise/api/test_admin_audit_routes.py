@@ -49,6 +49,10 @@ class QueryableAuditSink(CollectingAuditSink):
         resource_type: str | None = None,
         resource_id: str | None = None,
         decision: str | None = None,
+        request_id: str | None = None,
+        before_id: int | None = None,
+        created_after: str | None = None,
+        created_before: str | None = None,
     ):
         self.queries.append(
             {
@@ -58,9 +62,26 @@ class QueryableAuditSink(CollectingAuditSink):
                 "resource_type": resource_type,
                 "resource_id": resource_id,
                 "decision": decision,
+                "request_id": request_id,
+                "before_id": before_id,
+                "created_after": created_after,
+                "created_before": created_before,
             }
         )
-        return self.source_events
+        events = [
+            event
+            for event in self.source_events
+            if (user_id is None or event.user_id == user_id)
+            and (action is None or event.action == action)
+            and (resource_type is None or event.resource_type == resource_type)
+            and (resource_id is None or event.resource_id == resource_id)
+            and (decision is None or event.decision == decision)
+            and (request_id is None or event.request_id == request_id)
+            and (before_id is None or (event.id is not None and event.id < before_id))
+            and (created_after is None or (event.created_at is not None and event.created_at >= created_after))
+            and (created_before is None or (event.created_at is not None and event.created_at < created_before))
+        ]
+        return events[:limit]
 
 
 class QueryableFailingWriteAuditSink(QueryableAuditSink):
@@ -137,6 +158,8 @@ def test_admin_audit_logs_returns_unavailable_when_sink_is_write_only(monkeypatc
 
 def test_admin_audit_logs_forwards_filters_returns_entries_and_audits(monkeypatch):
     audit_event = CoreAuditEvent(
+        id=42,
+        created_at="2026-07-01T08:00:00Z",
         user_id="u2",
         action="chat.stream",
         resource_type="session",
@@ -166,26 +189,38 @@ def test_admin_audit_logs_forwards_filters_returns_entries_and_audits(monkeypatc
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is True
-    assert body["data"] == [
-        {
-            "user_id": "u2",
-            "action": "chat.stream",
-            "resource_type": "session",
-            "resource_id": "s1",
-            "decision": "allow",
-            "reason": None,
-            "request_id": "r1",
-            "metadata": {"operation": "stream", "sql": "redacted"},
-        }
-    ]
+    assert body["data"] == {
+        "entries": [
+            {
+                "id": 42,
+                "created_at": "2026-07-01T08:00:00Z",
+                "user_id": "u2",
+                "action": "chat.stream",
+                "resource_type": "session",
+                "resource_id": "s1",
+                "decision": "allow",
+                "reason": None,
+                "request_id": "r1",
+                "metadata": {"operation": "stream", "sql": "redacted"},
+            }
+        ],
+        "limit": 25,
+        "before_id": None,
+        "next_before_id": None,
+        "has_more": False,
+    }
     assert audit_sink.queries == [
         {
-            "limit": 25,
+            "limit": 26,
             "user_id": "u2",
             "action": "chat.stream",
             "resource_type": "session",
             "resource_id": "s1",
             "decision": "allow",
+            "request_id": None,
+            "before_id": None,
+            "created_after": None,
+            "created_before": None,
         }
     ]
 
@@ -195,7 +230,150 @@ def test_admin_audit_logs_forwards_filters_returns_entries_and_audits(monkeypatc
     assert event.resource_type == "audit_log"
     assert event.resource_id is None
     assert event.decision == "allow"
-    assert event.metadata == {"operation": "list_audit_logs", "count": 1}
+    assert event.metadata == {"operation": "list_audit_logs", "count": 1, "has_more": False}
+
+
+def test_admin_audit_logs_returns_cursor_page(monkeypatch):
+    audit_sink = QueryableAuditSink(
+        [
+            CoreAuditEvent(
+                id=5,
+                created_at="2026-07-01T09:05:00Z",
+                user_id="u2",
+                action="chat.stream",
+                resource_type="session",
+                resource_id="s5",
+                decision="allow",
+            ),
+            CoreAuditEvent(
+                id=4,
+                created_at="2026-07-01T09:04:00Z",
+                user_id="u2",
+                action="chat.stream",
+                resource_type="session",
+                resource_id="s4",
+                decision="allow",
+            ),
+            CoreAuditEvent(
+                id=3,
+                created_at="2026-07-01T09:03:00Z",
+                user_id="u2",
+                action="chat.stream",
+                resource_type="session",
+                resource_id="s3",
+                decision="allow",
+            ),
+            CoreAuditEvent(
+                id=2,
+                created_at="2026-07-01T09:02:00Z",
+                user_id="u2",
+                action="chat.stream",
+                resource_type="session",
+                resource_id="s2",
+                decision="allow",
+            ),
+        ]
+    )
+    ctx = AppContext(user_id="admin", permissions={"module.admin.audit"})
+    _install_extensions(monkeypatch, audit_sink)
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/admin/audit-logs", params={"limit": 2, "before_id": 5})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert [entry["id"] for entry in body["data"]["entries"]] == [4, 3]
+    assert body["data"]["limit"] == 2
+    assert body["data"]["before_id"] == 5
+    assert body["data"]["next_before_id"] == 3
+    assert body["data"]["has_more"] is True
+    assert audit_sink.queries == [
+        {
+            "limit": 3,
+            "user_id": None,
+            "action": None,
+            "resource_type": None,
+            "resource_id": None,
+            "decision": None,
+            "request_id": None,
+            "before_id": 5,
+            "created_after": None,
+            "created_before": None,
+        }
+    ]
+
+
+def test_admin_audit_logs_filters_request_id_and_time_range(monkeypatch):
+    audit_sink = QueryableAuditSink(
+        [
+            CoreAuditEvent(
+                id=10,
+                created_at="2026-07-01T09:30:00+00:00",
+                user_id="u2",
+                action="sql.execute",
+                resource_type="datasource",
+                resource_id="finance",
+                decision="deny",
+                request_id="req-1",
+            ),
+            CoreAuditEvent(
+                id=9,
+                created_at="2026-07-01T08:30:00+00:00",
+                user_id="u2",
+                action="sql.execute",
+                resource_type="datasource",
+                resource_id="finance",
+                decision="deny",
+                request_id="req-1",
+            ),
+            CoreAuditEvent(
+                id=8,
+                created_at="2026-07-01T09:45:00+00:00",
+                user_id="u3",
+                action="sql.execute",
+                resource_type="datasource",
+                resource_id="sales",
+                decision="deny",
+                request_id="req-2",
+            ),
+        ]
+    )
+    ctx = AppContext(user_id="admin", permissions={"module.admin.audit"})
+    _install_extensions(monkeypatch, audit_sink)
+
+    with _client(ctx) as client:
+        response = client.get(
+            "/api/v1/admin/audit-logs",
+            params={
+                "request_id": "req-1",
+                "created_after": "2026-07-01T09:00:00+00:00",
+                "created_before": "2026-07-01T10:00:00+00:00",
+            },
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert [entry["id"] for entry in body["data"]["entries"]] == [10]
+    assert audit_sink.queries == [
+        {
+            "limit": 101,
+            "user_id": None,
+            "action": None,
+            "resource_type": None,
+            "resource_id": None,
+            "decision": None,
+            "request_id": "req-1",
+            "before_id": None,
+            "created_after": "2026-07-01T09:00:00+00:00",
+            "created_before": "2026-07-01T10:00:00+00:00",
+        }
+    ]
+    event = audit_sink.events[-1]
+    assert event.metadata["request_id"] == "req-1"
+    assert event.metadata["created_after"] == "2026-07-01T09:00:00+00:00"
+    assert event.metadata["created_before"] == "2026-07-01T10:00:00+00:00"
 
 
 def test_admin_audit_logs_returns_entries_when_post_query_audit_fails(monkeypatch):
@@ -219,11 +397,13 @@ def test_admin_audit_logs_returns_entries_when_post_query_audit_fails(monkeypatc
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is True
-    assert body["data"][0]["resource_id"] == "s1"
+    assert body["data"]["entries"][0]["resource_id"] == "s1"
 
 
 def test_admin_audit_log_export_returns_csv_and_audits(monkeypatch):
     audit_event = CoreAuditEvent(
+        id=7,
+        created_at="2026-07-01T09:00:00Z",
         user_id="u2",
         action="sql.execute",
         resource_type="datasource",
@@ -249,6 +429,8 @@ def test_admin_audit_log_export_returns_csv_and_audits(monkeypatch):
     rows = list(csv.DictReader(StringIO(response.text)))
     assert rows == [
         {
+            "id": "7",
+            "created_at": "2026-07-01T09:00:00Z",
             "user_id": "u2",
             "action": "sql.execute",
             "resource_type": "datasource",
@@ -261,12 +443,16 @@ def test_admin_audit_log_export_returns_csv_and_audits(monkeypatch):
     ]
     assert audit_sink.queries == [
         {
-            "limit": 10,
+            "limit": 11,
             "user_id": None,
             "action": None,
             "resource_type": "datasource",
             "resource_id": None,
             "decision": "deny",
+            "request_id": None,
+            "before_id": None,
+            "created_after": None,
+            "created_before": None,
         }
     ]
 
@@ -480,6 +666,8 @@ def test_admin_audit_log_export_sanitizes_formula_prefix_cells(monkeypatch):
     rows = list(csv.DictReader(StringIO(response.text)))
     assert rows == [
         {
+            "id": "",
+            "created_at": "",
             "user_id": "'\t=cmd",
             "action": "'+SUM(1,1)",
             "resource_type": "datasource",

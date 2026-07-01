@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+from datetime import datetime, timezone
 from io import StringIO
 from typing import Annotated, Any
 
@@ -31,6 +32,8 @@ AdminAuditExportCtx = Annotated[AppContext, Depends(require_module("module.admin
 class AuditLogEntry(BaseModel):
     """Sanitized audit log entry returned to admin callers."""
 
+    id: int | None = None
+    created_at: str | None = None
     user_id: str | None = None
     action: str
     resource_type: str
@@ -41,45 +44,88 @@ class AuditLogEntry(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-@router.get("/admin/audit-logs", response_model=Result[list[AuditLogEntry]], summary="List Audit Logs")
+class AuditLogPage(BaseModel):
+    """Cursor-paginated audit log page."""
+
+    entries: list[AuditLogEntry]
+    limit: int
+    before_id: int | None = None
+    next_before_id: int | None = None
+    has_more: bool
+
+
+@router.get("/admin/audit-logs", response_model=Result[AuditLogPage], summary="List Audit Logs")
 async def list_audit_logs(
     ctx: AdminAuditCtx,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    before_id: Annotated[int | None, Query(ge=1)] = None,
     user_id: str | None = None,
     action: str | None = None,
     resource_type: str | None = None,
     resource_id: str | None = None,
     decision: str | None = None,
-) -> Result[list[AuditLogEntry]]:
+    request_id: str | None = None,
+    created_after: datetime | None = None,
+    created_before: datetime | None = None,
+) -> Result[AuditLogPage]:
     """Query audit logs when the configured audit sink exposes a reader interface."""
 
-    events, error = await _query_audit_events(
+    events, has_more, error = await _query_audit_events(
         ctx,
         operation="list_audit_logs",
         limit=limit,
+        before_id=before_id,
         user_id=user_id,
         action=action,
         resource_type=resource_type,
         resource_id=resource_id,
         decision=decision,
+        request_id=request_id,
+        created_after=_datetime_param(created_after),
+        created_before=_datetime_param(created_before),
     )
     if error is not None:
         return error
 
     entries = [_entry_from_event(event) for event in events]
-    await _audit_query(ctx, operation="list_audit_logs", decision="allow", reason=None, count=len(entries))
-    return Result(success=True, data=entries)
+    page = AuditLogPage(
+        entries=entries,
+        limit=limit,
+        before_id=before_id,
+        next_before_id=_next_before_id(entries, has_more),
+        has_more=has_more,
+    )
+    await _audit_query(
+        ctx,
+        operation="list_audit_logs",
+        decision="allow",
+        reason=None,
+        count=len(entries),
+        metadata={
+            "before_id": before_id,
+            "next_before_id": page.next_before_id,
+            "has_more": has_more,
+            "request_id": request_id,
+            "created_after": _datetime_param(created_after),
+            "created_before": _datetime_param(created_before),
+        },
+    )
+    return Result(success=True, data=page)
 
 
 @router.get("/admin/audit-logs/export", response_model=None, summary="Export Audit Logs")
 async def export_audit_logs(
     ctx: AdminAuditExportCtx,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
+    before_id: Annotated[int | None, Query(ge=1)] = None,
     user_id: str | None = None,
     action: str | None = None,
     resource_type: str | None = None,
     resource_id: str | None = None,
     decision: str | None = None,
+    request_id: str | None = None,
+    created_after: datetime | None = None,
+    created_before: datetime | None = None,
 ) -> Response | Result[dict]:
     """Export matching audit logs as a CSV file when the audit sink supports queries."""
 
@@ -100,27 +146,35 @@ async def export_audit_logs(
         metadata={
             "operation": "export_audit_logs",
             "limit": limit,
+            "before_id": before_id,
             "user_id": user_id,
             "action": action,
             "resource_type": resource_type,
             "resource_id": resource_id,
             "decision": decision,
+            "request_id": request_id,
+            "created_after": _datetime_param(created_after),
+            "created_before": _datetime_param(created_before),
         },
     )
     if quota_error is not None:
         return quota_error
 
-    events, error = await _query_audit_events(
+    events, _, error = await _query_audit_events(
         ctx,
         operation="export_audit_logs",
         audit_action="module.admin.audit.export",
         query_events=query_events,
         limit=limit,
+        before_id=before_id,
         user_id=user_id,
         action=action,
         resource_type=resource_type,
         resource_id=resource_id,
         decision=decision,
+        request_id=request_id,
+        created_after=_datetime_param(created_after),
+        created_before=_datetime_param(created_before),
     )
     if error is not None:
         return error
@@ -132,6 +186,12 @@ async def export_audit_logs(
         decision="allow",
         reason=None,
         count=len(events),
+        metadata={
+            "before_id": before_id,
+            "request_id": request_id,
+            "created_after": _datetime_param(created_after),
+            "created_before": _datetime_param(created_before),
+        },
     )
     return Response(
         content=_events_to_csv(events),
@@ -173,12 +233,16 @@ async def _query_audit_events(
     audit_action: str = "module.admin.audit",
     query_events: Any | None = None,
     limit: int,
+    before_id: int | None,
     user_id: str | None,
     action: str | None,
     resource_type: str | None,
     resource_id: str | None,
     decision: str | None,
-) -> tuple[list[CoreAuditEvent], Result[Any] | None]:
+    request_id: str | None,
+    created_after: str | None,
+    created_before: str | None,
+) -> tuple[list[CoreAuditEvent], bool, Result[Any] | None]:
     if query_events is None:
         query_events, error = await _audit_query_reader(
             ctx,
@@ -186,16 +250,20 @@ async def _query_audit_events(
             audit_action=audit_action,
         )
         if error is not None:
-            return [], error
+            return [], False, error
 
     try:
         events = await query_events(
-            limit=limit,
+            limit=limit + 1,
             user_id=user_id,
             action=action,
             resource_type=resource_type,
             resource_id=resource_id,
             decision=decision,
+            request_id=request_id,
+            before_id=before_id,
+            created_after=created_after,
+            created_before=created_before,
         )
     except Exception:
         await _audit_query(
@@ -206,13 +274,17 @@ async def _query_audit_events(
             reason="audit query failed",
             count=None,
         )
-        return [], Result(
-            success=False,
-            errorCode="AUDIT_QUERY_FAILED",
-            errorMessage="Audit log query failed.",
+        return (
+            [],
+            False,
+            Result(
+                success=False,
+                errorCode="AUDIT_QUERY_FAILED",
+                errorMessage="Audit log query failed.",
+            ),
         )
 
-    return events[:limit], None
+    return events[:limit], len(events) > limit, None
 
 
 async def _audit_query(
@@ -223,10 +295,13 @@ async def _audit_query(
     decision: str,
     reason: str | None,
     count: int | None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
-    metadata = {"operation": operation}
+    audit_metadata = {"operation": operation}
     if count is not None:
-        metadata["count"] = count
+        audit_metadata["count"] = count
+    if metadata:
+        audit_metadata.update({key: value for key, value in metadata.items() if value is not None})
     try:
         await audit_decision(
             ctx,
@@ -236,7 +311,7 @@ async def _audit_query(
                 resource_id=None,
                 decision=decision,
                 reason=reason,
-                metadata=metadata,
+                metadata=audit_metadata,
             ),
         )
     except Exception:
@@ -245,6 +320,8 @@ async def _audit_query(
 
 def _entry_from_event(event: CoreAuditEvent) -> AuditLogEntry:
     return AuditLogEntry(
+        id=event.id,
+        created_at=event.created_at,
         user_id=event.user_id,
         action=event.action,
         resource_type=event.resource_type,
@@ -256,11 +333,27 @@ def _entry_from_event(event: CoreAuditEvent) -> AuditLogEntry:
     )
 
 
+def _next_before_id(entries: list[AuditLogEntry], has_more: bool) -> int | None:
+    if not has_more or not entries:
+        return None
+    return entries[-1].id
+
+
+def _datetime_param(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
+
+
 def _events_to_csv(events: list[CoreAuditEvent]) -> str:
     output = StringIO()
     writer = csv.DictWriter(
         output,
         fieldnames=[
+            "id",
+            "created_at",
             "user_id",
             "action",
             "resource_type",
@@ -275,6 +368,8 @@ def _events_to_csv(events: list[CoreAuditEvent]) -> str:
     for event in events:
         writer.writerow(
             {
+                "id": _csv_cell(event.id),
+                "created_at": _csv_cell(event.created_at),
                 "user_id": _csv_cell(event.user_id),
                 "action": _csv_cell(event.action),
                 "resource_type": _csv_cell(event.resource_type),

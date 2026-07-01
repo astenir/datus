@@ -427,6 +427,10 @@ class AuditLogReader(Protocol):
         resource_type: str | None = None,
         resource_id: str | None = None,
         decision: str | None = None,
+        request_id: str | None = None,
+        before_id: int | None = None,
+        created_after: str | None = None,
+        created_before: str | None = None,
     ) -> list[AuditEvent]:
         """Return matching audit events, newest first."""
         ...

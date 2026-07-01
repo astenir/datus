@@ -1034,6 +1034,10 @@ class PgAuditSink(_PgStoreBase):
         resource_type: str | None = None,
         resource_id: str | None = None,
         decision: str | None = None,
+        request_id: str | None = None,
+        before_id: int | None = None,
+        created_after: str | None = None,
+        created_before: str | None = None,
     ) -> list[AuditEvent]:
         filters = {
             "user_id": user_id,
@@ -1041,12 +1045,25 @@ class PgAuditSink(_PgStoreBase):
             "resource_type": resource_type,
             "resource_id": resource_id,
             "decision": decision,
+            "request_id": request_id,
         }
         where_sql, params = _where(filters)
+        if before_id is not None:
+            params.append(before_id)
+            before_clause = f"id < ${len(params)}"
+            where_sql = f"{where_sql} AND {before_clause}" if where_sql else f"WHERE {before_clause}"
+        if created_after is not None:
+            params.append(created_after)
+            created_after_clause = f"created_at >= ${len(params)}::timestamptz"
+            where_sql = f"{where_sql} AND {created_after_clause}" if where_sql else f"WHERE {created_after_clause}"
+        if created_before is not None:
+            params.append(created_before)
+            created_before_clause = f"created_at < ${len(params)}::timestamptz"
+            where_sql = f"{where_sql} AND {created_before_clause}" if where_sql else f"WHERE {created_before_clause}"
         params.append(max(1, int(limit)))
         rows = await self._fetch(
             f"""
-            SELECT user_id, action, resource_type, resource_id, decision, reason, request_id, metadata_json
+            SELECT id, user_id, action, resource_type, resource_id, decision, reason, request_id, metadata_json, created_at
             FROM enterprise_audit_logs
             {where_sql}
             ORDER BY id DESC
@@ -1664,6 +1681,7 @@ def _session_owner_record(row: Any) -> dict[str, Any]:
 
 def _audit_event(row: Any) -> AuditEvent:
     return AuditEvent(
+        id=int(row["id"]) if row["id"] is not None else None,
         user_id=_optional_str(row["user_id"]),
         action=str(row["action"]),
         resource_type=str(row["resource_type"]),
@@ -1671,6 +1689,7 @@ def _audit_event(row: Any) -> AuditEvent:
         decision=str(row["decision"]),
         reason=_optional_str(row["reason"]),
         request_id=_optional_str(row["request_id"]),
+        created_at=_iso(row["created_at"]),
         metadata=_load_jsonb(row["metadata_json"]),
     )
 
@@ -1890,6 +1909,9 @@ ON enterprise_audit_logs (resource_type);
 
 CREATE INDEX IF NOT EXISTS idx_enterprise_audit_logs_decision
 ON enterprise_audit_logs (decision);
+
+CREATE INDEX IF NOT EXISTS idx_enterprise_audit_logs_request_id
+ON enterprise_audit_logs (request_id);
 
 CREATE TABLE IF NOT EXISTS enterprise_quotas (
     subject_type text NOT NULL,

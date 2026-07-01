@@ -1221,6 +1221,10 @@ class SqliteAuditSink:
         resource_type: str | None = None,
         resource_id: str | None = None,
         decision: str | None = None,
+        request_id: str | None = None,
+        before_id: int | None = None,
+        created_after: str | None = None,
+        created_before: str | None = None,
     ) -> list[AuditEvent]:
         filters = {
             "user_id": user_id,
@@ -1228,6 +1232,7 @@ class SqliteAuditSink:
             "resource_type": resource_type,
             "resource_id": resource_id,
             "decision": decision,
+            "request_id": request_id,
         }
         where = []
         params: list[Any] = []
@@ -1236,9 +1241,18 @@ class SqliteAuditSink:
                 continue
             where.append(f"{column} = ?")
             params.append(value)
+        if before_id is not None:
+            where.append("id < ?")
+            params.append(before_id)
+        if created_after is not None:
+            where.append("created_at >= ?")
+            params.append(created_after)
+        if created_before is not None:
+            where.append("created_at < ?")
+            params.append(created_before)
 
         query = """
-            SELECT user_id, action, resource_type, resource_id, decision, reason, request_id, metadata_json
+            SELECT id, user_id, action, resource_type, resource_id, decision, reason, request_id, metadata_json, created_at
             FROM enterprise_audit_logs
         """
         if where:
@@ -1277,6 +1291,18 @@ class SqliteAuditSink:
                 ON enterprise_audit_logs (user_id, action, resource_type, resource_id, decision, id)
                 """
             )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_enterprise_audit_logs_request_id
+                ON enterprise_audit_logs (request_id, id)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_enterprise_audit_logs_created_at
+                ON enterprise_audit_logs (created_at, id)
+                """
+            )
             conn.commit()
 
 
@@ -1311,18 +1337,20 @@ def _ensure_sqlite_columns(conn: sqlite3.Connection, table: str, columns: dict[s
 def _audit_event_from_row(row) -> AuditEvent:
     metadata: dict[str, Any]
     try:
-        raw_metadata = json.loads(row[7] or "{}")
+        raw_metadata = json.loads(row[8] or "{}")
         metadata = raw_metadata if isinstance(raw_metadata, dict) else {}
     except json.JSONDecodeError:
         metadata = {}
     return AuditEvent(
-        user_id=_optional_str(row[0]),
-        action=str(row[1]),
-        resource_type=str(row[2]),
-        resource_id=_optional_str(row[3]),
-        decision=str(row[4]),
-        reason=_optional_str(row[5]),
-        request_id=_optional_str(row[6]),
+        id=int(row[0]) if row[0] is not None else None,
+        user_id=_optional_str(row[1]),
+        action=str(row[2]),
+        resource_type=str(row[3]),
+        resource_id=_optional_str(row[4]),
+        decision=str(row[5]),
+        reason=_optional_str(row[6]),
+        request_id=_optional_str(row[7]),
+        created_at=_optional_str(row[9]),
         metadata=metadata,
     )
 

@@ -542,6 +542,7 @@ async def test_sqlite_audit_sink_persists_and_filters_events(tmp_path):
             resource_type="datasource",
             resource_id="finance",
             decision="allow",
+            request_id="req-sql",
             metadata={"row_count": 1},
         )
     )
@@ -559,8 +560,22 @@ async def test_sqlite_audit_sink_persists_and_filters_events(tmp_path):
     reopened = SqliteAuditSink(str(tmp_path / "enterprise_audit.db"))
     all_events = await reopened.query_events(limit=10)
     sql_events = await reopened.query_events(limit=10, user_id="alice", action="sql.execute", decision="allow")
+    cursor_events = await reopened.query_events(limit=10, before_id=2)
+    request_events = await reopened.query_events(limit=10, request_id="req-sql")
+    time_events = await reopened.query_events(
+        limit=10,
+        created_after="1900-01-01T00:00:00+00:00",
+        created_before="9999-01-01T00:00:00+00:00",
+    )
 
     assert [event.action for event in all_events] == ["chat.stream", "sql.execute"]
+    assert all_events[0].id == 2
+    assert all_events[0].created_at
     assert len(sql_events) == 1
+    assert sql_events[0].id == 1
+    assert sql_events[0].created_at
     assert sql_events[0].resource_id == "finance"
     assert sql_events[0].metadata == {"row_count": 1}
+    assert [event.id for event in cursor_events] == [1]
+    assert [event.id for event in request_events] == [1]
+    assert [event.id for event in time_events] == [2, 1]

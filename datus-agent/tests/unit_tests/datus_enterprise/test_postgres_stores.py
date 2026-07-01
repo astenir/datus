@@ -147,6 +147,7 @@ class FakeConnection:
                     request_id=args[6],
                     metadata_json=args[7],
                     id=len(self.audit_logs) + 1,
+                    created_at=NOW,
                 )
             )
             return "INSERT 0 1"
@@ -325,9 +326,19 @@ class FakeConnection:
             return sorted(rows, key=lambda row: row["session_id"])
         if "FROM enterprise_audit_logs" in normalized:
             rows = list(self.audit_logs)
-            rows = self._filtered(
-                rows, ("user_id", "action", "resource_type", "resource_id", "decision"), normalized, args[:-1]
-            )
+            filter_columns = ("user_id", "action", "resource_type", "resource_id", "decision", "request_id")
+            rows = self._filtered(rows, filter_columns, normalized, args[:-1])
+            value_index = sum(1 for column in filter_columns if f"{column} = $" in normalized)
+            if "id < $" in normalized:
+                rows = [row for row in rows if row["id"] < args[value_index]]
+                value_index += 1
+            if "created_at >= $" in normalized:
+                created_after = _parse_iso(args[value_index])
+                rows = [row for row in rows if row["created_at"] >= created_after]
+                value_index += 1
+            if "created_at < $" in normalized:
+                created_before = _parse_iso(args[value_index])
+                rows = [row for row in rows if row["created_at"] < created_before]
             return sorted(rows, key=lambda row: row["id"], reverse=True)[: args[-1]]
         if "FROM enterprise_quotas" in normalized and "FOR UPDATE" in normalized:
             resource, subject_types, subject_ids = args
@@ -378,6 +389,10 @@ def fake_pg(monkeypatch):
 
     monkeypatch.setitem(sys.modules, "asyncpg", SimpleNamespace(create_pool=create_pool))
     return conn
+
+
+def _parse_iso(value: str) -> datetime:
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
 
 @pytest.mark.asyncio
@@ -653,10 +668,23 @@ async def test_pg_audit_sink_writes_and_queries_filtered_events(fake_pg):
             metadata={},
         )
     )
+    fake_pg.audit_logs[1]["created_at"] = datetime(2026, 1, 2, tzinfo=timezone.utc)
 
     events = await sink.query_events(limit=10, user_id="alice", action="sql.execute", decision="allow")
+    cursor_events = await sink.query_events(limit=10, before_id=2)
+    request_events = await sink.query_events(limit=10, request_id="r1")
+    time_events = await sink.query_events(
+        limit=10,
+        created_after="2026-01-01T12:00:00+00:00",
+        created_before="2026-01-03T00:00:00+00:00",
+    )
     assert len(events) == 1
+    assert events[0].id == 1
+    assert events[0].created_at == "2026-01-01T00:00:00+00:00"
     assert events[0].metadata == {"row_count": 1}
+    assert [event.id for event in cursor_events] == [1]
+    assert [event.id for event in request_events] == [1]
+    assert [event.id for event in time_events] == [2]
 
 
 @pytest.mark.asyncio
