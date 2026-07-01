@@ -76,7 +76,7 @@ git push origin main
 Use commit messages that name the upstream release, for example:
 
 ```text
-[Others] 合并上游 v0.3.7 release
+chore(upstream): 合并上游 v0.3.7 release
 ```
 
 If an unreleased upstream fix is needed before the next release tag, cherry-pick the specific upstream commit on a short-lived branch instead of merging `upstream/main`:
@@ -111,7 +111,7 @@ Use the PR CI harness for ordinary upstream-style changes. For local downstream 
 - Use `from datus.utils.loggings import get_logger`; do not add `print()` for application logging.
 - Raise `DatusException(ErrorCode.XXX, ...)` from `datus.utils.exceptions` for domain errors.
 - Error-code ranges: `1xxxxx` common, `2xxxxx` node, `3xxxxx` model, `4xxxxx` tool/storage, `5xxxxx` database, `6xxxxx` semantic.
-- Use English in code and comments. For upstream PRs, use English commit and PR text. For this downstream fork's local commits, keep the existing bracketed category plus Chinese summary style unless the user asks otherwise, for example `[Others] 合并上游 v0.3.7 release`.
+- Use English in code and comments. For upstream PRs, use English commit and PR text. For this downstream fork's local commits, follow the Conventional Commits rules below, using an English type/scope with a concise Chinese description.
 - Chinese is acceptable in user-facing docs explicitly targeted to Chinese readers.
 
 ## CLI UI Rules
@@ -195,6 +195,42 @@ PR bodies must follow `.github/PULL_REQUEST_TEMPLATE.md` and fill all sections:
 - `## Test Cases`: added or changed integration/nightly tests; justify if none.
 
 When using `gh pr create --body`, copy `.github/PULL_REQUEST_TEMPLATE.md` as the starting point. Empty or missing sections must be revised before review.
+
+## Commit Messages
+
+Commit messages should follow Conventional Commits.
+
+- Format: `<type>(<scope>): <description>`
+- Use a lowercase English `type` from the allowed list below.
+- Use a short scope when it clarifies the touched backend domain, such as `api`, `auth`, `config`, `cli`, `agent`, `models`, `tools`, `storage`, `enterprise`, `docs`, `build`, `ci`, or `upstream`.
+- Keep the subject line concise, preferably 72 characters or fewer.
+- Use a concise Chinese description after the colon for downstream local commits, preferably a short verb-object phrase such as `修复会话加载` or `补充权限校验`.
+- Use English descriptions for upstream PR-facing commits unless the user asks otherwise.
+- Use a body when the commit needs rationale, migration notes, verification details, or tradeoffs.
+- Use `!` after the type or scope for breaking changes, and include a `BREAKING CHANGE:` footer when needed.
+- Do not use vague messages such as `update`, `fix bug`, `change stuff`, `调整代码`, or `wip`.
+
+Allowed Conventional Commit types:
+
+- `feat`: user-facing feature or visible capability.
+- `fix`: bug fix or behavioral regression fix.
+- `docs`: documentation-only change.
+- `style`: formatting or purely visual style change that does not alter behavior.
+- `refactor`: code structure change without feature or bug-fix intent.
+- `perf`: performance improvement.
+- `test`: tests, fixtures, or test utilities.
+- `build`: dependencies, package scripts, generated artifacts, or build tooling.
+- `ci`: CI or automation configuration.
+- `chore`: repository maintenance, upstream release merges, or tasks that do not fit the categories above.
+- `revert`: revert a previous commit.
+
+Examples:
+
+- `feat(api): 新增企业用户查询接口`
+- `fix(auth): 修复用户信息认证失败处理`
+- `docs(enterprise): 补充部署验证步骤`
+- `test(storage): 覆盖会话正文解析`
+- `chore(upstream): 合并上游 v0.3.7 release`
 
 ## Commit Workflow
 

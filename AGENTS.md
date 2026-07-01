@@ -40,7 +40,37 @@ Use pytest for Python packages and Vitest/Playwright where configured for the fr
 
 ## Commits
 
-Use concise Chinese commit messages with a bracketed or parenthesized category, for example `（同步）迁移个人版 Datus 子项目`.
+Commit messages should follow Conventional Commits.
+
+- Format: `<type>(<scope>): <description>`
+- Use a lowercase English `type` from the allowed list below.
+- Use a short scope when it clarifies the touched sub-project or domain, such as `agent`, `web`, `db-adapters`, `storage-adapters`, `api`, `auth`, `docs`, `build`, or `ci`.
+- Keep the subject line concise, preferably 72 characters or fewer.
+- Use a concise Chinese description after the colon, preferably a short verb-object phrase such as `修复会话加载` or `补充提交规范`.
+- Use a body when the commit needs rationale, migration notes, verification details, or tradeoffs.
+- Use `!` after the type or scope for breaking changes, and include a `BREAKING CHANGE:` footer when needed.
+- Do not use vague messages such as `update`, `fix bug`, `change stuff`, `调整代码`, or `wip`.
+
+Allowed Conventional Commit types:
+
+- `feat`: user-facing feature or visible capability.
+- `fix`: bug fix or behavioral regression fix.
+- `docs`: documentation-only change.
+- `style`: formatting or purely visual style change that does not alter behavior.
+- `refactor`: code structure change without feature or bug-fix intent.
+- `perf`: performance improvement.
+- `test`: tests, fixtures, or test utilities.
+- `build`: dependencies, package scripts, generated contract artifacts, or build tooling.
+- `ci`: CI or automation configuration.
+- `chore`: repository maintenance that does not fit the categories above.
+- `revert`: revert a previous commit.
+
+Examples:
+
+- `docs(agents): 补充提交信息规范`
+- `feat(web): 新增数据源选择器`
+- `fix(agent): 修复会话加载`
+- `build(db-adapters): 更新锁文件`
 
 ## Security
 
