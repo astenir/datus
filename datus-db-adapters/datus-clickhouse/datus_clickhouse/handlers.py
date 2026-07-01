@@ -1,0 +1,56 @@
+# Copyright 2025-present DatusAI, Inc.
+# Licensed under the Apache License, Version 2.0.
+# See http://www.apache.org/licenses/LICENSE-2.0 for details.
+
+"""URI builder and context resolver for ClickHouse."""
+
+from typing import Optional, Tuple, Union
+
+from sqlalchemy.engine.url import URL, make_url
+
+
+def _clean_str(value: Optional[Union[str, int]]) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple, set)):
+        for item in value:
+            if item:
+                return str(item).strip()
+        return ""
+    return str(value).strip()
+
+
+def _value_or_none(value: Optional[Union[str, int]]) -> Optional[str]:
+    cleaned = _clean_str(value)
+    return cleaned or None
+
+
+def _port_or_none(port_value: Optional[Union[str, int]]) -> Optional[int]:
+    cleaned = _clean_str(port_value)
+    if not cleaned:
+        return None
+    try:
+        return int(cleaned)
+    except ValueError:
+        return None
+
+
+def build_clickhouse_uri(db_config) -> str:
+    return str(
+        URL.create(
+            drivername="clickhouse",
+            username=_value_or_none(db_config.username),
+            password=_value_or_none(db_config.password),
+            host=_value_or_none(db_config.host),
+            port=_port_or_none(db_config.port),
+            database=_value_or_none(db_config.database),
+        )
+    )
+
+
+def resolve_clickhouse_context(db_config, uri: str) -> Tuple[str, str, str, str]:
+    url = make_url(uri)
+    database = _clean_str(url.database) or _clean_str(db_config.database) or "default"
+    schema = _clean_str(getattr(db_config, "schema", None))
+    catalog = _clean_str(getattr(db_config, "catalog", None))
+    return "clickhouse", catalog, database, schema
