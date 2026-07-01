@@ -11,7 +11,7 @@
   <a href="./datus-web"><img src="https://img.shields.io/badge/Web-Vue%203-42B883?logo=vue.js&logoColor=white" alt="Vue 3 Web"></a>
   <a href="./datus-db-adapters"><img src="https://img.shields.io/badge/Adapters-Multi--Database-F97316" alt="Database Adapters"></a>
   <a href="./datus-agent"><img src="https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white" alt="FastAPI"></a>
-  <a href="./datus-agent/LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue" alt="Apache 2.0 License"></a>
+  <a href="./LICENSE.md"><img src="https://img.shields.io/badge/License-Multi--license-blue" alt="Multi-license"></a>
 </p>
 
 ![Datus architecture](./datus-agent/docs/assets/datus_architecture.svg)
@@ -33,6 +33,20 @@
 | [`datus-storage-adapters`](./datus-storage-adapters) | 关系型和向量存储后端适配器 | Python, uv |
 
 根目录只保留跨项目协调文件。具体开发、测试和启动方式以各子项目自己的 `README.md` / `AGENTS.md` 为准。
+
+## License
+
+This monorepo contains components under different open-source licenses:
+
+| Component | License |
+| --- | --- |
+| [`datus-agent`](./datus-agent) | Apache-2.0 |
+| [`datus-db-adapters`](./datus-db-adapters) | Apache-2.0 |
+| [`datus-storage-adapters`](./datus-storage-adapters) | Apache-2.0 |
+| [`datus-web`](./datus-web) | MIT |
+
+See [LICENSE.md](./LICENSE.md) and [ATTRIBUTION.md](./ATTRIBUTION.md) for the
+full license and upstream attribution notes.
 
 ## Quick Start
 
