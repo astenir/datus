@@ -1,21 +1,19 @@
-# Enterprise PostgreSQL metadata configuration overlay.
+# 企业 PostgreSQL metadata 配置片段。
 #
-# Copy the relevant sections into agent.yml for production-like enterprise
-# deployments. This file only moves enterprise platform metadata stores to
-# PostgreSQL; normal business datasource, model, RAG/vector, and project
-# subject/ or artifact bundle files remain in the regular agent.yml/runtime
-# paths.
+# 将需要的片段合并到 agent.yml，用于接近生产的企业部署。
+# 该文件只把企业平台 metadata store 切到 PostgreSQL；
+# 普通业务 datasource、模型、RAG/vector、项目 subject/ 文件和 artifact bundle
+# 仍由常规 agent.yml 与运行时路径管理。
 #
-# Each PG metadata/body store owns one asyncpg pool. With the eight metadata
-# stores below plus the optional session_body_store and max_size=2, each API
-# process can open up to 18 enterprise PostgreSQL connections before accounting
-# for business datasources or operational clients. Adjust these pool sizes
-# together with uvicorn worker/pod count and PostgreSQL max_connections.
+# 每个 PG metadata/body store 都会持有一个 asyncpg pool。下面 9 个 metadata store
+# 加上 session_body_store，在 max_size=2 时，每个 API 进程最多会打开 20 个
+# enterprise PostgreSQL 连接；还要额外预留业务数据源和运维连接。
+# 调整 min_size/max_size 时必须同时考虑 uvicorn worker/pod 数和 PostgreSQL max_connections。
 
 api:
   auth_provider:
-    # Use this provider when the enterprise gateway cannot inject signed
-    # identity headers. Datus validates the bearer token by calling userinfo.
+    # 企业网关不能注入签名身份 header 时使用该 provider。
+    # Datus 会读取 Bearer access token，并调用 userinfo 接口换取员工身份。
     class: datus_enterprise.auth_provider:UserInfoBearerAuthProvider
     kwargs:
       userinfo_url: ${DATUS_ENTERPRISE_USERINFO_URL}
@@ -28,7 +26,7 @@ api:
       allowed_statuses: ["正常"]
       default_project_id: enterprise
 
-    # If the enterprise gateway can be changed, prefer signed headers instead:
+    # 如果企业网关可以改造，优先使用签名 header 方案：
     #
     # class: datus_enterprise.auth_provider:SignedHeaderAuthProvider
     # kwargs:
@@ -44,9 +42,9 @@ enterprise:
   config_projector:
     class: datus_enterprise.projection:DatasourceGrantProjector
 
-  # Optional first-login provisioning. Keep disabled unless your enterprise
-  # userinfo/header provider is the source of truth for employee identity.
-  # Default roles must already exist and should be low-privilege.
+  # 可选：首次登录自动创建用户。默认关闭。
+  # 只有 userinfo/header provider 已是可信员工身份来源时才开启；
+  # 默认角色必须预先存在，并且应该是低权限角色。
   user_auto_provisioning:
     enabled: false
     default_role_ids: []
@@ -86,13 +84,12 @@ enterprise:
       min_size: 1
       max_size: 2
 
-  # Optional but recommended for enterprise multi-worker deployments. This
-  # moves chat session body/history/state out of local AdvancedSQLiteSession
-  # .db files and into PostgreSQL. It is separate from session_owner_store:
-  # session_owner_store is the authorization/index metadata table, while this
-  # store persists messages/items, message structure, turn usage, running usage,
-  # and system-prompt snapshots for new sessions. It does not migrate old .db
-  # files automatically.
+  # 可选，但企业多 worker 部署建议启用。
+  # 它把新会话的正文/history/state 从本地 AdvancedSQLiteSession .db 文件迁到 PostgreSQL。
+  # 注意它和 session_owner_store 不是一回事：
+  # session_owner_store 是授权和索引 metadata；
+  # session_body_store 保存 messages/items、message structure、turn usage、
+  # running usage 和 system-prompt snapshot。它不会自动迁移历史 .db 文件。
   session_body_store:
     class: datus_enterprise.postgres_session_store:PgSessionBodyStore
     kwargs:
@@ -128,8 +125,8 @@ enterprise:
       min_size: 1
       max_size: 2
 
-# Optional SQL policy. Configure a concrete provider when datasource grants
-# must be enforced by SQL rewrite/deny logic in addition to route projection.
+# 可选：SQL policy。
+# 当 datasource grant 还需要通过 SQL rewrite/deny 兜底时，配置具体 provider。
 #
 # agent:
 #   sql_policy:

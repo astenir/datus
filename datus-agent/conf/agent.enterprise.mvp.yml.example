@@ -1,13 +1,13 @@
-# Enterprise MVP configuration overlay.
+# 企业单节点 MVP 配置片段。
 #
-# Copy the relevant sections into agent.yml for a single-node enterprise MVP.
-# This file intentionally contains only enterprise-facing settings; keep normal
-# model, datasource, and provider configuration in the regular agent.yml.
+# 将需要的片段合并到 agent.yml。该文件只放企业平台相关配置；
+# 普通模型、业务数据源、RAG/vector 和项目文件路径仍放在常规 agent.yml 中。
+# 该配置适合本地或单节点试点，不适合多 worker / HA 生产部署。
 
 api:
   auth_provider:
-    # Use this provider when the enterprise gateway cannot inject signed
-    # identity headers. Datus validates the bearer token by calling userinfo.
+    # 企业网关不能注入签名身份 header 时使用该 provider。
+    # Datus 会读取 Bearer access token，并调用 userinfo 接口换取员工身份。
     class: datus_enterprise.auth_provider:UserInfoBearerAuthProvider
     kwargs:
       userinfo_url: ${DATUS_ENTERPRISE_USERINFO_URL}
@@ -20,7 +20,7 @@ api:
       allowed_statuses: ["正常"]
       default_project_id: enterprise
 
-    # If the enterprise gateway can be changed, prefer signed headers instead:
+    # 如果企业网关可以改造，优先使用签名 header 方案：
     #
     # class: datus_enterprise.auth_provider:SignedHeaderAuthProvider
     # kwargs:
@@ -30,25 +30,24 @@ api:
 enterprise:
   enabled: true
 
-  # LocalAuthorizationProvider is permission-key based. In enterprise mode,
-  # permissions are refreshed from role_store, not trusted from the browser.
+  # LocalAuthorizationProvider 基于稳定 permission key 判断权限。
+  # 企业模式下权限必须从 role_store 刷新，不能信任浏览器传入的 roles/permissions。
   authorization_provider:
     class: datus.api.enterprise.defaults:LocalAuthorizationProvider
 
-  # Applies datasource grants to a request-scoped AgentConfig clone.
+  # 将 datasource grant 投影到请求级 AgentConfig clone，不能修改共享服务配置。
   config_projector:
     class: datus_enterprise.projection:DatasourceGrantProjector
 
-  # Optional first-login provisioning. Keep disabled unless your enterprise
-  # userinfo/header provider is the source of truth for employee identity.
-  # Default roles must already exist and should be low-privilege.
+  # 可选：首次登录自动创建用户。默认关闭。
+  # 只有 userinfo/header provider 已是可信员工身份来源时才开启；
+  # 默认角色必须预先存在，并且应该是低权限角色。
   user_auto_provisioning:
     enabled: false
     default_role_ids: []
 
-  # Single-node metadata stores. They may share one SQLite file because each
-  # store owns separate tables. Replace these with Postgres-backed providers
-  # before multi-worker or HA deployment.
+  # 单节点 metadata store。多个 store 可以共用一个 SQLite 文件，因为各自管理独立表。
+  # 多 worker、滚动发布或 HA 试点前，应切换到 PostgreSQL store。
   user_store:
     class: datus.api.enterprise.defaults:SqliteEnterpriseUserStore
     kwargs:
@@ -74,14 +73,13 @@ enterprise:
     kwargs:
       db_path: .datus/enterprise.db
 
-  # Optional single-process quota metadata. Replace with a shared store for
-  # multi-worker deployments; omit it only when quota-protected endpoints should
-  # fail closed with QUOTA_STORE_UNAVAILABLE.
+  # 可选：单进程 quota metadata。多 worker 部署需要换成共享 store。
+  # 如果省略该项，已接入 quota 的路径会以 QUOTA_STORE_UNAVAILABLE fail closed。
   quota_store:
     class: datus.api.enterprise.defaults:InMemoryEnterpriseQuotaStore
 
-# Optional SQL policy. Configure a concrete provider when datasource grants
-# must be enforced by SQL rewrite/deny logic in addition to route projection.
+# 可选：SQL policy。
+# 当 datasource grant 还需要通过 SQL rewrite/deny 兜底时，配置具体 provider。
 #
 # agent:
 #   sql_policy:

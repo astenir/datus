@@ -1,19 +1,18 @@
-# Local enterprise PostgreSQL test configuration.
+# 本地企业 PostgreSQL 测试配置。
 #
-# This is a complete agent.yml-style config for local API testing without an
-# enterprise gateway. It uses SignedHeaderAuthProvider so local scripts can
-# generate trusted identity headers, while enterprise metadata stores use
-# PostgreSQL through DATUS_ENTERPRISE_PG_DSN.
+# 这是一个完整的 agent.yml 示例，用于没有真实企业网关时做本地 API 联调。
+# 默认使用 SignedHeaderAuthProvider，方便脚本生成可信签名身份 header；
+# 企业 metadata store 通过 DATUS_ENTERPRISE_PG_DSN 连接 PostgreSQL。
 #
-# Required environment variables:
+# 必需环境变量：
 #   DATUS_ENTERPRISE_HEADER_SECRET
 #   DATUS_ENTERPRISE_PG_DSN
-# Optional for chat/embedding paths:
+# chat / embedding 路径可选环境变量：
 #   DEEPSEEK_API_KEY
 #   SILICONFLOW_API_KEY
 #   CCKS_FUND_DB_PASSWORD
 #
-# Example:
+# 示例：
 #   cp conf/agent.local-enterprise-pg.yml.example conf/agent.local-enterprise-pg.yml
 #   export DATUS_ENTERPRISE_HEADER_SECRET="$(uv run python scripts/enterprise_local_api.py secret)"
 #   export DATUS_ENTERPRISE_PG_DSN="postgresql://datus:datus@127.0.0.1:5433/datus_enterprise"
@@ -21,10 +20,10 @@
 #   uv run datus-api --config conf/agent.local-enterprise-pg.yml --datasource ccks_fund --port 8000 --reload
 #   uv run python scripts/enterprise_local_api.py smoke --datasource ccks_fund --print-curl
 #
-# To test UserInfoBearerAuthProvider instead of signed headers, run:
+# 如果要测试 UserInfoBearerAuthProvider 而不是签名 header，先启动 mock userinfo：
 #   uv run python scripts/enterprise_mock_userinfo.py --port 8010 --reload
 #   export DATUS_ENTERPRISE_USERINFO_URL="http://127.0.0.1:8010/userinfo"
-# Then replace the auth_provider block below with:
+# 然后把下面 agent.api.auth_provider 替换为：
 #   class: datus_enterprise.auth_provider:UserInfoBearerAuthProvider
 #   kwargs:
 #     userinfo_url: ${DATUS_ENTERPRISE_USERINFO_URL}
@@ -36,7 +35,7 @@
 #     status_field: userStatus
 #     allowed_statuses: ["正常"]
 #     default_project_id: enterprise
-#     # Local development only. Keep disabled for production and real pilots.
+#     # 仅本地开发使用；生产和真实员工试点必须关闭。
 #     dev_admin_enabled: ${DATUS_DEV_ADMIN_AUTH:-false}
 #     dev_admin_require_basic_auth: ${DATUS_DEV_ADMIN_REQUIRE_BASIC_AUTH:-false}
 #     dev_admin_user_id: admin
@@ -45,8 +44,8 @@
 #     dev_admin_project_id: enterprise
 
 agent:
-  home: /home/astenir/Code/personal/datus/datus-data
-  project_root: /home/astenir/Code/personal/datus/datus-project
+  home: ${DATUS_HOME:-~/.datus}
+  project_root: ${DATUS_PROJECT_ROOT:-.}
   target_provider: deepseek
   target_model: deepseek-v4-flash
 
@@ -67,8 +66,8 @@ agent:
     config_projector:
       class: datus_enterprise.projection:DatasourceGrantProjector
 
-    # Optional first-login provisioning for local frontend smoke tests. Keep
-    # disabled by default; if enabled, seed the default role first.
+    # 本地前端 smoke 可选开启首次登录自动创建用户。
+    # 默认关闭；如需开启，先 seed 好默认角色。
     user_auto_provisioning:
       enabled: false
       default_role_ids: []
@@ -116,8 +115,8 @@ agent:
       class: datus_enterprise.postgres_stores:PgEnterpriseSecretStore
       kwargs: *enterprise_pg
 
-  # Keep this disabled for basic local RBAC / datasource grant smoke tests.
-  # Turn it on only when intentionally testing SQL-policy enforcement.
+  # 基础 RBAC / datasource grant smoke 测试保持关闭。
+  # 只有专门验证 SQL policy 兜底时才开启。
   sql_policy:
     enabled: false
 
@@ -160,11 +159,6 @@ agent:
         sslmode: prefer
         timeout_seconds: 30
         default: true
-
-      california_schools:
-        type: sqlite
-        uri: sqlite:////home/astenir/.datus/benchmark/california_schools/california_schools.sqlite
-        default: false
 
     semantic_layer:
       metricflow:
