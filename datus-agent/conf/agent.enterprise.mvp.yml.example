@@ -39,6 +39,13 @@ enterprise:
   config_projector:
     class: datus_enterprise.projection:DatasourceGrantProjector
 
+  # Optional first-login provisioning. Keep disabled unless your enterprise
+  # userinfo/header provider is the source of truth for employee identity.
+  # Default roles must already exist and should be low-privilege.
+  user_auto_provisioning:
+    enabled: false
+    default_role_ids: []
+
   # Single-node metadata stores. They may share one SQLite file because each
   # store owns separate tables. Replace these with Postgres-backed providers
   # before multi-worker or HA deployment.

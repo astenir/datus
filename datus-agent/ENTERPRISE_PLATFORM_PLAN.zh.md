@@ -340,6 +340,8 @@ class AppContext:
 
 用户信息接口只负责“这个人是谁”。Datus 内部模块权限、数据源授权和 artifact ACL 仍由 Datus metadata store 决定，避免把企业 IAM 返回字段直接当作 Datus 授权事实。
 
+如果希望员工首次访问时自动进入 Datus 用户目录，可显式开启 `enterprise.user_auto_provisioning.enabled`。该能力只在认证成功、`EnterpriseUserStore` 中没有该用户时创建最小用户档案，并可绑定预先存在的低权限默认角色；默认关闭，不会把 userinfo/header 中的 roles、permissions 或 datasource grants 当作授权事实。默认角色缺失、用户写入失败或角色绑定失败时 fail closed，并写入 `auth.enterprise_user_auto_provision` 审计。
+
 网关可改时的签名 header 方案仍作为推荐部署形态之一：
 
 - 网关负责读取和校验用户登录态、OIDC/JWT、企业 SSO 或其他内部身份凭证。
@@ -1168,7 +1170,7 @@ CREATE INDEX idx_audit_time ON audit_logs (created_at);
 - 已新增 `EnterpriseUserStore` 协议，以及本地兼容的内存实现和单节点 SQLite `enterprise_users` 骨架；企业模式下可通过 `enterprise.user_store.class` 替换为生产 metadata store。
 - 已注册 `/api/v1/admin/users`、`/api/v1/admin/users/{user_id}`、`/api/v1/admin/users/{user_id}/disable` 和 `/api/v1/admin/users/{user_id}/enable`，统一要求 `module.admin.users`，企业上下文只来自认证后的 `AppContext`，不从路径或请求体传入。
 - 用户管理接口返回稳定 `Result` 错误码：`USER_ID_INVALID`、`RESOURCE_NOT_FOUND`、`USER_LIST_FAILED`、`USER_READ_FAILED`、`USER_UPSERT_FAILED`、`USER_UPDATE_FAILED`；管理 allow/deny 使用 `module.admin.users` 写入审计，metadata 只包含脱敏的新旧摘要。
-- `enterprise.enabled=true` 的新请求会检查用户状态：缺少 `user_id` 返回 `AUTH_REQUIRED`，已存在且被禁用的用户返回 `USER_DISABLED`，用户状态存储不可用时返回 `USER_STATUS_UNAVAILABLE` 并审计 deny。未录入用户仍允许通过，以兼容已有 identity-only auth provider；若 role/grant metadata 读取失败或用户-role 绑定指向缺失 role，则 fail closed 并审计 deny。
+- `enterprise.enabled=true` 的新请求会检查用户状态：缺少 `user_id` 返回 `AUTH_REQUIRED`，已存在且被禁用的用户返回 `USER_DISABLED`，用户状态存储不可用时返回 `USER_STATUS_UNAVAILABLE` 并审计 deny。未录入用户默认仍允许通过，以兼容已有 identity-only auth provider；显式开启 `enterprise.user_auto_provisioning.enabled` 后，未录入用户会从认证后的 principal 创建最小用户档案并绑定预先存在的 `default_role_ids`，失败返回 `USER_AUTO_PROVISION_*` 并审计 deny。若 role/grant metadata 读取失败或用户-role 绑定指向缺失 role，则 fail closed 并审计 deny。
 - 已新增 `EnterpriseRoleStore` 协议，以及本地兼容的内存实现和单节点 SQLite `enterprise_roles` / `enterprise_role_permissions` / `enterprise_user_roles` 骨架；企业模式下可通过 `enterprise.role_store.class` 替换为生产 metadata store。
 - 已注册 `/api/v1/admin/roles`、`/api/v1/admin/roles/{role_id}`、`/api/v1/admin/roles/{role_id}/permissions` 和 `/api/v1/admin/users/{user_id}/roles`，统一要求 `module.admin.roles`；role metadata、permission set 与用户-role 绑定会在后续新请求中自动合并进 `AppContext.roles` 和 `AppContext.permissions`，不会复用旧请求上下文。
 - 角色管理接口返回稳定 `Result` 错误码：`ROLE_ID_INVALID`、`ROLE_NAME_INVALID`、`ROLE_PERMISSION_INVALID`、`USER_ID_INVALID`、`RESOURCE_NOT_FOUND`、`ROLE_LIST_FAILED`、`ROLE_READ_FAILED`、`ROLE_UPSERT_FAILED`、`ROLE_UPDATE_FAILED`、`ROLE_DELETE_FAILED`、`ROLE_DELETE_FORBIDDEN`、`ROLE_BINDINGS_READ_FAILED`、`USER_READ_FAILED`、`USER_ROLES_READ_FAILED`、`USER_ROLES_UPDATE_FAILED`；管理 allow/deny 使用 `module.admin.roles` 写入审计，metadata 只包含脱敏的新旧摘要。

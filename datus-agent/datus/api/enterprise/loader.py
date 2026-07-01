@@ -40,6 +40,14 @@ T = TypeVar("T")
 
 
 @dataclass(frozen=True)
+class UserAutoProvisioningConfig:
+    """Enterprise first-login user provisioning settings."""
+
+    enabled: bool = False
+    default_role_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class EnterpriseExtensions:
     """Loaded enterprise extension set."""
 
@@ -52,6 +60,7 @@ class EnterpriseExtensions:
     artifact_acl_store: ArtifactAclStore | None = None
     quota_store: EnterpriseQuotaStore | None = None
     secret_store: EnterpriseSecretStore | None = None
+    user_auto_provisioning: UserAutoProvisioningConfig = field(default_factory=UserAutoProvisioningConfig)
     user_store: EnterpriseUserStore = field(default_factory=InMemoryEnterpriseUserStore)
     role_store: EnterpriseRoleStore = field(default_factory=InMemoryEnterpriseRoleStore)
     datasource_grant_store: EnterpriseDatasourceGrantStore = field(
@@ -122,6 +131,7 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
             artifact_acl_store=None,
             quota_store=None,
             secret_store=None,
+            user_auto_provisioning=UserAutoProvisioningConfig(),
             user_store=InMemoryEnterpriseUserStore(),
             role_store=InMemoryEnterpriseRoleStore(),
             datasource_grant_store=InMemoryEnterpriseDatasourceGrantStore(),
@@ -193,6 +203,7 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         EnterpriseAgentStore,
         InMemoryEnterpriseAgentStore(),
     )
+    user_auto_provisioning = _load_user_auto_provisioning(raw.get("user_auto_provisioning"))
 
     return EnterpriseExtensions(
         enabled=True,
@@ -204,6 +215,7 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         artifact_acl_store=artifact_acl_store,
         quota_store=quota_store,
         secret_store=secret_store,
+        user_auto_provisioning=user_auto_provisioning,
         user_store=user_store,
         role_store=role_store,
         datasource_grant_store=datasource_grant_store,
@@ -223,6 +235,32 @@ def _coerce_bool(value: Any, *, default: bool) -> bool:
         if normalized in {"0", "false", "no", "off", ""}:
             return False
     return bool(value)
+
+
+def _load_user_auto_provisioning(raw: Any) -> UserAutoProvisioningConfig:
+    if raw is None:
+        return UserAutoProvisioningConfig()
+    if not isinstance(raw, dict):
+        raise DatusException(
+            ErrorCode.COMMON_CONFIG_ERROR,
+            message="enterprise.user_auto_provisioning must be a mapping.",
+        )
+    return UserAutoProvisioningConfig(
+        enabled=_coerce_bool(raw.get("enabled"), default=False),
+        default_role_ids=tuple(_string_list(raw.get("default_role_ids"))),
+    )
+
+
+def _string_list(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        values = raw.split(",")
+    elif isinstance(raw, (list, tuple, set)):
+        values = raw
+    else:
+        return []
+    return sorted({str(value).strip() for value in values if str(value).strip()})
 
 
 def _load_required_component(raw: dict[str, Any], key: str, protocol: type[Protocol]) -> Any:

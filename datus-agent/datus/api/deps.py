@@ -3,6 +3,7 @@
 import copy
 import hashlib
 import re
+from datetime import datetime, timezone
 from fnmatch import fnmatchcase
 from inspect import isawaitable
 from typing import Annotated, Any, Optional
@@ -219,6 +220,8 @@ async def _validate_enterprise_context(ctx: AppContext, enterprise_extensions: E
             ),
         )
         raise HTTPException(status_code=403, detail="USER_DISABLED")
+    if user is None and enterprise_extensions.user_auto_provisioning.enabled:
+        await _auto_provision_enterprise_user(ctx, enterprise_extensions)
 
 
 async def _refresh_enterprise_context(ctx: AppContext, enterprise_extensions: EnterpriseExtensions) -> None:
@@ -293,6 +296,99 @@ async def _merged_datasource_grants(
     for record in records:
         _merge_grant_record(grants, record, mode="narrow")
     return grants
+
+
+async def _auto_provision_enterprise_user(
+    ctx: AppContext,
+    enterprise_extensions: EnterpriseExtensions,
+) -> None:
+    """Create a least-privilege enterprise user record on first successful auth."""
+
+    role_ids = list(enterprise_extensions.user_auto_provisioning.default_role_ids)
+    for role_id in role_ids:
+        try:
+            role = await enterprise_extensions.role_store.get_role(role_id)
+        except Exception as e:
+            await _audit_auto_provision(
+                ctx,
+                enterprise_extensions,
+                decision="deny",
+                reason="default role unavailable",
+                metadata={"role_id": role_id},
+            )
+            raise HTTPException(status_code=403, detail="USER_AUTO_PROVISION_UNAVAILABLE") from e
+        if role is None:
+            await _audit_auto_provision(
+                ctx,
+                enterprise_extensions,
+                decision="deny",
+                reason="default role not found",
+                metadata={"role_id": role_id},
+            )
+            raise HTTPException(status_code=403, detail="USER_AUTO_PROVISION_ROLE_NOT_FOUND")
+
+    try:
+        await enterprise_extensions.user_store.upsert_user(
+            user_id=ctx.user_id or "",
+            display_name=_principal_str(ctx, "display_name") or _principal_str(ctx, "realname") or ctx.user_id,
+            email=_principal_str(ctx, "email"),
+            enabled=True,
+            external_user_id=_principal_str(ctx, "external_user_id") or _principal_str(ctx, "userId"),
+            department=_principal_str(ctx, "department"),
+            title=_principal_str(ctx, "title"),
+            last_seen_at=datetime.now(timezone.utc).isoformat(),
+        )
+        if role_ids:
+            await enterprise_extensions.role_store.set_user_roles(ctx.user_id or "", role_ids)
+    except Exception as e:
+        await _audit_auto_provision(
+            ctx,
+            enterprise_extensions,
+            decision="deny",
+            reason="user auto-provision failed",
+            metadata={"default_role_ids": role_ids},
+        )
+        raise HTTPException(status_code=403, detail="USER_AUTO_PROVISION_UNAVAILABLE") from e
+
+    await _audit_auto_provision(
+        ctx,
+        enterprise_extensions,
+        decision="allow",
+        reason="user auto-provisioned",
+        metadata={"default_role_ids": role_ids},
+    )
+
+
+async def _audit_auto_provision(
+    ctx: AppContext,
+    enterprise_extensions: EnterpriseExtensions,
+    *,
+    decision: str,
+    reason: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    await _write_enterprise_audit_best_effort(
+        enterprise_extensions,
+        AuditEvent(
+            user_id=ctx.user_id,
+            action="auth.enterprise_user_auto_provision",
+            resource_type="user",
+            resource_id=ctx.user_id,
+            decision=decision,
+            reason=reason,
+            metadata=metadata or {},
+        ),
+    )
+
+
+def _principal_str(ctx: AppContext, key: str) -> str | None:
+    value = (ctx.principal or {}).get(key)
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    return None
 
 
 def _merge_grant_record(grants: dict[str, Any], record: dict[str, Any], *, mode: str = "union") -> None:

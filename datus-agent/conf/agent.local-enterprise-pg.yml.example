@@ -67,6 +67,12 @@ agent:
     config_projector:
       class: datus_enterprise.projection:DatasourceGrantProjector
 
+    # Optional first-login provisioning for local frontend smoke tests. Keep
+    # disabled by default; if enabled, seed the default role first.
+    user_auto_provisioning:
+      enabled: false
+      default_role_ids: []
+
     user_store:
       class: datus_enterprise.postgres_stores:PgEnterpriseUserStore
       kwargs: &enterprise_pg

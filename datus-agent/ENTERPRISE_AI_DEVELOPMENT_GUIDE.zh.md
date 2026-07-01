@@ -74,6 +74,7 @@
 - 本地 dev admin 开关只允许用于开发联调，默认必须关闭；开启后可以把缺省请求或 Basic `admin/admin` 映射成本地 `admin` 并注入开发权限，但不得作为真实员工试点、生产身份边界或上线门槛的一部分。
 - 企业开关不引入 `tenant_id`，也不允许把企业上下文当作业务 API 参数由客户端提交。
 - MVP 身份方案优先适配当前企业环境：网关不可改时，实现 Bearer access token + userinfo `AuthProvider`，由 Datus 调企业用户信息接口换取身份；网关可改时可使用 `datus_enterprise.auth_provider.SignedHeaderAuthProvider`，只信任带 HMAC-SHA256 签名和时间戳的反向代理身份 header；直接 OIDC/JWKS 校验 provider、JWKS cache 和 key rotation 仍是后续切片。
+- 首次访问自动开通必须通过 `enterprise.user_auto_provisioning.enabled` 显式开启，默认关闭。只允许基于认证后的 `AppContext` 创建最小用户档案和绑定预先存在的低权限默认角色；不得信任前端或 userinfo/header 中的 roles、permissions、datasource grants。默认角色缺失、用户写入失败或角色绑定失败时 fail closed，并写入 `auth.enterprise_user_auto_provision` 审计。
 
 平台运行状态语义：
 

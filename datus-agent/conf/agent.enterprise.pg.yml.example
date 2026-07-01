@@ -44,6 +44,13 @@ enterprise:
   config_projector:
     class: datus_enterprise.projection:DatasourceGrantProjector
 
+  # Optional first-login provisioning. Keep disabled unless your enterprise
+  # userinfo/header provider is the source of truth for employee identity.
+  # Default roles must already exist and should be low-privilege.
+  user_auto_provisioning:
+    enabled: false
+    default_role_ids: []
+
   user_store:
     class: datus_enterprise.postgres_stores:PgEnterpriseUserStore
     kwargs:

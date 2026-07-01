@@ -9,7 +9,7 @@ from datus.api.enterprise.defaults import (
     InMemoryEnterpriseUserStore,
     PassthroughConfigProjector,
 )
-from datus.api.enterprise.loader import load_enterprise_extensions
+from datus.api.enterprise.loader import UserAutoProvisioningConfig, load_enterprise_extensions
 from datus.utils.exceptions import DatusException
 
 
@@ -209,6 +209,7 @@ def test_disabled_enterprise_loads_local_defaults():
     assert extensions.artifact_acl_store is None
     assert extensions.quota_store is None
     assert extensions.secret_store is None
+    assert extensions.user_auto_provisioning == UserAutoProvisioningConfig()
 
 
 def test_enabled_enterprise_requires_core_providers():
@@ -245,6 +246,38 @@ def test_enabled_enterprise_uses_passthrough_projector_when_projection_not_confi
     assert extensions.artifact_acl_store is None
     assert extensions.quota_store is None
     assert extensions.secret_store is None
+    assert extensions.user_auto_provisioning == UserAutoProvisioningConfig()
+
+
+def test_enabled_enterprise_loads_user_auto_provisioning_config(fake_module):
+    extensions = load_enterprise_extensions(
+        {
+            "enabled": True,
+            "authorization_provider": {"class": f"{fake_module}.Authz"},
+            "datasource_grant_store": {"class": f"{fake_module}.DatasourceGrantStore"},
+            "audit_sink": {"class": f"{fake_module}.Audit"},
+            "user_auto_provisioning": {
+                "enabled": "true",
+                "default_role_ids": ["reader", "reader", "analyst"],
+            },
+        }
+    )
+
+    assert extensions.user_auto_provisioning.enabled is True
+    assert extensions.user_auto_provisioning.default_role_ids == ("analyst", "reader")
+
+
+def test_enabled_enterprise_rejects_invalid_user_auto_provisioning_config(fake_module):
+    with pytest.raises(DatusException, match="user_auto_provisioning"):
+        load_enterprise_extensions(
+            {
+                "enabled": True,
+                "authorization_provider": {"class": f"{fake_module}.Authz"},
+                "datasource_grant_store": {"class": f"{fake_module}.DatasourceGrantStore"},
+                "audit_sink": {"class": f"{fake_module}.Audit"},
+                "user_auto_provisioning": "yes",
+            }
+        )
 
 
 def test_enabled_enterprise_loads_configured_core_providers(fake_module):

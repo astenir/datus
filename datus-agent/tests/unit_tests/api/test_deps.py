@@ -190,6 +190,120 @@ class TestGetRequestAppContext:
         grant_store.list_grants.assert_any_await(subject_type="role", subject_id="analyst")
         grant_store.list_grants.assert_any_await(subject_type="user", subject_id="alice")
 
+    async def test_enterprise_auto_provisions_missing_user_with_default_roles(self):
+        from datus.api.enterprise.defaults import (
+            InMemoryEnterpriseDatasourceGrantStore,
+            InMemoryEnterpriseRoleStore,
+            InMemoryEnterpriseUserStore,
+            InMemorySessionOwnerStore,
+            LocalAuthorizationProvider,
+            PassthroughConfigProjector,
+        )
+        from datus.api.enterprise.loader import EnterpriseExtensions, UserAutoProvisioningConfig
+
+        class CollectingAuditSink:
+            def __init__(self):
+                self.events = []
+
+            async def write(self, event):
+                self.events.append(event)
+
+        user_store = InMemoryEnterpriseUserStore()
+        role_store = InMemoryEnterpriseRoleStore()
+        await role_store.upsert_role(role_id="reader", name="Reader", permissions=["module.chat"])
+        grant_store = InMemoryEnterpriseDatasourceGrantStore()
+        audit_sink = CollectingAuditSink()
+        ctx = AppContext(
+            user_id="alice",
+            project_id="proj-1",
+            principal={
+                "display_name": "Alice Chen",
+                "email": "alice@example.com",
+                "external_user_id": "u-100",
+                "department": "Finance",
+                "title": "Analyst",
+            },
+        )
+        mock_auth = MagicMock()
+        mock_auth.authenticate = AsyncMock(return_value=ctx)
+        deps._auth_provider = mock_auth
+        deps._enterprise_extensions = EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=audit_sink,
+            user_auto_provisioning=UserAutoProvisioningConfig(enabled=True, default_role_ids=("reader",)),
+            user_store=user_store,
+            role_store=role_store,
+            datasource_grant_store=grant_store,
+        )
+        request = SimpleNamespace(state=SimpleNamespace())
+
+        result = await get_request_app_context(request)
+
+        assert result is ctx
+        user = await user_store.get_user("alice")
+        assert user is not None
+        assert user["display_name"] == "Alice Chen"
+        assert user["email"] == "alice@example.com"
+        assert user["external_user_id"] == "u-100"
+        assert user["department"] == "Finance"
+        assert user["title"] == "Analyst"
+        assert user["enabled"] is True
+        assert await role_store.list_user_roles("alice") == ["reader"]
+        assert ctx.roles == ["reader"]
+        assert ctx.permissions == {"module.chat"}
+        assert audit_sink.events[-1].action == "auth.enterprise_user_auto_provision"
+        assert audit_sink.events[-1].decision == "allow"
+        assert audit_sink.events[-1].metadata == {"default_role_ids": ["reader"]}
+
+    async def test_enterprise_auto_provision_fails_closed_when_default_role_is_missing(self):
+        from datus.api.enterprise.defaults import (
+            InMemoryEnterpriseDatasourceGrantStore,
+            InMemoryEnterpriseRoleStore,
+            InMemoryEnterpriseUserStore,
+            InMemorySessionOwnerStore,
+            LocalAuthorizationProvider,
+            PassthroughConfigProjector,
+        )
+        from datus.api.enterprise.loader import EnterpriseExtensions, UserAutoProvisioningConfig
+
+        class CollectingAuditSink:
+            def __init__(self):
+                self.events = []
+
+            async def write(self, event):
+                self.events.append(event)
+
+        user_store = InMemoryEnterpriseUserStore()
+        audit_sink = CollectingAuditSink()
+        mock_auth = MagicMock()
+        mock_auth.authenticate = AsyncMock(return_value=AppContext(user_id="alice", project_id="proj-1"))
+        deps._auth_provider = mock_auth
+        deps._enterprise_extensions = EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=audit_sink,
+            user_auto_provisioning=UserAutoProvisioningConfig(enabled=True, default_role_ids=("missing",)),
+            user_store=user_store,
+            role_store=InMemoryEnterpriseRoleStore(),
+            datasource_grant_store=InMemoryEnterpriseDatasourceGrantStore(),
+        )
+        request = SimpleNamespace(state=SimpleNamespace())
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_request_app_context(request)
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "USER_AUTO_PROVISION_ROLE_NOT_FOUND"
+        assert await user_store.get_user("alice") is None
+        assert audit_sink.events[-1].action == "auth.enterprise_user_auto_provision"
+        assert audit_sink.events[-1].decision == "deny"
+        assert audit_sink.events[-1].metadata == {"role_id": "missing"}
+
     async def test_enterprise_context_refreshes_cached_context_before_reuse(self):
         from datus.api.enterprise.defaults import (
             InMemoryEnterpriseDatasourceGrantStore,
