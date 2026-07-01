@@ -136,6 +136,98 @@ describe("useAdminOverview", () => {
     expect(overview.data.value.datasourceGrants).toEqual([grant]);
   });
 
+  it("refreshes focused overview slices without overfetching unrelated tab data", async () => {
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+    await overview.loadOverview();
+
+    const nextGrant = { ...grant, subject_id: "operator" };
+    const nextQuota = {
+      subject_type: "user",
+      subject_id: "alice",
+      resource: "chat.stream",
+      limit: 10,
+      window_seconds: 60,
+      enabled: true,
+      created_at: null,
+      updated_at: null,
+    };
+    const nextUsage = {
+      subject_type: "user",
+      subject_id: "alice",
+      resource: "chat.stream",
+      used: 3,
+      window_seconds: 60,
+      reset_at: null,
+    };
+    const nextSession = {
+      session_id: "session-2",
+      owner_user_id: "bob",
+      status: "idle",
+      is_running: false,
+      created_at: null,
+      updated_at: null,
+      event_count: 1,
+    };
+    const nextArtifact = {
+      ...artifact,
+      manifest: {
+        ...artifact.manifest,
+        slug: "risk-report",
+      },
+    };
+
+    vi.clearAllMocks();
+    listDatasources.mockResolvedValue({ data: [{ name: "risk", type: "postgres", is_default: false }] });
+    listGrants.mockResolvedValue({ data: [nextGrant] });
+    listQuotas.mockResolvedValue({ data: [nextQuota] });
+    listUsage.mockResolvedValue({ data: [nextUsage] });
+    listSessions.mockResolvedValue({ data: [nextSession] });
+    listArtifacts.mockResolvedValue({ data: [nextArtifact] });
+
+    await overview.loadDatasourceGrants();
+
+    expect(listDatasources).toHaveBeenCalledTimes(1);
+    expect(listGrants).toHaveBeenCalledTimes(1);
+    expect(listQuotas).not.toHaveBeenCalled();
+    expect(listSessions).not.toHaveBeenCalled();
+    expect(listArtifacts).not.toHaveBeenCalled();
+    expect(overview.data.value.datasourceGrants).toEqual([nextGrant]);
+    expect(overview.data.value.artifacts).toEqual([artifact]);
+
+    vi.clearAllMocks();
+
+    await overview.loadQuotasAndUsage();
+
+    expect(listQuotas).toHaveBeenCalledTimes(1);
+    expect(listUsage).toHaveBeenCalledTimes(1);
+    expect(listDatasources).not.toHaveBeenCalled();
+    expect(listGrants).not.toHaveBeenCalled();
+    expect(overview.data.value.quotas).toEqual([nextQuota]);
+    expect(overview.data.value.usage).toEqual([nextUsage]);
+    expect(overview.data.value.datasourceGrants).toEqual([nextGrant]);
+
+    vi.clearAllMocks();
+
+    await overview.loadSessions();
+
+    expect(listSessions).toHaveBeenCalledTimes(1);
+    expect(listQuotas).not.toHaveBeenCalled();
+    expect(listArtifacts).not.toHaveBeenCalled();
+    expect(overview.data.value.sessions).toEqual([nextSession]);
+    expect(overview.data.value.quotas).toEqual([nextQuota]);
+
+    vi.clearAllMocks();
+
+    await overview.loadArtifacts();
+
+    expect(listArtifacts).toHaveBeenCalledTimes(1);
+    expect(listSessions).not.toHaveBeenCalled();
+    expect(listGrants).not.toHaveBeenCalled();
+    expect(overview.data.value.artifacts).toEqual([nextArtifact]);
+    expect(overview.data.value.sessions).toEqual([nextSession]);
+  });
+
   it("saves datasource grants with parsed scope JSON", async () => {
     const { useAdminOverview } = await import("./useAdminOverview");
     const overview = useAdminOverview();

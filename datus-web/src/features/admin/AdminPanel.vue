@@ -1,7 +1,5 @@
 <script setup lang="ts">
 import { computed, onMounted, watch } from "vue"
-import { RefreshCwIcon } from "@lucide/vue"
-import { Button } from "@/components/ui/button"
 import { useAdminOverview } from "@/composables/useAdminOverview"
 import { useAuditLogs } from "@/composables/useAuditLogs"
 import { useRoleManager } from "@/composables/useRoleManager"
@@ -56,6 +54,32 @@ function loadAll() {
   void roles.loadRoles()
   audits.loadActionTypes()
   void overview.loadOverview()
+}
+
+function refreshActiveTab() {
+  switch (props.activeTab) {
+    case "users":
+      void users.loadUsers()
+      return
+    case "roles":
+      void roles.loadRoles()
+      return
+    case "grants":
+      void overview.loadDatasourceGrants()
+      return
+    case "sessions":
+      void overview.loadSessions()
+      return
+    case "quotas":
+      void overview.loadQuotasAndUsage()
+      return
+    case "artifacts":
+      void overview.loadArtifacts()
+      return
+    case "audit":
+      audits.loadActionTypes()
+      void audits.loadLogs()
+  }
 }
 
 function formatOptionalDate(value: string | null | undefined) {
@@ -301,24 +325,6 @@ watch(
 <template>
   <section class="flex min-h-0 flex-1 overflow-hidden p-4">
     <div class="flex min-h-0 flex-1 flex-col gap-4">
-      <div class="flex flex-wrap items-center gap-3">
-        <div class="min-w-0 flex-1">
-          <h1 class="text-lg font-semibold">权限与运营管理</h1>
-          <p class="text-sm text-muted-foreground">
-            用户、角色、数据授权、运行会话、额度、产物 ACL 和审计事件。
-          </p>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          :disabled="loading"
-          @click="loadAll"
-        >
-          <RefreshCwIcon data-icon="inline-start" />
-          刷新
-        </Button>
-      </div>
-
       <AdminManagementTabs
         :active-tab="props.activeTab"
         :audits="audits"
@@ -330,10 +336,12 @@ watch(
         :request-audit-reset="requestAuditReset"
         :request-audit-search="requestAuditSearch"
         :request-grant-detail="requestGrantDetail"
+        :request-refresh-active-tab="refreshActiveTab"
         :request-role-detail="requestRoleDetail"
         :request-session-detail="requestSessionDetail"
         :request-user-detail="requestUserDetail"
         :roles="roles"
+        :refreshing="loading"
         :set-active-tab="setActiveTab"
         :usage-by-key="usageByKey"
         :users="users"

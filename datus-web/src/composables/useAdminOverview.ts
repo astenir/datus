@@ -272,6 +272,78 @@ export function useAdminOverview() {
     }
   }
 
+  async function loadDatasourceGrants() {
+    loading.value = true;
+    try {
+      const [datasourceResult, grantResult] = await Promise.all([
+        adminDatasourceApi.listDatasources(),
+        adminDatasourceApi.listGrants(),
+      ]);
+      data.value = {
+        ...data.value,
+        datasources: datasourceResult.data ?? [],
+        datasourceGrants: grantResult.data ?? [],
+      };
+    } catch (err) {
+      console.error("加载数据授权失败:", err);
+      toast.error("加载数据授权失败");
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function loadQuotasAndUsage() {
+    loading.value = true;
+    try {
+      const [quotaResult, usageResult] = await Promise.all([
+        adminQuotaApi.listQuotas(),
+        adminQuotaApi.listUsage(),
+      ]);
+      data.value = {
+        ...data.value,
+        quotas: quotaResult.data ?? [],
+        usage: usageResult.data ?? [],
+      };
+    } catch (err) {
+      console.error("加载额度与用量失败:", err);
+      toast.error("加载额度与用量失败");
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function loadSessions() {
+    loading.value = true;
+    try {
+      const result = await adminSessionApi.listSessions();
+      data.value = {
+        ...data.value,
+        sessions: result.data ?? [],
+      };
+    } catch (err) {
+      console.error("加载会话失败:", err);
+      toast.error("加载会话失败");
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  async function loadArtifacts() {
+    loading.value = true;
+    try {
+      const result = await adminArtifactApi.listArtifacts();
+      data.value = {
+        ...data.value,
+        artifacts: result.data ?? [],
+      };
+    } catch (err) {
+      console.error("加载产物 ACL 失败:", err);
+      toast.error("加载产物 ACL 失败");
+    } finally {
+      loading.value = false;
+    }
+  }
+
   async function loadGrantCatalog(datasourceKey = grantForm.value.datasource_key) {
     const normalizedDatasourceKey = datasourceKey.trim();
     grantCatalogError.value = null;
@@ -824,6 +896,10 @@ export function useAdminOverview() {
     grantCount,
     quotaCount,
     loadOverview,
+    loadDatasourceGrants,
+    loadQuotasAndUsage,
+    loadSessions,
+    loadArtifacts,
     loadGrantCatalog,
     openCreateGrantDialog,
     openEditGrantDialog,

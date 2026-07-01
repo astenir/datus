@@ -46,10 +46,12 @@ export interface AdminManagementTabProps {
   requestAuditReset: () => void
   requestAuditSearch: () => void
   requestGrantDetail: (grant: AdminGrantListItem) => void
+  requestRefreshActiveTab: () => void
   requestRoleDetail: (roleId: string) => void
   requestSessionDetail: (sessionId: string) => void
   requestUserDetail: (userId: string) => void
   roles: AdminRoleController
+  refreshing: boolean
   setActiveTab: (value: unknown) => void
   usageByKey: Map<string, AdminUsage>
   users: AdminUserController

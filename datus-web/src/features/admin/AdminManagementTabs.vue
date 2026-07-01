@@ -4,6 +4,7 @@ import {
   EyeIcon,
   PencilIcon,
   PlusIcon,
+  RefreshCwIcon,
   SearchIcon,
   ShieldCheckIcon,
   SquareIcon,
@@ -45,15 +46,27 @@ defineProps<AdminManagementTabProps>()
     class="flex min-h-0 flex-1 flex-col gap-4"
     @update:model-value="setActiveTab"
   >
-    <TabsList class="flex h-auto !flex-row flex-wrap justify-start">
-      <TabsTrigger value="users">用户</TabsTrigger>
-      <TabsTrigger value="roles">角色</TabsTrigger>
-      <TabsTrigger value="grants">数据授权</TabsTrigger>
-      <TabsTrigger value="sessions">会话</TabsTrigger>
-      <TabsTrigger value="quotas">额度</TabsTrigger>
-      <TabsTrigger value="artifacts">产物 ACL</TabsTrigger>
-      <TabsTrigger value="audit">审计</TabsTrigger>
-    </TabsList>
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <TabsList class="flex h-auto !flex-row flex-wrap justify-start">
+        <TabsTrigger value="users">用户</TabsTrigger>
+        <TabsTrigger value="roles">角色</TabsTrigger>
+        <TabsTrigger value="grants">数据授权</TabsTrigger>
+        <TabsTrigger value="sessions">会话</TabsTrigger>
+        <TabsTrigger value="quotas">额度</TabsTrigger>
+        <TabsTrigger value="artifacts">产物 ACL</TabsTrigger>
+        <TabsTrigger value="audit">审计</TabsTrigger>
+      </TabsList>
+
+      <Button
+        variant="outline"
+        size="sm"
+        :disabled="refreshing"
+        @click="requestRefreshActiveTab"
+      >
+        <RefreshCwIcon data-icon="inline-start" />
+        刷新
+      </Button>
+    </div>
 
     <TabsContent
       value="users"
