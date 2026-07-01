@@ -44,6 +44,7 @@ defineProps<{
   streaming?: boolean
   thinkingDisplay?: "answer" | "reasoning"
   interactionDisabled?: boolean
+  activeInteractionKey?: string | null
   databaseName?: string
 }>()
 
@@ -153,6 +154,7 @@ function childMessageLabel(message: ToolChildMessage) {
                 :streaming="streaming"
                 :thinking-display="thinkingDisplay"
                 :interaction-disabled="interactionDisabled"
+                :active-interaction-key="activeInteractionKey"
                 :database-name="databaseName"
                 @submit-interaction="submitInteraction"
                 @open-artifact="openArtifact"
@@ -219,6 +221,7 @@ function childMessageLabel(message: ToolChildMessage) {
                 :streaming="streaming"
                 :thinking-display="thinkingDisplay"
                 :interaction-disabled="interactionDisabled"
+                :active-interaction-key="activeInteractionKey"
                 :database-name="databaseName"
                 @submit-interaction="submitInteraction"
                 @open-artifact="openArtifact"
@@ -293,7 +296,7 @@ function childMessageLabel(message: ToolChildMessage) {
   <UserInteractionBlock
     v-else-if="block.type === 'user-interaction'"
     :block="block"
-    :disabled="interactionDisabled"
+    :disabled="interactionDisabled || block.interactionKey !== activeInteractionKey"
     @submit="submitInteraction"
   />
 </template>

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   activeStreamingMessageId,
+  activeUserInteractionKey,
   buildChatStreamRequest,
   buildUserInteractionInput,
   chatSessionsPath,
@@ -652,6 +653,50 @@ describe("streaming thinking display compatibility", () => {
       role: "user",
       blocks: [{ type: "thinking", content: "not an assistant answer" }],
     })).toBe(false);
+  });
+});
+
+describe("activeUserInteractionKey", () => {
+  const interactionBlock = {
+    type: "user-interaction" as const,
+    interactionKey: "permission-action-1",
+    actionType: "confirm",
+    requests: [
+      {
+        content: "允许执行？",
+        options: [
+          { key: "y", title: "允许" },
+          { key: "n", title: "拒绝" },
+        ],
+        allowFreeText: false,
+        multiSelect: false,
+      },
+    ],
+  };
+
+  it("enables only the latest streaming interaction request", () => {
+    expect(activeUserInteractionKey([
+      { id: "prompt", role: "assistant" as const, content: "需要用户确认", blocks: [interactionBlock] },
+    ], { isStreaming: true })).toBe("permission-action-1");
+  });
+
+  it("disables old interaction cards after the session moves forward", () => {
+    expect(activeUserInteractionKey([
+      { id: "prompt", role: "assistant" as const, content: "需要用户确认", blocks: [interactionBlock] },
+      { id: "next", role: "assistant" as const, content: "继续执行", blocks: [{ type: "thinking" as const, content: "继续执行" }] },
+    ], { isStreaming: true })).toBeNull();
+  });
+
+  it("disables interaction cards after the stream ends or the key was submitted", () => {
+    const messages = [
+      { id: "prompt", role: "assistant" as const, content: "需要用户确认", blocks: [interactionBlock] },
+    ];
+
+    expect(activeUserInteractionKey(messages, { isStreaming: false })).toBeNull();
+    expect(activeUserInteractionKey(messages, {
+      isStreaming: true,
+      submittedInteractionKeys: new Set(["permission-action-1"]),
+    })).toBeNull();
   });
 });
 

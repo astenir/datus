@@ -57,6 +57,7 @@ const currentStatus = computed<ChatStatus>(() => props.workspace.isStreaming.val
 const streamingMessageId = computed(() =>
   props.workspace.isStreaming.value ? activeStreamingMessageId(props.workspace.messages.value) : null,
 )
+const activeInteractionKey = computed(() => props.workspace.activeInteractionKey.value)
 const modelSelectorOpen = shallowRef(false)
 const schemaOptions = computed(() => props.workspace.schemaOptions.value)
 const selectedModelValue = computed({
@@ -226,10 +227,11 @@ async function openArtifact(kind: string, slug: string) {
         <ChatMessageItem
           v-for="message in displayMessages"
           :key="message.id"
-          v-memo="[message, message.id === streamingMessageId, Boolean(pendingInteractionKey), workspace.database.value]"
+          v-memo="[message, message.id === streamingMessageId, Boolean(pendingInteractionKey), activeInteractionKey, workspace.database.value]"
           :message="message"
           :streaming="message.id === streamingMessageId"
           :interaction-disabled="Boolean(pendingInteractionKey)"
+          :active-interaction-key="activeInteractionKey"
           :database-name="workspace.database.value"
           @submit-interaction="submitInteraction"
           @open-artifact="openArtifact"

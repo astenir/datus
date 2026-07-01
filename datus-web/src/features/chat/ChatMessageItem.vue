@@ -9,6 +9,7 @@ const props = defineProps<{
   message: ChatDisplayMessage
   streaming?: boolean
   interactionDisabled?: boolean
+  activeInteractionKey?: string | null
   databaseName?: string
 }>()
 
@@ -67,6 +68,7 @@ function openArtifact(kind: string, slug: string) {
             :streaming="streaming"
             :thinking-display="thinkingDisplay"
             :interaction-disabled="interactionDisabled"
+            :active-interaction-key="activeInteractionKey"
             :database-name="databaseName"
             @submit-interaction="submitInteraction"
             @open-artifact="openArtifact"

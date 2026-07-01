@@ -276,6 +276,25 @@ export function activeStreamingMessageId(messages: readonly ChatMessage[]) {
   return messages[messages.length - 1]?.id ?? null;
 }
 
+export function activeUserInteractionKey(
+  messages: readonly ChatMessage[],
+  options: {
+    isStreaming?: boolean;
+    submittedInteractionKeys?: ReadonlySet<string>;
+  } = {},
+) {
+  if (!options.isStreaming) return null;
+
+  const latestMessage = messages[messages.length - 1];
+  const latestBlock = latestMessage?.blocks?.[latestMessage.blocks.length - 1];
+  if (latestBlock?.type !== "user-interaction") return null;
+
+  const interactionKey = latestBlock.interactionKey.trim();
+  if (!interactionKey || options.submittedInteractionKeys?.has(interactionKey)) return null;
+
+  return interactionKey;
+}
+
 export function shouldRenderThinkingAsAnswer(message: Pick<ChatDisplayMessage, "role" | "depth" | "blocks">) {
   const blocks = message.blocks ?? [];
   return message.role === "assistant"

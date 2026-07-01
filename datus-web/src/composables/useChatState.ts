@@ -1,6 +1,7 @@
-import { readonly, shallowRef } from "vue";
+import { computed, readonly, shallowRef } from "vue";
 import { chatApi } from "@/lib/api";
 import {
+  activeUserInteractionKey,
   buildChatStreamRequest,
   buildUserInteractionInput,
   consumeSseStream,
@@ -26,9 +27,16 @@ const sessions = shallowRef<ChatSessionOption[]>([]);
 const selectedSession = shallowRef<string | null>(null);
 const isStreaming = shallowRef(false);
 const isLoadingSessions = shallowRef(false);
+const submittedInteractionKeys = shallowRef<ReadonlySet<string>>(new Set());
 const abortRef = { current: null as AbortController | null };
 const messageCache = new Map<string, ChatMessage[]>();
 const CACHE_MAX = 20;
+const activeInteractionKey = computed(() =>
+  activeUserInteractionKey(messages.value, {
+    isStreaming: isStreaming.value,
+    submittedInteractionKeys: submittedInteractionKeys.value,
+  })
+);
 
 function cacheSet(key: string, value: ChatMessage[]) {
   if (messageCache.size >= CACHE_MAX && !messageCache.has(key)) {
@@ -97,6 +105,7 @@ function selectSession(sessionId: string | null) {
     abortRef.current = null;
   }
   isStreaming.value = false;
+  submittedInteractionKeys.value = new Set();
 
   // Cache current messages for the outgoing session
   if (selectedSession.value && messages.value.length > 0) {
@@ -126,6 +135,7 @@ async function sendMessage(opts: {
   schema: string;
 }) {
   if (isStreaming.value) return;
+  submittedInteractionKeys.value = new Set();
   const { language, planMode, permissionMode } = useChatSettings();
   const base = effectiveBase();
 
@@ -234,6 +244,7 @@ async function stopSession() {
     }
   }
   isStreaming.value = false;
+  submittedInteractionKeys.value = new Set();
 }
 
 async function deleteSession(sessionId: string) {
@@ -354,19 +365,29 @@ async function sendInteraction(interactionKey: string, answers: string | string[
   const sessionId = selectedSession.value;
   if (!sessionId) throw new Error("会话未就绪");
   if (!interactionKey) throw new Error("交互请求未就绪");
+  if (activeInteractionKey.value !== interactionKey) throw new Error("交互请求已失效");
 
   // Do NOT stopSession — the task is alive and waiting for interaction.
   // The SSE stream from sendMessage is still open; broker.submit() will
   // unblock the task and new events flow through the same stream.
 
-  const result = await chatApi.userInteraction(base, buildUserInteractionInput(sessionId, interactionKey, answers));
-  if (!result) throw new Error("后端未接受本次交互提交");
+  submittedInteractionKeys.value = new Set([...submittedInteractionKeys.value, interactionKey]);
+  try {
+    const result = await chatApi.userInteraction(base, buildUserInteractionInput(sessionId, interactionKey, answers));
+    if (!result) throw new Error("后端未接受本次交互提交");
+  } catch (error) {
+    const next = new Set(submittedInteractionKeys.value);
+    next.delete(interactionKey);
+    submittedInteractionKeys.value = next;
+    throw error;
+  }
   // No resumeSession needed — sendMessage's SSE reader is still running.
 }
 
 function clearMessages() {
   messages.value = [];
   selectedSession.value = null;
+  submittedInteractionKeys.value = new Set();
   messageCache.clear();
 }
 
@@ -376,6 +397,7 @@ function dispose() {
     abortRef.current = null;
   }
   isStreaming.value = false;
+  submittedInteractionKeys.value = new Set();
 }
 
 export function useChatState() {
@@ -385,6 +407,7 @@ export function useChatState() {
     selectedSession: readonly(selectedSession),
     isStreaming: readonly(isStreaming),
     isLoadingSessions: readonly(isLoadingSessions),
+    activeInteractionKey: readonly(activeInteractionKey),
     loadSessions,
     selectSession,
     sendMessage,
