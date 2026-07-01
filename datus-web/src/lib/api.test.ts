@@ -558,12 +558,22 @@ describe("api client", () => {
       ))
       .mockImplementation(() => Promise.resolve(mockJsonResponse({ success: true, data: [] })));
 
-    await adminAuditApi.listLogs({ limit: 20, userId: "alice", decision: "deny" });
+    await adminAuditApi.listLogs({
+      limit: 20,
+      beforeId: 42,
+      userId: "alice",
+      decision: "deny",
+      requestId: "req-1",
+      createdAfter: "2026-07-01T09:00:00Z",
+      createdBefore: "2026-07-02T09:00:00Z",
+    });
     const exportFile = await adminAuditApi.exportLogs({
       limit: 20,
+      beforeId: 42,
       userId: "alice",
       resourceType: "role",
       decision: "deny",
+      requestId: "req-1",
     });
     await adminSessionApi.stopSession("session-1");
     await adminDatasourceApi.listGrants({ subjectType: "role", subjectId: "admin" });
@@ -579,9 +589,11 @@ describe("api client", () => {
       datasources: ["fund"],
     });
 
-    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("/api/v1/admin/audit-logs?limit=20&user_id=alice&decision=deny");
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe(
+      "/api/v1/admin/audit-logs?limit=20&before_id=42&user_id=alice&decision=deny&request_id=req-1&created_after=2026-07-01T09%3A00%3A00Z&created_before=2026-07-02T09%3A00%3A00Z",
+    );
     expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe(
-      "/api/v1/admin/audit-logs/export?limit=20&user_id=alice&resource_type=role&decision=deny",
+      "/api/v1/admin/audit-logs/export?limit=20&before_id=42&user_id=alice&resource_type=role&decision=deny&request_id=req-1",
     );
     expect(exportFile).toEqual({
       filename: "audit-logs.csv",

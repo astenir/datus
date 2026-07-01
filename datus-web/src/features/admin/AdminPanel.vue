@@ -7,6 +7,7 @@ import { useUserManager } from "@/composables/useUserManager"
 import AdminDialogs from "@/features/admin/AdminDialogs.vue"
 import AdminManagementTabs from "@/features/admin/AdminManagementTabs.vue"
 import { formatDatasourceScope } from "@/lib/datasource-scope-labels"
+import { defaultAuditLogLimit } from "@/lib/audit-log-pagination"
 import type {
   AdminArtifactListItem,
   AdminGrantListItem,
@@ -150,22 +151,52 @@ function auditRouteFromForm(): AdminAuditRouteState {
     resourceType: audits.searchForm.value.resource_type.trim() || null,
     resourceId: audits.searchForm.value.resource_id.trim() || null,
     decision: audits.searchForm.value.decision.trim() || null,
+    requestId: audits.searchForm.value.request_id.trim() || null,
+    createdAfter: audits.searchForm.value.created_after.trim() || null,
+    createdBefore: audits.searchForm.value.created_before.trim() || null,
     limit: audits.limit.value,
+    beforeId: audits.beforeId.value,
   }
 }
 
 function requestAuditSearch() {
-  emit("update:activeAudit", auditRouteFromForm())
+  audits.handleSearch()
+  emit("update:activeAudit", {
+    ...auditRouteFromForm(),
+    beforeId: null,
+  })
 }
 
 function requestAuditReset() {
+  audits.resetPagination()
   emit("update:activeAudit", {
     userId: null,
     action: null,
     resourceType: null,
     resourceId: null,
     decision: null,
-    limit: 50,
+    requestId: null,
+    createdAfter: null,
+    createdBefore: null,
+    limit: defaultAuditLogLimit,
+    beforeId: null,
+  })
+}
+
+function requestAuditNextPage() {
+  const nextBeforeId = audits.prepareNextPage()
+  if (nextBeforeId == null) return
+  emit("update:activeAudit", {
+    ...auditRouteFromForm(),
+    beforeId: nextBeforeId,
+  })
+}
+
+function requestAuditPreviousPage() {
+  const previousBeforeId = audits.preparePreviousPage()
+  emit("update:activeAudit", {
+    ...auditRouteFromForm(),
+    beforeId: previousBeforeId,
   })
 }
 
@@ -311,7 +342,11 @@ watch(
       resourceType: null,
       resourceId: null,
       decision: null,
-      limit: 50,
+      requestId: null,
+      createdAfter: null,
+      createdBefore: null,
+      limit: defaultAuditLogLimit,
+      beforeId: null,
     })
 
     if (changed || audits.logs.value.length === 0) {
@@ -323,8 +358,8 @@ watch(
 </script>
 
 <template>
-  <section class="flex min-h-0 flex-1 overflow-hidden p-4">
-    <div class="flex min-h-0 flex-1 flex-col gap-4">
+  <section class="flex min-h-0 min-w-0 flex-1 overflow-hidden p-4">
+    <div class="flex min-h-0 min-w-0 flex-1 flex-col gap-4">
       <AdminManagementTabs
         :active-tab="props.activeTab"
         :audits="audits"
@@ -334,6 +369,8 @@ watch(
         :overview="overview"
         :request-artifact-acl="requestArtifactAcl"
         :request-audit-reset="requestAuditReset"
+        :request-audit-next-page="requestAuditNextPage"
+        :request-audit-previous-page="requestAuditPreviousPage"
         :request-audit-search="requestAuditSearch"
         :request-grant-detail="requestGrantDetail"
         :request-refresh-active-tab="refreshActiveTab"

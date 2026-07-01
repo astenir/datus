@@ -43,6 +43,8 @@ export interface AdminManagementTabProps {
   grantKey: GrantKey
   overview: AdminOverviewController
   requestArtifactAcl: (artifact: AdminArtifactListItem) => void
+  requestAuditNextPage: () => void
+  requestAuditPreviousPage: () => void
   requestAuditReset: () => void
   requestAuditSearch: () => void
   requestGrantDetail: (grant: AdminGrantListItem) => void

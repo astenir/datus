@@ -13,7 +13,7 @@ import type {
   ApiResponse,
   ArtifactAcl,
   AuditLogExportFile,
-  AuditLog,
+  AuditLogListResponse,
   AuditLogListParams,
   DatasourceGrantListParams,
   QuotaListParams,
@@ -43,11 +43,15 @@ function queryString(entries: Array<[string, string | number | boolean | undefin
 function auditLogQuery(params: AuditLogListParams): string {
   return queryString([
     ["limit", params.limit],
+    ["before_id", params.beforeId],
     ["user_id", params.userId],
     ["action", params.action],
     ["resource_type", params.resourceType],
     ["resource_id", params.resourceId],
     ["decision", params.decision],
+    ["request_id", params.requestId],
+    ["created_after", params.createdAfter],
+    ["created_before", params.createdBefore],
   ]);
 }
 
@@ -118,8 +122,8 @@ export const adminUserApi = {
 };
 
 export const adminAuditApi = {
-  listLogs(params: AuditLogListParams): Promise<ApiResponse<AuditLog[]>> {
-    return get<ApiResponse<AuditLog[]>>(`/api/v1/admin/audit-logs${auditLogQuery(params)}`);
+  listLogs(params: AuditLogListParams): Promise<ApiResponse<AuditLogListResponse>> {
+    return get<ApiResponse<AuditLogListResponse>>(`/api/v1/admin/audit-logs${auditLogQuery(params)}`);
   },
 
   async exportLogs(params: AuditLogListParams): Promise<AuditLogExportFile> {

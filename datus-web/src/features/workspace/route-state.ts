@@ -1,4 +1,5 @@
 import type { LocationQuery, LocationQueryRaw } from "vue-router"
+import { defaultAuditLogLimit, isAuditLogLimitOption } from "@/lib/audit-log-pagination"
 import type { AdminViewTab } from "@/features/workspace/types"
 import { isAdminViewTab } from "@/features/workspace/types"
 
@@ -25,10 +26,12 @@ export type AdminAuditRouteState = {
   resourceType: string | null
   resourceId: string | null
   decision: string | null
+  requestId: string | null
+  createdAfter: string | null
+  createdBefore: string | null
   limit: number
+  beforeId: number | null
 }
-
-const auditLimitValues = [50, 100, 200, 500] as const
 
 export function routeQueryStringParam(value: unknown): string | null {
   if (typeof value === "string") {
@@ -81,7 +84,9 @@ export function adminArtifactFromQuery(query: LocationQuery): AdminArtifactRoute
 
 export function adminAuditFromQuery(query: LocationQuery): AdminAuditRouteState {
   const limitValue = Number(routeQueryStringParam(query.audit_limit) ?? "")
-  const limit = (auditLimitValues as readonly number[]).includes(limitValue) ? limitValue : 50
+  const limit = isAuditLogLimitOption(limitValue) ? limitValue : defaultAuditLogLimit
+  const beforeIdValue = Number(routeQueryStringParam(query.audit_before_id) ?? "")
+  const beforeId = Number.isInteger(beforeIdValue) && beforeIdValue > 0 ? beforeIdValue : null
 
   return {
     userId: routeQueryStringParam(query.audit_user),
@@ -89,7 +94,11 @@ export function adminAuditFromQuery(query: LocationQuery): AdminAuditRouteState 
     resourceType: routeQueryStringParam(query.audit_resource_type),
     resourceId: routeQueryStringParam(query.audit_resource_id),
     decision: routeQueryStringParam(query.audit_decision),
+    requestId: routeQueryStringParam(query.audit_request_id),
+    createdAfter: routeQueryStringParam(query.audit_created_after),
+    createdBefore: routeQueryStringParam(query.audit_created_before),
     limit,
+    beforeId,
   }
 }
 

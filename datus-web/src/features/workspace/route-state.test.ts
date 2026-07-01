@@ -118,25 +118,38 @@ describe("workspace route state", () => {
       audit_resource_type: " datasource ",
       audit_resource_id: " fund ",
       audit_decision: " allow ",
+      audit_request_id: " req-1 ",
+      audit_created_after: " 2026-07-01T09:00 ",
+      audit_created_before: " 2026-07-01T10:00 ",
       audit_limit: "200",
+      audit_before_id: "42",
     })).toEqual({
       userId: "alice",
       action: "sql.execute",
       resourceType: "datasource",
       resourceId: "fund",
       decision: "allow",
+      requestId: "req-1",
+      createdAfter: "2026-07-01T09:00",
+      createdBefore: "2026-07-01T10:00",
       limit: 200,
+      beforeId: 42,
     })
     expect(adminAuditFromQuery({
       audit_user: ["", "bob"],
       audit_limit: "999",
+      audit_before_id: "0",
     })).toEqual({
       userId: "bob",
       action: null,
       resourceType: null,
       resourceId: null,
       decision: null,
-      limit: 50,
+      requestId: null,
+      createdAfter: null,
+      createdBefore: null,
+      limit: 20,
+      beforeId: null,
     })
   })
 

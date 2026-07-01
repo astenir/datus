@@ -2699,6 +2699,10 @@ export interface components {
 
         AuditLogEntry: {
 
+            id?: number | null;
+
+            created_at?: string | null;
+
             user_id?: string | null;
 
             action: string;
@@ -2716,6 +2720,19 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             };
+        };
+
+        AuditLogPage: {
+
+            entries: components["schemas"]["AuditLogEntry"][];
+
+            limit: number;
+
+            before_id?: number | null;
+
+            next_before_id?: number | null;
+
+            has_more: boolean;
         };
 
         Body_create_kb_upload_api_v1_kb_uploads_post: {
@@ -3928,6 +3945,17 @@ export interface components {
             errorMessage?: string | null;
         };
 
+        Result_AuditLogPage_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["AuditLogPage"] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
         Result_ChatHistoryData_: {
 
             success: boolean;
@@ -4480,17 +4508,6 @@ export interface components {
             success: boolean;
 
             data?: components["schemas"]["AdminUserSummary"][] | null;
-
-            errorCode?: string | null;
-
-            errorMessage?: string | null;
-        };
-
-        Result_list_AuditLogEntry__: {
-
-            success: boolean;
-
-            data?: components["schemas"]["AuditLogEntry"][] | null;
 
             errorCode?: string | null;
 
@@ -8830,11 +8847,15 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                before_id?: number | null;
                 user_id?: string | null;
                 action?: string | null;
                 resource_type?: string | null;
                 resource_id?: string | null;
                 decision?: string | null;
+                request_id?: string | null;
+                created_after?: string | null;
+                created_before?: string | null;
             };
             header?: never;
             path?: never;
@@ -8848,7 +8869,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Result_list_AuditLogEntry__"];
+                    "application/json": components["schemas"]["Result_AuditLogPage_"];
                 };
             };
 
@@ -8866,11 +8887,15 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                before_id?: number | null;
                 user_id?: string | null;
                 action?: string | null;
                 resource_type?: string | null;
                 resource_id?: string | null;
                 decision?: string | null;
+                request_id?: string | null;
+                created_after?: string | null;
+                created_before?: string | null;
             };
             header?: never;
             path?: never;

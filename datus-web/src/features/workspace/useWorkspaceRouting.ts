@@ -3,6 +3,7 @@ import { useRoute, useRouter } from "vue-router"
 
 import type { AuthState } from "@/composables/useAuth"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
+import { defaultAuditLogLimit } from "@/lib/audit-log-pagination"
 import { canRenderWorkspaceView, workspaceRedirectTarget } from "@/features/workspace/access"
 import {
   adminAuditFromQuery,
@@ -104,7 +105,13 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
           audit_resource_type: adminTab.value === "audit" ? adminAudit.value?.resourceType ?? null : null,
           audit_resource_id: adminTab.value === "audit" ? adminAudit.value?.resourceId ?? null : null,
           audit_decision: adminTab.value === "audit" ? adminAudit.value?.decision ?? null : null,
-          audit_limit: adminTab.value === "audit" ? String(adminAudit.value?.limit ?? 50) : null,
+          audit_request_id: adminTab.value === "audit" ? adminAudit.value?.requestId ?? null : null,
+          audit_created_after: adminTab.value === "audit" ? adminAudit.value?.createdAfter ?? null : null,
+          audit_created_before: adminTab.value === "audit" ? adminAudit.value?.createdBefore ?? null : null,
+          audit_limit: adminTab.value === "audit" ? String(adminAudit.value?.limit ?? defaultAuditLogLimit) : null,
+          audit_before_id: adminTab.value === "audit" && adminAudit.value?.beforeId != null
+            ? String(adminAudit.value.beforeId)
+            : null,
           grant_subject_type: adminTab.value === "grants" ? adminGrant.value?.subjectType ?? null : null,
           grant_subject_id: adminTab.value === "grants" ? adminGrant.value?.subjectId ?? null : null,
           grant_datasource: adminTab.value === "grants" ? adminGrant.value?.datasourceKey ?? null : null,
@@ -205,7 +212,13 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
         audit_resource_type: tab === "audit" ? adminAudit.value?.resourceType ?? null : null,
         audit_resource_id: tab === "audit" ? adminAudit.value?.resourceId ?? null : null,
         audit_decision: tab === "audit" ? adminAudit.value?.decision ?? null : null,
-        audit_limit: tab === "audit" ? String(adminAudit.value?.limit ?? 50) : null,
+        audit_request_id: tab === "audit" ? adminAudit.value?.requestId ?? null : null,
+        audit_created_after: tab === "audit" ? adminAudit.value?.createdAfter ?? null : null,
+        audit_created_before: tab === "audit" ? adminAudit.value?.createdBefore ?? null : null,
+        audit_limit: tab === "audit" ? String(adminAudit.value?.limit ?? defaultAuditLogLimit) : null,
+        audit_before_id: tab === "audit" && adminAudit.value?.beforeId != null
+          ? String(adminAudit.value.beforeId)
+          : null,
         grant_subject_type: tab === "grants" ? adminGrant.value?.subjectType ?? null : null,
         grant_subject_id: tab === "grants" ? adminGrant.value?.subjectId ?? null : null,
         grant_datasource: tab === "grants" ? adminGrant.value?.datasourceKey ?? null : null,
@@ -259,7 +272,11 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
       audit_resource_type: filters.resourceType,
       audit_resource_id: filters.resourceId,
       audit_decision: filters.decision,
+      audit_request_id: filters.requestId,
+      audit_created_after: filters.createdAfter,
+      audit_created_before: filters.createdBefore,
       audit_limit: String(filters.limit),
+      audit_before_id: filters.beforeId != null ? String(filters.beforeId) : null,
     })
   }
 
@@ -281,7 +298,11 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
         audit_resource_type: null,
         audit_resource_id: null,
         audit_decision: null,
+        audit_request_id: null,
+        audit_created_after: null,
+        audit_created_before: null,
         audit_limit: null,
+        audit_before_id: null,
         grant_subject_type: null,
         grant_subject_id: null,
         grant_datasource: null,

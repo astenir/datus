@@ -2,7 +2,15 @@ import { computed, ref, shallowRef } from "vue";
 import { toast } from "vue-sonner";
 
 import { adminAuditApi } from "@/lib/api";
-import type { AuditActionType, AuditLog, AuditLogExportFile, AuditLogSearchForm } from "@/types/admin";
+import { defaultAuditLogLimit, isAuditLogLimitOption } from "@/lib/audit-log-pagination";
+import type {
+  AuditActionType,
+  AuditLog,
+  AuditLogExportFile,
+  AuditLogListResponse,
+  AuditLogPage,
+  AuditLogSearchForm,
+} from "@/types/admin";
 import type { AdminAuditRouteState } from "@/features/workspace/route-state";
 
 const defaultSearchForm = (): AuditLogSearchForm => ({
@@ -11,6 +19,9 @@ const defaultSearchForm = (): AuditLogSearchForm => ({
   resource_type: "",
   resource_id: "",
   decision: "",
+  request_id: "",
+  created_after: "",
+  created_before: "",
 });
 
 function trimFilter(value: string): string | undefined {
@@ -41,7 +52,11 @@ function downloadCsv(file: AuditLogExportFile): boolean {
 export function useAuditLogs() {
   const searchForm = ref<AuditLogSearchForm>(defaultSearchForm());
 
-  const limit = shallowRef(50);
+  const limit = shallowRef<number>(defaultAuditLogLimit);
+  const beforeId = shallowRef<number | null>(null);
+  const previousBeforeIds = ref<Array<number | null>>([]);
+  const nextBeforeId = shallowRef<number | null>(null);
+  const hasMore = shallowRef(false);
   const total = shallowRef(0);
   const logs = ref<AuditLog[]>([]);
   const loading = shallowRef(false);
@@ -54,6 +69,14 @@ export function useAuditLogs() {
   const targetCount = computed(() => new Set(logs.value.map((log) => log.resource_id).filter(Boolean)).size);
   const activeFilterCount = computed(() => Object.values(searchForm.value).filter((value) => value.trim()).length);
   const hasActiveFilters = computed(() => activeFilterCount.value > 0);
+  const currentPage = computed(() => previousBeforeIds.value.length + 1);
+  const hasPreviousPage = computed(() => previousBeforeIds.value.length > 0);
+  const lastLogId = computed(() => {
+    const lastLog = logs.value[logs.value.length - 1];
+    return lastLog?.id ?? null;
+  });
+  const nextPageBeforeId = computed(() => nextBeforeId.value ?? lastLogId.value);
+  const hasNextPage = computed(() => hasMore.value && nextPageBeforeId.value != null);
   const actionFilterValue = computed({
     get: () => searchForm.value.action || "__all__",
     set: (value: string) => {
@@ -70,8 +93,9 @@ export function useAuditLogs() {
     get: () => String(limit.value),
     set: (value: string) => {
       const nextLimit = Number(value);
-      if ([50, 100, 200, 500].includes(nextLimit)) {
+      if (isAuditLogLimitOption(nextLimit)) {
         limit.value = nextLimit;
+        resetPagination();
       }
     },
   });
@@ -79,16 +103,50 @@ export function useAuditLogs() {
   function currentParams() {
     return {
       limit: limit.value,
+      beforeId: beforeId.value ?? undefined,
       userId: trimFilter(searchForm.value.user_id),
       action: trimFilter(searchForm.value.action),
       resourceType: trimFilter(searchForm.value.resource_type),
       resourceId: trimFilter(searchForm.value.resource_id),
       decision: trimFilter(searchForm.value.decision),
+      requestId: trimFilter(searchForm.value.request_id),
+      createdAfter: trimFilter(searchForm.value.created_after),
+      createdBefore: trimFilter(searchForm.value.created_before),
     };
   }
 
   function loadActionTypes() {
     actionTypes.value = [];
+  }
+
+  function normalizePage(data: AuditLogListResponse | null | undefined): AuditLogPage {
+    if (Array.isArray(data)) {
+      const lastEntry = data[data.length - 1];
+      const inferredNextBeforeId = lastEntry?.id ?? null;
+      const inferredHasMore = data.length >= limit.value && inferredNextBeforeId != null;
+      return {
+        entries: data,
+        limit: limit.value,
+        before_id: beforeId.value,
+        next_before_id: inferredHasMore ? inferredNextBeforeId : null,
+        has_more: inferredHasMore,
+      };
+    }
+
+    return {
+      entries: data?.entries ?? [],
+      limit: data?.limit ?? limit.value,
+      before_id: data?.before_id ?? beforeId.value,
+      next_before_id: data?.next_before_id ?? null,
+      has_more: data?.has_more ?? false,
+    };
+  }
+
+  function resetPagination() {
+    beforeId.value = null;
+    previousBeforeIds.value = [];
+    nextBeforeId.value = null;
+    hasMore.value = false;
   }
 
   function applyRouteFilters(filters: AdminAuditRouteState): boolean {
@@ -98,18 +156,40 @@ export function useAuditLogs() {
       resource_type: filters.resourceType ?? "",
       resource_id: filters.resourceId ?? "",
       decision: filters.decision ?? "",
+      request_id: filters.requestId ?? "",
+      created_after: filters.createdAfter ?? "",
+      created_before: filters.createdBefore ?? "",
     };
     const nextLimit = filters.limit;
+    const nextBeforeId = filters.beforeId;
     const changed = searchForm.value.user_id !== nextForm.user_id
       || searchForm.value.action !== nextForm.action
       || searchForm.value.resource_type !== nextForm.resource_type
       || searchForm.value.resource_id !== nextForm.resource_id
       || searchForm.value.decision !== nextForm.decision
+      || searchForm.value.request_id !== nextForm.request_id
+      || searchForm.value.created_after !== nextForm.created_after
+      || searchForm.value.created_before !== nextForm.created_before
+      || limit.value !== nextLimit
+      || beforeId.value !== nextBeforeId;
+
+    const filtersChanged = searchForm.value.user_id !== nextForm.user_id
+      || searchForm.value.action !== nextForm.action
+      || searchForm.value.resource_type !== nextForm.resource_type
+      || searchForm.value.resource_id !== nextForm.resource_id
+      || searchForm.value.decision !== nextForm.decision
+      || searchForm.value.request_id !== nextForm.request_id
+      || searchForm.value.created_after !== nextForm.created_after
+      || searchForm.value.created_before !== nextForm.created_before
       || limit.value !== nextLimit;
 
     if (changed) {
       searchForm.value = nextForm;
       limit.value = nextLimit;
+      beforeId.value = nextBeforeId;
+      if (filtersChanged) {
+        previousBeforeIds.value = [];
+      }
     }
 
     return changed;
@@ -119,12 +199,18 @@ export function useAuditLogs() {
     loading.value = true;
     try {
       const result = await adminAuditApi.listLogs(currentParams());
-      logs.value = result?.data ?? [];
+      const page = normalizePage(result?.data);
+      logs.value = page.entries;
       total.value = logs.value.length;
+      beforeId.value = page.before_id ?? null;
+      nextBeforeId.value = page.next_before_id ?? null;
+      hasMore.value = page.has_more;
     } catch (err) {
       console.error("加载日志列表失败:", err);
       logs.value = [];
       total.value = 0;
+      nextBeforeId.value = null;
+      hasMore.value = false;
       toast.error("加载审计日志失败");
     } finally {
       loading.value = false;
@@ -132,12 +218,28 @@ export function useAuditLogs() {
   }
 
   function handleSearch() {
+    resetPagination();
     void loadLogs();
   }
 
   function handleReset() {
     searchForm.value = defaultSearchForm();
+    resetPagination();
     void loadLogs();
+  }
+
+  function prepareNextPage(): number | null {
+    if (!hasNextPage.value) return null;
+    previousBeforeIds.value = [...previousBeforeIds.value, beforeId.value];
+    return nextPageBeforeId.value;
+  }
+
+  function preparePreviousPage(): number | null {
+    if (!hasPreviousPage.value) return null;
+    const previousIds = [...previousBeforeIds.value];
+    const previous = previousIds.pop() ?? null;
+    previousBeforeIds.value = previousIds;
+    return previous;
   }
 
   async function exportLogs() {
@@ -175,12 +277,16 @@ export function useAuditLogs() {
   }
 
   function formatLogKey(log: AuditLog, index: number) {
+    if (log.id != null) return `audit-log:${log.id}`;
     return `${log.request_id ?? "request"}:${log.user_id ?? "system"}:${log.action}:${log.resource_type}:${log.resource_id ?? index}`;
   }
 
   return {
     searchForm,
     limit,
+    beforeId,
+    nextBeforeId,
+    hasMore,
     total,
     logs,
     loading,
@@ -192,6 +298,9 @@ export function useAuditLogs() {
     targetCount,
     activeFilterCount,
     hasActiveFilters,
+    currentPage,
+    hasPreviousPage,
+    hasNextPage,
     actionFilterValue,
     decisionFilterValue,
     limitValue,
@@ -200,6 +309,9 @@ export function useAuditLogs() {
     loadLogs,
     handleSearch,
     handleReset,
+    resetPagination,
+    prepareNextPage,
+    preparePreviousPage,
     exportLogs,
     viewDetail,
     getActionText,

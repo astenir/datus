@@ -539,17 +539,27 @@ function withSelectedFallbackOptions(
   </Dialog>
 
   <Dialog v-model:open="audits.showDetail.value">
-    <DialogContent class="sm:max-w-2xl">
+    <DialogContent class="max-h-[calc(100vh-2rem)] overflow-y-auto bg-background sm:max-w-2xl">
       <DialogHeader>
         <DialogTitle>审计详情</DialogTitle>
         <DialogDescription>
-          {{ audits.selectedLog.value?.request_id || "未记录 Request ID" }}
+          {{ audits.selectedLog.value?.id != null ? `#${audits.selectedLog.value.id}` : "未记录日志 ID" }}
+          ·
+          {{ formatOptionalDate(audits.selectedLog.value?.created_at) }}
         </DialogDescription>
       </DialogHeader>
       <div
         v-if="audits.selectedLog.value"
         class="grid gap-3 text-sm md:grid-cols-2"
       >
+        <div class="rounded-md border p-3">
+          <div class="text-xs text-muted-foreground">日志 ID</div>
+          <div class="font-medium">{{ audits.selectedLog.value.id ?? "-" }}</div>
+        </div>
+        <div class="rounded-md border p-3">
+          <div class="text-xs text-muted-foreground">创建时间</div>
+          <div class="font-medium">{{ formatOptionalDate(audits.selectedLog.value.created_at) }}</div>
+        </div>
         <div class="rounded-md border p-3">
           <div class="text-xs text-muted-foreground">用户</div>
           <div class="font-medium">{{ audits.selectedLog.value.user_id || "-" }}</div>
@@ -567,6 +577,10 @@ function withSelectedFallbackOptions(
         <div class="rounded-md border p-3">
           <div class="text-xs text-muted-foreground">决策</div>
           <div class="font-medium">{{ audits.selectedLog.value.decision }}</div>
+        </div>
+        <div class="rounded-md border p-3 md:col-span-2">
+          <div class="text-xs text-muted-foreground">Request ID</div>
+          <div class="font-medium">{{ audits.selectedLog.value.request_id || "-" }}</div>
         </div>
         <div class="rounded-md border p-3 md:col-span-2">
           <div class="text-xs text-muted-foreground">原因</div>

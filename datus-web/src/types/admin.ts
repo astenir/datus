@@ -12,6 +12,8 @@ export type Role = components["schemas"]["AdminRoleSummary"];
 export type AdminSession = components["schemas"]["AdminSessionSummary"];
 export type AdminSessionDetail = components["schemas"]["AdminSessionDetail"];
 export type AuditLog = components["schemas"]["AuditLogEntry"];
+export type AuditLogPage = components["schemas"]["AuditLogPage"];
+export type AuditLogListResponse = AuditLogPage | AuditLog[];
 export type AdminDatasource = components["schemas"]["AdminDatasourceSummary"];
 export type AdminDatasourceGrant = components["schemas"]["AdminDatasourceGrantSummary"];
 export type AdminQuota = components["schemas"]["AdminQuotaSummary"];
@@ -71,6 +73,9 @@ export interface AuditLogSearchForm {
   resource_type: string;
   resource_id: string;
   decision: string;
+  request_id: string;
+  created_after: string;
+  created_before: string;
 }
 
 export interface AuditLogExportFile {
@@ -146,11 +151,15 @@ export interface ArtifactAclFormData {
 
 export interface AuditLogListParams {
   limit: number;
+  beforeId?: number;
   userId?: string;
   action?: string;
   resourceType?: string;
   resourceId?: string;
   decision?: string;
+  requestId?: string;
+  createdAfter?: string;
+  createdBefore?: string;
 }
 
 export interface AdminUserListParams {
