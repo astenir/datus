@@ -1,169 +1,147 @@
 # 本地企业后端测试启动指南
 
-本文用于在本地启动一套便于前端开发联调的 Datus 企业模式后端。目标是不用真实企业网关，也能测试：
+本文只解决一件事：在本机快速启动企业模式后端，并验证 RBAC、datasource grant、session owner、audit 等企业链路是否能跑通。架构和上线门槛见 `ENTERPRISE_PLATFORM_PLAN.zh.md`。
 
-- 企业认证入口。
-- 用户、角色、权限和 datasource grant。
-- PostgreSQL-backed enterprise metadata store。
-- 业务 PostgreSQL datasource。
-- `/api/v1/me`、catalog、SQL executor、chat 等前端常用 API。
+## 最小启动清单
 
-本文只面向本下游 fork 的本地开发，不是生产部署文档。
-
-## 架构说明
-
-本地测试涉及两类 PostgreSQL：
-
-| 名称 | 用途 | 示例 |
-| --- | --- | --- |
-| enterprise metadata PG | 存 Datus 企业平台元数据，例如用户、角色、权限、数据源授权、session owner、audit、quota | `datus_enterprise` |
-| 业务 datasource PG | Datus 真正查询的业务库 | `ccks_fund` |
-
-这两个库可以在同一个 PostgreSQL 实例里，也可以分开。`enterprise metadata PG` 不保存业务表数据。
-
-本地企业模式有两种认证方式：
-
-| 模式 | 适合场景 | 前端请求需要带什么 |
-| --- | --- | --- |
-| `SignedHeaderAuthProvider` | 模拟企业网关已经认证过用户，由网关注入签名身份 header | 本地代理补 `X-Datus-*` 签名 header |
-| `UserInfoBearerAuthProvider` | 模拟 Datus 收到 access token 后自己调用企业 userinfo 接口 | 前端直接带 `Authorization: Bearer <token>` |
-
-前端开发更推荐先用 `UserInfoBearerAuthProvider` 模式，因为浏览器只需要带 Bearer token，不需要本地代理计算 HMAC 签名。
-
-## 前置条件
-
-在仓库根目录执行以下命令：
+默认使用 `conf/agent.local-enterprise-pg.yml.example`，它是完整的本地企业 PG 配置，默认认证模式是 `SignedHeaderAuthProvider`。
 
 ```bash
 cd datus-agent
-uv sync
+
+# 1. 复制本地配置
+cp conf/agent.local-enterprise-pg.yml.example conf/agent.local-enterprise-pg.yml
+
+# 2. 准备环境变量
+export DATUS_ENTERPRISE_PG_DSN="postgresql://datus:datus@127.0.0.1:5433/datus_enterprise"
+export DATUS_ENTERPRISE_HEADER_SECRET="$(uv run python scripts/enterprise_local_api.py secret)"
+export CCKS_FUND_DB_PASSWORD="datus"
+
+# 3. 初始化企业 metadata
+uv run python scripts/enterprise_local_pg_seed.py --datasource ccks_fund
+
+# 4. 启动 Datus API
+uv run datus-api \
+  --config conf/agent.local-enterprise-pg.yml \
+  --datasource ccks_fund \
+  --port 8000 \
+  --reload
 ```
 
-确认本地 PostgreSQL 可用，并准备好 enterprise metadata 数据库。以下示例假设 PostgreSQL 在 `127.0.0.1:5433`，用户名密码都是 `datus`：
+另开终端验证：
 
 ```bash
-psql "postgresql://datus:datus@127.0.0.1:5433/postgres" \
-  -c "CREATE DATABASE datus_enterprise;"
+cd datus-agent
+
+uv run python scripts/enterprise_local_api.py request \
+  --base-url http://127.0.0.1:8000 \
+  --path /api/v1/me \
+  --user alice
+
+uv run python scripts/enterprise_local_api.py smoke \
+  --base-url http://127.0.0.1:8000 \
+  --datasource ccks_fund \
+  --user alice
 ```
 
-如果数据库已存在，会报 `already exists`，可以忽略或换成你自己的库名。
+如果你只想测试前端 Bearer token 流程，请改用下文的 `UserInfoBearerAuthProvider`。
 
-配置环境变量：
+## 前置条件
+
+需要：
+
+- Python/uv 环境已可用。
+- 本地 PostgreSQL 可访问，且存在 `datus_enterprise` metadata 库。
+- 要测试 `ccks_fund` datasource 时，业务库也能通过配置访问。
+- 可选：`DEEPSEEK_API_KEY` 和 `SILICONFLOW_API_KEY`，用于真实 chat/embedding 路径。
+
+创建 metadata 库示例：
 
 ```bash
+createdb -h 127.0.0.1 -p 5433 -U datus datus_enterprise
+```
+
+如果你的本地 PostgreSQL 用户、端口或密码不同，只改环境变量和 `conf/agent.local-enterprise-pg.yml` 的业务 datasource 段。不要把业务库 DSN 写进 `DATUS_ENTERPRISE_PG_DSN`；这个变量只给企业 metadata store 使用。
+
+## 配置文件
+
+本地配置默认包含：
+
+- `agent.api.auth_provider`: `SignedHeaderAuthProvider`
+- `agent.enterprise.*`: PostgreSQL-backed user、role、datasource grant、agent、session owner、session body、artifact ACL、audit、quota、secret stores
+- `services.datasources.ccks_fund`: 本地业务 PostgreSQL 示例
+- `sql_policy.enabled: false`: 基础 RBAC/grant smoke 默认不启用 SQL policy
+
+常改字段：
+
+```yaml
+agent:
+  home: ${DATUS_HOME:-~/.datus}
+  project_root: ${DATUS_PROJECT_ROOT:-.}
+  services:
+    datasources:
+      ccks_fund:
+        host: 127.0.0.1
+        port: "5433"
+        username: datus
+        password: ${CCKS_FUND_DB_PASSWORD:-datus}
+        database: ccks_fund
+        schema: public
+```
+
+本地文件 `conf/agent.local-enterprise-pg.yml` 不要提交。
+
+## 方式一：SignedHeaderAuthProvider
+
+适合模拟“企业网关已登录并向 Datus 注入签名身份 header”。
+
+准备：
+
+```bash
+export DATUS_ENTERPRISE_HEADER_SECRET="$(uv run python scripts/enterprise_local_api.py secret)"
+uv run python scripts/enterprise_local_pg_seed.py --datasource ccks_fund
+```
+
+启动：
+
+```bash
+uv run datus-api \
+  --config conf/agent.local-enterprise-pg.yml \
+  --datasource ccks_fund \
+  --port 8000 \
+  --reload
+```
+
+调用：
+
+```bash
+uv run python scripts/enterprise_local_api.py request \
+  --base-url http://127.0.0.1:8000 \
+  --path /api/v1/me \
+  --user alice
+
+uv run python scripts/enterprise_local_api.py request \
+  --base-url http://127.0.0.1:8000 \
+  --path /api/v1/catalog/list \
+  --user alice
+```
+
+普通浏览器前端不能自己生成可信签名 header。前端联调一般建议用 `UserInfoBearerAuthProvider`。
+
+## 方式二：UserInfoBearerAuthProvider
+
+适合测试“浏览器发送 Bearer token，Datus 调企业 userinfo 获取身份”的 MVP 身份方案。
+
+启动 mock userinfo：
+
+```bash
+uv run python scripts/enterprise_mock_userinfo.py --port 8010 --reload
+export DATUS_ENTERPRISE_USERINFO_URL="http://127.0.0.1:8010/userinfo"
 export DATUS_ENTERPRISE_PG_DSN="postgresql://datus:datus@127.0.0.1:5433/datus_enterprise"
 export CCKS_FUND_DB_PASSWORD="datus"
 ```
 
-`DATUS_ENTERPRISE_PG_DSN` 指向 enterprise metadata PG。`CCKS_FUND_DB_PASSWORD` 是示例业务 datasource `ccks_fund` 的密码。
-
-## 准备配置文件
-
-从本地企业 PG 示例复制一份可修改配置：
-
-```bash
-cp conf/agent.local-enterprise-pg.yml.example conf/agent.local-enterprise-pg.yml
-```
-
-检查 `conf/agent.local-enterprise-pg.yml` 里的业务 datasource 配置，默认是：
-
-```yaml
-services:
-  datasources:
-    ccks_fund:
-      type: postgresql
-      host: 127.0.0.1
-      port: "5433"
-      username: datus
-      password: ${CCKS_FUND_DB_PASSWORD:-datus}
-      database: ccks_fund
-      schema: public
-```
-
-如果你的业务 PG 地址、端口、库名或账号不同，只改这一段。不要把业务库 DSN 写到 `DATUS_ENTERPRISE_PG_DSN`。
-
-## 初始化企业 metadata
-
-执行 seed 脚本：
-
-```bash
-uv run python scripts/enterprise_local_pg_seed.py --datasource ccks_fund
-```
-
-默认会写入：
-
-| 用户 | 默认 token 映射 | 角色 |
-| --- | --- | --- |
-| `alice` | `dev-alice-token` | 本地管理员 |
-| `bob` | `dev-bob-token` | 普通读者/分析用户 |
-
-默认管理员权限包含：
-
-```text
-module.*
-module.admin.*
-```
-
-默认普通用户权限包含：
-
-```text
-module.chat
-module.datasource_catalog
-module.sql_executor
-module.config.view
-module.system.status
-```
-
-seed 脚本也会为角色写入 `ccks_fund` 的 datasource grant。如果你实际 datasource key 不是 `ccks_fund`，要改成对应值：
-
-```bash
-uv run python scripts/enterprise_local_pg_seed.py --datasource your_datasource_key
-```
-
-## 方式一：UserInfoBearerAuthProvider
-
-这是推荐的本地前端联调方式。
-
-### 启动 mock userinfo
-
-打开一个终端：
-
-```bash
-uv run python scripts/enterprise_mock_userinfo.py --port 8010 --reload
-```
-
-mock userinfo 地址：
-
-```text
-http://127.0.0.1:8010/userinfo
-```
-
-查看可用 token：
-
-```bash
-curl -i http://127.0.0.1:8010/tokens
-```
-
-默认 token：
-
-| Token | userinfo 返回用户 | 用途 |
-| --- | --- | --- |
-| `dev-alice-token` | `alice` | 管理员视角 |
-| `dev-bob-token` | `bob` | 普通用户视角 |
-| `dev-charlie-token` | `charlie` | 认证成功但默认未 seed，适合测无权限 |
-| `disabled-token` | `disabled_user`，`userStatus=停用` | 测禁用用户 |
-
-验证 mock：
-
-```bash
-curl -i \
-  -H "Authorization: Bearer dev-alice-token" \
-  http://127.0.0.1:8010/userinfo
-```
-
-### 修改 Datus auth provider
-
-编辑 `conf/agent.local-enterprise-pg.yml`，把 `agent.api.auth_provider` 改成：
+把 `conf/agent.local-enterprise-pg.yml` 中的 `agent.api.auth_provider` 改成：
 
 ```yaml
 api:
@@ -179,19 +157,19 @@ api:
       status_field: userStatus
       allowed_statuses: ["正常"]
       default_project_id: enterprise
+      dev_admin_enabled: ${DATUS_DEV_ADMIN_AUTH:-false}
+      dev_admin_require_basic_auth: ${DATUS_DEV_ADMIN_REQUIRE_BASIC_AUTH:-false}
+      dev_admin_user_id: admin
+      dev_admin_username: admin
+      dev_admin_password: ${DATUS_DEV_ADMIN_PASSWORD:-admin}
+      dev_admin_project_id: enterprise
 ```
 
-设置 userinfo URL：
+重新 seed 并启动 API：
 
 ```bash
-export DATUS_ENTERPRISE_USERINFO_URL="http://127.0.0.1:8010/userinfo"
-```
+uv run python scripts/enterprise_local_pg_seed.py --datasource ccks_fund
 
-### 启动 Datus API
-
-打开另一个终端：
-
-```bash
 uv run datus-api \
   --config conf/agent.local-enterprise-pg.yml \
   --datasource ccks_fund \
@@ -199,308 +177,94 @@ uv run datus-api \
   --reload
 ```
 
-API 地址：
+验证：
 
-```text
-http://127.0.0.1:8000
+```bash
+curl -i \
+  -H "Authorization: Bearer dev-alice-token" \
+  http://127.0.0.1:8000/api/v1/me
+
+curl -i \
+  -H "Authorization: Bearer dev-bob-token" \
+  http://127.0.0.1:8000/api/v1/permissions/me
 ```
 
-### 可选：开启 dev admin 默认登录
+可用 mock token 通常包括：
 
-只在本地开发需要跳过 mock userinfo / 前端 token 接线时启用：
+```text
+dev-alice-token
+dev-bob-token
+dev-charlie-token
+disabled-token
+```
+
+如需本地“无 token 也进 admin”：
 
 ```bash
 export DATUS_DEV_ADMIN_AUTH=true
-```
-
-如果还希望浏览器或调试工具必须显式带 `admin/admin`，再打开 Basic 校验：
-
-```bash
+# 可选：要求 Basic admin/admin
 export DATUS_DEV_ADMIN_REQUIRE_BASIC_AUTH=true
 ```
 
-此时请求可以不带 `Authorization`，默认进入 `admin`；如果启用了 Basic 校验，则使用：
+该开关只允许本地开发使用。真实员工试点和生产必须关闭。
+
+## 前端联调
+
+Bearer userinfo 模式：
 
 ```bash
-curl -i \
-  -u admin:admin \
-  http://127.0.0.1:8000/api/v1/me
+cd ../datus-web
+VITE_DATUS_API_TARGET=http://127.0.0.1:8000 \
+VITE_DEV_ACCESS_TOKEN=dev-alice-token \
+npm run dev
 ```
 
-该开关由 `UserInfoBearerAuthProvider` 的 `dev_admin_enabled` 控制，默认关闭。开启后会给本地 `admin` 注入 `module.*`、`module.admin.*` 和所有已配置 datasource 的开发授权，只适合本地联调，不得用于真实企业试点或生产。
-
-### 验证 Datus API
-
-管理员视角：
+如果要换用户：
 
 ```bash
-curl -i \
-  -H "Authorization: Bearer dev-alice-token" \
-  http://127.0.0.1:8000/api/v1/me
+VITE_DEV_ACCESS_TOKEN=dev-bob-token npm run dev
 ```
 
-普通用户视角：
-
-```bash
-curl -i \
-  -H "Authorization: Bearer dev-bob-token" \
-  http://127.0.0.1:8000/api/v1/me
-```
-
-数据源目录：
-
-```bash
-curl -i \
-  -H "Authorization: Bearer dev-alice-token" \
-  "http://127.0.0.1:8000/api/v1/catalog/list?datasource_id=ccks_fund"
-```
-
-SQL executor：
-
-```bash
-curl -i \
-  -H "Authorization: Bearer dev-alice-token" \
-  -H "Content-Type: application/json" \
-  -d '{"database_name":"ccks_fund","sql_query":"SELECT 1","result_format":"json"}' \
-  http://127.0.0.1:8000/api/v1/sql/execute
-```
-
-禁用用户：
-
-```bash
-curl -i \
-  -H "Authorization: Bearer disabled-token" \
-  http://127.0.0.1:8000/api/v1/me
-```
-
-预期被拒绝，错误应和 `AUTH_USER_DISABLED` 相关。
-
-## 方式二：SignedHeaderAuthProvider
-
-这个模式用于模拟“企业网关完成登录认证，然后向 Datus 注入签名身份 header”。
-
-### 配置签名密钥
-
-```bash
-export DATUS_ENTERPRISE_HEADER_SECRET="$(uv run python scripts/enterprise_local_api.py secret)"
-```
-
-`conf/agent.local-enterprise-pg.yml.example` 默认就是 `SignedHeaderAuthProvider`，如果你没有改过 auth provider，可以直接启动 Datus API：
-
-```bash
-uv run datus-api \
-  --config conf/agent.local-enterprise-pg.yml \
-  --datasource ccks_fund \
-  --port 8000 \
-  --reload
-```
-
-### 使用本地签名工具调试
-
-查看当前用户：
-
-```bash
-uv run python scripts/enterprise_local_api.py request \
-  --base-url http://127.0.0.1:8000 \
-  --path /api/v1/me \
-  --user alice
-```
-
-catalog smoke：
-
-```bash
-uv run python scripts/enterprise_local_api.py smoke \
-  --base-url http://127.0.0.1:8000 \
-  --datasource ccks_fund \
-  --print-curl
-```
-
-生成可复制的 curl：
-
-```bash
-uv run python scripts/enterprise_local_api.py curl \
-  --base-url http://127.0.0.1:8000 \
-  --path '/api/v1/catalog/list?datasource_id=ccks_fund' \
-  --user alice
-```
-
-### 前端如何接 signed header 模式
-
-前端浏览器不要保存 `DATUS_ENTERPRISE_HEADER_SECRET`，也不要自己计算 `X-Datus-Signature`。如果必须用 signed header 模式联调，应该由 Vite dev server、Node proxy、Nginx、Caddy 或 BFF 在服务端侧给 `/api/v1/*` 请求补签名 header。
-
-生产环境也应由真实网关、Ingress、sidecar 或 BFF 做这个动作，不应由浏览器持有签名密钥。
-
-## 前端开发建议
-
-如果使用 `UserInfoBearerAuthProvider`，Vite 代理可以很简单：
-
-```ts
-import { defineConfig } from 'vite'
-
-export default defineConfig({
-  server: {
-    proxy: {
-      '/api': {
-        target: 'http://127.0.0.1:8000',
-        changeOrigin: true,
-      },
-    },
-  },
-})
-```
-
-前端请求示例：
-
-```ts
-const token = import.meta.env.VITE_DATUS_DEV_TOKEN ?? 'dev-alice-token'
-
-const response = await fetch('/api/v1/me', {
-  headers: {
-    Authorization: `Bearer ${token}`,
-  },
-})
-```
-
-本地 `.env.development`：
-
-```text
-VITE_DATUS_DEV_TOKEN=dev-alice-token
-```
-
-常用前端初始化接口：
-
-```text
-GET /api/v1/me
-GET /api/v1/me/features
-GET /api/v1/me/permissions
-GET /api/v1/me/datasource-grants
-GET /api/v1/catalog/list?datasource_id=ccks_fund
-```
-
-SQL executor：
-
-```text
-POST /api/v1/sql/execute
-POST /api/v1/sql/stop_execute
-```
-
-Chat：
-
-```text
-POST /api/v1/chat/stream
-GET  /api/v1/chat/sessions
-GET  /api/v1/chat/history
-```
+Signed header 模式不适合普通 Vite 浏览器前端直连，因为浏览器无法持有企业网关签名密钥。需要一个本地代理或改用 Bearer userinfo。
 
 ## 常见错误
 
-### database "datus_enterprise" does not exist
+| 错误 | 常见原因 | 处理 |
+| --- | --- | --- |
+| `database "datus_enterprise" does not exist` | metadata 库未创建或 DSN 指错 | 创建库，检查 `DATUS_ENTERPRISE_PG_DSN` |
+| `AUTH_REQUIRED` | Bearer 模式没带 `Authorization`；signed 模式没带签名 header | Bearer 加 token；signed 用 `enterprise_local_api.py` |
+| `AUTH_TOKEN_INVALID` | mock userinfo 不认识 token，或 userinfo URL 不通 | 确认 mock 进程和 `DATUS_ENTERPRISE_USERINFO_URL` |
+| `AUTH_USERINFO_UNAVAILABLE` | Datus 访问 userinfo 超时/失败 | curl userinfo，检查端口和 env 是否被配置解析 |
+| `AUTH_USER_DISABLED` | 使用了 disabled 用户或 metadata 中用户被禁用 | 换 token 或重新 seed/enable 用户 |
+| `PERMISSION_DENIED` | 用户缺模块 permission | 检查 seed 的 role/permission，或用 admin 用户验证 |
+| `DATASOURCE_ACCESS_DENIED` | 用户没有该 datasource grant | 重新 seed 或检查 grant metadata |
+| `AUTH_SIGNATURE_INVALID` | 签名密钥不一致、时间戳过期、path/method 不匹配 | 重新导出 `DATUS_ENTERPRISE_HEADER_SECRET`，用脚本生成请求 |
+| 端口 8000 被占用 | 旧 `datus-api --reload` 进程仍在 | `ss -tanp | rg ':8000'` 后停止旧进程 |
+| 修改后端代码没生效 | 运行的是 daemon 或无 reload 进程 | 使用 `--reload` 或重启 API |
 
-含义：PostgreSQL 能连上，但 enterprise metadata 数据库还没创建。
+## 验证建议
 
-处理：
-
-```bash
-psql "postgresql://datus:datus@127.0.0.1:5433/postgres" \
-  -c "CREATE DATABASE datus_enterprise;"
-```
-
-### AUTH_REQUIRED
-
-`UserInfoBearerAuthProvider` 模式下通常表示没有带 Bearer token：
-
-```bash
-curl -i \
-  -H "Authorization: Bearer dev-alice-token" \
-  http://127.0.0.1:8000/api/v1/me
-```
-
-`SignedHeaderAuthProvider` 模式下通常表示没有签名 header，需要用 `scripts/enterprise_local_api.py` 或本地代理补 header。
-
-### AUTH_TOKEN_INVALID
-
-含义：Datus 调 userinfo 时，mock userinfo 或真实 userinfo 拒绝了 token。
-
-先验证 mock：
+基础 smoke：
 
 ```bash
-curl -i \
-  -H "Authorization: Bearer dev-alice-token" \
-  http://127.0.0.1:8010/userinfo
+curl -i http://127.0.0.1:8000/health
+curl -i -H "Authorization: Bearer dev-alice-token" http://127.0.0.1:8000/api/v1/me
+curl -i -H "Authorization: Bearer dev-alice-token" http://127.0.0.1:8000/api/v1/catalog/list
 ```
 
-### AUTH_USER_DISABLED
+安全边界 smoke：
 
-含义：userinfo 返回的 `userStatus` 不在 `allowed_statuses` 中。默认只允许：
+- Alice 能访问授权 datasource。
+- Bob/Charlie 的权限与 grant 差异符合 seed。
+- `disabled-token` 被拒绝。
+- 未授权 datasource 返回 403 或稳定错误。
+- 切到 `DATUS_PLATFORM_STATUS=readonly` 后，SQL/chat/admin mutation 在执行前拒绝。
 
-```yaml
-allowed_statuses: ["正常"]
-```
-
-`disabled-token` 会触发这个路径。
-
-### PERMISSION_DENIED
-
-含义：认证通过，但 Datus 企业 metadata 中没有对应模块权限。
-
-处理：
-
-1. 确认 seed 已执行。
-2. 确认 userinfo 返回的 `username` 和 seed 写入的用户一致。
-3. 用 `dev-alice-token` 先测管理员视角。
-
-### DATASOURCE_ACCESS_DENIED
-
-含义：当前用户没有请求 datasource 的授权，或 seed 的 `--datasource` 和配置里的 datasource key 不一致。
-
-处理：
+测试命令：
 
 ```bash
-uv run python scripts/enterprise_local_pg_seed.py --datasource ccks_fund
+uv run pytest tests/unit_tests/datus_enterprise/test_enterprise_mvp_smoke.py
+uv run pytest tests/unit_tests/api/enterprise/test_route_security_matrix.py
 ```
 
-如果你的 datasource key 不是 `ccks_fund`，替换成实际 key。
-
-### AUTH_SIGNATURE_INVALID
-
-只适用于 `SignedHeaderAuthProvider`。通常是签名密钥不一致、请求 path 不一致，或签名过期。
-
-处理：
-
-1. 确认 Datus API 和签名脚本使用同一个 `DATUS_ENTERPRISE_HEADER_SECRET`。
-2. 重新生成请求，默认签名时间窗口是 300 秒。
-3. 优先使用 `scripts/enterprise_local_api.py` 生成请求，不要手写签名。
-
-## 最小启动清单
-
-推荐的本地前端开发启动顺序：
-
-```bash
-# 1. 准备配置
-cp conf/agent.local-enterprise-pg.yml.example conf/agent.local-enterprise-pg.yml
-
-# 2. 准备环境变量
-export DATUS_ENTERPRISE_PG_DSN="postgresql://datus:datus@127.0.0.1:5433/datus_enterprise"
-export DATUS_ENTERPRISE_USERINFO_URL="http://127.0.0.1:8010/userinfo"
-export CCKS_FUND_DB_PASSWORD="datus"
-
-# 3. 初始化企业 metadata
-uv run python scripts/enterprise_local_pg_seed.py --datasource ccks_fund
-
-# 4. 启动 mock userinfo，一个终端
-uv run python scripts/enterprise_mock_userinfo.py --port 8010 --reload
-
-# 5. 启动 Datus API，另一个终端
-uv run datus-api \
-  --config conf/agent.local-enterprise-pg.yml \
-  --datasource ccks_fund \
-  --port 8000 \
-  --reload
-
-# 6. 验证 API
-curl -i \
-  -H "Authorization: Bearer dev-alice-token" \
-  http://127.0.0.1:8000/api/v1/me
-```
-
-注意第 5 步前，需要把 `conf/agent.local-enterprise-pg.yml` 的 `auth_provider` 改为 `UserInfoBearerAuthProvider`。如果不改，它仍会使用默认的 signed header 模式。
+真实 PostgreSQL integration 测试必须使用独立库或唯一前缀，并清理自己写入的数据。
