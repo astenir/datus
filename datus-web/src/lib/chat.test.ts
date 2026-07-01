@@ -572,6 +572,90 @@ describe("contentFromPayloadBlocks", () => {
     ]);
   });
 
+  it("keeps persisted interaction summaries read-only and separate from live interactions", () => {
+    const parsed = contentFromPayloadBlocks([
+      {
+        type: "interaction-summary",
+        payload: {
+          status: "answered",
+          actionType: "ask_user",
+          interactionKey: "must-not-submit",
+          requests: [
+            {
+              title: "County",
+              content: "Which county?",
+              contentType: "markdown",
+              options: [
+                { key: "1", title: "Los Angeles" },
+                { key: "2", title: "San Francisco" },
+              ],
+              defaultChoice: "1",
+              allowFreeText: true,
+              multiSelect: false,
+            },
+          ],
+          answers: [
+            { question: "Which county?", answer: "Los Angeles" },
+          ],
+        },
+      },
+    ]);
+
+    expect(parsed.blocks).toEqual([
+      {
+        type: "interaction-summary",
+        status: "answered",
+        actionType: "ask_user",
+        requests: [
+          {
+            title: "County",
+            content: "Which county?",
+            contentType: "markdown",
+            options: [
+              { key: "1", title: "Los Angeles" },
+              { key: "2", title: "San Francisco" },
+            ],
+            defaultChoice: "1",
+            allowFreeText: true,
+            multiSelect: false,
+          },
+        ],
+        answers: [
+          { question: "Which county?", answer: "Los Angeles" },
+        ],
+      },
+    ]);
+    expect(parsed.blocks[0]).not.toHaveProperty("interactionKey");
+    expect(parsed.text).toBe("交互摘要 (answered)");
+  });
+
+  it("defensively normalizes incomplete interaction summaries", () => {
+    const parsed = contentFromPayloadBlocks([
+      {
+        type: "interaction-summary",
+        payload: {
+          status: "unexpected",
+          action_type: "ask_user",
+          answers: [
+            { question: "Pick counties", answer: ["Los Angeles", "San Francisco"] },
+          ],
+        },
+      },
+    ]);
+
+    expect(parsed.blocks).toEqual([
+      {
+        type: "interaction-summary",
+        status: "unknown",
+        actionType: "ask_user",
+        requests: [],
+        answers: [
+          { question: "Pick counties", answer: ["Los Angeles", "San Francisco"] },
+        ],
+      },
+    ]);
+  });
+
   it("keeps sub-agent completion payloads structured for node rendering", () => {
     const parsed = contentFromPayloadBlocks([
       {
@@ -697,6 +781,25 @@ describe("activeUserInteractionKey", () => {
       isStreaming: true,
       submittedInteractionKeys: new Set(["permission-action-1"]),
     })).toBeNull();
+  });
+
+  it("does not activate persisted interaction summary blocks", () => {
+    expect(activeUserInteractionKey([
+      {
+        id: "summary",
+        role: "assistant" as const,
+        content: "交互摘要",
+        blocks: [
+          {
+            type: "interaction-summary" as const,
+            status: "answered" as const,
+            actionType: "ask_user",
+            requests: [],
+            answers: [],
+          },
+        ],
+      },
+    ], { isStreaming: true })).toBeNull();
   });
 });
 

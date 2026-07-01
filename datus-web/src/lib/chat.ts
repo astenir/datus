@@ -2,6 +2,7 @@ import type {
   CatalogRecord,
   ChatDisplayMessage,
   ChatMessage,
+  InteractionSummaryStatus,
   MessageDisplayBlock,
   ChatSessionOption,
   MessageBlock,
@@ -84,6 +85,57 @@ export function filterVisibleChatSessions(sessions: ChatSessionOption[]) {
 
 function callToolIdFromPayload(payload: Record<string, unknown>) {
   return stringifyContent(payload.callToolId ?? payload.call_tool_id).trim() || undefined;
+}
+
+function parseInteractionRequests(rawRequests: readonly unknown[]) {
+  return rawRequests.map((request) => {
+    const req = isRecord(request) ? request : {};
+    const rawOptions = Array.isArray(req.options) ? req.options : [];
+    const options = rawOptions.map((option) => {
+      const opt = isRecord(option) ? option : {};
+      const key = stringifyContent(opt.key).trim();
+      const title = stringifyContent(opt.title ?? opt.key).trim();
+      return { key, title: title || key };
+    });
+    const title = stringifyContent(req.title).trim();
+    const content = stringifyContent(req.content).trim() || title || "Interaction";
+    const contentType = stringifyContent(req.contentType ?? req.content_type).trim();
+    const defaultChoice = stringifyContent(req.defaultChoice ?? req.default_choice).trim();
+    const allowFreeText = req.allowFreeText ?? req.allow_free_text ?? false;
+    const multiSelect = req.multiSelect ?? req.multi_select ?? false;
+    const parsed: Extract<MessageBlock, { type: "user-interaction" }>["requests"][number] = {
+      content,
+      options,
+      allowFreeText: !!allowFreeText,
+      multiSelect: !!multiSelect,
+    };
+    if (title) parsed.title = title;
+    if (contentType) parsed.contentType = contentType;
+    if (defaultChoice) parsed.defaultChoice = defaultChoice;
+    return parsed;
+  });
+}
+
+function normalizeInteractionSummaryStatus(value: unknown): InteractionSummaryStatus {
+  const status = stringifyContent(value).trim().toLowerCase();
+  if (status === "answered" || status === "cancelled" || status === "failed") return status;
+  return "unknown";
+}
+
+function parseInteractionSummaryAnswers(rawAnswers: unknown) {
+  if (!Array.isArray(rawAnswers)) return [];
+
+  return rawAnswers.map((item) => {
+    const answerItem = isRecord(item) ? item : {};
+    const rawAnswer = answerItem.answer;
+    const answer = Array.isArray(rawAnswer)
+      ? rawAnswer.map((entry) => stringifyContent(entry).trim()).filter(Boolean)
+      : stringifyContent(rawAnswer).trim();
+    return {
+      question: stringifyContent(answerItem.question ?? answerItem.content).trim() || "Interaction",
+      answer,
+    };
+  });
 }
 
 function parentActionIdFromPayload(payload: SseMessagePayload) {
@@ -490,18 +542,22 @@ export function contentFromPayloadBlocks(
           ? [{ content: payload.content, options: payload.options }]
           : [];
       const rawRequests = Array.isArray(payload.requests) ? payload.requests : legacyRequest;
-      const requests = rawRequests.map((request) => {
-        const req = request as Record<string, unknown>;
-        const rawOptions = Array.isArray(req.options) ? req.options : [];
-        const options = rawOptions.map((option) => {
-          const opt = option as Record<string, unknown>;
-          return { key: stringifyContent(opt.key), title: stringifyContent(opt.title) };
-        });
-        const allowFreeText = req.allowFreeText ?? req.allow_free_text ?? false;
-        const multiSelect = req.multiSelect ?? req.multi_select ?? false;
-        return { content: stringifyContent(req.content), options, allowFreeText: !!allowFreeText, multiSelect: !!multiSelect };
-      });
+      const requests = parseInteractionRequests(rawRequests);
       blocks.push({ type: "user-interaction", interactionKey, actionType, requests });
+    } else if (type === "interaction-summary") {
+      const actionType = stringifyContent(payload.actionType ?? payload.action_type ?? "interaction");
+      const requests = parseInteractionRequests(Array.isArray(payload.requests) ? payload.requests : []);
+      const answers = parseInteractionSummaryAnswers(payload.answers);
+      const error = stringifyContent(payload.error).trim();
+      const block: Extract<MessageBlock, { type: "interaction-summary" }> = {
+        type: "interaction-summary",
+        status: normalizeInteractionSummaryStatus(payload.status),
+        actionType,
+        requests,
+        answers,
+      };
+      if (error) block.error = error;
+      blocks.push(block);
     } else if (type === "subagent-complete") {
       const subagent = stringifyContent(payload.subagentType ?? payload.subagent_type ?? "subagent");
       const toolCount = payload.toolCount ?? payload.tool_count;
@@ -540,6 +596,7 @@ export function contentFromPayloadBlocks(
       if (block.type === "tool-call") return `调用工具 ${block.toolName}`;
       if (block.type === "tool-result") return `工具结果 ${block.toolName}${block.shortDesc ? `\n${block.shortDesc}` : ""}`;
       if (block.type === "user-interaction") return `需要用户确认 (${block.actionType})`;
+      if (block.type === "interaction-summary") return `交互摘要 (${block.status})`;
       if (block.type === "subagent-complete") return `子 Agent 完成 ${block.subagent}`;
       if (block.type === "artifact") return block.name;
       return "";

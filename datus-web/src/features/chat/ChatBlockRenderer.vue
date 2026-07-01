@@ -35,6 +35,7 @@ import {
   ToolHeader,
 } from "@/components/ai-elements/tool"
 import { MessageResponse } from "@/components/ai-elements/message"
+import InteractionSummaryBlock from "@/features/chat/InteractionSummaryBlock.vue"
 import ToolPayloadView from "@/features/chat/ToolPayloadView.vue"
 import UserInteractionBlock from "@/features/chat/UserInteractionBlock.vue"
 import type { MessageDisplayBlock, ToolChildMessage } from "@/types"
@@ -298,5 +299,10 @@ function childMessageLabel(message: ToolChildMessage) {
     :block="block"
     :disabled="interactionDisabled || block.interactionKey !== activeInteractionKey"
     @submit="submitInteraction"
+  />
+
+  <InteractionSummaryBlock
+    v-else-if="block.type === 'interaction-summary'"
+    :block="block"
   />
 </template>

@@ -52,6 +52,7 @@ export type MessageBlock =
   | ToolCallBlock
   | ToolResultBlock
   | { type: "user-interaction"; interactionKey: string; actionType: string; requests: readonly UserInteractionRequest[] }
+  | InteractionSummaryBlock
   | { type: "subagent-complete"; subagent: string; toolCount?: number; duration?: number; errorText?: string }
   | { type: "artifact"; kind: string; slug: string; name: string; description?: string; mode?: string };
 
@@ -62,10 +63,29 @@ export type ChatDisplayMessage = Omit<ChatMessage, "blocks"> & {
 };
 
 export type UserInteractionRequest = {
+  title?: string;
   content: string;
+  contentType?: string;
   options: ReadonlyArray<{ key: string; title: string }>;
+  defaultChoice?: string;
   allowFreeText?: boolean;
   multiSelect?: boolean;
+};
+
+export type InteractionSummaryStatus = "answered" | "cancelled" | "failed" | "unknown";
+
+export type InteractionSummaryAnswer = {
+  question: string;
+  answer: string | readonly string[];
+};
+
+export type InteractionSummaryBlock = {
+  type: "interaction-summary";
+  status: InteractionSummaryStatus;
+  actionType: string;
+  requests: readonly UserInteractionRequest[];
+  answers: readonly InteractionSummaryAnswer[];
+  error?: string;
 };
 
 export type ParsedMessage = {
