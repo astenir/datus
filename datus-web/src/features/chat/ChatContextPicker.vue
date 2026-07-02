@@ -51,6 +51,7 @@ const emit = defineEmits<{
   updateSchema: [value: string]
   updateAgent: [value: string]
   requestCatalog: []
+  requestAgents: []
 }>()
 
 const datasourceLabel = computed(() => optionLabel(props.datasource, props.datasourceOptions) || "未选择数据源")
@@ -126,6 +127,11 @@ function selectDatasource(value: string) {
 function openDataScope() {
   emit("requestCatalog")
   panelView.value = "data-scope"
+}
+
+function openAgentPicker() {
+  emit("requestAgents")
+  panelView.value = "agent"
 }
 
 function selectDatabase(value: string) {
@@ -256,7 +262,7 @@ function resetContext() {
             type="button"
             variant="ghost"
             :class="rowClass()"
-            @click="panelView = 'agent'"
+            @click="openAgentPicker"
           >
             <div class="flex min-w-0 flex-1 items-center gap-3 text-left">
               <BotIcon

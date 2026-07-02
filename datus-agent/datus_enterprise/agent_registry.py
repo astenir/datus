@@ -21,7 +21,9 @@ AGENT_ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,79}$")
 AGENT_STATUSES = {"draft", "published", "disabled", "archived"}
 AGENT_VISIBILITIES = {"private", "role", "enterprise"}
 ADMIN_AGENT_PERMISSION = "module.admin.agents"
-ENTERPRISE_AGENT_NODE_CLASSES = set(SUBAGENT_TOOL_REFERENCE) - {"chat"}
+DEFAULT_CHAT_AGENT_ID = "chat"
+ENTERPRISE_BUILTIN_AGENT_IDS = set(BUILTIN_SUBAGENTS) | {DEFAULT_CHAT_AGENT_ID}
+ENTERPRISE_AGENT_NODE_CLASSES = set(SUBAGENT_TOOL_REFERENCE)
 
 _NODE_CLASS_MODULE_PERMISSIONS = {
     "gen_sql": "module.sql_executor",
@@ -44,7 +46,7 @@ def validate_agent_id(agent_id: str) -> str | None:
     normalized = (agent_id or "").strip()
     if not AGENT_ID_PATTERN.fullmatch(normalized):
         return "Agent id must match ^[A-Za-z][A-Za-z0-9_-]{0,79}$."
-    if normalized in BUILTIN_SUBAGENTS:
+    if is_enterprise_builtin_agent_id(normalized):
         return f"Agent id '{normalized}' is reserved for a built-in subagent."
     return None
 
@@ -141,7 +143,7 @@ def builtin_agent_summaries_for_context(ctx: AppContext) -> list[dict[str, Any]]
     """Return built-in agents the current user is allowed to dispatch."""
 
     summaries = []
-    for agent_id in sorted(BUILTIN_SUBAGENTS):
+    for agent_id in sorted(ENTERPRISE_BUILTIN_AGENT_IDS):
         if not can_use_node_class(ctx, agent_id):
             continue
         summaries.append(builtin_agent_summary(agent_id))
@@ -153,7 +155,11 @@ def builtin_agent_summaries_for_admin(status: str | None = None) -> list[dict[st
 
     if status is not None and status.strip().lower() != "published":
         return []
-    return [builtin_agent_summary(agent_id) for agent_id in sorted(BUILTIN_SUBAGENTS)]
+    return [builtin_agent_summary(agent_id) for agent_id in sorted(ENTERPRISE_BUILTIN_AGENT_IDS)]
+
+
+def is_enterprise_builtin_agent_id(agent_id: str) -> bool:
+    return agent_id in ENTERPRISE_BUILTIN_AGENT_IDS
 
 
 def builtin_agent_summary(agent_id: str) -> dict[str, Any]:

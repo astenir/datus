@@ -58,6 +58,7 @@ class ChatAgenticNode(AgenticNode):
         scope: Optional[str] = None,
         execution_mode: Literal["interactive", "workflow"] = "interactive",
         is_subagent: bool = False,
+        node_name: Optional[str] = None,
         session_id: Optional[str] = None,
     ):
         """
@@ -75,12 +76,16 @@ class ChatAgenticNode(AgenticNode):
         self.execution_mode = execution_mode
 
         # Node name for config lookup and template resolution
-        self.configured_node_name = "chat"
+        self.configured_node_name = node_name or "chat"
 
         # Max turns from config
         self.max_turns = 50
-        if agent_config and hasattr(agent_config, "agentic_nodes") and "chat" in agent_config.agentic_nodes:
-            agentic_node_config = agent_config.agentic_nodes["chat"]
+        if (
+            agent_config
+            and hasattr(agent_config, "agentic_nodes")
+            and self.configured_node_name in agent_config.agentic_nodes
+        ):
+            agentic_node_config = agent_config.agentic_nodes[self.configured_node_name]
             if isinstance(agentic_node_config, dict):
                 self.max_turns = agentic_node_config.get("max_turns", 50)
 
@@ -233,7 +238,7 @@ class ChatAgenticNode(AgenticNode):
             )
             self.skill_func_tool = SkillFuncTool(
                 manager=self.skill_manager,
-                node_name="chat",
+                node_name=self.get_node_name(),
                 node_class=self.get_node_class_name(),
                 authoring_mode=self.SKILL_AUTHORING_MODE,
             )
@@ -317,9 +322,9 @@ class ChatAgenticNode(AgenticNode):
         if not self.agent_config:
             return {}
 
-        chat_config = self.agent_config.agentic_nodes.get("chat", {})
+        chat_config = self.agent_config.agentic_nodes.get(self.get_node_name(), {})
         if isinstance(chat_config, dict) and "permissions" in chat_config:
-            return {"chat": chat_config["permissions"]}
+            return {self.get_node_name(): chat_config["permissions"]}
 
         return {}
 

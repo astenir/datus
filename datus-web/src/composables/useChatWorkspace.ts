@@ -7,7 +7,8 @@ import { useConnection } from "@/composables/useConnection";
 import { useModels } from "@/composables/useModels";
 import { usePermission } from "@/composables/usePermission";
 import { useTheme } from "@/composables/useTheme";
-import type { SelectOption } from "@/types";
+import { agentApi } from "@/lib/api";
+import type { AgentInfo, SelectOption } from "@/types";
 
 const STATUS_REFRESH_DELAYS = [1500, 5000] as const;
 
@@ -29,6 +30,7 @@ export function useChatWorkspace() {
     datasourceOptions,
     isTestingDatasource,
     checkConnection,
+    effectiveBase,
     setApiBase,
     testDatasource,
   } = useConnection();
@@ -71,8 +73,17 @@ export function useChatWorkspace() {
     setSchema,
   } = useCatalog();
 
-  // Enterprise mode disables the legacy agent-config routes; keep chat on the default agent.
-  const agentOptions = computed<SelectOption[]>(() => []);
+  const availableAgents = shallowRef<AgentInfo[]>([]);
+  const isLoadingAgents = shallowRef(false);
+  const agentOptions = computed<SelectOption[]>(() =>
+    availableAgents.value
+      .filter((agent) => agent.agent_id !== "chat" && agent.status === "published")
+      .map((agent) => ({
+        value: agent.agent_id,
+        label: agent.name || agent.agent_id,
+      }))
+      .sort((left, right) => left.label.localeCompare(right.label) || left.value.localeCompare(right.value))
+  );
   const selectedAgent = shallowRef("");
   const selectedModel = shallowRef("");
   const selectedDatasource = shallowRef("");
@@ -178,6 +189,25 @@ export function useChatWorkspace() {
     return true;
   }
 
+  async function loadAgentOptions(): Promise<boolean> {
+    isLoadingAgents.value = true;
+    try {
+      const loadedAgents = await agentApi.availableList(effectiveBase());
+      availableAgents.value = loadedAgents ?? [];
+      if (selectedAgent.value && !agentOptions.value.some((option) => option.value === selectedAgent.value)) {
+        selectedAgent.value = "";
+      }
+      return true;
+    } catch (error) {
+      console.error("Failed to load chat agent options:", error);
+      availableAgents.value = [];
+      selectedAgent.value = "";
+      return false;
+    } finally {
+      isLoadingAgents.value = false;
+    }
+  }
+
   async function initialize() {
     if (initialized.value) return;
     if (initializePromise) return initializePromise;
@@ -189,6 +219,7 @@ export function useChatWorkspace() {
       await Promise.all([
         loadSessions(),
         loadModels(),
+        loadAgentOptions(),
       ]);
       void loadDatasourceStatuses();
       warmDatasource(currentDatasource.value);
@@ -230,6 +261,7 @@ export function useChatWorkspace() {
     selectedSession,
     isStreaming,
     isLoadingSessions,
+    isLoadingAgents,
     activeInteractionKey,
     selectSession,
     stopSession,
@@ -250,6 +282,7 @@ export function useChatWorkspace() {
     currentDatasourceStatus,
     isPrewarmingCurrentDatasource,
     loadSessions,
+    loadAgentOptions,
     loadCatalog: refreshCatalog,
     ensureCatalogLoaded,
     loadDatasourceStatuses,

@@ -282,6 +282,7 @@ async function openArtifact(kind: string, slug: string) {
                 @update-schema="workspace.setSchema"
                 @update-agent="(value) => { workspace.selectedAgent.value = value }"
                 @request-catalog="workspace.ensureCatalogLoaded"
+                @request-agents="workspace.loadAgentOptions"
               />
             </PromptInputTools>
 

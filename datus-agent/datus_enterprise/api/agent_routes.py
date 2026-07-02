@@ -9,7 +9,6 @@ from pydantic import BaseModel, Field
 
 from datus.api import deps
 from datus.api.auth.context import AppContext
-from datus.api.constants import BUILTIN_SUBAGENTS
 from datus.api.enterprise.deps import require_platform_active
 from datus.api.models.agent_models import AgentToolsData, AgentUseToolsData
 from datus.api.models.base_models import Result
@@ -24,6 +23,7 @@ from datus_enterprise.agent_registry import (
     builtin_agent_summary,
     can_use_agent,
     can_use_node_class,
+    is_enterprise_builtin_agent_id,
     normalize_acl,
     normalize_agent_payload,
     validate_agent_id,
@@ -143,6 +143,11 @@ async def get_available_agent_tools(agent_id: str, ctx: AgentListCtx) -> Result[
 async def get_available_agent(agent_id: str, ctx: AgentListCtx) -> Result[EnterpriseAgentDetail]:
     """Return a published enterprise agent visible to the current user."""
 
+    if is_enterprise_builtin_agent_id(agent_id):
+        if not can_use_node_class(ctx, agent_id):
+            return _agent_error("RESOURCE_NOT_FOUND", "Agent not found.")
+        return Result(success=True, data=_detail_from_builtin(builtin_agent_summary(agent_id)))
+
     try:
         record = await deps.get_enterprise_extensions().agent_store.get_agent(agent_id)
     except Exception:
@@ -158,7 +163,7 @@ async def get_available_agent(agent_id: str, ctx: AgentListCtx) -> Result[Enterp
 
 
 async def _node_class_for_available_agent(agent_id: str, ctx: AppContext) -> str | None:
-    if agent_id in BUILTIN_SUBAGENTS:
+    if is_enterprise_builtin_agent_id(agent_id):
         return agent_id if can_use_node_class(ctx, agent_id) else None
     try:
         record = await deps.get_enterprise_extensions().agent_store.get_agent(agent_id)
@@ -233,7 +238,7 @@ async def list_admin_agents(
 async def get_admin_agent(agent_id: str, ctx: AdminAgentsCtx) -> Result[EnterpriseAgentDetail]:
     """Return one enterprise agent definition for administration."""
 
-    if agent_id in BUILTIN_SUBAGENTS:
+    if is_enterprise_builtin_agent_id(agent_id):
         await _audit_agent(ctx, agent_id=agent_id, operation="get_admin_agent", decision="allow")
         return Result(success=True, data=_detail_from_builtin(builtin_agent_summary(agent_id)))
 

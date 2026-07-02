@@ -469,6 +469,29 @@ def test_chat_stream_denies_custom_privileged_subagent_with_module_chat_only(mon
     svc.chat.stream_chat.assert_not_called()
 
 
+def test_chat_stream_allows_custom_chat_subagent_with_module_chat_only(monkeypatch):
+    async def empty_stream(*_args, **_kwargs):
+        if False:
+            yield
+
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config()
+    svc.agent_config.agentic_nodes = {"custom_chat": {"id": "custom-chat-id", "node_class": "chat"}}
+    svc.chat.stream_chat = MagicMock(return_value=empty_stream())
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    with _client(chat_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/chat/stream",
+            json={"message": "chat with tools", "subagent_id": "custom-chat-id"},
+        )
+
+    assert response.status_code == 200
+    svc.chat.stream_chat.assert_called_once()
+    assert svc.chat.stream_chat.call_args.kwargs["sub_agent_id"] == "custom-chat-id"
+
+
 @pytest.mark.parametrize(
     ("agent_type", "subagent_id"),
     [("ask_report", "custom-ask-report-id"), ("ask_dashboard", "custom-ask-dashboard-id")],

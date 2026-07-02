@@ -61,6 +61,13 @@ const selectedIsReadonly = computed(() => manager.selectedIsBuiltin.value)
 const toolCatalogEntries = computed(() => manager.toolCatalogEntries())
 const useToolTypeEntries = computed(() => manager.useToolTypeEntries())
 const defaultUseTools = computed(() => manager.selectedUseTools.value?.default_tools ?? [])
+const mcpServerOptions = computed(() => manager.mcpServerOptions.value)
+const selectedMcpList = computed(() =>
+  manager.form.value.mcpText
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+)
 const deleteDialogOpen = computed({
   get: () => deleteTarget.value !== null,
   set: (value: boolean) => {
@@ -149,6 +156,10 @@ function startCreate() {
   formDialogOpen.value = true
 }
 
+function startCreateFromBuiltin() {
+  manager.startCreateFromSelectedBuiltin()
+}
+
 async function submitForm() {
   const saved = await manager.saveForm()
   if (saved) {
@@ -160,6 +171,7 @@ async function refreshAll() {
   await Promise.all([
     manager.loadAgents(),
     manager.loadToolCatalog(),
+    manager.loadMcpCatalog(),
   ])
 }
 
@@ -463,7 +475,18 @@ onMounted(() => {
                 <LockIcon />
                 <AlertTitle>系统内置 Agent</AlertTitle>
                 <AlertDescription>
-                  当前详情来自内置模板，保存和删除操作由后端拒绝。
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <span>当前详情来自内置模板，保存和删除操作由后端拒绝。</span>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      @click="startCreateFromBuiltin"
+                    >
+                      <PlusIcon data-icon="inline-start" />
+                      复制为企业 Agent
+                    </Button>
+                  </div>
                 </AlertDescription>
               </Alert>
 
@@ -612,15 +635,103 @@ onMounted(() => {
               </div>
 
               <div class="grid gap-4 md:grid-cols-2">
-                <Field>
-                  <FieldLabel for="agent-mcp">MCP</FieldLabel>
-                  <Textarea
-                    id="agent-mcp"
-                    v-model="manager.form.value.mcpText"
-                    class="min-h-20 font-mono text-xs leading-6"
-                    :readonly="selectedIsReadonly"
-                    placeholder="server.tool"
-                  />
+                <Field class="md:col-span-2">
+                  <FieldLabel>MCP</FieldLabel>
+                  <div class="rounded-lg border bg-muted/20 p-3">
+                    <div class="mb-3 flex flex-wrap items-center gap-2">
+                      <Badge variant="outline">{{ mcpServerOptions.length }} 个 Server</Badge>
+                      <Badge variant="secondary">{{ manager.selectedMcpCount.value }} 已选</Badge>
+                      <Badge variant="outline">{{ manager.selectedMcpToolCount.value }} 个工具</Badge>
+                      <Badge
+                        v-if="manager.mcpCatalogLoading.value"
+                        variant="outline"
+                      >
+                        <LoaderCircleIcon
+                          class="animate-spin"
+                          data-icon="inline-start"
+                        />
+                        加载中
+                      </Badge>
+                    </div>
+
+                    <Alert
+                      v-if="manager.mcpCatalogError.value"
+                      variant="destructive"
+                    >
+                      <BotIcon />
+                      <AlertTitle>读取 MCP 失败</AlertTitle>
+                      <AlertDescription>{{ manager.mcpCatalogError.value }}</AlertDescription>
+                    </Alert>
+
+                    <div
+                      v-else-if="mcpServerOptions.length === 0 && !manager.mcpCatalogLoading.value"
+                      class="rounded-md border bg-background p-3 text-sm text-muted-foreground"
+                    >
+                      暂无 MCP Server。
+                    </div>
+
+                    <div
+                      v-else
+                      class="grid gap-2 md:grid-cols-2"
+                    >
+                      <Button
+                        v-for="server in mcpServerOptions"
+                        :key="server.name"
+                        type="button"
+                        :variant="server.selected ? 'secondary' : 'outline'"
+                        class="h-auto min-h-16 justify-start px-3 py-2 text-left"
+                        :aria-pressed="server.selected"
+                        :disabled="selectedIsReadonly"
+                        @click="manager.toggleMcpServer(server.name)"
+                      >
+                        <span class="flex min-w-0 flex-1 flex-col gap-1.5">
+                          <span class="flex min-w-0 items-center gap-2">
+                            <CheckCircle2Icon
+                              v-if="server.selected"
+                              class="shrink-0"
+                              data-icon="inline-start"
+                            />
+                            <span class="truncate text-sm font-medium">{{ server.name }}</span>
+                            <Badge
+                              variant="outline"
+                              class="shrink-0"
+                            >
+                              {{ server.type }}
+                            </Badge>
+                          </span>
+                          <span class="truncate text-xs text-muted-foreground">{{ server.target }}</span>
+                          <span class="flex flex-wrap gap-1">
+                            <Badge
+                              v-for="tool in server.tools.slice(0, 4)"
+                              :key="`${server.name}:${tool}`"
+                              variant="secondary"
+                            >
+                              {{ tool }}
+                            </Badge>
+                            <Badge
+                              v-if="server.tools.length > 4"
+                              variant="outline"
+                            >
+                              +{{ server.tools.length - 4 }}
+                            </Badge>
+                          </span>
+                        </span>
+                      </Button>
+                    </div>
+
+                    <div
+                      v-if="selectedMcpList.length > 0"
+                      class="mt-3 flex flex-wrap gap-1.5"
+                    >
+                      <Badge
+                        v-for="serverName in selectedMcpList"
+                        :key="serverName"
+                        variant="outline"
+                      >
+                        {{ serverName }}
+                      </Badge>
+                    </div>
+                  </div>
                 </Field>
                 <Field>
                   <FieldLabel for="agent-skills">Skills</FieldLabel>

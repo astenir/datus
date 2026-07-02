@@ -19,6 +19,11 @@ describe("useChatWorkspace", () => {
     const checkConnection = vi.fn(async () => {});
     const loadSessions = vi.fn(async () => {});
     const loadModels = vi.fn(async () => {});
+    const loadAgentOptions = vi.fn(async () => [
+      { agent_id: "chat", name: "chat", node_class: "chat", status: "published", source: "builtin" },
+      { agent_id: "research", name: "Research", node_class: "chat", status: "published", source: "enterprise" },
+      { agent_id: "draft_bot", name: "Draft Bot", node_class: "chat", status: "draft", source: "enterprise" },
+    ]);
     const loadCatalog = vi.fn(async () => {});
     const loadDatasourceStatuses = vi.fn(async () => true);
     const prewarmDatasource = vi.fn(async () => false);
@@ -50,10 +55,16 @@ describe("useChatWorkspace", () => {
         datasourceOptions: readonly(ref([])),
         isTestingDatasource: readonly(shallowRef(false)),
         checkConnection,
+        effectiveBase: () => "http://api.test",
         setApiBase: vi.fn(),
         testDatasource: vi.fn(),
         switchDatasource: vi.fn(),
       }),
+    }));
+    vi.doMock("@/lib/api", () => ({
+      agentApi: {
+        availableList: loadAgentOptions,
+      },
     }));
     vi.doMock("@/composables/usePermission", () => ({
       usePermission: () => ({
@@ -121,10 +132,11 @@ describe("useChatWorkspace", () => {
     expect(checkConnection).toHaveBeenCalledTimes(1);
     expect(loadSessions).toHaveBeenCalledTimes(1);
     expect(loadModels).toHaveBeenCalledTimes(1);
+    expect(loadAgentOptions).toHaveBeenCalledTimes(1);
     expect(loadCatalog).not.toHaveBeenCalled();
     expect(loadDatasourceStatuses).toHaveBeenCalledTimes(1);
     expect(prewarmDatasource).not.toHaveBeenCalled();
-    expect(workspace.agentOptions.value).toEqual([]);
+    expect(workspace.agentOptions.value).toEqual([{ value: "research", label: "Research" }]);
 
     await expect(workspace.compactSession("s1")).resolves.toEqual({ session_id: "s1", success: true });
     expect(compactSession).toHaveBeenCalledWith("s1");
@@ -154,6 +166,7 @@ describe("useChatWorkspace", () => {
       { value: "blocked", label: "blocked" },
     ]);
     const switchDatasource = vi.fn();
+    const loadAgentOptions = vi.fn(async () => []);
     const loadCatalog = vi.fn(async () => {});
     const loadDatasourceStatuses = vi.fn(async () => true);
     const prewarmDatasource = vi.fn(async () => true);
@@ -187,10 +200,16 @@ describe("useChatWorkspace", () => {
         datasourceOptions: readonly(datasourceOptions),
         isTestingDatasource: readonly(shallowRef(false)),
         checkConnection: vi.fn(),
+        effectiveBase: () => "http://api.test",
         setApiBase: vi.fn(),
         testDatasource: vi.fn(),
         switchDatasource,
       }),
+    }));
+    vi.doMock("@/lib/api", () => ({
+      agentApi: {
+        availableList: loadAgentOptions,
+      },
     }));
     vi.doMock("@/composables/usePermission", () => ({
       usePermission: () => ({

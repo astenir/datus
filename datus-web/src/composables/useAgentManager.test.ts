@@ -7,6 +7,8 @@ const editAgent = vi.fn();
 const deleteAgent = vi.fn();
 const agentTools = vi.fn();
 const agentUseTools = vi.fn();
+const listMcpServers = vi.fn();
+const listMcpTools = vi.fn();
 const toastError = vi.fn();
 const toastSuccess = vi.fn();
 
@@ -19,6 +21,10 @@ vi.mock("@/lib/api", () => ({
     delete: deleteAgent,
     tools: agentTools,
     useTools: agentUseTools,
+  },
+  mcpApi: {
+    listServers: listMcpServers,
+    listTools: listMcpTools,
   },
 }));
 
@@ -53,7 +59,7 @@ describe("useAgentManager", () => {
       prompt_language: "en",
       prompt_version: "1.0",
       tools: ["read_query"],
-      mcp: ["fund.query"],
+      mcp: ["filesystem"],
       skills: ["fund-analyst"],
       scoped_context: {
         catalogs: ["fund"],
@@ -76,6 +82,17 @@ describe("useAgentManager", () => {
         analytics: { tools: ["explain_query"] },
       },
     });
+    listMcpServers.mockResolvedValue({
+      servers: [
+        { name: "remote_api", type: "http", url: "https://api.example.test/mcp" },
+        { name: "filesystem", type: "stdio", command: "npx" },
+      ],
+    });
+    listMcpTools.mockImplementation((_baseUrl: string, serverName: string) => Promise.resolve({
+      tools: serverName === "filesystem"
+        ? [{ name: "read_file" }, { name: "list_directory" }]
+        : [{ name: "search" }],
+    }));
   });
 
   it("loads and sorts agents from the active connection", async () => {
@@ -149,6 +166,58 @@ describe("useAgentManager", () => {
     expect(manager.canSubmitForm.value).toBe(false);
   });
 
+  it("copies the builtin chat agent into an editable enterprise draft", async () => {
+    listAgents.mockResolvedValue([
+      { agent_id: "chat", name: "chat", node_class: "chat", status: "published", source: "builtin" },
+      { agent_id: "chat_custom", name: "chat_custom", node_class: "chat", status: "draft", source: "enterprise" },
+    ]);
+    getAgent.mockResolvedValue({
+      agent_id: "chat",
+      name: "chat",
+      description: "Default chat assistant",
+      node_class: "chat",
+      status: "published",
+      source: "builtin",
+      prompt_template: null,
+      prompt_template_content: "builtin template body",
+      prompt_template_name: "chat_system",
+      prompt_language: "en",
+      prompt_version: "1.2",
+      tools: [],
+      mcp: [],
+      skills: [],
+      scoped_context: {},
+      rules: [],
+      max_turns: 30,
+    });
+    agentUseTools.mockResolvedValue({
+      default_tools: ["memory_tools.*"],
+      tool_types: {},
+    });
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.loadAgents();
+    await manager.selectAgent("chat");
+    const started = manager.startCreateFromSelectedBuiltin();
+
+    expect(started).toBe(true);
+    expect(manager.selectedAgent.value).toBeNull();
+    expect(manager.selectedIsBuiltin.value).toBe(false);
+    expect(manager.formMode.value).toBe("create");
+    expect(manager.canSubmitForm.value).toBe(true);
+    expect(manager.form.value).toMatchObject({
+      id: "",
+      name: "chat_custom_2",
+      nodeClass: "chat",
+      status: "draft",
+      promptTemplate: "builtin template body",
+      toolsText: "memory_tools.*",
+      mcpText: "",
+    });
+    expect(toastSuccess).toHaveBeenCalledWith("已复制为企业 Agent 草稿，可选择 MCP 后保存。");
+  });
+
   it("loads available agent tool catalogs", async () => {
     const { useAgentManager } = await import("./useAgentManager");
     const manager = useAgentManager();
@@ -158,6 +227,31 @@ describe("useAgentManager", () => {
     expect(agentTools).toHaveBeenCalledWith("http://api.test");
     expect(manager.toolCategoryCount.value).toBe(1);
     expect(manager.toolCount.value).toBe(2);
+  });
+
+  it("loads MCP servers and toggles agent server bindings", async () => {
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.loadMcpCatalog();
+
+    expect(listMcpServers).toHaveBeenCalledWith("http://api.test");
+    expect(listMcpTools).toHaveBeenCalledWith("http://api.test", "filesystem");
+    expect(listMcpTools).toHaveBeenCalledWith("http://api.test", "remote_api");
+    expect(manager.mcpServerOptions.value.map(server => server.name)).toEqual(["filesystem", "remote_api"]);
+    expect(manager.mcpServerOptions.value[0]).toMatchObject({
+      name: "filesystem",
+      target: "npx",
+      tools: ["list_directory", "read_file"],
+      selected: false,
+    });
+
+    manager.toggleMcpServer("filesystem");
+
+    expect(manager.form.value.mcpText).toBe("filesystem");
+    expect(manager.selectedMcpCount.value).toBe(1);
+    expect(manager.selectedMcpToolCount.value).toBe(2);
+    expect(manager.mcpServerOptions.value[0]?.selected).toBe(true);
   });
 
   it("creates agents with normalized list fields", async () => {
@@ -171,7 +265,7 @@ describe("useAgentManager", () => {
       description: "Research agent",
       promptTemplate: "Answer carefully",
       toolsText: "read_query, explain_query",
-      mcpText: "fund.query",
+      mcpText: "filesystem",
       skillsText: "fund-analyst",
       datasourceId: "fund_pg",
       artifactSlug: "risk_dashboard",
@@ -194,7 +288,7 @@ describe("useAgentManager", () => {
       prompt_language: "en",
       prompt_version: "1.0",
       tools: ["read_query", "explain_query"],
-      mcp: ["fund.query"],
+      mcp: ["filesystem"],
       skills: ["fund-analyst"],
       scoped_context: {
         catalogs: ["fund"],

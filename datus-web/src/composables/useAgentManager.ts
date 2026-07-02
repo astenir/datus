@@ -2,7 +2,7 @@ import { computed, readonly, ref, shallowRef } from "vue";
 import { toast } from "vue-sonner";
 
 import { useConnection } from "@/composables/useConnection";
-import { agentApi } from "@/lib/api";
+import { agentApi, mcpApi } from "@/lib/api";
 import { ApiResultError } from "@/lib/chat";
 import type {
   AgentDetail,
@@ -11,6 +11,7 @@ import type {
   AgentUseToolsData,
   CreateAgentInput,
   EditAgentInput,
+  McpServerInfo,
 } from "@/types";
 
 export interface AgentFormState {
@@ -32,6 +33,14 @@ export interface AgentFormState {
 }
 
 export type AgentFormMode = "create" | "edit";
+
+export interface AgentMcpServerOption {
+  name: string;
+  type: string;
+  target: string;
+  tools: string[];
+  selected: boolean;
+}
 
 function emptyForm(): AgentFormState {
   return {
@@ -154,7 +163,9 @@ function agentIdentifier(agent: AgentInfo | AgentDetail): string {
   return agent.agent_id;
 }
 
-function isBuiltinAgent(agent: AgentInfo | AgentDetail | null | undefined): boolean {
+function isBuiltinAgent(
+  agent: AgentInfo | AgentDetail | null | undefined,
+): agent is (AgentInfo | AgentDetail) & { source: "builtin" } {
   return agent?.source === "builtin";
 }
 
@@ -174,6 +185,30 @@ function countUseToolEntries(catalog: AgentUseToolsData | null): number {
   return defaults + typed;
 }
 
+function mcpServerTarget(server: McpServerInfo): string {
+  return server.command || server.url || server.cwd || "local";
+}
+
+function agentIdCandidate(raw: string): string {
+  const sanitized = raw.replace(/[^A-Za-z0-9_-]/g, "_").replace(/^[^A-Za-z]+/, "");
+  const candidate = sanitized || "custom_agent";
+  return candidate.slice(0, 80);
+}
+
+function uniqueAgentId(baseId: string, existingAgents: readonly AgentInfo[]): string {
+  const existingIds = new Set(existingAgents.map(agent => agent.agent_id));
+  const candidate = agentIdCandidate(`${baseId}_custom`);
+  if (!existingIds.has(candidate)) return candidate;
+
+  for (let index = 2; index < 100; index += 1) {
+    const suffix = `_${index}`;
+    const next = `${candidate.slice(0, 80 - suffix.length)}${suffix}`;
+    if (!existingIds.has(next)) return next;
+  }
+
+  return agentIdCandidate(`${baseId}_${Date.now()}`);
+}
+
 export function useAgentManager() {
   const connection = useConnection();
 
@@ -181,6 +216,8 @@ export function useAgentManager() {
   const selectedAgent = ref<AgentDetail | null>(null);
   const toolCatalog = ref<AgentToolsData | null>(null);
   const selectedUseTools = ref<AgentUseToolsData | null>(null);
+  const mcpServers = ref<McpServerInfo[]>([]);
+  const mcpToolsByServer = ref<Record<string, string[]>>({});
   const form = ref<AgentFormState>(emptyForm());
   const formMode = shallowRef<AgentFormMode>("create");
   const loading = shallowRef(false);
@@ -188,6 +225,8 @@ export function useAgentManager() {
   const saving = shallowRef(false);
   const deleting = shallowRef(false);
   const toolsLoading = shallowRef(false);
+  const mcpCatalogLoading = shallowRef(false);
+  const mcpCatalogError = shallowRef<string | null>(null);
   const error = shallowRef<string | null>(null);
   const enterpriseRoutesUnavailable = shallowRef(false);
 
@@ -198,6 +237,22 @@ export function useAgentManager() {
   const toolCategoryCount = computed(() => Object.keys(toolCatalog.value?.tools ?? {}).length);
   const toolCount = computed(() => countToolCatalogEntries(toolCatalog.value));
   const selectedUseToolCount = computed(() => countUseToolEntries(selectedUseTools.value));
+  const selectedMcpNames = computed(() => new Set(parseListText(form.value.mcpText) ?? []));
+  const mcpServerOptions = computed<AgentMcpServerOption[]>(() =>
+    [...mcpServers.value]
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map((server) => ({
+        name: server.name,
+        type: server.type,
+        target: mcpServerTarget(server),
+        tools: mcpToolsByServer.value[server.name] ?? [],
+        selected: selectedMcpNames.value.has(server.name),
+      }))
+  );
+  const selectedMcpCount = computed(() => selectedMcpNames.value.size);
+  const selectedMcpToolCount = computed(() =>
+    [...selectedMcpNames.value].reduce((total, serverName) => total + (mcpToolsByServer.value[serverName]?.length ?? 0), 0)
+  );
   const canSubmitForm = computed(() => {
     if (saving.value) return false;
     if (formMode.value === "edit" && selectedIsBuiltin.value) return false;
@@ -254,6 +309,43 @@ export function useAgentManager() {
     }
   }
 
+  async function loadMcpCatalog() {
+    mcpCatalogLoading.value = true;
+    mcpCatalogError.value = null;
+
+    try {
+      const result = await mcpApi.listServers(connection.effectiveBase());
+      const servers = [...(result?.servers ?? [])].sort((left, right) => left.name.localeCompare(right.name));
+      mcpServers.value = servers;
+
+      const toolEntries = await Promise.all(
+        servers.map(async (server) => {
+          try {
+            const toolsResult = await mcpApi.listTools(connection.effectiveBase(), server.name);
+            const toolNames = (toolsResult?.tools ?? [])
+              .map((tool) => tool.name)
+              .filter((name) => name.trim().length > 0)
+              .sort((left, right) => left.localeCompare(right));
+            return [server.name, toolNames] as const;
+          } catch (err) {
+            console.warn(`读取 MCP Server ${server.name} 工具失败`, err);
+            return [server.name, []] as const;
+          }
+        })
+      );
+      mcpToolsByServer.value = Object.fromEntries(toolEntries);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "读取 MCP Server 失败";
+      mcpServers.value = [];
+      mcpToolsByServer.value = {};
+      mcpCatalogError.value = message;
+      console.error("读取 MCP Server 失败:", err);
+      toast.error(message);
+    } finally {
+      mcpCatalogLoading.value = false;
+    }
+  }
+
   async function selectAgent(agentName: string | null) {
     if (!agentName) {
       selectedAgent.value = null;
@@ -287,6 +379,47 @@ export function useAgentManager() {
     selectedUseTools.value = null;
     form.value = emptyForm();
     formMode.value = "create";
+  }
+
+  function startCreateFromSelectedBuiltin() {
+    const source = selectedAgent.value;
+    if (!isBuiltinAgent(source)) {
+      toast.error("请选择一个系统内置 Agent 后再复制。");
+      return false;
+    }
+
+    const agentId = uniqueAgentId(source.agent_id, agents.value);
+    const defaultTools = selectedUseTools.value?.default_tools ?? [];
+    form.value = {
+      ...formFromDetail(source),
+      id: "",
+      name: agentId,
+      nodeClass: source.node_class || source.agent_id,
+      status: "draft",
+      toolsText: source.tools?.length ? listText(source.tools) : listText(defaultTools),
+      mcpText: "",
+    };
+    selectedAgent.value = null;
+    formMode.value = "create";
+    toast.success("已复制为企业 Agent 草稿，可选择 MCP 后保存。");
+    return true;
+  }
+
+  function setMcpServerSelected(serverName: string, selected: boolean) {
+    const normalized = serverName.trim();
+    if (!normalized) return;
+
+    const next = new Set(parseListText(form.value.mcpText) ?? []);
+    if (selected) {
+      next.add(normalized);
+    } else {
+      next.delete(normalized);
+    }
+    form.value.mcpText = [...next].sort((left, right) => left.localeCompare(right)).join("\n");
+  }
+
+  function toggleMcpServer(serverName: string) {
+    setMcpServerSelected(serverName, !selectedMcpNames.value.has(serverName));
   }
 
   async function saveForm(): Promise<boolean> {
@@ -363,6 +496,8 @@ export function useAgentManager() {
     agents: readonly(agents),
     selectedAgent: readonly(selectedAgent),
     selectedUseTools: readonly(selectedUseTools),
+    mcpServers: readonly(mcpServers),
+    mcpToolsByServer: readonly(mcpToolsByServer),
     toolCatalog: readonly(toolCatalog),
     form,
     formMode: readonly(formMode),
@@ -371,6 +506,8 @@ export function useAgentManager() {
     saving: readonly(saving),
     deleting: readonly(deleting),
     toolsLoading: readonly(toolsLoading),
+    mcpCatalogLoading: readonly(mcpCatalogLoading),
+    mcpCatalogError: readonly(mcpCatalogError),
     error: readonly(error),
     enterpriseRoutesUnavailable: readonly(enterpriseRoutesUnavailable),
     agentCount,
@@ -380,11 +517,18 @@ export function useAgentManager() {
     toolCategoryCount,
     toolCount,
     selectedUseToolCount,
+    mcpServerOptions,
+    selectedMcpCount,
+    selectedMcpToolCount,
     canSubmitForm,
     loadAgents,
     loadToolCatalog,
+    loadMcpCatalog,
     selectAgent,
     startCreate,
+    startCreateFromSelectedBuiltin,
+    setMcpServerSelected,
+    toggleMcpServer,
     saveForm,
     deleteAgent,
     isBuiltinAgent,
@@ -403,5 +547,6 @@ export const agentManagerInternals = {
   scopedContextFromForm,
   countToolCatalogEntries,
   countUseToolEntries,
+  uniqueAgentId,
   isRecord,
 };

@@ -101,6 +101,8 @@ def test_admin_agents_list_includes_readonly_builtins(monkeypatch):
 
     assert response.status_code == 200
     items = {item["agent_id"]: item for item in response.json()["data"]}
+    assert items["chat"]["source"] == "builtin"
+    assert items["chat"]["node_class"] == "chat"
     assert items["gen_sql"]["source"] == "builtin"
     assert items["gen_sql"]["status"] == "published"
     assert items["gen_sql"]["acl"] is None
@@ -120,6 +122,7 @@ def test_admin_agents_status_filter_treats_builtins_as_published(monkeypatch):
 
     published_ids = {item["agent_id"] for item in published_response.json()["data"]}
     draft_ids = {item["agent_id"] for item in draft_response.json()["data"]}
+    assert "chat" in published_ids
     assert "gen_sql" in published_ids
     assert "gen_sql" not in draft_ids
 
@@ -161,6 +164,24 @@ def test_admin_builtin_agent_detail_uses_special_template_mapping(monkeypatch):
     assert "skill engineer" in response.json()["data"]["prompt_template"]
 
 
+def test_admin_default_chat_agent_detail_is_readonly(monkeypatch):
+    _install_extensions(monkeypatch, InMemoryEnterpriseAgentStore())
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        detail_response = client.get("/api/v1/admin/agents/chat")
+        mutation_response = client.put("/api/v1/admin/agents/chat", json={"node_class": "chat"})
+
+    assert detail_response.status_code == 200
+    assert detail_response.json()["success"] is True
+    assert detail_response.json()["data"]["source"] == "builtin"
+    assert detail_response.json()["data"]["node_class"] == "chat"
+    assert detail_response.json()["data"]["prompt_template_name"] == "chat_system"
+    assert mutation_response.status_code == 200
+    assert mutation_response.json()["success"] is False
+    assert mutation_response.json()["errorCode"] == "AGENT_ID_INVALID"
+
+
 def test_available_agent_tools_require_visible_agent_and_node_permission(monkeypatch):
     agent_store = InMemoryEnterpriseAgentStore()
     _install_extensions(monkeypatch, agent_store)
@@ -186,6 +207,23 @@ def test_available_agent_tools_require_visible_agent_and_node_permission(monkeyp
     assert denied_response.status_code == 200
     assert denied_response.json()["success"] is False
     assert denied_response.json()["errorCode"] == "RESOURCE_NOT_FOUND"
+
+
+def test_available_default_chat_agent_is_listed_and_readable(monkeypatch):
+    _install_extensions(monkeypatch, InMemoryEnterpriseAgentStore())
+    ctx = AppContext(user_id="alice", permissions={"module.chat"})
+
+    with _client(ctx) as client:
+        list_response = client.get("/api/v1/agents")
+        detail_response = client.get("/api/v1/agents/chat")
+        tools_response = client.get("/api/v1/agents/chat/tools")
+
+    ids = {item["agent_id"] for item in list_response.json()["data"]}
+    assert "chat" in ids
+    assert detail_response.json()["success"] is True
+    assert detail_response.json()["data"]["source"] == "builtin"
+    assert tools_response.json()["success"] is True
+    assert "memory_tools.*" in tools_response.json()["data"]["default_tools"]
 
 
 def test_admin_agent_upsert_acl_and_available_list(monkeypatch):
@@ -240,18 +278,28 @@ def test_available_agents_filters_node_class_permission(monkeypatch):
     assert "sales_sql" not in ids
 
 
-def test_admin_agent_upsert_rejects_runtime_unsupported_chat_node_class(monkeypatch):
+def test_admin_agent_upsert_accepts_custom_chat_node_class(monkeypatch):
     agent_store = InMemoryEnterpriseAgentStore()
     _install_extensions(monkeypatch, agent_store)
     admin_ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
 
     with _client(admin_ctx) as client:
-        response = client.put("/api/v1/admin/agents/custom_chat", json={"node_class": "chat"})
+        response = client.put(
+            "/api/v1/admin/agents/custom_chat",
+            json={
+                "name": "Custom Chat",
+                "node_class": "chat",
+                "status": "published",
+                "mcp": ["filesystem"],
+                "acl": {"visibility": "enterprise"},
+            },
+        )
 
     assert response.status_code == 200
-    assert response.json()["success"] is False
-    assert response.json()["errorCode"] == "AGENT_INVALID"
-    assert agent_store._agents == {}
+    assert response.json()["success"] is True
+    assert response.json()["data"]["node_class"] == "chat"
+    assert response.json()["data"]["mcp"] == ["filesystem"]
+    assert agent_store._agents["custom_chat"]["node_class"] == "chat"
 
 
 def test_admin_agent_upsert_is_blocked_in_readonly_status(monkeypatch):

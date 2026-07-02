@@ -9,6 +9,10 @@ import type {
 } from "@/types";
 
 export const agentApi = {
+  availableList(baseUrl: string): Promise<AgentInfo[] | null> {
+    return apiResult(baseUrl, "/api/v1/agents");
+  },
+
   list(baseUrl: string): Promise<AgentInfo[] | null> {
     return apiResult(baseUrl, "/api/v1/admin/agents");
   },

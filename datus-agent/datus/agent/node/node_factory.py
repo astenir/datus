@@ -52,6 +52,22 @@ def create_interactive_node(
                 agent_config=agent_config, execution_mode=execution_mode, scope=scope, session_id=session_id
             )
 
+        elif subagent_name == "chat" or node_class_type == "chat":
+            from datus.agent.node.chat_agentic_node import ChatAgenticNode
+
+            return ChatAgenticNode(
+                node_id=node_id if node_id is not None else f"{subagent_name}{node_id_suffix}",
+                description=f"Chat node for {subagent_name}",
+                node_type="chat",
+                input_data=None,
+                agent_config=agent_config,
+                tools=None,
+                scope=scope,
+                execution_mode=execution_mode,
+                node_name=subagent_name,
+                session_id=session_id,
+            )
+
         elif subagent_name == "gen_metrics":
             from datus.agent.node.gen_metrics_agentic_node import GenMetricsAgenticNode
 
