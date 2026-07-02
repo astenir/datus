@@ -135,6 +135,7 @@ _ADMIN_AGENT_READ_POLICY = _policy(
     AUDIT,
     SYSTEM_READONLY,
     module_permission="module.admin.agents",
+    note="Admin agent catalog includes read-only built-in agents plus enterprise-managed custom agents.",
 )
 _ADMIN_AGENT_MUTATION_POLICY = _policy(
     MODULE_RBAC,
@@ -169,6 +170,17 @@ _CATALOG_READ_POLICY = _policy(
     SYSTEM_READONLY,
     module_permission="module.datasource_catalog",
     data_boundaries={DATASOURCE_PROJECTION, DATASOURCE_GRANT, TABLE_SCOPE},
+)
+_CATALOG_PREWARM_POLICY = _policy(
+    MODULE_RBAC,
+    DATASOURCE_PROJECTION,
+    DATASOURCE_GRANT,
+    PLATFORM_STATUS_GATE,
+    MUTATION_EXECUTION,
+    module_permission="module.datasource_catalog",
+    audit_action="system.platform_status",
+    data_boundaries={DATASOURCE_PROJECTION, DATASOURCE_GRANT},
+    note="Queues datasource connection prewarm only after catalog authorization and active platform status.",
 )
 _SUBJECT_TREE_READ_POLICY = _policy(
     MODULE_RBAC,
@@ -334,7 +346,8 @@ _add(
     ),
 )
 
-_add("GET", "/api/v1/catalog/list", _CATALOG_READ_POLICY)
+_add_many("GET", ["/api/v1/catalog/list", "/api/v1/catalog/status"], _CATALOG_READ_POLICY)
+_add("POST", "/api/v1/catalog/prewarm", _CATALOG_PREWARM_POLICY)
 _add_many("GET", ["/api/v1/table/detail", "/api/v1/semantic_model"], _CATALOG_READ_POLICY)
 _add("GET", "/api/v1/subject-tree", _SUBJECT_TREE_READ_POLICY)
 _add_many(

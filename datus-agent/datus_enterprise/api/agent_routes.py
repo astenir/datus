@@ -18,7 +18,10 @@ from datus_enterprise.agent_registry import (
     ADMIN_AGENT_PERMISSION,
     ENTERPRISE_AGENT_NODE_CLASSES,
     agent_audit_summary,
+    builtin_agent_prompt_template,
+    builtin_agent_summaries_for_admin,
     builtin_agent_summaries_for_context,
+    builtin_agent_summary,
     can_use_agent,
     can_use_node_class,
     normalize_acl,
@@ -93,6 +96,8 @@ class EnterpriseAgentDetail(EnterpriseAgentSummary):
     """Sanitized enterprise agent detail."""
 
     prompt_template: str | None = None
+    prompt_template_name: str | None = None
+    prompt_template_content: str | None = None
     prompt_language: str = "en"
     prompt_version: str | None = "1.0"
     tools: list[str] = Field(default_factory=list)
@@ -218,13 +223,19 @@ async def list_admin_agents(
     except Exception:
         await _audit_agent(ctx, operation="list_admin_agents", decision="deny", reason="agent list failed")
         return _agent_error("AGENT_LIST_FAILED", "Agent list failed.")
-    await _audit_agent(ctx, operation="list_admin_agents", decision="allow", metadata={"count": len(records)})
-    return Result(success=True, data=[_summary_from_record(record) for record in records])
+    summaries = [_summary_from_builtin(item) for item in builtin_agent_summaries_for_admin(status)]
+    summaries.extend(_summary_from_record(record) for record in records)
+    await _audit_agent(ctx, operation="list_admin_agents", decision="allow", metadata={"count": len(summaries)})
+    return Result(success=True, data=summaries)
 
 
 @router.get("/admin/agents/{agent_id}", response_model=Result[EnterpriseAgentDetail], summary="Get Admin Agent")
 async def get_admin_agent(agent_id: str, ctx: AdminAgentsCtx) -> Result[EnterpriseAgentDetail]:
     """Return one enterprise agent definition for administration."""
+
+    if agent_id in BUILTIN_SUBAGENTS:
+        await _audit_agent(ctx, agent_id=agent_id, operation="get_admin_agent", decision="allow")
+        return Result(success=True, data=_detail_from_builtin(builtin_agent_summary(agent_id)))
 
     invalid = validate_agent_id(agent_id)
     if invalid is not None:
@@ -440,6 +451,17 @@ def _summary_from_record(record: dict[str, Any]) -> EnterpriseAgentSummary:
     )
 
 
+def _summary_from_builtin(record: dict[str, Any]) -> EnterpriseAgentSummary:
+    return EnterpriseAgentSummary(
+        agent_id=str(record["agent_id"]),
+        name=str(record.get("name") or record["agent_id"]),
+        description=record.get("description"),
+        node_class=str(record.get("node_class") or record["agent_id"]),
+        status="published",
+        source="builtin",
+    )
+
+
 def _detail_from_record(record: dict[str, Any]) -> EnterpriseAgentDetail:
     summary = _summary_from_record(record).model_dump()
     return EnterpriseAgentDetail(
@@ -453,6 +475,14 @@ def _detail_from_record(record: dict[str, Any]) -> EnterpriseAgentDetail:
         scoped_context=dict(record.get("scoped_context") or {}),
         rules=list(record.get("rules") or []),
         max_turns=int(record.get("max_turns") or 30),
+    )
+
+
+def _detail_from_builtin(record: dict[str, Any]) -> EnterpriseAgentDetail:
+    summary = _summary_from_builtin(record).model_dump()
+    return EnterpriseAgentDetail(
+        **summary,
+        **builtin_agent_prompt_template(str(record["agent_id"])),
     )
 
 

@@ -85,6 +85,82 @@ def test_admin_agent_tools_and_tool_reference(monkeypatch):
     assert "db_tools" in reference_response.json()["data"]["tool_types"]
 
 
+def test_admin_agents_list_includes_readonly_builtins(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store)
+    agent_store._agents["sales_sql"] = {
+        "agent_id": "sales_sql",
+        "node_class": "gen_sql",
+        "status": "published",
+        "acl": {"visibility": "enterprise"},
+    }
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/admin/agents")
+
+    assert response.status_code == 200
+    items = {item["agent_id"]: item for item in response.json()["data"]}
+    assert items["gen_sql"]["source"] == "builtin"
+    assert items["gen_sql"]["status"] == "published"
+    assert items["gen_sql"]["acl"] is None
+    assert "feedback" not in items
+    assert items["sales_sql"]["source"] == "enterprise"
+    assert items["sales_sql"]["acl"]["visibility"] == "enterprise"
+
+
+def test_admin_agents_status_filter_treats_builtins_as_published(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        published_response = client.get("/api/v1/admin/agents", params={"status": "published"})
+        draft_response = client.get("/api/v1/admin/agents", params={"status": "draft"})
+
+    published_ids = {item["agent_id"] for item in published_response.json()["data"]}
+    draft_ids = {item["agent_id"] for item in draft_response.json()["data"]}
+    assert "gen_sql" in published_ids
+    assert "gen_sql" not in draft_ids
+
+
+def test_admin_builtin_agent_detail_is_readonly(monkeypatch):
+    _install_extensions(monkeypatch, InMemoryEnterpriseAgentStore())
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        detail_response = client.get("/api/v1/admin/agents/gen_sql")
+        mutation_response = client.put("/api/v1/admin/agents/gen_sql", json={"status": "published"})
+
+    assert detail_response.status_code == 200
+    assert detail_response.json()["success"] is True
+    assert detail_response.json()["data"]["source"] == "builtin"
+    assert detail_response.json()["data"]["acl"] is None
+    assert detail_response.json()["data"]["prompt_template_name"] == "gen_sql_system"
+    assert detail_response.json()["data"]["prompt_version"] == "1.2"
+    assert (
+        detail_response.json()["data"]["prompt_template"] == detail_response.json()["data"]["prompt_template_content"]
+    )
+    assert "available_tool_names" in detail_response.json()["data"]["prompt_template"]
+    assert mutation_response.status_code == 200
+    assert mutation_response.json()["success"] is False
+    assert mutation_response.json()["errorCode"] == "AGENT_ID_INVALID"
+
+
+def test_admin_builtin_agent_detail_uses_special_template_mapping(monkeypatch):
+    _install_extensions(monkeypatch, InMemoryEnterpriseAgentStore())
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/admin/agents/gen_skill")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert response.json()["data"]["prompt_template_name"] == "skill_creator_system"
+    assert response.json()["data"]["prompt_version"] == "1.0"
+    assert "skill engineer" in response.json()["data"]["prompt_template"]
+
+
 def test_available_agent_tools_require_visible_agent_and_node_permission(monkeypatch):
     agent_store = InMemoryEnterpriseAgentStore()
     _install_extensions(monkeypatch, agent_store)

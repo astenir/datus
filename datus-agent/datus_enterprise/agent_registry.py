@@ -14,6 +14,7 @@ from datus.api.services.agent_service import (
     _validate_tools,
     _validate_tools_for_agent_type,
 )
+from datus.prompts.prompt_manager import PromptManager
 from datus.tools.func_tool.sub_agent_task_tool import BUILTIN_SUBAGENT_DESCRIPTIONS
 
 AGENT_ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,79}$")
@@ -30,6 +31,10 @@ _NODE_CLASS_MODULE_PERMISSIONS = {
     "gen_dashboard": "module.dashboard.query",
     "gen_visual_dashboard": "module.dashboard.query",
     "ask_dashboard": "module.dashboard.query",
+}
+
+_BUILTIN_PROMPT_TEMPLATE_NAMES = {
+    "gen_skill": "skill_creator_system",
 }
 
 
@@ -139,17 +144,48 @@ def builtin_agent_summaries_for_context(ctx: AppContext) -> list[dict[str, Any]]
     for agent_id in sorted(BUILTIN_SUBAGENTS):
         if not can_use_node_class(ctx, agent_id):
             continue
-        summaries.append(
-            {
-                "agent_id": agent_id,
-                "name": agent_id,
-                "description": BUILTIN_SUBAGENT_DESCRIPTIONS.get(agent_id, ""),
-                "node_class": agent_id,
-                "status": "published",
-                "source": "builtin",
-            }
-        )
+        summaries.append(builtin_agent_summary(agent_id))
     return summaries
+
+
+def builtin_agent_summaries_for_admin(status: str | None = None) -> list[dict[str, Any]]:
+    """Return read-only built-in agents for the enterprise admin catalog."""
+
+    if status is not None and status.strip().lower() != "published":
+        return []
+    return [builtin_agent_summary(agent_id) for agent_id in sorted(BUILTIN_SUBAGENTS)]
+
+
+def builtin_agent_summary(agent_id: str) -> dict[str, Any]:
+    """Return the stable summary shape for one built-in agent."""
+
+    return {
+        "agent_id": agent_id,
+        "name": agent_id,
+        "description": BUILTIN_SUBAGENT_DESCRIPTIONS.get(agent_id, ""),
+        "node_class": agent_id,
+        "status": "published",
+        "source": "builtin",
+    }
+
+
+def builtin_agent_prompt_template(agent_id: str) -> dict[str, str | None]:
+    """Return read-only prompt template metadata and source for one built-in agent."""
+
+    template_name = _BUILTIN_PROMPT_TEMPLATE_NAMES.get(agent_id, f"{agent_id}_system")
+    prompt_manager = PromptManager()
+    try:
+        version = prompt_manager.get_latest_version(template_name)
+        content = prompt_manager.get_raw_template(template_name, version)
+    except FileNotFoundError:
+        version = None
+        content = None
+    return {
+        "prompt_template_name": template_name,
+        "prompt_version": version,
+        "prompt_template": content,
+        "prompt_template_content": content,
+    }
 
 
 def can_view_agent(ctx: AppContext, record: dict[str, Any]) -> bool:
