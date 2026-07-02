@@ -2,7 +2,7 @@ import { computed, readonly, ref, shallowRef } from "vue";
 import { toast } from "vue-sonner";
 
 import { useConnection } from "@/composables/useConnection";
-import { agentApi, mcpApi } from "@/lib/api";
+import { adminArtifactApi, adminDatasourceApi, agentApi, mcpApi } from "@/lib/api";
 import { ApiResultError } from "@/lib/chat";
 import type {
   AgentDetail,
@@ -13,6 +13,7 @@ import type {
   EditAgentInput,
   McpServerInfo,
 } from "@/types";
+import type { AdminArtifact, AdminDatasource } from "@/types/admin";
 
 export interface AgentFormState {
   id: string;
@@ -41,6 +42,23 @@ export interface AgentMcpServerOption {
   tools: string[];
   selected: boolean;
 }
+
+export interface AgentSelectOption {
+  value: string;
+  label: string;
+  description?: string;
+}
+
+type AgentListFormField = "toolsText" | "mcpText" | "skillsText" | "catalogsText" | "subjectsText" | "rulesText";
+
+const defaultNodeClassOptions = [
+  { value: "chat", label: "通用聊天", description: "面向普通问答、规划和多工具协作。" },
+  { value: "gen_sql", label: "SQL 分析", description: "生成和执行只读 SQL。" },
+  { value: "gen_report", label: "报表生成", description: "创建或更新报表产物。" },
+  { value: "ask_report", label: "报表问答", description: "围绕一个已存在报表做只读问答。" },
+  { value: "ask_dashboard", label: "仪表盘问答", description: "围绕一个已存在仪表盘做只读问答。" },
+  { value: "ask_metrics", label: "指标问答", description: "围绕指标、维度和归因分析问答。" },
+] satisfies AgentSelectOption[];
 
 function emptyForm(): AgentFormState {
   return {
@@ -77,6 +95,28 @@ function parseListText(value: string): string[] | undefined {
 
 function listText(value: string[] | undefined): string {
   return value?.join("\n") ?? "";
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+  return [...new Set(values.map(value => value.trim()).filter(Boolean))];
+}
+
+function withSelectedFallbackOptions(
+  options: readonly AgentSelectOption[],
+  selectedValues: readonly string[],
+): AgentSelectOption[] {
+  const optionValues = new Set(options.map(option => option.value));
+  const fallbackOptions = uniqueStrings(selectedValues)
+    .filter(value => !optionValues.has(value))
+    .map(value => ({
+      value,
+      label: `当前：${value}`,
+    }));
+  return [...fallbackOptions, ...options];
+}
+
+function optionSort(left: AgentSelectOption, right: AgentSelectOption): number {
+  return left.label.localeCompare(right.label) || left.value.localeCompare(right.value);
 }
 
 function listFromScopedContext(value: Record<string, unknown> | undefined, key: string): string[] | undefined {
@@ -175,6 +215,62 @@ function normalizeAgentList(result: AgentInfo[] | null): AgentInfo[] {
   );
 }
 
+function datasourceOption(datasource: AdminDatasource): AgentSelectOption {
+  return {
+    value: datasource.name,
+    label: datasource.is_default ? `${datasource.name}（默认）` : datasource.name,
+    description: datasource.type ?? undefined,
+  };
+}
+
+function artifactOption(artifact: AdminArtifact): AgentSelectOption {
+  const manifest = artifact.manifest;
+  const typeLabel = artifact.artifact_type === "report" ? "报表" : "仪表盘";
+  return {
+    value: manifest.slug,
+    label: `${manifest.name || manifest.slug}（${typeLabel}）`,
+    description: manifest.description || manifest.slug,
+  };
+}
+
+function toolOptionsFromCatalog(catalog: Record<string, string[]>): AgentSelectOption[] {
+  return Object.entries(catalog).flatMap(([category, tools]) =>
+    tools.map(tool => ({
+      value: `${category}.${tool}`,
+      label: tool,
+      description: category,
+    }))
+  ).sort(optionSort);
+}
+
+function skillOptionsFromAgents(
+  agents: readonly AgentInfo[],
+  selectedAgent: AgentDetail | null,
+  form: AgentFormState,
+): AgentSelectOption[] {
+  const known = uniqueStrings([
+    ...(selectedAgent?.skills ?? []),
+    ...(parseListText(form.skillsText) ?? []),
+  ]);
+  const ownerByAgent = new Map<string, string[]>();
+  for (const skill of known) {
+    ownerByAgent.set(skill, []);
+  }
+  if (selectedAgent?.skills?.length) {
+    for (const skill of selectedAgent.skills) {
+      ownerByAgent.set(skill, [selectedAgent.name]);
+    }
+  }
+  return known.map((skill) => {
+    const owners = ownerByAgent.get(skill) ?? [];
+    return {
+      value: skill,
+      label: skill,
+      description: owners.length ? `来自 ${owners.join("、")}` : agents.length ? "当前配置" : undefined,
+    };
+  }).sort(optionSort);
+}
+
 function countToolCatalogEntries(catalog: AgentToolsData | null): number {
   return Object.values(catalog?.tools ?? {}).reduce((total, tools) => total + tools.length, 0);
 }
@@ -218,6 +314,8 @@ export function useAgentManager() {
   const selectedUseTools = ref<AgentUseToolsData | null>(null);
   const mcpServers = ref<McpServerInfo[]>([]);
   const mcpToolsByServer = ref<Record<string, string[]>>({});
+  const datasources = ref<AdminDatasource[]>([]);
+  const artifacts = ref<AdminArtifact[]>([]);
   const form = ref<AgentFormState>(emptyForm());
   const formMode = shallowRef<AgentFormMode>("create");
   const loading = shallowRef(false);
@@ -227,6 +325,8 @@ export function useAgentManager() {
   const toolsLoading = shallowRef(false);
   const mcpCatalogLoading = shallowRef(false);
   const mcpCatalogError = shallowRef<string | null>(null);
+  const resourceCatalogLoading = shallowRef(false);
+  const resourceCatalogError = shallowRef<string | null>(null);
   const error = shallowRef<string | null>(null);
   const enterpriseRoutesUnavailable = shallowRef(false);
 
@@ -237,7 +337,41 @@ export function useAgentManager() {
   const toolCategoryCount = computed(() => Object.keys(toolCatalog.value?.tools ?? {}).length);
   const toolCount = computed(() => countToolCatalogEntries(toolCatalog.value));
   const selectedUseToolCount = computed(() => countUseToolEntries(selectedUseTools.value));
+  const selectedTools = computed(() => parseListText(form.value.toolsText) ?? []);
+  const selectedSkills = computed(() => parseListText(form.value.skillsText) ?? []);
   const selectedMcpNames = computed(() => new Set(parseListText(form.value.mcpText) ?? []));
+  const datasourceOptions = computed(() =>
+    withSelectedFallbackOptions(
+      datasources.value.map(datasourceOption).sort(optionSort),
+      form.value.datasourceId ? [form.value.datasourceId] : [],
+    )
+  );
+  const artifactOptions = computed(() =>
+    withSelectedFallbackOptions(
+      artifacts.value.map(artifactOption).sort(optionSort),
+      form.value.artifactSlug ? [form.value.artifactSlug] : [],
+    )
+  );
+  const nodeClassOptions = computed(() =>
+    withSelectedFallbackOptions(
+      defaultNodeClassOptions,
+      form.value.nodeClass ? [form.value.nodeClass] : [],
+    )
+  );
+  const toolOptions = computed(() => {
+    const typeCatalog = Object.fromEntries(
+      Object.entries(selectedUseTools.value?.tool_types ?? {})
+        .map(([category, data]) => [category, data.tools ?? []] as const),
+    );
+    const baseOptions = toolOptionsFromCatalog(
+      Object.keys(typeCatalog).length ? typeCatalog : toolCatalog.value?.tools ?? {},
+    );
+    return withSelectedFallbackOptions(baseOptions, [
+      ...selectedTools.value,
+      ...(selectedUseTools.value?.default_tools ?? []),
+    ]);
+  });
+  const skillOptions = computed(() => skillOptionsFromAgents(agents.value, selectedAgent.value, form.value));
   const mcpServerOptions = computed<AgentMcpServerOption[]>(() =>
     [...mcpServers.value]
       .sort((left, right) => left.name.localeCompare(right.name))
@@ -346,6 +480,45 @@ export function useAgentManager() {
     }
   }
 
+  async function loadUseToolsForNodeClass(nodeClass = form.value.nodeClass) {
+    const normalized = nodeClass.trim() || "gen_sql";
+    try {
+      selectedUseTools.value = await agentApi.useTools(connection.effectiveBase(), normalized);
+    } catch (err) {
+      const message = agentRouteErrorMessage(err, "读取节点工具参考失败");
+      console.error("读取节点工具参考失败:", err);
+      selectedUseTools.value = null;
+      toast.error(message);
+    }
+  }
+
+  async function loadResourceCatalogs() {
+    resourceCatalogLoading.value = true;
+    resourceCatalogError.value = null;
+
+    try {
+      const [datasourceResult, artifactResult] = await Promise.all([
+        adminDatasourceApi.listDatasources(),
+        adminArtifactApi.listArtifacts(),
+      ]);
+      datasources.value = [...(datasourceResult.data ?? [])].sort((left, right) => left.name.localeCompare(right.name));
+      artifacts.value = [...(artifactResult.data ?? [])].sort((left, right) =>
+        left.artifact_type.localeCompare(right.artifact_type)
+        || left.manifest.name.localeCompare(right.manifest.name)
+        || left.manifest.slug.localeCompare(right.manifest.slug)
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "读取 Agent 可选资源失败";
+      datasources.value = [];
+      artifacts.value = [];
+      resourceCatalogError.value = message;
+      console.error("读取 Agent 可选资源失败:", err);
+      toast.error(message);
+    } finally {
+      resourceCatalogLoading.value = false;
+    }
+  }
+
   async function selectAgent(agentName: string | null) {
     if (!agentName) {
       selectedAgent.value = null;
@@ -360,10 +533,12 @@ export function useAgentManager() {
     try {
       const detail = await agentApi.get(connection.effectiveBase(), agentName);
       selectedAgent.value = detail;
-      selectedUseTools.value = await agentApi.useTools(connection.effectiveBase(), detail?.node_class || "gen_sql");
       if (detail) {
         form.value = formFromDetail(detail);
         formMode.value = "edit";
+        await loadUseToolsForNodeClass(detail.node_class || "gen_sql");
+      } else {
+        selectedUseTools.value = null;
       }
     } catch (err) {
       const message = agentRouteErrorMessage(err, "读取 Agent 详情失败");
@@ -420,6 +595,40 @@ export function useAgentManager() {
 
   function toggleMcpServer(serverName: string) {
     setMcpServerSelected(serverName, !selectedMcpNames.value.has(serverName));
+  }
+
+  function setListFieldValues(field: AgentListFormField, values: readonly string[]) {
+    form.value[field] = uniqueStrings(values).sort((left, right) => left.localeCompare(right)).join("\n");
+  }
+
+  function addListFieldValue(field: AgentListFormField, value: string) {
+    const normalized = value.trim();
+    if (!normalized) return;
+
+    setListFieldValues(field, [...(parseListText(form.value[field]) ?? []), normalized]);
+  }
+
+  function toggleListFieldValue(field: AgentListFormField, value: string) {
+    const normalized = value.trim();
+    if (!normalized) return;
+
+    const next = new Set(parseListText(form.value[field]) ?? []);
+    if (next.has(normalized)) {
+      next.delete(normalized);
+    } else {
+      next.add(normalized);
+    }
+    setListFieldValues(field, [...next]);
+  }
+
+  function applyDefaultTools() {
+    const defaults = selectedUseTools.value?.default_tools ?? [];
+    if (!defaults.length) {
+      toast.error("当前节点类型没有返回默认工具。");
+      return;
+    }
+    setListFieldValues("toolsText", defaults);
+    toast.success("已应用默认工具");
   }
 
   async function saveForm(): Promise<boolean> {
@@ -498,6 +707,8 @@ export function useAgentManager() {
     selectedUseTools: readonly(selectedUseTools),
     mcpServers: readonly(mcpServers),
     mcpToolsByServer: readonly(mcpToolsByServer),
+    datasources: readonly(datasources),
+    artifacts: readonly(artifacts),
     toolCatalog: readonly(toolCatalog),
     form,
     formMode: readonly(formMode),
@@ -508,6 +719,8 @@ export function useAgentManager() {
     toolsLoading: readonly(toolsLoading),
     mcpCatalogLoading: readonly(mcpCatalogLoading),
     mcpCatalogError: readonly(mcpCatalogError),
+    resourceCatalogLoading: readonly(resourceCatalogLoading),
+    resourceCatalogError: readonly(resourceCatalogError),
     error: readonly(error),
     enterpriseRoutesUnavailable: readonly(enterpriseRoutesUnavailable),
     agentCount,
@@ -517,6 +730,13 @@ export function useAgentManager() {
     toolCategoryCount,
     toolCount,
     selectedUseToolCount,
+    selectedTools,
+    selectedSkills,
+    datasourceOptions,
+    artifactOptions,
+    nodeClassOptions,
+    toolOptions,
+    skillOptions,
     mcpServerOptions,
     selectedMcpCount,
     selectedMcpToolCount,
@@ -524,11 +744,16 @@ export function useAgentManager() {
     loadAgents,
     loadToolCatalog,
     loadMcpCatalog,
+    loadResourceCatalogs,
+    loadUseToolsForNodeClass,
     selectAgent,
     startCreate,
     startCreateFromSelectedBuiltin,
     setMcpServerSelected,
     toggleMcpServer,
+    addListFieldValue,
+    toggleListFieldValue,
+    applyDefaultTools,
     saveForm,
     deleteAgent,
     isBuiltinAgent,

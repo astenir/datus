@@ -7,6 +7,8 @@ const editAgent = vi.fn();
 const deleteAgent = vi.fn();
 const agentTools = vi.fn();
 const agentUseTools = vi.fn();
+const listDatasources = vi.fn();
+const listArtifacts = vi.fn();
 const listMcpServers = vi.fn();
 const listMcpTools = vi.fn();
 const toastError = vi.fn();
@@ -21,6 +23,12 @@ vi.mock("@/lib/api", () => ({
     delete: deleteAgent,
     tools: agentTools,
     useTools: agentUseTools,
+  },
+  adminDatasourceApi: {
+    listDatasources,
+  },
+  adminArtifactApi: {
+    listArtifacts,
   },
   mcpApi: {
     listServers: listMcpServers,
@@ -81,6 +89,36 @@ describe("useAgentManager", () => {
       tool_types: {
         analytics: { tools: ["explain_query"] },
       },
+    });
+    listDatasources.mockResolvedValue({
+      data: [
+        { name: "warehouse", type: "postgres", is_default: false },
+        { name: "fund_pg", type: "postgres", is_default: true },
+      ],
+    });
+    listArtifacts.mockResolvedValue({
+      data: [
+        {
+          artifact_type: "dashboard",
+          manifest: {
+            slug: "risk_dashboard",
+            name: "Risk Dashboard",
+            description: "Risk overview",
+            kind: "dashboard",
+            created_at: "2026-01-01T00:00:00Z",
+          },
+        },
+        {
+          artifact_type: "report",
+          manifest: {
+            slug: "weekly_report",
+            name: "Weekly Report",
+            description: "Weekly summary",
+            kind: "report",
+            created_at: "2026-01-02T00:00:00Z",
+          },
+        },
+      ],
     });
     listMcpServers.mockResolvedValue({
       servers: [
@@ -254,6 +292,33 @@ describe("useAgentManager", () => {
     expect(manager.mcpServerOptions.value[0]?.selected).toBe(true);
   });
 
+  it("loads datasource and artifact option catalogs for picker fields", async () => {
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.loadResourceCatalogs();
+
+    expect(listDatasources).toHaveBeenCalled();
+    expect(listArtifacts).toHaveBeenCalled();
+    expect(manager.datasourceOptions.value.map(option => option.value)).toEqual(["fund_pg", "warehouse"]);
+    expect(manager.datasourceOptions.value[0]?.label).toContain("默认");
+    expect(manager.artifactOptions.value.map(option => option.value)).toEqual(["risk_dashboard", "weekly_report"]);
+  });
+
+  it("keeps selected values as fallback options when catalogs do not include them", async () => {
+    listDatasources.mockResolvedValue({ data: [] });
+    listArtifacts.mockResolvedValue({ data: [] });
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+    manager.form.value.datasourceId = "legacy_ds";
+    manager.form.value.artifactSlug = "legacy_report";
+
+    await manager.loadResourceCatalogs();
+
+    expect(manager.datasourceOptions.value).toEqual([{ value: "legacy_ds", label: "当前：legacy_ds" }]);
+    expect(manager.artifactOptions.value).toEqual([{ value: "legacy_report", label: "当前：legacy_report" }]);
+  });
+
   it("creates agents with normalized list fields", async () => {
     const { useAgentManager } = await import("./useAgentManager");
     const manager = useAgentManager();
@@ -358,6 +423,21 @@ describe("useAgentManager", () => {
 
     expect(createAgent).not.toHaveBeenCalled();
     expect(toastError).toHaveBeenCalledWith("最大轮次必须是正整数");
+  });
+
+  it("updates list-like form fields through picker actions", async () => {
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    manager.toggleListFieldValue("toolsText", "db_tools.read_query");
+    manager.addListFieldValue("skillsText", "fund-analyst");
+    manager.toggleListFieldValue("toolsText", "semantic_tools.search_semantic_model");
+    manager.toggleListFieldValue("toolsText", "db_tools.read_query");
+
+    expect(manager.form.value.toolsText).toBe("semantic_tools.search_semantic_model");
+    expect(manager.selectedTools.value).toEqual(["semantic_tools.search_semantic_model"]);
+    expect(manager.form.value.skillsText).toBe("fund-analyst");
+    expect(manager.selectedSkills.value).toEqual(["fund-analyst"]);
   });
 
   it("deletes agents and reloads the list", async () => {

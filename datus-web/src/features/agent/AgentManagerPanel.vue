@@ -12,6 +12,7 @@ import {
   SaveIcon,
   Trash2Icon,
   WrenchIcon,
+  XIcon,
 } from "@lucide/vue"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -25,7 +26,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -47,6 +48,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { useAgentManager } from "@/composables/useAgentManager"
+import AgentMultiOptionPicker from "@/features/agent/AgentMultiOptionPicker.vue"
 import { formatDate } from "@/lib/utils"
 
 const manager = useAgentManager()
@@ -54,12 +56,18 @@ type AgentRow = (typeof manager.agents.value)[number]
 
 const deleteTarget = shallowRef<AgentRow | null>(null)
 const formDialogOpen = shallowRef(false)
+const customSkillInput = shallowRef("")
 
 const selectedIsReadonly = computed(() => manager.selectedIsBuiltin.value)
 const toolCatalogEntries = computed(() => manager.toolCatalogEntries())
 const useToolTypeEntries = computed(() => manager.useToolTypeEntries())
 const defaultUseTools = computed(() => manager.selectedUseTools.value?.default_tools ?? [])
 const mcpServerOptions = computed(() => manager.mcpServerOptions.value)
+const resourceCatalogBadgeLabel = computed(() => {
+  if (manager.resourceCatalogLoading.value) return "资源加载中"
+  if (manager.resourceCatalogError.value) return "资源读取失败"
+  return `${manager.datasourceOptions.value.length} 数据源 / ${manager.artifactOptions.value.length} 产物`
+})
 const selectedMcpList = computed(() =>
   manager.form.value.mcpText
     .split(/[\n,]/)
@@ -170,7 +178,30 @@ async function refreshAll() {
     manager.loadAgents(),
     manager.loadToolCatalog(),
     manager.loadMcpCatalog(),
+    manager.loadResourceCatalogs(),
   ])
+}
+
+function clearDatasource() {
+  manager.form.value.datasourceId = ""
+}
+
+function clearArtifact() {
+  manager.form.value.artifactSlug = ""
+}
+
+function changeNodeClass(value: unknown) {
+  if (typeof value !== "string") return
+  manager.form.value.nodeClass = value
+  void manager.loadUseToolsForNodeClass(value)
+}
+
+function addCustomSkill() {
+  const value = customSkillInput.value.trim()
+  if (!value) return
+
+  manager.addListFieldValue("skillsText", value)
+  customSkillInput.value = ""
 }
 
 async function confirmDelete() {
@@ -195,6 +226,7 @@ onMounted(() => {
           <div class="mt-1 flex flex-wrap items-center gap-2">
             <Badge variant="secondary">{{ manager.agentCount.value }} 个 Agent</Badge>
             <Badge variant="outline">{{ manager.toolCategoryCount.value }} 类 / {{ manager.toolCount.value }} 个工具</Badge>
+            <Badge variant="outline">{{ resourceCatalogBadgeLabel }}</Badge>
           </div>
         </div>
         <div class="flex items-center gap-2">
@@ -515,12 +547,29 @@ onMounted(() => {
 
                 <Field>
                   <FieldLabel for="agent-type">节点类型</FieldLabel>
-                  <Input
-                    id="agent-type"
+                  <Select
                     v-model="manager.form.value.nodeClass"
-                    :readonly="selectedIsReadonly"
-                    placeholder="gen_sql"
-                  />
+                    :disabled="selectedIsReadonly"
+                    @update:model-value="changeNodeClass"
+                  >
+                    <SelectTrigger id="agent-type">
+                      <SelectValue placeholder="选择节点类型" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem
+                          v-for="option in manager.nodeClassOptions.value"
+                          :key="option.value"
+                          :value="option.value"
+                        >
+                          {{ option.label }}
+                        </SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <FieldDescription>
+                    {{ manager.nodeClassOptions.value.find(option => option.value === manager.form.value.nodeClass)?.description || manager.form.value.nodeClass }}
+                  </FieldDescription>
                 </Field>
               </div>
 
@@ -570,25 +619,90 @@ onMounted(() => {
 
               <div class="grid gap-4 md:grid-cols-2">
                 <Field>
-                  <FieldLabel for="agent-datasource">数据源 ID</FieldLabel>
-                  <Input
-                    id="agent-datasource"
-                    v-model="manager.form.value.datasourceId"
-                    :readonly="selectedIsReadonly"
-                    placeholder="fund_pg"
-                  />
+                  <FieldLabel for="agent-datasource">绑定数据源</FieldLabel>
+                  <div class="flex gap-2">
+                    <Select
+                      v-model="manager.form.value.datasourceId"
+                      :disabled="selectedIsReadonly || manager.resourceCatalogLoading.value"
+                    >
+                      <SelectTrigger id="agent-datasource">
+                        <SelectValue placeholder="选择数据源" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem
+                            v-for="option in manager.datasourceOptions.value"
+                            :key="option.value"
+                            :value="option.value"
+                          >
+                            {{ option.label }}
+                          </SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      :disabled="selectedIsReadonly || !manager.form.value.datasourceId"
+                      aria-label="清空绑定数据源"
+                      @click="clearDatasource"
+                    >
+                      <XIcon data-icon="inline-start" />
+                    </Button>
+                  </div>
+                  <FieldDescription>
+                    从管理接口返回的数据源中选择；保存为空表示不绑定固定数据源。
+                  </FieldDescription>
                 </Field>
 
                 <Field>
-                  <FieldLabel for="agent-artifact">Artifact Slug</FieldLabel>
-                  <Input
-                    id="agent-artifact"
-                    v-model="manager.form.value.artifactSlug"
-                    :readonly="selectedIsReadonly"
-                    placeholder="risk_dashboard"
-                  />
+                  <FieldLabel for="agent-artifact">绑定产物</FieldLabel>
+                  <div class="flex gap-2">
+                    <Select
+                      v-model="manager.form.value.artifactSlug"
+                      :disabled="selectedIsReadonly || manager.resourceCatalogLoading.value"
+                    >
+                      <SelectTrigger id="agent-artifact">
+                        <SelectValue placeholder="选择报表或仪表盘" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          <SelectItem
+                            v-for="option in manager.artifactOptions.value"
+                            :key="option.value"
+                            :value="option.value"
+                          >
+                            {{ option.label }}
+                          </SelectItem>
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      :disabled="selectedIsReadonly || !manager.form.value.artifactSlug"
+                      aria-label="清空绑定产物"
+                      @click="clearArtifact"
+                    >
+                      <XIcon data-icon="inline-start" />
+                    </Button>
+                  </div>
+                  <FieldDescription>
+                    ask_report / ask_dashboard 通常需要绑定已有报表或仪表盘。
+                  </FieldDescription>
                 </Field>
               </div>
+
+              <Alert
+                v-if="manager.resourceCatalogError.value"
+                variant="destructive"
+              >
+                <BotIcon />
+                <AlertTitle>资源选项读取失败</AlertTitle>
+                <AlertDescription>{{ manager.resourceCatalogError.value }}</AlertDescription>
+              </Alert>
 
               <Field>
                 <FieldLabel for="agent-prompt">系统提示词</FieldLabel>
@@ -603,14 +717,31 @@ onMounted(() => {
 
               <div class="grid gap-4 md:grid-cols-2">
                 <Field>
-                  <FieldLabel for="agent-tools">工具</FieldLabel>
-                  <Textarea
-                    id="agent-tools"
-                    v-model="manager.form.value.toolsText"
-                    class="min-h-24 font-mono text-xs leading-6"
-                    :readonly="selectedIsReadonly"
-                    placeholder="read_query"
+                  <div class="flex items-center justify-between gap-2">
+                    <FieldLabel>工具</FieldLabel>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      :disabled="selectedIsReadonly || defaultUseTools.length === 0"
+                      @click="manager.applyDefaultTools"
+                    >
+                      <ListChecksIcon data-icon="inline-start" />
+                      默认工具
+                    </Button>
+                  </div>
+                  <AgentMultiOptionPicker
+                    :options="manager.toolOptions.value"
+                    :selected-values="manager.selectedTools.value"
+                    :disabled="selectedIsReadonly || manager.toolsLoading.value"
+                    placeholder="选择工具"
+                    search-placeholder="搜索工具或分类"
+                    empty-text="未选择工具；保存时后端会按节点类型使用默认行为。"
+                    @toggle="manager.toggleListFieldValue('toolsText', $event)"
                   />
+                  <FieldDescription>
+                    工具来自当前节点类型的可用工具参考；已存在但当前目录未返回的值会保留为“当前”选项。
+                  </FieldDescription>
                 </Field>
                 <Field>
                   <FieldLabel for="agent-rules">规则</FieldLabel>
@@ -724,14 +855,36 @@ onMounted(() => {
                   </div>
                 </Field>
                 <Field>
-                  <FieldLabel for="agent-skills">Skills</FieldLabel>
-                  <Textarea
-                    id="agent-skills"
-                    v-model="manager.form.value.skillsText"
-                    class="min-h-20 font-mono text-xs leading-6"
-                    :readonly="selectedIsReadonly"
-                    placeholder="skill-name"
+                  <FieldLabel>Skills</FieldLabel>
+                  <AgentMultiOptionPicker
+                    :options="manager.skillOptions.value"
+                    :selected-values="manager.selectedSkills.value"
+                    :disabled="selectedIsReadonly || manager.skillOptions.value.length === 0"
+                    placeholder="选择 Skill"
+                    search-placeholder="搜索 Skill"
+                    empty-text="未选择 Skill。"
+                    @toggle="manager.toggleListFieldValue('skillsText', $event)"
                   />
+                  <div class="flex gap-2">
+                    <Input
+                      v-model="customSkillInput"
+                      :readonly="selectedIsReadonly"
+                      placeholder="添加自定义 Skill"
+                      @keydown.enter.prevent="addCustomSkill"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      :disabled="selectedIsReadonly || !customSkillInput.trim()"
+                      @click="addCustomSkill"
+                    >
+                      <PlusIcon data-icon="inline-start" />
+                      添加
+                    </Button>
+                  </div>
+                  <FieldDescription>
+                    当前后端未提供全量 Skill 目录，页面会优先复用当前 Agent 的 Skill，并支持按标签添加项目内已有 Skill。
+                  </FieldDescription>
                 </Field>
               </div>
 
