@@ -53,6 +53,8 @@ describe("useAgentManager", () => {
       prompt_language: "en",
       prompt_version: "1.0",
       tools: ["read_query"],
+      mcp: ["fund.query"],
+      skills: ["fund-analyst"],
       scoped_context: {
         catalogs: ["fund"],
         subjects: ["portfolio"],
@@ -117,6 +119,36 @@ describe("useAgentManager", () => {
     expect(manager.selectedUseToolCount.value).toBe(2);
   });
 
+  it("hydrates builtin templates from the read-only detail payload", async () => {
+    getAgent.mockResolvedValue({
+      agent_id: "gen_sql",
+      name: "gen_sql",
+      description: "SQL assistant",
+      node_class: "gen_sql",
+      status: "published",
+      source: "builtin",
+      prompt_template: null,
+      prompt_template_content: "builtin template body",
+      prompt_template_name: "gen_sql_system",
+      prompt_language: "en",
+      prompt_version: "1.2",
+      tools: [],
+      mcp: [],
+      skills: [],
+      scoped_context: {},
+      rules: [],
+      max_turns: 30,
+    });
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.selectAgent("gen_sql");
+
+    expect(manager.form.value.promptTemplate).toBe("builtin template body");
+    expect(manager.selectedIsBuiltin.value).toBe(true);
+    expect(manager.canSubmitForm.value).toBe(false);
+  });
+
   it("loads available agent tool catalogs", async () => {
     const { useAgentManager } = await import("./useAgentManager");
     const manager = useAgentManager();
@@ -139,6 +171,10 @@ describe("useAgentManager", () => {
       description: "Research agent",
       promptTemplate: "Answer carefully",
       toolsText: "read_query, explain_query",
+      mcpText: "fund.query",
+      skillsText: "fund-analyst",
+      datasourceId: "fund_pg",
+      artifactSlug: "risk_dashboard",
       catalogsText: "fund",
       subjectsText: "portfolio\nrisk",
       rulesText: "",
@@ -151,11 +187,15 @@ describe("useAgentManager", () => {
       name: "researcher",
       node_class: "gen_sql",
       status: "draft",
+      datasource_id: "fund_pg",
+      artifact_slug: "risk_dashboard",
       description: "Research agent",
       prompt_template: "Answer carefully",
       prompt_language: "en",
       prompt_version: "1.0",
       tools: ["read_query", "explain_query"],
+      mcp: ["fund.query"],
+      skills: ["fund-analyst"],
       scoped_context: {
         catalogs: ["fund"],
         subjects: ["portfolio", "risk"],
@@ -179,6 +219,39 @@ describe("useAgentManager", () => {
       node_class: "gen_sql",
       prompt_template: "Updated prompt",
     }));
+  });
+
+  it("does not save or delete builtin agents from the management surface", async () => {
+    listAgents.mockResolvedValue([
+      { agent_id: "gen_sql", name: "gen_sql", node_class: "gen_sql", status: "published", source: "builtin" },
+    ]);
+    getAgent.mockResolvedValue({
+      agent_id: "gen_sql",
+      name: "gen_sql",
+      description: "SQL assistant",
+      node_class: "gen_sql",
+      status: "published",
+      source: "builtin",
+      prompt_template: "builtin template body",
+      prompt_language: "en",
+      prompt_version: "1.2",
+      tools: [],
+      scoped_context: {},
+      rules: [],
+      max_turns: 30,
+    });
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.loadAgents();
+    await manager.selectAgent("gen_sql");
+    await manager.saveForm();
+    await manager.deleteAgent("gen_sql");
+
+    expect(editAgent).not.toHaveBeenCalled();
+    expect(deleteAgent).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith("系统内置 Agent 为只读，不能在管理页保存。");
+    expect(toastError).toHaveBeenCalledWith("系统内置 Agent 为只读，不能删除。");
   });
 
   it("rejects invalid max turn values before saving", async () => {

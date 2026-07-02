@@ -3195,6 +3195,10 @@ export interface components {
 
             prompt_template?: string | null;
 
+            prompt_template_name?: string | null;
+
+            prompt_template_content?: string | null;
+
             prompt_language: string;
 
             prompt_version: string | null;

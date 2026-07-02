@@ -6,6 +6,7 @@ import {
   CheckCircle2Icon,
   ListChecksIcon,
   LoaderCircleIcon,
+  LockIcon,
   PlusIcon,
   RefreshCwIcon,
   SaveIcon,
@@ -56,6 +57,7 @@ const formDialogOpen = shallowRef(false)
 
 const selectedTitle = computed(() => manager.selectedAgentName.value ?? "新建 Agent")
 const selectedTypeLabel = computed(() => manager.selectedAgent.value?.node_class || manager.form.value.nodeClass || "未指定")
+const selectedIsReadonly = computed(() => manager.selectedIsBuiltin.value)
 const toolCatalogEntries = computed(() => manager.toolCatalogEntries())
 const useToolTypeEntries = computed(() => manager.useToolTypeEntries())
 const defaultUseTools = computed(() => manager.selectedUseTools.value?.default_tools ?? [])
@@ -65,17 +67,76 @@ const deleteDialogOpen = computed({
     if (!value) deleteTarget.value = null
   },
 })
-const formModeLabel = computed(() => manager.formMode.value === "edit" ? "编辑" : "新建")
-const saveLabel = computed(() => manager.formMode.value === "edit" ? "保存 Agent" : "创建 Agent")
+const formModeLabel = computed(() => {
+  if (selectedIsReadonly.value) return "查看"
+  return manager.formMode.value === "edit" ? "编辑" : "新建"
+})
+const saveLabel = computed(() => {
+  if (selectedIsReadonly.value) return "只读 Agent"
+  return manager.formMode.value === "edit" ? "保存 Agent" : "创建 Agent"
+})
 const formDialogDescription = computed(() => {
+  if (selectedIsReadonly.value) {
+    return "系统内置 Agent 使用内置模板，只能查看，不能在企业 Agent 管理中修改。"
+  }
   return manager.formMode.value === "edit"
     ? "编辑当前 Agent 的节点类型、工具、约束和作用域，保存后会同步到企业 Agent 接口。"
     : "创建新的可复用 Agent；列表字段支持英文逗号或换行分隔。"
+})
+const selectedAclText = computed(() => formatAcl(manager.selectedAgent.value?.acl))
+const selectedScopedContextText = computed(() => formatJson(manager.selectedAgent.value?.scoped_context))
+const selectedDetailRows = computed(() => {
+  const agent = manager.selectedAgent.value
+  if (!agent) return []
+
+  return [
+    ["Agent ID", agent.agent_id],
+    ["来源", sourceLabel(agent.source)],
+    ["所有者", agent.owner_user_id],
+    ["数据源", agent.datasource_id],
+    ["Artifact", agent.artifact_slug],
+    ["创建时间", formatDate(agent.created_at) || null],
+    ["更新时间", formatDate(agent.updated_at) || null],
+    ["模板", agent.prompt_template_name],
+    ["模板版本", agent.prompt_version],
+    ["语言", agent.prompt_language],
+    ["MCP", listSummary(agent.mcp)],
+    ["Skills", listSummary(agent.skills)],
+  ] satisfies Array<[string, string | null | undefined]>
 })
 
 function systemPromptSummary(agent: AgentRow) {
   const text = agent.description || ""
   return text.trim() || "-"
+}
+
+function sourceLabel(source: string | null | undefined) {
+  if (source === "builtin") return "系统内置"
+  if (source === "enterprise") return "企业自定义"
+  return source?.trim() || "-"
+}
+
+function listSummary(items: readonly string[] | null | undefined) {
+  return items?.length ? items.join(", ") : "-"
+}
+
+function formatAcl(
+  acl: {
+    visibility?: string | null
+    allowed_roles?: readonly string[]
+    allowed_user_ids?: readonly string[]
+  } | null | undefined,
+) {
+  if (!acl) return "-"
+
+  const roles = listSummary(acl.allowed_roles)
+  const users = listSummary(acl.allowed_user_ids)
+  return `${acl.visibility || "private"} / roles: ${roles} / users: ${users}`
+}
+
+function formatJson(value: Record<string, unknown> | null | undefined) {
+  if (!value || Object.keys(value).length === 0) return "-"
+  return JSON.stringify(value, null, 2)
 }
 
 async function selectAgent(agent: AgentRow) {
@@ -222,6 +283,12 @@ onMounted(() => {
                         </div>
                         <div class="flex min-w-0 flex-wrap items-center gap-1.5">
                           <Badge variant="secondary">{{ agent.node_class || "gen_sql" }}</Badge>
+                          <Badge
+                            v-if="agent.source === 'builtin'"
+                            variant="outline"
+                          >
+                            系统内置
+                          </Badge>
                           <span class="min-w-0 truncate text-xs text-muted-foreground">{{ systemPromptSummary(agent) }}</span>
                         </div>
                       </div>
@@ -236,6 +303,7 @@ onMounted(() => {
                       <Button
                         variant="ghost"
                         size="icon-sm"
+                        :disabled="agent.source === 'builtin' || manager.deleting.value"
                         aria-label="删除 Agent"
                         @click.stop="deleteTarget = agent"
                       >
@@ -388,12 +456,46 @@ onMounted(() => {
         >
           <ScrollArea class="min-h-0 flex-1">
             <FieldGroup class="gap-4 pr-3">
+              <Alert
+                v-if="selectedIsReadonly"
+                variant="default"
+              >
+                <LockIcon />
+                <AlertTitle>系统内置 Agent</AlertTitle>
+                <AlertDescription>
+                  当前详情来自内置模板，保存和删除操作由后端拒绝。
+                </AlertDescription>
+              </Alert>
+
+              <div
+                v-if="manager.selectedAgent.value"
+                class="grid gap-3 rounded-lg border bg-muted/20 p-3 md:grid-cols-2"
+              >
+                <div
+                  v-for="[label, value] in selectedDetailRows"
+                  :key="label"
+                  class="min-w-0"
+                >
+                  <div class="text-xs font-medium text-muted-foreground">{{ label }}</div>
+                  <div class="mt-1 whitespace-pre-wrap break-words text-sm leading-6">{{ value || "-" }}</div>
+                </div>
+                <div class="min-w-0 md:col-span-2">
+                  <div class="text-xs font-medium text-muted-foreground">ACL</div>
+                  <div class="mt-1 whitespace-pre-wrap break-words text-sm leading-6">{{ selectedAclText }}</div>
+                </div>
+                <div class="min-w-0 md:col-span-2">
+                  <div class="text-xs font-medium text-muted-foreground">Scoped Context</div>
+                  <pre class="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md bg-background p-2 text-xs leading-5">{{ selectedScopedContextText }}</pre>
+                </div>
+              </div>
+
               <div class="grid gap-4 md:grid-cols-2">
                 <Field>
                   <FieldLabel for="agent-name">名称</FieldLabel>
                   <Input
                     id="agent-name"
                     v-model="manager.form.value.name"
+                    :readonly="selectedIsReadonly"
                     placeholder="fund_research"
                   />
                 </Field>
@@ -403,6 +505,7 @@ onMounted(() => {
                   <Input
                     id="agent-type"
                     v-model="manager.form.value.nodeClass"
+                    :readonly="selectedIsReadonly"
                     placeholder="gen_sql"
                   />
                 </Field>
@@ -411,7 +514,10 @@ onMounted(() => {
               <div class="grid gap-4 md:grid-cols-2">
                 <Field>
                   <FieldLabel for="agent-status">状态</FieldLabel>
-                  <Select v-model="manager.form.value.status">
+                  <Select
+                    v-model="manager.form.value.status"
+                    :disabled="selectedIsReadonly"
+                  >
                     <SelectTrigger id="agent-status">
                       <SelectValue placeholder="选择状态" />
                     </SelectTrigger>
@@ -431,6 +537,7 @@ onMounted(() => {
                   <Input
                     id="agent-max-turns"
                     v-model="manager.form.value.maxTurns"
+                    :readonly="selectedIsReadonly"
                     inputmode="numeric"
                     placeholder="8"
                   />
@@ -443,9 +550,32 @@ onMounted(() => {
                   id="agent-description"
                   v-model="manager.form.value.description"
                   class="min-h-16"
+                  :readonly="selectedIsReadonly"
                   placeholder="这个 Agent 的职责范围"
                 />
               </Field>
+
+              <div class="grid gap-4 md:grid-cols-2">
+                <Field>
+                  <FieldLabel for="agent-datasource">数据源 ID</FieldLabel>
+                  <Input
+                    id="agent-datasource"
+                    v-model="manager.form.value.datasourceId"
+                    :readonly="selectedIsReadonly"
+                    placeholder="fund_pg"
+                  />
+                </Field>
+
+                <Field>
+                  <FieldLabel for="agent-artifact">Artifact Slug</FieldLabel>
+                  <Input
+                    id="agent-artifact"
+                    v-model="manager.form.value.artifactSlug"
+                    :readonly="selectedIsReadonly"
+                    placeholder="risk_dashboard"
+                  />
+                </Field>
+              </div>
 
               <Field>
                 <FieldLabel for="agent-prompt">系统提示词</FieldLabel>
@@ -453,6 +583,7 @@ onMounted(() => {
                   id="agent-prompt"
                   v-model="manager.form.value.promptTemplate"
                   class="min-h-32 font-mono text-xs leading-6"
+                  :readonly="selectedIsReadonly"
                   spellcheck="false"
                 />
               </Field>
@@ -464,6 +595,7 @@ onMounted(() => {
                     id="agent-tools"
                     v-model="manager.form.value.toolsText"
                     class="min-h-24 font-mono text-xs leading-6"
+                    :readonly="selectedIsReadonly"
                     placeholder="read_query"
                   />
                 </Field>
@@ -473,7 +605,31 @@ onMounted(() => {
                     id="agent-rules"
                     v-model="manager.form.value.rulesText"
                     class="min-h-24 font-mono text-xs leading-6"
+                    :readonly="selectedIsReadonly"
                     placeholder="仅查询授权数据源"
+                  />
+                </Field>
+              </div>
+
+              <div class="grid gap-4 md:grid-cols-2">
+                <Field>
+                  <FieldLabel for="agent-mcp">MCP</FieldLabel>
+                  <Textarea
+                    id="agent-mcp"
+                    v-model="manager.form.value.mcpText"
+                    class="min-h-20 font-mono text-xs leading-6"
+                    :readonly="selectedIsReadonly"
+                    placeholder="server.tool"
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel for="agent-skills">Skills</FieldLabel>
+                  <Textarea
+                    id="agent-skills"
+                    v-model="manager.form.value.skillsText"
+                    class="min-h-20 font-mono text-xs leading-6"
+                    :readonly="selectedIsReadonly"
+                    placeholder="skill-name"
                   />
                 </Field>
               </div>
@@ -484,6 +640,7 @@ onMounted(() => {
                   <Input
                     id="agent-catalogs"
                     v-model="manager.form.value.catalogsText"
+                    :readonly="selectedIsReadonly"
                     placeholder="fund, market"
                   />
                 </Field>
@@ -492,6 +649,7 @@ onMounted(() => {
                   <Input
                     id="agent-subjects"
                     v-model="manager.form.value.subjectsText"
+                    :readonly="selectedIsReadonly"
                     placeholder="portfolio, risk"
                   />
                 </Field>
@@ -510,9 +668,17 @@ onMounted(() => {
             </Button>
             <Button
               type="submit"
+              :variant="selectedIsReadonly ? 'secondary' : 'default'"
               :disabled="!manager.canSubmitForm.value"
             >
-              <SaveIcon data-icon="inline-start" />
+              <LockIcon
+                v-if="selectedIsReadonly"
+                data-icon="inline-start"
+              />
+              <SaveIcon
+                v-else
+                data-icon="inline-start"
+              />
               {{ saveLabel }}
             </Button>
           </DialogFooter>

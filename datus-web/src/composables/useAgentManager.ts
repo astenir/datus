@@ -18,9 +18,13 @@ export interface AgentFormState {
   name: string;
   nodeClass: string;
   status: string;
+  datasourceId: string;
+  artifactSlug: string;
   description: string;
   promptTemplate: string;
   toolsText: string;
+  mcpText: string;
+  skillsText: string;
   catalogsText: string;
   subjectsText: string;
   rulesText: string;
@@ -35,9 +39,13 @@ function emptyForm(): AgentFormState {
     name: "",
     nodeClass: "gen_sql",
     status: "draft",
+    datasourceId: "",
+    artifactSlug: "",
     description: "",
     promptTemplate: "",
     toolsText: "",
+    mcpText: "",
+    skillsText: "",
     catalogsText: "",
     subjectsText: "",
     rulesText: "",
@@ -104,9 +112,13 @@ function formFromDetail(agent: AgentDetail): AgentFormState {
     name: agent.name,
     nodeClass: agent.node_class || "gen_sql",
     status: agent.status || "draft",
+    datasourceId: agent.datasource_id ?? "",
+    artifactSlug: agent.artifact_slug ?? "",
     description: agent.description ?? "",
-    promptTemplate: agent.prompt_template ?? "",
+    promptTemplate: agent.prompt_template ?? agent.prompt_template_content ?? "",
     toolsText: listText(agent.tools),
+    mcpText: listText(agent.mcp),
+    skillsText: listText(agent.skills),
     catalogsText: listText(listFromScopedContext(agent.scoped_context, "catalogs")),
     subjectsText: listText(listFromScopedContext(agent.scoped_context, "subjects")),
     rulesText: listText(agent.rules),
@@ -119,11 +131,15 @@ function createInputFromForm(form: AgentFormState): CreateAgentInput {
     name: trimmedOptional(form.name),
     node_class: trimmedOptional(form.nodeClass) ?? "gen_sql",
     status: trimmedOptional(form.status) ?? "draft",
+    datasource_id: trimmedOptional(form.datasourceId),
+    artifact_slug: trimmedOptional(form.artifactSlug),
     description: trimmedOptional(form.description),
     prompt_template: trimmedOptional(form.promptTemplate),
     prompt_language: "en",
     prompt_version: "1.0",
     tools: parseListText(form.toolsText),
+    mcp: parseListText(form.mcpText),
+    skills: parseListText(form.skillsText),
     scoped_context: scopedContextFromForm(form),
     rules: parseListText(form.rulesText),
     max_turns: parsePositiveInteger(form.maxTurns) ?? 30,
@@ -136,6 +152,10 @@ function editInputFromForm(form: AgentFormState): EditAgentInput {
 
 function agentIdentifier(agent: AgentInfo | AgentDetail): string {
   return agent.agent_id;
+}
+
+function isBuiltinAgent(agent: AgentInfo | AgentDetail | null | undefined): boolean {
+  return agent?.source === "builtin";
 }
 
 function normalizeAgentList(result: AgentInfo[] | null): AgentInfo[] {
@@ -174,11 +194,13 @@ export function useAgentManager() {
   const agentCount = computed(() => agents.value.length);
   const selectedAgentId = computed(() => selectedAgent.value?.agent_id ?? null);
   const selectedAgentName = computed(() => selectedAgent.value?.name ?? null);
+  const selectedIsBuiltin = computed(() => isBuiltinAgent(selectedAgent.value));
   const toolCategoryCount = computed(() => Object.keys(toolCatalog.value?.tools ?? {}).length);
   const toolCount = computed(() => countToolCatalogEntries(toolCatalog.value));
   const selectedUseToolCount = computed(() => countUseToolEntries(selectedUseTools.value));
   const canSubmitForm = computed(() => {
     if (saving.value) return false;
+    if (formMode.value === "edit" && selectedIsBuiltin.value) return false;
     if (formMode.value === "edit" && !form.value.id.trim()) return false;
     return Boolean(form.value.name.trim());
   });
@@ -268,6 +290,10 @@ export function useAgentManager() {
   }
 
   async function saveForm(): Promise<boolean> {
+    if (formMode.value === "edit" && selectedIsBuiltin.value) {
+      toast.error("系统内置 Agent 为只读，不能在管理页保存。");
+      return false;
+    }
     if (!canSubmitForm.value) return false;
 
     saving.value = true;
@@ -300,6 +326,13 @@ export function useAgentManager() {
   }
 
   async function deleteAgent(agentId: string) {
+    const target = agents.value.find(agent => agent.agent_id === agentId)
+      ?? (selectedAgent.value?.agent_id === agentId ? selectedAgent.value : undefined);
+    if (isBuiltinAgent(target)) {
+      toast.error("系统内置 Agent 为只读，不能删除。");
+      return;
+    }
+
     deleting.value = true;
 
     try {
@@ -343,6 +376,7 @@ export function useAgentManager() {
     agentCount,
     selectedAgentId,
     selectedAgentName,
+    selectedIsBuiltin,
     toolCategoryCount,
     toolCount,
     selectedUseToolCount,
@@ -353,6 +387,7 @@ export function useAgentManager() {
     startCreate,
     saveForm,
     deleteAgent,
+    isBuiltinAgent,
     toolCatalogEntries,
     useToolTypeEntries,
   };
