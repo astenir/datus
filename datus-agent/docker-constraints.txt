@@ -1,0 +1,9 @@
+# Keep Docker builds aligned with the checked-in uv.lock for dependencies whose
+# broad version ranges otherwise trigger expensive pip resolver backtracking.
+litellm==1.81.10
+openai==2.20.0
+fastapi==0.115.14
+pydantic==2.12.3
+numpy==1.26.4
+pandas==2.1.4
+

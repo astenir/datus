@@ -695,6 +695,68 @@ class TestAgentConfigServiceSelectors:
             }
         }
 
+    def test_datasources_file_adds_and_overrides_inline_datasources(self, tmp_path):
+        datasources_file = tmp_path / "datasources.yml"
+        datasources_file.write_text(
+            """
+datasources:
+  inline_pg:
+    type: postgresql
+    host: override-host
+    database: overridden
+    default: false
+  mysql_sales:
+    type: mysql
+    host: mysql-host
+    port: "3306"
+    username: readonly
+    password: secret
+    database: sales
+    default: true
+""",
+            encoding="utf-8",
+        )
+
+        cfg = self._make(
+            tmp_path,
+            services={
+                "datasources_file": str(datasources_file),
+                "datasources": {
+                    "inline_pg": {
+                        "type": "postgresql",
+                        "host": "inline-host",
+                        "database": "inline",
+                        "default": True,
+                    }
+                },
+            },
+        )
+
+        assert cfg.services.datasources["inline_pg"].host == "override-host"
+        assert cfg.services.datasources["inline_pg"].database == "overridden"
+        assert cfg.services.datasources["inline_pg"].default is False
+        assert cfg.services.datasources["mysql_sales"].type == "mysql"
+        assert cfg.services.default_datasource == "mysql_sales"
+
+    def test_datasources_file_accepts_full_agent_fragment(self, tmp_path):
+        datasources_file = tmp_path / "datasources.yml"
+        datasources_file.write_text(
+            """
+agent:
+  services:
+    datasources:
+      warehouse:
+        type: postgresql
+        host: pg-host
+        database: warehouse
+""",
+            encoding="utf-8",
+        )
+
+        cfg = self._make(tmp_path, services={"datasources_file": str(datasources_file), "datasources": {}})
+
+        assert cfg.services.datasources["warehouse"].host == "pg-host"
+
     def test_resolve_semantic_adapter_requires_explicit_choice_for_multiple_entries(self, tmp_path):
         cfg = self._make(
             tmp_path,
@@ -1921,6 +1983,92 @@ class TestProviderConfigurationDispatch:
         )
         active = cfg.active_model()
         assert active.api_key == "env-secret"
+
+    def test_models_file_adds_providers_and_custom_models(self, tmp_path):
+        models_file = tmp_path / "models.yml"
+        models_file.write_text(
+            """
+providers:
+  openai:
+    api_key: sk-file
+    base_url: https://gateway.example.com/v1
+models:
+  private_model:
+    type: openai
+    api_key: private-key
+    model: qwen-plus
+    base_url: https://private.example.com/v1
+model_extras:
+  private_model:
+    owner: compose
+""",
+            encoding="utf-8",
+        )
+
+        cfg = self._make(
+            tmp_path,
+            models_file=str(models_file),
+            target_provider="openai",
+            target_model="gpt-4.1",
+        )
+
+        active = cfg.active_model()
+        assert active.api_key == "sk-file"
+        assert active.base_url == "https://gateway.example.com/v1"
+        assert cfg.models["private_model"].model == "qwen-plus"
+        assert cfg.get_model_extra("private_model") == {"owner": "compose"}
+
+    def test_models_file_can_select_custom_target(self, tmp_path):
+        models_file = tmp_path / "models.yml"
+        models_file.write_text(
+            """
+target: private_model
+models:
+  private_model:
+    type: openai
+    api_key: private-key
+    model: qwen-plus
+    base_url: https://private.example.com/v1
+""",
+            encoding="utf-8",
+        )
+
+        cfg = self._make(tmp_path, models_file=str(models_file), target="", models={})
+
+        active = cfg.active_model()
+        assert active.api_key == "private-key"
+        assert active.model == "qwen-plus"
+
+    def test_storage_target_model_resolves_env_key(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("DATUS_TEST_EMBEDDING_KEY", "custom_embedding")
+        cfg = self._make(
+            tmp_path,
+            models={
+                "legacy": {
+                    "type": "openai",
+                    "api_key": "legacy-key",
+                    "model": "legacy-model",
+                    "base_url": "https://legacy.example.com",
+                },
+                "custom_embedding": {
+                    "type": "openai",
+                    "api_key": "embedding-key",
+                    "model": "embedding-model",
+                    "base_url": "https://embedding.example.com",
+                },
+            },
+            storage={
+                "database": {
+                    "registry_name": "openai",
+                    "model_name": "embedding-model",
+                    "dim_size": 1024,
+                    "target_model": "${DATUS_TEST_EMBEDDING_KEY}",
+                }
+            },
+            skip_init_dirs=False,
+        )
+
+        assert cfg.storage_configs["database"].openai_config.api_key == "embedding-key"
 
     def test_active_model_raises_when_nothing_is_configured(self, tmp_path):
         cfg = self._make(tmp_path, target="", models={})

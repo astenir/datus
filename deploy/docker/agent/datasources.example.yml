@@ -1,0 +1,44 @@
+# Copy this file to `deploy/docker/agent/datasources.yml` for local Docker
+# Compose usage. The copied file is git-ignored because it may contain real
+# datasource hosts, usernames, or passwords.
+#
+# The file may use any of these shapes:
+#   datasources: { ... }
+#   services: { datasources: { ... } }
+#   agent: { services: { datasources: { ... } } }
+#
+# Entries here are merged on top of `agent.compose.yml` and override duplicate
+# datasource keys. Values still support ${ENV} and ${ENV:-default}
+# interpolation if those variables are present inside the API container. For
+# local Compose, it is often simpler to put the read-only password directly in
+# the copied, git-ignored `datasources.yml`.
+
+datasources:
+  sales_postgres:
+    type: postgresql
+    host: sales-pg.example.internal
+    port: "5432"
+    username: readonly_user
+    password: change-me
+    database: sales
+    schema: public
+    sslmode: require
+    default: false
+
+  analytics_mysql:
+    type: mysql
+    host: analytics-mysql.example.internal
+    port: "3306"
+    username: readonly_user
+    password: change-me
+    database: analytics
+    default: false
+
+  finance_starrocks:
+    type: starrocks
+    host: starrocks-fe.example.internal
+    port: "9030"
+    username: readonly_user
+    password: change-me
+    database: finance
+    default: false

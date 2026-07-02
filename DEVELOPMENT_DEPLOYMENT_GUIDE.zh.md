@@ -395,7 +395,174 @@ VITE_DEV_ACCESS_TOKEN=dev-alice-token \
 npm run dev
 ```
 
-## 6. 切换联调用户
+## 6. Docker Compose 一键本地环境
+
+如果只是想快速拉起一套本地企业联调环境，可以在 monorepo 根目录运行：
+
+```bash
+cp .env.compose.example .env
+docker compose up --build
+```
+
+该 compose 会启动：
+
+| 服务 | 默认地址 | 说明 |
+| --- | --- | --- |
+| Datus Web | `http://localhost:5173` | Vite dev server，已配置 `dev-alice-token` |
+| Datus API | `http://localhost:8000` | 单进程 FastAPI 服务 |
+| Mock userinfo | `http://localhost:8010` | 本地 Bearer token 到用户信息的模拟服务 |
+| PostgreSQL | `127.0.0.1:55433` | `datus_enterprise` metadata 库和示例 `ccks_fund` 业务库 |
+
+默认 token 可在 `.env` 中通过 `DATUS_DEV_ACCESS_TOKEN` 切换为 `dev-bob-token`、`dev-charlie-token` 或 `disabled-token`。
+
+`.env.compose.example` 只保留本地 Compose 最常改的运行参数。数据源连接明细不再放进 `.env`，而是放进独立 datasource YAML，避免每新增一个数据源就扩展一组环境变量。
+
+| 场景 | 主要变量 | 说明 |
+| --- | --- | --- |
+| 切换大模型 | `DATUS_TARGET_PROVIDER`、`DATUS_TARGET_MODEL`、`DATUS_TARGET`、`DATUS_MODELS_FILE`、`deploy/docker/agent/models.yml` | `.env` 只选默认模型；多个 provider、API key、私有 base_url、自定义 model 放进一个 YAML 文件 |
+| 切换 embedding | `DATUS_EMBEDDING_MODEL_KEY`、`deploy/docker/agent/models.yml` | embedding model key 可配置；默认是 `compose_embedding`，连接参数放在模型 YAML；如果模型维度不是默认 1024，需要同步改 `agent.compose.yml` 中的 `dim_size` |
+| 外接业务数据源 | `DATUS_DATASOURCE`、`DATUS_DATASOURCES_FILE`、`deploy/docker/agent/datasources.yml` | 多个 datasource 放进一个 YAML 文件；`.env` 只选择默认 datasource 和 datasource 文件路径 |
+| 接企业 userinfo | `DATUS_ENTERPRISE_USERINFO_URL` | 默认为空时使用 compose mock userinfo；字段名不同时再补充 `DATUS_AUTH_*` 高级覆盖 |
+| 接企业权限库 | `DATUS_ENTERPRISE_PG_DSN` | 默认使用 compose PostgreSQL；填入外部 PostgreSQL DSN 后用户、角色、datasource grant、session、ACL、audit 等企业 metadata 都走外部库 |
+| 本地初始化权限 | `DATUS_SEED_*` | 控制 seed 的用户、角色、模块权限、schema/table grant；多个 datasource key 可用逗号分隔写进 `DATUS_SEED_DATASOURCE` |
+
+多数据源不要继续在 `docker-compose.yml` 里暴露一组组环境变量。推荐复制一个本地 YAML 文件：
+
+```bash
+cp deploy/docker/agent/datasources.example.yml deploy/docker/agent/datasources.yml
+```
+
+然后在 `deploy/docker/agent/datasources.yml` 维护完整清单：
+
+```yaml
+datasources:
+  sales_postgres:
+    type: postgresql
+    host: sales-pg.example.internal
+    port: "5432"
+    username: readonly_user
+    password: change-me
+    database: sales
+    schema: public
+    sslmode: require
+
+  analytics_mysql:
+    type: mysql
+    host: analytics-mysql.example.internal
+    port: "3306"
+    username: readonly_user
+    password: change-me
+    database: analytics
+```
+
+该文件会被 compose 挂载到 `/run/datus/agent/datasources.yml`，并通过 `DATUS_DATASOURCES_FILE` 合并进 `agent.compose.yml` 的 `services.datasources`。文件里的 datasource 会追加到默认清单，并覆盖同名 datasource。修改这个 YAML 后通常只需要重建容器，不需要重新 build 镜像：
+
+```bash
+docker compose up -d --force-recreate api web
+```
+
+如果希望本地 mock 用户同时拥有这些 datasource 的授权，把 datasource key 用逗号写进 `.env`：
+
+```dotenv
+DATUS_DATASOURCE=sales_postgres
+DATUS_SEED_DATASOURCE=ccks_fund,sales_postgres,analytics_mysql
+```
+
+大模型配置也不要继续在 `.env` 里铺开每个 provider 的 API key。推荐复制一个本地 YAML 文件：
+
+```bash
+cp deploy/docker/agent/models.example.yml deploy/docker/agent/models.yml
+```
+
+然后在 `deploy/docker/agent/models.yml` 维护 provider 和自定义 model：
+
+```yaml
+providers:
+  qwen:
+    api_key: change-me
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+
+  openrouter:
+    api_key: change-me
+    base_url: https://openrouter.ai/api/v1
+
+models:
+  my_private_model:
+    type: openai
+    model: qwen-plus
+    base_url: https://llm-gateway.example.internal/v1
+    api_key: change-me
+```
+
+使用 catalog provider 时，`.env` 只选 provider 和 model：
+
+```dotenv
+DATUS_TARGET_PROVIDER=qwen
+DATUS_TARGET_MODEL=qwen3.6-plus
+```
+
+使用 `models.yml` 里的自定义 model 时，清空 provider/model 选择，改用 `DATUS_TARGET`：
+
+```dotenv
+DATUS_TARGET=my_private_model
+DATUS_TARGET_PROVIDER=
+DATUS_TARGET_MODEL=
+```
+
+embedding 模型是另一条配置链路，不跟随 `DATUS_TARGET_PROVIDER` / `DATUS_TARGET_MODEL`。当前 Docker Compose 的 `agent.storage.*` 指向 `target_model: ${DATUS_EMBEDDING_MODEL_KEY:-compose_embedding}`，所以默认实际使用 `models.yml` 里的 `models.compose_embedding`：
+
+```yaml
+models:
+  compose_embedding:
+    type: openai
+    model: Qwen/Qwen3-Embedding-0.6B
+    base_url: https://api.siliconflow.cn/v1
+    api_key: change-me
+```
+
+如果只是换 embedding 模型但 key 仍然叫 `compose_embedding`，只需要改这一段连接参数。若想使用更明确的 key，也可以在 `.env` 里设置：
+
+```dotenv
+DATUS_EMBEDDING_MODEL_KEY=enterprise_embedding
+```
+
+并在 `models.yml` 里提供同名条目：
+
+```yaml
+models:
+  enterprise_embedding:
+    type: openai
+    model: text-embedding-v3
+    base_url: https://llm-gateway.example.internal/v1
+    api_key: change-me
+```
+
+如果向量维度不是默认 `1024`，还要同步修改 `datus-agent/conf/agent.compose.yml` 里 `storage.*.dim_size`，否则后续向量存储/检索会维度不一致。
+
+接企业权限系统时，推荐保留 `UserInfoBearerAuthProvider` 这条链路：网关或 IdP 提供 userinfo，Datus 自己的 PostgreSQL store 保存角色、权限、datasource grant、artifact ACL、audit 等治理 metadata。也就是：
+
+```dotenv
+DATUS_ENTERPRISE_USERINFO_URL=https://idp.example.internal/oauth2/userinfo
+DATUS_ENTERPRISE_PG_DSN=postgresql://datus_meta:change-me@pg.example.internal:5432/datus_enterprise
+DATUS_AUTH_USER_ID_FIELD=username
+DATUS_AUTH_EMAIL_FIELD=email
+DATUS_AUTH_DISPLAY_NAME_FIELD=name
+DATUS_AUTH_STATUS_FIELD=status
+DATUS_AUTH_ALLOWED_STATUS=active
+```
+
+常用命令：
+
+```bash
+docker compose ps
+docker compose logs -f api
+docker compose down
+docker compose down -v  # 同时删除本地 PostgreSQL / Datus runtime volume
+```
+
+注意：这套 compose 是本地/测试部署，不是生产上线模板。它使用 mock userinfo、本地开发 token、单 API 进程和 compose 内置 PostgreSQL；真实员工试点或生产环境必须替换真实企业身份源、密钥管理、备份恢复、观测告警，并在扩展多实例时明确 chat/SSE sticky routing 或外部化运行态。
+
+## 7. 切换联调用户
 
 前端换用户时，重启 Vite 并替换 token：
 
@@ -415,7 +582,7 @@ curl -i \
 
 如果权限结果与预期不一致，先重跑 seed，再检查对应用户、角色、模块权限和 datasource grant。
 
-## 7. 端口、进程和重启
+## 8. 端口、进程和重启
 
 查看端口占用：
 
@@ -439,7 +606,7 @@ uv run datus-api --config conf/agent.yml --action restart
 
 开发期不建议 daemon + reload 混用；当前 CLI 明确禁止 `--daemon` 和 `--reload` 同时使用。
 
-## 8. 测试和构建
+## 9. 测试和构建
 
 后端常用检查：
 
@@ -466,7 +633,7 @@ VITE_DATUS_API_TARGET=http://127.0.0.1:8000 npm run api:sync
 VITE_DATUS_API_TARGET=http://127.0.0.1:8000 DATUS_API_TOKEN=dev-alice-token npm run api:smoke
 ```
 
-## 9. 常见问题
+## 10. 常见问题
 
 | 现象 | 常见原因 | 处理 |
 | --- | --- | --- |
@@ -482,7 +649,7 @@ VITE_DATUS_API_TARGET=http://127.0.0.1:8000 DATUS_API_TOKEN=dev-alice-token npm 
 | 端口占用 | 旧进程未停止 | 用 `ss -tanp` 找进程并停止 |
 | 前端请求 403/401 但 curl 正常 | Vite 没带 token，或页面 API base 指向别处 | 重启 Vite；确认 `VITE_DEV_ACCESS_TOKEN` 和当前 API base |
 
-## 10. 测试环境部署注意事项
+## 11. 测试环境部署注意事项
 
 测试环境可以复用本地启动结构，但必须收紧这些边界：
 
@@ -496,7 +663,7 @@ VITE_DATUS_API_TARGET=http://127.0.0.1:8000 DATUS_API_TOKEN=dev-alice-token npm 
 - 企业 metadata PostgreSQL 需要备份、恢复、迁移和连接池预算。
 - OpenAPI 契约变更要同步 `datus-web/openapi.json` 和 `src/types/openapi.ts`。
 
-## 11. 配置和提交规范
+## 12. 配置和提交规范
 
 不要提交：
 

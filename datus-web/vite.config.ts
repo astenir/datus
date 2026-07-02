@@ -3,7 +3,9 @@ import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
 import { defineConfig } from 'vite'
 
-const apiTarget = process.env.VITE_DATUS_API_TARGET ?? 'http://localhost:8000'
+const apiTarget = process.env.DATUS_API_PROXY_TARGET
+  ?? process.env.VITE_DATUS_API_TARGET
+  ?? 'http://localhost:8000'
 
 export default defineConfig({
   plugins: [vue(), tailwindcss()],

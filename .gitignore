@@ -23,3 +23,7 @@ coverage/
 .datus/
 .tmp/
 *.log
+
+# Local Docker Compose datasource overrides
+deploy/docker/agent/datasources.yml
+deploy/docker/agent/models.yml

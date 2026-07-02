@@ -317,6 +317,148 @@ class ServicesConfig:
         )
 
 
+def _extract_datasources_mapping(raw: Any, source: str) -> Dict[str, Any]:
+    """Return a datasource mapping from a full or partial YAML fragment.
+
+    Supported file shapes:
+      - datasources: { ... }
+      - services: { datasources: { ... } }
+      - agent: { services: { datasources: { ... } } }
+      - direct mapping where every top-level key is a datasource key
+    """
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise DatusException(
+            ErrorCode.COMMON_FIELD_INVALID,
+            message=f"{source} must be a YAML mapping.",
+        )
+
+    if "agent" in raw:
+        agent_raw = raw.get("agent")
+        if not isinstance(agent_raw, dict):
+            raise DatusException(
+                ErrorCode.COMMON_FIELD_INVALID,
+                message=f"{source}.agent must be a mapping.",
+            )
+        raw = agent_raw
+
+    if "services" in raw:
+        services_raw = raw.get("services")
+        if not isinstance(services_raw, dict):
+            raise DatusException(
+                ErrorCode.COMMON_FIELD_INVALID,
+                message=f"{source}.services must be a mapping.",
+            )
+        raw = services_raw
+
+    if "datasources" in raw:
+        datasources_raw = raw.get("datasources") or {}
+        if not isinstance(datasources_raw, dict):
+            raise DatusException(
+                ErrorCode.COMMON_FIELD_INVALID,
+                message=f"{source}.datasources must be a mapping.",
+            )
+        return datasources_raw
+
+    return raw
+
+
+def _load_datasources_file(path_value: Any) -> Dict[str, Any]:
+    """Load extra ``services.datasources`` entries from a YAML file.
+
+    This keeps Docker/Kubernetes deployments from needing one environment
+    variable per datasource field. Values inside the file still support the
+    existing ``${ENV}`` / ``${ENV:-default}`` interpolation during DbConfig
+    parsing.
+    """
+    path_text = resolve_env(str(path_value or "")).strip()
+    if not path_text or path_text.startswith("<MISSING:"):
+        return {}
+
+    path = Path(path_text).expanduser()
+    if not path.exists():
+        logger.info("Datasource config file %s not found; using inline datasources only.", path)
+        return {}
+    if not path.is_file():
+        raise DatusException(
+            ErrorCode.COMMON_FIELD_INVALID,
+            message=f"Datasource config file {path} is not a file.",
+        )
+
+    import yaml
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+    except yaml.YAMLError as exc:
+        raise DatusException(
+            ErrorCode.COMMON_FIELD_INVALID,
+            message=f"Failed to parse datasource config file {path}: {exc}",
+        ) from exc
+
+    return _extract_datasources_mapping(raw, str(path))
+
+
+def _extract_model_settings(raw: Any, source: str) -> Dict[str, Any]:
+    """Return model/provider settings from a full or partial YAML fragment."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise DatusException(
+            ErrorCode.COMMON_FIELD_INVALID,
+            message=f"{source} must be a YAML mapping.",
+        )
+
+    if "agent" in raw:
+        agent_raw = raw.get("agent")
+        if not isinstance(agent_raw, dict):
+            raise DatusException(
+                ErrorCode.COMMON_FIELD_INVALID,
+                message=f"{source}.agent must be a mapping.",
+            )
+        raw = agent_raw
+
+    allowed = {"providers", "models", "model_extras", "target", "target_provider", "target_model"}
+    for key in ("providers", "models", "model_extras"):
+        if key in raw and raw[key] is not None and not isinstance(raw[key], dict):
+            raise DatusException(
+                ErrorCode.COMMON_FIELD_INVALID,
+                message=f"{source}.{key} must be a mapping.",
+            )
+    return {key: raw[key] for key in allowed if key in raw}
+
+
+def _load_model_settings_file(path_value: Any) -> Dict[str, Any]:
+    """Load optional ``agent.providers`` / ``agent.models`` entries from YAML."""
+    path_text = resolve_env(str(path_value or "")).strip()
+    if not path_text or path_text.startswith("<MISSING:"):
+        return {}
+
+    path = Path(path_text).expanduser()
+    if not path.exists():
+        logger.info("Model config file %s not found; using inline model/provider config only.", path)
+        return {}
+    if not path.is_file():
+        raise DatusException(
+            ErrorCode.COMMON_FIELD_INVALID,
+            message=f"Model config file {path} is not a file.",
+        )
+
+    import yaml
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            raw = yaml.safe_load(f) or {}
+    except yaml.YAMLError as exc:
+        raise DatusException(
+            ErrorCode.COMMON_FIELD_INVALID,
+            message=f"Failed to parse model config file {path}: {exc}",
+        ) from exc
+
+    return _extract_model_settings(raw, str(path))
+
+
 @dataclass
 class ModelConfig:
     type: str
@@ -713,7 +855,7 @@ class AgentConfig:
         Initialize the global config from yaml file
         """
         # Resolve home early so dependent helpers can use a stable path manager.
-        self.home = kwargs.get("home", "~/.datus")
+        self.home = resolve_env(str(kwargs.get("home") or "~/.datus"))
         # project_name must be computed before _set_path_manager so shard-aware
         # directories (sessions/, data/) bind to the right project.  When the
         # user explicitly sets ``agent.project_name`` in YAML we must validate
@@ -724,34 +866,44 @@ class AgentConfig:
         # instead of the launcher's CWD. Running the same project from different
         # working directories would otherwise split sessions/data across shards
         # while the KB stays under a single project_root/subject.
-        resolved_project_root = Path(kwargs.get("project_root") or os.getcwd()).resolve()
+        project_root_raw = kwargs.get("project_root") or os.getcwd()
+        resolved_project_root = Path(resolve_env(str(project_root_raw))).resolve()
         if raw_project_name:
-            self._project_name = _validate_project_name(raw_project_name)
+            self._project_name = _validate_project_name(resolve_env(str(raw_project_name)))
         else:
             self._project_name = _normalize_project_name(str(resolved_project_root))
         self._project_root = resolved_project_root
         self._set_path_manager(self.home)
-        models_raw = kwargs.get("models", {}) or {}
-        self.target = kwargs.get("target", "") or ""
+        model_settings_file = kwargs.get("models_file") or os.getenv("DATUS_MODELS_FILE", "")
+        model_settings = _load_model_settings_file(model_settings_file) if model_settings_file else {}
+        models_raw = dict(kwargs.get("models", {}) or {})
+        models_raw.update(model_settings.get("models") or {})
+        self.target = resolve_env(str(kwargs.get("target") or ""))
+        if not self.target and model_settings.get("target"):
+            self.target = resolve_env(str(model_settings.get("target") or ""))
         self.models = {name: load_model_config(cfg) for name, cfg in models_raw.items()}
         # Normalize to plain ``dict`` so ``dataclasses.asdict`` serializes
         # cleanly into the AgentConfig fingerprint — host-side mutations
         # are picked up on the next service-cache miss.
-        model_extras_raw = kwargs.get("model_extras") or {}
+        model_extras_raw = dict(kwargs.get("model_extras") or {})
+        model_extras_raw.update(model_settings.get("model_extras") or {})
         self.model_extras = {
             str(name): dict(extras) if isinstance(extras, dict) else {} for name, extras in model_extras_raw.items()
         }
         # Provider-level credentials (new schema). Empty when the user has not
         # migrated to the ``agent.providers`` section; legacy ``agent.models``
         # still works via :meth:`active_model` fallback.
-        providers_raw = kwargs.get("providers", {}) or {}
+        providers_raw = dict(kwargs.get("providers", {}) or {})
+        providers_raw.update(model_settings.get("providers") or {})
         self.providers = _load_provider_configs(providers_raw)
         # Project-level active target forwarded by ``_apply_project_override``:
         # when both are set, ``active_model()`` synthesizes a ``ModelConfig``
         # from ``providers`` + the shipped ``conf/providers.yml`` catalog
         # instead of indexing ``agent.models``.
-        self._target_provider: Optional[str] = kwargs.get("target_provider") or None
-        self._target_model: Optional[str] = kwargs.get("target_model") or None
+        target_provider_raw = kwargs.get("target_provider") or model_settings.get("target_provider")
+        target_model_raw = kwargs.get("target_model") or model_settings.get("target_model")
+        self._target_provider = resolve_env(str(target_provider_raw)) if target_provider_raw else None
+        self._target_model = resolve_env(str(target_model_raw)) if target_model_raw else None
         # Reasoning effort override. ``target_reasoning_effort`` comes from
         # ``./.datus/config.yml`` (project scope) and wins over the
         # ``reasoning_effort`` top-level field in ``agent.yml`` (global
@@ -863,7 +1015,17 @@ class AgentConfig:
         if not isinstance(services_raw, dict):
             services_raw = {}
         self.services = ServicesConfig.from_dict(services_raw)
-        self._init_services_config(services_raw.get("datasources", {}))
+        inline_datasources_raw = services_raw.get("datasources") or {}
+        if not isinstance(inline_datasources_raw, dict):
+            raise DatusException(
+                ErrorCode.COMMON_FIELD_INVALID,
+                message="agent.services.datasources must be a mapping.",
+            )
+        datasources_raw = dict(inline_datasources_raw)
+        datasources_file = services_raw.get("datasources_file") or os.getenv("DATUS_DATASOURCES_FILE", "")
+        if datasources_file:
+            datasources_raw.update(_load_datasources_file(datasources_file))
+        self._init_services_config(datasources_raw)
         self.init_semantic_layer(self.services.semantic_layer)
         self.init_dashboard(self.services.bi_platforms)
         self.init_scheduler_services(self.services.schedulers)
@@ -880,7 +1042,8 @@ class AgentConfig:
         else:
             self._init_dirs()
 
-        storage_config = kwargs.get("storage", {})
+        storage_raw = kwargs.get("storage", {})
+        storage_config = _resolve_nested_value(storage_raw) if isinstance(storage_raw, dict) else {}
         # use default embedding model if not provided
         if storage_config:
             if self._skip_init_dirs:

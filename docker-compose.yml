@@ -1,0 +1,185 @@
+name: datus
+
+x-agent-build: &agent-build
+  context: .
+  dockerfile: datus-agent/Dockerfile
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: datus-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: datus
+      POSTGRES_PASSWORD: ${DATUS_POSTGRES_PASSWORD:-datus}
+      POSTGRES_DB: datus_enterprise
+    ports:
+      - "${DATUS_POSTGRES_PORT:-55433}:5432"
+    volumes:
+      - datus-postgres-data:/var/lib/postgresql/data
+      - ./deploy/docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U datus -d datus_enterprise"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  userinfo:
+    build: *agent-build
+    image: datus-agent:local
+    container_name: datus-userinfo
+    restart: unless-stopped
+    command:
+      - python
+      - scripts/enterprise_mock_userinfo.py
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8010"
+    ports:
+      - "${DATUS_USERINFO_PORT:-8010}:8010"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=2)"
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build: *agent-build
+    image: datus-agent:local
+    container_name: datus-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      userinfo:
+        condition: service_healthy
+    environment:
+      DATUS_HOME: /data/.datus
+      DATUS_PROJECT_ROOT: /data/project
+      DATUS_DATASOURCE: ${DATUS_DATASOURCE:-ccks_fund}
+      DATUS_DATASOURCES_FILE: ${DATUS_DATASOURCES_FILE:-/run/datus/agent/datasources.yml}
+      DATUS_MODELS_FILE: ${DATUS_MODELS_FILE:-/run/datus/agent/models.yml}
+      DATUS_TARGET: ${DATUS_TARGET:-}
+      DATUS_TARGET_PROVIDER: ${DATUS_TARGET_PROVIDER:-}
+      DATUS_TARGET_MODEL: ${DATUS_TARGET_MODEL:-}
+      DATUS_ENTERPRISE_USERINFO_URL: ${DATUS_ENTERPRISE_USERINFO_URL:-http://userinfo:8010/userinfo}
+      DATUS_ENTERPRISE_PG_DSN: ${DATUS_ENTERPRISE_PG_DSN:-postgresql://datus:${DATUS_POSTGRES_PASSWORD:-datus}@postgres:5432/datus_enterprise}
+      DATUS_AUTH_USER_ID_FIELD: ${DATUS_AUTH_USER_ID_FIELD:-username}
+      DATUS_AUTH_EXTERNAL_USER_ID_FIELD: ${DATUS_AUTH_EXTERNAL_USER_ID_FIELD:-userId}
+      DATUS_AUTH_EMAIL_FIELD: ${DATUS_AUTH_EMAIL_FIELD:-email}
+      DATUS_AUTH_DISPLAY_NAME_FIELD: ${DATUS_AUTH_DISPLAY_NAME_FIELD:-realname}
+      DATUS_AUTH_STATUS_FIELD: ${DATUS_AUTH_STATUS_FIELD:-userStatus}
+      DATUS_AUTH_ALLOWED_STATUS: ${DATUS_AUTH_ALLOWED_STATUS:-正常}
+      DATUS_AUTH_DEFAULT_PROJECT_ID: ${DATUS_AUTH_DEFAULT_PROJECT_ID:-enterprise}
+      DATUS_SEED_DATASOURCE: ${DATUS_SEED_DATASOURCE:-}
+      DATUS_SEED_DATASOURCE_SCHEMAS: ${DATUS_SEED_DATASOURCE_SCHEMAS:-public}
+      DATUS_SEED_DATASOURCE_TABLES: ${DATUS_SEED_DATASOURCE_TABLES:-*}
+      DATUS_SEED_ADMIN_USER: ${DATUS_SEED_ADMIN_USER:-alice}
+      DATUS_SEED_READER_USER: ${DATUS_SEED_READER_USER:-bob}
+      DATUS_SEED_ADMIN_ROLE: ${DATUS_SEED_ADMIN_ROLE:-local_admin}
+      DATUS_SEED_READER_ROLE: ${DATUS_SEED_READER_ROLE:-fund_reader}
+      DATUS_SEED_ADMIN_PERMISSIONS: ${DATUS_SEED_ADMIN_PERMISSIONS:-*}
+      DATUS_SEED_READER_PERMISSIONS: ${DATUS_SEED_READER_PERMISSIONS:-module.chat,module.datasource_catalog,module.sql_executor,module.config.view,module.system.status}
+      DATUS_SEED_SKIP_READER_GRANT: ${DATUS_SEED_SKIP_READER_GRANT:-0}
+      CCKS_FUND_DB_HOST: ${CCKS_FUND_DB_HOST:-postgres}
+      CCKS_FUND_DB_PORT: ${CCKS_FUND_DB_PORT:-5432}
+      CCKS_FUND_DB_USER: ${CCKS_FUND_DB_USER:-datus}
+      CCKS_FUND_DB_PASSWORD: ${CCKS_FUND_DB_PASSWORD:-${DATUS_POSTGRES_PASSWORD:-datus}}
+      CCKS_FUND_DB_NAME: ${CCKS_FUND_DB_NAME:-ccks_fund}
+      CCKS_FUND_DB_SCHEMA: ${CCKS_FUND_DB_SCHEMA:-public}
+      CCKS_FUND_DB_SSLMODE: ${CCKS_FUND_DB_SSLMODE:-prefer}
+      DATUS_EXTERNAL_DATASOURCE_TYPE: ${DATUS_EXTERNAL_DATASOURCE_TYPE:-postgresql}
+      DATUS_EXTERNAL_POSTGRES_HOST: ${DATUS_EXTERNAL_POSTGRES_HOST:-postgres}
+      DATUS_EXTERNAL_POSTGRES_PORT: ${DATUS_EXTERNAL_POSTGRES_PORT:-5432}
+      DATUS_EXTERNAL_POSTGRES_USER: ${DATUS_EXTERNAL_POSTGRES_USER:-datus}
+      DATUS_EXTERNAL_POSTGRES_PASSWORD: ${DATUS_EXTERNAL_POSTGRES_PASSWORD:-datus}
+      DATUS_EXTERNAL_POSTGRES_DATABASE: ${DATUS_EXTERNAL_POSTGRES_DATABASE:-ccks_fund}
+      DATUS_EXTERNAL_POSTGRES_SCHEMA: ${DATUS_EXTERNAL_POSTGRES_SCHEMA:-public}
+      DATUS_EXTERNAL_POSTGRES_SSLMODE: ${DATUS_EXTERNAL_POSTGRES_SSLMODE:-prefer}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      SILICONFLOW_API_KEY: ${SILICONFLOW_API_KEY:-}
+      SILICONFLOW_BASE_URL: ${SILICONFLOW_BASE_URL:-https://api.siliconflow.cn/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      DATUS_EMBEDDING_MODEL: ${DATUS_EMBEDDING_MODEL:-Qwen/Qwen3-Embedding-0.6B}
+    command:
+      - sh
+      - -c
+      - |
+        skip_reader_grant=""
+        if [ "$${DATUS_SEED_SKIP_READER_GRANT:-0}" = "1" ]; then
+          skip_reader_grant="--skip-reader-grant"
+        fi
+        seed_datasources="$${DATUS_SEED_DATASOURCE:-$${DATUS_DATASOURCE:-ccks_fund}}"
+        old_ifs="$${IFS}"
+        IFS=","
+        for seed_datasource in $${seed_datasources}; do
+          IFS="$${old_ifs}"
+          seed_datasource="$$(printf '%s' "$${seed_datasource}" | xargs)"
+          if [ -n "$${seed_datasource}" ]; then
+            python scripts/enterprise_local_pg_seed.py \
+              --datasource "$${seed_datasource}" \
+              --schema "$${DATUS_SEED_DATASOURCE_SCHEMAS:-public}" \
+              --table "$${DATUS_SEED_DATASOURCE_TABLES:-*}" \
+              --admin-user "$${DATUS_SEED_ADMIN_USER:-alice}" \
+              --reader-user "$${DATUS_SEED_READER_USER:-bob}" \
+              --admin-role "$${DATUS_SEED_ADMIN_ROLE:-local_admin}" \
+              --reader-role "$${DATUS_SEED_READER_ROLE:-fund_reader}" \
+              --admin-permission "$${DATUS_SEED_ADMIN_PERMISSIONS:-*}" \
+              --reader-permission "$${DATUS_SEED_READER_PERMISSIONS:-module.chat,module.datasource_catalog,module.sql_executor,module.config.view,module.system.status}" \
+              $${skip_reader_grant}
+          fi
+          IFS=","
+        done
+        IFS="$${old_ifs}"
+        exec python -m datus.api.main \
+          --config conf/agent.compose.yml \
+          --datasource "$${DATUS_DATASOURCE:-ccks_fund}" \
+          --host 0.0.0.0 \
+          --port 8000
+    ports:
+      - "${DATUS_API_PORT:-8000}:8000"
+    volumes:
+      - datus-agent-data:/data
+      - ./deploy/docker/agent:/run/datus/agent:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  web:
+    build:
+      context: .
+      dockerfile: datus-web/Dockerfile
+    image: datus-web:local
+    container_name: datus-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      DATUS_API_PROXY_TARGET: http://api:8000
+      VITE_DEV_ACCESS_TOKEN: ${DATUS_DEV_ACCESS_TOKEN:-dev-alice-token}
+    ports:
+      - "${DATUS_WEB_PORT:-5173}:5173"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - node -e "fetch('http://127.0.0.1:5173').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  datus-postgres-data:
+  datus-agent-data:

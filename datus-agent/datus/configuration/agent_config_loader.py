@@ -2,12 +2,13 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+import os
 from pathlib import Path
 from typing import Any, Dict
 
 import yaml
 
-from datus.configuration.agent_config import AgentConfig, NodeConfig
+from datus.configuration.agent_config import AgentConfig, NodeConfig, _load_datasources_file
 from datus.configuration.node_type import NodeType
 from datus.configuration.project_config import ProjectTarget, load_project_override
 from datus.utils.constants import DBType
@@ -15,6 +16,28 @@ from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
+
+
+def _merge_datasources_file(agent_raw: Dict[str, Any]) -> None:
+    """Merge ``services.datasources_file`` before project override validation."""
+    services_raw = agent_raw.get("services") or {}
+    if not isinstance(services_raw, dict):
+        return
+
+    datasources_file = services_raw.get("datasources_file") or os.getenv("DATUS_DATASOURCES_FILE", "")
+    if not datasources_file:
+        return
+
+    inline_datasources = services_raw.get("datasources") or {}
+    if not isinstance(inline_datasources, dict):
+        return
+
+    datasources = dict(inline_datasources)
+    datasources.update(_load_datasources_file(datasources_file))
+    services_raw["datasources"] = datasources
+    # Avoid re-loading the same file later in AgentConfig, which would undo
+    # default flags flipped by .datus/config.yml.
+    services_raw["datasources_file"] = ""
 
 
 def load_node_config(node_type: str, data: dict) -> NodeConfig:
@@ -278,6 +301,7 @@ def _apply_project_override(agent_raw: Dict[str, Any]) -> None:
     override = load_project_override()
     if override is None or override.is_empty():
         return
+    _merge_datasources_file(agent_raw)
     if override.target is not None:
         if isinstance(override.target, ProjectTarget):
             if override.target.custom:

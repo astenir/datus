@@ -54,6 +54,28 @@ full license and upstream attribution notes.
 
 - [Datus 开发部署手册](./DEVELOPMENT_DEPLOYMENT_GUIDE.zh.md)
 
+也可以用 Docker Compose 启动一套本地企业联调环境：
+
+```bash
+cp .env.compose.example .env
+docker compose up --build
+```
+
+启动后访问：
+
+- Web 工作区：`http://localhost:5173`
+- Datus API：`http://localhost:8000`
+- Mock userinfo：`http://localhost:8010`
+- PostgreSQL：`127.0.0.1:55433`
+
+Compose 默认使用 `dev-alice-token`、mock userinfo、PostgreSQL metadata store 和示例 `ccks_fund` datasource，只适合本地体验和测试。`.env` 只保留常用运行参数：
+
+- 大模型：`.env` 只用 `DATUS_TARGET_PROVIDER`、`DATUS_TARGET_MODEL` 或 `DATUS_TARGET` 选择默认模型；多个 provider、API key、私有 base_url、自定义模型条目放在 `deploy/docker/agent/models.yml`。
+- 外接数据源：复制 `deploy/docker/agent/datasources.example.yml` 为 `deploy/docker/agent/datasources.yml`，在一个 YAML 文件里维护 datasource 清单；`.env` 中只用 `DATUS_DATASOURCE` 选择默认 datasource。
+- 企业身份和权限：设置 `DATUS_ENTERPRISE_USERINFO_URL` 接真实 userinfo，设置 `DATUS_ENTERPRISE_PG_DSN` 接外部企业 metadata/RBAC PostgreSQL，并用 `DATUS_SEED_*` 控制本地 seed 的用户、角色、权限和 datasource grant。
+
+真实部署仍需替换企业认证、密钥、备份、监控和上线配置。
+
 也可以分别启动子项目：
 
 ```bash
