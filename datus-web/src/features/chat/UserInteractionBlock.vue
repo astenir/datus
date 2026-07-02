@@ -12,6 +12,8 @@ import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion"
 import { Button } from "@/components/ui/button"
 import { Field, FieldLabel } from "@/components/ui/field"
 import { Textarea } from "@/components/ui/textarea"
+import PermissionRequestDetails from "@/features/chat/PermissionRequestDetails.vue"
+import { parsePermissionRequest } from "@/lib/interaction-display"
 import type { MessageBlock, UserInteractionRequest } from "@/types"
 
 type UserInteractionBlockData = Extract<MessageBlock, { type: "user-interaction" }>
@@ -33,6 +35,10 @@ const freeTextAnswers = ref<Record<number, string>>({})
 
 const approval = computed(() => ({ id: props.block.interactionKey }))
 const singleRequest = computed(() => props.block.requests[0] ?? null)
+const singlePermissionRequest = computed(() => (
+  singleRequest.value ? parsePermissionRequest(singleRequest.value.content) : null
+))
+const permissionRequests = computed(() => props.block.requests.map((request) => parsePermissionRequest(request.content)))
 const hasRequests = computed(() => props.block.requests.length > 0)
 const isQuickConfirm = computed(() => {
   const request = singleRequest.value
@@ -86,6 +92,10 @@ function isNegativeOption(option: UserInteractionOption) {
     ["no", "cancel", "deny", "reject", "取消", "拒绝"].includes(title)
 }
 
+function permissionRequestFor(index: number) {
+  return permissionRequests.value[index] ?? null
+}
+
 function selectedFor(index: number) {
   return selectedAnswers.value[index] ?? []
 }
@@ -137,7 +147,16 @@ function submitAll() {
     state="approval-requested"
   >
     <ConfirmationRequest>
-      <ConfirmationTitle>{{ singleRequest.content }}</ConfirmationTitle>
+      <ConfirmationTitle
+        v-if="singlePermissionRequest"
+        class="flex flex-col gap-3 text-foreground"
+      >
+        <span>需要确认工具调用</span>
+        <PermissionRequestDetails :request="singlePermissionRequest" />
+      </ConfirmationTitle>
+      <ConfirmationTitle v-else>
+        {{ singleRequest.content }}
+      </ConfirmationTitle>
     </ConfirmationRequest>
     <ConfirmationActions>
       <ConfirmationAction
@@ -156,7 +175,14 @@ function submitAll() {
     v-else-if="isQuickSingleChoice && singleRequest"
     class="flex flex-col gap-2 rounded-lg border bg-muted/20 p-3"
   >
-    <p class="text-sm leading-6 text-foreground">
+    <PermissionRequestDetails
+      v-if="singlePermissionRequest"
+      :request="singlePermissionRequest"
+    />
+    <p
+      v-else
+      class="text-sm leading-6 text-foreground"
+    >
       {{ singleRequest.content }}
     </p>
     <Suggestions>
@@ -179,7 +205,14 @@ function submitAll() {
       :key="`${block.interactionKey}-${requestIndex}`"
       class="flex flex-col gap-3"
     >
-      <p class="text-sm leading-6 text-foreground">
+      <PermissionRequestDetails
+        v-if="permissionRequestFor(requestIndex)"
+        :request="permissionRequestFor(requestIndex)!"
+      />
+      <p
+        v-else
+        class="text-sm leading-6 text-foreground"
+      >
         {{ request.content }}
       </p>
 
