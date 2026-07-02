@@ -55,8 +55,6 @@ type AgentRow = (typeof manager.agents.value)[number]
 const deleteTarget = shallowRef<AgentRow | null>(null)
 const formDialogOpen = shallowRef(false)
 
-const selectedTitle = computed(() => manager.selectedAgentName.value ?? "新建 Agent")
-const selectedTypeLabel = computed(() => manager.selectedAgent.value?.node_class || manager.form.value.nodeClass || "未指定")
 const selectedIsReadonly = computed(() => manager.selectedIsBuiltin.value)
 const toolCatalogEntries = computed(() => manager.toolCatalogEntries())
 const useToolTypeEntries = computed(() => manager.useToolTypeEntries())
@@ -197,10 +195,6 @@ onMounted(() => {
           <div class="mt-1 flex flex-wrap items-center gap-2">
             <Badge variant="secondary">{{ manager.agentCount.value }} 个 Agent</Badge>
             <Badge variant="outline">{{ manager.toolCategoryCount.value }} 类 / {{ manager.toolCount.value }} 个工具</Badge>
-            <span class="min-w-0 truncate text-xs text-muted-foreground">
-              当前：<span class="font-medium text-foreground">{{ selectedTitle }}</span>
-            </span>
-            <Badge variant="outline">{{ selectedTypeLabel }}</Badge>
           </div>
         </div>
         <div class="flex items-center gap-2">
@@ -244,7 +238,7 @@ onMounted(() => {
             <div class="flex flex-wrap items-start gap-3">
               <div class="min-w-0 flex-1">
                 <CardTitle class="text-lg">Agent 列表</CardTitle>
-                <CardDescription class="text-sm">选择一行查看详情并编辑。</CardDescription>
+                <CardDescription class="text-sm">点击一行打开详情并编辑。</CardDescription>
               </div>
               <Badge
                 v-if="manager.loading.value"
@@ -287,10 +281,6 @@ onMounted(() => {
                     <TableCell>
                       <div class="flex min-w-0 flex-col gap-1">
                         <div class="flex min-w-0 items-center gap-2 font-medium">
-                          <CheckCircle2Icon
-                            v-if="agent.agent_id === manager.selectedAgentId.value"
-                            class="shrink-0 text-primary"
-                          />
                           <span class="truncate">{{ agent.name }}</span>
                         </div>
                         <div class="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -467,7 +457,7 @@ onMounted(() => {
           @submit.prevent="submitForm"
         >
           <ScrollArea class="min-h-0 flex-1">
-            <FieldGroup class="gap-4 pr-3">
+            <FieldGroup class="gap-4 px-1 py-1 pr-4">
               <Alert
                 v-if="selectedIsReadonly"
                 variant="default"
