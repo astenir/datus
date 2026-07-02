@@ -185,6 +185,38 @@ class MCPManager:
             logger.error(f"Error adding server {config.name}: {e}")
             return False, f"Error adding server: {e}"
 
+    def update_server(self, name: str, config: AnyMCPServerConfig) -> Tuple[bool, str]:
+        """
+        Update an existing MCP server config.
+
+        Args:
+            name: Existing server name
+            config: Replacement server config
+
+        Returns:
+            Tuple of (success, message)
+        """
+        try:
+            with self._lock:
+                existing = self.config.get_server(name)
+                if not existing:
+                    return False, f"Server '{name}' not found"
+                if config.name != name:
+                    return False, "Server name cannot be changed"
+
+                if config.tool_filter is None:
+                    config.tool_filter = existing.tool_filter
+                self.config.add_server(config)
+
+                if self.save_config():
+                    logger.info(f"Updated MCP server: {name} ({config.type})")
+                    return True, f"Successfully updated server '{name}'"
+                return False, "Failed to save config"
+
+        except Exception as e:
+            logger.error(f"Error updating server {name}: {e}")
+            return False, f"Error updating server: {e}"
+
     def remove_server(self, name: str) -> Tuple[bool, str]:
         """
         Remove an MCP server config.
@@ -398,6 +430,7 @@ class MCPManager:
             command=expanded_config.get("command"),
             args=expanded_config.get("args", []),
             env=env_vars,
+            cwd=expanded_config.get("cwd"),
         )
 
         server_instance = SilentMCPServerStdio(params=server_params, client_session_timeout_seconds=60)
@@ -405,6 +438,7 @@ class MCPManager:
             "command": expanded_config.get("command"),
             "args": expanded_config.get("args", []),
             "env_count": len(env_vars),
+            "cwd": expanded_config.get("cwd"),
         }
         return server_instance, details
 

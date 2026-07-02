@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildMcpServerInfo, buildRemoteMcpHeaders, createDefaultMcpServerForm } from "./mcp";
+import { buildMcpServerInfo, buildRemoteMcpHeaders, createDefaultMcpServerForm, createMcpServerForm } from "./mcp";
 
 describe("MCP helpers", () => {
   it("builds an Authorization header from a remote MCP token", () => {
@@ -62,6 +62,27 @@ describe("MCP helpers", () => {
         env: { NODE_OPTIONS: "--no-warnings" },
         cwd: "/workspace",
       },
+    });
+  });
+
+  it("hydrates an edit form from an existing MCP server", () => {
+    expect(
+      createMcpServerForm({
+        name: "filesystem",
+        type: "stdio",
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+        env: { NODE_OPTIONS: "--no-warnings" },
+        cwd: "/workspace",
+      }),
+    ).toEqual({
+      ...createDefaultMcpServerForm(),
+      name: "filesystem",
+      type: "stdio",
+      command: "npx",
+      argsText: "-y\n@modelcontextprotocol/server-filesystem\n/tmp",
+      envJson: JSON.stringify({ NODE_OPTIONS: "--no-warnings" }, null, 2),
+      cwd: "/workspace",
     });
   });
 

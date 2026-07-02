@@ -16,6 +16,7 @@ from datus.api.models.mcp_models import (
     AddServerInput,
     CallToolInput,
     ToolFilterInput,
+    UpdateServerInput,
 )
 
 router = APIRouter(prefix="/api/v1/mcp", tags=["mcp"])
@@ -78,6 +79,19 @@ async def _require_mcp_server_remove_permission(
     await _require_mcp_permission(
         ctx,
         "mcp.server.remove",
+        resource_type="mcp_server",
+        resource_id=server_name,
+        attributes={"server_name": server_name},
+    )
+
+
+async def _require_mcp_server_edit_permission(
+    server_name: str,
+    ctx: McpModuleCtx,
+) -> None:
+    await _require_mcp_permission(
+        ctx,
+        "mcp.server.edit",
         resource_type="mcp_server",
         resource_id=server_name,
         attributes={"server_name": server_name},
@@ -199,6 +213,28 @@ async def add_server(
     """Add a new MCP server."""
     svc = await api_deps.resolve_datus_service_for_request(http_request)
     return svc.mcp.add_server(server_config)
+
+
+@router.put(
+    "/servers/{server_name}",
+    response_model=Result[Dict[str, Any]],
+    summary="Update MCP Server",
+    description="Update an existing MCP server configuration",
+    dependencies=[
+        Depends(_require_mcp_module),
+        Depends(_require_mcp_server_edit_permission),
+        Depends(require_platform_active(operation="mcp.server.edit", resource_type="mcp_server")),
+    ],
+)
+async def update_server(
+    server_config: UpdateServerInput,
+    _ctx: McpModuleCtx,
+    http_request: Request,
+    server_name: str = SERVER_NAME_PATH,
+) -> Result[Dict[str, Any]]:
+    """Update an existing MCP server."""
+    svc = await api_deps.resolve_datus_service_for_request(http_request)
+    return svc.mcp.update_server(server_name, server_config)
 
 
 @router.delete(

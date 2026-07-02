@@ -80,6 +80,23 @@ export function createDefaultMcpServerForm(): McpServerFormInput {
   };
 }
 
+export function createMcpServerForm(server: McpServerInfo | null | undefined): McpServerFormInput {
+  if (!server) return createDefaultMcpServerForm();
+
+  return {
+    name: server.name,
+    type: isMcpServerType(server.type) ? server.type : "stdio",
+    command: server.command ?? "",
+    argsText: server.args?.join("\n") ?? "",
+    url: server.url ?? "",
+    headersJson: jsonRecordText(server.headers),
+    token: "",
+    timeoutText: typeof server.timeout === "number" ? String(server.timeout) : "",
+    envJson: jsonRecordText(server.env),
+    cwd: server.cwd ?? "",
+  };
+}
+
 export function buildMcpServerInfo(input: McpServerFormInput): BuildMcpServerResult {
   const name = input.name.trim();
   if (!name) {
@@ -176,6 +193,10 @@ function parseJsonStringRecord(label: string, value: string): { value?: Record<s
   }
 
   return Object.keys(result).length > 0 ? { value: result } : {};
+}
+
+function jsonRecordText(value: Record<string, string> | undefined): string {
+  return value && Object.keys(value).length > 0 ? JSON.stringify(value, null, 2) : "";
 }
 
 function isStringRecord(value: unknown): value is Record<string, string> {

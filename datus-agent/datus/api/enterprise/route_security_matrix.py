@@ -494,7 +494,7 @@ _add_many(
 )
 _add_many(
     "PUT",
-    ["/api/v1/mcp/servers/{server_name}/filters"],
+    ["/api/v1/mcp/servers/{server_name}", "/api/v1/mcp/servers/{server_name}/filters"],
     _policy(MODULE_RBAC, TOOL_PERMISSION, PLATFORM_STATUS_GATE, MUTATION_EXECUTION, module_permission="module.mcp"),
 )
 _add_many(

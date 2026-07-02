@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, shallowRef, watch } from "vue"
-import { AlertCircleIcon, PlusIcon } from "@lucide/vue"
+import { AlertCircleIcon, PlusIcon, SaveIcon } from "@lucide/vue"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -27,6 +27,7 @@ import {
   MCP_SERVER_TYPES,
   buildMcpServerInfo,
   createDefaultMcpServerForm,
+  createMcpServerForm,
 } from "@/lib/mcp"
 import type { McpServerInfo } from "@/types"
 
@@ -34,6 +35,8 @@ const open = defineModel<boolean>("open", { default: false })
 
 const props = defineProps<{
   submitting: boolean;
+  mode: "create" | "edit";
+  server?: McpServerInfo | null;
 }>()
 
 const emit = defineEmits<{
@@ -43,10 +46,18 @@ const emit = defineEmits<{
 const form = reactive(createDefaultMcpServerForm())
 const error = shallowRef("")
 const isStdio = computed(() => form.type === "stdio")
+const isEdit = computed(() => props.mode === "edit")
+const title = computed(() => isEdit.value ? "编辑 MCP Server" : "添加 MCP Server")
+const description = computed(() =>
+  isEdit.value
+    ? "更新后端 MCP Server 配置，保存后可重新检查连接并查看工具。"
+    : "新增配置会写入后端 MCP 管理接口，保存后可在当前页面检查连接并查看工具。"
+)
+const submitLabel = computed(() => isEdit.value ? "保存" : "添加")
 
 watch(open, (value) => {
   if (value) {
-    Object.assign(form, createDefaultMcpServerForm())
+    Object.assign(form, isEdit.value ? createMcpServerForm(props.server) : createDefaultMcpServerForm())
     error.value = ""
   }
 })
@@ -67,9 +78,9 @@ function submitForm() {
   <Dialog v-model:open="open">
     <DialogContent class="max-h-[calc(100vh-2rem)] overflow-y-auto bg-background sm:max-w-2xl">
       <DialogHeader>
-        <DialogTitle>添加 MCP Server</DialogTitle>
+        <DialogTitle>{{ title }}</DialogTitle>
         <DialogDescription>
-          新增配置会写入后端 MCP 管理接口，保存后可在当前页面检查连接并查看工具。
+          {{ description }}
         </DialogDescription>
       </DialogHeader>
 
@@ -94,8 +105,10 @@ function submitForm() {
                 id="mcp-server-name"
                 v-model="form.name"
                 autocomplete="off"
+                :disabled="isEdit"
                 placeholder="filesystem"
               />
+              <FieldDescription v-if="isEdit">Server 名称由路径标识，编辑时不可改名。</FieldDescription>
             </Field>
 
             <Field>
@@ -235,10 +248,14 @@ function submitForm() {
               data-icon="inline-start"
             />
             <PlusIcon
+              v-else-if="!isEdit"
+              data-icon="inline-start"
+            />
+            <SaveIcon
               v-else
               data-icon="inline-start"
             />
-            添加
+            {{ submitLabel }}
           </Button>
         </DialogFooter>
       </form>

@@ -404,6 +404,32 @@ describe("api client", () => {
     });
   });
 
+  it("updates MCP servers without sending the immutable server name", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ success: true, data: {} }));
+
+    await mcpApi.updateServer("http://localhost:8000", "remote-mcp", {
+      name: "remote-mcp",
+      type: "http",
+      url: "https://example.com/mcp",
+      headers: {
+        Authorization: "Bearer token",
+      },
+      timeout: 30,
+    });
+
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/mcp/servers/remote-mcp");
+    const init = vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit;
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(String(init.body))).toEqual({
+      type: "http",
+      url: "https://example.com/mcp",
+      headers: {
+        Authorization: "Bearer token",
+      },
+      timeout: 30,
+    });
+  });
+
   it("uses the current filtered MCP tools route", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ success: true, data: { tools: [] } }));
 

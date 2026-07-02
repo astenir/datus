@@ -97,6 +97,7 @@ module.kb
 module.mcp
 mcp.server.list
 mcp.server.add
+mcp.server.edit
 mcp.server.remove
 mcp.server.connectivity
 mcp.server.tools

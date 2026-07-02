@@ -197,6 +197,7 @@ class MCPServerConfig(BaseModel):
                 command=expanded_config.get("command"),
                 args=expanded_config.get("args"),
                 env=expanded_config.get("env"),
+                cwd=expanded_config.get("cwd"),
                 tool_filter=tool_filter,
             )
         elif server_type == MCPServerType.SSE:
@@ -226,6 +227,7 @@ class STDIOServerConfig(MCPServerConfig):
     command: str = Field(..., description="Command to execute")
     args: Optional[List[str]] = Field(None, description="Command arguments")
     env: Optional[Dict[str, str]] = Field(None, description="Env variables")
+    cwd: Optional[str] = Field(None, description="Working directory")
 
     def get_connection_info(self) -> Dict[str, Any]:
         """Get connection information for STDIO server."""
@@ -234,6 +236,7 @@ class STDIOServerConfig(MCPServerConfig):
             "command": self.command,
             "args": self.args or [],
             "env": self.env or {},
+            "cwd": self.cwd,
         }
 
 
@@ -368,6 +371,8 @@ class MCPConfig(BaseModel):
                     server_config["args"] = server.args
                 if server.env:
                     server_config["env"] = server.env
+                if server.cwd:
+                    server_config["cwd"] = server.cwd
 
             elif server.type == MCPServerType.SSE:
                 if server.url:

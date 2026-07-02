@@ -62,6 +62,7 @@ describe("useRoleManager", () => {
         "module.*",
         "module.admin.*",
         "module.sql_executor",
+        "mcp.server.edit",
         "module.admin.users",
       ])
     );
@@ -74,6 +75,7 @@ describe("useRoleManager", () => {
     expect(manager.featureGroups.map((group) => group.label)).toEqual([
       "特殊权限",
       "核心功能",
+      "MCP 管理",
       "报表与仪表盘",
       "配置",
       "管理后台",

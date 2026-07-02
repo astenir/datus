@@ -1,6 +1,11 @@
 import { apiResult, jsonBody, putBody } from "./helpers";
 import type { McpConnectivityResult, McpServerInfo, McpToolFilter, McpToolInfo } from "@/types";
 
+type McpServerUpdateInput = Pick<
+  McpServerInfo,
+  "type" | "command" | "args" | "url" | "headers" | "timeout" | "env" | "cwd"
+>;
+
 export const mcpApi = {
   listServers(baseUrl: string, serverType?: string): Promise<{ servers: McpServerInfo[] } | null> {
     const query = serverType ? `?server_type=${encodeURIComponent(serverType)}` : "";
@@ -9,6 +14,20 @@ export const mcpApi = {
 
   addServer(baseUrl: string, server: McpServerInfo): Promise<unknown> {
     return apiResult(baseUrl, "/api/v1/mcp/servers", jsonBody(server));
+  },
+
+  updateServer(baseUrl: string, serverName: string, server: McpServerInfo): Promise<unknown> {
+    const payload: McpServerUpdateInput = {
+      type: server.type,
+      command: server.command,
+      args: server.args,
+      url: server.url,
+      headers: server.headers,
+      timeout: server.timeout,
+      env: server.env,
+      cwd: server.cwd,
+    };
+    return apiResult(baseUrl, `/api/v1/mcp/servers/${encodeURIComponent(serverName)}`, putBody(payload));
   },
 
   removeServer(baseUrl: string, serverName: string): Promise<unknown> {

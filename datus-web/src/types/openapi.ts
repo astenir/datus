@@ -929,7 +929,8 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        put?: never;
+
+        put: operations["update_server_api_v1_mcp_servers__server_name__put"];
         post?: never;
 
         delete: operations["remove_server_api_v1_mcp_servers__server_name__delete"];
@@ -2273,8 +2274,6 @@ export interface components {
 
         AddServerInput: {
 
-            name: string;
-
             type: string;
 
             command?: string | null;
@@ -2294,6 +2293,8 @@ export interface components {
             } | null;
 
             cwd?: string | null;
+
+            name: string;
         };
 
         AdminArtifactSummary: {
@@ -4877,6 +4878,29 @@ export interface components {
             target?: string | null;
         };
 
+        UpdateServerInput: {
+
+            type: string;
+
+            command?: string | null;
+
+            args?: string[] | null;
+
+            url?: string | null;
+
+            headers?: {
+                [key: string]: string;
+            } | null;
+
+            timeout?: number | null;
+
+            env?: {
+                [key: string]: string;
+            } | null;
+
+            cwd?: string | null;
+        };
+
         UpsertAdminRoleRequest: {
 
             name: string;
@@ -6835,6 +6859,41 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["AddServerInput"];
+            };
+        };
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_Dict_str__Any__"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_server_api_v1_mcp_servers__server_name__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                server_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateServerInput"];
             };
         };
         responses: {

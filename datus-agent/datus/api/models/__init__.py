@@ -104,6 +104,7 @@ from datus.api.models.mcp_models import (
     ToolFilterConfig,
     ToolFilterInput,
     ToolInfo,
+    UpdateServerInput,
 )
 from datus.api.models.table_models import (
     ColumnInfo,
@@ -221,6 +222,7 @@ __all__ = [
     # mcp_models
     "MCPServerInfo",
     "AddServerInput",
+    "UpdateServerInput",
     "ConnectivityDetails",
     "ToolInfo",
     "CallToolInput",

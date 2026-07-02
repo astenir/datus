@@ -41,6 +41,7 @@ def _svc() -> MagicMock:
     svc = MagicMock()
     svc.mcp.list_servers.return_value = Result[dict](success=True, data={"servers": []})
     svc.mcp.add_server.return_value = Result[dict](success=True, data={"name": "srv"})
+    svc.mcp.update_server.return_value = Result[dict](success=True, data={"name": "srv"})
     svc.mcp.remove_server.return_value = Result[dict](success=True, data={"removed": True})
     svc.mcp.check_connectivity = AsyncMock(return_value=Result[dict](success=True, data={"connected": True}))
     svc.mcp.list_tools = AsyncMock(return_value=Result[dict](success=True, data={"tools": []}))
@@ -73,6 +74,7 @@ def _client(ctx: AppContext, svc: MagicMock) -> TestClient:
     [
         ("get", "/api/v1/mcp/servers", None),
         ("post", "/api/v1/mcp/servers", {"name": "srv", "type": "stdio", "command": "python"}),
+        ("put", "/api/v1/mcp/servers/srv", {"type": "stdio", "command": "node"}),
         ("delete", "/api/v1/mcp/servers/srv", None),
         ("get", "/api/v1/mcp/servers/srv/connectivity", None),
         ("get", "/api/v1/mcp/servers/srv/tools", None),
@@ -95,6 +97,7 @@ def test_mcp_routes_require_module_mcp(monkeypatch, method, path, json_body):
     assert response.status_code == 403
     svc.mcp.list_servers.assert_not_called()
     svc.mcp.add_server.assert_not_called()
+    svc.mcp.update_server.assert_not_called()
     svc.mcp.remove_server.assert_not_called()
     svc.mcp.check_connectivity.assert_not_awaited()
     svc.mcp.list_tools.assert_not_awaited()
@@ -109,6 +112,7 @@ def test_mcp_routes_require_module_mcp(monkeypatch, method, path, json_body):
     [
         ("get", "/api/v1/mcp/servers", None),
         ("post", "/api/v1/mcp/servers", {"name": "srv", "type": "stdio", "command": "python"}),
+        ("put", "/api/v1/mcp/servers/srv", {"type": "stdio", "command": "node"}),
         ("delete", "/api/v1/mcp/servers/srv", None),
         ("get", "/api/v1/mcp/servers/srv/connectivity", None),
         ("get", "/api/v1/mcp/servers/srv/tools", None),
@@ -351,6 +355,7 @@ def test_mcp_tool_call_allows_matching_fine_grained_tool_permission(monkeypatch)
             "mcp.server.add",
             "add_server",
         ),
+        ("put", "/api/v1/mcp/servers/srv", {"type": "stdio", "command": "node"}, "mcp.server.edit", "update_server"),
         ("delete", "/api/v1/mcp/servers/srv", None, "mcp.server.remove", "remove_server"),
         ("get", "/api/v1/mcp/servers/srv/connectivity", None, "mcp.server.connectivity", "check_connectivity"),
         (
@@ -416,6 +421,7 @@ def test_mcp_add_permission_denial_with_invalid_body_does_not_resolve_datus_serv
     ("method", "path", "permission"),
     [
         ("post", "/api/v1/mcp/servers", "mcp.server.add"),
+        ("put", "/api/v1/mcp/servers/srv", "mcp.server.edit"),
         ("post", "/api/v1/mcp/servers/srv/tools/tool_a/call", "mcp.srv.tool_a"),
         ("put", "/api/v1/mcp/servers/srv/filters", "mcp.filter.set"),
     ],
@@ -452,6 +458,7 @@ def test_mcp_invalid_body_does_not_resolve_datus_service(monkeypatch, method, pa
             "mcp.server.add",
             "add_server",
         ),
+        ("put", "/api/v1/mcp/servers/srv", {"type": "stdio", "command": "node"}, "mcp.server.edit", "update_server"),
         ("delete", "/api/v1/mcp/servers/srv", None, "mcp.server.remove", "remove_server"),
         ("get", "/api/v1/mcp/servers/srv/connectivity", None, "mcp.server.connectivity", "check_connectivity"),
         (
@@ -500,6 +507,7 @@ def test_mcp_management_execution_allows_matching_fine_grained_permission(
             "mcp.server.add",
             "mcp.server.add",
         ),
+        ("put", "/api/v1/mcp/servers/srv", {"type": "stdio", "command": "node"}, "mcp.server.edit", "mcp.server.edit"),
         ("delete", "/api/v1/mcp/servers/srv", None, "mcp.server.remove", "mcp.server.remove"),
         ("get", "/api/v1/mcp/servers/srv/connectivity", None, "mcp.server.connectivity", "mcp.server.connectivity"),
         (
@@ -538,6 +546,7 @@ def test_mcp_execution_and_mutation_routes_block_readonly_before_service(
     assert audit_sink.events[-1].action == "system.platform_status"
     assert audit_sink.events[-1].metadata == {"operation": operation, "platform_status": "readonly"}
     svc.mcp.add_server.assert_not_called()
+    svc.mcp.update_server.assert_not_called()
     svc.mcp.remove_server.assert_not_called()
     svc.mcp.check_connectivity.assert_not_awaited()
     svc.mcp.call_tool.assert_not_awaited()

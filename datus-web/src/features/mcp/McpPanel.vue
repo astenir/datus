@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, shallowRef } from "vue"
-import { ActivityIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "@lucide/vue"
+import { ActivityIcon, PencilIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "@lucide/vue"
 import { toast } from "vue-sonner"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -36,10 +36,12 @@ const tools = ref<McpToolInfo[]>([])
 const connectivityResults = ref<Record<string, McpConnectivityResult>>({})
 const loading = shallowRef(false)
 const toolsLoading = shallowRef(false)
-const adding = shallowRef(false)
+const submittingServer = shallowRef(false)
 const deleting = shallowRef(false)
 const checkingServer = shallowRef("")
-const addDialogOpen = shallowRef(false)
+const serverDialogOpen = shallowRef(false)
+const serverDialogMode = shallowRef<"create" | "edit">("create")
+const editingServer = shallowRef<McpServerInfo | null>(null)
 const deleteTarget = shallowRef<McpServerInfo | null>(null)
 
 const selected = computed(() => servers.value.find((server) => server.name === selectedServer.value))
@@ -101,17 +103,35 @@ function connectivityLabel(result?: McpConnectivityResult) {
   return `${result.message || result.status || "连接正常"}${suffix}`
 }
 
-async function addServer(server: McpServerInfo) {
-  adding.value = true
+function openAddDialog() {
+  serverDialogMode.value = "create"
+  editingServer.value = null
+  serverDialogOpen.value = true
+}
+
+function openEditDialog(server: McpServerInfo) {
+  serverDialogMode.value = "edit"
+  editingServer.value = server
+  serverDialogOpen.value = true
+}
+
+async function submitServer(server: McpServerInfo) {
+  submittingServer.value = true
   try {
-    await mcpApi.addServer(effectiveBase(), server)
-    toast.success(`已添加 MCP Server：${server.name}`)
-    addDialogOpen.value = false
+    if (serverDialogMode.value === "edit" && editingServer.value) {
+      await mcpApi.updateServer(effectiveBase(), editingServer.value.name, server)
+      toast.success(`已更新 MCP Server：${server.name}`)
+    } else {
+      await mcpApi.addServer(effectiveBase(), server)
+      toast.success(`已添加 MCP Server：${server.name}`)
+    }
+    serverDialogOpen.value = false
+    editingServer.value = null
     await loadServers(server.name)
   } catch (error) {
-    handleError("添加 MCP Server 失败", error)
+    handleError(serverDialogMode.value === "edit" ? "更新 MCP Server 失败" : "添加 MCP Server 失败", error)
   } finally {
-    adding.value = false
+    submittingServer.value = false
   }
 }
 
@@ -180,7 +200,7 @@ onMounted(() => {
           </Button>
           <Button
             size="sm"
-            @click="addDialogOpen = true"
+            @click="openAddDialog"
           >
             <PlusIcon data-icon="inline-start" />
             添加
@@ -236,6 +256,14 @@ onMounted(() => {
                           v-if="checkingServer === server.name"
                         />
                         <ActivityIcon v-else />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon-sm"
+                        :aria-label="`编辑 ${server.name}`"
+                        @click="openEditDialog(server)"
+                      >
+                        <PencilIcon />
                       </Button>
                       <Button
                         variant="ghost"
@@ -319,9 +347,11 @@ onMounted(() => {
     </div>
 
     <McpServerDialog
-      v-model:open="addDialogOpen"
-      :submitting="adding"
-      @submit="addServer"
+      v-model:open="serverDialogOpen"
+      :mode="serverDialogMode"
+      :server="editingServer"
+      :submitting="submittingServer"
+      @submit="submitServer"
     />
 
     <Dialog v-model:open="deleteDialogOpen">

@@ -158,12 +158,13 @@ class TestSTDIOServerConfig:
         assert cfg.env is None
 
     def test_get_connection_info(self):
-        cfg = STDIOServerConfig(name="s", command="node", args=["server.js"], env={"FOO": "bar"})
+        cfg = STDIOServerConfig(name="s", command="node", args=["server.js"], env={"FOO": "bar"}, cwd="/workspace")
         info = cfg.get_connection_info()
         assert info["type"] == "stdio"
         assert info["command"] == "node"
         assert info["args"] == ["server.js"]
         assert info["env"] == {"FOO": "bar"}
+        assert info["cwd"] == "/workspace"
 
     def test_get_connection_info_defaults(self):
         cfg = STDIOServerConfig(name="s", command="node")
@@ -246,10 +247,13 @@ class TestHTTPServerConfig:
 
 class TestMCPServerConfigFactory:
     def test_create_stdio_from_dict(self):
-        cfg = MCPServerConfig.from_config_format("srv", {"type": "stdio", "command": "python", "args": ["-m", "app"]})
+        cfg = MCPServerConfig.from_config_format(
+            "srv", {"type": "stdio", "command": "python", "args": ["-m", "app"], "cwd": "/workspace"}
+        )
         assert isinstance(cfg, STDIOServerConfig)
         assert cfg.command == "python"
         assert cfg.args == ["-m", "app"]
+        assert cfg.cwd == "/workspace"
 
     def test_create_sse_from_dict(self):
         cfg = MCPServerConfig.from_config_format("srv", {"type": "sse", "url": "http://example.com/sse"})
@@ -382,7 +386,9 @@ class TestMCPConfig:
 
     def test_to_config_format_stdio(self):
         cfg = MCPConfig()
-        cfg.add_server(STDIOServerConfig(name="s", command="python", args=["-m", "app"], env={"K": "V"}))
+        cfg.add_server(
+            STDIOServerConfig(name="s", command="python", args=["-m", "app"], env={"K": "V"}, cwd="/workspace")
+        )
         out = cfg.to_config_format()
         assert "mcpServers" in out
         assert "s" in out["mcpServers"]
@@ -390,6 +396,7 @@ class TestMCPConfig:
         assert s_cfg["command"] == "python"
         assert s_cfg["args"] == ["-m", "app"]
         assert s_cfg["env"] == {"K": "V"}
+        assert s_cfg["cwd"] == "/workspace"
 
     def test_to_config_format_sse(self):
         cfg = MCPConfig()

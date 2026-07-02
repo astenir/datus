@@ -39,6 +39,7 @@ describe("permission labels", () => {
         { value: "module.*", kind: "wildcard", label: "全部功能权限" },
         { value: "module.admin.*", kind: "wildcard", label: "全部管理权限" },
         { value: "module.sql_executor", kind: "regular", label: "SQL 执行" },
+        { value: "mcp.server.edit", kind: "regular", label: "MCP Server 编辑" },
         { value: "module.admin.users", kind: "regular", label: "用户管理" },
         { value: "module.admin.audit.export", kind: "regular", label: "审计导出" },
       ])
@@ -51,6 +52,7 @@ describe("permission labels", () => {
     expect(ROLE_PERMISSION_GROUPS.map((group) => group.label)).toEqual([
       "特殊权限",
       "核心功能",
+      "MCP 管理",
       "报表与仪表盘",
       "配置",
       "管理后台",
