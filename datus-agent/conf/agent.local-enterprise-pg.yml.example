@@ -16,7 +16,7 @@
 #   cp conf/agent.local-enterprise-pg.yml.example conf/agent.local-enterprise-pg.yml
 #   export DATUS_ENTERPRISE_HEADER_SECRET="$(uv run python scripts/enterprise_local_api.py secret)"
 #   export DATUS_ENTERPRISE_PG_DSN="postgresql://datus:datus@127.0.0.1:5433/datus_enterprise"
-#   uv run python scripts/enterprise_local_pg_seed.py --datasource ccks_fund
+#   uv run python scripts/enterprise_pg_seed.py --datasource ccks_fund
 #   uv run datus-api --config conf/agent.local-enterprise-pg.yml --datasource ccks_fund --port 8000 --reload
 #   uv run python scripts/enterprise_local_api.py smoke --datasource ccks_fund --print-curl
 #

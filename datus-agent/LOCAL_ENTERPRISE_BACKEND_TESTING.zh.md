@@ -18,7 +18,7 @@ export DATUS_ENTERPRISE_HEADER_SECRET="$(uv run python scripts/enterprise_local_
 export CCKS_FUND_DB_PASSWORD="datus"
 
 # 3. 初始化企业 metadata
-uv run python scripts/enterprise_local_pg_seed.py --datasource ccks_fund
+uv run python scripts/enterprise_pg_seed.py --datasource ccks_fund
 
 # 4. 启动 Datus API
 uv run datus-api \
@@ -99,7 +99,7 @@ agent:
 
 ```bash
 export DATUS_ENTERPRISE_HEADER_SECRET="$(uv run python scripts/enterprise_local_api.py secret)"
-uv run python scripts/enterprise_local_pg_seed.py --datasource ccks_fund
+uv run python scripts/enterprise_pg_seed.py --datasource ccks_fund
 ```
 
 启动：
@@ -168,7 +168,7 @@ api:
 重新 seed 并启动 API：
 
 ```bash
-uv run python scripts/enterprise_local_pg_seed.py --datasource ccks_fund
+uv run python scripts/enterprise_pg_seed.py --datasource ccks_fund
 
 uv run datus-api \
   --config conf/agent.local-enterprise-pg.yml \

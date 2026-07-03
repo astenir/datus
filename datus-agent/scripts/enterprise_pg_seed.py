@@ -46,18 +46,24 @@ def _build_parser() -> argparse.ArgumentParser:
         default=os.getenv("DATUS_ENTERPRISE_PG_DSN", ""),
         help="PostgreSQL DSN. Defaults to DATUS_ENTERPRISE_PG_DSN.",
     )
-    parser.add_argument("--datasource", default="ccks_fund", help="Datasource key to grant.")
+    parser.add_argument("--datasource", default="ccks_fund", help="Datasource key to grant to the reader role.")
     parser.add_argument(
-        "--schema", action="append", default=None, help="Allowed schema pattern. Repeat or comma-separate."
+        "--admin-datasource",
+        action="append",
+        default=None,
+        help="Datasource key to grant to the admin role. Repeat or comma-separate. Defaults to *.",
     )
     parser.add_argument(
-        "--table", action="append", default=None, help="Allowed table pattern. Repeat or comma-separate."
+        "--schema", action="append", default=None, help="Reader role allowed schema pattern. Repeat or comma-separate."
+    )
+    parser.add_argument(
+        "--table", action="append", default=None, help="Reader role allowed table pattern. Repeat or comma-separate."
     )
     parser.add_argument("--admin-user", default="alice", help="Admin test user id.")
     parser.add_argument("--reader-user", default="bob", help="Reader test user id.")
     parser.add_argument("--admin-role", default="local_admin", help="Admin role id.")
     parser.add_argument("--reader-role", default="fund_reader", help="Reader role id.")
-    parser.add_argument("--admin-email", default="alice@example.com", help="Admin test user email.")
+    parser.add_argument("--admin-email", default=None, help="Admin test user email.")
     parser.add_argument("--reader-email", default="bob@example.com", help="Reader test user email.")
     parser.add_argument(
         "--admin-permission",
@@ -83,7 +89,8 @@ async def _seed(args: argparse.Namespace) -> dict[str, Any]:
     if not args.dsn.strip():
         raise SystemExit("PostgreSQL DSN is required. Set DATUS_ENTERPRISE_PG_DSN or pass --dsn.")
 
-    schemas = _csv_or_repeated(args.schema) or ["public"]
+    admin_datasources = _csv_or_repeated(args.admin_datasource) or ["*"]
+    reader_schemas = _csv_or_repeated(args.schema) or ["public"]
     tables = _csv_or_repeated(args.table) or ["*"]
     admin_permissions = _csv_or_repeated(args.admin_permission) or DEFAULT_ADMIN_PERMISSIONS
     reader_permissions = _csv_or_repeated(args.reader_permission) or DEFAULT_READER_PERMISSIONS
@@ -125,27 +132,38 @@ async def _seed(args: argparse.Namespace) -> dict[str, Any]:
         admin_roles = await role_store.set_user_roles(args.admin_user, [args.admin_role])
         reader_roles = await role_store.set_user_roles(args.reader_user, [args.reader_role])
 
-        grant_scope = {
+        admin_scope = {
             "allow_catalog": True,
             "allow_sql": True,
-            "schemas": schemas,
+            "schemas": ["*"],
+            "tables": ["*"],
+        }
+        reader_scope = {
+            "allow_catalog": True,
+            "allow_sql": True,
+            "schemas": reader_schemas,
             "tables": tables,
         }
-        admin_grant = await grant_store.put_grant(
-            subject_type="role",
-            subject_id=args.admin_role,
-            datasource_key=args.datasource,
-            effect="allow",
-            scope=grant_scope,
-        )
-        reader_grant = None
+        grants = []
+        for datasource in admin_datasources:
+            grants.append(
+                await grant_store.put_grant(
+                    subject_type="role",
+                    subject_id=args.admin_role,
+                    datasource_key=datasource,
+                    effect="allow",
+                    scope=admin_scope,
+                )
+            )
         if not args.skip_reader_grant:
-            reader_grant = await grant_store.put_grant(
-                subject_type="role",
-                subject_id=args.reader_role,
-                datasource_key=args.datasource,
-                effect="allow",
-                scope=grant_scope,
+            grants.append(
+                await grant_store.put_grant(
+                    subject_type="role",
+                    subject_id=args.reader_role,
+                    datasource_key=args.datasource,
+                    effect="allow",
+                    scope=reader_scope,
+                )
             )
 
         return {
@@ -155,7 +173,7 @@ async def _seed(args: argparse.Namespace) -> dict[str, Any]:
                 args.admin_user: admin_roles,
                 args.reader_user: reader_roles,
             },
-            "datasource_grants": [item for item in [admin_grant, reader_grant] if item is not None],
+            "datasource_grants": grants,
         }
     finally:
         for store in stores:
