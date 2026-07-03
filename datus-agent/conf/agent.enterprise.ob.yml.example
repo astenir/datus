@@ -1,10 +1,10 @@
-# 企业 OceanBase MySQL session 配置片段。
+# 企业 OceanBase MySQL metadata/session 配置片段。
 #
-# 将需要的片段合并到 agent.yml，用于把会话 owner/index metadata 和
-# 新会话正文/history/state 存到 OceanBase MySQL 模式。
+# 将需要的片段合并到 agent.yml，用于把企业 metadata、会话 owner/index
+# metadata 和新会话正文/history/state 存到 OceanBase MySQL 模式。
 #
 # 注意：
-# - 该片段只覆盖 session_owner_store 与 session_body_store。
+# - 该片段覆盖 Datus 内部 enterprise metadata 与 session store。
 # - agent.storage.rdb/vector 是另一套通用存储面，不会自动承接聊天会话。
 # - session_body_store 不授予访问权；普通列表/history/delete/resume 仍必须
 #   以 session_owner_store 的 owner metadata 作为授权入口。
@@ -23,8 +23,94 @@
 enterprise:
   enabled: true
 
+  authorization_provider:
+    class: datus.api.enterprise.defaults:LocalAuthorizationProvider
+
+  config_projector:
+    class: datus_enterprise.projection:DatasourceGrantProjector
+
+  user_store:
+    class: datus_enterprise.oceanbase_stores:ObEnterpriseUserStore
+    kwargs:
+      host: ${DATUS_ENTERPRISE_OB_HOST}
+      port: ${DATUS_ENTERPRISE_OB_PORT:-2881}
+      user: ${DATUS_ENTERPRISE_OB_USER}
+      password: ${DATUS_ENTERPRISE_OB_PASSWORD}
+      database: ${DATUS_ENTERPRISE_OB_DATABASE:-datus_enterprise}
+      pool_max_size: 2
+
+  role_store:
+    class: datus_enterprise.oceanbase_stores:ObEnterpriseRoleStore
+    kwargs:
+      host: ${DATUS_ENTERPRISE_OB_HOST}
+      port: ${DATUS_ENTERPRISE_OB_PORT:-2881}
+      user: ${DATUS_ENTERPRISE_OB_USER}
+      password: ${DATUS_ENTERPRISE_OB_PASSWORD}
+      database: ${DATUS_ENTERPRISE_OB_DATABASE:-datus_enterprise}
+      pool_max_size: 2
+
+  datasource_grant_store:
+    class: datus_enterprise.oceanbase_stores:ObEnterpriseDatasourceGrantStore
+    kwargs:
+      host: ${DATUS_ENTERPRISE_OB_HOST}
+      port: ${DATUS_ENTERPRISE_OB_PORT:-2881}
+      user: ${DATUS_ENTERPRISE_OB_USER}
+      password: ${DATUS_ENTERPRISE_OB_PASSWORD}
+      database: ${DATUS_ENTERPRISE_OB_DATABASE:-datus_enterprise}
+      pool_max_size: 2
+
+  agent_store:
+    class: datus_enterprise.oceanbase_stores:ObEnterpriseAgentStore
+    kwargs:
+      host: ${DATUS_ENTERPRISE_OB_HOST}
+      port: ${DATUS_ENTERPRISE_OB_PORT:-2881}
+      user: ${DATUS_ENTERPRISE_OB_USER}
+      password: ${DATUS_ENTERPRISE_OB_PASSWORD}
+      database: ${DATUS_ENTERPRISE_OB_DATABASE:-datus_enterprise}
+      pool_max_size: 2
+
   session_owner_store:
     class: datus_enterprise.oceanbase_stores:ObSessionOwnerStore
+    kwargs:
+      host: ${DATUS_ENTERPRISE_OB_HOST}
+      port: ${DATUS_ENTERPRISE_OB_PORT:-2881}
+      user: ${DATUS_ENTERPRISE_OB_USER}
+      password: ${DATUS_ENTERPRISE_OB_PASSWORD}
+      database: ${DATUS_ENTERPRISE_OB_DATABASE:-datus_enterprise}
+      pool_max_size: 2
+
+  artifact_acl_store:
+    class: datus_enterprise.oceanbase_stores:ObArtifactAclStore
+    kwargs:
+      host: ${DATUS_ENTERPRISE_OB_HOST}
+      port: ${DATUS_ENTERPRISE_OB_PORT:-2881}
+      user: ${DATUS_ENTERPRISE_OB_USER}
+      password: ${DATUS_ENTERPRISE_OB_PASSWORD}
+      database: ${DATUS_ENTERPRISE_OB_DATABASE:-datus_enterprise}
+      pool_max_size: 2
+
+  audit_sink:
+    class: datus_enterprise.oceanbase_stores:ObAuditSink
+    kwargs:
+      host: ${DATUS_ENTERPRISE_OB_HOST}
+      port: ${DATUS_ENTERPRISE_OB_PORT:-2881}
+      user: ${DATUS_ENTERPRISE_OB_USER}
+      password: ${DATUS_ENTERPRISE_OB_PASSWORD}
+      database: ${DATUS_ENTERPRISE_OB_DATABASE:-datus_enterprise}
+      pool_max_size: 2
+
+  quota_store:
+    class: datus_enterprise.oceanbase_stores:ObEnterpriseQuotaStore
+    kwargs:
+      host: ${DATUS_ENTERPRISE_OB_HOST}
+      port: ${DATUS_ENTERPRISE_OB_PORT:-2881}
+      user: ${DATUS_ENTERPRISE_OB_USER}
+      password: ${DATUS_ENTERPRISE_OB_PASSWORD}
+      database: ${DATUS_ENTERPRISE_OB_DATABASE:-datus_enterprise}
+      pool_max_size: 2
+
+  secret_store:
+    class: datus_enterprise.oceanbase_stores:ObEnterpriseSecretStore
     kwargs:
       host: ${DATUS_ENTERPRISE_OB_HOST}
       port: ${DATUS_ENTERPRISE_OB_PORT:-2881}
