@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { getCurrentAccessToken, getCurrentUser, setCurrentAccessToken, setCurrentUser } from "@/lib/request";
 import { usePermission } from "./usePermission";
-import { createDevUser, useAuth } from "./useAuth";
+import {
+  buildAuthLoginUrl,
+  consumePostLoginRedirect,
+  createDevUser,
+  rememberPostLoginRedirect,
+  useAuth,
+} from "./useAuth";
 
 function mockJsonResponse(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), {
@@ -34,6 +40,42 @@ describe("useAuth", () => {
     const second = useAuth();
 
     expect(first.state).toBe(second.state);
+  });
+
+  it("stores and consumes the post-login chat redirect marker once", () => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal("sessionStorage", {
+      getItem: vi.fn((key: string) => storage.get(key) ?? null),
+      setItem: vi.fn((key: string, value: string) => storage.set(key, value)),
+      removeItem: vi.fn((key: string) => storage.delete(key)),
+    });
+
+    rememberPostLoginRedirect();
+
+    expect(consumePostLoginRedirect()).toBe(true);
+    expect(consumePostLoginRedirect()).toBe(false);
+  });
+
+  it("adds the chat targetUrl to the external login URL", () => {
+    const loginUrl = buildAuthLoginUrl(
+      "http://passport.dev.phfund.com.cn:8008/casLogin/login.html",
+      "http://datus.example.com/datus/chat",
+    );
+
+    expect(loginUrl).toBe(
+      "http://passport.dev.phfund.com.cn:8008/casLogin/login.html?targetUrl=http%3A%2F%2Fdatus.example.com%2Fdatus%2Fchat",
+    );
+  });
+
+  it("replaces an existing login targetUrl", () => {
+    const loginUrl = buildAuthLoginUrl(
+      "https://passport.example.com/index?targetUrl=https%3A%2F%2Fold.example.com&source=datus",
+      "https://datus.example.com/chat",
+    );
+
+    expect(loginUrl).toBe(
+      "https://passport.example.com/index?targetUrl=https%3A%2F%2Fdatus.example.com%2Fchat&source=datus",
+    );
   });
 
   it("creates a named dev user from VITE_DEV_USER", () => {

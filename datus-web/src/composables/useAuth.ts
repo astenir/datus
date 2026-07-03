@@ -44,6 +44,8 @@ const AUTH_API_URL = import.meta.env.VITE_AUTH_API_URL || "";
 const AUTH_LOGIN_URL = import.meta.env.VITE_AUTH_LOGIN_URL || "";
 const DEV_ACCESS_TOKEN = import.meta.env.VITE_DEV_ACCESS_TOKEN || "";
 const DEV_USER = import.meta.env.VITE_DEV_USER || "";
+const POST_LOGIN_REDIRECT_KEY = "datus_post_login_redirect";
+const POST_LOGIN_CHAT_TARGET = "chat";
 
 const FALLBACK_DEV_USER: UserInfo = {
   userId: 1,
@@ -140,12 +142,55 @@ function clearAccessTokenCookie(): void {
   document.cookie = "access_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/";
 }
 
+export function rememberPostLoginRedirect(): void {
+  if (typeof sessionStorage === "undefined") return;
+
+  try {
+    sessionStorage.setItem(POST_LOGIN_REDIRECT_KEY, POST_LOGIN_CHAT_TARGET);
+  } catch (error) {
+    console.warn("登录后跳转状态保存失败:", error);
+  }
+}
+
+export function consumePostLoginRedirect(): boolean {
+  if (typeof sessionStorage === "undefined") return false;
+
+  try {
+    const target = sessionStorage.getItem(POST_LOGIN_REDIRECT_KEY);
+    sessionStorage.removeItem(POST_LOGIN_REDIRECT_KEY);
+    return target === POST_LOGIN_CHAT_TARGET;
+  } catch (error) {
+    console.warn("登录后跳转状态读取失败:", error);
+    return false;
+  }
+}
+
+export function buildAuthLoginUrl(loginUrl: string, targetUrl: string): string {
+  try {
+    const baseUrl = typeof location === "undefined" ? undefined : location.origin;
+    const url = new URL(loginUrl, baseUrl);
+    url.searchParams.set("targetUrl", targetUrl);
+    return url.toString();
+  } catch {
+    const separator = loginUrl.includes("?") ? "&" : "?";
+    return `${loginUrl}${separator}targetUrl=${encodeURIComponent(targetUrl)}`;
+  }
+}
+
+function postLoginTargetUrl(): string {
+  if (typeof location === "undefined") return "/chat";
+
+  const base = new URL(import.meta.env.BASE_URL, location.origin);
+  return new URL("chat", base).toString();
+}
+
 /**
  * 跳转到登录页
  */
 function redirectToLogin(): void {
   if (AUTH_LOGIN_URL) {
-    location.href = AUTH_LOGIN_URL;
+    rememberPostLoginRedirect();
+    location.href = buildAuthLoginUrl(AUTH_LOGIN_URL, postLoginTargetUrl());
   }
 }
 

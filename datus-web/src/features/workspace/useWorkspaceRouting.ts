@@ -1,7 +1,7 @@
 import { computed, onMounted, shallowRef, watch, type ComputedRef, type Ref } from "vue"
 import { useRoute, useRouter } from "vue-router"
 
-import type { AuthState } from "@/composables/useAuth"
+import { consumePostLoginRedirect, type AuthState } from "@/composables/useAuth"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import { defaultAuditLogLimit } from "@/lib/audit-log-pagination"
 import { canRenderWorkspaceView, workspaceRedirectTarget } from "@/features/workspace/access"
@@ -355,11 +355,19 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
     void router.replace({ query: nextQuery })
   }
 
+  async function redirectPostLoginToChat() {
+    if (!consumePostLoginRedirect()) return
+    if (activeView.value === "chat" && !chatSessionId.value) return
+
+    await router.replace(chatRouteForSession())
+  }
+
   onMounted(async () => {
     if (options.authState.value.loading) {
       await options.checkAuth()
     }
     if (options.authState.value.authenticated) {
+      await redirectPostLoginToChat()
       await options.workspace.initialize()
       await applyRouteWorkspaceContext()
       routeContextHydrated.value = true
