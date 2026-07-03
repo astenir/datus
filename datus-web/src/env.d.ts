@@ -3,6 +3,11 @@
 interface ImportMetaEnv {
   readonly VITE_DATUS_API_BASE?: string;
   readonly VITE_DATUS_API_TARGET?: string;
+  readonly VITE_DATUS_WEB_BASE?: string;
+  readonly VITE_AUTH_API_URL?: string;
+  readonly VITE_AUTH_LOGIN_URL?: string;
+  readonly VITE_DEV_ACCESS_TOKEN?: string;
+  readonly VITE_DEV_USER?: string;
   readonly VITE_SHOW_SERVICE_CONNECTION?: string;
 }
 

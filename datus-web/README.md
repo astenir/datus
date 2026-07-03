@@ -54,13 +54,104 @@ http://localhost:8000
 VITE_DATUS_API_TARGET=http://127.0.0.1:8001 npm run dev
 ```
 
+## 子路径托管
+
+生产环境如果把前端托管到子路径，例如 `https://example.com/datus/`，构建时需要指定 Vite base：
+
+```bash
+VITE_DATUS_WEB_BASE=/datus/ npm run build
+```
+
+建议只把前端放到子路径，API 仍保持站点根路径代理：
+
+```text
+/datus/   -> datus-web 静态文件
+/api/...  -> datus-agent API
+/health   -> datus-agent health
+```
+
+Nginx 示例：
+
+```nginx
+server {
+    listen 80;
+    server_name example.com;
+
+    client_max_body_size 100m;
+
+    location = /health {
+        proxy_pass http://127.0.0.1:8000/health;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8000/api/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+        proxy_cache off;
+        gzip off;
+        add_header X-Accel-Buffering no always;
+    }
+
+    location = /datus {
+        return 301 /datus/;
+    }
+
+    location /datus/assets/ {
+        alias /srv/datus-web/dist/assets/;
+        access_log off;
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+
+    location /datus/ {
+        alias /srv/datus-web/dist/;
+        index index.html;
+        try_files $uri $uri/ /datus/index.html;
+    }
+}
+```
+
+如果浏览器曾在页面里设置过 API 地址，`localStorage` 中的 `datus-api-base` 会优先于同源 `/api` 代理。部署后遇到前端请求指向旧地址时，先清理该项或在页面里改回空值。
+
 本地环境变量请写入 `.env.local`，不要提交真实环境配置或凭据。只允许提交 `.env.example` 这类占位模板。
+
+## 内网测试构建
+
+需要为某个内网测试环境固定登录、API 和子路径配置时，创建本地文件 `.env.intranet.local`。该文件会被 `.gitignore` 忽略，不要提交：
+
+```bash
+VITE_DATUS_WEB_BASE=/datus/
+VITE_DATUS_API_TARGET=https://api.example.internal/
+VITE_AUTH_API_URL=https://passport.example.internal/user/detail
+VITE_AUTH_LOGIN_URL=https://passport.example.internal/login.html
+```
+
+然后执行：
+
+```bash
+npm run build:intranet
+```
+
+`build:intranet` 会通过 Vite mode 读取 `.env.intranet.local`。如果前端和 API 由同一个 Nginx 站点代理，推荐把 `VITE_DATUS_API_TARGET` 留空，让浏览器请求同源 `/api`，由 Nginx 转发到后端；只有 API 与前端不同源且后端 CORS 已正确放行时，才把它设置成完整后端 origin。
 
 ## 常用命令
 
 ```bash
 npm test
 npm run build
+npm run build:intranet
 npm run preview
 npm run lint:typography
 ```
@@ -69,6 +160,7 @@ npm run lint:typography
 
 - `npm test`: 运行 Vitest 测试
 - `npm run build`: 运行 `vue-tsc` 类型检查并构建生产包
+- `npm run build:intranet`: 使用 `.env.intranet.local` 构建内网测试包
 - `npm run preview`: 预览生产构建
 - `npm run lint:typography`: 检查项目业务 UI 的字号规范
 

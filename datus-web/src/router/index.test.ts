@@ -185,6 +185,20 @@ describe("workspace router", () => {
     })
   })
 
+  it("can run under a deployment subpath when the history base is provided", async () => {
+    const router = createDatusRouter(createMemoryHistory("/datus/"))
+    await router.push("/chat/session-42")
+    await router.isReady()
+
+    expect(router.currentRoute.value).toMatchObject({
+      name: workspaceRouteNames.chatSession,
+      fullPath: "/chat/session-42",
+      params: { sessionId: "session-42" },
+    })
+
+    expect(router.resolve({ name: workspaceRouteNames.admin }).href).toBe("/datus/admin")
+  })
+
   it("marks admin as a guarded workspace route", async () => {
     await expect(routeTo("/admin")).resolves.toMatchObject({
       name: workspaceRouteNames.admin,

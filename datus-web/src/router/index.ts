@@ -118,7 +118,7 @@ export const workspaceRoutes: RouteRecordRaw[] = [
   },
 ]
 
-export function createDatusRouter(history: RouterHistory = createWebHistory()): Router {
+export function createDatusRouter(history: RouterHistory = createWebHistory(import.meta.env.BASE_URL)): Router {
   const router = createRouter({
     history,
     routes: workspaceRoutes,
