@@ -63,6 +63,29 @@ class TestDBFuncToolCompressorModelName:
 
         assert tool.compressor.model_name == "gpt-3.5-turbo"
 
+    def test_table_semantic_profile_store_disabled_when_size_probe_fails(self):
+        mock_connector = Mock()
+        mock_connector.dialect = "sqlite"
+        mock_connector.get_databases.return_value = []
+
+        mock_config = Mock()
+        mock_config.active_model.return_value.model = "gpt-4o"
+        mock_config.project_name = "project"
+
+        with (
+            patch("datus.tools.func_tool.database.SchemaWithValueRAG") as mock_rag,
+            patch("datus.tools.func_tool.database.SemanticModelRAG") as mock_sem,
+            patch("datus.tools.func_tool.database.TableSemanticProfileRAG") as mock_profile,
+        ):
+            mock_rag.return_value.schema_store.table_size.return_value = 0
+            mock_sem.return_value.get_size.return_value = 0
+            mock_profile.return_value.get_size.side_effect = RuntimeError("storage unavailable")
+
+            tool = DBFuncTool(mock_connector, agent_config=mock_config)
+
+        assert tool.has_table_semantic_profiles is False
+        assert tool._table_semantic_profiles is None
+
 
 class TestDBFuncToolExecuteDDL:
     """Tests for DBFuncTool.execute_ddl method."""
@@ -388,6 +411,10 @@ class TestExecuteDDLStatementValidation:
             "CREATE SCHEMA IF NOT EXISTS staging",
             "DROP SCHEMA staging",
             "DROP SCHEMA IF EXISTS staging",
+            "CREATE DATABASE blockchain",
+            "CREATE DATABASE IF NOT EXISTS blockchain",
+            "DROP DATABASE blockchain",
+            "DROP DATABASE IF EXISTS blockchain",
             "  CREATE TABLE test (id INT)",
             "ALTER TABLE test ADD COLUMN name TEXT",
             "DROP TABLE test",
@@ -397,33 +424,35 @@ class TestExecuteDDLStatementValidation:
             "CREATE OR REPLACE VIEW v AS SELECT 1",
             "CREATE TEMPORARY TABLE tmp AS SELECT 1",
             "CREATE TEMP TABLE tmp (id INT)",
+            # Non-read, non-DML statements no longer pre-rejected — permission
+            # gates them, the tool executes whatever the engine accepts.
+            "TRUNCATE TABLE users",
+            "GRANT ALL ON users TO public",
+            "CREATE INDEX idx ON users (id)",
+            "MERGE INTO target t USING source s ON t.id = s.id WHEN MATCHED THEN UPDATE SET name = s.name",
         ],
     )
     def test_allowed_ddl_statements(self, sql):
-        """Allowed DDL statement types should pass validation."""
+        """Non-read, non-DML statements pass validation and execute."""
         tool = self._make_tool()
         result = tool.execute_ddl(sql)
         assert result.success == 1
 
     @pytest.mark.parametrize(
-        "sql",
+        ("sql", "expected"),
         [
-            "SELECT * FROM users",
-            "INSERT INTO users VALUES (1, 'test')",
-            "UPDATE users SET name='x'",
-            "DELETE FROM users",
-            "TRUNCATE TABLE users",
-            "GRANT ALL ON users TO public",
-            "CREATE OR REPLACE FUNCTION test() RETURNS void",
-            "CREATE PROCEDURE test() BEGIN END",
+            ("SELECT * FROM users", "read path"),
+            ("INSERT INTO users VALUES (1, 'test')", "write path"),
+            ("UPDATE users SET name='x'", "write path"),
+            ("DELETE FROM users", "write path"),
         ],
     )
-    def test_rejected_non_ddl_statements(self, sql):
-        """Non-DDL statements should be rejected."""
+    def test_read_and_dml_rejected_from_ddl_path(self, sql, expected):
+        """Read-only and DML statements have dedicated paths and are refused here."""
         tool = self._make_tool()
         result = tool.execute_ddl(sql)
         assert result.success == 0
-        assert "Only DDL statements are allowed" in result.error
+        assert expected in result.error
 
     def test_rejected_multi_statement(self):
         """Multi-statement SQL should be rejected."""
@@ -932,6 +961,116 @@ class TestDescribeTableDuckDBSchemaPrefix:
 
         assert effective.get("schema_name") == "raw"
         assert effective.get("table_name") == "stage"
+
+
+class TestDescribeTableSemanticProfile:
+    def test_describe_table_enriches_from_table_semantic_profile(self):
+        mock_connector = Mock()
+        mock_connector.dialect = "sqlite"
+        mock_connector.get_databases.return_value = []
+        mock_connector.get_schema.return_value = [
+            {"name": "order_id", "type": "INTEGER", "comment": ""},
+            {"name": "order_date", "type": "DATE", "comment": ""},
+            {"name": "amount", "type": "DOUBLE", "comment": ""},
+        ]
+
+        tool = DBFuncTool(mock_connector)
+        tool._table_semantic_profiles = Mock()
+        tool.has_semantic_models = True
+        tool._semantic_storage = Mock()
+        tool._table_semantic_profiles.get_profile.return_value = {
+            "format": "osi",
+            "physical_table_fq_name": "main.orders",
+            "semantic_model_name": "shop",
+            "dataset_name": "orders",
+            "data_source_name": "",
+            "description": "Orders dataset",
+            "ai_context_json": '{"synonyms": ["purchases"]}',
+            "columns_json": (
+                "["
+                '{"name":"order_id","expr":"order_id","role":"primary_key","description":"Order key"},'
+                '{"name":"order_date","expr":"order_date","role":"time_dimension","description":"Order date"},'
+                '{"name":"amount","expr":"amount","role":"measure","description":"Order amount"}'
+                "]"
+            ),
+            "relationships_json": '[{"name":"orders_to_customers","to_dataset":"customers"}]',
+            "custom_extensions_json": "",
+            "yaml_path": "/tmp/orders.yml",
+        }
+
+        result = tool.describe_table("orders")
+
+        assert result.success == 1
+        tool._semantic_storage.get_semantic_model.assert_not_called()
+        assert result.result["table"] == {
+            "name": "orders",
+            "description": "Orders dataset",
+            "ai_context": {"synonyms": ["purchases"]},
+        }
+        assert result.result["semantic"]["relationships"][0]["name"] == "orders_to_customers"
+        assert "filters" not in result.result["semantic"]
+        assert "format" not in result.result["semantic"]
+        assert "semantic_model_name" not in result.result["semantic"]
+        assert "dataset_name" not in result.result["semantic"]
+        assert "data_source_name" not in result.result["semantic"]
+        assert "physical_table" not in result.result["semantic"]
+        assert "custom_extensions" not in result.result["semantic"]
+        assert "yaml_path" not in result.result["semantic"]
+        columns = {col["name"]: col for col in result.result["columns"]}
+        assert columns["order_id"]["semantic_role"] == "primary_key"
+        assert "is_entity_key" not in columns["order_id"]
+        assert columns["order_date"]["is_dimension"] is True
+        assert columns["amount"]["semantic_role"] == "measure"
+        assert "is_measure" not in columns["amount"]
+        assert columns["amount"]["comment"] == "Order amount"
+
+    def test_describe_table_keeps_metricflow_profile_enrichment(self):
+        mock_connector = Mock()
+        mock_connector.dialect = "sqlite"
+        mock_connector.get_databases.return_value = []
+        mock_connector.get_schema.return_value = [
+            {"name": "order_id", "type": "INTEGER", "comment": ""},
+            {"name": "order_date", "type": "DATE", "comment": ""},
+            {"name": "amount", "type": "DOUBLE", "comment": ""},
+        ]
+
+        tool = DBFuncTool(mock_connector)
+        tool._table_semantic_profiles = Mock()
+        tool._table_semantic_profiles.get_profile.return_value = {
+            "table_name": "orders",
+            "semantic_model_name": "orders_source",
+            "dataset_name": "",
+            "data_source_name": "orders_source",
+            "description": "Orders data source",
+            "ai_context_json": '{"synonyms": ["sales orders"]}',
+            "columns_json": (
+                "["
+                '{"name":"order_id","expr":"order_id","role":"primary_key","description":"Order key"},'
+                '{"name":"order_date","expr":"order_date","role":"time_dimension","description":"Order date"},'
+                '{"name":"amount","expr":"amount","role":"measure","description":"Order amount","agg":"sum"}'
+                "]"
+            ),
+            "relationships_json": '[{"name":"orders_to_customers","to_dataset":"customers"}]',
+        }
+
+        result = tool.describe_table("orders")
+
+        assert result.success == 1
+        assert result.result["table"] == {
+            "name": "orders_source",
+            "description": "Orders data source",
+            "ai_context": {"synonyms": ["sales orders"]},
+        }
+        assert result.result["semantic"] == {
+            "relationships": [{"name": "orders_to_customers", "to_dataset": "customers"}],
+        }
+        columns = {col["name"]: col for col in result.result["columns"]}
+        assert columns["order_date"]["semantic_role"] == "time_dimension"
+        assert columns["order_date"]["is_dimension"] is True
+        assert columns["amount"]["semantic_role"] == "measure"
+        assert columns["amount"]["comment"] == "Order amount"
+        assert "is_measure" not in columns["amount"]
+        assert "is_entity_key" not in columns["order_id"]
 
 
 class TestExecuteDDLDatabaseParam:
@@ -2083,3 +2222,199 @@ class TestPathTraversalGuard:
         result = tool.execute_write("/etc/passwd.sql")
         assert result.success == 0
         assert "failed" in result.error.lower()
+
+
+class TestDBFuncToolExecuteSql:
+    """Tests for the unified ``execute_sql`` dispatch entry point."""
+
+    def _make_tool(self, connector=None):
+        if connector is None:
+            connector = Mock()
+            connector.dialect = "sqlite"
+            connector.get_databases.return_value = []
+        with (
+            patch("datus.tools.func_tool.database.SchemaWithValueRAG") as mock_rag,
+            patch("datus.tools.func_tool.database.SemanticModelRAG") as mock_sem,
+        ):
+            mock_rag.return_value.schema_store.table_size.return_value = 0
+            mock_sem.return_value.get_size.return_value = 0
+            return DBFuncTool(connector)
+
+    def test_select_routes_to_read_query(self):
+        mock_connector = Mock()
+        mock_connector.dialect = "sqlite"
+        mock_connector.get_databases.return_value = []
+        mock_connector.execute_query.return_value = Mock(success=True, sql_return=[{"a": 1}])
+
+        tool = self._make_tool(mock_connector)
+        tool.compressor.compress = Mock(return_value={"original_rows": 1, "compressed_data": "a\n1"})
+
+        result = tool.execute_sql("SELECT * FROM users")
+
+        assert result.success == 1
+        mock_connector.execute_query.assert_called_once()
+        # Read results are the compressor payload (carries compressed_data).
+        assert result.result == {"original_rows": 1, "compressed_data": "a\n1"}
+
+    def test_insert_routes_to_execute_write(self):
+        mock_connector = Mock()
+        mock_connector.dialect = "sqlite"
+        mock_connector.get_databases.return_value = []
+        mock_connector.execute_insert.return_value = Mock(success=True, row_count=2)
+
+        tool = self._make_tool(mock_connector)
+        result = tool.execute_sql("INSERT INTO users VALUES (1), (2)")
+
+        assert result.success == 1
+        assert result.result["sql_type"] == "insert"
+        assert result.result["row_count"] == 2
+        mock_connector.execute_insert.assert_called_once()
+
+    def test_create_table_routes_to_execute_ddl(self):
+        mock_connector = Mock()
+        mock_connector.dialect = "sqlite"
+        mock_connector.get_databases.return_value = []
+        mock_connector.execute_ddl.return_value = Mock(success=True)
+
+        tool = self._make_tool(mock_connector)
+        result = tool.execute_sql("CREATE TABLE test (id INT)")
+
+        assert result.success == 1
+        assert result.result["message"] == "DDL executed successfully"
+        mock_connector.execute_ddl.assert_called_once()
+
+    def test_read_only_allows_select(self):
+        mock_connector = Mock()
+        mock_connector.dialect = "sqlite"
+        mock_connector.get_databases.return_value = []
+        mock_connector.execute_query.return_value = Mock(success=True, sql_return=[{"a": 1}])
+
+        with (
+            patch("datus.tools.func_tool.database.SchemaWithValueRAG") as mock_rag,
+            patch("datus.tools.func_tool.database.SemanticModelRAG") as mock_sem,
+        ):
+            mock_rag.return_value.schema_store.table_size.return_value = 0
+            mock_sem.return_value.get_size.return_value = 0
+            tool = DBFuncTool(mock_connector, read_only=True)
+        tool.compressor.compress = Mock(return_value={"original_rows": 1, "compressed_data": "a\n1"})
+
+        result = tool.execute_sql("SELECT * FROM users")
+
+        assert result.success == 1
+        mock_connector.execute_query.assert_called_once()
+
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "INSERT INTO users VALUES (1)",
+            "UPDATE users SET a = 1",
+            "DELETE FROM users",
+            "CREATE TABLE t (id INT)",
+            "DROP TABLE users",
+            "TRUNCATE TABLE users",
+        ],
+    )
+    def test_read_only_rejects_non_read(self, sql):
+        """A read-only DBFuncTool hard-rejects every non-read statement at the
+        tool layer, independent of PermissionHooks."""
+        mock_connector = Mock()
+        mock_connector.dialect = "sqlite"
+        mock_connector.get_databases.return_value = []
+
+        with (
+            patch("datus.tools.func_tool.database.SchemaWithValueRAG") as mock_rag,
+            patch("datus.tools.func_tool.database.SemanticModelRAG") as mock_sem,
+        ):
+            mock_rag.return_value.schema_store.table_size.return_value = 0
+            mock_sem.return_value.get_size.return_value = 0
+            tool = DBFuncTool(mock_connector, read_only=True)
+
+        result = tool.execute_sql(sql)
+
+        assert result.success == 0
+        assert "read-only" in (result.error or "")
+        mock_connector.execute_insert.assert_not_called()
+        mock_connector.execute_ddl.assert_not_called()
+
+    def test_min_max_rows_forwarded_to_write(self):
+        mock_connector = Mock()
+        mock_connector.dialect = "sqlite"
+        mock_connector.get_databases.return_value = []
+        mock_connector.execute_insert.return_value = Mock(success=True, row_count=5)
+
+        tool = self._make_tool(mock_connector)
+        # Affected 5 rows but max_rows=1 → DML safety bound violated.
+        result = tool.execute_sql("INSERT INTO users VALUES (1)", max_rows=1)
+
+        assert result.success == 0
+        assert "above max_rows" in result.error
+
+    @pytest.mark.parametrize(
+        "sql",
+        [
+            "MERGE INTO target t USING source s ON t.id = s.id WHEN MATCHED THEN UPDATE SET name = s.name",
+            "GRANT SELECT ON users TO bob",
+            "TRUNCATE TABLE users",
+            "CREATE DATABASE blockchain",
+        ],
+    )
+    def test_non_read_non_dml_routes_to_generic_execute(self, sql):
+        """MERGE / GRANT / TRUNCATE / CREATE DATABASE are not pre-rejected — the
+        permission layer gates them and the tool executes them generically."""
+        mock_connector = Mock()
+        mock_connector.dialect = "sqlite"
+        mock_connector.get_databases.return_value = []
+        mock_connector.execute_ddl.return_value = Mock(success=True)
+
+        tool = self._make_tool(mock_connector)
+        result = tool.execute_sql(sql)
+
+        assert result.success == 1
+        mock_connector.execute_ddl.assert_called_once()
+
+    def test_rejects_multi_statement(self):
+        """Multi-statement scripts are still refused — one statement per call."""
+        tool = self._make_tool()
+        result = tool.execute_sql("INSERT INTO a VALUES (1); DELETE FROM a")
+
+        assert result.success == 0
+
+    def test_sql_file_path_routes_by_content(self, tmp_path):
+        mock_connector = Mock()
+        mock_connector.dialect = "sqlite"
+        mock_connector.get_databases.return_value = []
+        mock_connector.execute_insert.return_value = Mock(success=True, row_count=1)
+
+        sql_file = tmp_path / "insert.sql"
+        sql_file.write_text("INSERT INTO users VALUES (1)", encoding="utf-8")
+
+        mock_config = Mock()
+        mock_config.active_model.return_value.model = "gpt-5.4"
+        mock_config.project_root = str(tmp_path)
+
+        with (
+            patch("datus.tools.func_tool.database.SchemaWithValueRAG") as mock_rag,
+            patch("datus.tools.func_tool.database.SemanticModelRAG") as mock_sem,
+        ):
+            mock_rag.return_value.schema_store.table_size.return_value = 0
+            mock_sem.return_value.get_size.return_value = 0
+            tool = DBFuncTool(mock_connector, agent_config=mock_config)
+
+        result = tool.execute_sql("insert.sql")
+
+        assert result.success == 1
+        assert result.result["sql_type"] == "insert"
+
+    def test_available_tools_exposes_execute_sql_only(self):
+        mock_connector = Mock()
+        mock_connector.dialect = "sqlite"
+        mock_connector.get_databases.return_value = []
+
+        tool = self._make_tool(mock_connector)
+        tool_names = {t.name for t in tool.available_tools()}
+
+        assert "execute_sql" in tool_names
+        # The legacy split tools are internal-only now.
+        assert "read_query" not in tool_names
+        assert "execute_ddl" not in tool_names
+        assert "execute_write" not in tool_names

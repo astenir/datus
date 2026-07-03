@@ -705,6 +705,24 @@ class TestValidateMetricFileHasBlocks:
 class TestSyncMetricToDb:
     """Tests for GenerationTools._sync_metric_to_db() private method."""
 
+    def test_current_db_parts_prefers_runtime_context(self):
+        from datus.tools.func_tool.generation_tools import GenerationTools
+
+        agent_config = SimpleNamespace(
+            current_db_config=lambda: SimpleNamespace(catalog="", database="", schema=""),
+            runtime_db_context=lambda: {
+                "catalog": "default_catalog",
+                "database": "ac_manage",
+                "schema": "public",
+            },
+        )
+
+        assert GenerationTools._current_db_parts(agent_config) == {
+            "catalog_name": "default_catalog",
+            "database_name": "ac_manage",
+            "schema_name": "public",
+        }
+
     def test_metric_file_not_found(self, generation_tools):
         result = generation_tools._sync_metric_to_db("/nonexistent/metric.yaml")
         assert result["success"] is False
@@ -1108,6 +1126,7 @@ class TestOsiSync:
         generation_tools.agent_config.current_db_config.return_value = SimpleNamespace(
             catalog="default_catalog", database="shop", schema=""
         )
+        generation_tools.table_semantic_profile_rag = Mock()
         semantic_file = tmp_path / "orders.yml"
         semantic_file.write_text(
             "version: 0.2.0.dev0\n"
@@ -1121,6 +1140,10 @@ class TestOsiSync:
         dataset = SimpleNamespace(
             name="orders",
             description="Orders table",
+            ai_context={
+                "instructions": "Use this dataset for order-level analytics.",
+                "synonyms": ["purchases"],
+            },
             source=SimpleNamespace(table="orders"),
             primary_key="order_id",
             time_dimension=SimpleNamespace(name="order_date", granularity="day"),
@@ -1142,7 +1165,15 @@ class TestOsiSync:
             time_dimension=None,
             dimensions=[],
         )
-        doc = SimpleNamespace(datasets=[dataset, other_dataset], metrics=[])
+        relationship = SimpleNamespace(
+            **{
+                "from": "orders",
+                "to": "customers",
+                "from_columns": ["customer_id", "store_id"],
+                "to_columns": ["customer_id", "store_id"],
+            }
+        )
+        doc = SimpleNamespace(datasets=[dataset, other_dataset], relationships=[relationship], metrics=[])
 
         with patch.object(generation_tools, "_load_osi_document", return_value=doc):
             result = generation_tools.sync_osi_semantic_to_db(str(semantic_file))
@@ -1154,6 +1185,49 @@ class TestOsiSync:
         assert objects[0]["name"] == "orders"
         assert objects[1]["name"] == "order_id"
         assert objects[1]["is_entity_key"] is True
+        generation_tools.table_semantic_profile_rag.upsert_batch.assert_called_once()
+        profiles = generation_tools.table_semantic_profile_rag.upsert_batch.call_args.args[0]
+        assert profiles[0]["format"] == "osi"
+        assert profiles[0]["dataset_name"] == "orders"
+        assert profiles[0]["description"] == "Orders table"
+        assert "order-level analytics" in profiles[0]["ai_context_json"]
+        assert '"name": "customer_segment"' in profiles[0]["columns_json"]
+        assert '"from_columns": ["customer_id", "store_id"]' in profiles[0]["relationships_json"]
+        assert '"to_columns": ["customer_id", "store_id"]' in profiles[0]["relationships_json"]
+        assert result["table_semantic_profiles"] == 1
+
+    def test_sync_osi_semantic_to_db_fails_when_table_profile_sync_fails(self, generation_tools, tmp_path):
+        generation_tools.agent_config.current_db_config.return_value = SimpleNamespace(
+            catalog="default_catalog", database="shop", schema=""
+        )
+        generation_tools.table_semantic_profile_rag = Mock()
+        generation_tools.table_semantic_profile_rag.upsert_batch.side_effect = RuntimeError("profile sync failed")
+        semantic_file = tmp_path / "orders.yml"
+        semantic_file.write_text(
+            "version: 0.2.0.dev0\n"
+            "semantic_model:\n"
+            "  - name: shop\n"
+            "    datasets:\n"
+            "      - name: orders\n"
+            "        source: orders\n"
+            "        primary_key: [order_id]\n"
+        )
+        dataset = SimpleNamespace(
+            name="orders",
+            description="Orders table",
+            ai_context={"instructions": "Use this dataset for order-level analytics."},
+            source=SimpleNamespace(table="orders"),
+            primary_key="order_id",
+            time_dimension=None,
+            dimensions=[],
+        )
+        doc = SimpleNamespace(datasets=[dataset], relationships=[], metrics=[])
+
+        with patch.object(generation_tools, "_load_osi_document", return_value=doc):
+            result = generation_tools.sync_osi_semantic_to_db(str(semantic_file))
+
+        assert result["success"] is False
+        assert "profile sync failed" in result["error"]
 
 
 class TestGenerateSqlSummaryId:

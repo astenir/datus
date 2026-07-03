@@ -18,7 +18,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Union
 import httpx
 import litellm
 import yaml
-from agents import Agent, ModelSettings, Runner, Tool
+from agents import Agent, ModelSettings, Runner, Tool, WebSearchTool
 from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError
 from agents.extensions.memory import AdvancedSQLiteSession
 from agents.mcp import MCPServerStdio
@@ -34,16 +34,52 @@ from datus.models.mcp_result_extractors import extract_sql_contexts
 from datus.models.mcp_utils import multiple_mcp_servers
 from datus.observability.manager import get_observability_manager
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager
-from datus.schemas.tool_summary import TOOL_SUMMARY_REGISTRY, looks_like_failure
+from datus.schemas.tool_summary import TOOL_SUMMARY_REGISTRY, detect_tool_failure
 from datus.utils.constants import LLMProvider
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.json_utils import to_str
-from datus.utils.loggings import get_logger
+from datus.utils.loggings import configure_litellm_logging, get_logger
 from datus.utils.resource_utils import read_data_file_text
 from datus.utils.text_utils import LitellmPlaceholderStreamFilter, strip_litellm_placeholder
 from datus.utils.trace_context import build_agents_run_config_kwargs, build_trace_span_attributes
 
 logger = get_logger(__name__)
+
+
+def describe_hosted_tool_item(raw_item: Any) -> Optional[tuple[str, Optional[str], str]]:
+    """Resolve display fields for an OpenAI Responses hosted ``web_search`` run-item.
+
+    The hosted ``web_search`` tool runs server-side, so its run-item is NOT a
+    ``function_call`` and carries no ``name``/``call_id``/``arguments`` — leaving
+    the stream converter to label it ``unknown``. Map it to ``web_search`` and
+    surface the query/url so the CLI/web event stream shows ``web_search(...)``.
+
+    Restricted to ``web_search_call``: the downstream deferred path normalizes
+    every hosted completion through :func:`normalize_search_results`, so other
+    hosted ``*_call`` items (``file_search_call`` / ``image_generation_call`` /
+    ``code_interpreter_call`` …) must NOT be routed here until they get their own
+    completion handling.
+
+    Returns ``(name, call_id, arguments_json)`` for a hosted ``web_search`` item,
+    or ``None`` for anything else (handled by the normal function-call path).
+    """
+    itype = raw_item.get("type") if isinstance(raw_item, dict) else getattr(raw_item, "type", None)
+    if itype != "web_search_call":
+        return None
+    name = itype[: -len("_call")]  # "web_search_call" -> "web_search"
+
+    def _get(obj: Any, key: str) -> Any:
+        return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
+
+    call_id = _get(raw_item, "id") or _get(raw_item, "call_id")
+    action = _get(raw_item, "action")
+    args: dict = {}
+    if action is not None:
+        query = _get(action, "query") or _get(action, "queries") or _get(action, "url")
+        if query:
+            args["query"] = query
+    return name, call_id, json.dumps(args, ensure_ascii=False)
+
 
 # LiteLLM configuration
 # Enable dropping unsupported parameters for providers that don't support them
@@ -57,6 +93,7 @@ litellm.set_verbose = False
 # Suppress "Provider List: ..." debug prints to stdout when LiteLLM encounters
 # model names not in its built-in list (e.g. Coding Plan models like kimi-for-coding)
 litellm.suppress_debug_info = True
+configure_litellm_logging()
 
 # Module-level cache for model specs loaded from conf/providers.yml
 _MODEL_SPECS_CACHE: Optional[Dict[str, Dict[str, int]]] = None
@@ -193,27 +230,10 @@ def classify_openai_compatible_error(error: Exception) -> tuple[ErrorCode, bool]
 # CLI compact rendering and SSE share a single source of truth.
 
 
-def _detect_tool_failure(output_content: Any) -> bool:
-    """Return True when the tool's output payload signals failure.
-
-    Tools built on :class:`FuncToolResult` report errors via ``success=0`` /
-    non-empty ``error`` instead of raising. The Agents SDK therefore emits a
-    ``tool_call_output_item`` for them and we must inspect the payload to
-    render ✗ (and mark the action FAILED) correctly.
-    """
-    data: Optional[dict] = None
-    if isinstance(output_content, dict):
-        data = output_content
-    elif isinstance(output_content, str):
-        try:
-            parsed = json.loads(output_content)
-        except (TypeError, ValueError):
-            return False
-        if isinstance(parsed, dict):
-            data = parsed
-    if data is None:
-        return False
-    return looks_like_failure(data)
+# Failure detection is shared across all model backends so OpenAI-compatible,
+# Claude-native and Codex render ✗ identically for FuncToolResult(success=0).
+# Kept as a module-level alias for backward-compatible imports.
+_detect_tool_failure = detect_tool_failure
 
 
 class OpenAICompatibleModel(LLMBaseModel):
@@ -732,6 +752,68 @@ class OpenAICompatibleModel(LLMBaseModel):
 
             return {"error": "Failed to parse JSON response", "raw_response": response_text}
 
+    @staticmethod
+    def _maybe_add_builtin_web_search(tools: Optional[List[Tool]], kwargs: dict) -> Optional[List[Tool]]:
+        """Append the OpenAI hosted ``WebSearchTool`` when the node opts in.
+
+        Only OpenAIModel sets ``supports_builtin_web_search`` (the node then passes
+        ``builtin_web_tools={"web_search": True}``), so this is a no-op for every
+        other OpenAI-compatible provider. The hosted tool is served by the OpenAI
+        Responses API; the local ``web_search`` function tool is suppressed by the
+        node when this is active. Idempotent.
+        """
+        if not (kwargs.get("builtin_web_tools") or {}).get("web_search"):
+            return tools
+        tools = list(tools or [])
+        if not any(isinstance(t, WebSearchTool) for t in tools):
+            tools.append(WebSearchTool())
+        return tools
+
+    @staticmethod
+    def _build_hosted_search_completion(
+        call_id: str,
+        tool_name: str,
+        arguments: str,
+        args_str: str,
+        query: str,
+        sources: List[Dict[str, Any]],
+        start_time: Optional[datetime] = None,
+    ) -> ActionHistory:
+        """Build the completion for a single hosted ``web_search`` call.
+
+        OpenAI's hosted search returns no results on the call item; the only
+        per-call metadata available in-stream is ``action.sources`` (URLs, no
+        titles). We use those as the canonical result and emit the completion
+        immediately so the CLI stops the in-progress spinner as soon as the
+        server-side search returns, rather than pinning it until stream end. The
+        richer ``url_citation`` titles still surface inline in the assistant
+        answer text.
+        """
+        from datus.schemas.action_history import ActionHistory, ActionRole, ActionStatus
+        from datus.schemas.web_result import normalize_search_results, web_search_short_summary
+
+        canonical = normalize_search_results(query, sources or [])
+        summary = web_search_short_summary(canonical)
+        kwargs: Dict[str, Any] = dict(
+            action_id=f"complete_{call_id}",
+            role=ActionRole.TOOL,
+            messages=f"Tool call: {tool_name}('{args_str}...')",
+            action_type=tool_name,
+            input={"function_name": tool_name, "arguments": arguments},
+            output={
+                "success": True,
+                "raw_output": {"success": True, "result": canonical},
+                "summary": summary,
+                "status_message": summary,
+            },
+            status=ActionStatus.SUCCESS,
+        )
+        if start_time is not None:
+            kwargs["start_time"] = start_time
+        done_action = ActionHistory(**kwargs)
+        done_action.end_time = datetime.now()
+        return done_action
+
     async def generate_with_tools(
         self,
         prompt: Union[str, List[Dict[str, str]]],
@@ -764,6 +846,7 @@ class OpenAICompatibleModel(LLMBaseModel):
         Returns:
             Dict with content and sql_contexts
         """
+        tools = self._maybe_add_builtin_web_search(tools, kwargs)
         # Use the internal method that returns a Dict
         result = await self._generate_with_tools_internal(
             prompt,
@@ -829,6 +912,7 @@ class OpenAICompatibleModel(LLMBaseModel):
         if action_history_manager is None:
             action_history_manager = ActionHistoryManager()
 
+        tools = self._maybe_add_builtin_web_search(tools, kwargs)
         async for action in self._generate_with_tools_stream_internal(
             prompt,
             mcp_servers,
@@ -1013,6 +1097,15 @@ class OpenAICompatibleModel(LLMBaseModel):
                 existing_extra_args = model_settings_kwargs.get("extra_args", {})
                 existing_extra_args["prompt_cache_key"] = prompt_cache_key
                 model_settings_kwargs["extra_args"] = existing_extra_args
+
+        # When the hosted web_search tool is in play, ask the Responses API to
+        # echo the per-call source URLs (``action.sources``). They are a fallback
+        # for the richer url_citation results we read off the assistant message.
+        if tools and any(isinstance(t, WebSearchTool) for t in tools):
+            existing_include = list(model_settings_kwargs.get("response_include") or [])
+            if "web_search_call.action.sources" not in existing_include:
+                existing_include.append("web_search_call.action.sources")
+            model_settings_kwargs["response_include"] = existing_include
 
         agent_kwargs["model_settings"] = ModelSettings(**model_settings_kwargs)
 
@@ -1355,13 +1448,28 @@ class OpenAICompatibleModel(LLMBaseModel):
                             final_assistant_yielded = False
                             raw_item = getattr(event.item, "raw_item", None)
                             if raw_item:
-                                tool_name = getattr(raw_item, "name", None)
+                                # ``raw_item`` may be a dict (e.g. function_call
+                                # replayed from an input list) or an SDK object;
+                                # mirror the tool_call_output_item handling below.
+                                if isinstance(raw_item, dict):
+                                    tool_name = raw_item.get("name")
+                                    arguments = raw_item.get("arguments", "{}")
+                                    call_id = raw_item.get("call_id")
+                                else:
+                                    tool_name = getattr(raw_item, "name", None)
+                                    arguments = getattr(raw_item, "arguments", "{}")
+                                    call_id = getattr(raw_item, "call_id", None)
+                                is_hosted = False
                                 if not tool_name:
-                                    logger.warning(f"Tool call has no name field: {type(raw_item)}, {dir(raw_item)}")
-                                    tool_name = "unknown"
-
-                                arguments = getattr(raw_item, "arguments", "{}")
-                                call_id = getattr(raw_item, "call_id", None)
+                                    hosted = describe_hosted_tool_item(raw_item)
+                                    if hosted:
+                                        tool_name, call_id, arguments = hosted
+                                        is_hosted = True
+                                    else:
+                                        logger.warning(
+                                            f"Tool call has no name field: {type(raw_item)}, {dir(raw_item)}"
+                                        )
+                                        tool_name = "unknown"
 
                                 # Generate call_id if missing
                                 if not call_id:
@@ -1369,6 +1477,7 @@ class OpenAICompatibleModel(LLMBaseModel):
                                     logger.warning(f"Tool call missing call_id, generated: {call_id}")
 
                                 # Try to format arguments
+                                args_dict: dict = {}
                                 try:
                                     args_dict = json.loads(arguments) if arguments else {}
                                     args_str = to_str(args_dict)[:80]
@@ -1396,6 +1505,38 @@ class OpenAICompatibleModel(LLMBaseModel):
                                 )
                                 action_history_manager.add_action(start_action)
                                 yield start_action
+
+                                # Hosted tools (web_search, …) run server-side and
+                                # emit no ``tool_call_output_item``. The results
+                                # are not on the call item — the richer title+url
+                                # pairs arrive as url_citation annotations on the
+                                # assistant message. Emit the completion right away
+                                # from the call's own ``action.sources`` so the CLI
+                                # stops the in-progress spinner as soon as the
+                                # server-side search returns, rather than pinning it
+                                # until stream end. The citation titles still
+                                # surface inline in the assistant answer text.
+                                if is_hosted:
+                                    temp_tool_calls.pop(call_id, None)
+                                    from datus.schemas.web_result import extract_action_sources, hosted_action_query
+
+                                    raw_action = (
+                                        raw_item.get("action")
+                                        if isinstance(raw_item, dict)
+                                        else getattr(raw_item, "action", None)
+                                    )
+                                    hosted_done = self._build_hosted_search_completion(
+                                        call_id=call_id,
+                                        tool_name=tool_name,
+                                        arguments=arguments,
+                                        args_str=args_str,
+                                        query=str(hosted_action_query(raw_action) or args_dict.get("query") or ""),
+                                        sources=extract_action_sources(raw_action),
+                                        start_time=start_action.start_time,
+                                    )
+                                    if action_history_manager is not None:
+                                        action_history_manager.add_action(hosted_done)
+                                    yield hosted_done
 
                         # Handle tool call completion
                         elif item_type == "tool_call_output_item":

@@ -28,7 +28,7 @@ questions.
 **Database tools** (anchored to the artifact's scoped datasource):
 - `execute_sql(query, datasource?)` — run a read-only SQL statement. Use sparingly; prefer reading the artifact's existing `queries/<name>.json` first.
 - `list_tables(...)`, `describe_table(...)`, `get_table_ddl(...)` — schema introspection within the scoped catalogs.
-- `read_query(...)` — quick row-count / sample probes.
+- `execute_sql(...)` — quick row-count / sample probes.
 {% endif -%}
 {% if has_semantic_tools -%}
 
@@ -61,7 +61,7 @@ questions.
 {% if has_platform_doc_tools -%}
 
 **Platform documentation tools** (if SQL questions touch dialect specifics):
-- `list_document_nav`, `get_document`, `search_document`, `web_search_document`.
+- `list_document_nav`, `get_document`, `search_document`.
 {% endif %}
 
 ## Conversation conventions

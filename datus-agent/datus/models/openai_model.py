@@ -27,6 +27,20 @@ class OpenAIModel(OpenAICompatibleModel):
         """
         super().__init__(model_config, **kwargs)
 
+    def supports_builtin_web_search(self) -> bool:
+        # The hosted ``web_search`` tool is ONLY accepted by the OpenAI Responses
+        # API. ``get_agents_sdk_model`` routes through ``OpenAIResponsesModel``
+        # solely for the canonical ``api.openai.com`` endpoint; a custom base_url
+        # (vLLM, OpenRouter relay, Coding Plan proxy, …) falls back to the LiteLLM
+        # ChatCompletions path, which rejects hosted tools with a ``UserError``.
+        # Gate on the real route so we never inject ``WebSearchTool`` into a
+        # ChatCompletions request — those endpoints use the local Tavily backend.
+        return self.litellm_adapter._is_official_openai()
+
+    def supports_builtin_web_fetch(self) -> bool:
+        # OpenAI Responses has no hosted fetch tool; web_fetch uses the local backend.
+        return False
+
     def _get_api_key(self) -> str:
         """Get OpenAI API key from config or environment."""
         api_key = self.model_config.api_key or os.environ.get("OPENAI_API_KEY")

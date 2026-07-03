@@ -34,7 +34,12 @@ logger = get_logger(__name__)
 SUMMARY_TEXT_MAX_CHARS = 19
 SUMMARY_ERROR_MAX_CHARS = 19
 
-FS_TOOLS_NO_CLIP = frozenset({"read_file", "write_file", "edit_file", "glob", "grep"})
+# Filesystem tools want full path/count visibility; web tools want their
+# result titles / page label visible on the compact line rather than clipped
+# to a handful of characters.
+FS_TOOLS_NO_CLIP = frozenset(
+    {"read_file", "write_file", "edit_file", "delete_file", "glob", "grep", "web_search", "web_fetch"}
+)
 
 
 # ── Generic helpers (public API) ────────────────────────────────────────
@@ -61,6 +66,33 @@ def looks_like_failure(data: dict) -> bool:
     if isinstance(error, str) and error.strip():
         return True
     return False
+
+
+def detect_tool_failure(output_content: Any) -> bool:
+    """Return True when a tool's output payload signals failure.
+
+    Tools built on :class:`~datus.tools.func_tool.base.FuncToolResult` report
+    errors via ``success=0`` / non-empty ``error`` instead of raising, so the
+    model integrations cannot infer failure from "did the call throw". Every
+    backend (OpenAI-compatible, Claude-native, Codex) must run the returned
+    payload through this helper to render ✗ and mark the action FAILED.
+
+    Accepts the raw ``ToolCallOutputItem.output`` shape: a dict (normal SDK
+    path), a JSON string, or anything else (treated as non-failure).
+    """
+    data: Optional[dict] = None
+    if isinstance(output_content, dict):
+        data = output_content
+    elif isinstance(output_content, str):
+        try:
+            parsed = json.loads(output_content)
+        except (TypeError, ValueError):
+            return False
+        if isinstance(parsed, dict):
+            data = parsed
+    if data is None:
+        return False
+    return looks_like_failure(data)
 
 
 def format_failure(data: dict) -> str:
@@ -143,8 +175,8 @@ def _clip_short(text: str, tool_name: str = "", limit: int = SUMMARY_TEXT_MAX_CH
     """Final-stage clip applied at registry exit.
 
     Filesystem tools (``read_file``, ``write_file``, ``edit_file``,
-    ``glob``, ``grep``) are exempt — their summaries are returned
-    verbatim because users want full path / count visibility there.
+    ``delete_file``, ``glob``, ``grep``) are exempt — their summaries are
+    returned verbatim because users want full path / count visibility there.
     """
     if not isinstance(text, str):
         return text
@@ -196,6 +228,29 @@ def _fmt_execute_ddl(result: Any) -> str:
     if isinstance(result, dict) and result.get("message"):
         return "DDL OK"
     return ""
+
+
+def _fmt_execute_sql(result: Any) -> str:
+    """Unified ``execute_sql`` summary — dispatches by result payload shape.
+
+    Read results carry ``compressed_data``/``original_rows``; write results
+    carry a row count; DDL results carry only a ``message``.
+    """
+    if isinstance(result, dict):
+        if "compressed_data" in result or "original_rows" in result:
+            return _fmt_read_query(result)
+        # ``execute_write`` always emits a ``message`` and may legitimately
+        # report ``row_count: None``, so classify a write by its ``sql_type``
+        # (or any row-count key) BEFORE the DDL ``message`` check — otherwise an
+        # INSERT/UPDATE/DELETE with an unknown row count would be mislabeled
+        # "DDL OK".
+        if result.get("sql_type") in {"insert", "update", "delete"} or any(
+            key in result for key in ("row_count", "affected_rows", "rows_affected")
+        ):
+            return _fmt_execute_write(result) or "Write OK"
+        if result.get("message"):
+            return _fmt_execute_ddl(result)
+    return _fmt_read_query(result)
 
 
 def _fmt_describe_table(result: Any) -> str:
@@ -805,6 +860,15 @@ def _fmt_edit_file(result: Any) -> str:
     return ""
 
 
+def _fmt_delete_file(result: Any) -> str:
+    if isinstance(result, str):
+        marker = "File deleted successfully: "
+        if result.startswith(marker):
+            return f"deleted {result[len(marker) :]}"
+        return truncate_text(result)
+    return ""
+
+
 def _fmt_glob(result: Any) -> str:
     if isinstance(result, dict):
         files = result.get("files")
@@ -1018,7 +1082,13 @@ def _fmt_search_document(result: Any) -> str:
     return ""
 
 
-def _fmt_web_search_document(result: Any) -> str:
+def _fmt_web_search(result: Any) -> str:
+    # Canonical schema (datus.schemas.web_result): {query, result_count, results}.
+    from datus.schemas.web_result import web_search_short_summary
+
+    if isinstance(result, dict) and ("results" in result or "query" in result):
+        return web_search_short_summary(result)
+    # Legacy fallbacks (older docs/doc_count shape, or a bare list).
     if isinstance(result, list):
         return pluralize(len(result), "web result")
     if isinstance(result, dict):
@@ -1027,6 +1097,14 @@ def _fmt_web_search_document(result: Any) -> str:
             n = len(result["docs"])
         if isinstance(n, int):
             return pluralize(n, "web result")
+    return ""
+
+
+def _fmt_web_fetch(result: Any) -> str:
+    from datus.schemas.web_result import web_fetch_short_summary
+
+    if isinstance(result, dict) and isinstance(result.get("content"), str):
+        return web_fetch_short_summary(result)
     return ""
 
 
@@ -1109,6 +1187,7 @@ def _register_builtins(registry: ToolSummaryRegistry) -> None:
     """Register every built-in tool formatter."""
     builtins: Dict[str, FormatterFn] = {
         # Database tools
+        "execute_sql": _fmt_execute_sql,
         "read_query": _fmt_read_query,
         "query": _fmt_read_query,
         "execute_write": _fmt_execute_write,
@@ -1184,6 +1263,7 @@ def _register_builtins(registry: ToolSummaryRegistry) -> None:
         "read_file": _fmt_read_file,
         "write_file": _fmt_write_file,
         "edit_file": _fmt_edit_file,
+        "delete_file": _fmt_delete_file,
         "glob": _fmt_glob,
         "grep": _fmt_grep,
         # Plan / todo
@@ -1206,7 +1286,8 @@ def _register_builtins(registry: ToolSummaryRegistry) -> None:
         "list_document_nav": _fmt_list_document_nav,
         "get_document": _fmt_get_document,
         "search_document": _fmt_search_document,
-        "web_search_document": _fmt_web_search_document,
+        "web_search": _fmt_web_search,
+        "web_fetch": _fmt_web_fetch,
     }
     for name, fn in builtins.items():
         registry.register(name, fn)

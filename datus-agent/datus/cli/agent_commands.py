@@ -1042,16 +1042,26 @@ class AgentCommands:
             # If no SQL contexts found, try to extract from actions
             if not sql_contexts:
                 # Look for SQL execution results in actions
+                from datus.utils.sql_utils import is_read_query_result
+
                 for action in actions:
                     # Handle both string and enum status
                     status_value = action.status.value if hasattr(action.status, "value") else action.status
 
-                    if action.action_type == "read_query" and status_value == "success":
-                        # This is a SQL execution result, create SQLContext from it
-                        sql_input = action.input or {}
-                        sql_output = action.output or {}
+                    sql_output = action.output or {}
+                    if (
+                        action.action_type == "execute_sql"
+                        and status_value == "success"
+                        and is_read_query_result(sql_output.get("result"))
+                    ):
+                        # Read-only query result → SQLContext. Write/DDL executions
+                        # return a metadata payload and are skipped.
+                        # Tool actions store params under ``input["arguments"]``;
+                        # fall back to the top-level shape for older payloads.
+                        raw_input = action.input or {}
+                        sql_input = raw_input.get("arguments", raw_input) if isinstance(raw_input, dict) else {}
 
-                        sql_query = sql_input.get("sql", "")
+                        sql_query = sql_input.get("sql") or sql_input.get("query", "")
                         sql_result = sql_output.get("result", "")
                         sql_error = sql_output.get("error", "")
 
@@ -1063,7 +1073,7 @@ class AgentCommands:
                             row_count=0,
                         )
                         sql_contexts.append(sql_context)
-                        logger.info(f"Added SQL context from read_query action: {sql_query[:100]}...")
+                        logger.info(f"Added SQL context from execute_sql action: {sql_query[:100]}...")
 
                 # Look for final message with SQL result
                 for action in reversed(actions):  # Start from the last action

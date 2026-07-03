@@ -15,6 +15,7 @@ from fastapi.responses import StreamingResponse
 from datus.api import deps as api_deps
 from datus.api.enterprise.models import AccessDecision
 from datus.api.models.base_models import Result
+from datus.api.models.chat_models import ToolResult, ToolResultInput
 from datus.api.models.cli_models import (
     ChatHistoryData,
     ChatSessionData,
@@ -37,6 +38,7 @@ from datus.api.routes.chat_routes import (
     submit_tool_result,
     submit_user_interaction,
 )
+from datus.tools.proxy.tool_result_channel import ToolResultChannel
 from datus.tools.sql_policy import SqlPolicyConfig
 
 
@@ -1385,3 +1387,53 @@ class TestGetChatHistory:
         assert isinstance(result, Result)
         assert result.data is None
         mock_wf.assert_called_once_with(ANY, timeout=_FUSE_IO_TIMEOUT)
+
+
+def _tool_result_input(call_id="call_1", session_id="sess1"):
+    return ToolResultInput(
+        session_id=session_id,
+        call_tool_id=call_id,
+        tool_result=ToolResult(success=1, result="ok"),
+    )
+
+
+def _task_with_channel(channel):
+    task = MagicMock()
+    task.node.tool_channel = channel
+    return task
+
+
+class TestSubmitToolResult:
+    @pytest.mark.asyncio
+    async def test_matched_publishes_and_returns_received(self):
+        channel = ToolResultChannel()
+        svc = _mock_svc(task=_task_with_channel(channel))
+
+        result = await submit_tool_result(_tool_result_input(), _mock_ctx(), _request_with_service(svc))
+
+        assert result.success is True
+        assert result.data.status == "received"
+        # The published result is observable by a waiter.
+        assert await channel.wait_for("call_1") == {"success": 1, "error": None, "result": "ok"}
+
+    @pytest.mark.asyncio
+    async def test_late_report_returns_ignored(self):
+        channel = ToolResultChannel()
+        # Future already settled — simulates a report arriving after the waiter
+        # timed out / a duplicate.
+        await channel.publish("call_1", {"success": 1})
+        svc = _mock_svc(task=_task_with_channel(channel))
+
+        result = await submit_tool_result(_tool_result_input(), _mock_ctx(), _request_with_service(svc))
+
+        assert result.success is True
+        assert result.data.status == "ignored"
+
+    @pytest.mark.asyncio
+    async def test_unknown_task_returns_not_found(self):
+        svc = _mock_svc(task=None)
+
+        result = await submit_tool_result(_tool_result_input(), _mock_ctx(), _request_with_service(svc))
+
+        assert result.success is False
+        assert result.errorCode == "TASK_NOT_FOUND"

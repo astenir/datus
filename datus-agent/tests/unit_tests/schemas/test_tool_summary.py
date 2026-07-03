@@ -25,6 +25,7 @@ from datus.schemas.tool_summary import (
     SUMMARY_TEXT_MAX_CHARS,
     TOOL_SUMMARY_REGISTRY,
     ToolSummaryRegistry,
+    detect_tool_failure,
     format_failure,
     format_generic_result,
     format_list_envelope,
@@ -72,6 +73,44 @@ class TestPublicHelpers:
     def test_looks_like_failure_default_false(self):
         assert looks_like_failure({"success": 1}) is False
         assert looks_like_failure({}) is False
+
+    def test_detect_tool_failure_dict_payload(self):
+        assert detect_tool_failure({"success": 0, "error": "boom"}) is True
+        assert detect_tool_failure({"success": False}) is True
+        assert detect_tool_failure({"error": "connection refused"}) is True
+        assert detect_tool_failure({"success": 1, "result": [1, 2]}) is False
+        assert detect_tool_failure({"success": 1, "error": "  "}) is False
+
+    def test_detect_tool_failure_json_string_payload(self):
+        # Claude-native path stores raw_output as a JSON string.
+        assert detect_tool_failure(json.dumps({"success": 0, "error": "x"})) is True
+        assert detect_tool_failure(json.dumps({"success": 1})) is False
+
+    def test_detect_tool_failure_non_json_string_is_not_failure(self):
+        # A Python repr (single quotes) or plain text is not JSON-parseable and
+        # must NOT be misread — return False rather than raising.
+        assert detect_tool_failure("{'success': 0}") is False
+        assert detect_tool_failure("ok") is False
+        assert detect_tool_failure("") is False
+
+    def test_detect_tool_failure_other_types(self):
+        assert detect_tool_failure(None) is False
+        assert detect_tool_failure([{"success": 0}]) is False
+
+    def test_detect_tool_failure_real_functoolresult_contract(self):
+        """Contract test: the exact payload model backends receive from a
+        FuncToolResult (its model_dump) must be detected. This locks the
+        producer (func_tool) ↔ consumer (detect_tool_failure) shape so a
+        rejected write never renders a green ✓."""
+        from datus.tools.func_tool.base import FuncToolResult
+
+        failed = FuncToolResult(success=0, error="File type not allowed: x.sh").model_dump(mode="json")
+        ok = FuncToolResult(success=1, result="File written successfully").model_dump(mode="json")
+        assert detect_tool_failure(failed) is True
+        assert detect_tool_failure(ok) is False
+        # Claude-native serializes the same payload as a JSON string.
+        assert detect_tool_failure(json.dumps(failed)) is True
+        assert detect_tool_failure(json.dumps(ok)) is False
 
     def test_format_failure_with_message(self):
         # Error text is clipped to SUMMARY_ERROR_MAX_CHARS (19).
@@ -617,6 +656,22 @@ class TestFilesystemFormatters:
         out = _summarize("edit_file", {"success": 1, "result": "File edited successfully: /tmp/y.py"})
         assert out == "edited /tmp/y.py"
 
+    def test_delete_file(self):
+        out = _summarize("delete_file", {"success": 1, "result": "File deleted successfully: /tmp/z.txt"})
+        assert out == "deleted /tmp/z.txt"
+
+    def test_delete_file_unrecognized_string_falls_through(self):
+        # No success marker -> the formatter returns the (truncated) raw string.
+        from datus.schemas.tool_summary import _fmt_delete_file
+
+        assert _fmt_delete_file("scratch removed") == "scratch removed"
+
+    def test_delete_file_non_string_result_empty(self):
+        # Non-string result -> formatter yields "" so the generic path takes over.
+        from datus.schemas.tool_summary import _fmt_delete_file
+
+        assert _fmt_delete_file({"deleted": True}) == ""
+
     def test_glob(self):
         out = _summarize(
             "glob",
@@ -902,8 +957,20 @@ def test_failure_path_uniform(tool: str):
         ("list_document_nav", {"total_docs": 5}, "5 docs"),
         ("get_document", {"chunks": [1, 2, 3]}, "3 chunks"),
         ("search_document", {"docs": [1]}, "1 doc match"),
-        ("web_search_document", [1, 2, 3], "3 web results"),
-        ("web_search_document", {"docs": [1, 2]}, "2 web results"),
+        # Canonical web_search schema (query/results keys) → labelled summary.
+        (
+            "web_search",
+            {"query": "q", "result_count": 1, "results": [{"title": "T", "url": "https://u", "snippet": "s"}]},
+            "1 web result: T",
+        ),
+        # web_search / web_fetch legacy fallbacks (bare list / docs shape, no
+        # canonical query/results keys).
+        ("web_search", [1, 2, 3], "3 web results"),
+        ("web_search", {"docs": [1, 2]}, "2 web results"),
+        # Canonical web_fetch schema → "<label> (N chars)" (web tools bypass the
+        # 19-char clip, like filesystem tools).
+        ("web_fetch", {"content": "abcde"}, "fetched (5 chars)"),
+        ("web_fetch", {"content": "abcde", "truncated": True}, "fetched (5 chars) (truncated)"),
     ],
 )
 def test_per_tool_fallback_branches(tool: str, payload: Any, expected: str):
@@ -1007,7 +1074,8 @@ _LENGTH_CONTRACT_SAMPLES: list[tuple[str, Any]] = [
     ("list_document_nav", {"platform": "snowflake", "total_docs": 99999}),
     ("get_document", {"platform": "snowflake", "chunk_count": 99999}),
     ("search_document", {"docs": [{}] * 999}),
-    ("web_search_document", [{}] * 999),
+    # web_search / web_fetch are intentionally exempt (in FS_TOOLS_NO_CLIP) so
+    # their result titles / page label stay visible — not part of this contract.
 ]
 
 

@@ -1329,6 +1329,30 @@ class SessionManager:
 
                 # Handle user messages
                 if role == "user":
+                    raw_user_content = message_json.get("content", "")
+                    # Claude-native tool results are user-role transport
+                    # messages, not real user turns. Attach them to the
+                    # matching tool action without emitting an empty user row.
+                    if isinstance(raw_user_content, list):
+                        tool_results = [
+                            block
+                            for block in raw_user_content
+                            if isinstance(block, dict) and block.get("type") == "tool_result"
+                        ]
+                        has_user_text = any(
+                            isinstance(block, dict) and block.get("type") in ("text", "input_text", "output_text")
+                            for block in raw_user_content
+                        )
+                        if tool_results and not has_user_text:
+                            for tool_result in tool_results:
+                                SessionManager._attach_native_tool_result(
+                                    current_actions,
+                                    tool_result.get("tool_use_id"),
+                                    tool_result.get("content"),
+                                    str(created_at) if created_at else None,
+                                )
+                            continue
+
                     # Before adding user message, flush any pending assistant group
                     if current_assistant_group:
                         final_action = SessionManager._parse_final_output(current_actions, current_assistant_group)
@@ -1489,6 +1513,33 @@ class SessionManager:
                             )
                             current_actions.append(thinking_action)
 
+                        # Native Claude tool calls live inside assistant content
+                        # as tool_use / server_tool_use blocks.
+                        if item_type in ("tool_use", "server_tool_use"):
+                            if not current_assistant_group:
+                                current_assistant_group = {
+                                    "role": "assistant",
+                                    "content": "",
+                                    "timestamp": created_at_iso,
+                                    "created_at": created_at_iso,
+                                }
+                            SessionManager._restore_native_tool_call(
+                                item,
+                                current_actions,
+                                assistant_progress,
+                                str(created_at) if created_at else None,
+                            )
+
+                        # Server-side web tools return their result inline in
+                        # the same assistant message, keyed by tool_use_id.
+                        if item_type in ("web_search_tool_result", "web_fetch_tool_result"):
+                            SessionManager._attach_native_tool_result(
+                                current_actions,
+                                item.get("tool_use_id"),
+                                item.get("content"),
+                                str(created_at) if created_at else None,
+                            )
+
             except (json.JSONDecodeError, TypeError, ValueError) as e:
                 logger.debug(f"Skipping malformed message: {e}")
                 continue
@@ -1566,6 +1617,103 @@ class SessionManager:
             logger.exception(f"Failed to load session messages for {session_id}: {e}")
 
         return messages
+
+    @staticmethod
+    def _restore_native_tool_call(
+        item: Dict[str, Any],
+        current_actions: List[ActionHistory],
+        assistant_progress: List[str],
+        created_at: Optional[str],
+    ) -> None:
+        """Build a PROCESSING tool action from a Claude-native content block.
+
+        ``ClaudeModel``'s OAuth path persists tool calls as ``tool_use`` /
+        ``server_tool_use`` blocks INSIDE the assistant message content (not as
+        flat ``function_call`` messages). Without restoring them here, the
+        resumed TUI shows assistant text but drops every tool-call card. Mirrors
+        the ``function_call`` branch's ActionHistory shape so the renderer treats
+        native and OpenAI sessions identically.
+        """
+        tool_name = item.get("name", "unknown")
+        tool_input = item.get("input", {})
+        try:
+            arguments = json.dumps(tool_input, ensure_ascii=False) if not isinstance(tool_input, str) else tool_input
+        except (TypeError, ValueError):
+            arguments = "{}"
+        assistant_progress.append(f"✓ Tool call: {tool_name}({arguments[:60]})")
+        action = ActionHistory(
+            action_id=item.get("id", str(uuid.uuid4())),
+            role=ActionRole.TOOL,
+            messages=f"Tool call: {tool_name}",
+            action_type=tool_name,
+            input={"function_name": tool_name, "arguments": arguments},
+            output=None,
+            status=ActionStatus.PROCESSING,
+            start_time=datetime.fromisoformat(created_at) if created_at else datetime.now(),
+        )
+        current_actions.append(action)
+
+    @staticmethod
+    def _attach_native_tool_result(
+        current_actions: List[ActionHistory],
+        tool_use_id: Optional[str],
+        raw_content: Any,
+        created_at: Optional[str],
+    ) -> None:
+        """Pair a Claude-native tool result with its in-flight tool_use action.
+
+        Mirrors the ``function_call_output`` path but for Anthropic blocks
+        (``tool_result`` in a user message, or ``web_search_tool_result`` /
+        ``web_fetch_tool_result`` inline in an assistant message), so the resumed
+        transcript renders the tool's output card instead of dropping it.
+        """
+        if not current_actions:
+            return
+        if isinstance(raw_content, list):
+            output_text = " ".join(p.get("text", "") for p in raw_content if isinstance(p, dict)).strip()
+        elif isinstance(raw_content, str):
+            output_text = raw_content
+        else:
+            output_text = json.dumps(raw_content, ensure_ascii=False) if raw_content is not None else ""
+
+        # Match by tool_use_id; fall back to the most recent in-flight tool call
+        # only when no id is available (mirrors function_call_output).
+        match = None
+        if tool_use_id:
+            for cand in reversed(current_actions):
+                if cand.action_id == tool_use_id and cand.status == ActionStatus.PROCESSING:
+                    match = cand
+                    break
+        else:
+            for cand in reversed(current_actions):
+                if cand.status == ActionStatus.PROCESSING and cand.role == ActionRole.TOOL:
+                    match = cand
+                    break
+        if match is None:
+            return
+
+        output_data = {}
+        if output_text:
+            try:
+                output_data = ast.literal_eval(output_text)
+            except (ValueError, SyntaxError):
+                try:
+                    output_data = json.loads(output_text)
+                except json.JSONDecodeError:
+                    output_data = {"result": output_text}
+
+        success_action = ActionHistory(
+            action_id="complete_" + (tool_use_id or match.action_id),
+            role=ActionRole.TOOL,
+            messages=f"Tool result: {match.action_type}",
+            action_type=match.action_type,
+            input=match.input,
+            output=output_data,
+            status=ActionStatus.SUCCESS,
+            start_time=match.start_time,
+            end_time=datetime.fromisoformat(created_at) if created_at else datetime.now(),
+        )
+        current_actions.append(success_action)
 
     def close_all_sessions(self) -> None:
         """Close all active sessions."""

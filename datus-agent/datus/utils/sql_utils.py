@@ -530,6 +530,58 @@ def _fallback_sql_type(statement: str) -> SQLType | None:
     return _KEYWORD_SQL_TYPE_MAP.get(keyword)
 
 
+def is_read_query_result(result: Any) -> bool:
+    """Return True if a ``FuncToolResult.result`` payload is a read-only query
+    result set.
+
+    ``execute_sql`` returns the compressor output (a dict carrying
+    ``compressed_data``) for SELECT/SHOW/EXPLAIN statements, and a metadata
+    payload (``message``/``sql``/...) for INSERT/UPDATE/DELETE/DDL. Consumers
+    that only want to seed query context from reads use this to skip writes.
+    """
+    return isinstance(result, dict) and "compressed_data" in result
+
+
+def looks_like_sql_file_ref(text: str) -> bool:
+    """True if ``text`` is a bare ``.sql`` file reference, not inline SQL.
+
+    ``execute_sql`` accepts either an inline statement or a workspace-relative
+    ``.sql`` file path. A real SQL statement always contains whitespace (at
+    minimum between the keyword and its operand), so a whitespace-free token
+    ending in ``.sql`` is a path. Shared by the execution path (``DBFuncTool``)
+    and the permission gate (``PermissionHooks``) so both detect a file
+    reference identically.
+    """
+    s = text.strip()
+    return bool(s) and s.endswith(".sql") and "\n" not in s and " " not in s
+
+
+def read_workspace_sql_file(file_path: str, workspace_root: str) -> str:
+    """Read a workspace-relative ``.sql`` file, rejecting unsafe paths.
+
+    Shared by ``DBFuncTool._read_sql_from_file`` (execution) and
+    ``PermissionHooks`` (the statement-type gate) so both resolve a ``.sql``
+    reference identically. Raises ``ValueError`` on an absolute path, a ``..``
+    traversal, or a path escaping the workspace, and ``FileNotFoundError`` when
+    the file does not exist.
+    """
+    import os
+    from pathlib import Path
+
+    if os.path.isabs(file_path):
+        raise ValueError(f"Absolute paths are not allowed: {file_path}")
+    if ".." in file_path:
+        raise ValueError(f"Invalid SQL file path: {file_path}")
+    root = os.path.expanduser(workspace_root or ".")
+    full_path = (Path(root) / file_path).resolve()
+    root_resolved = Path(root).resolve()
+    if not str(full_path).startswith(str(root_resolved) + os.sep) and full_path != root_resolved:
+        raise ValueError(f"SQL file path escapes workspace: {file_path}")
+    if not full_path.exists():
+        raise FileNotFoundError(file_path)
+    return full_path.read_text(encoding="utf-8")
+
+
 def parse_sql_type(sql: str, dialect: str) -> SQLType:
     """
     Determines the type of an SQL statement based on its first keyword.

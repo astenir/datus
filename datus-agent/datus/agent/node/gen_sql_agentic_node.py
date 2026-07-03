@@ -124,7 +124,7 @@ class GenSQLAgenticNode(AgenticNode):
         self.setup_tools()
 
         # Setup ask_user tool for clarification questions (interactive mode only)
-        if self.execution_mode == "interactive":
+        if self.execution_mode == "interactive" and not self.ask_user_tool:
             self._setup_ask_user_tool()
 
         logger.debug(f"GenSQLAgenticNode tools: {len(self.tools)} tools - {[tool.name for tool in self.tools]}")
@@ -215,6 +215,9 @@ class GenSQLAgenticNode(AgenticNode):
         )
         self._rebuild_tools()
 
+    def _input_database(self) -> Optional[str]:
+        return getattr(self.input, "database", None) if self.input else None
+
     def _rebuild_tools(self):
         """Rebuild the tools list with current tool instances."""
         self.tools = []
@@ -251,6 +254,8 @@ class GenSQLAgenticNode(AgenticNode):
             return
 
         self.tools = []
+        self.db_func_tool = None
+        self.reference_template_tools = None
         tools_str = self.node_config.get("tools")
         if not tools_str:
             tools_str = self.DEFAULT_TOOLS
@@ -270,6 +275,9 @@ class GenSQLAgenticNode(AgenticNode):
         if self.sub_agent_task_tool:
             self.tools.extend(self.sub_agent_task_tool.available_tools())
 
+        if self.execution_mode == "interactive":
+            self._setup_ask_user_tool()
+
         # Plan-mode tools (confirm_plan + todo_*) for main agents; no-op for sub-agents.
         self._register_plan_mode_tools()
 
@@ -288,6 +296,7 @@ class GenSQLAgenticNode(AgenticNode):
         try:
             self.db_func_tool = DBFuncTool(
                 agent_config=self.agent_config,
+                default_database=self._input_database(),
                 sub_agent_name=self.node_config.get("system_prompt"),
             )
             self.tools.extend(self.db_func_tool.available_tools())
@@ -310,6 +319,7 @@ class GenSQLAgenticNode(AgenticNode):
                 agent_config=self.agent_config,
                 sub_agent_name=self.node_config.get("system_prompt"),
                 adapter_type=adapter_type,
+                runtime_db_context_provider=self._semantic_runtime_db_context,
             )
             self.tools.extend(self.semantic_tools.available_tools())
         except Exception as e:
@@ -320,13 +330,14 @@ class GenSQLAgenticNode(AgenticNode):
 
         If db_tools are not configured but reference_template_tools are requested,
         create an internal-only db_func_tool for execute_reference_template
-        without exposing db_tools (read_query, list_tables, etc.) to the LLM.
+        without exposing db_tools (execute_sql, list_tables, etc.) to the LLM.
         """
         try:
             db_tool = self.db_func_tool
             if not db_tool:
                 db_tool = DBFuncTool(
                     agent_config=self.agent_config,
+                    default_database=self._input_database(),
                     sub_agent_name=self.node_config.get("system_prompt"),
                 )
             self.reference_template_tools = ReferenceTemplateTools(
@@ -446,12 +457,14 @@ class GenSQLAgenticNode(AgenticNode):
                         agent_config=self.agent_config,
                         sub_agent_name=self.node_config.get("system_prompt"),
                         adapter_type=adapter_type,
+                        runtime_db_context_provider=self._semantic_runtime_db_context,
                     )
                 tool_instance = self.semantic_tools
             elif tool_type == "db_tools":
                 if not self.db_func_tool:
                     self.db_func_tool = DBFuncTool(
                         agent_config=self.agent_config,
+                        default_database=self._input_database(),
                         sub_agent_name=self.node_config.get("system_prompt"),
                     )
                 tool_instance = self.db_func_tool
@@ -473,6 +486,7 @@ class GenSQLAgenticNode(AgenticNode):
                     if not db_tool:
                         db_tool = DBFuncTool(
                             agent_config=self.agent_config,
+                            default_database=self._input_database(),
                             sub_agent_name=self.node_config.get("system_prompt"),
                         )
                     self.reference_template_tools = ReferenceTemplateTools(
@@ -636,7 +650,6 @@ class GenSQLAgenticNode(AgenticNode):
         context["has_task_tool"] = bool(self.sub_agent_task_tool)
         available_tool_names = self._get_available_tool_names()
         context["available_tool_names"] = available_tool_names
-        context["has_read_query_tool"] = "read_query" in available_tool_names
         context["has_describe_table_tool"] = "describe_table" in available_tool_names
         context["has_list_metrics_tool"] = "list_metrics" in available_tool_names
         context["has_query_metrics_tool"] = "query_metrics" in available_tool_names

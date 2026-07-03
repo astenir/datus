@@ -207,10 +207,11 @@ class DatasourceService:
     ) -> List[DatabaseInfo]:
         """Get connection information for a database connector.
 
-        Enumerates all databases (and schemas if supported), marks the
-        connector's configured database as ``current``.  Request-level
-        filters (database_name, schema_name, catalog_name) narrow the
-        result set when provided.
+        Lists the database(s) this connector is scoped to — its configured
+        database, or the whole server only when no database is configured —
+        resolves schemas if supported, and marks the connector's configured
+        database as ``current``. Request-level filters (database_name,
+        schema_name, catalog_name) narrow the result set when provided.
         """
         from datus_db_core import connector_registry
 
@@ -239,17 +240,24 @@ class DatasourceService:
             logger.exception("Connection test failed for %s", connector.database_name)
             return [_disconnected(connector.database_name)]
 
-        # 1) Enumerate databases — fatal if this fails since we have nothing to iterate.
+        # 1) Resolve which databases to list — fatal if this fails since we have nothing
+        # to iterate. A datasource is a connection profile scoped to its configured
+        # database(s): get_connections() already yields one connector per config-known
+        # database (a server datasource's configured ``database``, or one connector per
+        # glob file). So list the database this connector is bound to, NOT every database
+        # on the server — otherwise a single project datasource leaks the whole instance.
         try:
             if request.database_name:
                 db_names = [request.database_name]
+            elif connector.database_name:
+                db_names = [connector.database_name]
             elif hasattr(connector, "get_databases"):
+                # No database configured for this datasource — fall back to enumerating
+                # the server so the user can still browse what the connection can reach.
                 db_names = connector.get_databases(
                     catalog_name=catalog_name,
                     include_sys=request.include_sys_schemas,
                 )
-            elif connector.database_name:
-                db_names = [connector.database_name]
             else:
                 db_names = []
         except Exception as e:
@@ -517,16 +525,23 @@ class DatasourceService:
                 errorMessage=str(e),
             )
 
-    def _get_semantic_model(self, full_name: str):
+    def _get_semantic_model(
+        self,
+        full_name: str,
+        *,
+        catalog: Optional[str] = None,
+        database: Optional[str] = None,
+        db_schema: Optional[str] = None,
+    ):
         self._ensure_current_connection()
         if self.current_db_connector is None:
             raise RuntimeError("No database connection")
         # Parse table name parts
         name_parts = parse_table_name_parts(full_name, self.current_db_connector.get_type())
         current_db_config = self.agent_config.current_db_config()
-        catalog_name = name_parts["catalog_name"] or current_db_config.catalog
-        database_name = name_parts["database_name"] or self.current_db_name or current_db_config.database
-        schema_name = name_parts["schema_name"] or current_db_config.schema
+        catalog_name = catalog or name_parts["catalog_name"] or current_db_config.catalog
+        database_name = database or name_parts["database_name"] or self.current_db_name or current_db_config.database
+        schema_name = db_schema or name_parts["schema_name"] or current_db_config.schema
         table_name = name_parts["table_name"]
 
         # Get semantic model using SemanticMetricsRAG
@@ -538,7 +553,14 @@ class DatasourceService:
         )
         return semantic_model
 
-    def get_semantic_model(self, full_name: str) -> Result[GetSemanticModelData]:
+    def get_semantic_model(
+        self,
+        full_name: str,
+        *,
+        catalog: Optional[str] = None,
+        database: Optional[str] = None,
+        db_schema: Optional[str] = None,
+    ) -> Result[GetSemanticModelData]:
         """Get SemanticModel YAML.
 
         Business logic:
@@ -554,7 +576,12 @@ class DatasourceService:
             Result[GetSemanticModelData] with YAML content
         """
         try:
-            semantic_model = self._get_semantic_model(full_name)
+            semantic_model = self._get_semantic_model(
+                full_name,
+                catalog=catalog,
+                database=database,
+                db_schema=db_schema,
+            )
             if not semantic_model:
                 return Result[GetSemanticModelData](
                     success=True,
@@ -612,7 +639,12 @@ class DatasourceService:
             )
 
         # Step 2: Get semantic file path
-        semantic_model = self._get_semantic_model(request.table)
+        semantic_model = self._get_semantic_model(
+            request.table,
+            catalog=request.catalog,
+            database=request.database,
+            db_schema=request.db_schema,
+        )
         if not semantic_model:
             return Result[dict](
                 success=False,
@@ -678,7 +710,12 @@ class DatasourceService:
         logger.info("Validating semantic model YAML")
         try:
             full_name = request.table
-            semantic_model = self._get_semantic_model(full_name)
+            semantic_model = self._get_semantic_model(
+                full_name,
+                catalog=request.catalog,
+                database=request.database,
+                db_schema=request.db_schema,
+            )
             if not semantic_model:
                 return Result[ValidateSemanticModelData](
                     success=False,
@@ -697,6 +734,9 @@ class DatasourceService:
                 file_path=semantic_file_path,
                 datus_home=self.agent_config.home,
                 datasource=self.agent_config.current_datasource,
+                catalog=request.catalog,
+                database=request.database,
+                db_schema=request.db_schema,
             )
 
             if not is_valid:

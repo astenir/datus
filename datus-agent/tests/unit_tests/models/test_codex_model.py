@@ -570,6 +570,69 @@ class TestCodexModelGenerateWithToolsStream:
     @patch("datus.models.codex_model.Runner")
     @patch("datus.models.codex_model.Agent")
     @patch("datus.models.codex_model.extract_sql_contexts")
+    async def test_stream_hosted_web_search_completes_in_stream(
+        self, mock_extract, mock_agent_cls, mock_runner, mock_mcp, mock_oauth_cls, model_config
+    ):
+        """Hosted web_search emits no tool_call_output_item; its SUCCESS completion
+        must be yielded immediately in-stream (from action.sources) so the CLI
+        spinner clears rather than staying pinned until the turn ends."""
+        from datus.models.codex_model import CodexModel
+
+        mock_oauth = MagicMock()
+        mock_oauth.get_access_token.return_value = "tok"
+        mock_oauth_cls.return_value = mock_oauth
+
+        model = CodexModel(model_config=model_config)
+        model._async_client = MagicMock()
+
+        with patch("agents.models.openai_responses.OpenAIResponsesModel"):
+            mock_mcp.return_value.__aenter__ = AsyncMock(return_value={})
+            mock_mcp.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            # Hosted web_search_call item (dict form): no name/output, results
+            # live in action.sources.
+            hosted_event = MagicMock()
+            hosted_event.type = "run_item_stream_event"
+            hosted_event.item.type = "tool_call_item"
+            hosted_event.item.raw_item = {
+                "type": "web_search_call",
+                "id": "ws_1",
+                "action": {"type": "search", "query": "duckdb latest", "sources": [{"url": "https://duckdb.org"}]},
+            }
+
+            mock_result = MagicMock()
+            mock_result.final_output = "Done"
+            is_complete_values = iter([False, True])
+            type(mock_result).is_complete = property(lambda self: next(is_complete_values))
+
+            async def stream_events():
+                yield hosted_event
+
+            mock_result.stream_events = stream_events
+            mock_runner.run_streamed.return_value = mock_result
+            mock_extract.return_value = []
+
+            actions = []
+            async for action in model.generate_with_tools_stream(prompt="test"):
+                actions.append(action)
+
+            # PROCESSING (search dispatched) -> SUCCESS (in-stream, not deferred) -> final
+            assert actions[0].action_type == "web_search"
+            assert str(actions[0].status) == "processing"
+            assert actions[1].action_id == "complete_ws_1"
+            assert actions[1].action_type == "web_search"
+            assert str(actions[1].status) == "success"
+            canonical = actions[1].output["raw_output"]["result"]
+            assert canonical["query"] == "duckdb latest"
+            assert canonical["results"] == [{"title": "", "url": "https://duckdb.org", "snippet": "", "age": None}]
+            assert actions[2].action_type == "final_response"
+
+    @pytest.mark.asyncio
+    @patch("datus.models.codex_model.OAuthManager")
+    @patch("datus.models.codex_model.multiple_mcp_servers")
+    @patch("datus.models.codex_model.Runner")
+    @patch("datus.models.codex_model.Agent")
+    @patch("datus.models.codex_model.extract_sql_contexts")
     async def test_stream_with_raw_response_text(
         self, mock_extract, mock_agent_cls, mock_runner, mock_mcp, mock_oauth_cls, model_config
     ):
@@ -700,6 +763,118 @@ class TestCodexModelBaseUrl:
         )
         model = CodexModel(model_config=config)
         assert model._base_url == "https://my-proxy.example.com/codex"
+
+
+class TestCodexSupportsBuiltinWebSearch:
+    """Hosted ``web_search`` is gated on the official ChatGPT Codex host.
+
+    A custom ``base_url`` points at a third-party relay that may not support the
+    hosted tool, so it must fall back to the local Tavily backend.
+    """
+
+    @patch("datus.models.codex_model.OAuthManager")
+    def test_official_codex_enables_web_search(self, mock_oauth_cls, model_config):
+        from datus.models.codex_model import CodexModel
+
+        mock_oauth_cls.return_value = MagicMock()
+        model = CodexModel(model_config=model_config)
+        assert model.supports_builtin_web_search() is True
+
+    @patch("datus.models.codex_model.OAuthManager")
+    def test_default_base_url_enables_web_search(self, mock_oauth_cls):
+        from datus.models.codex_model import CodexModel
+
+        mock_oauth_cls.return_value = MagicMock()
+        config = ModelConfig(type="codex", api_key="", model="gpt-5.3-codex", auth_type="oauth")
+        model = CodexModel(model_config=config)
+        assert model.supports_builtin_web_search() is True
+
+    @patch("datus.models.codex_model.OAuthManager")
+    def test_custom_proxy_disables_web_search(self, mock_oauth_cls):
+        from datus.models.codex_model import CodexModel
+
+        mock_oauth_cls.return_value = MagicMock()
+        config = ModelConfig(
+            type="codex",
+            api_key="",
+            model="gpt-5.3-codex",
+            base_url="https://my-proxy.example.com/codex",
+            auth_type="oauth",
+        )
+        model = CodexModel(model_config=config)
+        assert model.supports_builtin_web_search() is False
+
+
+class TestCodexBuiltinWebSearchInjection:
+    """The hosted ``WebSearchTool`` must only be injected when
+    ``supports_builtin_web_search()`` is True — i.e. on the official ChatGPT
+    Codex host. Custom relay hosts fall back to the local Tavily backend.
+    """
+
+    @pytest.mark.asyncio
+    @patch("datus.models.codex_model.OAuthManager")
+    @patch("datus.models.codex_model.multiple_mcp_servers")
+    @patch("datus.models.codex_model.Runner")
+    @patch("datus.models.codex_model.Agent")
+    async def test_official_host_injects_web_search_tool(
+        self, mock_agent_cls, mock_runner, mock_mcp, mock_oauth_cls, model_config
+    ):
+        from agents import WebSearchTool
+
+        from datus.models.codex_model import CodexModel
+
+        mock_oauth_cls.return_value = MagicMock()
+        model = CodexModel(model_config=model_config)
+        model._async_client = MagicMock()
+
+        with (
+            patch("agents.models.openai_responses.OpenAIResponsesModel"),
+            patch("datus.models.codex_model.extract_sql_contexts", return_value=[]),
+        ):
+            mock_mcp.return_value.__aenter__ = AsyncMock(return_value={})
+            mock_mcp.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_runner.run_streamed.return_value = _mock_streamed_result("done", 1)
+
+            await model.generate_with_tools(prompt="test", builtin_web_tools={"web_search": True})
+
+        injected = mock_agent_cls.call_args.kwargs.get("tools") or []
+        assert any(isinstance(t, WebSearchTool) for t in injected)
+
+    @pytest.mark.asyncio
+    @patch("datus.models.codex_model.OAuthManager")
+    @patch("datus.models.codex_model.multiple_mcp_servers")
+    @patch("datus.models.codex_model.Runner")
+    @patch("datus.models.codex_model.Agent")
+    async def test_custom_proxy_does_not_inject_web_search_tool(
+        self, mock_agent_cls, mock_runner, mock_mcp, mock_oauth_cls
+    ):
+        from agents import WebSearchTool
+
+        from datus.models.codex_model import CodexModel
+
+        mock_oauth_cls.return_value = MagicMock()
+        config = ModelConfig(
+            type="codex",
+            api_key="",
+            model="gpt-5.3-codex",
+            base_url="https://my-proxy.example.com/codex",
+            auth_type="oauth",
+        )
+        model = CodexModel(model_config=config)
+        model._async_client = MagicMock()
+
+        with (
+            patch("agents.models.openai_responses.OpenAIResponsesModel"),
+            patch("datus.models.codex_model.extract_sql_contexts", return_value=[]),
+        ):
+            mock_mcp.return_value.__aenter__ = AsyncMock(return_value={})
+            mock_mcp.return_value.__aexit__ = AsyncMock(return_value=False)
+            mock_runner.run_streamed.return_value = _mock_streamed_result("done", 1)
+
+            await model.generate_with_tools(prompt="test", builtin_web_tools={"web_search": True})
+
+        injected = mock_agent_cls.call_args.kwargs.get("tools") or []
+        assert not any(isinstance(t, WebSearchTool) for t in injected)
 
 
 class TestCodexModelJsonOutput401Retry:

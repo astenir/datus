@@ -1575,3 +1575,307 @@ class TestVisualArtifactAutoAllow:
         )
 
         mock_broker.request.assert_not_called()
+
+
+class TestExecuteSqlPermission:
+    """Statement-type gating for ``db_tools.execute_sql`` via _handle_sql_permission."""
+
+    def _make_hooks(self, mock_broker, config, non_interactive=False, project_root=None):
+        registry = ToolRegistry()
+        tool_mock = MagicMock()
+        tool_mock.name = "execute_sql"
+        registry.register_tools("db_tools", [tool_mock])
+        manager = PermissionManager(global_config=config)
+        return PermissionHooks(
+            broker=mock_broker,
+            permission_manager=manager,
+            node_name="chat",
+            tool_registry=registry,
+            non_interactive=non_interactive,
+            project_root=project_root,
+        )
+
+    @staticmethod
+    def _ctx(sql):
+        import json
+
+        ctx = MagicMock()
+        ctx.tool_arguments = json.dumps({"sql": sql})
+        return ctx
+
+    @staticmethod
+    def _tool():
+        t = MagicMock()
+        t.name = "execute_sql"
+        return t
+
+    @pytest.mark.asyncio
+    async def test_read_auto_allows_under_normal_default_ask(self, mock_broker):
+        """A SELECT auto-allows even when the profile default is ASK — no prompt."""
+        config = PermissionConfig(default_permission=PermissionLevel.ASK, rules=[])
+        hooks = self._make_hooks(mock_broker, config)
+
+        await hooks.on_tool_start(self._ctx("SELECT * FROM users"), MagicMock(), self._tool())
+
+        mock_broker.request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_metadata_show_auto_allows(self, mock_broker):
+        config = PermissionConfig(default_permission=PermissionLevel.ASK, rules=[])
+        hooks = self._make_hooks(mock_broker, config)
+
+        await hooks.on_tool_start(self._ctx("SHOW TABLES"), MagicMock(), self._tool())
+
+        mock_broker.request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_write_prompts_and_allows_on_yes(self, mock_broker):
+        """An INSERT defers to the normal ASK flow; user 'y' lets it through."""
+        config = PermissionConfig(default_permission=PermissionLevel.ASK, rules=[])
+        hooks = self._make_hooks(mock_broker, config)
+        # InteractionBroker.request returns List[List[str]]; mirror that shape.
+        mock_broker.request = AsyncMock(return_value=[["y"]])
+
+        await hooks.on_tool_start(self._ctx("INSERT INTO users VALUES (1)"), MagicMock(), self._tool())
+
+        assert mock_broker.request.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_write_rejected_on_no(self, mock_broker):
+        config = PermissionConfig(default_permission=PermissionLevel.ASK, rules=[])
+        hooks = self._make_hooks(mock_broker, config)
+        mock_broker.request = AsyncMock(return_value=[["n"]])
+
+        with pytest.raises(PermissionDeniedException):
+            await hooks.on_tool_start(self._ctx("DELETE FROM users"), MagicMock(), self._tool())
+
+    @pytest.mark.asyncio
+    async def test_ddl_prompts(self, mock_broker):
+        config = PermissionConfig(default_permission=PermissionLevel.ASK, rules=[])
+        hooks = self._make_hooks(mock_broker, config)
+        mock_broker.request = AsyncMock(return_value=[["y"]])
+
+        await hooks.on_tool_start(self._ctx("CREATE TABLE t (id INT)"), MagicMock(), self._tool())
+
+        assert mock_broker.request.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_unknown_or_unparseable_sql_prompts(self, mock_broker):
+        """An unresolvable .sql path / unparseable text is non-read → ASK (fail safe).
+
+        With no ``project_root`` set the ``.sql`` file cannot be read, so the gate
+        keeps the path as-is, classifies it UNKNOWN, and prompts.
+        """
+        config = PermissionConfig(default_permission=PermissionLevel.ASK, rules=[])
+        hooks = self._make_hooks(mock_broker, config)
+        mock_broker.request = AsyncMock(return_value=[["y"]])
+
+        await hooks.on_tool_start(self._ctx("sql/session_1/q.sql"), MagicMock(), self._tool())
+
+        assert mock_broker.request.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_readonly_sql_file_auto_allows(self, mock_broker, tmp_path):
+        """A .sql file holding a read-only SELECT is resolved and auto-allows.
+
+        The gate reads the workspace-relative file (same logic as the tool) so a
+        read-only file does not trigger an unnecessary confirmation prompt.
+        """
+        sql_dir = tmp_path / "sql"
+        sql_dir.mkdir()
+        (sql_dir / "probe.sql").write_text("SELECT * FROM users LIMIT 10")
+        config = PermissionConfig(default_permission=PermissionLevel.ASK, rules=[])
+        hooks = self._make_hooks(mock_broker, config, project_root=str(tmp_path))
+
+        await hooks.on_tool_start(self._ctx("sql/probe.sql"), MagicMock(), self._tool())
+
+        mock_broker.request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_write_sql_file_prompts(self, mock_broker, tmp_path):
+        """A .sql file holding a write is resolved to its real type and prompts."""
+        sql_dir = tmp_path / "sql"
+        sql_dir.mkdir()
+        (sql_dir / "load.sql").write_text("INSERT INTO users VALUES (1)")
+        config = PermissionConfig(default_permission=PermissionLevel.ASK, rules=[])
+        hooks = self._make_hooks(mock_broker, config, project_root=str(tmp_path))
+        mock_broker.request = AsyncMock(return_value=[["y"]])
+
+        await hooks.on_tool_start(self._ctx("sql/load.sql"), MagicMock(), self._tool())
+
+        assert mock_broker.request.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_read_respects_explicit_deny(self, mock_broker):
+        """An explicit DENY on execute_sql blocks even a read."""
+        config = PermissionConfig(
+            default_permission=PermissionLevel.ASK,
+            rules=[PermissionRule(tool="db_tools", pattern="execute_sql", permission=PermissionLevel.DENY)],
+        )
+        hooks = self._make_hooks(mock_broker, config)
+
+        with pytest.raises(PermissionDeniedException):
+            await hooks.on_tool_start(self._ctx("SELECT 1"), MagicMock(), self._tool())
+
+    @pytest.mark.asyncio
+    async def test_write_non_interactive_raises_without_prompt(self, mock_broker):
+        config = PermissionConfig(default_permission=PermissionLevel.ASK, rules=[])
+        hooks = self._make_hooks(mock_broker, config, non_interactive=True)
+
+        with pytest.raises(PermissionDeniedException):
+            await hooks.on_tool_start(self._ctx("UPDATE users SET a = 1"), MagicMock(), self._tool())
+
+        mock_broker.request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_write_allowed_under_dangerous_default(self, mock_broker):
+        """Dangerous profile (default ALLOW) lets writes through with no prompt."""
+        config = PermissionConfig(default_permission=PermissionLevel.ALLOW, rules=[])
+        hooks = self._make_hooks(mock_broker, config)
+
+        await hooks.on_tool_start(self._ctx("INSERT INTO t VALUES (1)"), MagicMock(), self._tool())
+
+        mock_broker.request.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_session_always_allow_is_bucketed_by_sql_type(self, mock_broker):
+        """'Always allow' is keyed by the concrete SQL type, not a coarse class.
+
+        The session approval is bucketed per type (``execute_sql.insert`` /
+        ``.update`` / ``.ddl``), so approving an INSERT only auto-approves later
+        INSERTs — a different type (UPDATE, DROP) still prompts.
+        """
+        config = PermissionConfig(default_permission=PermissionLevel.ASK, rules=[])
+        hooks = self._make_hooks(mock_broker, config)
+        mock_broker.request = AsyncMock(return_value=[["a"]])  # "always allow (session)"
+
+        # First INSERT: prompts once and approves the ``insert`` bucket.
+        await hooks.on_tool_start(self._ctx("INSERT INTO t VALUES (1)"), MagicMock(), self._tool())
+        assert mock_broker.request.await_count == 1
+
+        # Another INSERT (same type): served from the session cache, no prompt.
+        await hooks.on_tool_start(self._ctx("INSERT INTO t VALUES (2)"), MagicMock(), self._tool())
+        assert mock_broker.request.await_count == 1
+
+        # An UPDATE (different type) is NOT covered by the insert bucket → prompts.
+        await hooks.on_tool_start(self._ctx("UPDATE t SET a = 1"), MagicMock(), self._tool())
+        assert mock_broker.request.await_count == 2
+
+        # A DDL (different type again) → prompts once more.
+        await hooks.on_tool_start(self._ctx("DROP TABLE t"), MagicMock(), self._tool())
+        assert mock_broker.request.await_count == 3
+
+
+class TestFormatToolArgsMarkdown:
+    """Unit tests for the ``_format_tool_args_markdown`` rendering helper.
+
+    Replaces the old single-line ``json.dumps`` + 200-char truncation: scalars
+    render inline, the ``sql`` arg / long strings move into fenced code blocks,
+    and nested structures render as pretty JSON — never truncated.
+    """
+
+    @staticmethod
+    def _fmt(args):
+        return permission_hooks_module._format_tool_args_markdown(args)
+
+    def test_empty_args_returns_empty_string(self):
+        """Empty args produce no markdown so callers can skip the section."""
+        assert self._fmt({}) == ""
+
+    def test_scalars_render_inline(self):
+        """Short scalars render inline as ``**key:** `value``` with no code fence."""
+        out = self._fmt({"database": "sales", "limit": 10, "dry_run": True, "note": None})
+        assert "**database:** `sales`" in out
+        assert "**limit:** `10`" in out
+        assert "**dry_run:** `True`" in out
+        assert "**note:** `None`" in out
+        assert "```" not in out
+        # Section header is present.
+        assert "**Arguments**" in out
+
+    def test_sql_arg_uses_sql_fence_and_is_not_truncated(self):
+        """The ``sql`` argument lands in a ```sql block with its full text."""
+        long_sql = "INSERT INTO orders (id, amount) VALUES " + ", ".join(f"({i}, {i * 1.5})" for i in range(50))
+        assert len(long_sql) > 200  # would have been truncated by the old code
+        out = self._fmt({"sql": long_sql})
+        assert "```sql" in out
+        assert long_sql in out  # full statement preserved
+        assert "..." not in out  # no truncation marker
+
+    def test_long_non_sql_string_uses_plain_fence(self):
+        """A long/multi-line non-sql string goes into a language-less fence."""
+        text = "line one\nline two\nline three"
+        out = self._fmt({"body": text})
+        assert "**body:**" in out
+        assert "```\n" in out  # language-less fence opener
+        assert "```sql" not in out
+        assert text in out
+
+    def test_nested_value_renders_pretty_json(self):
+        """dict/list values render as multi-line pretty JSON in a ```json block."""
+        nested = {"filters": {"region": {"in": ["us", "eu"]}}, "cols": ["a", "b"]}
+        out = self._fmt(nested)
+        assert "```json" in out
+        # Pretty-printed (indented, multi-line), not a single compact line.
+        assert "\n  " in out
+        # Deeply nested content is preserved.
+        assert '"region"' in out
+        assert '"in"' in out
+
+    def test_short_string_at_threshold_stays_inline(self):
+        """A string at the inline boundary is not forced into a code fence."""
+        value = "x" * permission_hooks_module._INLINE_ARG_MAX
+        out = self._fmt({"k": value})
+        assert f"**k:** `{value}`" in out
+        assert "```" not in out
+
+
+class TestPermissionPromptContent:
+    """End-to-end check that ``_request_user_confirmation`` builds rich content."""
+
+    def _make_hooks(self, mock_broker):
+        manager = PermissionManager(global_config=PermissionConfig())
+        return PermissionHooks(
+            broker=mock_broker,
+            permission_manager=manager,
+            node_name="chat",
+            tool_registry=ToolRegistry(),
+        )
+
+    @staticmethod
+    def _ctx(args):
+        import json
+
+        ctx = MagicMock()
+        ctx.tool_arguments = json.dumps(args)
+        return ctx
+
+    @pytest.mark.asyncio
+    async def test_content_includes_sql_block_without_truncation(self, mock_broker):
+        """The InteractionEvent content carries a full, highlighted SQL block."""
+        mock_broker.request = AsyncMock(return_value=[["y"]])
+        hooks = self._make_hooks(mock_broker)
+        long_sql = "INSERT INTO orders VALUES " + ", ".join(f"({i})" for i in range(60))
+
+        approved = await hooks._request_user_confirmation(
+            "db_tools", "execute_sql.insert", self._ctx({"sql": long_sql})
+        )
+
+        assert approved is True
+        event = mock_broker.request.call_args.args[0][0]
+        assert "```sql" in event.content
+        assert long_sql in event.content  # not truncated
+        assert "..." not in event.content
+
+    @pytest.mark.asyncio
+    async def test_content_has_no_arguments_section_when_args_empty(self, mock_broker):
+        """With no args, the content omits the Arguments section entirely."""
+        mock_broker.request = AsyncMock(return_value=[["n"]])
+        hooks = self._make_hooks(mock_broker)
+
+        approved = await hooks._request_user_confirmation("skills", "deep-analysis", self._ctx({}))
+
+        assert approved is False
+        event = mock_broker.request.call_args.args[0][0]
+        assert "**Arguments**" not in event.content
+        assert "Permission Request" in event.content

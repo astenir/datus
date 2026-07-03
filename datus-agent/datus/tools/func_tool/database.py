@@ -9,7 +9,6 @@ import re
 from collections import OrderedDict
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
-from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Union
 
 from agents import Tool
@@ -19,6 +18,7 @@ from datus.configuration.agent_config import AgentConfig
 from datus.schemas.agent_models import SubAgentConfig
 from datus.storage.schema_metadata.store import SchemaWithValueRAG
 from datus.storage.semantic_model.store import SemanticModelRAG
+from datus.storage.table_semantic_profile.store import TableSemanticProfileRAG
 from datus.tools.db_tools.db_manager import DBManager, db_manager_instance
 from datus.tools.func_tool.base import FuncToolResult, trans_to_function_tool
 from datus.utils.compress_utils import DataCompressor
@@ -34,6 +34,7 @@ _SQL_IDENTIFIER_RE = (
     r"(?:\s*\.\s*(?:`[^`]+`|\"[^\"]+\"|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_$]*))*"
 )
 _SQL_IDENTIFIER_END_RE = r"(?=\s|$|;)"
+_FALLBACK_SCHEMA_DIALECTS = {"postgres", "postgresql", "greenplum", "redshift"}
 
 
 @dataclass
@@ -120,6 +121,7 @@ class DBFuncTool:
         scoped_tables: Optional[Iterable[str]] = None,
         principal: Optional[Dict[str, Any]] = None,
         connector_cache_size: int = DEFAULT_CONNECTOR_CACHE_SIZE,
+        read_only: bool = False,
     ):
         """
         Initialize DBFuncTool.
@@ -137,6 +139,14 @@ class DBFuncTool:
             principal: Request-scoped SQL policy attributes. When omitted,
                        falls back to ``agent_config.principal`` if present.
             connector_cache_size: Max connectors to cache (LRU eviction), default 8
+            read_only: When True, ``execute_sql`` hard-rejects any non-read
+                       statement (INSERT/UPDATE/DELETE/DDL/MERGE/...) at the tool
+                       layer, independent of ``PermissionHooks``. Use for agents
+                       whose contract is read-only (Explore, ask_report/dashboard,
+                       LLM validators) so the unified write-capable entry point
+                       cannot mutate the datasource even when hooks are bypassed
+                       (e.g. validators run with ``hooks=None``) or under a
+                       permissive profile.
         """
         if connector_or_manager is None:
             if not agent_config:
@@ -165,14 +175,28 @@ class DBFuncTool:
         principal_source = principal if principal is not None else getattr(agent_config, "principal", {})
         self.principal: Dict[str, Any] = dict(principal_source) if isinstance(principal_source, dict) else {}
         self.sub_agent_name = sub_agent_name
+        self.read_only = read_only
         self.schema_rag = SchemaWithValueRAG(agent_config, sub_agent_name) if agent_config else None
         self._field_order = self._determine_field_order()
         self._scoped_patterns = self._load_scoped_patterns(scoped_tables)
 
         self._semantic_storage = SemanticModelRAG(agent_config, sub_agent_name) if agent_config else None
+        self._table_semantic_profiles = None
+        if agent_config and isinstance(getattr(agent_config, "project_name", ""), str):
+            try:
+                self._table_semantic_profiles = TableSemanticProfileRAG(agent_config, sub_agent_name)
+            except Exception as exc:
+                logger.debug(f"Failed to initialize table semantic profile storage: {exc}")
         self.has_schema = self.schema_rag and self.schema_rag.schema_store.table_size() > 0
 
         self.has_semantic_models = self._semantic_storage and self._semantic_storage.get_size() > 0
+        try:
+            self.has_table_semantic_profiles = (
+                self._table_semantic_profiles is not None and self._table_semantic_profiles.get_size() > 0
+            )
+        except Exception:
+            self._table_semantic_profiles = None
+            self.has_table_semantic_profiles = False
 
     def _init_single_db_connector(self, connector: BaseSqlConnector):
         # Legacy single connector mode
@@ -265,12 +289,13 @@ class DBFuncTool:
 
     def _determine_field_order(self) -> Sequence[str]:
         dialect = getattr(self._primary_connector, "dialect", "") or ""
+        dialect_name = str(dialect).lower()
         fields: List[str] = []
         if connector_registry.support_catalog(dialect):
             fields.append("catalog")
         if connector_registry.support_database(dialect) or dialect == DBType.SQLITE:
             fields.append("database")
-        if connector_registry.support_schema(dialect):
+        if connector_registry.support_schema(dialect) or dialect_name in _FALLBACK_SCHEMA_DIALECTS:
             fields.append("schema")
         fields.append("table")
         return fields
@@ -362,6 +387,94 @@ class DBFuncTool:
         logger.info(f"get_semantic_model result: {result}")
         return result if result is not None else {}
 
+    def _get_table_semantic_profile(
+        self, catalog: str = "", database: str = "", schema: str = "", table_name: str = ""
+    ) -> Dict[str, Any]:
+        if self._table_semantic_profiles is None:
+            return {}
+        result = self._table_semantic_profiles.get_profile(
+            catalog_name=catalog,
+            database_name=database,
+            schema_name=schema,
+            table_name=table_name,
+            select_fields=[
+                "table_name",
+                "semantic_model_name",
+                "dataset_name",
+                "data_source_name",
+                "description",
+                "ai_context_json",
+                "columns_json",
+                "relationships_json",
+            ],
+        )
+        logger.info(f"get_table_semantic_profile result: {result}")
+        return result if result is not None else {}
+
+    @staticmethod
+    def _decode_profile_json(value: Any, default: Any) -> Any:
+        if value in (None, ""):
+            return default
+        if isinstance(value, (dict, list)):
+            return value
+        if not isinstance(value, str):
+            return default
+        try:
+            return json.loads(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _apply_table_semantic_profile(self, result_data: Dict[str, Any], profile: Dict[str, Any]) -> None:
+        """Attach a table semantic profile to describe_table output."""
+
+        columns = result_data.get("columns", [])
+        semantic_columns = self._decode_profile_json(profile.get("columns_json"), [])
+        relationships = self._decode_profile_json(profile.get("relationships_json"), [])
+        ai_context = self._decode_profile_json(profile.get("ai_context_json"), None)
+
+        table = {
+            "name": (
+                profile.get("dataset_name")
+                or profile.get("data_source_name")
+                or profile.get("table_name")
+                or profile.get("semantic_model_name")
+                or ""
+            ),
+            "description": profile.get("description", ""),
+        }
+        if ai_context not in (None, "", [], {}):
+            table["ai_context"] = ai_context
+        result_data["table"] = table
+        result_data["semantic"] = {
+            "relationships": relationships,
+        }
+
+        if not isinstance(semantic_columns, list):
+            return
+        semantic_lookup = {}
+        for semantic_col in semantic_columns:
+            if not isinstance(semantic_col, dict):
+                continue
+            for key in ("expr", "name"):
+                value = semantic_col.get(key)
+                if value:
+                    semantic_lookup.setdefault(str(value).strip("`").lower(), semantic_col)
+
+        for col in columns:
+            col_name = str(col.get("name", "")).lower()
+            semantic_col = semantic_lookup.get(col_name)
+            if not semantic_col:
+                continue
+            role = semantic_col.get("role") or ""
+            description = semantic_col.get("description") or ""
+            col["semantic_role"] = role
+            col["is_dimension"] = role in ("dimension", "time_dimension")
+            if semantic_col.get("ai_context") not in (None, "", [], {}):
+                col["ai_context"] = semantic_col.get("ai_context")
+            if description:
+                col["semantic_description"] = description
+                col["comment"] = description
+
     def _enrich_fields_with_descriptions(
         self, field_list_json: str, ddl_columns: List[Dict[str, Any]], field_type: str
     ) -> List[Dict[str, Any]]:
@@ -439,30 +552,26 @@ class DBFuncTool:
         return os.path.expanduser(workspace_root)
 
     def _read_sql_from_file(self, file_path: str) -> str:
-        """Read SQL content from a file path relative to workspace root."""
-        if os.path.isabs(file_path):
-            raise DatusException(
-                ErrorCode.TOOL_INVALID_INPUT,
-                message_args={"error_message": f"Absolute paths are not allowed: {file_path}"},
-            )
-        if ".." in file_path:
-            raise DatusException(
-                ErrorCode.TOOL_INVALID_INPUT, message_args={"error_message": f"Invalid SQL file path: {file_path}"}
-            )
-        workspace_root = self._resolve_workspace_root()
-        full_path = (Path(workspace_root) / file_path).resolve()
-        workspace_resolved = Path(workspace_root).resolve()
-        if not str(full_path).startswith(str(workspace_resolved) + os.sep) and full_path != workspace_resolved:
-            raise DatusException(
-                ErrorCode.TOOL_INVALID_INPUT,
-                message_args={"error_message": f"SQL file path escapes workspace: {file_path}"},
-            )
-        if not full_path.exists():
+        """Read SQL content from a file path relative to workspace root.
+
+        Delegates the path-safety checks and read to the shared
+        :func:`read_workspace_sql_file` so the execution path and the
+        permission gate resolve a ``.sql`` reference identically.
+        """
+        from datus.utils.sql_utils import read_workspace_sql_file
+
+        try:
+            return read_workspace_sql_file(file_path, self._resolve_workspace_root())
+        except FileNotFoundError:
             raise DatusException(
                 ErrorCode.COMMON_FILE_NOT_FOUND,
                 message_args={"config_name": "SQL", "file_name": file_path},
             )
-        return full_path.read_text(encoding="utf-8")
+        except ValueError as e:
+            raise DatusException(
+                ErrorCode.TOOL_INVALID_INPUT,
+                message_args={"error_message": str(e)},
+            )
 
     @staticmethod
     def _normalize_identifier_part(value: Optional[str]) -> str:
@@ -562,7 +671,7 @@ class DBFuncTool:
         filtered: List[Dict[str, Any]] = []
         for entry in entries:
             coordinate = self._build_table_coordinate(
-                raw_name=str(entry.get("name", "")),
+                raw_name=str(entry.get("qualified_name", "")),
                 catalog=catalog,
                 database=database,
                 schema=schema,
@@ -807,7 +916,7 @@ class DBFuncTool:
         if self.has_schema:
             methods_to_convert.append(self.search_table)
 
-        methods_to_convert.append(self.read_query)
+        methods_to_convert.append(self.execute_sql)
 
         if any(connector_registry.support_database(dialect) for dialect in configured_dialects):
             bound_tools.append(self.to_function_tool(self.list_databases))
@@ -1040,8 +1149,10 @@ class DBFuncTool:
             include_views: When True (default) also include views and materialized views.
 
         Returns:
-            FuncToolResult with result=[{"type": "table|view|materialized_view", "name": str}, ...]. On failure
-            success=0 with an explanatory error message.
+            FuncToolResult with result=[{"type": "table|view|materialized_view", "qualified_name": str}, ...].
+            ``qualified_name`` is ``[db.][schema.]table``, prefixing only the levels the caller did not pass
+            (e.g. pass ``database`` but not ``schema`` and each entry carries its resolved ``schema.table``).
+            On failure success=0 with an explanatory error message.
         """
         try:
             catalog, database, schema_name = self._normalize_namespace_args(
@@ -1053,7 +1164,7 @@ class DBFuncTool:
             connector = self._get_connector(datasource, database)
             result = []
             for tb in connector.get_tables(catalog, database, schema_name):
-                result.append({"type": "table", "name": tb})
+                result.append({"type": "table", "qualified_name": tb})
 
             if include_views:
                 # Add views. We deliberately swallow any exception — some connectors
@@ -1064,7 +1175,7 @@ class DBFuncTool:
                 try:
                     views = connector.get_views(catalog, database, schema_name)
                     for view in views:
-                        result.append({"type": "view", "name": view})
+                        result.append({"type": "view", "qualified_name": view})
                 except Exception as e:
                     logger.debug(f"get_views unavailable on {connector.dialect}: {e}")
 
@@ -1072,7 +1183,7 @@ class DBFuncTool:
                 try:
                     materialized_views = connector.get_materialized_views(catalog, database, schema_name)
                     for mv in materialized_views:
-                        result.append({"type": "materialized_view", "name": mv})
+                        result.append({"type": "materialized_view", "qualified_name": mv})
                 except Exception as e:
                     logger.debug(f"get_materialized_views unavailable on {connector.dialect}: {e}")
 
@@ -1112,6 +1223,9 @@ class DBFuncTool:
             - table (dict, optional): Table-level metadata from semantic model (only if model exists):
               - name (str): Name of the table
               - description (str): Table description from semantic model
+              - ai_context (dict/list/str, optional): Extra LLM-facing business guidance
+            - semantic (dict, optional): LLM-facing semantic hints:
+              - relationships (list): Relevant dataset/data-source relationships
         """
         try:
             catalog, database, schema_name = self._normalize_namespace_args(
@@ -1165,8 +1279,26 @@ class DBFuncTool:
 
             # 3. Enrich with Semantic Model Info if available
             result_data = {"columns": columns}
+            profile_applied = False
 
-            if self.has_semantic_models:
+            try:
+                profile = self._get_table_semantic_profile(
+                    coordinate.catalog,
+                    coordinate.database,
+                    coordinate.schema,
+                    coordinate.table,
+                )
+                if profile:
+                    logger.debug(
+                        "Found table semantic profile: %s",
+                        profile.get("dataset_name") or profile.get("data_source_name") or "unknown",
+                    )
+                    self._apply_table_semantic_profile(result_data, profile)
+                    profile_applied = True
+            except Exception as e:
+                logger.warning(f"Failed to get table semantic profile for {table_name}: {e}")
+
+            if self.has_semantic_models and not profile_applied:
                 try:
                     logger.debug("Checking for semantic models")
                     # Use coordinate values (resolved and stripped) for lookup
@@ -1180,11 +1312,15 @@ class DBFuncTool:
                     if model:
                         logger.debug(f"Found semantic model: {model.get('semantic_model_name', 'unknown')}")
 
-                        # Add table-level metadata
-                        result_data["table"] = {
-                            "name": model.get("semantic_model_name", ""),
-                            "description": model.get("description", ""),
-                        }
+                        # Add table-level metadata unless the authoring-format
+                        # profile already provided a richer table projection.
+                        result_data.setdefault(
+                            "table",
+                            {
+                                "name": model.get("semantic_model_name", ""),
+                                "description": model.get("description", ""),
+                            },
+                        )
 
                         # Create lookup map using expr (physical column) as key, fallback to name
                         # expr is the actual column name/expression, name is the semantic name
@@ -1204,9 +1340,10 @@ class DBFuncTool:
                                     dim_data = dim_map[col_name]
                                     col["is_dimension"] = True
                                     if dim_data.get("description"):
+                                        col.setdefault("semantic_description", dim_data.get("description"))
                                         col["comment"] = dim_data.get("description")
                                 else:
-                                    col["is_dimension"] = False
+                                    col.setdefault("is_dimension", False)
                         else:
                             logger.debug("No dimensions defined in model")
                     else:
@@ -1227,9 +1364,99 @@ class DBFuncTool:
             return FuncToolResult(success=0, error=error_msg)
 
     @mcp_tool()
+    def execute_sql(
+        self,
+        sql: str,
+        datasource: Optional[str] = "",
+        database: Optional[str] = "",
+        min_rows: Optional[int] = None,
+        max_rows: Optional[int] = None,
+    ) -> FuncToolResult:
+        """
+        Execute a single SQL statement against the current database connection.
+
+        This is the unified entry point for running SQL. The statement type is
+        detected automatically and routed accordingly:
+
+        * Read-only (SELECT, SHOW/DESCRIBE, EXPLAIN) — returns result rows; runs
+          without confirmation.
+        * DML (INSERT, UPDATE, DELETE) — modifies data and returns write metadata.
+        * Any other statement — DDL (CREATE/ALTER/DROP TABLE/VIEW, CREATE/DROP
+          SCHEMA or DATABASE, CTAS), plus TRUNCATE, MERGE, GRANT, etc. — runs
+          generically and returns execution metadata.
+
+        CAUTION: Everything except a read-only query modifies the database and
+        requires user confirmation. Prefer a read-only SELECT for inspection, and
+        only run a write/DDL statement when the task explicitly requires it.
+        Multi-statement scripts are rejected — submit one statement per call.
+
+        Args:
+            sql: A single SQL statement, or a ``.sql`` file path
+                (e.g. "sql/session_1/query.sql") to read and execute from the workspace.
+            datasource: Optional datasource name for multi-datasource scenarios.
+            database: Optional physical database to run against. Required to target a
+                specific database of a multi-database datasource (e.g. one file of a
+                sqlite/duckdb glob).
+            min_rows: Optional minimum acceptable affected row count (DML only).
+            max_rows: Optional maximum acceptable affected row count (DML only).
+
+        Returns:
+            FuncToolResult: compressed rows for read-only queries, or execution
+            metadata for writes/DDL. On failure success=0 with an error message.
+        """
+        from datus.utils.sql_utils import looks_like_sql_file_ref, parse_sql_type
+
+        try:
+            # Resolve a ``.sql`` file path up front so type detection inspects the
+            # real statement, not the path. The inner methods re-detect the path
+            # too, but on resolved SQL the check is a no-op. The permission gate
+            # resolves the same file via the shared helper so a read-only .sql
+            # file auto-allows instead of prompting. A .sql file must contain a
+            # single statement; the downstream read/write/DDL paths each reject
+            # multi-statement input.
+            sql_stripped = sql.strip()
+            if looks_like_sql_file_ref(sql_stripped):
+                sql = self._read_sql_from_file(sql_stripped)
+
+            connector = self._get_connector(datasource, database)
+            sql_type = parse_sql_type(sql, connector.dialect)
+
+            if sql_type in (SQLType.SELECT, SQLType.METADATA_SHOW, SQLType.EXPLAIN):
+                return self.read_query(sql, datasource=datasource, database=database)
+            if self.read_only:
+                # Defense-in-depth for read-only agents: reject any non-read
+                # statement at the tool layer, independent of PermissionHooks
+                # (which may be bypassed, e.g. validators run with hooks=None).
+                return FuncToolResult(
+                    success=0,
+                    error=(
+                        "This agent is read-only: only SELECT/SHOW/DESCRIBE/EXPLAIN "
+                        "statements are allowed through execute_sql."
+                    ),
+                )
+            if sql_type in (SQLType.INSERT, SQLType.UPDATE, SQLType.DELETE):
+                return self.execute_write(
+                    sql,
+                    datasource=datasource,
+                    database=database,
+                    min_rows=min_rows,
+                    max_rows=max_rows,
+                )
+            # Any other statement — DDL (CREATE/ALTER/DROP, CREATE DATABASE, ...),
+            # MERGE, or engine-specific commands. The permission layer has already
+            # gated non-read SQL behind confirmation, so execute it generically
+            # rather than rejecting it by sub-type. Only multi-statement scripts
+            # are refused (one statement per call).
+            return self.execute_ddl(sql, datasource=datasource, database=database)
+        except Exception as e:
+            return FuncToolResult(success=0, error=str(e))
+
     def read_query(self, sql: str, datasource: Optional[str] = "", database: Optional[str] = "") -> FuncToolResult:
         """
         Execute a read-only SQL query and return the result rows (optionally compressed).
+
+        Internal read path used by :meth:`execute_sql` and by Python callers
+        (e.g. reference-template execution). Not exposed to the LLM as its own tool.
 
         Only SELECT, SHOW/DESCRIBE, and EXPLAIN statements are allowed.
         DML (INSERT/UPDATE/DELETE) and DDL (CREATE/ALTER/DROP) are rejected.
@@ -1245,10 +1472,12 @@ class DBFuncTool:
             FuncToolResult with result=self.compressor.compress(rows) when successful. On failure success=0 with the
             underlying error message from the connector.
         """
+        from datus.utils.sql_utils import looks_like_sql_file_ref
+
         try:
             # Support SQL file path: if sql is a simple path ending with .sql, read from file
             sql_stripped = sql.strip()
-            if sql_stripped.endswith(".sql") and "\n" not in sql_stripped and " " not in sql_stripped:
+            if looks_like_sql_file_ref(sql_stripped):
                 sql = self._read_sql_from_file(sql_stripped)
 
             connector = self._get_connector(datasource, database)
@@ -1423,22 +1652,17 @@ class DBFuncTool:
             return FuncToolResult(success=0, error=str(e))
 
     # Regex matching allowed DDL statement prefixes
-    _ALLOWED_DDL_RE = re.compile(
-        r"^\s*(CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMPORARY|TEMP)\s+)?(?:TABLE|VIEW)"
-        r"|CREATE\s+SCHEMA(?:\s+IF\s+NOT\s+EXISTS)?"
-        r"|DROP\s+SCHEMA(?:\s+IF\s+EXISTS)?"
-        r"|ALTER\s+TABLE"
-        r"|DROP\s+(?:TABLE|VIEW)(?:\s+IF\s+EXISTS)?)\b",
-        re.IGNORECASE,
-    )
-
     def execute_ddl(self, sql: str, datasource: Optional[str] = "", database: Optional[str] = "") -> FuncToolResult:
         """
-        Execute a DDL SQL statement (CREATE TABLE AS SELECT, ALTER TABLE, etc.).
+        Execute a single non-read, non-DML SQL statement (the generic write path).
 
         CAUTION: This modifies the database. Only use when explicitly instructed.
-        Supported statements: CREATE TABLE, CREATE TABLE AS SELECT (CTAS),
-        CREATE/DROP SCHEMA, ALTER TABLE, DROP TABLE, CREATE VIEW, DROP VIEW.
+        Handles DDL (CREATE/ALTER/DROP TABLE/VIEW, CREATE/DROP SCHEMA or DATABASE,
+        CTAS), as well as other non-query statements (TRUNCATE, MERGE, GRANT,
+        CREATE INDEX, engine-specific commands). Statement-type permission gating
+        lives in ``PermissionHooks._handle_sql_permission``; this method does not
+        re-gate by sub-type. Read-only and INSERT/UPDATE/DELETE statements have
+        dedicated paths and are rejected here.
 
         Args:
             sql: DDL SQL statement to execute
@@ -1447,33 +1671,46 @@ class DBFuncTool:
         Returns:
             Execution result with success status
         """
-        from datus.utils.sql_utils import strip_sql_comments
+        from datus.utils.sql_utils import _first_statement, parse_sql_type, strip_sql_comments
 
         # Validate: strip comments, reject multi-statement SQL
         cleaned = strip_sql_comments(sql).strip().rstrip(";").strip()
         if not cleaned:
             return FuncToolResult(success=0, error="Empty SQL statement")
 
-        if ";" in cleaned:
+        # Use the quote-aware parser, not a raw ``";" in cleaned`` check, so a
+        # single statement with a semicolon inside a string literal or quoted
+        # identifier (e.g. ``COMMENT ON ... IS 'a;b'``) is not falsely rejected.
+        if _first_statement(cleaned) != cleaned:
             return FuncToolResult(
                 success=0,
-                error="Multi-statement SQL is not allowed. Please submit one DDL statement at a time.",
-            )
-
-        # Validate: only allow DDL statement types
-        if not self._ALLOWED_DDL_RE.match(cleaned):
-            return FuncToolResult(
-                success=0,
-                error="Only DDL statements are allowed (CREATE/DROP SCHEMA, CREATE TABLE/VIEW, ALTER TABLE, "
-                "DROP TABLE/VIEW). DML statements (INSERT, UPDATE, DELETE, SELECT) are not permitted.",
+                error="Multi-statement SQL is not allowed. Please submit one statement at a time.",
             )
 
         connector = self._get_connector(datasource, database)
+
+        # Generic non-query execution path. There is NO sub-type allow-list:
+        # once the permission layer has approved a non-read statement, run it
+        # (CREATE/ALTER/DROP, CREATE DATABASE, TRUNCATE, MERGE, GRANT, ...). The
+        # only guard is defense-in-depth: read-only and DML statements have
+        # dedicated paths (read_query / execute_write) and must not land here.
+        stmt_type = parse_sql_type(cleaned, connector.dialect)
+        if stmt_type in (SQLType.SELECT, SQLType.METADATA_SHOW, SQLType.EXPLAIN):
+            return FuncToolResult(
+                success=0,
+                error="Read-only statements (SELECT/SHOW/DESCRIBE/EXPLAIN) must run through the read path.",
+            )
+        if stmt_type in (SQLType.INSERT, SQLType.UPDATE, SQLType.DELETE):
+            return FuncToolResult(
+                success=0,
+                error="DML statements (INSERT/UPDATE/DELETE) must run through the write path.",
+            )
+
         out_of_scope = self._check_sql_table_scope(cleaned, connector)
         if out_of_scope:
             return FuncToolResult(
                 success=0,
-                error=f"DDL statement references tables outside scoped context: {', '.join(out_of_scope)}",
+                error=f"Statement references tables outside scoped context: {', '.join(out_of_scope)}",
             )
 
         if self._ddl_sql_reads_from_source(cleaned, connector.dialect):
@@ -1551,7 +1788,12 @@ class DBFuncTool:
         Returns:
             FuncToolResult with execution metadata when successful.
         """
-        from datus.utils.sql_utils import _first_statement, parse_sql_type, strip_sql_comments
+        from datus.utils.sql_utils import (
+            _first_statement,
+            looks_like_sql_file_ref,
+            parse_sql_type,
+            strip_sql_comments,
+        )
 
         if dry_run:
             return FuncToolResult(
@@ -1561,7 +1803,7 @@ class DBFuncTool:
 
         try:
             sql_stripped = sql.strip()
-            if sql_stripped.endswith(".sql") and "\n" not in sql_stripped and " " not in sql_stripped:
+            if looks_like_sql_file_ref(sql_stripped):
                 sql = self._read_sql_from_file(sql_stripped)
 
             cleaned = strip_sql_comments(sql).strip()

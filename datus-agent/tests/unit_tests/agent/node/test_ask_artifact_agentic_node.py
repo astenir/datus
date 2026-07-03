@@ -1906,15 +1906,39 @@ class TestToolsWhitelist:
         assert not missing, f"whitelisted tools missing from node surface: {sorted(missing)}"
 
     def test_method_level_whitelist_is_precise(self, real_agent_config):
-        """``db_tools.read_query`` grants exactly that method — sibling db
+        """``db_tools.execute_sql`` grants exactly that method — sibling db
         methods that weren't listed stay dropped."""
-        node = _make_ask_report_with_tools(real_agent_config, "db_tools.read_query")
+        node = _make_ask_report_with_tools(real_agent_config, "db_tools.execute_sql")
         names = _tool_names(node)
         # Listed → present.
-        assert "read_query" in names
+        assert "execute_sql" in names
         # Not listed (other DBFuncTool methods) → absent.
         for other in ("list_tables", "describe_table"):
             assert other not in names, f"{other} should not be exposed by a method-level whitelist"
+
+        # The prompt/rules path must mirror the pruned surface: the behavioral
+        # rules may advertise the exposed ``execute_sql`` but must NOT instruct
+        # the model to call the dropped ``describe_table`` (which would fail at
+        # call time with "Tool ... not found").
+        rules = node._render_behavioral_rules_section()
+        assert "execute_sql" in rules
+        assert "describe_table" not in rules, "rules must not mention a db tool the whitelist dropped"
+
+    def test_dashboard_rule6_gates_ad_hoc_sql_on_execute_sql_only(self, real_agent_config):
+        """Dashboard rule 6 must advertise ad-hoc ``execute_sql`` ONLY when that
+        tool is exposed. A whitelist that keeps just ``describe_table`` leaves DB
+        access nominally present, but the model has no way to run SQL — so the
+        rule must take its no-execution form instead of telling it to run SQL."""
+        node = _make_ask_dashboard_with_tools(real_agent_config, "db_tools.describe_table")
+        names = _tool_names(node)
+        assert "describe_table" in names
+        assert "execute_sql" not in names
+
+        rules = node._render_behavioral_rules_section()
+        assert "ad-hoc SQL via `execute_sql`" not in rules, (
+            "dashboard rule 6 must not advertise execute_sql when it is not whitelisted"
+        )
+        assert "live SQL execution is not enabled" in rules
 
     def test_filesystem_tools_require_whitelist(self, real_agent_config):
         """Filesystem tools are gated like every other group — present only
@@ -1939,12 +1963,12 @@ class TestToolsWhitelist:
         # db_tools omitted from this whitelist → still dropped.
         assert "read_query" not in names
 
-    def test_db_tools_wildcard_keeps_read_query(self, real_agent_config):
+    def test_db_tools_wildcard_keeps_execute_sql(self, real_agent_config):
         """Sanity check the other direction: whitelisting ``db_tools.*``
-        keeps ``read_query`` so the prune isn't unconditionally stripping db."""
+        keeps ``execute_sql`` so the prune isn't unconditionally stripping db."""
         node = _make_ask_report_with_tools(real_agent_config, "db_tools.*")
         names = _tool_names(node)
-        assert "read_query" in names
+        assert "execute_sql" in names
         assert "list_tables" in names
 
     def test_empty_whitelist_exposes_no_tools(self, real_agent_config):
@@ -2198,6 +2222,28 @@ class TestChatDecoupling:
         )
         node._get_system_prompt()
         assert "load_skill" in _tool_names(node)
+
+    def test_web_tools_not_reinjected_after_prompt_build(self, real_agent_config):
+        """web_search/web_fetch stay out across a prompt build when ``web_tool``
+        isn't whitelisted — the same lazy-injection / snapshot-replay leak as
+        bash and skills, on the unified web tool group."""
+        node = _make_ask_report_with_tools(
+            real_agent_config, "date_parsing_tools.*,filesystem_tools.*", name="ask_noweb", slug="noweb"
+        )
+        node._get_system_prompt()  # runs the lazy web-tool re-injection path
+        leaked = {"web_search", "web_fetch"} & _tool_names(node)
+        assert not leaked, f"web tools leaked via prompt-build lazy injection: {sorted(leaked)}"
+        assert node._web_tool is None
+        assert node._builtin_web_tools == {"web_search": False, "web_fetch": False}
+
+    def test_web_tools_present_when_whitelisted(self, real_agent_config):
+        """Symmetric to bash/skills: ``web_tool.*`` lets the web group mount
+        through the prompt build (the base injector resolves the backends)."""
+        node = _make_ask_report_with_tools(
+            real_agent_config, "web_tool.*,filesystem_tools.*", name="ask_web", slug="withweb"
+        )
+        node._get_system_prompt()
+        assert node._web_tool is not None  # gate passed through to the base injector
 
     def test_no_db_boundary_statement_gated_on_db_exposure(self, real_agent_config):
         """A db-less whitelist gets the explicit 'no live database access'

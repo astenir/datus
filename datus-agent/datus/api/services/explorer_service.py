@@ -23,6 +23,7 @@ from datus.api.models.explorer_models import (
     RenameSubjectInput,
     SubjectListData,
     SubjectNode,
+    SubjectPathInput,
 )
 from datus.utils.loggings import get_logger
 
@@ -76,6 +77,30 @@ class ExplorerService:
                 ErrorCode.STORAGE_INVALID_ARGUMENT,
                 message_args={"error_message": "No datasource is selected; select a datasource first"},
             )
+
+    def _semantic_runtime_db_context(self, request=None) -> dict:
+        """Build runtime DB context for semantic adapter API calls."""
+        context = {}
+        if self.datasource_id:
+            context["datasource"] = self.datasource_id
+
+        db_config = None
+        try:
+            db_config = self.agent_config.current_db_config(self.datasource_id)
+        except Exception as e:
+            logger.debug("Unable to read current DB config for semantic API context: %s", e)
+
+        catalog = getattr(request, "catalog", None) or getattr(db_config, "catalog", "") or ""
+        database = getattr(request, "database", None) or getattr(db_config, "database", "") or ""
+        schema = getattr(request, "db_schema", None) or getattr(db_config, "schema", "") or ""
+        if catalog:
+            context["catalog"] = str(catalog).strip()
+        if database:
+            context["database"] = str(database).strip()
+        if schema:
+            context["schema"] = str(schema).strip()
+            context["db_schema"] = str(schema).strip()
+        return {key: value for key, value in context.items() if value}
 
     def _gen_reference_sql_id(self, sql: str) -> str:
         """Generate a stable identifier for reference SQL entries."""
@@ -608,7 +633,7 @@ class ExplorerService:
                 errorMessage=str(e),
             )
 
-    async def get_metric_dimensions(self, subject_path: List[str]) -> Result[MetricDimensionsData]:
+    async def get_metric_dimensions(self, request: SubjectPathInput) -> Result[MetricDimensionsData]:
         """List the queryable dimensions of a saved metric.
 
         Powers the preview panel's dimension picker, so the user only chooses
@@ -619,18 +644,22 @@ class ExplorerService:
         try:
             self._require_datasource()
 
-            if not subject_path:
+            if not request.subject_path:
                 return Result[MetricDimensionsData](
                     success=False,
                     errorCode=ErrorCode.PROVIDER_CONFIG_ERROR,
                     errorMessage="Subject path cannot be empty",
                 )
 
-            metric_name = subject_path[-1]
+            metric_name = request.subject_path[-1]
 
             from datus.tools.func_tool.semantic_tools import SemanticTools
 
-            tools = SemanticTools(self.agent_config)
+            runtime_db_context = self._semantic_runtime_db_context(request)
+            tools = SemanticTools(
+                self.agent_config,
+                runtime_db_context_provider=lambda: runtime_db_context,
+            )
             adapter = tools.adapter
             if adapter is None:
                 return Result[MetricDimensionsData](
@@ -687,7 +716,11 @@ class ExplorerService:
 
             from datus.tools.func_tool.semantic_tools import SemanticTools
 
-            tools = SemanticTools(self.agent_config)
+            runtime_db_context = self._semantic_runtime_db_context(request)
+            tools = SemanticTools(
+                self.agent_config,
+                runtime_db_context_provider=lambda: runtime_db_context,
+            )
             if tools.adapter is None:
                 return Result[MetricPreviewData](
                     success=False,
@@ -724,11 +757,12 @@ class ExplorerService:
                         errorCode=ErrorCode.PROVIDER_CONFIG_ERROR,
                         errorMessage=f"Failed to compile SQL for metric '{metric_name}'.",
                     )
-                # The datasource id (logical key) is not a physical database; return the
-                # bound datasource's real default database so callers can run the SQL as-is.
-                # Pin the lookup to this service's datasource_id (not the implicit "current")
-                # so a multi-datasource config can never return another datasource's database.
-                database = self.agent_config.current_db_config(self.datasource_id).database or None
+                # Return the same runtime database context used to compile the SQL.
+                database = (
+                    runtime_db_context.get("database")
+                    or self.agent_config.current_db_config(self.datasource_id).database
+                    or None
+                )
                 return Result[MetricPreviewData](
                     success=True,
                     data=MetricPreviewData(metric=metric_name, sql=sql, database=database),

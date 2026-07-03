@@ -30,12 +30,16 @@ from agents.tool_context import ToolContext
 from agents.usage import InputTokensDetails, OutputTokensDetails, RequestUsage
 
 from datus.configuration.agent_config import ModelConfig
+from datus.models.litellm_adapter import is_official_anthropic_endpoint
 from datus.models.mcp_utils import multiple_mcp_servers
 from datus.models.openai_compatible import OpenAICompatibleModel
 from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.node_models import SQLContext
+from datus.schemas.tool_summary import detect_tool_failure
+from datus.utils.constants import SQLType
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
+from datus.utils.sql_utils import parse_sql_type
 from datus.utils.ssl_utils import is_ssl_cert_verification_error
 from datus.utils.traceable_utils import optional_traceable
 
@@ -69,6 +73,118 @@ def wrap_prompt_cache(messages):
         content[cnt_size - 1]["cache_control"] = {"type": "ephemeral"}
 
     return messages_copy
+
+
+def _extract_document_text(node, depth: int = 0) -> str:
+    """Best-effort recursive pull of readable text from a web_fetch document block.
+
+    Anthropic's ``web_fetch_result`` wraps the fetched page as a document block
+    whose text can sit at ``.source.data`` (text media type) or in a nested
+    ``.content[].text`` list, depending on the page. We probe both, bounded by
+    depth so a pathological structure can't recurse without end.
+    """
+    if node is None or depth > 6:
+        return ""
+
+    def _get(obj, key):
+        return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
+
+    # Direct text payloads.
+    text = _get(node, "text")
+    if isinstance(text, str) and text:
+        return text
+    source = _get(node, "source")
+    if source is not None:
+        data = _get(source, "data")
+        if isinstance(data, str) and data and (_get(source, "type") in (None, "text")):
+            return data
+    # Recurse into a nested content list / single child.
+    child = _get(node, "content")
+    if isinstance(child, list):
+        return "\n".join(filter(None, (_extract_document_text(c, depth + 1) for c in child)))
+    if child is not None:
+        return _extract_document_text(child, depth + 1)
+    return ""
+
+
+def summarize_web_tool_result(res_block, query: str = ""):
+    """Normalize an Anthropic ``web_search_tool_result`` / ``web_fetch_tool_result``.
+
+    Returns ``(summary, canonical_result)`` where ``summary`` is the compact
+    one-liner (SSE ``shortDesc`` / TUI compact line) and ``canonical_result`` is
+    the provider-agnostic schema from :mod:`datus.schemas.web_result` — so a
+    Claude server-tool call renders identically to the local Tavily / httpx
+    backends and the OpenAI hosted path.
+    """
+    from datus.schemas.web_result import (
+        normalize_fetch_result,
+        normalize_search_results,
+        web_fetch_short_summary,
+        web_search_short_summary,
+    )
+
+    content = getattr(res_block, "content", None) if res_block is not None else None
+
+    # web_search: ``content`` is a list of result blocks (title/url/page_age).
+    if isinstance(content, list):
+        items = []
+        for item in content:
+            items.append(
+                {
+                    "title": getattr(item, "title", None) or "",
+                    "url": getattr(item, "url", None) or "",
+                    "snippet": "",  # Anthropic returns encrypted_content; no readable snippet.
+                    "age": getattr(item, "page_age", None),
+                }
+            )
+        canonical = normalize_search_results(query, items)
+        return web_search_short_summary(canonical), canonical
+
+    # web_fetch: ``content`` is a single document-bearing result block.
+    if content is not None:
+        url = getattr(content, "url", None) or getattr(res_block, "url", None) or ""
+        doc = getattr(content, "content", None)
+        title = getattr(doc, "title", None) or getattr(content, "title", None) or ""
+        text = _extract_document_text(doc)
+        canonical = normalize_fetch_result(url=url, title=title, content=text, truncated=False)
+        return web_fetch_short_summary(canonical), canonical
+
+    return "completed", {}
+
+
+# Anthropic's message *input* schema for replayed server-side blocks is stricter
+# than the *output* schema: it accepts only the keys below per block type. The
+# streamed response (rehydrated via ``stream.get_final_message()``) attaches
+# output-only fields such as ``citations`` to these blocks — and because the SDK
+# block models use ``extra="allow"``, ``model_dump`` carries them through. Replaying
+# them verbatim trips a 400 (e.g. ``server_tool_use.citations: Extra inputs are not
+# permitted``), which aborts the turn before it can be persisted — so the next turn
+# also "forgets" the conversation. Whitelist the input-permitted keys to avoid this.
+_SERVER_BLOCK_INPUT_KEYS: Dict[str, tuple[str, ...]] = {
+    "server_tool_use": ("type", "id", "name", "input"),
+    "web_search_tool_result": ("type", "tool_use_id", "content"),
+    "web_fetch_tool_result": ("type", "tool_use_id", "content"),
+}
+
+
+def sanitize_server_block_for_replay(block: Any) -> Optional[Dict[str, Any]]:
+    """Dump a server-side content block to the Anthropic message *input* schema.
+
+    Returns a dict containing only the keys Anthropic accepts when the block is
+    replayed inside an assistant message, or ``None`` if the block cannot be
+    serialized. Drops output-only fields (notably ``citations``) that would
+    otherwise raise ``Extra inputs are not permitted``.
+    """
+    try:
+        dumped = block.model_dump(mode="json")
+    except Exception:
+        logger.debug("Skipping non-serializable content block: %s", getattr(block, "type", "?"))
+        return None
+    allowed = _SERVER_BLOCK_INPUT_KEYS.get(dumped.get("type"))
+    if allowed is None:
+        # Unknown server block type — fall back to verbatim dump (best effort).
+        return dumped
+    return {k: dumped[k] for k in allowed if k in dumped}
 
 
 def convert_tools_for_anthropic(mcp_tools):
@@ -123,6 +239,10 @@ class ClaudeModel(OpenAICompatibleModel):
         "oauth-2025-04-20",
         "interleaved-thinking-2025-05-14",
         "prompt-caching-scope-2026-01-05",
+        # Enables the server-side ``web_fetch_20250910`` tool on the native path.
+        # Harmless when web_fetch isn't requested — Anthropic ignores betas for
+        # tools absent from the request. (web_search_20250305 is GA, no beta.)
+        "web-fetch-2025-09-10",
     ]
 
     # Claude Code client headers — required for subscription tokens to be accepted.
@@ -153,6 +273,28 @@ class ClaudeModel(OpenAICompatibleModel):
 
         # Initialize native Anthropic client (always available for prompt caching)
         self._init_anthropic_client()
+
+    def supports_builtin_web_search(self) -> bool:
+        # Anthropic web_search_20250305 (GA) runs server-side via the native path,
+        # which is available for both OAuth and API-key auth. Gate on the official
+        # ``api.anthropic.com`` host: third-party Claude-compatible proxies (e.g.
+        # ``kimi_coding`` at ``api.kimi.com/coding``) share ``type: claude`` but do
+        # not really support the hosted tool — they return malformed
+        # ``server_tool_use`` blocks (missing ``id``) or an empty stub, so those
+        # endpoints fall back to the local Tavily backend instead.
+        return is_official_anthropic_endpoint(self._get_base_url())
+
+    def supports_builtin_web_fetch(self) -> bool:
+        # web_fetch is served by the LOCAL httpx backend (``web_tool.web_fetch``)
+        # rather than Anthropic's server-side ``web_fetch_20250910``. The hosted
+        # tool emits ``server_tool_use`` / ``web_fetch_tool_result`` blocks that
+        # must be replayed verbatim next turn; the rehydrated blocks carry an
+        # output-only ``citations`` field the message *input* schema rejects
+        # (400 ``server_tool_use.citations: Extra inputs are not permitted``),
+        # which aborts the turn before it can be persisted. The local backend
+        # returns a plain ``tool_result`` instead, sidestepping that entirely.
+        # (web_search stays server-side — see ``sanitize_server_block_for_replay``.)
+        return False
 
     def _get_api_key(self) -> str:
         """Get Anthropic API key from config or environment."""
@@ -321,7 +463,18 @@ class ClaudeModel(OpenAICompatibleModel):
                 "Async Anthropic client is not initialized; streaming unavailable",
             )
         if self._is_oauth_token:
+            # OAuth client already carries the OAuth + web-fetch betas in its
+            # default headers; beta.messages is required for that path.
             return self.async_anthropic_client.beta.messages.stream(**kwargs)
+        # API-key path: web_search_20250305 is GA, but web_fetch_20250910 is beta
+        # and must go through beta.messages with the web-fetch beta header (the
+        # API-key client carries no default betas).
+        tools = kwargs.get("tools") or []
+        if any(isinstance(t, dict) and t.get("type") == "web_fetch_20250910" for t in tools):
+            extra = dict(kwargs.pop("extra_headers", {}) or {})
+            existing_beta = extra.get("anthropic-beta")
+            extra["anthropic-beta"] = ",".join(filter(None, [existing_beta, "web-fetch-2025-09-10"]))
+            return self.async_anthropic_client.beta.messages.stream(extra_headers=extra, **kwargs)
         return self.async_anthropic_client.messages.stream(**kwargs)
 
     def _diagnose_oauth_401(self, original_error: Exception) -> None:
@@ -514,11 +667,23 @@ class ClaudeModel(OpenAICompatibleModel):
                             }
                         )
                         func_tool_map[ft.name] = ft
-                    # Re-apply cache control on last tool
-                    if tools:
-                        for t in tools:
-                            t.pop("cache_control", None)
-                        tools[-1]["cache_control"] = {"type": "ephemeral"}
+
+                # Append Anthropic server-side web tools when the node opts in.
+                # These run server-side (the results come back as
+                # web_search_tool_result / web_fetch_tool_result content blocks),
+                # so they are NOT registered in func_tool_map.
+                builtin_web = kwargs.get("builtin_web_tools") or {}
+                if builtin_web.get("web_search") and self.supports_builtin_web_search():
+                    tools.append({"type": "web_search_20250305", "name": "web_search", "max_uses": 5})
+                if builtin_web.get("web_fetch") and self.supports_builtin_web_fetch():
+                    tools.append({"type": "web_fetch_20250910", "name": "web_fetch", "max_uses": 5})
+
+                # Re-apply cache control so the ephemeral marker lands on the final
+                # tool, whatever its source (MCP / func / server-side web).
+                if tools:
+                    for t in tools:
+                        t.pop("cache_control", None)
+                    tools[-1]["cache_control"] = {"type": "ephemeral"}
                 # Load prior turns from the session so multi-turn chat works.
                 # Native Anthropic loop is not driven by openai-agents Runner, so
                 # we replay session history into ``messages`` ourselves.
@@ -542,10 +707,21 @@ class ClaudeModel(OpenAICompatibleModel):
                     "role": "user",
                     "content": [{"type": "text", "text": prompt_text}],
                 }
+                # Index of this turn's first NEW message in ``messages`` (prior
+                # session history was just replayed above, so anything before
+                # this index is already persisted). The end-of-turn persistence
+                # stores ``messages[turn_start_index:]`` — the full structured
+                # delta including every ``tool_use`` / ``tool_result`` — instead
+                # of only the final text.
+                turn_start_index = len(messages)
                 messages.append(user_turn_message)
                 tool_call_cache = {}
                 sql_contexts = []
                 final_content = ""
+                # Guards the failure-path persistence below: the success path
+                # sets this once it has committed the turn, so the ``except``
+                # handler never double-writes a turn it already saved.
+                turn_persisted = False
                 # Accumulate token usage across all turns
                 cumulative_input_tokens = 0
                 cumulative_output_tokens = 0
@@ -582,6 +758,17 @@ class ClaudeModel(OpenAICompatibleModel):
                         temperature=kwargs.get("temperature", anthropic.NOT_GIVEN),
                     )
 
+                    # Track server-side web tool calls emitted in real time during
+                    # streaming so the post-stream scan (and the non-streaming
+                    # fallback) doesn't double-emit them.
+                    emitted_server_ids: set = set()
+                    server_tool_names: dict = {}
+                    server_tool_queries: dict = {}
+                    # Track the most recent server-tool start id so a result block
+                    # whose ``tool_use_id`` is ``None`` (malformed proxies) pairs back
+                    # to the generated ``srv_*`` id instead of collapsing onto
+                    # ``complete_None`` (which ActionHistoryManager would dedupe away).
+                    last_server_tool_id: Optional[str] = None
                     if self.async_anthropic_client is not None:
                         # Streaming path: yield text deltas as ``thinking_delta``
                         # ActionHistory in real time (parity with
@@ -600,9 +787,64 @@ class ClaudeModel(OpenAICompatibleModel):
                                 event_type = getattr(event, "type", None)
                                 if event_type == "content_block_start":
                                     block_start = getattr(event, "content_block", None)
-                                    if block_start is not None and getattr(block_start, "type", None) == "text":
+                                    bs_type = getattr(block_start, "type", None) if block_start is not None else None
+                                    if bs_type == "text":
                                         thinking_stream_id = f"thinking_stream_{uuid.uuid4().hex[:8]}"
                                         thinking_accumulated = ""
+                                    elif bs_type == "server_tool_use":
+                                        # Server-side web tool call — surface it in real
+                                        # time (interleaved where it happens) instead of
+                                        # only after the stream completes.
+                                        sid = getattr(block_start, "id", None) or f"srv_{uuid.uuid4().hex[:8]}"
+                                        sname = getattr(block_start, "name", None) or "web_search"
+                                        server_tool_names[sid] = sname
+                                        emitted_server_ids.add(sid)
+                                        last_server_tool_id = sid
+                                        s_input = getattr(block_start, "input", {}) or {}
+                                        if isinstance(s_input, dict):
+                                            server_tool_queries[sid] = str(
+                                                s_input.get("query") or s_input.get("url") or ""
+                                            )
+                                        yield ActionHistory(
+                                            action_id=sid,
+                                            role=ActionRole.TOOL,
+                                            messages=f"Tool call: {sname}",
+                                            action_type=sname,
+                                            input={"function_name": sname, "arguments": s_input},
+                                            output={},
+                                            status=ActionStatus.PROCESSING,
+                                        )
+                                    elif bs_type in ("web_search_tool_result", "web_fetch_tool_result"):
+                                        # Malformed proxies (e.g. kimi) echo a result
+                                        # block with a null ``tool_use_id``; fall back
+                                        # to the matching start's generated id so the
+                                        # completion pairs with it and never collapses
+                                        # onto ``complete_None``.
+                                        tid = (
+                                            getattr(block_start, "tool_use_id", None)
+                                            or last_server_tool_id
+                                            or f"srv_{uuid.uuid4().hex[:8]}"
+                                        )
+                                        sname = server_tool_names.get(tid, "web_search")
+                                        summary, canonical = summarize_web_tool_result(
+                                            block_start, query=server_tool_queries.get(tid, "")
+                                        )
+                                        complete = ActionHistory(
+                                            action_id=f"complete_{tid}",
+                                            role=ActionRole.TOOL,
+                                            messages=f"Tool call: {sname}",
+                                            action_type=sname,
+                                            input={"function_name": sname, "arguments": {}},
+                                            output={
+                                                "success": True,
+                                                "raw_output": {"success": True, "result": canonical},
+                                                "summary": summary,
+                                                "status_message": summary,
+                                            },
+                                            status=ActionStatus.SUCCESS,
+                                        )
+                                        complete.end_time = datetime.now()
+                                        yield complete
                                 elif event_type == "content_block_delta":
                                     delta = getattr(event, "delta", None)
                                     if delta is None or getattr(delta, "type", None) != "text_delta":
@@ -695,9 +937,92 @@ class ClaudeModel(OpenAICompatibleModel):
 
                     message = response.content
 
+                    # Surface server-side tool calls (Anthropic web_search /
+                    # web_fetch) as TOOL ActionHistory. The streaming path already
+                    # emits these in real time (tracked in ``emitted_server_ids``),
+                    # so this post-stream pass only covers the non-streaming
+                    # fallback. When streaming ran we skip it entirely: dedup-by-id
+                    # is unreliable for providers (e.g. kimi) that return
+                    # ``server_tool_use`` blocks with a null ``id`` — the streaming
+                    # path substitutes a generated ``srv_*`` id, leaving the
+                    # final-message block's ``id`` as ``None``, which would miss the
+                    # ``emitted_server_ids`` check and re-emit here with
+                    # ``action_id=None`` (crashing ActionHistory validation).
+                    used_streaming = self.async_anthropic_client is not None
+                    server_results = {
+                        getattr(b, "tool_use_id", None): b
+                        for b in message
+                        if getattr(b, "type", None) in ("web_search_tool_result", "web_fetch_tool_result")
+                    }
+                    for block in message:
+                        if used_streaming:
+                            break
+                        if getattr(block, "type", None) != "server_tool_use":
+                            continue
+                        if block.id in emitted_server_ids:
+                            continue
+                        # Fall back to a generated id when the provider omits one,
+                        # mirroring the streaming path, so ActionHistory never sees
+                        # a ``None`` action_id.
+                        sid = block.id or f"srv_{uuid.uuid4().hex[:8]}"
+                        block_input = getattr(block, "input", {}) or {}
+                        s_args = json.dumps(block_input, ensure_ascii=False)[:80]
+                        q = (
+                            block_input.get("query") or block_input.get("url") or ""
+                            if isinstance(block_input, dict)
+                            else ""
+                        )
+                        summary, canonical = summarize_web_tool_result(server_results.get(block.id), query=q)
+                        start_action = ActionHistory(
+                            action_id=sid,
+                            role=ActionRole.TOOL,
+                            messages=f"Tool call: {block.name}('{s_args}...')",
+                            action_type=block.name,
+                            input={"function_name": block.name, "arguments": block_input},
+                            output={},
+                            status=ActionStatus.PROCESSING,
+                        )
+                        if action_history_manager is not None:
+                            action_history_manager.add_action(start_action)
+                        yield start_action
+                        complete_action = ActionHistory(
+                            action_id=f"complete_{sid}",
+                            role=ActionRole.TOOL,
+                            messages=f"Tool call: {block.name}('{s_args}...')",
+                            action_type=block.name,
+                            input={"function_name": block.name, "arguments": block_input},
+                            output={
+                                "success": True,
+                                "raw_output": {"success": True, "result": canonical},
+                                "summary": summary,
+                                "status_message": summary,
+                            },
+                            status=ActionStatus.SUCCESS,
+                        )
+                        complete_action.end_time = datetime.now()
+                        if action_history_manager is not None:
+                            action_history_manager.add_action(complete_action)
+                        yield complete_action
+
                     # If no tool calls, conversation is complete
                     if not any(block.type == "tool_use" for block in message):
                         final_content = "\n".join([block.text for block in message if block.type == "text"])
+                        # Persist the final assistant message — including any
+                        # sanitized ``server_tool_use`` / ``web_search_tool_result``
+                        # blocks from a ``web_search``-only turn — before breaking.
+                        # The completion branch exits before the assistant-content
+                        # append below, so without this the native web-tool replay
+                        # history would be reduced to plain ``final_content``.
+                        final_replay_content: List[Dict[str, Any]] = []
+                        for block in message:
+                            if block.type == "text":
+                                final_replay_content.append({"type": "text", "text": block.text})
+                            else:
+                                sanitized = sanitize_server_block_for_replay(block)
+                                if sanitized is not None:
+                                    final_replay_content.append(sanitized)
+                        if final_replay_content:
+                            messages.append({"role": "assistant", "content": final_replay_content})
                         logger.debug("No tool calls, conversation completed")
                         break
 
@@ -798,26 +1123,43 @@ class ClaudeModel(OpenAICompatibleModel):
                             if not tool_executed:
                                 logger.error(f"Tool {block.name} could not be executed")
 
-                            # Yield SUCCESS/FAILURE action for real-time tool call display
+                            # Yield SUCCESS/FAILURE action for real-time tool call display.
+                            # A tool that returns FuncToolResult(success=0) executed without
+                            # raising (tool_executed=True), so keying status off tool_executed
+                            # alone would render a green ✓ on a soft failure. Fold the payload's
+                            # success/error signal in via detect_tool_failure.
                             result_text = ""
                             if block.id in tool_call_cache:
                                 result_text = tool_call_cache[block.id].content[0].text
+                            tool_failed = (not tool_executed) or detect_tool_failure(hook_result)
                             result_summary = (
-                                self._format_tool_result(result_text, block.name) if tool_executed else "Failed"
+                                self._format_tool_result(result_text, block.name) if not tool_failed else "Failed"
                             )
+                            tool_output = {
+                                "success": not tool_failed,
+                                "raw_output": result_text,
+                                "summary": result_summary,
+                                "status_message": result_summary,
+                            }
+                            # Keep the structured records (raw_output is stringified
+                            # for the Anthropic message). Unwrap the FuncToolResult
+                            # envelope so benchmark trajectory evaluation can read
+                            # source_context_id provenance.
+                            structured_result = None
+                            if isinstance(hook_result, dict):
+                                structured_result = hook_result.get("result", hook_result)
+                            elif isinstance(hook_result, list):
+                                structured_result = hook_result
+                            if isinstance(structured_result, (dict, list)):
+                                tool_output["result"] = structured_result
                             complete_action = ActionHistory(
                                 action_id=f"complete_{block.id}",
                                 role=ActionRole.TOOL,
                                 messages=f"Tool call: {block.name}('{args_str}...')",
                                 action_type=block.name,
                                 input={"function_name": block.name, "arguments": block.input},
-                                output={
-                                    "success": tool_executed,
-                                    "raw_output": result_text,
-                                    "summary": result_summary,
-                                    "status_message": result_summary,
-                                },
-                                status=ActionStatus.SUCCESS if tool_executed else ActionStatus.FAILED,
+                                output=tool_output,
+                                status=ActionStatus.SUCCESS if not tool_failed else ActionStatus.FAILED,
                             )
                             complete_action.end_time = datetime.now()
                             if action_history_manager is not None:
@@ -853,6 +1195,16 @@ class ClaudeModel(OpenAICompatibleModel):
                                 }
                             )
                             tool_use_blocks.append(block)
+                        else:
+                            # Preserve server-side blocks (server_tool_use /
+                            # web_search_tool_result / web_fetch_tool_result) so a mixed
+                            # turn (server web tool + local tool_use) keeps a valid
+                            # assistant message when replayed to Anthropic next turn.
+                            # Sanitize to the input schema to drop output-only fields
+                            # (e.g. ``citations``) the API rejects on replay.
+                            sanitized = sanitize_server_block_for_replay(block)
+                            if sanitized is not None:
+                                content.append(sanitized)
 
                     if content:
                         messages.append({"role": "assistant", "content": content})
@@ -860,9 +1212,28 @@ class ClaudeModel(OpenAICompatibleModel):
                     for block in tool_use_blocks:
                         if block.id in tool_call_cache:
                             sql_result = tool_call_cache[block.id].content[0].text
-                            # Use "Error" to determine execution success
-                            if "Error" not in sql_result and block.name == "read_query":
-                                sql_query = block.input.get("query") or block.input.get("sql", "")
+                            # Only seed SQL context from successful read-only
+                            # execute_sql calls. Parse the tool payload to detect
+                            # failure instead of a brittle ``"Error" in text``
+                            # substring check, which both misses structured
+                            # ``{"success": 0, "error": ...}`` failures and can
+                            # reject valid result text that merely contains "Error".
+                            sql_query = block.input.get("query") or block.input.get("sql", "")
+                            tool_failed = False
+                            try:
+                                parsed_result = json.loads(sql_result) if isinstance(sql_result, str) else sql_result
+                            except (TypeError, json.JSONDecodeError):
+                                parsed_result = None
+                            if isinstance(parsed_result, dict):
+                                tool_failed = parsed_result.get("success") == 0 or bool(parsed_result.get("error"))
+                            elif isinstance(sql_result, str):
+                                tool_failed = sql_result.lstrip().lower().startswith("error")
+                            if (
+                                not tool_failed
+                                and block.name == "execute_sql"
+                                and parse_sql_type(sql_query, "")
+                                in (SQLType.SELECT, SQLType.METADATA_SHOW, SQLType.EXPLAIN)
+                            ):
                                 sql_context = SQLContext(
                                     sql_query=sql_query,
                                     sql_return=sql_result,
@@ -936,11 +1307,20 @@ class ClaudeModel(OpenAICompatibleModel):
                 # in that case so the next turn starts from a clean slate.
                 if session is not None and final_content:
                     try:
-                        assistant_turn_message = {
-                            "role": "assistant",
-                            "content": [{"type": "text", "text": final_content}],
-                        }
-                        await session.add_items([user_turn_message, assistant_turn_message])
+                        # Persist the FULL structured turn — every assistant
+                        # ``tool_use`` block and its matching ``tool_result``
+                        # reply — not just ``final_content``. ``messages`` from
+                        # ``turn_start_index`` on is exactly the sequence
+                        # Anthropic accepted during the loop, so replaying it on
+                        # resume is safe and keeps the tool-calling history
+                        # intact. Storing only the final text previously dropped
+                        # every tool call/result, leaving resumed turns with
+                        # broken history (and tool calls leaking into text).
+                        turn_items = self._replay_safe_turn_items(
+                            messages[turn_start_index:], user_turn_message, final_content
+                        )
+                        await session.add_items(turn_items)
+                        turn_persisted = True
                         # Persist the turn's token usage into the durable
                         # ``turn_usage`` table. The native loop never calls
                         # ``Runner.run`` (which is what normally triggers
@@ -966,13 +1346,114 @@ class ClaudeModel(OpenAICompatibleModel):
                 yield final_action
 
         except anthropic.AuthenticationError as e:
+            await self._persist_failed_turn(locals(), e)
             self._diagnose_oauth_401(e)
             raise
         except Exception as e:
+            await self._persist_failed_turn(locals(), e)
             if is_ssl_cert_verification_error(e):
                 raise DatusException(ErrorCode.MODEL_SSL_CERT_ERROR) from e
             logger.error(f"Error in _generate_with_mcp_stream: {str(e)}")
             raise
+
+    async def _persist_failed_turn(self, frame_locals: Dict[str, Any], error: Exception) -> None:
+        """Best-effort save of an interrupted turn so the next turn isn't amnesiac.
+
+        When the native loop raises mid-turn (e.g. a 400 on replay, a network
+        drop, or an interrupt), the normal end-of-loop persistence never runs, so
+        neither the user message nor any partial reply reaches the session — and
+        the user's *next* turn "forgets" what was just asked. This commits the
+        user message plus a placeholder/partial assistant message (kept non-empty
+        and role-alternating so Anthropic accepts the replay) before the original
+        error propagates. It must never mask that error: all failures here are
+        swallowed.
+        """
+        session = frame_locals.get("session")
+        if session is None or frame_locals.get("turn_persisted"):
+            return
+        user_turn_message = frame_locals.get("user_turn_message")
+        if not user_turn_message:
+            return
+        try:
+            partial = (frame_locals.get("final_content") or "").strip()
+            if not partial:
+                # On a mid-stream failure ``final_content`` is still empty, but
+                # the partial text the user already saw lives in
+                # ``thinking_accumulated`` — prefer it over the placeholder.
+                partial = (frame_locals.get("thinking_accumulated") or "").strip()
+            assistant_text = partial or f"[Turn interrupted before completion: {type(error).__name__}]"
+            # Preserve any completed tool_use/tool_result rounds from this turn
+            # too, not just a placeholder — ``_replay_safe_turn_items`` drops a
+            # trailing dangling ``tool_use`` (interrupted before its result) and
+            # appends ``assistant_text`` so the history ends on an assistant
+            # message Anthropic will accept on replay.
+            messages = frame_locals.get("messages")
+            turn_start_index = frame_locals.get("turn_start_index")
+            if isinstance(messages, list) and isinstance(turn_start_index, int):
+                turn_items = self._replay_safe_turn_items(
+                    messages[turn_start_index:], user_turn_message, assistant_text
+                )
+            else:
+                turn_items = [
+                    user_turn_message,
+                    {"role": "assistant", "content": [{"type": "text", "text": assistant_text}]},
+                ]
+            await session.add_items(turn_items)
+            logger.info("Persisted interrupted native Claude turn so history survives the failure.")
+        except Exception as persist_err:
+            logger.warning(f"Failed to persist interrupted native Claude turn: {persist_err}")
+
+    @staticmethod
+    def _replay_safe_turn_items(
+        turn_items: List[Dict[str, Any]],
+        user_turn_message: Dict[str, Any],
+        fallback_text: str,
+    ) -> List[Dict[str, Any]]:
+        """Trim one native-loop turn to a replay-safe item list for the session.
+
+        ``turn_items`` is the slice of the native loop's ``messages`` added
+        during a single user turn: the user message, then alternating assistant
+        (``text`` + ``tool_use``) and user (``tool_result``) messages, ending —
+        on the success path — with a clean assistant text message.
+
+        Anthropic rejects replay of (a) an assistant ``tool_use`` block with no
+        matching ``tool_result`` and (b) a history that ends on a
+        user/``tool_result`` message (it would collide with the next turn's
+        user message). This drops any trailing *dangling* ``tool_use`` (only the
+        tail can dangle — the loop appends each ``tool_result`` immediately after
+        its ``tool_use``) and guarantees the sequence ends on an assistant
+        message, appending a non-empty ``fallback_text`` placeholder when needed
+        so the turn is never lost. Completed tool rounds are preserved verbatim.
+        """
+        items = [m for m in turn_items if isinstance(m, dict)]
+
+        def _tool_use_ids(msg: Dict[str, Any]) -> List[Any]:
+            content = msg.get("content")
+            if not isinstance(content, list):
+                return []
+            return [b.get("id") for b in content if isinstance(b, dict) and b.get("type") == "tool_use"]
+
+        answered = set()
+        for m in items:
+            if m.get("role") == "user" and isinstance(m.get("content"), list):
+                for b in m["content"]:
+                    if isinstance(b, dict) and b.get("type") == "tool_result":
+                        answered.add(b.get("tool_use_id"))
+
+        # Drop a trailing assistant turn whose tool calls were never answered
+        # (interrupted between emitting the tool_use and recording its result).
+        while items:
+            last = items[-1]
+            if last.get("role") == "assistant" and any(tid not in answered for tid in _tool_use_ids(last)):
+                items.pop()
+                continue
+            break
+
+        if not items:
+            items = [user_turn_message]
+        if items[-1].get("role") != "assistant":
+            items.append({"role": "assistant", "content": [{"type": "text", "text": fallback_text or "[empty turn]"}]})
+        return items
 
     def _build_native_usage_info(
         self,
@@ -1223,9 +1704,18 @@ class ClaudeModel(OpenAICompatibleModel):
         Routes to native Anthropic API for OAuth subscription tokens,
         otherwise uses parent class LiteLLM implementation.
         """
-        # For OAuth tokens, use native path (LiteLLM sends x-api-key which is incompatible)
-        # Directly iterate the async generator for real-time tool call display
-        if self.use_native_api and self._is_oauth_token:
+        # Route to the native Anthropic path for (a) OAuth subscription tokens
+        # (LiteLLM sends x-api-key which is incompatible with Bearer auth), or
+        # (b) whenever vendor-native web tools are requested — server tools can
+        # only be expressed as raw tool dicts on the native Messages API, not via
+        # the agents-SDK LiteLLM tool list. Non-web calls (e.g. compaction
+        # summarization, which passes no builtin_web_tools) stay on LiteLLM.
+        _builtin_web_tools = kwargs.get("builtin_web_tools") or {}
+        _want_builtin_web = bool(
+            (_builtin_web_tools.get("web_search") and self.supports_builtin_web_search())
+            or (_builtin_web_tools.get("web_fetch") and self.supports_builtin_web_fetch())
+        )
+        if (self.use_native_api and self._is_oauth_token) or _want_builtin_web:
             if action_history_manager is None:
                 action_history_manager = ActionHistoryManager()
             async for action in self._generate_with_mcp_stream(

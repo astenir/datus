@@ -2,8 +2,10 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+import json
 import os
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any, Dict, List, Optional, Set
 
 import pyarrow as pa
 import yaml
@@ -20,12 +22,49 @@ logger = get_logger(__name__)
 
 METRIC_ID_PREFIX = "metric:"
 _METRIC_DEFINITION_FIELDS = ("semantic_model_name", "metric_type", "measure_expr", "base_measures")
+_METRIC_LOOKUP_MAX_QUERY_LENGTH = 120
+_METRIC_EXACT_QUERY_PATTERN = re.compile(r"^[0-9A-Za-z_.:/-]+$")
+_METRIC_LOOKUP_TOKEN_PATTERN = re.compile(r"[^0-9a-zA-Z]+")
 
 
 def normalize_metric_name(value: Any) -> str:
     """Return the datasource-local business key used for metric names."""
 
     return str(value or "").strip().lower()
+
+
+def metric_lookup_key(value: Any) -> str:
+    """Normalize metric names and ids for exact-name retrieval fallback."""
+
+    text = str(value or "").strip().lower()
+    if text.startswith(METRIC_ID_PREFIX):
+        text = text[len(METRIC_ID_PREFIX) :]
+    text = _METRIC_LOOKUP_TOKEN_PATTERN.sub("_", text).strip("_")
+    return re.sub(r"_+", "_", text)
+
+
+def metric_exact_query_keys(query_text: Any) -> Set[str]:
+    """Return lookup keys for identifier-like exact metric lookups."""
+
+    text = str(query_text or "").strip()
+    if not text or len(text) > _METRIC_LOOKUP_MAX_QUERY_LENGTH:
+        return set()
+    if not _METRIC_EXACT_QUERY_PATTERN.fullmatch(text):
+        return set()
+
+    key = metric_lookup_key(text)
+    return {key} if key else set()
+
+
+def metric_matches_exact_query(metric: Dict[str, Any], query_keys: Set[str]) -> bool:
+    """Return true when a metric row exactly matches normalized query keys."""
+
+    if not query_keys:
+        return False
+    for field in ("name", "id"):
+        if metric_lookup_key(metric.get(field)) in query_keys:
+            return True
+    return False
 
 
 def build_metric_id(subject_path: List[str], name: str) -> str:
@@ -100,6 +139,10 @@ class MetricStorage(BaseSubjectEmbeddingStore):
                     # -- Operations & Lineage --
                     pa.field("yaml_path", pa.string()),
                     pa.field("updated_at", pa.timestamp("ms")),
+                    # Semantic Hub stable node id (locked_metadata.uid); empty for
+                    # metrics not governed by the Hub. Lets retrieval be counted
+                    # per Hub uid (consumption tracking).
+                    pa.field("uid", pa.string()),
                 ]
             ),
             vector_source_name="description",
@@ -120,6 +163,15 @@ class MetricStorage(BaseSubjectEmbeddingStore):
 
         self.create_subject_index()
         self.create_fts_index(["description", "name"])
+
+    def _scope_column_migration_exprs(self) -> Dict[str, str]:
+        # Also backfill the Hub uid column on pre-existing metric tables (empty
+        # default; real uids land on the next build-kb / pull vectorization),
+        # reusing the same best-effort ensure_columns migration as scope columns.
+        exprs = super()._scope_column_migration_exprs()
+        if self._schema is not None and "uid" in set(self._schema.names):
+            exprs = {**exprs, "uid": "''"}
+        return exprs
 
     def batch_store_metrics(self, metrics: List[Dict[str, Any]]) -> None:
         """Store multiple metrics in the database efficiently.
@@ -626,6 +678,7 @@ class MetricRAG:
         from datus.storage.registry import get_storage
 
         self.agent_config = agent_config
+        self.sub_agent_name = sub_agent_name
         self.datasource_id = resolve_datasource_id(agent_config, datasource_id)
         self._provenance_enabled = is_knowledge_provenance_enabled(agent_config)
         self.storage: MetricStorage = get_storage(
@@ -712,13 +765,86 @@ class MetricRAG:
         self, query_text: str, subject_path: Optional[List[str]] = None, top_n: int = 5
     ) -> List[Dict[str, Any]]:
         """Search metrics by query text with optional subject path filtering."""
-        results = self.storage.search_metrics(
+        exact_results = self._search_exact_metric_matches(query_text, subject_path)
+        vector_results = self.storage.search_metrics(
             query_text=query_text,
             subject_path=subject_path,
             top_n=top_n,
             extra_conditions=self._sub_agent_conditions(),
         )
-        return self._enrich_metric_results(results)
+        results = self._merge_search_results(exact_results, vector_results, top_n)
+        enriched = self._enrich_metric_results(results)
+        self._emit_retrieval(query_text, enriched)
+        return enriched
+
+    def _emit_retrieval(self, query_text: str, results: List[Dict[str, Any]]) -> None:
+        # Fire-and-forget: report retrieved Hub metrics so the host can count
+        # consumption. Never let hook errors break a search.
+        try:
+            from datus.api.hooks import MetricRetrievalEvent, get_metric_retrieval_hook
+
+            hook = get_metric_retrieval_hook()
+            if hook is None:
+                return
+            hook.on_retrieval(
+                MetricRetrievalEvent(
+                    query_text=query_text,
+                    datasource_id=self.datasource_id,
+                    project_name=getattr(self.agent_config, "project_name", None),
+                    sub_agent_name=self.sub_agent_name,
+                    # uid is the contract's string field — normalize missing/null
+                    # to "" (empty = not Hub-governed) rather than forwarding None.
+                    metrics=[{"id": r.get("id"), "name": r.get("name"), "uid": r.get("uid") or ""} for r in results],
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 — retrieval must never fail on telemetry
+            logger.debug(f"metric retrieval hook failed: {exc}")
+
+    def _search_exact_metric_matches(
+        self,
+        query_text: str,
+        subject_path: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        query_keys = metric_exact_query_keys(query_text)
+        if not query_keys:
+            return []
+
+        try:
+            candidates = self.storage.search_all_metrics(
+                subject_path=subject_path,
+                extra_conditions=self._sub_agent_conditions(),
+            )
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            logger.debug("Unable to run exact metric-name fallback: %s", exc)
+            return []
+
+        return [metric for metric in candidates if metric_matches_exact_query(metric, query_keys)]
+
+    @classmethod
+    def _merge_search_results(
+        cls,
+        exact_results: List[Dict[str, Any]],
+        vector_results: List[Dict[str, Any]],
+        top_n: int,
+    ) -> List[Dict[str, Any]]:
+        merged: List[Dict[str, Any]] = []
+        seen: Set[str] = set()
+        for metric in [*exact_results, *vector_results]:
+            key = cls._search_result_identity(metric)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(metric)
+            if top_n and len(merged) >= top_n:
+                break
+        return merged
+
+    @staticmethod
+    def _search_result_identity(metric: Dict[str, Any]) -> str:
+        metric_id = metric.get("id")
+        if metric_id:
+            return f"id:{metric_id}"
+        return f"row:{json.dumps(metric, sort_keys=True, default=str)}"
 
     def get_metrics_detail(self, subject_path: List[str], name: str) -> List[Dict[str, Any]]:
         """Get metrics detail by subject path and name."""

@@ -1,7 +1,7 @@
 # Project basic information configuration, required.
 [project]
 name = "datus-agent"
-version = "0.3.6"
+version = "0.3.7"
 description = "AI-powered SQL Agent for data engineering (Compiled Version)"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -193,6 +193,11 @@ dev = [
     "pytest-cov>=7.0.0",
     "chardet>=3.0.2,<6",
     "diff-cover>=10.2.0",
+]
+ci = [
+    "datus-storage-postgresql>=0.1.5",
+    "datus-metricflow>=0.2.7",
+    "datus-semantic-metricflow>=0.2.8",
 ]
 
 [tool.coverage.run]

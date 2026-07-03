@@ -14,7 +14,7 @@ import inspect
 import io
 import json
 from collections import OrderedDict
-from typing import Any, Dict, List, Literal, Optional, Set
+from typing import Any, Callable, Dict, List, Literal, Mapping, Optional, Set, Tuple
 
 from agents import Tool
 
@@ -97,10 +97,68 @@ def _normalize_name_list(value) -> List[str]:
     return names
 
 
+def _normalize_validation_checks(value) -> Optional[List[str]]:
+    """Normalize optional adapter validation check names."""
+    value = normalize_null(value)
+    if value is None:
+        return None
+    candidates: List[Any]
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.startswith("["):
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, list):
+                candidates = parsed
+            else:
+                candidates = [part.strip() for part in text.split(",")]
+        else:
+            candidates = [part.strip() for part in text.split(",")]
+    elif isinstance(value, (list, tuple, set)):
+        candidates = list(value)
+    else:
+        candidates = [value]
+
+    checks = []
+    for candidate in candidates:
+        candidate = normalize_null(candidate)
+        if candidate is None:
+            continue
+        check = str(candidate).strip()
+        if check:
+            checks.append(check)
+    return checks or None
+
+
 def _normalize_optional_path(value) -> Optional[List[str]]:
     """Normalize optional subject paths and drop null placeholders."""
     names = _normalize_name_list(value)
     return names or None
+
+
+def _normalize_optional_bool(value) -> bool:
+    """Normalize optional tool boolean arguments that may arrive as strings."""
+    value = normalize_null(value)
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+    return bool(value)
+
+
+def _signature_accepts_parameter(parameters, name: str) -> bool:
+    """Return true when a callable explicitly accepts ``name`` or arbitrary kwargs."""
+    return name in parameters or any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values())
 
 
 _TIME_GRANULARITIES = {"day", "week", "month", "quarter", "year"}
@@ -243,6 +301,7 @@ class SemanticTools:
         sub_agent_name: Optional[str] = None,
         adapter_type: Optional[str] = None,
         generation_evidence: Optional[GenerationEvidence] = None,
+        runtime_db_context_provider: Optional[Callable[[], Mapping[str, Any]]] = None,
     ):
         """
         Initialize semantic function tool.
@@ -253,11 +312,16 @@ class SemanticTools:
             adapter_type: Optional adapter type (e.g., "metricflow"). If not provided, tools will use storage only.
             generation_evidence: Optional shared tracker for validate_semantic and query_metrics(dry_run=True)
                 publish-gate evidence.
+            runtime_db_context_provider: Optional callback that returns the per-turn datasource/catalog/database/schema
+                context used to initialize the semantic adapter.
         """
         self.agent_config = agent_config
         self.sub_agent_name = sub_agent_name
         self.adapter_type = adapter_type
         self.generation_evidence = generation_evidence
+        self._runtime_db_context_provider = runtime_db_context_provider
+        self._runtime_db_context_static: Dict[str, str] = {}
+        self._runtime_db_context_static_set = False
 
         # Keep storage handles for compatibility with older call sites, but
         # public SemanticTools methods use the semantic adapter as their source
@@ -272,6 +336,7 @@ class SemanticTools:
         self._adapter: Optional[BaseSemanticAdapter] = None
         self._attribution_tool: Optional[DimensionAttributionUtil] = None
         self._adapter_load_error: Optional[str] = None
+        self._adapter_context_key: Optional[Tuple[str, str, str, str, str]] = None
 
     @staticmethod
     def _query_data_row_count(data: Any) -> int:
@@ -355,6 +420,68 @@ class SemanticTools:
             self.adapter_type = resolved_adapter
         return resolved_adapter
 
+    @staticmethod
+    def _normalize_runtime_db_context(runtime_db_context: Optional[Mapping[str, Any]]) -> Dict[str, str]:
+        if not runtime_db_context:
+            return {}
+
+        normalized: Dict[str, str] = {}
+        for key in (
+            "datasource",
+            "catalog",
+            "catalog_name",
+            "database",
+            "database_name",
+            "schema",
+            "db_schema",
+            "schema_name",
+        ):
+            value = runtime_db_context.get(key)
+            if value is None:
+                continue
+            text = value.strip() if isinstance(value, str) else str(value).strip()
+            if text:
+                normalized[key] = text
+
+        if "catalog" not in normalized and "catalog_name" in normalized:
+            normalized["catalog"] = normalized["catalog_name"]
+        if "database" not in normalized and "database_name" in normalized:
+            normalized["database"] = normalized["database_name"]
+        if "schema" not in normalized:
+            if "db_schema" in normalized:
+                normalized["schema"] = normalized["db_schema"]
+            elif "schema_name" in normalized:
+                normalized["schema"] = normalized["schema_name"]
+        return normalized
+
+    def set_runtime_db_context(self, runtime_db_context: Optional[Mapping[str, Any]]) -> None:
+        """Set a static runtime DB context and invalidate any adapter built for the old context."""
+        normalized = self._normalize_runtime_db_context(runtime_db_context)
+        if normalized == self._runtime_db_context_static and self._runtime_db_context_static_set:
+            return
+        self._runtime_db_context_static = normalized
+        self._runtime_db_context_static_set = True
+        self._adapter = None
+        self._attribution_tool = None
+        self._adapter_context_key = None
+
+    def _runtime_db_context(self) -> Dict[str, str]:
+        if callable(self._runtime_db_context_provider):
+            try:
+                return self._normalize_runtime_db_context(self._runtime_db_context_provider())
+            except Exception as e:
+                logger.debug("Failed to resolve runtime DB context for semantic adapter: %s", e)
+                return {}
+        if self._runtime_db_context_static_set:
+            return dict(self._runtime_db_context_static)
+        runtime_context_getter = getattr(self.agent_config, "runtime_db_context", None)
+        if callable(runtime_context_getter):
+            try:
+                return self._normalize_runtime_db_context(runtime_context_getter())
+            except Exception as e:
+                logger.debug("Failed to resolve AgentConfig runtime DB context for semantic adapter: %s", e)
+        return {}
+
     def _extract_db_config(self, datasource: str) -> Optional[dict]:
         """Extract db_config dict from the selected database config."""
         try:
@@ -368,7 +495,7 @@ class SemanticTools:
         db_config = {
             k: str(v)
             for k, v in raw.items()
-            if v is not None and v != "" and k not in ("extra", "path_pattern", "catalog", "default")
+            if v is not None and v != "" and k not in ("extra", "path_pattern", "default")
         }
         # Preserve connector-specific `extra` fields without overwriting explicit top-level keys
         if isinstance(extra, dict):
@@ -381,49 +508,76 @@ class SemanticTools:
     @property
     def adapter(self) -> Optional[BaseSemanticAdapter]:
         """Lazy load semantic adapter if configured."""
-        if self._adapter is None:
-            try:
-                resolved_adapter = self.adapter_type
-                resolver = getattr(self.agent_config, "resolve_semantic_adapter", None)
-                if callable(resolver):
-                    resolved_adapter = resolver(self.adapter_type)
-                if not resolved_adapter:
-                    return None
+        try:
+            resolved_adapter = self.adapter_type
+            resolver = getattr(self.agent_config, "resolve_semantic_adapter", None)
+            if callable(resolver):
+                resolved_adapter = resolver(self.adapter_type)
+            if not resolved_adapter:
+                return None
 
-                metadata = semantic_adapter_registry.get_metadata(resolved_adapter)
-                builder = getattr(self.agent_config, "build_semantic_adapter_config", None)
-                adapter_config = builder(resolved_adapter) if callable(builder) else None
-                if adapter_config is None:
-                    datasource = self.agent_config.current_datasource
-                    db_config = self._extract_db_config(datasource)
-                    semantic_models_path = str(self.agent_config.path_manager.semantic_model_path(datasource))
-
-                    if metadata and metadata.config_class:
-                        adapter_config = metadata.config_class(
-                            datasource=datasource,
-                            db_config=db_config,
-                            semantic_models_path=semantic_models_path,
-                        )
-                    else:
-                        from datus.tools.semantic_tools.config import SemanticAdapterConfig
-
-                        adapter_config = SemanticAdapterConfig(datasource=datasource)
-                elif isinstance(adapter_config, dict):
-                    if metadata and metadata.config_class:
-                        adapter_config = metadata.config_class(**adapter_config)
-                    else:
-                        from datus.tools.semantic_tools.config import SemanticAdapterConfig
-
-                        adapter_config = SemanticAdapterConfig(**adapter_config)
-
-                self.adapter_type = resolved_adapter
-                self._adapter = semantic_adapter_registry.create_adapter(resolved_adapter, adapter_config)
-                self._adapter_load_error = None
-                logger.info(f"Loaded semantic adapter: {resolved_adapter}")
-            except Exception as e:
-                logger.warning(f"Failed to load semantic adapter '{self.adapter_type}': {e}")
-                self._adapter_load_error = str(e)
+            runtime_db_context = self._runtime_db_context()
+            datasource = runtime_db_context.get("datasource") or self.agent_config.current_datasource
+            context_key = (
+                resolved_adapter,
+                datasource or "",
+                runtime_db_context.get("catalog", ""),
+                runtime_db_context.get("database", ""),
+                runtime_db_context.get("schema", ""),
+            )
+            if self._adapter is not None:
+                if self._adapter_context_key is None or self._adapter_context_key == context_key:
+                    return self._adapter
                 self._adapter = None
+                self._attribution_tool = None
+                self._adapter_context_key = None
+
+            metadata = semantic_adapter_registry.get_metadata(resolved_adapter)
+            builder = getattr(self.agent_config, "build_semantic_adapter_config", None)
+            adapter_config = None
+            if callable(builder):
+                builder_kwargs: Dict[str, Any] = {}
+                try:
+                    builder_params = inspect.signature(builder).parameters
+                    if "database_name" in builder_params:
+                        builder_kwargs["database_name"] = datasource or None
+                    if "runtime_db_context" in builder_params:
+                        builder_kwargs["runtime_db_context"] = runtime_db_context
+                except (TypeError, ValueError):
+                    pass
+                adapter_config = builder(resolved_adapter, **builder_kwargs)
+            if adapter_config is None:
+                db_config = self._extract_db_config(datasource)
+                semantic_models_path = str(self.agent_config.path_manager.semantic_model_path(datasource))
+
+                if metadata and metadata.config_class:
+                    adapter_config = metadata.config_class(
+                        datasource=datasource,
+                        db_config=db_config,
+                        semantic_models_path=semantic_models_path,
+                    )
+                else:
+                    from datus.tools.semantic_tools.config import SemanticAdapterConfig
+
+                    adapter_config = SemanticAdapterConfig(datasource=datasource)
+            elif isinstance(adapter_config, dict):
+                if metadata and metadata.config_class:
+                    adapter_config = metadata.config_class(**adapter_config)
+                else:
+                    from datus.tools.semantic_tools.config import SemanticAdapterConfig
+
+                    adapter_config = SemanticAdapterConfig(**adapter_config)
+
+            self.adapter_type = resolved_adapter
+            self._adapter = semantic_adapter_registry.create_adapter(resolved_adapter, adapter_config)
+            self._adapter_context_key = context_key
+            self._adapter_load_error = None
+            logger.info(f"Loaded semantic adapter: {resolved_adapter}")
+        except Exception as e:
+            logger.warning(f"Failed to load semantic adapter '{self.adapter_type}': {e}")
+            self._adapter_load_error = str(e)
+            self._adapter = None
+            self._adapter_context_key = None
         return self._adapter
 
     @property
@@ -474,6 +628,7 @@ class SemanticTools:
             # Clear cached adapter and attribution tool
             self._adapter = None
             self._attribution_tool = None
+            self._adapter_context_key = None
 
             # Force reload by accessing the property
             if self.adapter is not None:
@@ -494,7 +649,7 @@ class SemanticTools:
         Returns:
             List of Tool objects for LLM function calling
         """
-        if self.adapter is None:
+        if not self._configured_adapter_type():
             logger.warning("SemanticTools unavailable: %s", self._adapter_unavailable_message())
             return []
 
@@ -738,6 +893,10 @@ class SemanticTools:
         where: Optional[str] = None,
         limit: Optional[int] = None,
         order_by: Optional[List[str]] = None,
+        join_policy: Optional[
+            Literal["auto", "match_only", "fact_preserving", "dimension_preserving", "unmatched_only"]
+        ] = None,
+        zero_fill: bool = False,
         dry_run: bool = False,
     ) -> FuncToolResult:
         """
@@ -755,6 +914,12 @@ class SemanticTools:
             order_by: Optional list of columns to sort by. Use column name for ascending,
                       prefix with '-' for descending. Examples: ['metric_time__day'] for ascending,
                       ['-message_count'] for descending. Do NOT use 'asc'/'desc' keywords.
+            join_policy: Optional relationship handling policy for joined dimensions:
+                      'auto'/'match_only' keeps only facts that match requested joined dimensions;
+                      'fact_preserving' keeps unmatched facts;
+                      'dimension_preserving' keeps all dimension values;
+                      'unmatched_only' returns only unmatched facts.
+            zero_fill: Fill missing metric values with 0 when join_policy='dimension_preserving'.
             dry_run: If True, only validate and return query plan
 
         Returns:
@@ -784,10 +949,12 @@ class SemanticTools:
         time_end = normalize_null(time_end)
         time_granularity = normalize_null(time_granularity)
         where = normalize_null(where)
+        join_policy = normalize_null(join_policy)
+        zero_fill = _normalize_optional_bool(zero_fill)
         logger.info(
             f"query_metrics called: metrics={metrics}, dimensions={dimensions}, path={path}, "
             f"time=[{time_start},{time_end}], granularity={time_granularity}, where={where}, "
-            f"limit={limit}, dry_run={dry_run}"
+            f"limit={limit}, join_policy={join_policy}, zero_fill={zero_fill}, dry_run={dry_run}"
         )
 
         try:
@@ -796,20 +963,43 @@ class SemanticTools:
                 return preflight_result
 
             # Execute query via adapter
-            result = _run_async(
-                adapter.query_metrics(
-                    metrics=metrics,
-                    dimensions=dimensions,
-                    path=path or None,
-                    time_start=time_start,
-                    time_end=time_end,
-                    time_granularity=time_granularity,
-                    where=where,
-                    limit=limit,
-                    order_by=order_by or None,
-                    dry_run=dry_run,
+            adapter_query_kwargs = {
+                "metrics": metrics,
+                "dimensions": dimensions,
+                "path": path or None,
+                "time_start": time_start,
+                "time_end": time_end,
+                "time_granularity": time_granularity,
+                "where": where,
+                "limit": limit,
+                "order_by": order_by or None,
+                "dry_run": dry_run,
+            }
+            adapter_params = inspect.signature(adapter.query_metrics).parameters
+            requested_join_controls = bool(join_policy) or bool(zero_fill)
+            supports_join_policy = _signature_accepts_parameter(adapter_params, "join_policy")
+            supports_zero_fill = _signature_accepts_parameter(adapter_params, "zero_fill")
+            if supports_join_policy and join_policy:
+                adapter_query_kwargs["join_policy"] = join_policy
+            elif join_policy:
+                return FuncToolResult(
+                    success=0,
+                    error="query_metrics join_policy is not supported by the current semantic adapter.",
                 )
-            )
+            if supports_zero_fill and zero_fill:
+                adapter_query_kwargs["zero_fill"] = zero_fill
+            elif zero_fill:
+                return FuncToolResult(
+                    success=0,
+                    error="query_metrics zero_fill is not supported by the current semantic adapter.",
+                )
+            if requested_join_controls and not (supports_join_policy or supports_zero_fill):
+                return FuncToolResult(
+                    success=0,
+                    error="query_metrics join controls are not supported by the current semantic adapter.",
+                )
+
+            result = _run_async(adapter.query_metrics(**adapter_query_kwargs))
 
             # Drop non-JSON-serializable metadata entries (MetricFlow puts a
             # ``DataflowPlan`` object under ``dataflow_plan``). ``str(v)`` on
@@ -861,7 +1051,12 @@ class SemanticTools:
                 error=f"Failed to query metrics: {str(e)}",
             )
 
-    def validate_semantic(self, scope: Literal["all", "semantic_model"] = "all") -> FuncToolResult:
+    def validate_semantic(
+        self,
+        scope: Literal["all", "semantic_model"] = "all",
+        checks: Optional[List[str] | str] = None,
+        baseline_artifact_json: str = "",
+    ) -> FuncToolResult:
         """
         Validate semantic layer configuration (requires adapter).
 
@@ -874,6 +1069,10 @@ class SemanticTools:
                 including metrics. Use "semantic_model" when generating semantic
                 models before metric definitions exist; this still fails on real
                 semantic model errors but ignores the expected no-metrics issue.
+            checks: Optional adapter-specific validation checks. Adapters that do
+                not support named checks return an error when this is supplied.
+            baseline_artifact_json: Optional JSON-encoded semantic artifact used
+                by adapters that support mutation guard validation.
 
         Returns:
             FuncToolResult with validation status and issues
@@ -886,7 +1085,26 @@ class SemanticTools:
                 result=None,
             )
 
-        logger.info(f"validate_semantic called scope={scope}")
+        checks_list = _normalize_validation_checks(checks)
+        baseline_artifact = None
+        baseline_artifact_text = normalize_null(baseline_artifact_json)
+        if baseline_artifact_text:
+            try:
+                baseline_artifact = json.loads(str(baseline_artifact_text))
+            except (TypeError, json.JSONDecodeError) as e:
+                return FuncToolResult(
+                    success=0,
+                    error=f"baseline_artifact_json must be valid JSON: {e}",
+                    result=None,
+                )
+            if not isinstance(baseline_artifact, dict):
+                return FuncToolResult(
+                    success=0,
+                    error="baseline_artifact_json must decode to a JSON object",
+                    result=None,
+                )
+
+        logger.info(f"validate_semantic called scope={scope} checks={checks_list}")
         adapter, error = self._require_adapter("validate_semantic")
         if error:
             error.result = None
@@ -895,15 +1113,37 @@ class SemanticTools:
         try:
             validate_semantic = adapter.validate_semantic
             validation_kwargs = {}
-            if scope != "all":
-                try:
-                    signature = inspect.signature(validate_semantic)
-                    if "scope" in signature.parameters:
-                        validation_kwargs["scope"] = scope
-                    elif "validation_scope" in signature.parameters:
-                        validation_kwargs["validation_scope"] = scope
-                except (TypeError, ValueError):
-                    validation_kwargs = {}
+            try:
+                signature = inspect.signature(validate_semantic)
+                params = signature.parameters
+                if _signature_accepts_parameter(params, "scope"):
+                    validation_kwargs["scope"] = scope
+                elif scope != "all" and "validation_scope" in params:
+                    validation_kwargs["validation_scope"] = scope
+                if checks_list is not None:
+                    if not _signature_accepts_parameter(params, "checks"):
+                        return FuncToolResult(
+                            success=0,
+                            error="validate_semantic checks are not supported by the current semantic adapter",
+                            result=None,
+                        )
+                    validation_kwargs["checks"] = checks_list
+                if baseline_artifact is not None:
+                    if not _signature_accepts_parameter(params, "baseline_artifact"):
+                        return FuncToolResult(
+                            success=0,
+                            error="validate_semantic baseline_artifact is not supported by the current semantic adapter",
+                            result=None,
+                        )
+                    validation_kwargs["baseline_artifact"] = baseline_artifact
+            except (TypeError, ValueError):
+                if checks_list is not None or baseline_artifact is not None:
+                    return FuncToolResult(
+                        success=0,
+                        error="validate_semantic validation options are not supported by the current semantic adapter",
+                        result=None,
+                    )
+                validation_kwargs = {}
 
             validation_result = _run_async(validate_semantic(**validation_kwargs))
 
@@ -941,6 +1181,7 @@ class SemanticTools:
                     "valid": effective_valid,
                     "issues": effective_issues,
                     "scope": scope,
+                    "checks": checks_list,
                     "ignored_issues": ignored_issues,
                 },
                 error=None if effective_valid else _format_validation_error(effective_issues),

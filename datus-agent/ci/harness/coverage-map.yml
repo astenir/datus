@@ -547,6 +547,7 @@ flow_groups:
           - Bootstrap and agentic generation persist semantic objects that are available to query-time retrieval.
           - Metrics and semantic models remain separable by kind and datasource scope, and extracted knowledge is captured as markdown via the extract-knowledge skill.
           - Existing metrics can be queried through the metric-first AskMetrics subagent without falling back to raw SQL generation.
+          - Runtime database context is propagated into semantic adapter initialization so validation can use the selected catalog/database/schema without a static datasource database.
         coverage:
           pr_acceptance:
             status: covered
@@ -555,6 +556,8 @@ flow_groups:
               - tests/unit_tests/agent/node/test_gen_metrics_agentic_node.py
               - tests/unit_tests/agent/node/test_ask_metrics_agentic_node.py
               - tests/unit_tests/tools/func_tool/test_context_search.py
+              - tests/unit_tests/configuration/test_agent_config.py::TestAgentConfigServiceSelectors::test_build_semantic_adapter_config_uses_runtime_database_when_datasource_omits_database
+              - tests/unit_tests/tools/func_tool/test_semantic_tools.py::TestRuntimeDbContext::test_validate_semantic_initializes_adapter_with_runtime_database
           merge_queue:
             status: covered
             nodeids:
@@ -562,9 +565,13 @@ flow_groups:
               - tests/unit_tests/agent/node/test_gen_metrics_agentic_node.py
               - tests/unit_tests/agent/node/test_ask_metrics_agentic_node.py
               - tests/unit_tests/tools/func_tool/test_context_search.py
+              - tests/unit_tests/configuration/test_agent_config.py::TestAgentConfigServiceSelectors::test_build_semantic_adapter_config_uses_runtime_database_when_datasource_omits_database
+              - tests/unit_tests/tools/func_tool/test_semantic_tools.py::TestRuntimeDbContext::test_validate_semantic_initializes_adapter_with_runtime_database
           nightly:
             status: covered
             nodeids:
+              - tests/unit_tests/configuration/test_agent_config.py::TestAgentConfigServiceSelectors::test_build_semantic_adapter_config_uses_runtime_database_when_datasource_omits_database
+              - tests/unit_tests/tools/func_tool/test_semantic_tools.py::TestRuntimeDbContext::test_validate_semantic_initializes_adapter_with_runtime_database
               - tests/integration/agent/test_gen_semantic_model_agentic.py
               - tests/integration/agent/test_gen_metrics_agentic.py
           weekly_benchmark:
@@ -999,6 +1006,42 @@ flow_groups:
             notes: >
               Scoped out: the VSCode extension is a remote IDE front-end with no stable headless
               automation path; tracked as an external editor surface rather than an automated flow.
+          weekly_benchmark:
+            status: not_applicable
+        gaps:
+          - https://github.com/Datus-ai/Datus-agent/issues/910
+
+      - id: extension.web_tools
+        title: Web search and fetch tools
+        priority: p1
+        quality_sensitive: false
+        docs:
+          - docs/configuration/web_tool.md
+        entrypoints:
+          - "Tool: web_search"
+          - "Tool: web_fetch"
+        contracts:
+          - The unified web tool group resolves provider configuration and exposes web_search/web_fetch to agents per permission policy.
+          - web_search/web_fetch results render through the canonical web_result schema regardless of backend (Tavily / Anthropic / OpenAI hosted).
+        coverage:
+          pr_acceptance:
+            status: covered
+            nodeids:
+              - tests/unit_tests/tools/func_tool/test_web_tool.py
+              - tests/unit_tests/schemas/test_web_result.py
+              - tests/unit_tests/agent/node/test_agentic_node_web_tools.py
+          merge_queue:
+            status: covered
+            nodeids:
+              - tests/unit_tests/tools/func_tool/test_web_tool.py
+              - tests/unit_tests/schemas/test_web_result.py
+              - tests/unit_tests/agent/node/test_agentic_node_web_tools.py
+          nightly:
+            status: external
+            notes: >
+              Live web_search/web_fetch require real provider credentials (Tavily / Anthropic / OpenAI
+              hosted) and network egress, classified as an external dependency. Provider-agnostic result
+              parsing, rendering, and tool wiring/permission exposure are covered deterministically.
           weekly_benchmark:
             status: not_applicable
         gaps:

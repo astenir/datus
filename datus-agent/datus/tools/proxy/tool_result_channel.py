@@ -10,11 +10,18 @@ Wait and publish are order-independent: either side can arrive first.
 """
 
 import asyncio
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from datus.utils.loggings import get_logger
 
 logger = get_logger(__name__)
+
+# Safety net: a proxied tool (e.g. write_file/edit_file executed on the client)
+# blocks the agent loop until the client POSTs its result. If the client never
+# reports — tab closed, crash, or a frontend bug that swallows the report — the
+# loop would otherwise hang forever. ``wait_for`` defaults to this bound so the
+# turn fails cleanly instead.
+DEFAULT_RESULT_TIMEOUT: float = 600.0
 
 
 class ToolResultChannel:
@@ -35,11 +42,16 @@ class ToolResultChannel:
             self._futures[call_id] = fut
         return fut
 
-    async def wait_for(self, call_id: str, timeout: float | None = None) -> Any:
+    async def wait_for(self, call_id: str, timeout: Optional[float] = DEFAULT_RESULT_TIMEOUT) -> Any:
         """Wait for a result to be published for the given call_id.
 
-        When ``timeout`` is provided, the pending future is removed on timeout so
-        a missing external callback does not leave stale state behind.
+        ``timeout`` (seconds) bounds the wait so a never-reported client tool
+        cannot block the agent loop forever; it defaults to
+        ``DEFAULT_RESULT_TIMEOUT`` and only an explicit ``timeout=None`` opts
+        into an unbounded wait. On expiry ``asyncio.wait_for`` cancels the
+        future (leaving it settled) and ``asyncio.TimeoutError`` propagates. The
+        settled future is retained so a late ``publish`` for the same
+        ``call_id`` is recognised as late rather than silently re-created.
         """
         async with self._lock:
             future = self._get_or_create_future(call_id)
@@ -50,22 +62,36 @@ class ToolResultChannel:
         except asyncio.TimeoutError:
             async with self._lock:
                 if self._futures.get(call_id) is future and not future.done():
-                    self._futures.pop(call_id, None)
+                    future.cancel()
             raise
 
-    async def publish(self, call_id: str, result: Any) -> None:
-        """Publish a result for the given call_id."""
+    async def publish(self, call_id: str, result: Any) -> bool:
+        """Publish a result for the given call_id.
+
+        Returns ``True`` if a live waiter received it, ``False`` if the result
+        was dropped — a duplicate, or one that arrived after the waiter timed
+        out — so callers can tell ``matched`` from ``late`` reports.
+        """
         async with self._lock:
             future = self._get_or_create_future(call_id)
-            if not future.done():
-                future.set_result(result)
+            if future.done():
+                # Already settled — typically a duplicate report, or one that
+                # arrived after wait_for timed out and dropped its waiter.
+                logger.warning(f"Tool result for call_id={call_id} ignored; waiter already settled")
+                return False
+            future.set_result(result)
+        logger.info(f"Tool result published for call_id={call_id}")
+        return True
 
-    def cancel_all(self, reason: str = "Channel closed"):
+    def cancel_all(self, reason: str = "Channel closed") -> None:
         """Cancel all pending futures.
 
         Note: This is a synchronous method and must be called from the
         same event-loop thread that owns the futures.
         """
+        pending = [call_id for call_id, fut in self._futures.items() if not fut.done()]
+        if pending:
+            logger.info(f"Cancelling {len(pending)} pending tool result(s): {reason}; call_ids={pending}")
         for future in self._futures.values():
             if not future.done():
                 future.set_exception(RuntimeError(reason))

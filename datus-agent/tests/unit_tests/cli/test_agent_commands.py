@@ -860,21 +860,25 @@ class TestExtractSqlFromStreamingActions:
         agent_commands._extract_sql_from_streaming_actions([], workflow, node)
         assert workflow.context.sql_contexts == []
 
-    def test_extracts_from_read_query_action(self, agent_commands):
+    def test_extracts_from_execute_sql_action(self, agent_commands):
         workflow = MagicMock()
         workflow.context.sql_contexts = []
 
         action = MagicMock()
-        action.action_type = "read_query"
+        action.action_type = "execute_sql"
         action.status = MagicMock()
         action.status.value = "success"
-        action.input = {"sql": "SELECT 1"}
-        action.output = {"result": "1 row", "error": ""}
+        # Real tool actions nest params under ``input["arguments"]``.
+        action.input = {"function_name": "execute_sql", "arguments": {"sql": "SELECT 1"}}
+        # Read-only results carry the compressor payload (compressed_data).
+        action.output = {"result": {"original_rows": 1, "compressed_data": "n\n1"}, "error": ""}
 
         node = MagicMock(spec=[])  # no action_history_manager
         agent_commands._extract_sql_from_streaming_actions([action], workflow, node)
 
         assert len(workflow.context.sql_contexts) == 1
+        # The query is extracted from the nested ``arguments`` payload.
+        assert workflow.context.sql_contexts[0].sql_query == "SELECT 1"
 
     def test_extracts_from_action_history_manager(self, agent_commands):
         workflow = MagicMock()
@@ -894,15 +898,16 @@ class TestExtractSqlFromStreamingActions:
         workflow.context.sql_contexts = []
 
         action = MagicMock()
-        action.action_type = "read_query"
+        action.action_type = "execute_sql"
         action.status = MagicMock()
         action.status.value = "success"
-        action.input = {"sql": "SELECT bad"}
+        action.input = {"function_name": "execute_sql", "arguments": {"sql": "SELECT bad"}}
+        # A failed read returns no compressor payload → not read-shaped → skipped.
         action.output = {"result": "", "error": "syntax error"}
 
         node = MagicMock(spec=[])
         agent_commands._extract_sql_from_streaming_actions([action], workflow, node)
-        # Failed context (error != "") should not be added
+        # Failed context (no read-shaped result) should not be added
         assert len(workflow.context.sql_contexts) == 0
 
     def test_extracts_output_field_from_final_assistant_message(self, agent_commands):

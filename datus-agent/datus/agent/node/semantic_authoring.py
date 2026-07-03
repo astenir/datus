@@ -25,6 +25,8 @@ default ``{node}_system`` latest-version scan is never affected.
 
 from __future__ import annotations
 
+import re
+from dataclasses import fields, is_dataclass
 from typing import Any, Dict, Optional
 
 from datus.utils.loggings import get_logger
@@ -72,6 +74,95 @@ def resolve_authoring_format(
 def is_osi_authoring(agent_config: Any = None, node_config: Optional[Dict[str, Any]] = None) -> bool:
     """Return ``True`` when this node should author OSI instead of MetricFlow."""
     return resolve_authoring_format(agent_config, node_config) == AUTHORING_FORMAT_OSI
+
+
+def _normalize_model_name(value: Any) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"[^0-9A-Za-z_]+", "_", text)
+    text = re.sub(r"_+", "_", text).strip("_").lower()
+    return text
+
+
+def _declared_field_names(value: Any) -> set[str]:
+    if is_dataclass(value):
+        return {field.name for field in fields(value)}
+
+    for attr_name in ("model_fields", "__fields__"):
+        field_map = getattr(value, attr_name, None) or getattr(type(value), attr_name, None)
+        if isinstance(field_map, dict):
+            return set(field_map)
+
+    annotations = getattr(type(value), "__annotations__", None)
+    return set(annotations) if isinstance(annotations, dict) else set()
+
+
+def _config_field_value(config: Any, field_name: str) -> Any:
+    if isinstance(config, dict):
+        value = config.get(field_name, "")
+    elif field_name in _declared_field_names(config):
+        value = getattr(config, field_name, "")
+    else:
+        return ""
+    return "" if callable(value) else value
+
+
+def default_osi_semantic_model_name(agent_config: Any = None) -> str:
+    """Return the default OSI semantic model name for the current authoring scope."""
+    candidates = []
+    if agent_config is not None:
+        runtime_context = {}
+        runtime_context_getter = getattr(agent_config, "runtime_db_context", None)
+        if callable(runtime_context_getter):
+            try:
+                runtime_context = runtime_context_getter() or {}
+            except Exception:
+                runtime_context = {}
+        if isinstance(runtime_context, dict):
+            candidates.extend(
+                [
+                    runtime_context.get("database"),
+                    runtime_context.get("database_name"),
+                    runtime_context.get("schema"),
+                    runtime_context.get("db_schema"),
+                    runtime_context.get("schema_name"),
+                    runtime_context.get("catalog"),
+                    runtime_context.get("catalog_name"),
+                ]
+            )
+        try:
+            db_config = agent_config.current_db_config()
+        except Exception:
+            db_config = None
+        if db_config is not None:
+            candidates.extend(
+                [
+                    _config_field_value(db_config, "database"),
+                    _config_field_value(db_config, "schema"),
+                    _config_field_value(db_config, "catalog"),
+                ]
+            )
+        candidates.extend(
+            [
+                getattr(agent_config, "current_datasource", ""),
+                getattr(agent_config, "project_name", ""),
+            ]
+        )
+
+    for candidate in candidates:
+        normalized = _normalize_model_name(candidate)
+        if normalized:
+            return normalized
+    return "semantic_model"
+
+
+def default_osi_semantic_model_file(agent_config: Any = None) -> str:
+    """Return the project-relative default YAML path for OSI domain authoring."""
+    datasource = ""
+    if agent_config is not None:
+        datasource = str(getattr(agent_config, "current_datasource", "") or "").strip()
+    if not datasource:
+        datasource = "default"
+    return f"subject/semantic_models/{datasource}/{default_osi_semantic_model_name(agent_config)}.yml"
 
 
 def osi_template_name(node_name: str) -> str:

@@ -1860,15 +1860,32 @@ class ChatCommands:
             except json.JSONDecodeError:
                 return value
 
+        from datus.utils.constants import SQLType
+        from datus.utils.sql_utils import parse_sql_type
+
+        def _action_sql(act) -> str:
+            # Tool actions store params under ``input["arguments"]`` (a dict or a
+            # JSON string); fall back to the top-level shape for older payloads.
+            inp = _maybe_parse_json(act.input)
+            if not isinstance(inp, dict):
+                return ""
+            args = _maybe_parse_json(inp.get("arguments", inp))
+            if not isinstance(args, dict):
+                return ""
+            return args.get("sql") or args.get("query", "") or ""
+
+        def _is_read_sql_action(act) -> bool:
+            # ``execute_sql`` is the unified entry point; only seed SQL context
+            # from read-type statements (by input SQL), so a write/DDL never
+            # clobbers the last query's context. Covers failed reads too.
+            if act.function_name() != "execute_sql":
+                return False
+            return parse_sql_type(_action_sql(act), "") in (SQLType.SELECT, SQLType.METADATA_SHOW, SQLType.EXPLAIN)
+
         last_sql_action = None
         for i in range(len(incremental_actions) - 1, -1, -1):
             action = incremental_actions[i]
-            if (
-                action
-                and action.is_done()
-                and action.role == ActionRole.TOOL
-                and action.function_name() == "read_query"
-            ):
+            if action and action.is_done() and action.role == ActionRole.TOOL and _is_read_sql_action(action):
                 last_sql_action = action
                 break
 
@@ -1882,7 +1899,7 @@ class ChatCommands:
 
         action_output = _maybe_parse_json(last_sql_action.output)
         if not isinstance(action_output, dict):
-            logger.warning("read_query action output is not a dict; storing it as SQL context error")
+            logger.warning("execute_sql action output is not a dict; storing it as SQL context error")
             error = str(action_output or "")
             sql_return = None
             row_count = 0
@@ -1893,7 +1910,7 @@ class ChatCommands:
         else:
             tool_result = _maybe_parse_json(action_output.get("raw_output", {}))
             if not isinstance(tool_result, dict):
-                logger.warning("read_query raw_output is not a dict; storing it as SQL context error")
+                logger.warning("execute_sql raw_output is not a dict; storing it as SQL context error")
                 error = str(tool_result or "")
                 sql_return = ""
                 row_count = 0
@@ -1911,8 +1928,13 @@ class ChatCommands:
                 sql_return = ""
                 row_count = 0
 
+        # Seed the context with the SQL of the matched read action, not the
+        # caller-supplied ``sql`` — a later write/DDL turn must not pair the
+        # read result with the wrong statement. Fall back to ``sql`` when the
+        # action carries no parseable input.
+        matched_sql = _action_sql(last_sql_action) or sql
         sql_context = SQLContext(
-            sql_query=sql,
+            sql_query=matched_sql,
             sql_error=error,
             sql_return=sql_return,
             row_count=row_count,

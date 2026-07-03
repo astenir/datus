@@ -157,7 +157,7 @@ def _item_name(item) -> str:
     if isinstance(item, str):
         return item
     if isinstance(item, dict):
-        for key in ("name", "table_name", "database", "schema", "identifier", "title", "id"):
+        for key in ("name", "qualified_name", "table_name", "database", "schema", "identifier", "title", "id"):
             val = item.get(key)
             if val:
                 return str(val)
@@ -234,6 +234,7 @@ _TOOL_ARGS_FORMATTERS: Dict[str, Callable[[dict], str]] = {
     "list_tables": lambda a: _format_kw(a, "catalog", "schema_name"),
     "describe_table": lambda a: _format_positional(a, "table_name", "name"),
     "search_table": lambda a: _format_positional(a, "query_text", "query"),
+    "execute_sql": lambda a: _format_positional(a, "query", "sql"),
     "read_query": lambda a: _format_positional(a, "query", "sql"),
     "query": lambda a: _format_positional(a, "query", "sql"),
     "list_databases": lambda _a: "",
@@ -242,6 +243,7 @@ _TOOL_ARGS_FORMATTERS: Dict[str, Callable[[dict], str]] = {
     "read_file": lambda a: _format_positional(a, "file_path", "path"),
     "write_file": lambda a: _format_positional(a, "file_path", "path"),
     "edit_file": lambda a: _format_positional(a, "file_path", "path"),
+    "delete_file": lambda a: _format_positional(a, "file_path", "path"),
     "glob": lambda a: _format_kw(a, "pattern", "path"),
     "grep": lambda a: _format_kw(a, "pattern", "path"),
     # Context search tools
@@ -264,7 +266,8 @@ _TOOL_ARGS_FORMATTERS: Dict[str, Callable[[dict], str]] = {
     "list_document_nav": lambda _a: "",
     "get_document": lambda a: _format_positional(a, "doc_id", "doc_name", "name"),
     "search_document": lambda a: _format_positional(a, "query", "query_text"),
-    "web_search_document": lambda a: _format_positional(a, "query", "query_text"),
+    "web_search": lambda a: _format_positional(a, "keywords", "query", "query_text"),
+    "web_fetch": lambda a: _format_positional(a, "url"),
     # Skill tools
     "load_skill": lambda a: _format_positional(a, "skill_name", "name"),
     "execute_command": lambda a: _format_kw(a, "command"),
@@ -903,7 +906,8 @@ def _build_describe_table(action: ActionHistory, verbose: bool) -> ToolCallConte
 
 
 def _build_read_query(action: ActionHistory, verbose: bool) -> ToolCallContent:
-    """read_query / query: show row × column count.
+    """execute_sql / read_query / query: show row × column count for reads,
+    or rows-affected / message for writes & DDL.
 
     Handles both raised-exception failures (``action.status == FAILED``) and
     tool-reported failures (``FuncToolResult(success=0)``). The latter leaves
@@ -953,9 +957,19 @@ def _build_read_query(action: ActionHistory, verbose: bool) -> ToolCallContent:
                 else:
                     tc.compact_result = f"{rows} rows"
             else:
-                items = _get_items_from_output(action.output)
-                if isinstance(items, list):
-                    tc.compact_result = f"{len(items)} items"
+                result = data.get("result")
+                # Write/DDL execute_sql payloads carry a message + optional
+                # row_count instead of a row set.
+                if isinstance(result, dict) and ("message" in result or "row_count" in result):
+                    row_count = result.get("row_count")
+                    if row_count is not None:
+                        tc.compact_result = f"{row_count} rows affected"
+                    else:
+                        tc.compact_result = str(result.get("message") or "OK")
+                else:
+                    items = _get_items_from_output(action.output)
+                    if isinstance(items, list):
+                        tc.compact_result = f"{len(items)} items"
     return tc
 
 
@@ -1079,8 +1093,18 @@ def _build_edit_file(action: ActionHistory, verbose: bool) -> ToolCallContent:
 
 
 def _build_write_file(action: ActionHistory, verbose: bool) -> ToolCallContent:
-    """write_file: show file path and write result."""
+    """write_file: show file path and write result.
+
+    A rejected write returns ``FuncToolResult(success=0)`` without raising, so
+    the compact line must surface the error and flip the icon to ✗ instead of
+    fabricating a ``wrote N lines`` success from the input ``content`` alone.
+    """
     tc = make_base_content(action)
+    data = parse_output_data(action.output)
+    tool_error: Optional[str] = None
+    if data is not None and (data.get("success") == 0 or data.get("error")):
+        tool_error = str(data.get("error") or "Failed")
+        tc.status_mark = "✗"
     if verbose:
         # Custom args: show path/file_type, truncate long content
         args_lines: List[str] = []
@@ -1105,18 +1129,22 @@ def _build_write_file(action: ActionHistory, verbose: bool) -> ToolCallContent:
         if action.output:
             tc.output_lines = _format_result_only_markup(action.output)
     else:
-        data = parse_output_data(action.output)
-        args = _parse_args_dict(action)
-        content = args.get("content")
-        if isinstance(content, str) and content:
-            line_count = len(content.splitlines()) or 1
-            tc.compact_result = f"wrote {line_count} lines"
-        elif data:
-            result = data.get("result")
-            if isinstance(result, str) and "success" in result.lower():
-                tc.compact_result = "File written"
-            elif data.get("success"):
-                tc.compact_result = "File written"
+        if action.status == ActionStatus.FAILED:
+            tc.compact_result = action.output if isinstance(action.output, str) else (tool_error or "Failed")
+        elif tool_error is not None:
+            tc.compact_result = tool_error
+        else:
+            args = _parse_args_dict(action)
+            content = args.get("content")
+            if isinstance(content, str) and content:
+                line_count = len(content.splitlines()) or 1
+                tc.compact_result = f"wrote {line_count} lines"
+            elif data:
+                result = data.get("result")
+                if isinstance(result, str) and "success" in result.lower():
+                    tc.compact_result = "File written"
+                elif data.get("success"):
+                    tc.compact_result = "File written"
     return tc
 
 
@@ -1199,8 +1227,85 @@ def _build_simple_action(action: ActionHistory, verbose: bool, success_label: st
     return tc
 
 
+def _build_web_search(action: ActionHistory, verbose: bool) -> ToolCallContent:
+    """web_search: compact = canonical shortDesc; verbose = full results list.
+
+    Renders the provider-agnostic ``web_search`` schema
+    (``{query, result_count, results: [{title, url, snippet, age}]}``) the same
+    way regardless of which backend (Tavily / Anthropic / OpenAI hosted) served
+    the call.
+    """
+    from datus.schemas.web_result import web_search_short_summary
+
+    tc = make_base_content(action)
+    data = parse_output_data(action.output)
+    result = data.get("result") if isinstance(data, dict) else None
+    if not isinstance(result, dict):
+        set_error_as_result(tc, action)
+        return tc
+
+    if verbose:
+        tc.args_lines = extract_args_markup(action)
+        lines: List[str] = []
+        query = str(result.get("query") or "").strip()
+        if query:
+            lines.append(f"[bold]query[/bold]: {_escape_markup(query)}")
+        results = result.get("results") if isinstance(result.get("results"), list) else []
+        for idx, item in enumerate(results, 1):
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            url = str(item.get("url") or "").strip()
+            age = item.get("age")
+            header = f"{idx}. {_escape_markup(title)}" if title else f"{idx}. {_escape_markup(url)}"
+            if age:
+                header += f"  [dim]· {_escape_markup(str(age))}[/dim]"
+            lines.append(header)
+            if title and url:
+                lines.append(f"   [dim]{_escape_markup(url)}[/dim]")
+            snippet = str(item.get("snippet") or "").strip()
+            if snippet:
+                lines.append(f"   {_escape_markup(snippet)}")
+        tc.output_lines = lines or _format_result_only_markup(action.output)
+    else:
+        tc.compact_result = web_search_short_summary(result)
+    return tc
+
+
+def _build_web_fetch(action: ActionHistory, verbose: bool) -> ToolCallContent:
+    """web_fetch: compact = ``Title (N chars)``; verbose = title/url + full text."""
+    from datus.schemas.web_result import web_fetch_short_summary
+
+    tc = make_base_content(action)
+    data = parse_output_data(action.output)
+    result = data.get("result") if isinstance(data, dict) else None
+    if not isinstance(result, dict):
+        set_error_as_result(tc, action)
+        return tc
+
+    if verbose:
+        tc.args_lines = extract_args_markup(action)
+        lines = []
+        title = str(result.get("title") or "").strip()
+        url = str(result.get("url") or "").strip()
+        if title:
+            lines.append(f"[bold]{_escape_markup(title)}[/bold]")
+        if url:
+            suffix = " [dim](truncated)[/dim]" if result.get("truncated") else ""
+            lines.append(f"[dim]{_escape_markup(url)}[/dim]{suffix}")
+        content = result.get("content")
+        if isinstance(content, str) and content:
+            lines.append("")
+            for line in content.split("\n"):
+                lines.append(_escape_markup(line))
+        tc.output_lines = lines or _format_result_only_markup(action.output)
+    else:
+        tc.compact_result = web_fetch_short_summary(result)
+    return tc
+
+
 def _build_doc_search_result(action: ActionHistory, verbose: bool) -> ToolCallContent:
-    """Shared builder for search_document / web_search_document — use result['doc_count']."""
+    """Shared builder for search_document / web_search — use result['doc_count']."""
     tc = make_base_content(action)
     if verbose:
         tc.args_lines = extract_args_markup(action)
@@ -1979,6 +2084,7 @@ class ToolCallContentBuilder:
         self._registry["list_tables"] = _build_list_tables
         self._registry["table_overview"] = _build_list_tables
         self._registry["describe_table"] = _build_describe_table
+        self._registry["execute_sql"] = _build_read_query
         self._registry["read_query"] = _build_read_query
         self._registry["query"] = _build_read_query
         self._registry["search_table"] = _build_search_table
@@ -2018,7 +2124,10 @@ class ToolCallContentBuilder:
         # Platform document tools
         self._registry["list_document_nav"] = _build_list_document_nav
         self._registry["get_document"] = _build_get_document
-        self._registry["web_search_document"] = _build_doc_search_result
+
+        # Web tool group (provider-agnostic canonical schema)
+        self._registry["web_search"] = _build_web_search
+        self._registry["web_fetch"] = _build_web_fetch
 
         # Plan tools
         self._registry["todo_list"] = _build_todo_list

@@ -125,8 +125,14 @@ class ExploreAgenticNode(AgenticNode):
                 dynamic_scoped_tables = self.input.scoped_tables
             self.db_func_tool = DBFuncTool(
                 agent_config=self.agent_config,
+                default_database=getattr(self.input, "database", None) if self.input else None,
                 sub_agent_name=self.get_node_name(),
                 scoped_tables=dynamic_scoped_tables,
+                # Explore profiles the datasource and must stay read-only;
+                # ``execute_sql`` is write-capable, so reject non-read SQL at the
+                # tool layer (the permission gate alone would defer writes to the
+                # normal ASK/ALLOW flow rather than hard-deny them).
+                read_only=True,
             )
             if dynamic_scoped_tables:
                 # A per-run scoped table allowlist indicates a tightly
@@ -135,7 +141,7 @@ class ExploreAgenticNode(AgenticNode):
                 self.tools.extend(
                     [
                         self.db_func_tool.to_function_tool(self.db_func_tool.describe_table),
-                        self.db_func_tool.to_function_tool(self.db_func_tool.read_query),
+                        self.db_func_tool.to_function_tool(self.db_func_tool.execute_sql),
                     ]
                 )
             else:

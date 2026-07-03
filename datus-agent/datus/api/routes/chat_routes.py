@@ -1046,6 +1046,10 @@ async def submit_tool_result(
     task_manager = svc.task_manager
     task = task_manager.get_task(request.session_id) if request.session_id else None
     if not task or not task.node:
+        # No live waiter means the agent loop already gave up (e.g. the proxy
+        # tool timed out) or the session was never running — surface it so a
+        # client that thinks it is unblocking the turn can be diagnosed.
+        logger.warning(f"tool_result for unknown task: session_id={request.session_id}, call_id={request.call_tool_id}")
         return Result[ToolResultData](
             success=False,
             errorCode="TASK_NOT_FOUND",
@@ -1053,7 +1057,8 @@ async def submit_tool_result(
         )
 
     try:
-        await task.node.tool_channel.publish(request.call_tool_id, request.tool_result.model_dump())
+        logger.info(f"Received tool_result: session_id={request.session_id}, call_id={request.call_tool_id}")
+        delivered = await task.node.tool_channel.publish(request.call_tool_id, request.tool_result.model_dump())
     except Exception:
         logger.warning("Tool result delivery failed for call_tool_id=%s", request.call_tool_id, exc_info=True)
         return Result[ToolResultData](
@@ -1062,9 +1067,16 @@ async def submit_tool_result(
             errorMessage="Tool result delivery failed.",
         )
 
+    if not delivered:
+        # Task is alive but no waiter took the result — it arrived after the
+        # proxy-tool wait already timed out, or it is a duplicate report.
+        logger.warning(f"tool_result arrived late: session_id={request.session_id}, call_id={request.call_tool_id}")
     return Result[ToolResultData](
         success=True,
-        data=ToolResultData(call_tool_id=request.call_tool_id, status="received"),
+        data=ToolResultData(
+            call_tool_id=request.call_tool_id,
+            status="received" if delivered else "ignored",
+        ),
     )
 
 

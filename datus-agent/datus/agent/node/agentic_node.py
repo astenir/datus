@@ -755,6 +755,78 @@ class AgenticNode(Node):
             "target for this turn; generate SQL for THIS dialect."
         )
 
+    def _semantic_runtime_db_context(self) -> Dict[str, str]:
+        """Return the current datasource/catalog/database/schema for semantic adapter initialization."""
+        agent_config = getattr(self, "agent_config", None)
+        if not agent_config:
+            return {}
+
+        from datus.utils.node_utils import resolve_database_name_for_prompt
+
+        datasource = getattr(agent_config, "current_datasource", "") or ""
+        runtime_context: Dict[str, str] = {}
+        runtime_context_getter = getattr(agent_config, "runtime_db_context", None)
+        if callable(runtime_context_getter):
+            try:
+                runtime_context = runtime_context_getter() or {}
+            except Exception as e:
+                logger.debug("Unable to read runtime DB context for semantic adapter: %s", e)
+                runtime_context = {}
+        datasource = runtime_context.get("datasource") or datasource
+        context: Dict[str, str] = {}
+        if datasource:
+            context["datasource"] = datasource
+
+        db_config = None
+        try:
+            db_config = agent_config.current_db_config(datasource)
+        except Exception as e:
+            logger.debug("Unable to read current DB config for semantic adapter context: %s", e)
+
+        user_input = getattr(self, "input", None)
+        connector = getattr(getattr(self, "db_func_tool", None), "connector", None)
+
+        catalog = (
+            getattr(user_input, "catalog", "")
+            or runtime_context.get("catalog")
+            or runtime_context.get("catalog_name")
+            or getattr(db_config, "catalog", "")
+            or ""
+        )
+        if catalog:
+            context["catalog"] = str(catalog).strip()
+
+        requested_database = (
+            getattr(user_input, "database", "")
+            or runtime_context.get("database")
+            or runtime_context.get("database_name")
+            or ""
+        )
+        database = resolve_database_name_for_prompt(connector, requested_database)
+        database = (
+            database
+            or runtime_context.get("database")
+            or runtime_context.get("database_name")
+            or getattr(db_config, "database", "")
+            or ""
+        )
+        if database:
+            context["database"] = str(database).strip()
+
+        schema = (
+            getattr(user_input, "db_schema", "")
+            or runtime_context.get("schema")
+            or runtime_context.get("db_schema")
+            or runtime_context.get("schema_name")
+            or getattr(db_config, "schema", "")
+            or ""
+        )
+        if schema:
+            context["schema"] = str(schema).strip()
+            context["db_schema"] = str(schema).strip()
+
+        return {key: value for key, value in context.items() if value}
+
     def _build_enhanced_message(
         self,
         user_input: Any,
@@ -1174,6 +1246,7 @@ class AgenticNode(Node):
         self._ensure_skill_tools_in_tools()
         self._ensure_bash_tool_in_tools()
         self._ensure_memory_tool_in_tools()
+        self._ensure_web_tools_in_tools()
 
     def _runtime_context_current_date(self) -> str:
         """Current-date reference rendered into the shared runtime-context block.
@@ -2401,6 +2474,45 @@ class AgenticNode(Node):
             f"{[t.name for t in self.bash_tool.available_tools()]}"
         )
 
+    def _ensure_web_tools_in_tools(self) -> None:
+        """Mount the unified ``web_tool`` group per the active provider.
+
+        Mirrors :meth:`_ensure_skill_tools_in_tools`. The active model decides
+        whether each capability is served by a vendor-native tool (then the local
+        function tool is suppressed and the model layer injects the hosted tool)
+        or by the local backend. Re-runs per request so a runtime ``/model``
+        switch re-resolves the backends; stale local web tools are dropped first.
+        """
+        from datus.tools.func_tool.web_tool import WebTool
+
+        try:
+            model = self.model
+        except Exception:
+            model = None
+        search_builtin = bool(getattr(model, "supports_builtin_web_search", lambda: False)()) if model else False
+        fetch_builtin = bool(getattr(model, "supports_builtin_web_fetch", lambda: False)()) if model else False
+        self._builtin_web_tools = {"web_search": search_builtin, "web_fetch": fetch_builtin}
+
+        self._web_tool = WebTool(
+            self.agent_config,
+            sub_agent_name=getattr(self, "sub_agent_name", None),
+            expose_local_search=not search_builtin,
+            expose_local_fetch=not fetch_builtin,
+        )
+        desired = self._web_tool.available_tools()
+        web_names = set(WebTool.all_tools_name())
+
+        # Drop previously-mounted web tools so a provider switch can't leave a
+        # stale local backend behind, then mount the current desired set.
+        existing = [t for t in (getattr(self, "tools", None) or []) if getattr(t, "name", None) not in web_names]
+        existing.extend(desired)
+        self.tools = existing
+        if desired:
+            logger.info(
+                f"Web tools injected into node '{self.get_node_name()}': "
+                f"{[t.name for t in desired]} (builtin={self._builtin_web_tools})"
+            )
+
     def _ensure_memory_tool_in_tools(self) -> None:
         """Ensure ``add_memory`` / ``edit_memory`` are in ``self.tools`` for a main agent.
 
@@ -2856,6 +2968,7 @@ class AgenticNode(Node):
             async for stream_action in self.model.generate_with_tools_stream(
                 prompt=ctx.user_prompt,
                 tools=self.tools or [],
+                builtin_web_tools=getattr(self, "_builtin_web_tools", None),
                 mcp_servers=self.mcp_servers,
                 instruction=ctx.system_instruction,
                 max_turns=effective_max_turns,
@@ -3406,7 +3519,7 @@ class AgenticNode(Node):
         Prefers ``all_tools_name()`` (the full surface, independent of
         runtime availability) over ``available_tools()`` so the registry
         also covers method-level wrappers some nodes mount directly (e.g.
-        ``DBFuncTool.execute_ddl`` on gen_job) and conditional tools that
+        ``DBFuncTool.transfer_query_result`` on gen_job) and conditional tools that
         appear only with certain configs. Registering a superset is safe:
         the registry is a name → category lookup consulted per call, so
         names that are never mounted are never queried.
@@ -3486,6 +3599,7 @@ class AgenticNode(Node):
                 fs_policy=self._make_filesystem_policy(),
                 non_interactive=non_interactive,
                 proxied_tool_names=self.proxied_tool_names,
+                project_root=getattr(self.agent_config, "project_root", None),
             )
             logger.debug(
                 f"PermissionHooks attached to node '{self.get_node_name()}' "

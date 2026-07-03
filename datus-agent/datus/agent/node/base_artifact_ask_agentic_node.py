@@ -147,6 +147,10 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
     NODE_NAME: ClassVar[str] = "ask_artifact"
     ARTIFACT_KIND: ClassVar[Literal["report", "dashboard"]] = "report"
     ARTIFACT_ROOT_DIR_NAME: ClassVar[str] = "reports"
+    # Artifact ask agents are read-only consultants — they may explore the
+    # datasource but must never mutate it. ``execute_sql`` is write-capable, so
+    # construct its DBFuncTool in read-only mode to hard-reject non-read SQL.
+    _db_read_only: bool = True
     # When True, a missing ``artifact_blob`` in the agentic_nodes entry is a
     # fatal startup error rather than a signal to fall back to the on-disk
     # ``<kind>/<slug>/`` directory. Kinds whose backend publish flow always
@@ -176,6 +180,7 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
         "date_parsing_tools": "date_parsing_tools",
         "filesystem_tools": "filesystem_func_tool",
         "platform_doc_tools": "_platform_doc_tool",
+        "web_tool": "_web_tool",
         "bash_tools": "bash_tool",
         "skills": "skill_func_tool",
     }
@@ -339,6 +344,7 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
                     agent_config=self.agent_config,
                     sub_agent_name=self.node_config.get("system_prompt"),
                     adapter_type=self.node_config.get("adapter_type", "metricflow"),
+                    runtime_db_context_provider=self._semantic_runtime_db_context,
                 )
             except Exception as exc:
                 logger.error("%s: failed to build whitelisted semantic_tools: %s", self.get_node_name(), exc)
@@ -415,6 +421,17 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
         except Exception:
             return False
 
+    def _db_tool_exposed(self, tool_name: str) -> bool:
+        """True if a specific db_tools tool survived the whitelist prune.
+
+        The method-level whitelist can keep ``execute_sql`` while dropping
+        ``describe_table`` (or vice versa), so tool-specific prompt guidance must
+        derive its flag from the exposed ``self.tools`` per tool rather than the
+        coarse :meth:`_db_tools_exposed`. Otherwise the prompt advertises a tool
+        the model cannot call ("Tool ... not found").
+        """
+        return any(tool.name == tool_name for tool in self.tools)
+
     def _group_whitelisted(self, group: str) -> bool:
         """True if the configured ``tools`` grants any tool in ``group``.
 
@@ -452,6 +469,26 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
         if not self._group_whitelisted("skills"):
             return
         super()._ensure_skill_tools_in_tools()
+
+    def _ensure_web_tools_in_tools(self) -> None:
+        """Gate :class:`AgenticNode`'s lazy web-tool re-injection on the whitelist.
+
+        Same prompt-build / snapshot-replay bypass as bash and skills (see
+        :meth:`_ensure_bash_tool_in_tools`): the base injector re-adds
+        ``web_search`` / ``web_fetch`` (and resolves provider-native builtins)
+        on every rebuild, which would silently grant web access to an ask_*
+        agent whose ``tools`` whitelist never requested ``web_tool``. Skip — and
+        scrub any stale local web tools + builtin flags — unless whitelisted.
+        """
+        if not self._group_whitelisted("web_tool"):
+            from datus.tools.func_tool.web_tool import WebTool
+
+            web_names = set(WebTool.all_tools_name())
+            self.tools = [t for t in (self.tools or []) if getattr(t, "name", None) not in web_names]
+            self._builtin_web_tools = {"web_search": False, "web_fetch": False}
+            self._web_tool = None
+            return
+        super()._ensure_web_tools_in_tools()
 
     def _get_available_skills_context(self) -> str:
         """Suppress the skills XML when ``skills`` isn't whitelisted.
@@ -856,6 +893,8 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
         # Ask consultants never carry the task() delegation tool; set it
         # explicitly so a shared partial can't advertise a tool they lack.
         context["has_task_tool"] = False
+        # Web tools are not advertised in the prompt (see ChatAgenticNode):
+        # their tool-schema descriptions document usage on their own.
         context["active_profile"] = getattr(self.agent_config, "active_profile_name", None) or "normal"
         from datus.utils.time_utils import get_default_current_date
 
@@ -902,11 +941,12 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
         otherwise), the skills XML (suppressed unless ``skills`` is
         whitelisted), and the response-language directive.
         """
-        # Re-inject whitelisted bash / skill tools (gated; no-op when the
+        # Re-inject whitelisted bash / skill / web tools (gated; no-op when the
         # whitelist didn't grant them). These add to ``self.tools``, not prompt
         # text — needed so a whitelist that DID grant them still works.
         self._ensure_skill_tools_in_tools()
         self._ensure_bash_tool_in_tools()
+        self._ensure_web_tools_in_tools()
         if self.skill_func_tool:
             skills_xml = self._get_available_skills_context()
             if skills_xml:
@@ -1709,12 +1749,21 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
         # which would mislead the LLM.
         has_insights = self._artifact_has_insights()
         # When the subagent whitelist drops db_tools, the model has no
-        # describe_table / read_query to call — promising them in the rules
-        # makes it attempt unavailable tools ("Tool ... not found").
-        db_exposed = self._db_tools_exposed()
+        # describe_table / execute_sql to call — promising them in the rules
+        # makes it attempt unavailable tools ("Tool ... not found"). The
+        # method-level whitelist can keep one without the other, so derive each
+        # flag independently rather than from the coarse db-exposed check.
+        describe_exposed = self._db_tool_exposed("describe_table")
+        execute_sql_exposed = self._db_tool_exposed("execute_sql")
+        db_exposed = describe_exposed or execute_sql_exposed
+        live_tool_names = [
+            f"`{name}`"
+            for name, exposed in (("describe_table", describe_exposed), ("execute_sql", execute_sql_exposed))
+            if exposed
+        ]
         live_data_clause = (
-            "(call `describe_table` / `execute_sql` for those)"
-            if db_exposed
+            f"(call {' / '.join(live_tool_names)} for those)"
+            if live_tool_names
             else "(live database tools are not enabled for this agent, so answer "
             "from the snapshot and say plainly when something cannot be verified live)"
         )
@@ -1728,8 +1777,8 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
             # model from offering to run queries. State it up front.
             lines.append(
                 "**This agent has NO live database access.** You cannot query "
-                "the database or introspect schema live (no `read_query`, "
-                "`list_tables`, or `describe_table`). Do NOT offer to run SQL "
+                "the database or introspect schema live (no SQL execution or "
+                "schema-introspection tools). Do NOT offer to run SQL "
                 "or fetch fresh data — answer only from the inlined data + "
                 "artifact files above, and say plainly when a question would "
                 "require a live query you can't run."
@@ -1774,7 +1823,10 @@ class BaseArtifactAskAgenticNode(ChatAgenticNode):
             "user explicitly asks, but call it out in your answer."
         )
         if self.ARTIFACT_KIND == "dashboard":
-            if db_exposed:
+            # This rule is specifically about running ad-hoc SQL, so gate it on
+            # ``execute_sql`` alone — a whitelist that keeps only ``describe_table``
+            # leaves ``db_exposed`` True but must NOT advertise SQL execution.
+            if execute_sql_exposed:
                 lines.append(
                     "6. **Dashboard queries have no precomputed data**. The "
                     "`queries/<slug>.sql.j2` files (inlined above) are "

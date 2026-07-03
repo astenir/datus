@@ -2,7 +2,9 @@
 Test cases for SemanticTools utility functions and query_metrics compression.
 """
 
+import json
 from enum import Enum
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
@@ -12,7 +14,7 @@ from datus.tools.func_tool.base import FuncToolResult, normalize_null
 from datus.tools.func_tool.generation_evidence import GenerationEvidence
 from datus.tools.func_tool.metric_queryability import extract_metric_queryability_contracts
 from datus.tools.func_tool.semantic_tools import _run_async
-from datus.tools.semantic_tools.models import QueryResult
+from datus.tools.semantic_tools.models import QueryResult, ValidationResult
 
 
 class _Severity(Enum):
@@ -89,7 +91,7 @@ class TestGenerationEvidence:
             [
                 {
                     "source": "sql_1",
-                    "metric_hints": ["activity_count"],
+                    "metric_hints": ["order_count"],
                     "dimension_hints": ["start_month"],
                     "time_group_hints": [
                         {
@@ -1224,6 +1226,130 @@ class TestQueryMetricsCompression:
             assert result.result["data"]["original_rows"] == 1
             assert result.result["data"]["original_columns"] == ["x"]
 
+    def test_query_metrics_passes_join_controls_to_supporting_adapter(self, semantic_tools):
+        """Test that semantic join controls are forwarded when the adapter supports them."""
+        query_result = QueryResult(columns=["x"], data=[{"x": 1}], metadata={})
+
+        class AdapterWithJoinControls:
+            def __init__(self):
+                self.query_kwargs = None
+
+            def get_dimensions(self, metric_name, path=None):
+                return [{"name": "customer_id__customer_name"}]
+
+            def query_metrics(
+                self,
+                metrics,
+                dimensions=None,
+                path=None,
+                time_start=None,
+                time_end=None,
+                time_granularity=None,
+                where=None,
+                limit=None,
+                order_by=None,
+                join_policy=None,
+                zero_fill=False,
+                dry_run=False,
+            ):
+                self.query_kwargs = {
+                    "metrics": metrics,
+                    "dimensions": dimensions,
+                    "path": path,
+                    "time_start": time_start,
+                    "time_end": time_end,
+                    "time_granularity": time_granularity,
+                    "where": where,
+                    "limit": limit,
+                    "order_by": order_by,
+                    "join_policy": join_policy,
+                    "zero_fill": zero_fill,
+                    "dry_run": dry_run,
+                }
+                return query_result
+
+        adapter = AdapterWithJoinControls()
+        semantic_tools._adapter = adapter
+        with patch(
+            "datus.tools.func_tool.semantic_tools._run_async",
+            side_effect=[
+                [{"name": "customer_id__customer_name"}],
+                query_result,
+            ],
+        ):
+            result = semantic_tools.query_metrics(
+                metrics=["order_count"],
+                dimensions=["customer_id__customer_name"],
+                join_policy="dimension_preserving",
+                zero_fill=True,
+            )
+
+        assert result.success == 1
+        assert adapter.query_kwargs["join_policy"] == "dimension_preserving"
+        assert adapter.query_kwargs["zero_fill"] is True
+
+    def test_query_metrics_passes_join_controls_to_kwargs_adapter(self, semantic_tools):
+        query_result = QueryResult(columns=["x"], data=[{"x": 1}], metadata={})
+
+        class AdapterWithKwargs:
+            def __init__(self):
+                self.query_kwargs = None
+
+            def get_dimensions(self, metric_name, path=None):
+                return [{"name": "customer_id__customer_name"}]
+
+            def query_metrics(self, metrics, dimensions=None, path=None, **kwargs):
+                self.query_kwargs = kwargs
+                return query_result
+
+        adapter = AdapterWithKwargs()
+        semantic_tools._adapter = adapter
+        with patch(
+            "datus.tools.func_tool.semantic_tools._run_async",
+            side_effect=[
+                [{"name": "customer_id__customer_name"}],
+                query_result,
+            ],
+        ):
+            result = semantic_tools.query_metrics(
+                metrics=["order_count"],
+                dimensions=["customer_id__customer_name"],
+                join_policy="dimension_preserving",
+                zero_fill=True,
+            )
+
+        assert result.success == 1
+        assert adapter.query_kwargs["join_policy"] == "dimension_preserving"
+        assert adapter.query_kwargs["zero_fill"] is True
+
+    def test_query_metrics_normalizes_false_zero_fill_before_adapter_gating(self, semantic_tools):
+        query_result = QueryResult(columns=["x"], data=[{"x": 1}], metadata={})
+
+        class AdapterWithoutJoinControls:
+            def get_dimensions(self, metric_name, path=None):
+                return []
+
+            def query_metrics(
+                self,
+                metrics,
+                dimensions=None,
+                path=None,
+                time_start=None,
+                time_end=None,
+                time_granularity=None,
+                where=None,
+                limit=None,
+                order_by=None,
+                dry_run=False,
+            ):
+                return query_result
+
+        semantic_tools._adapter = AdapterWithoutJoinControls()
+        with patch("datus.tools.func_tool.semantic_tools._run_async", return_value=query_result):
+            result = semantic_tools.query_metrics(metrics=["order_count"], zero_fill="false")
+
+        assert result.success == 1
+
 
 # ---------------------------------------------------------------------------
 # Extended fixtures (no adapter_type)
@@ -1298,7 +1424,7 @@ class TestAvailableTools:
             tools = semantic_tools_ext.available_tools()
         assert tools == []
 
-    def test_default_metricflow_adapter_load_failure_returns_no_tools(self):
+    def test_default_metricflow_adapter_does_not_load_during_tool_registration(self):
         with (
             patch("datus.tools.func_tool.semantic_tools.SemanticModelRAG"),
             patch("datus.tools.func_tool.semantic_tools.MetricRAG"),
@@ -1326,7 +1452,13 @@ class TestAvailableTools:
                 tools = tool.available_tools()
 
         names = [tool.name for tool in tools]
-        assert names == []
+        assert names == [
+            "list_metrics",
+            "get_dimensions",
+            "query_metrics",
+            "validate_semantic",
+            "attribution_analyze",
+        ]
 
     def test_with_adapter_adds_validate_and_attribution_tools(self):
         with (
@@ -1346,7 +1478,7 @@ class TestAvailableTools:
         # 3 base + validate_semantic + attribution_analyze (both enabled when adapter is set)
         assert len(tools) == 5
 
-    def test_configured_adapter_load_failure_exposes_no_tools(self):
+    def test_configured_adapter_load_failure_is_reported_when_tool_runs(self):
         with (
             patch("datus.tools.func_tool.semantic_tools.SemanticModelRAG"),
             patch("datus.tools.func_tool.semantic_tools.MetricRAG"),
@@ -1374,12 +1506,341 @@ class TestAvailableTools:
                 tools = tool.available_tools()
 
             names = [tool.name for tool in tools]
-            assert names == []
-            assert "attribution_analyze" not in names
+            assert names == [
+                "list_metrics",
+                "get_dimensions",
+                "query_metrics",
+                "validate_semantic",
+                "attribution_analyze",
+            ]
 
             result = tool.validate_semantic()
             assert result.success == 0
             assert "bad yaml" in result.error
+
+
+class TestRuntimeDbContext:
+    def test_normalize_runtime_context_handles_empty_and_aliases(self):
+        from datus.tools.func_tool.semantic_tools import SemanticTools
+
+        assert SemanticTools._normalize_runtime_db_context(None) == {}
+        assert SemanticTools._normalize_runtime_db_context(
+            {
+                "catalog_name": " runtime_catalog ",
+                "database_name": " runtime_db ",
+                "db_schema": " runtime_schema ",
+            }
+        ) == {
+            "catalog_name": "runtime_catalog",
+            "catalog": "runtime_catalog",
+            "database_name": "runtime_db",
+            "database": "runtime_db",
+            "db_schema": "runtime_schema",
+            "schema": "runtime_schema",
+        }
+        assert SemanticTools._normalize_runtime_db_context({"schema_name": "runtime_schema"}) == {
+            "schema_name": "runtime_schema",
+            "schema": "runtime_schema",
+        }
+
+    def test_adapter_config_receives_runtime_context_and_reloads_when_it_changes(self):
+        runtime_context = {"datasource": "college_exam", "database": "db_one"}
+        captured_builder_calls = []
+        adapter_config = object()
+        adapter_one = Mock()
+        adapter_two = Mock()
+
+        def build_config(adapter_type=None, database_name=None, runtime_db_context=None):
+            captured_builder_calls.append(
+                {
+                    "adapter_type": adapter_type,
+                    "database_name": database_name,
+                    "runtime_db_context": dict(runtime_db_context or {}),
+                }
+            )
+            return adapter_config
+
+        with (
+            patch("datus.tools.func_tool.semantic_tools.SemanticModelRAG"),
+            patch("datus.tools.func_tool.semantic_tools.MetricRAG"),
+            patch("datus.tools.func_tool.semantic_tools.semantic_adapter_registry.get_metadata", return_value=None),
+            patch(
+                "datus.tools.func_tool.semantic_tools.semantic_adapter_registry.create_adapter",
+                side_effect=[adapter_one, adapter_two],
+            ) as create_adapter,
+        ):
+            from datus.tools.func_tool.semantic_tools import SemanticTools
+
+            config = Mock()
+            config.active_model.return_value.model = "gpt-4o"
+            config.current_datasource = "college_exam"
+            config.resolve_semantic_adapter.side_effect = lambda adapter_type=None: adapter_type
+            config.build_semantic_adapter_config = build_config
+            tool = SemanticTools(
+                agent_config=config,
+                adapter_type="metricflow",
+                runtime_db_context_provider=lambda: runtime_context,
+            )
+
+            assert tool.adapter is adapter_one
+            assert tool.adapter is adapter_one
+            runtime_context["database"] = "db_two"
+            assert tool.adapter is adapter_two
+
+        assert create_adapter.call_count == 2
+        assert captured_builder_calls == [
+            {
+                "adapter_type": "metricflow",
+                "database_name": "college_exam",
+                "runtime_db_context": {"datasource": "college_exam", "database": "db_one"},
+            },
+            {
+                "adapter_type": "metricflow",
+                "database_name": "college_exam",
+                "runtime_db_context": {"datasource": "college_exam", "database": "db_two"},
+            },
+        ]
+
+    def test_adapter_config_uses_agent_config_runtime_context_when_provider_absent(self):
+        captured_builder_calls = []
+        adapter_config = object()
+        adapter = Mock()
+
+        def build_config(adapter_type=None, database_name=None, runtime_db_context=None):
+            captured_builder_calls.append(
+                {
+                    "adapter_type": adapter_type,
+                    "database_name": database_name,
+                    "runtime_db_context": dict(runtime_db_context or {}),
+                }
+            )
+            return adapter_config
+
+        with (
+            patch("datus.tools.func_tool.semantic_tools.SemanticModelRAG"),
+            patch("datus.tools.func_tool.semantic_tools.MetricRAG"),
+            patch("datus.tools.func_tool.semantic_tools.semantic_adapter_registry.get_metadata", return_value=None),
+            patch(
+                "datus.tools.func_tool.semantic_tools.semantic_adapter_registry.create_adapter",
+                return_value=adapter,
+            ) as create_adapter,
+        ):
+            from datus.tools.func_tool.semantic_tools import SemanticTools
+
+            config = Mock()
+            config.active_model.return_value.model = "gpt-4o"
+            config.current_datasource = "static_ds"
+            config.runtime_db_context.return_value = {
+                "datasource": "runtime_ds",
+                "database": "agent_ctx_db",
+            }
+            config.resolve_semantic_adapter.side_effect = lambda adapter_type=None: adapter_type
+            config.build_semantic_adapter_config = build_config
+
+            tool = SemanticTools(agent_config=config, adapter_type="metricflow")
+
+            assert tool.adapter is adapter
+
+        assert create_adapter.call_count == 1
+        assert captured_builder_calls == [
+            {
+                "adapter_type": "metricflow",
+                "database_name": "runtime_ds",
+                "runtime_db_context": {"datasource": "runtime_ds", "database": "agent_ctx_db"},
+            }
+        ]
+
+    def test_runtime_context_provider_failure_returns_empty_context(self):
+        with (
+            patch("datus.tools.func_tool.semantic_tools.SemanticModelRAG"),
+            patch("datus.tools.func_tool.semantic_tools.MetricRAG"),
+        ):
+            from datus.tools.func_tool.semantic_tools import SemanticTools
+
+            config = Mock()
+            config.active_model.return_value.model = "gpt-4o"
+            tool = SemanticTools(
+                agent_config=config,
+                adapter_type="metricflow",
+                runtime_db_context_provider=Mock(side_effect=RuntimeError("boom")),
+            )
+
+        assert tool._runtime_db_context() == {}
+
+    def test_agent_config_runtime_context_failure_returns_empty_context(self):
+        with (
+            patch("datus.tools.func_tool.semantic_tools.SemanticModelRAG"),
+            patch("datus.tools.func_tool.semantic_tools.MetricRAG"),
+        ):
+            from datus.tools.func_tool.semantic_tools import SemanticTools
+
+            config = Mock()
+            config.active_model.return_value.model = "gpt-4o"
+            config.runtime_db_context.side_effect = RuntimeError("boom")
+            tool = SemanticTools(agent_config=config, adapter_type="metricflow")
+
+        assert tool._runtime_db_context() == {}
+
+    def test_static_runtime_context_overrides_agent_config_context_and_is_idempotent(self):
+        with (
+            patch("datus.tools.func_tool.semantic_tools.SemanticModelRAG"),
+            patch("datus.tools.func_tool.semantic_tools.MetricRAG"),
+        ):
+            from datus.tools.func_tool.semantic_tools import SemanticTools
+
+            config = Mock()
+            config.active_model.return_value.model = "gpt-4o"
+            config.runtime_db_context.return_value = {"database": "agent_db"}
+            tool = SemanticTools(agent_config=config, adapter_type="metricflow")
+
+        tool._adapter = Mock()
+        tool._attribution_tool = Mock()
+        tool._adapter_context_key = ("metricflow", "ds", "", "", "")
+        tool.set_runtime_db_context({"database_name": "static_db"})
+
+        assert tool._runtime_db_context() == {
+            "database_name": "static_db",
+            "database": "static_db",
+        }
+        assert tool._adapter is None
+        assert tool._attribution_tool is None
+        assert tool._adapter_context_key is None
+
+        adapter = Mock()
+        tool._adapter = adapter
+        tool.set_runtime_db_context({"database_name": "static_db"})
+
+        assert tool._adapter is adapter
+
+    def test_adapter_uses_default_config_when_builder_absent(self, tmp_path):
+        adapter = Mock()
+        path_manager = SimpleNamespace(semantic_model_path=lambda datasource: tmp_path / datasource)
+        config = SimpleNamespace(
+            active_model=lambda: SimpleNamespace(model="gpt-4o"),
+            current_datasource="runtime_ds",
+            path_manager=path_manager,
+        )
+
+        with (
+            patch("datus.tools.func_tool.semantic_tools.SemanticModelRAG"),
+            patch("datus.tools.func_tool.semantic_tools.MetricRAG"),
+            patch("datus.tools.func_tool.semantic_tools.semantic_adapter_registry.get_metadata", return_value=None),
+            patch(
+                "datus.tools.func_tool.semantic_tools.semantic_adapter_registry.create_adapter",
+                return_value=adapter,
+            ) as create_adapter,
+        ):
+            from datus.tools.func_tool.semantic_tools import SemanticTools
+
+            tool = SemanticTools(agent_config=config, adapter_type="metricflow")
+
+            assert tool.adapter is adapter
+
+        adapter_config = create_adapter.call_args.args[1]
+        assert adapter_config.datasource == "runtime_ds"
+
+    def test_adapter_uses_metadata_config_when_builder_absent(self, tmp_path):
+        adapter = Mock()
+
+        class FakeConfig:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+
+        config = SimpleNamespace(
+            active_model=lambda: SimpleNamespace(model="gpt-4o"),
+            current_datasource="runtime_ds",
+            path_manager=SimpleNamespace(semantic_model_path=lambda datasource: tmp_path / datasource),
+        )
+        metadata = SimpleNamespace(config_class=FakeConfig)
+
+        with (
+            patch("datus.tools.func_tool.semantic_tools.SemanticModelRAG"),
+            patch("datus.tools.func_tool.semantic_tools.MetricRAG"),
+            patch("datus.tools.func_tool.semantic_tools.semantic_adapter_registry.get_metadata", return_value=metadata),
+            patch(
+                "datus.tools.func_tool.semantic_tools.semantic_adapter_registry.create_adapter",
+                return_value=adapter,
+            ) as create_adapter,
+        ):
+            from datus.tools.func_tool.semantic_tools import SemanticTools
+
+            tool = SemanticTools(agent_config=config, adapter_type="metricflow")
+
+            assert tool.adapter is adapter
+
+        adapter_config = create_adapter.call_args.args[1]
+        assert adapter_config.kwargs["datasource"] == "runtime_ds"
+        assert adapter_config.kwargs["semantic_models_path"] == str(tmp_path / "runtime_ds")
+
+    def test_validate_semantic_initializes_adapter_with_runtime_database(self, tmp_path):
+        from datus.configuration.agent_config import AgentConfig, NodeConfig
+        from datus.tools.func_tool.semantic_tools import SemanticTools
+
+        captured_configs = []
+
+        class FakeAdapter:
+            async def validate_semantic(self, scope="all"):
+                return ValidationResult(valid=True, issues=[])
+
+        def create_adapter(adapter_type, adapter_config):
+            captured_configs.append(adapter_config)
+            return FakeAdapter()
+
+        config = AgentConfig(
+            nodes={"test": NodeConfig(model="test-model", input=None)},
+            home=str(tmp_path / "h"),
+            target="mock",
+            models={
+                "mock": {
+                    "type": "openai",
+                    "api_key": "k",
+                    "model": "m",
+                    "base_url": "http://localhost:0",
+                }
+            },
+            services={
+                "datasources": {
+                    "college_exam": {
+                        "type": "mysql",
+                        "host": "mysql",
+                        "username": "user",
+                        "password": "pass",
+                        "default": True,
+                    },
+                },
+                "semantic_layer": {"metricflow": {"datasource": "college_exam"}},
+            },
+            skip_init_dirs=True,
+        )
+
+        with (
+            patch("datus.tools.func_tool.semantic_tools.SemanticModelRAG"),
+            patch("datus.tools.func_tool.semantic_tools.MetricRAG"),
+            patch("datus.tools.func_tool.semantic_tools.semantic_adapter_registry.get_metadata", return_value=None),
+            patch(
+                "datus.tools.func_tool.semantic_tools.semantic_adapter_registry.create_adapter",
+                side_effect=create_adapter,
+            ),
+        ):
+            tool = SemanticTools(
+                agent_config=config,
+                adapter_type="metricflow",
+                runtime_db_context_provider=lambda: {
+                    "datasource": "college_exam",
+                    "database": "college_exam",
+                },
+            )
+
+            result = tool.validate_semantic(scope="semantic_model")
+
+        assert result.success == 1
+        assert result.result["valid"] is True
+        assert captured_configs
+        first_config = captured_configs[0]
+        assert first_config.datasource == "college_exam"
+        assert first_config.db_config["type"] == "mysql"
+        assert first_config.db_config["host"] == "mysql"
+        assert first_config.db_config["database"] == "college_exam"
 
 
 class TestListMetrics:
@@ -1693,6 +2154,91 @@ class TestValidateSemantic:
         assert result.success == 0
         assert "scope must be one of" in result.error
 
+    def test_passes_checks_and_baseline_to_supported_adapter(self, semantic_tools_with_adapter):
+        tool, _ = semantic_tools_with_adapter
+        calls = {}
+
+        class _Adapter:
+            async def validate_semantic(self, scope="all", checks=None, baseline_artifact=None):
+                calls["scope"] = scope
+                calls["checks"] = checks
+                calls["baseline_artifact"] = baseline_artifact
+                result = Mock()
+                result.valid = True
+                result.issues = []
+                return result
+
+        tool._adapter = _Adapter()
+        baseline = {"version": "0.2.0.dev0", "semantic_model": [{"name": "shop", "datasets": []}]}
+
+        with patch.object(tool, "_reload_adapter", return_value=True):
+            result = tool.validate_semantic(
+                checks="authoring_quality,mutation_guard",
+                baseline_artifact_json=json.dumps(baseline),
+            )
+
+        assert result.success == 1
+        assert result.result["checks"] == ["authoring_quality", "mutation_guard"]
+        assert calls == {
+            "scope": "all",
+            "checks": ["authoring_quality", "mutation_guard"],
+            "baseline_artifact": baseline,
+        }
+
+    def test_passes_validation_options_to_kwargs_adapter(self, semantic_tools_with_adapter):
+        tool, _ = semantic_tools_with_adapter
+        calls = {}
+
+        class _Adapter:
+            async def validate_semantic(self, **kwargs):
+                calls.update(kwargs)
+                result = Mock()
+                result.valid = True
+                result.issues = []
+                return result
+
+        tool._adapter = _Adapter()
+        baseline = {"semantic_model": [{"name": "commerce"}]}
+
+        with patch.object(tool, "_reload_adapter", return_value=True):
+            result = tool.validate_semantic(
+                scope="semantic_model",
+                checks=["authoring_quality"],
+                baseline_artifact_json=json.dumps(baseline),
+            )
+
+        assert result.success == 1
+        assert calls == {
+            "scope": "semantic_model",
+            "checks": ["authoring_quality"],
+            "baseline_artifact": baseline,
+        }
+
+    def test_rejects_checks_when_adapter_does_not_support_them(self, semantic_tools_with_adapter):
+        tool, _ = semantic_tools_with_adapter
+
+        class _Adapter:
+            async def validate_semantic(self, scope="all"):
+                result = Mock()
+                result.valid = True
+                result.issues = []
+                return result
+
+        tool._adapter = _Adapter()
+
+        result = tool.validate_semantic(checks=["authoring_quality"])
+
+        assert result.success == 0
+        assert "checks are not supported" in result.error
+
+    def test_rejects_invalid_baseline_json(self, semantic_tools_with_adapter):
+        tool, _ = semantic_tools_with_adapter
+
+        result = tool.validate_semantic(baseline_artifact_json="{bad")
+
+        assert result.success == 0
+        assert "baseline_artifact_json must be valid JSON" in result.error
+
     def test_exception_returns_failure(self, semantic_tools_with_adapter):
         tool, mock_adapter = semantic_tools_with_adapter
 
@@ -1817,7 +2363,7 @@ class TestExtractDbConfig:
         assert result["private_key_file_pwd"] == "1234"
         assert "extra" not in result
         assert "path_pattern" not in result
-        assert "catalog" not in result
+        assert result["catalog"] == "skip"
 
 
 class TestReloadAdapter:
