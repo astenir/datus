@@ -18,11 +18,33 @@ function resolveRequestInput(input: string | URL | globalThis.Request): string |
   }
 
   const base = normalizeBaseUrl(apiBaseResolver?.() ?? "");
-  return base ? `${base}${input}` : input;
+  const target = requestUrl(input);
+  return base && target && isDatusApiPath(target.pathname) ? `${base}${input}` : input;
 }
 
 function isDatusApiPath(pathname: string): boolean {
   return pathname === "/api" || pathname.startsWith("/api/") || pathname === "/health";
+}
+
+function configuredApiBasePath(): string {
+  const base = normalizeBaseUrl(apiBaseResolver?.() ?? "");
+  if (!base) return "";
+
+  try {
+    const pathname = new URL(base, "http://datus.local").pathname.replace(/\/+$/, "");
+    return pathname === "/" ? "" : pathname;
+  } catch {
+    return "";
+  }
+}
+
+function isConfiguredDatusApiPath(pathname: string): boolean {
+  if (isDatusApiPath(pathname)) return true;
+
+  const basePath = configuredApiBasePath();
+  if (!basePath || !pathname.startsWith(`${basePath}/`)) return false;
+
+  return isDatusApiPath(pathname.slice(basePath.length));
 }
 
 function requestUrl(input: string | URL | globalThis.Request): URL | null {
@@ -52,7 +74,7 @@ function apiBaseUrl(): URL | null {
 
 function shouldAttachAccessToken(input: string | URL | globalThis.Request): boolean {
   const target = requestUrl(input);
-  if (!target || !isDatusApiPath(target.pathname)) return false;
+  if (!target || !isConfiguredDatusApiPath(target.pathname)) return false;
 
   if (typeof input === "string" && input.startsWith("/")) {
     return true;

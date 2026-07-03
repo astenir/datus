@@ -26,6 +26,7 @@ import {
   toolApi,
   visualizationApi,
 } from "./api";
+import { setApiBaseResolver } from "./request";
 
 function mockJsonResponse(payload: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(payload), {
@@ -37,6 +38,7 @@ function mockJsonResponse(payload: unknown, init?: ResponseInit) {
 
 describe("api client", () => {
   afterEach(() => {
+    setApiBaseResolver(null);
     vi.restoreAllMocks();
   });
 
@@ -70,6 +72,40 @@ describe("api client", () => {
       "http://localhost:8000/api/v1/chat/feedback",
       expect.objectContaining({ method: "POST" }),
     );
+  });
+
+  it("does not double-prefix helper requests when the API base is a relative path", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(mockJsonResponse({ success: true, data: { sessions: [], total_count: 0 } }))
+    );
+    setApiBaseResolver(() => "/datus-api");
+
+    await chatApi.sessions("/datus-api");
+    await chatApi.feedback("/datus-api", {
+      source_session_id: "s1",
+      reaction_emoji: "thumbs_up",
+      reference_msg: "good",
+    });
+    await kbApi.upload("/datus-api", {
+      purpose: "success_story_csv",
+      files: [new File(["question,sql\nq,select 1"], "success.csv", { type: "text/csv" })],
+    });
+    await kbApi.bootstrap("/datus-api", { components: ["metadata"], database_name: "fund" });
+    await dashboardApi.html("/datus-api", "fund_overview");
+
+    expect(dashboardApi.htmlUrl("/datus-api", "fund_overview")).toBe(
+      "/datus-api/api/v1/dashboards/fund_overview/html",
+    );
+    expect(reportApi.htmlUrl("/datus-api", "fund_report")).toBe(
+      "/datus-api/api/v1/reports/fund_report/html",
+    );
+    expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toEqual([
+      "/datus-api/api/v1/chat/sessions",
+      "/datus-api/api/v1/chat/feedback",
+      "/datus-api/api/v1/kb/uploads",
+      "/datus-api/api/v1/kb/bootstrap",
+      "/datus-api/api/v1/dashboards/fund_overview/html",
+    ]);
   });
 
   it("uploads KB source files as multipart form data", async () => {

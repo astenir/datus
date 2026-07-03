@@ -28,6 +28,18 @@ describe("request helpers", () => {
     );
   });
 
+  it("does not prefix relative requests that already include the configured API base path", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ ok: true }));
+    setApiBaseResolver(() => "/datus-api");
+
+    await get("/datus-api/api/v1/chat/sessions");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "/datus-api/api/v1/chat/sessions",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
   it("does not rewrite absolute URLs", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ ok: true }));
     setApiBaseResolver(() => "https://api.example.test");
@@ -57,6 +69,18 @@ describe("request helpers", () => {
     setCurrentAccessToken("dev-alice-token");
 
     await get("https://api.example.test/api/v1/config/agent");
+
+    const init = fetchMock.mock.calls[0]?.[1];
+    const headers = new Headers(init?.headers);
+    expect(headers.get("Authorization")).toBe("Bearer dev-alice-token");
+  });
+
+  it("adds the configured bearer token to relative API requests that already include the configured base path", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({ ok: true }));
+    setApiBaseResolver(() => "/datus-api");
+    setCurrentAccessToken("dev-alice-token");
+
+    await get("/datus-api/api/v1/chat/sessions");
 
     const init = fetchMock.mock.calls[0]?.[1];
     const headers = new Headers(init?.headers);
