@@ -16,6 +16,7 @@ classifiers = [
 ]
 dependencies = [
     "datus-storage-base",
+    "datus-storage-oceanbase-mysql",
     "datus-storage-postgresql",
 ]
 
@@ -29,11 +30,13 @@ build-backend = "setuptools.build_meta"
 
 [tool.uv.sources]
 datus-storage-base = { workspace = true }
+datus-storage-oceanbase-mysql = { workspace = true }
 datus-storage-postgresql = { workspace = true }
 
 [tool.uv.workspace]
 members = [
     "datus-storage-base",
+    "datus-storage-oceanbase-mysql",
     "datus-storage-postgresql",
 ]
 
@@ -74,4 +77,4 @@ ignore = [
 max-complexity = 10
 
 [tool.ruff.lint.isort]
-known-first-party = ["datus_storage_base", "datus_storage_postgresql"]
+known-first-party = ["datus_storage_base", "datus_storage_oceanbase_mysql", "datus_storage_postgresql"]

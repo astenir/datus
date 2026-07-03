@@ -393,3 +393,33 @@ storage:
   vector:
     type: lance    # default, no extra install needed
 ```
+
+### OceanBase MySQL Backend
+
+For OceanBase MySQL mode, install `datus-storage-oceanbase-mysql` and configure it as the RDB and/or vector backend. The RDB backend stores structured metadata; the vector backend stores embeddings in OceanBase `VECTOR(N)` columns and uses OceanBase vector distance functions for nearest-neighbor search.
+
+```yaml
+storage:
+  isolation: logical
+  rdb:
+    type: oceanbase-mysql
+    host: ${OB_HOST:-127.0.0.1}
+    port: ${OB_PORT:-2881}
+    user: ${OB_USER}
+    password: ${OB_PASSWORD}
+    database: datus_storage
+    pool_max_size: 5
+
+  vector:
+    type: oceanbase-mysql
+    host: ${OB_HOST:-127.0.0.1}
+    port: ${OB_PORT:-2881}
+    user: ${OB_USER}
+    password: ${OB_PASSWORD}
+    database: datus_storage
+    pool_max_size: 5
+```
+
+`logical` isolation stores all projects in the configured OceanBase database and adds Datus' internal namespace column to each table. `physical` isolation creates per-project/store OceanBase databases named `<project>__<store>`; the configured user must be allowed to create databases.
+
+OceanBase vector tables require OceanBase versions with `VECTOR` column and vector index support. The adapter creates vector tables as heap-organized tables and supports HNSW vector indexes through OceanBase `CREATE VECTOR INDEX`.

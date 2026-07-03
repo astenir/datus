@@ -44,6 +44,7 @@ COPY datus-db-adapters/datus-postgresql ./datus-db-adapters/datus-postgresql
 COPY datus-db-adapters/datus-mysql ./datus-db-adapters/datus-mysql
 COPY datus-db-adapters/datus-starrocks ./datus-db-adapters/datus-starrocks
 COPY datus-storage-adapters/datus-storage-base ./datus-storage-adapters/datus-storage-base
+COPY datus-storage-adapters/datus-storage-oceanbase-mysql ./datus-storage-adapters/datus-storage-oceanbase-mysql
 COPY datus-storage-adapters/datus-storage-postgresql ./datus-storage-adapters/datus-storage-postgresql
 
 RUN python -m pip install -c ./docker-constraints.txt \
@@ -53,6 +54,7 @@ RUN python -m pip install -c ./docker-constraints.txt \
         ./datus-db-adapters/datus-mysql \
         ./datus-db-adapters/datus-starrocks \
         ./datus-storage-adapters/datus-storage-base \
+        ./datus-storage-adapters/datus-storage-oceanbase-mysql \
         ./datus-storage-adapters/datus-storage-postgresql
 
 COPY datus-agent ./datus-agent

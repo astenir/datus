@@ -1,0 +1,48 @@
+[project]
+name = "datus-storage-oceanbase-mysql"
+version = "0.1.5"
+description = "OceanBase MySQL mode RDB backend adapter for datus-agent"
+requires-python = ">=3.12"
+license = "Apache-2.0"
+readme = "README.md"
+authors = [
+    { name = "Datus Team", email = "felix.liu@datus.ai" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "datus-storage-base>=0.1.5",
+    "pymysql>=1.1.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Datus-ai/datus-storage-adapters"
+Repository = "https://github.com/Datus-ai/datus-storage-adapters"
+
+[project.entry-points."datus.storage.rdb"]
+oceanbase-mysql = "datus_storage_oceanbase_mysql.rdb:register"
+
+[project.entry-points."datus.storage.vector"]
+oceanbase-mysql = "datus_storage_oceanbase_mysql.vector:register"
+
+[tool.uv.sources]
+datus-storage-base = { workspace = true }
+
+[build-system]
+requires = ["setuptools>=69.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["datus_storage_oceanbase_mysql*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
