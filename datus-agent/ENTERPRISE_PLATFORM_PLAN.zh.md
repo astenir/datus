@@ -241,6 +241,7 @@ Artifact 访问必须按 artifact type + slug 校验 ACL：
 
 - `conf/agent.enterprise.mvp.yml.example`：SQLite / in-memory metadata store，适合本地单节点或小范围试点。
 - `conf/agent.enterprise.pg.yml.example`：PostgreSQL user/role/datasource grant/enterprise agent/session owner/artifact ACL/audit/quota/secret metadata，并可启用 PG session body backend。
+- `conf/agent.enterprise.ob.yml.example`：OceanBase MySQL session owner/body backend 片段；只覆盖会话 owner metadata 与正文/history/state，不等同于完整 enterprise metadata 迁移。
 - `conf/agent.local-enterprise-pg.yml.example`：本地联调用完整配置，配合 seed/mock userinfo/签名工具使用。
 
 PG metadata 当前只做最小 `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` bootstrap，不是生产 migration runner。新增字段或 schema 变更必须说明人工 DDL、迁移、回滚、滚动发布兼容和备份恢复策略。

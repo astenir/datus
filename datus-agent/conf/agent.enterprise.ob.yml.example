@@ -1,0 +1,44 @@
+# 企业 OceanBase MySQL session 配置片段。
+#
+# 将需要的片段合并到 agent.yml，用于把会话 owner/index metadata 和
+# 新会话正文/history/state 存到 OceanBase MySQL 模式。
+#
+# 注意：
+# - 该片段只覆盖 session_owner_store 与 session_body_store。
+# - agent.storage.rdb/vector 是另一套通用存储面，不会自动承接聊天会话。
+# - session_body_store 不授予访问权；普通列表/history/delete/resume 仍必须
+#   以 session_owner_store 的 owner metadata 作为授权入口。
+# - 历史本地 AdvancedSQLiteSession .db 文件不会自动迁移到 OceanBase。
+# - 生产 schema 迁移、备份恢复、滚动发布兼容仍是独立运维工作；这里仅做
+#   CREATE DATABASE IF NOT EXISTS / CREATE TABLE IF NOT EXISTS bootstrap。
+#
+# 本地 OceanBase CE 验证时可使用类似环境变量：
+#
+# DATUS_ENTERPRISE_OB_HOST=127.0.0.1
+# DATUS_ENTERPRISE_OB_PORT=28811
+# DATUS_ENTERPRISE_OB_USER=root@test
+# DATUS_ENTERPRISE_OB_PASSWORD=testpass
+# DATUS_ENTERPRISE_OB_DATABASE=datus_enterprise
+
+enterprise:
+  enabled: true
+
+  session_owner_store:
+    class: datus_enterprise.oceanbase_stores:ObSessionOwnerStore
+    kwargs:
+      host: ${DATUS_ENTERPRISE_OB_HOST}
+      port: ${DATUS_ENTERPRISE_OB_PORT:-2881}
+      user: ${DATUS_ENTERPRISE_OB_USER}
+      password: ${DATUS_ENTERPRISE_OB_PASSWORD}
+      database: ${DATUS_ENTERPRISE_OB_DATABASE:-datus_enterprise}
+      pool_max_size: 2
+
+  session_body_store:
+    class: datus_enterprise.oceanbase_session_store:ObSessionBodyStore
+    kwargs:
+      host: ${DATUS_ENTERPRISE_OB_HOST}
+      port: ${DATUS_ENTERPRISE_OB_PORT:-2881}
+      user: ${DATUS_ENTERPRISE_OB_USER}
+      password: ${DATUS_ENTERPRISE_OB_PASSWORD}
+      database: ${DATUS_ENTERPRISE_OB_DATABASE:-datus_enterprise}
+      pool_max_size: 2

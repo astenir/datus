@@ -604,6 +604,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pygithub" },
     { name = "pygments" },
+    { name = "pymysql" },
     { name = "pyperclip" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
@@ -680,6 +681,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.11.7,<3.0" },
     { name = "pygithub", specifier = ">=2.1.0" },
     { name = "pygments", specifier = ">=2.18.0" },
+    { name = "pymysql", specifier = ">=1.1.1" },
     { name = "pyperclip", specifier = "==1.9.0" },
     { name = "python-dotenv", specifier = "==1.0.0" },
     { name = "pyyaml", specifier = "==6.0.1" },
@@ -2789,6 +2791,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/bf/6c/069ef2823c7366c529297493719e8a3f6b16a19bbaf42e6f5010307157ec/pylance-0.22.0-cp39-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:cd4cc3dd3772600092685282db8cd4c21eaa68f458445b3107bd01b43afb8f11", size = 36272984, upload-time = "2025-01-13T21:11:57.601Z" },
     { url = "https://files.pythonhosted.org/packages/50/ff/61e10792edab999d0cc0c89a409446d28bee0f47e157ebc5587c0f8fb332/pylance-0.22.0-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:8999e73ce180c977f91bb4629578d742b1e86fcf53e7d27b14d6d219395c17cd", size = 38322607, upload-time = "2025-01-13T21:11:40.174Z" },
     { url = "https://files.pythonhosted.org/packages/61/f0/b62b14630af78d468ff7b15cc21576910edbd73114795b49907b39df2841/pylance-0.22.0-cp39-abi3-win_amd64.whl", hash = "sha256:848f1a74dab14dc14bf05569404977cfcba9a95a44e513e5a3b32f1221bfa00f", size = 34216608, upload-time = "2025-01-13T21:24:47.835Z" },
+]
+
+[[package]]
+name = "pymysql"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c9/bc/1c6a92f385940f727daeecf3bacaf186e03875dff57197801046c583bcf0/pymysql-1.2.0.tar.gz", hash = "sha256:6c7b17ca686988104d7426c27895b455cdeea3e9d3ceb1270f0c3704fead8c33", size = 49021, upload-time = "2026-05-19T08:26:22.302Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c4/bd/2534e130295c8cfd4f0a2e31623baab7502278f1e97bcfe61db75656a77f/pymysql-1.2.0-py3-none-any.whl", hash = "sha256:62169ce6d5510f08e140c5e7990ee884a9764024e4a9a27b2cc11f1099322ae0", size = 45716, upload-time = "2026-05-19T08:26:20.974Z" },
 ]
 
 [[package]]
