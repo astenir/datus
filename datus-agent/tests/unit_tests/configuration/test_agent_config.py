@@ -2244,35 +2244,43 @@ models:
         assert active.model == "qwen-plus"
 
     def test_storage_target_model_resolves_env_key(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("DATUS_TEST_EMBEDDING_KEY", "custom_embedding")
-        cfg = self._make(
-            tmp_path,
-            models={
-                "legacy": {
-                    "type": "openai",
-                    "api_key": "legacy-key",
-                    "model": "legacy-model",
-                    "base_url": "https://legacy.example.com",
-                },
-                "custom_embedding": {
-                    "type": "openai",
-                    "api_key": "embedding-key",
-                    "model": "embedding-model",
-                    "base_url": "https://embedding.example.com",
-                },
-            },
-            storage={
-                "database": {
-                    "registry_name": "openai",
-                    "model_name": "embedding-model",
-                    "dim_size": 1024,
-                    "target_model": "${DATUS_TEST_EMBEDDING_KEY}",
-                }
-            },
-            skip_init_dirs=False,
-        )
+        from datus.storage.embedding_models import EMBEDDING_MODELS
 
-        assert cfg.storage_configs["database"].openai_config.api_key == "embedding-key"
+        original_models = dict(EMBEDDING_MODELS)
+        EMBEDDING_MODELS.clear()
+        monkeypatch.setenv("DATUS_TEST_EMBEDDING_KEY", "custom_embedding")
+        try:
+            cfg = self._make(
+                tmp_path,
+                models={
+                    "legacy": {
+                        "type": "openai",
+                        "api_key": "legacy-key",
+                        "model": "legacy-model",
+                        "base_url": "https://legacy.example.com",
+                    },
+                    "custom_embedding": {
+                        "type": "openai",
+                        "api_key": "embedding-key",
+                        "model": "embedding-model",
+                        "base_url": "https://embedding.example.com",
+                    },
+                },
+                storage={
+                    "database": {
+                        "registry_name": "openai",
+                        "model_name": "embedding-model",
+                        "dim_size": 1024,
+                        "target_model": "${DATUS_TEST_EMBEDDING_KEY}",
+                    }
+                },
+                skip_init_dirs=False,
+            )
+
+            assert cfg.storage_configs["database"].openai_config.api_key == "embedding-key"
+        finally:
+            EMBEDDING_MODELS.clear()
+            EMBEDDING_MODELS.update(original_models)
 
     def test_active_model_raises_when_nothing_is_configured(self, tmp_path):
         cfg = self._make(tmp_path, target="", models={})

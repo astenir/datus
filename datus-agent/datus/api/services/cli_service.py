@@ -604,8 +604,11 @@ class CLIService:
             table_index = order.index("table") if "table" in order else len(order)
             order.insert(table_index, "database")
         if has_database_scope and "database" not in order:
-            table_index = order.index("table") if "table" in order else len(order)
-            order.insert(table_index, "database")
+            if _schema_qualified_dialect(dialect) and "schema" in order:
+                order.insert(order.index("schema"), "database")
+            else:
+                table_index = order.index("table") if "table" in order else len(order)
+                order.insert(table_index, "database")
         if (has_schema_scope or (has_database_scope and _schema_qualified_dialect(dialect))) and "schema" not in order:
             table_index = order.index("table") if "table" in order else len(order)
             order.insert(table_index, "schema")

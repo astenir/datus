@@ -7,7 +7,7 @@ hook integration in ``datus.api.routes.chat_routes.stream_chat``."""
 import asyncio
 import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -33,7 +33,19 @@ def _mock_svc_with_nodes(nodes=None):
     svc.agent_config = SimpleNamespace(agentic_nodes=nodes or {}, principal={}, sql_policy_config=None)
     svc.task_manager.get_task.return_value = None
     svc.chat.session_exists.return_value = True
+    svc.chat.session_exists_async = AsyncMock(return_value=True)
     return svc
+
+
+def _request_with_service(svc):
+    async def override_service(request):
+        return svc
+
+    return SimpleNamespace(
+        app=SimpleNamespace(
+            dependency_overrides={chat_routes.api_deps.get_datus_service: override_service},
+        )
+    )
 
 
 class TestRegistry:
@@ -105,7 +117,7 @@ class TestStreamChatPreHookDenial:
 
         set_chat_hooks(make_chat_hooks(pre_chat=_pre))
 
-        response = await chat_routes.stream_chat(request, svc, ctx, MagicMock())
+        response = await chat_routes.stream_chat(request, ctx, _request_with_service(svc))
 
         chunks = []
         async for chunk in response.body_iterator:
@@ -132,7 +144,7 @@ class TestStreamChatPreHookDenial:
 
         set_chat_hooks(make_chat_hooks(pre_chat=_pre))
 
-        response = await chat_routes.stream_chat(request, svc, ctx, MagicMock())
+        response = await chat_routes.stream_chat(request, ctx, _request_with_service(svc))
 
         chunks = []
         async for chunk in response.body_iterator:
@@ -191,7 +203,7 @@ class TestStreamChatPostHookSchedule:
 
         set_chat_hooks(make_chat_hooks(pre_chat=_pre, post_chat=_post))
 
-        response = await chat_routes.stream_chat(request, svc, ctx, MagicMock())
+        response = await chat_routes.stream_chat(request, ctx, _request_with_service(svc))
 
         body_chunks = []
         async for chunk in response.body_iterator:
@@ -242,7 +254,7 @@ class TestStreamChatGeneratorError:
         ctx = MagicMock(user_id="u1")
         request = StreamChatInput(message="hi", session_id="sess-err")
 
-        response = await chat_routes.stream_chat(request, svc, ctx, MagicMock())
+        response = await chat_routes.stream_chat(request, ctx, _request_with_service(svc))
 
         body_chunks: list[str] = []
         with pytest.raises(RuntimeError):
@@ -271,7 +283,7 @@ class TestStreamChatGeneratorError:
         ctx = MagicMock(user_id="u1")
         request = StreamChatInput(message="hi", session_id="sess-cancel")
 
-        response = await chat_routes.stream_chat(request, svc, ctx, MagicMock())
+        response = await chat_routes.stream_chat(request, ctx, _request_with_service(svc))
 
         body_chunks: list[str] = []
         with pytest.raises(asyncio.CancelledError):

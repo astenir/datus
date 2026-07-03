@@ -219,7 +219,12 @@ def test_semantic_model_routes_allow_catalog_when_sql_access_is_disabled(monkeyp
     assert read_response.status_code == 200
     assert save_response.status_code == 200
     assert validate_response.status_code == 200
-    svc.datasource.get_semantic_model.assert_called_once_with("public.accounts")
+    svc.datasource.get_semantic_model.assert_called_once_with(
+        "public.accounts",
+        catalog=None,
+        database=None,
+        db_schema=None,
+    )
     svc.datasource.save_semantic_model.assert_awaited_once()
     svc.datasource.validate_semantic_model.assert_awaited_once()
 

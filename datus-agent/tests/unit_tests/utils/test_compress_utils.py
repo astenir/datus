@@ -1,4 +1,5 @@
 import csv
+import sqlite3
 from datetime import date
 from decimal import Decimal
 from io import StringIO
@@ -9,9 +10,8 @@ import pandas as pd
 import pyarrow as pa
 import pytest
 
-from datus.configuration.agent_config import AgentConfig
-from datus.tools.db_tools import BaseSqlConnector
-from datus.tools.db_tools.db_manager import DBManager, db_manager_instance
+from datus.configuration.agent_config import DbConfig
+from datus.tools.db_tools.db_manager import DBManager
 from datus.tools.func_tool import DBFuncTool
 from datus.utils.compress_utils import (
     DataCompressor,
@@ -23,7 +23,6 @@ from datus.utils.compress_utils import (
     _identify_id_time_columns,
     _to_dataframe_efficient,
 )
-from tests.conftest import load_acceptance_config
 
 
 def test_compress_mock():
@@ -107,21 +106,58 @@ def test_compressed_csv_quotes_values_with_commas():
     assert rows[-1]["ac_channel"] == "1,24"
 
 
-@pytest.fixture
-def agent_config():
-    return load_acceptance_config()
+def test_compress(tmp_path):
+    db_path = tmp_path / "card_games.sqlite"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE cards (
+                id INTEGER PRIMARY KEY,
+                name TEXT,
+                setCode TEXT,
+                rarity TEXT,
+                type TEXT,
+                manaCost TEXT,
+                cardKingdomId INTEGER,
+                cardKingdomFoilId INTEGER
+            )
+            """
+        )
+        rarities = ["mythic", "rare", "uncommon", "common"]
+        rows = [
+            (
+                idx,
+                f"Fixture Card {idx:02d}",
+                f"SET{idx % 3}",
+                rarities[idx % len(rarities)],
+                "Creature",
+                "{1}{G}",
+                1000 + idx,
+                2000 + idx,
+            )
+            for idx in range(1, 31)
+        ]
+        conn.executemany(
+            """
+            INSERT INTO cards (
+                id,
+                name,
+                setCode,
+                rarity,
+                type,
+                manaCost,
+                cardKingdomId,
+                cardKingdomFoilId
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
-
-@pytest.fixture
-def db_manager(agent_config: AgentConfig) -> DBManager:
-    # Only pass sqlite/duckdb databases to avoid connector-not-installed errors
-    sqlite_dbs = {
-        name: cfg for name, cfg in agent_config.services.datasources.items() if cfg.type in ("sqlite", "duckdb")
-    }
-    return db_manager_instance(sqlite_dbs)
-
-
-def test_compress(db_manager: DBManager):
     sql = """SELECT
     name,
     setCode,
@@ -141,9 +177,20 @@ ORDER BY
         ELSE 4
     END,
     name;"""
-    connector: BaseSqlConnector = db_manager.get_conn("bird_sqlite", "card_games")
-    tool = DBFuncTool(connector)
-    result = tool.read_query(sql)
+    db_manager = DBManager(
+        {
+            "card_games": DbConfig(
+                type="sqlite",
+                uri=f"sqlite:///{db_path}",
+                database="card_games",
+            )
+        }
+    )
+    try:
+        tool = DBFuncTool(db_manager.first_conn("card_games"))
+        result = tool.read_query(sql)
+    finally:
+        db_manager.close()
 
     assert result.success == 1
     assert isinstance(result.result, dict)

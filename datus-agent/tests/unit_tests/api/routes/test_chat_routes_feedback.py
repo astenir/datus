@@ -6,7 +6,7 @@
 
 import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -41,6 +41,7 @@ def _build_svc():
     )
     svc.task_manager.get_task.return_value = None
     svc.chat.session_exists.return_value = True
+    svc.chat.session_exists_async = AsyncMock(return_value=True)
 
     async def _empty_stream(*args, **kwargs):
         if False:
