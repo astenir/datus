@@ -28,6 +28,7 @@ _FEATURE_PERMISSIONS = {
     "dashboard_query": "module.dashboard.query",
     "kb": "module.kb",
     "mcp": "module.mcp",
+    "admin": "module.admin.*",
     "config_view": "module.config.view",
     "config_edit": "module.config.edit",
 }

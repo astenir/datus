@@ -92,6 +92,27 @@ def test_me_returns_current_context_summary(monkeypatch):
     assert body["data"]["features"]["sql_executor"] is False
 
 
+def test_me_marks_wildcard_permission_as_admin_feature(monkeypatch):
+    _install_extensions(monkeypatch)
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj_a",
+        roles=["local_admin"],
+        permissions={"*"},
+        is_admin=True,
+    )
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/me")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"]["is_admin"] is True
+    assert body["data"]["features"]["admin"] is True
+    assert body["data"]["features"]["chat"] is True
+
+
 def test_me_permissions_merges_principal_compatibility(monkeypatch):
     _install_extensions(monkeypatch)
     ctx = AppContext(

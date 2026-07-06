@@ -59,6 +59,24 @@ async def test_signed_header_auth_provider_builds_app_context() -> None:
 
 
 @pytest.mark.asyncio
+async def test_signed_header_auth_provider_treats_wildcard_permission_as_admin() -> None:
+    provider = SignedHeaderAuthProvider(secret="test-secret")
+    request = _request(
+        provider,
+        {
+            HEADER_USER_ID: "alice",
+            "X-Datus-Permissions": "*",
+        },
+    )
+
+    ctx = await provider.authenticate(request)
+
+    assert ctx.roles == []
+    assert ctx.permissions == {"*"}
+    assert ctx.is_admin is True
+
+
+@pytest.mark.asyncio
 async def test_signed_header_auth_provider_requires_signature() -> None:
     provider = SignedHeaderAuthProvider(secret="test-secret")
     request = _request(provider, {HEADER_USER_ID: "alice"})

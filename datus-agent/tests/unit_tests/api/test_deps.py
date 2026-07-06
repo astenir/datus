@@ -684,6 +684,47 @@ class TestGetDatusService:
         assert ctx.principal["permissions"] == ["module.chat"]
         assert ctx.principal["datasource_grants"] == ctx.datasource_grants
 
+    async def test_enterprise_context_treats_wildcard_permission_as_admin(self):
+        """A role with ``*`` must be reflected as an admin context even when the role id is not special."""
+        from datus.api.enterprise.defaults import (
+            InMemoryEnterpriseDatasourceGrantStore,
+            InMemoryEnterpriseRoleStore,
+            InMemoryEnterpriseUserStore,
+            InMemorySessionOwnerStore,
+            LocalAuthorizationProvider,
+            NoopAuditSink,
+            PassthroughConfigProjector,
+        )
+        from datus.api.enterprise.loader import EnterpriseExtensions
+
+        role_store = InMemoryEnterpriseRoleStore()
+        await role_store.upsert_role(role_id="local_admin", name="Local Admin", permissions=["*"])
+        await role_store.set_user_roles("alice", ["local_admin"])
+
+        ctx = AppContext(user_id="alice", project_id="proj-1", config=MagicMock())
+        mock_auth = MagicMock()
+        mock_auth.authenticate = AsyncMock(return_value=ctx)
+        deps._auth_provider = mock_auth
+        deps._enterprise_extensions = EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+            user_store=InMemoryEnterpriseUserStore(),
+            role_store=role_store,
+            datasource_grant_store=InMemoryEnterpriseDatasourceGrantStore(),
+        )
+        request = SimpleNamespace(state=SimpleNamespace())
+
+        result = await get_request_app_context(request)
+
+        assert result is ctx
+        assert ctx.roles == ["local_admin"]
+        assert ctx.permissions == {"*"}
+        assert ctx.is_admin is True
+        assert ctx.principal["permissions"] == ["*"]
+
     async def test_enterprise_context_combines_same_datasource_role_grants(self):
         """Multiple roles granting the same datasource must not drop compatible scope entries."""
         from datus.api.enterprise.defaults import (
