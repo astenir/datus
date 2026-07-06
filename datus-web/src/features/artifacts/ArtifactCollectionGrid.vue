@@ -89,6 +89,7 @@ const emit = defineEmits<{
             {{ props.openingSlug === item.slug ? "打开中" : "打开" }}
           </Button>
           <Button
+            v-if="item.can_manage_share"
             variant="outline"
             size="sm"
             :disabled="props.sharingSlug === item.slug"

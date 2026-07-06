@@ -67,6 +67,7 @@ describe("useArtifacts", () => {
         slug: "fund-overview",
         name: "Fund Overview",
         description: "Dashboard",
+        can_manage_share: true,
       },
     ]);
     reportList.mockResolvedValue([
@@ -74,6 +75,7 @@ describe("useArtifacts", () => {
         slug: "fund-report",
         name: "Fund Report",
         description: "Report",
+        can_manage_share: false,
       },
     ]);
     dashboardDetail.mockResolvedValue({
@@ -171,6 +173,8 @@ describe("useArtifacts", () => {
     expect(reportList).toHaveBeenCalledWith("http://api.test");
     expect(artifacts.dashboards.value).toHaveLength(1);
     expect(artifacts.reports.value).toHaveLength(1);
+    expect(artifacts.dashboards.value[0]?.can_manage_share).toBe(true);
+    expect(artifacts.reports.value[0]?.can_manage_share).toBe(false);
     expect(artifacts.listError.value).toBeNull();
   });
 

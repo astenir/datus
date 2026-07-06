@@ -90,22 +90,29 @@ class ArtifactShareRoleSummary(BaseModel):
     built_in: bool = False
 
 
+class ArtifactListItem(ArtifactManifest):
+    """User-visible artifact list item with current-user UI capabilities."""
+
+    can_manage_share: bool = False
+
+
 def _project_files_root(svc: ServiceDep) -> Path:
     return Path(svc.agent_config.project_root)
 
 
 @router.get(
     "/dashboards",
-    response_model=Result[List[ArtifactManifest]],
+    response_model=Result[List[ArtifactListItem]],
     summary="List Dashboard Artifacts",
     dependencies=[Depends(_require_dashboard_view)],
 )
-async def list_dashboards(svc: ServiceDep, ctx: DashboardViewCtx) -> Result[List[ArtifactManifest]]:
+async def list_dashboards(svc: ServiceDep, ctx: DashboardViewCtx) -> Result[List[ArtifactListItem]]:
     result = await svc.dashboard.list_dashboards(project_files_root=_project_files_root(svc))
     if not result.success or result.data is None:
         return result
     visible = await filter_visible_artifacts(ctx, artifact_type="dashboard", manifests=result.data)
-    return Result(success=True, data=visible)
+    items = await _artifact_list_items(ctx, artifact_type="dashboard", manifests=visible)
+    return Result(success=True, data=items)
 
 
 @router.get(
@@ -166,16 +173,17 @@ async def get_dashboard_html_by_path(
 
 @router.get(
     "/reports",
-    response_model=Result[List[ArtifactManifest]],
+    response_model=Result[List[ArtifactListItem]],
     summary="List Report Artifacts",
     dependencies=[Depends(_require_report_view)],
 )
-async def list_reports(svc: ServiceDep, ctx: ReportViewCtx) -> Result[List[ArtifactManifest]]:
+async def list_reports(svc: ServiceDep, ctx: ReportViewCtx) -> Result[List[ArtifactListItem]]:
     result = await svc.report.list_reports(project_files_root=_project_files_root(svc))
     if not result.success or result.data is None:
         return result
     visible = await filter_visible_artifacts(ctx, artifact_type="report", manifests=result.data)
-    return Result(success=True, data=visible)
+    items = await _artifact_list_items(ctx, artifact_type="report", manifests=visible)
+    return Result(success=True, data=items)
 
 
 @router.get(
@@ -708,6 +716,26 @@ async def _can_manage_artifact_share(ctx: AppContext, acl: ArtifactAcl) -> bool:
         resource=ResourceRef(type="artifact_acl", id=acl.owner_user_id),
     )
     return decision.allowed
+
+
+async def _artifact_list_items(
+    ctx: AppContext,
+    *,
+    artifact_type: Literal["report", "dashboard"],
+    manifests: List[ArtifactManifest],
+) -> List[ArtifactListItem]:
+    store = get_artifact_acl_store()
+    items: list[ArtifactListItem] = []
+    for manifest in manifests:
+        can_manage_share = False
+        if store is not None:
+            try:
+                raw_acl = await store.get_acl(artifact_type=artifact_type, slug=manifest.slug)
+                can_manage_share = await _can_manage_artifact_share(ctx, ArtifactAcl(**raw_acl))
+            except Exception:
+                can_manage_share = False
+        items.append(ArtifactListItem(**manifest.model_dump(), can_manage_share=can_manage_share))
+    return items
 
 
 async def _require_share_directory_access(

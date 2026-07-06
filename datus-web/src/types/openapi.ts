@@ -5027,6 +5027,38 @@ export interface components {
 
             type: string;
         };
+
+        ArtifactListItem: {
+
+            slug: string;
+
+            name: string;
+
+            description: string;
+
+            kind: "report" | "dashboard";
+
+            created_at: string;
+
+            updated_at?: string | null;
+
+            datasources?: string[];
+
+            key_tables?: string[];
+
+            can_manage_share: boolean;
+        };
+
+        Result_List_ArtifactListItem__: {
+
+            success: boolean;
+
+            data?: components["schemas"]["ArtifactListItem"][] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
     };
     responses: never;
     parameters: never;
@@ -7906,7 +7938,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Result_List_ArtifactManifest__"];
+                    "application/json": components["schemas"]["Result_List_ArtifactListItem__"];
                 };
             };
         };
@@ -8057,7 +8089,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Result_List_ArtifactManifest__"];
+                    "application/json": components["schemas"]["Result_List_ArtifactListItem__"];
                 };
             };
         };

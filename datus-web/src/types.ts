@@ -551,6 +551,7 @@ export type ArtifactManifest = {
   updated_at?: string;
   datasources?: string[];
   key_tables?: string[];
+  can_manage_share?: boolean;
 };
 
 export type ArtifactVisibility = "private" | "role" | "enterprise";

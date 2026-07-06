@@ -47,6 +47,13 @@ const selectedPreviewOpening = computed(() => {
 const selectedShareLoading = computed(() => {
   return Boolean(selectedPreviewKey.value && artifacts.shareLoadingKey.value === selectedPreviewKey.value)
 })
+const selectedDetailCanManageShare = computed(() => {
+  const slug = selectedDetailSlug.value
+  if (!slug) return false
+
+  const items = props.tab === "report" ? artifacts.reports.value : artifacts.dashboards.value
+  return items.some(item => item.slug === slug && item.can_manage_share === true)
+})
 
 const dashboardOpeningSlug = computed(() => loadingSlugFor("dashboard"))
 const reportOpeningSlug = computed(() => loadingSlugFor("report"))
@@ -185,6 +192,7 @@ watch(
             :error="artifacts.detailError.value"
             :preview-opening="selectedPreviewOpening"
             :share-loading="selectedShareLoading"
+            :can-manage-share="selectedDetailCanManageShare"
             :query-result="artifacts.queryResult.value"
             :query-loading="artifacts.queryLoading.value"
             :query-error="artifacts.queryError.value"

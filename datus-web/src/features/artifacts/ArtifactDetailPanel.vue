@@ -18,6 +18,7 @@ const props = defineProps<{
   error: string | null
   previewOpening: boolean
   shareLoading: boolean
+  canManageShare: boolean
   queryResult: SqlQueryResultEnvelope | null
   queryLoading: boolean
   queryError: string | null
@@ -179,6 +180,7 @@ const templates = computed(() => isDashboardDetail(props.detail) ? props.detail.
           {{ props.previewOpening ? "打开中" : "打开 HTML 预览" }}
         </Button>
         <Button
+          v-if="props.canManageShare"
           variant="outline"
           size="sm"
           :disabled="props.shareLoading"

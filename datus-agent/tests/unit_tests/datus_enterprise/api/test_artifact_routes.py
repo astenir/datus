@@ -664,6 +664,7 @@ def test_put_admin_artifact_acl_changes_runtime_report_visibility(monkeypatch, t
         owner_response = client.get("/api/v1/reports")
         assert owner_response.json()["success"] is True
         assert [item["slug"] for item in owner_response.json()["data"]] == ["sales"]
+        assert owner_response.json()["data"][0]["can_manage_share"] is True
 
 
 def test_artifact_share_user_directory_returns_sanitized_enabled_users(monkeypatch, tmp_path: Path):
@@ -839,6 +840,7 @@ def test_creator_can_share_report_with_single_user(monkeypatch, tmp_path: Path):
         ctx_holder["ctx"] = AppContext(user_id="viewer-1", permissions={"module.report.view"})
         list_response = client.get("/api/v1/reports")
         assert [item["slug"] for item in list_response.json()["data"]] == ["sales"]
+        assert list_response.json()["data"][0]["can_manage_share"] is False
         detail_response = client.get("/api/v1/reports/sales")
         assert detail_response.json()["success"] is True
 
