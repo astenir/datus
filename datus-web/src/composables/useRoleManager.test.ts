@@ -63,6 +63,7 @@ describe("useRoleManager", () => {
         "module.admin.*",
         "module.sql_executor",
         "mcp.server.edit",
+        "mcp.filter.set",
         "module.admin.users",
       ])
     );
@@ -81,6 +82,12 @@ describe("useRoleManager", () => {
       "管理后台",
     ]);
     expect(manager.featureGroups.flatMap((group) => group.options).length).toBe(manager.featureOptions.length);
+    expect(manager.permissionPresetGroups.map((group) => group.label)).toEqual([
+      "基础使用",
+      "数据分析",
+      "治理管理",
+      "平台运维",
+    ]);
   });
 
   it("filters roles locally by keyword", async () => {
@@ -149,6 +156,121 @@ describe("useRoleManager", () => {
       permissions: ["module.dashboard.view"],
     });
     expect(manager.showDialog.value).toBe(false);
+  });
+
+  it("normalizes role permissions when toggling dependent MCP permissions", async () => {
+    const { useRoleManager } = await import("./useRoleManager");
+    const manager = useRoleManager();
+
+    manager.toggleSelectedFeature("mcp.server.tools");
+
+    expect(manager.selectedFeatures.value).toEqual([
+      "module.mcp",
+      "mcp.server.list",
+      "mcp.server.tools",
+    ]);
+
+    manager.toggleSelectedFeature("module.mcp");
+
+    expect(manager.selectedFeatures.value).toEqual([]);
+  });
+
+  it("applies role permission presets", async () => {
+    const { useRoleManager } = await import("./useRoleManager");
+    const manager = useRoleManager();
+
+    manager.togglePermissionPreset("mcp-observer");
+
+    expect(manager.selectedFeatures.value).toEqual([
+      "module.mcp",
+      "mcp.server.list",
+      "mcp.server.tools",
+      "mcp.server.connectivity",
+    ]);
+    expect(manager.selectedPresetIds.value).toContain("mcp-observer");
+    expect(manager.selectedHighRiskCount.value).toBe(0);
+  });
+
+  it("toggles selected role permission presets off", async () => {
+    const { useRoleManager } = await import("./useRoleManager");
+    const manager = useRoleManager();
+
+    manager.togglePermissionPreset("workspace-basic");
+
+    expect(manager.selectedFeatures.value).toEqual([
+      "module.chat",
+      "module.datasource_catalog",
+      "module.config.view",
+      "module.system.status",
+    ]);
+    expect(manager.selectedPresetIds.value).toContain("workspace-basic");
+
+    manager.togglePermissionPreset("workspace-basic");
+
+    expect(manager.selectedFeatures.value).toEqual([]);
+    expect(manager.selectedPresetIds.value).not.toContain("workspace-basic");
+  });
+
+  it("keeps shared permissions when toggling one selected preset off", async () => {
+    const { useRoleManager } = await import("./useRoleManager");
+    const manager = useRoleManager();
+
+    manager.togglePermissionPreset("workspace-basic");
+    manager.togglePermissionPreset("audit-viewer");
+    manager.togglePermissionPreset("workspace-basic");
+
+    expect(manager.selectedFeatures.value).toEqual([
+      "module.admin.audit",
+      "module.system.status",
+    ]);
+    expect(manager.selectedPresetIds.value).toEqual(["audit-viewer"]);
+  });
+
+  it("resets advanced permission controls when opening the role dialog", async () => {
+    const { useRoleManager } = await import("./useRoleManager");
+    const manager = useRoleManager();
+    manager.advancedPermissionsOpen.value = true;
+
+    manager.openCreateDialog();
+
+    expect(manager.advancedPermissionsOpen.value).toBe(false);
+
+    manager.advancedPermissionsOpen.value = true;
+    manager.openEditDialog(role);
+
+    expect(manager.advancedPermissionsOpen.value).toBe(false);
+  });
+
+  it("saves selected permissions after dependency normalization", async () => {
+    const { useRoleManager } = await import("./useRoleManager");
+    const manager = useRoleManager();
+    manager.roleForm.value = {
+      name: "MCP 查看员",
+      description: "",
+      permissions: [],
+    };
+    manager.selectedFeatures.value = ["mcp.server.connectivity"];
+
+    await manager.saveRole();
+
+    expect(upsertRole).toHaveBeenCalledWith("MCP 查看员", {
+      name: "MCP 查看员",
+      description: null,
+      permissions: ["module.mcp", "mcp.server.list", "mcp.server.connectivity"],
+    });
+  });
+
+  it("opens edit dialog with normalized existing permissions", async () => {
+    const { useRoleManager } = await import("./useRoleManager");
+    const manager = useRoleManager();
+
+    manager.openEditDialog({ ...role, permissions: ["mcp.server.tools"] });
+
+    expect(manager.selectedFeatures.value).toEqual([
+      "module.mcp",
+      "mcp.server.list",
+      "mcp.server.tools",
+    ]);
   });
 
   it("blocks built-in role deletion", async () => {

@@ -31,7 +31,8 @@ import { Textarea } from "@/components/ui/textarea"
 import AdminAclMultiCombobox from "@/features/admin/AdminAclMultiCombobox.vue"
 import DatasourceGrantScopePicker from "@/features/admin/DatasourceGrantScopePicker.vue"
 import type { AdminAclSelectOption, AdminDialogProps } from "@/features/admin/types"
-import { permissionBadgeItems } from "@/lib/permission-labels"
+import { permissionBadgeItems, permissionRiskLabel } from "@/lib/permission-labels"
+import type { PermissionOptionGroup, PermissionPresetGroup, PermissionRisk } from "@/lib/permission-labels"
 import { quotaResourceOptionFor, quotaResourceOptions } from "@/lib/quota-options"
 
 const props = defineProps<AdminDialogProps>()
@@ -179,6 +180,22 @@ function withSelectedFallbackOptions(
       label: `当前：${value}`,
     }))
   return [...fallbackOptions, ...options]
+}
+
+function riskBadgeVariant(risk: PermissionRisk): "outline" | "secondary" | "destructive" {
+  if (risk === "high") return "destructive"
+  if (risk === "medium") return "secondary"
+  return "outline"
+}
+
+function selectedPermissionCount(group: PermissionOptionGroup): number {
+  const selected = new Set(props.roles.selectedFeatures.value)
+  return group.options.filter(option => selected.has(option.value)).length
+}
+
+function selectedPresetCount(group: PermissionPresetGroup): number {
+  const selected = new Set(props.roles.selectedPresetIds.value)
+  return group.presets.filter(preset => selected.has(preset.id)).length
 }
 </script>
 
@@ -743,38 +760,129 @@ function withSelectedFallbackOptions(
           />
         </Field>
         <Field>
-          <FieldLabel>权限</FieldLabel>
-          <div class="flex flex-col gap-3">
-            <FieldSet
-              v-for="group in roles.featureGroups"
-              :key="group.id"
-              class="gap-2 rounded-md border p-3"
-            >
-              <FieldLegend
-                variant="label"
-                class="mb-0 text-muted-foreground"
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <FieldLabel>权限套餐</FieldLabel>
+            <div class="flex flex-wrap gap-2">
+              <Badge variant="outline">{{ roles.selectedPermissionCount.value }} 项</Badge>
+              <Badge
+                v-if="roles.selectedHighRiskCount.value > 0"
+                variant="destructive"
               >
-                {{ group.label }}
-              </FieldLegend>
-              <div class="flex flex-wrap gap-2">
+                {{ roles.selectedHighRiskCount.value }} 项高风险
+              </Badge>
+            </div>
+          </div>
+          <div class="flex flex-col gap-3">
+            <div
+              v-for="group in roles.permissionPresetGroups"
+              :key="group.id"
+              class="flex flex-col gap-2 rounded-md border p-3"
+            >
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-sm font-medium">{{ group.label }}</span>
+                <Badge variant="outline">
+                  {{ selectedPresetCount(group) }} / {{ group.presets.length }}
+                </Badge>
+              </div>
+              <div class="grid gap-2 md:grid-cols-2">
                 <Button
-                  v-for="option in group.options"
-                  :key="option.value"
-                  :variant="
-                    roles.selectedFeatures.value.includes(option.value)
-                      ? option.kind === 'wildcard'
-                        ? 'destructive'
-                        : 'default'
-                      : 'outline'
-                  "
-                  size="sm"
-                  @click="roles.toggleSelectedFeature(option.value)"
+                  v-for="preset in group.presets"
+                  :key="preset.id"
+                  :variant="roles.selectedPresetIds.value.includes(preset.id) ? 'default' : 'outline'"
+                  class="h-auto max-w-full justify-start whitespace-normal rounded-md px-3 py-2 text-left"
+                  :title="roles.selectedPresetIds.value.includes(preset.id) ? '再次点击移除该套餐' : '点击应用该套餐'"
+                  @click="roles.togglePermissionPreset(preset.id)"
                 >
-                  {{ option.label }}
+                  <span class="flex min-w-0 flex-1 flex-col gap-1">
+                    <span class="flex min-w-0 flex-wrap items-center gap-2">
+                      <span class="font-medium">{{ preset.label }}</span>
+                      <Badge :variant="riskBadgeVariant(preset.risk)">
+                        {{ permissionRiskLabel(preset.risk) }}
+                      </Badge>
+                    </span>
+                    <span class="text-xs leading-5 text-muted-foreground">{{ preset.description }}</span>
+                  </span>
                 </Button>
               </div>
-            </FieldSet>
+            </div>
           </div>
+          <FieldDescription>点击套餐会应用权限；再次点击已应用套餐会移除该套餐权限，底层权限仍可继续微调。</FieldDescription>
+        </Field>
+        <Field>
+          <Collapsible
+            v-slot="{ open }"
+            v-model:open="roles.advancedPermissionsOpen.value"
+            class="flex flex-col gap-3"
+          >
+            <div class="flex flex-wrap items-center justify-between gap-2">
+              <div class="flex flex-wrap items-center gap-2">
+                <FieldLabel>高级权限</FieldLabel>
+                <Badge variant="secondary">已按依赖排序</Badge>
+              </div>
+              <CollapsibleTrigger as-child>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  class="gap-1"
+                >
+                  {{ open ? "收起" : "展开" }}
+                  <ChevronDownIcon
+                    :class="[
+                      'size-4 transition-transform',
+                      open ? 'rotate-180' : '',
+                    ]"
+                  />
+                </Button>
+              </CollapsibleTrigger>
+            </div>
+            <FieldDescription>需要精细调整时再展开底层权限；普通角色配置优先使用上方套餐。</FieldDescription>
+            <CollapsibleContent class="flex flex-col gap-3">
+              <FieldSet
+                v-for="group in roles.featureGroups"
+                :key="group.id"
+                class="gap-2 rounded-md border p-3"
+              >
+                <FieldLegend
+                  variant="label"
+                  class="mb-0 text-muted-foreground"
+                >
+                  <span class="flex flex-wrap items-center gap-2">
+                    <span>{{ group.label }}</span>
+                    <Badge variant="outline">
+                      {{ selectedPermissionCount(group) }} / {{ group.options.length }}
+                    </Badge>
+                  </span>
+                </FieldLegend>
+                <div class="flex flex-wrap gap-2">
+                  <Button
+                    v-for="option in group.options"
+                    :key="option.value"
+                    :variant="
+                      roles.selectedFeatures.value.includes(option.value)
+                        ? option.kind === 'wildcard'
+                          ? 'destructive'
+                          : 'default'
+                        : 'outline'
+                    "
+                    size="sm"
+                    class="h-auto max-w-full whitespace-normal rounded-md py-2 text-left"
+                    :title="option.description"
+                    @click="roles.toggleSelectedFeature(option.value)"
+                  >
+                    <span class="flex min-w-0 flex-col gap-1">
+                      <span class="flex min-w-0 flex-wrap items-center gap-2">
+                        <span>{{ option.label }}</span>
+                        <Badge :variant="riskBadgeVariant(option.risk)">
+                          {{ permissionRiskLabel(option.risk) }}
+                        </Badge>
+                      </span>
+                      <span class="break-all text-xs leading-5 text-muted-foreground">{{ option.value }}</span>
+                    </span>
+                  </Button>
+                </div>
+              </FieldSet>
+            </CollapsibleContent>
+          </Collapsible>
         </Field>
       </FieldGroup>
       <DialogFooter class="border-t pt-4">

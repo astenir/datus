@@ -2,12 +2,23 @@ import { computed, ref, shallowRef } from "vue";
 import { toast } from "vue-sonner";
 
 import { adminRoleApi } from "@/lib/api";
-import { ROLE_PERMISSION_GROUPS, ROLE_PERMISSION_OPTIONS } from "@/lib/permission-labels";
+import {
+  ROLE_PERMISSION_GROUPS,
+  ROLE_PERMISSION_OPTIONS,
+  ROLE_PERMISSION_PRESET_GROUPS,
+  ROLE_PERMISSION_PRESETS,
+  normalizePermissionSelection,
+  permissionPresetSelected,
+  togglePermissionPresetSelection,
+  togglePermissionSelection,
+} from "@/lib/permission-labels";
 import type { Role, RoleFormData, RoleSearchForm } from "@/types/admin";
 
 export function useRoleManager() {
   const featureOptions = ROLE_PERMISSION_OPTIONS;
   const featureGroups = ROLE_PERMISSION_GROUPS;
+  const permissionPresets = ROLE_PERMISSION_PRESETS;
+  const permissionPresetGroups = ROLE_PERMISSION_PRESET_GROUPS;
 
   const searchForm = ref<RoleSearchForm>({
     keyword: "",
@@ -37,6 +48,7 @@ export function useRoleManager() {
   const deleting = shallowRef(false);
 
   const selectedFeatures = ref<string[]>([]);
+  const advancedPermissionsOpen = shallowRef(false);
 
   const filteredRoles = computed(() => {
     const keyword = searchForm.value.keyword.trim().toLowerCase();
@@ -47,6 +59,17 @@ export function useRoleManager() {
   });
   const builtInRoleCount = computed(() => roles.value.filter((role) => role.built_in).length);
   const customRoleCount = computed(() => roles.value.filter((role) => !role.built_in).length);
+  const selectedPermissionCount = computed(() => selectedFeatures.value.length);
+  const selectedHighRiskCount = computed(() =>
+    selectedFeatures.value.filter((permission) =>
+      featureOptions.find((option) => option.value === permission)?.risk === "high"
+    ).length
+  );
+  const selectedPresetIds = computed(() =>
+    permissionPresets
+      .filter((preset) => permissionPresetSelected(selectedFeatures.value, preset))
+      .map((preset) => preset.id)
+  );
 
   async function loadRoles() {
     loading.value = true;
@@ -120,6 +143,7 @@ export function useRoleManager() {
       permissions: [],
     };
     selectedFeatures.value = [];
+    advancedPermissionsOpen.value = false;
     showDialog.value = true;
   }
 
@@ -131,7 +155,8 @@ export function useRoleManager() {
       description: role.description ?? "",
       permissions: role.permissions ?? [],
     };
-    selectedFeatures.value = [...(role.permissions ?? [])];
+    selectedFeatures.value = normalizePermissionSelection(role.permissions ?? []);
+    advancedPermissionsOpen.value = false;
     showDialog.value = true;
   }
 
@@ -148,7 +173,7 @@ export function useRoleManager() {
       await adminRoleApi.upsertRole(roleId, {
         name,
         description: roleForm.value.description.trim() || null,
-        permissions: selectedFeatures.value,
+        permissions: normalizePermissionSelection(selectedFeatures.value),
       });
       showDialog.value = false;
       void loadRoles();
@@ -161,9 +186,11 @@ export function useRoleManager() {
   }
 
   function toggleSelectedFeature(featureCode: string) {
-    selectedFeatures.value = selectedFeatures.value.includes(featureCode)
-      ? selectedFeatures.value.filter(item => item !== featureCode)
-      : [...selectedFeatures.value, featureCode];
+    selectedFeatures.value = togglePermissionSelection(selectedFeatures.value, featureCode);
+  }
+
+  function togglePermissionPreset(presetId: string) {
+    selectedFeatures.value = togglePermissionPresetSelection(selectedFeatures.value, presetId);
   }
 
   function requestDeleteRole(role: Role) {
@@ -196,6 +223,8 @@ export function useRoleManager() {
   return {
     featureOptions,
     featureGroups,
+    permissionPresets,
+    permissionPresetGroups,
     searchForm,
     total,
     roles,
@@ -215,8 +244,12 @@ export function useRoleManager() {
     roleToDelete,
     deleting,
     selectedFeatures,
+    advancedPermissionsOpen,
     builtInRoleCount,
     customRoleCount,
+    selectedPermissionCount,
+    selectedHighRiskCount,
+    selectedPresetIds,
     loadRoles,
     handleSearch,
     handleReset,
@@ -226,6 +259,7 @@ export function useRoleManager() {
     openEditDialog,
     saveRole,
     toggleSelectedFeature,
+    togglePermissionPreset,
     requestDeleteRole,
     deleteRole,
   };
