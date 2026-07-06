@@ -5,6 +5,7 @@ import pytest
 from datus.api.models.base_models import Result
 from datus.api.models.database_models import ListDatabasesInput
 from datus.api.services.database_service import DatasourceService
+from datus.configuration.agent_config import DbConfig
 from datus.tools.db_tools.db_manager import DBManager
 
 
@@ -292,9 +293,29 @@ class TestGetConnectionInfoScoping:
         assert connector.get_databases_calls == 1
         assert [i.name for i in infos] == ["benchmark", "ga4", "olist", "fund_poc"]
 
+    def test_explicit_enumerate_databases_lists_server_databases(self, real_agent_config, _no_schema_dialect):
+        """A server datasource may opt into instance-wide catalog listing."""
+        real_agent_config.services.datasources["warehouse"] = DbConfig(
+            type="starrocks",
+            database="benchmark",
+            enumerate_databases=True,
+        )
+        svc = DatasourceService(agent_config=real_agent_config)
+        connector = _FakeServerConnector(database_name="benchmark")
+
+        infos = svc._get_connection_info(connector, "warehouse", ListDatabasesInput())
+
+        assert connector.get_databases_calls == 1
+        assert [i.name for i in infos] == ["benchmark", "ga4", "olist", "fund_poc"]
+
     def test_request_database_name_filter_takes_precedence(self, real_agent_config, _no_schema_dialect):
         """An explicit database_name filter wins over the configured database and
         still avoids the server-wide enumeration."""
+        real_agent_config.services.datasources["benchmark"] = DbConfig(
+            type="starrocks",
+            database="benchmark",
+            enumerate_databases=True,
+        )
         svc = DatasourceService(agent_config=real_agent_config)
         connector = _FakeServerConnector(database_name="benchmark")
 

@@ -91,6 +91,9 @@ agent:
     #   username: ${STARROCKS_USER}
     #   password: ${STARROCKS_PASSWORD}
     #   database: ${STARROCKS_DATABASE}
+    #   # Optional: when true, catalog/list enumerates all reachable databases
+    #   # on the same server instead of only this configured database.
+    #   enumerate_databases: false
 
     # 新版语义层要求显式写出条目；空对象表示启用默认 MetricFlow 配置。
     semantic_layer:

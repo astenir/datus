@@ -211,6 +211,15 @@ class TestDbConfigFilterKwargs:
         cfg = DbConfig.filter_kwargs(DbConfig, kwargs)
         assert cfg.extra["custom_option"] == "token-value"
 
+    def test_enumerate_databases_is_first_class_bool(self):
+        cfg = DbConfig.filter_kwargs(DbConfig, {"type": "postgresql", "enumerate_databases": "true"})
+        assert cfg.enumerate_databases is True
+        assert not cfg.extra or "enumerate_databases" not in cfg.extra
+
+    def test_enumerate_databases_string_false_is_false(self):
+        cfg = DbConfig.filter_kwargs(DbConfig, {"type": "postgresql", "enumerate_databases": "false"})
+        assert cfg.enumerate_databases is False
+
 
 class TestSemanticAdapterDbConfig:
     def test_db_config_conversion_preserves_catalog(self):

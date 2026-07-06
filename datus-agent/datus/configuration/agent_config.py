@@ -232,6 +232,7 @@ class DbConfig:
     private_key_file_pwd: str = field(default="", init=True)
     catalog: str = field(default="", init=True)
     default: bool = field(default=False, init=True)  # Whether this is the default database
+    enumerate_databases: bool = field(default=False, init=True)  # Explicitly enumerate all reachable server DBs
     extra: Optional[Dict] = field(default=None, init=True)  # Adapter-specific fields stored here
 
     def to_dict(self) -> Dict[str, Any]:
@@ -250,6 +251,9 @@ class DbConfig:
                 # Skip internal fields that are handled separately
                 if v is not None and v != "" and k not in internal_fields:
                     extra_params[k] = _resolve_nested_value(v)
+                continue
+            if k == "enumerate_databases":
+                params[k] = _coerce_bool(v, False)
                 continue
             if not v:
                 params[k] = v

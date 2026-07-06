@@ -135,6 +135,7 @@ agent:
         username: ${CCKS_FUND_DB_USER:-datus}
         password: ${CCKS_FUND_DB_PASSWORD:-datus}
         database: ${CCKS_FUND_DB_NAME:-ccks_fund}
+        enumerate_databases: ${CCKS_FUND_ENUMERATE_DATABASES:-false}
         schema: ${CCKS_FUND_DB_SCHEMA:-public}
         sslmode: ${CCKS_FUND_DB_SSLMODE:-prefer}
         timeout_seconds: 30

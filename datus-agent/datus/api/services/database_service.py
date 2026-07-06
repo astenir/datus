@@ -208,7 +208,8 @@ class DatasourceService:
         """Get connection information for a database connector.
 
         Lists the database(s) this connector is scoped to — its configured
-        database, or the whole server only when no database is configured —
+        database by default, the whole server when explicitly configured with
+        ``enumerate_databases: true`` or when no database is configured —
         resolves schemas if supported, and marks the connector's configured
         database as ``current``. Request-level filters (database_name,
         schema_name, catalog_name) narrow the result set when provided.
@@ -242,13 +243,16 @@ class DatasourceService:
 
         # 1) Resolve which databases to list — fatal if this fails since we have nothing
         # to iterate. A datasource is a connection profile scoped to its configured
-        # database(s): get_connections() already yields one connector per config-known
-        # database (a server datasource's configured ``database``, or one connector per
-        # glob file). So list the database this connector is bound to, NOT every database
-        # on the server — otherwise a single project datasource leaks the whole instance.
+        # database(s) unless ``enumerate_databases: true`` explicitly opts into listing
+        # every reachable database on the server instance.
         try:
             if request.database_name:
                 db_names = [request.database_name]
+            elif self._should_enumerate_databases(ds_id) and hasattr(connector, "get_databases"):
+                db_names = connector.get_databases(
+                    catalog_name=catalog_name,
+                    include_sys=request.include_sys_schemas,
+                )
             elif connector.database_name:
                 db_names = [connector.database_name]
             elif hasattr(connector, "get_databases"):
@@ -362,6 +366,10 @@ class DatasourceService:
                     )
                 )
         return db_infos
+
+    def _should_enumerate_databases(self, datasource: str) -> bool:
+        config = getattr(getattr(self.agent_config, "services", None), "datasources", {}).get(datasource)
+        return bool(getattr(config, "enumerate_databases", False))
 
     def list_databases(self, request: ListDatabasesInput) -> Result[ListDatabasesData]:
         """

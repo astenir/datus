@@ -155,6 +155,9 @@ agent:
         username: datus
         password: ${CCKS_FUND_DB_PASSWORD:-datus}
         database: ccks_fund
+        # Keep false unless this datasource should expose every reachable
+        # PostgreSQL database on the same server instance.
+        enumerate_databases: ${CCKS_FUND_ENUMERATE_DATABASES:-false}
         schema: public
         sslmode: prefer
         timeout_seconds: 30
