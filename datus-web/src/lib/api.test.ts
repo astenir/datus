@@ -94,7 +94,7 @@ describe("api client", () => {
     await dashboardApi.html("/datus-api", "fund_overview");
 
     expect(dashboardApi.htmlUrl("/datus-api", "fund_overview")).toBe(
-      "/datus-api/api/v1/dashboards/fund_overview/html",
+      "/datus-api/api/v1/dashboards/fund_overview/html?query_endpoint=%2Fdatus-api%2Fapi%2Fv1%2Fdashboard%2Fquery",
     );
     expect(reportApi.htmlUrl("/datus-api", "fund_report")).toBe(
       "/datus-api/api/v1/reports/fund_report/html",
@@ -104,7 +104,7 @@ describe("api client", () => {
       "/datus-api/api/v1/chat/feedback",
       "/datus-api/api/v1/kb/uploads",
       "/datus-api/api/v1/kb/bootstrap",
-      "/datus-api/api/v1/dashboards/fund_overview/html",
+      "/datus-api/api/v1/dashboards/fund_overview/html?query_endpoint=%2Fdatus-api%2Fapi%2Fv1%2Fdashboard%2Fquery",
     ]);
   });
 
@@ -263,7 +263,9 @@ describe("api client", () => {
     expect(vi.mocked(fetch).mock.calls[5]?.[0]).toBe(
       "http://localhost:8000/api/v1/artifact-share/roles?artifact_type=report&query=analyst&limit=20",
     );
-    expect(vi.mocked(fetch).mock.calls[6]?.[0]).toBe("http://localhost:8000/api/v1/dashboards/fund_overview/html");
+    expect(vi.mocked(fetch).mock.calls[6]?.[0]).toBe(
+      "http://localhost:8000/api/v1/dashboards/fund_overview/html?query_endpoint=http%3A%2F%2Flocalhost%3A8000%2Fapi%2Fv1%2Fdashboard%2Fquery",
+    );
     expect(vi.mocked(fetch).mock.calls[7]?.[0]).toBe("http://localhost:8000/api/v1/reports/fund_report/html");
     expect((vi.mocked(fetch).mock.calls[3]?.[1] as RequestInit).method).toBe("PUT");
     expect(JSON.parse(String((vi.mocked(fetch).mock.calls[3]?.[1] as RequestInit).body))).toEqual({
@@ -272,7 +274,7 @@ describe("api client", () => {
       allowed_user_ids: ["alice"],
     });
     expect(dashboardApi.htmlUrl("http://localhost:8000/", "fund_overview")).toBe(
-      "http://localhost:8000/api/v1/dashboards/fund_overview/html",
+      "http://localhost:8000/api/v1/dashboards/fund_overview/html?query_endpoint=http%3A%2F%2Flocalhost%3A8000%2Fapi%2Fv1%2Fdashboard%2Fquery",
     );
     expect(reportApi.htmlUrl("http://localhost:8000/", "fund_report")).toBe(
       "http://localhost:8000/api/v1/reports/fund_report/html",

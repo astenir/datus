@@ -33,7 +33,8 @@ import {
 import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion"
 import { activeStreamingMessageId, mergeToolExecutionMessages } from "@/lib/chat"
 import { useConnection } from "@/composables/useConnection"
-import { artifactHtml, createArtifactPreviewUrl } from "@/composables/useArtifacts"
+import { artifactHtml, createArtifactPreviewUrl, withArtifactPreviewRuntime } from "@/composables/useArtifacts"
+import { getCurrentAccessToken } from "@/lib/request"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import type { ArtifactViewTab } from "@/features/workspace/types"
 import type { SelectOption } from "@/types"
@@ -178,7 +179,8 @@ async function openArtifact(kind: string, slug: string) {
   }
 
   try {
-    const html = await artifactHtml(effectiveBase(), tab, slug)
+    const rawHtml = await artifactHtml(effectiveBase(), tab, slug)
+    const html = withArtifactPreviewRuntime(rawHtml, effectiveBase(), getCurrentAccessToken())
     const url = createArtifactPreviewUrl(html)
     if (previewWindow) {
       previewWindow.location.href = url

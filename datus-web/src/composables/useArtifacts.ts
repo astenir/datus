@@ -73,6 +73,10 @@ function safeScriptString(value: string): string {
   return JSON.stringify(value).replace(/</g, "\\u003c");
 }
 
+function normalizedPreviewApiBase(baseUrl: string): string {
+  return baseUrl.trim().replace(/\/+$/, "");
+}
+
 function decodeJsSingleQuotedString(value: string): string {
   return value
     .replace(/<\\\//g, "</")
@@ -93,6 +97,95 @@ function injectPreviewHeadScript(html: string, script: string): string {
   if (index === -1) return `${script}\n${html}`;
 
   return `${html.slice(0, index)}${script}\n${html.slice(index)}`;
+}
+
+export function withArtifactPreviewRuntime(html: string, baseUrl: string, accessToken: string | null): string {
+  const apiBase = normalizedPreviewApiBase(baseUrl);
+  const token = accessToken?.trim() ?? "";
+  if (!apiBase && !token) return html;
+
+  const script = `<script>
+(function () {
+  var apiBase = ${safeScriptString(apiBase)};
+  var token = ${safeScriptString(token)};
+  if (window.__datusPreviewRuntimeInstalled || !window.fetch) return;
+  window.__datusPreviewRuntimeInstalled = true;
+  var originalFetch = window.fetch.bind(window);
+
+  function requestUrl(input) {
+    if (typeof input === "string" || input instanceof URL) return String(input);
+    if (input && typeof input.url === "string") return input.url;
+    return "";
+  }
+
+  function isDatusApiPath(pathname) {
+    return pathname === "/api" || pathname.indexOf("/api/") === 0 || pathname === "/health";
+  }
+
+  function apiBaseUrl() {
+    try {
+      return apiBase ? new URL(apiBase, window.location.origin) : null;
+    } catch (error) {
+      return null;
+    }
+  }
+
+  function rewriteDatusApiInput(input) {
+    var rawUrl = requestUrl(input);
+    var base = apiBaseUrl();
+    if (!rawUrl || !base) return input;
+
+    try {
+      var target = new URL(rawUrl, window.location.href);
+      if (target.origin !== window.location.origin || !isDatusApiPath(target.pathname)) return input;
+
+      var basePath = base.pathname.replace(/\\/+$/, "");
+      var rewritten = new URL(target.href);
+      rewritten.protocol = base.protocol;
+      rewritten.host = base.host;
+      rewritten.pathname = basePath + target.pathname;
+
+      if (input instanceof Request) return new Request(rewritten.href, input);
+      return rewritten.href;
+    } catch (error) {
+      return input;
+    }
+  }
+
+  function isConfiguredDatusApiTarget(input) {
+    try {
+      var target = new URL(requestUrl(input), window.location.href);
+      var base = apiBaseUrl();
+      if (!base) return isDatusApiPath(target.pathname) && target.origin === window.location.origin;
+
+      var basePath = base.pathname.replace(/\\/+$/, "");
+      var expectedPath = basePath ? basePath + "/api/" : "/api/";
+      return target.origin === base.origin
+        && (target.pathname === basePath + "/api" || target.pathname.indexOf(expectedPath) === 0 || target.pathname === basePath + "/health");
+    } catch (error) {
+      return false;
+    }
+  }
+
+  window.fetch = function (input, init) {
+    var nextInput = rewriteDatusApiInput(input);
+    if (!token || !isConfiguredDatusApiTarget(nextInput)) {
+      return originalFetch(nextInput, init);
+    }
+
+    var nextInit = init ? Object.assign({}, init) : {};
+    var requestHeaders = input instanceof Request ? input.headers : undefined;
+    var headers = new Headers(nextInit.headers || requestHeaders);
+    if (!headers.has("Authorization")) {
+      headers.set("Authorization", "Bearer " + token);
+    }
+    nextInit.headers = headers;
+    return originalFetch(nextInput, nextInit);
+  };
+})();
+</script>`;
+
+  return injectPreviewHeadScript(html, script);
 }
 
 export function withDashboardPreviewAuth(html: string, accessToken: string | null): string {
@@ -254,9 +347,7 @@ export function useArtifacts() {
 
     try {
       const rawHtml = await artifactHtml(connection.effectiveBase(), tab, slug);
-      const html = tab === "dashboard"
-        ? withDashboardPreviewAuth(rawHtml, getCurrentAccessToken())
-        : rawHtml;
+      const html = withArtifactPreviewRuntime(rawHtml, connection.effectiveBase(), getCurrentAccessToken());
       const url = createArtifactPreviewUrl(html);
       rememberPreviewUrl(url);
 

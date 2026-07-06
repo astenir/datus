@@ -13,6 +13,12 @@ import type {
   VisualizationResult,
 } from "@/types";
 
+function dashboardHtmlPath(baseUrl: string, slug: string): string {
+  const queryEndpoint = apiUrl(baseUrl, "/api/v1/dashboard/query");
+  const query = new URLSearchParams({ query_endpoint: queryEndpoint });
+  return `/api/v1/dashboards/${encodeURIComponent(slug)}/html?${query.toString()}`;
+}
+
 function shareDirectoryQuery(params: ArtifactShareDirectoryParams): string {
   const query = new URLSearchParams();
   query.set("artifact_type", params.artifactType);
@@ -33,11 +39,11 @@ export const dashboardApi = {
 
   htmlUrl(baseUrl: string, slug: string): string {
     const base = baseUrl.replace(/\/+$/, "");
-    return `${base}/api/v1/dashboards/${encodeURIComponent(slug)}/html`;
+    return `${base}${dashboardHtmlPath(baseUrl, slug)}`;
   },
 
   async html(baseUrl: string, slug: string): Promise<string> {
-    const response = await request(apiUrl(baseUrl, `/api/v1/dashboards/${encodeURIComponent(slug)}/html`));
+    const response = await request(apiUrl(baseUrl, dashboardHtmlPath(baseUrl, slug)));
     return response.text();
   },
 
