@@ -375,6 +375,23 @@ describe("useArtifacts", () => {
     expect(withDashboardPreviewAuth(html, null)).toBe(html);
   });
 
+  it("anchors preview runtime API rewrites to the opener origin for blob pages", async () => {
+    vi.stubGlobal("window", {
+      location: { origin: "https://datus.example.com" },
+    });
+    const { withArtifactPreviewRuntime } = await import("./useArtifacts");
+    const html = withArtifactPreviewRuntime(
+      "<!doctype html><html><head></head><body>dashboard</body></html>",
+      "/datus-api",
+      "dev-alice-token",
+    );
+
+    expect(html).toContain('var appOrigin = "https://datus.example.com"');
+    expect(html).toContain('var apiBase = "/datus-api"');
+    expect(html).toContain("parseTargetUrl(rawUrl)");
+    expect(html).toContain("return withUrlInput(input, target.href)");
+  });
+
   it("runs dashboard queries with route-selected slug and template params", async () => {
     const { useArtifacts } = await import("./useArtifacts");
     const artifacts = useArtifacts();

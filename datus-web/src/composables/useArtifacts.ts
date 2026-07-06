@@ -101,12 +101,16 @@ function injectPreviewHeadScript(html: string, script: string): string {
 
 export function withArtifactPreviewRuntime(html: string, baseUrl: string, accessToken: string | null): string {
   const apiBase = normalizedPreviewApiBase(baseUrl);
+  const appOrigin = typeof window !== "undefined" && window.location?.origin && window.location.origin !== "null"
+    ? window.location.origin
+    : "";
   const token = accessToken?.trim() ?? "";
   if (!apiBase && !token) return html;
 
   const script = `<script>
 (function () {
   var apiBase = ${safeScriptString(apiBase)};
+  var appOrigin = ${safeScriptString(appOrigin)};
   var token = ${safeScriptString(token)};
   if (window.__datusPreviewRuntimeInstalled || !window.fetch) return;
   window.__datusPreviewRuntimeInstalled = true;
@@ -122,31 +126,61 @@ export function withArtifactPreviewRuntime(html: string, baseUrl: string, access
     return pathname === "/api" || pathname.indexOf("/api/") === 0 || pathname === "/health";
   }
 
+  function originBase() {
+    if (appOrigin) return appOrigin;
+    return window.location.origin && window.location.origin !== "null" ? window.location.origin : "";
+  }
+
   function apiBaseUrl() {
     try {
-      return apiBase ? new URL(apiBase, window.location.origin) : null;
+      return apiBase ? new URL(apiBase, originBase() || window.location.href) : null;
     } catch (error) {
       return null;
     }
   }
 
+  function parseTargetUrl(rawUrl) {
+    return new URL(rawUrl, originBase() || window.location.href);
+  }
+
+  function configuredPathMatches(pathname) {
+    var base = apiBaseUrl();
+    if (!base) return isDatusApiPath(pathname);
+
+    var basePath = base.pathname.replace(/\\/+$/, "");
+    var apiPrefix = basePath ? basePath + "/api/" : "/api/";
+    return isDatusApiPath(pathname)
+      || pathname === basePath + "/api"
+      || pathname.indexOf(apiPrefix) === 0
+      || pathname === basePath + "/health";
+  }
+
+  function withUrlInput(input, href) {
+    if (input instanceof Request) return new Request(href, input);
+    return href;
+  }
+
   function rewriteDatusApiInput(input) {
     var rawUrl = requestUrl(input);
     var base = apiBaseUrl();
-    if (!rawUrl || !base) return input;
+    if (!rawUrl) return input;
 
     try {
-      var target = new URL(rawUrl, window.location.href);
-      if (target.origin !== window.location.origin || !isDatusApiPath(target.pathname)) return input;
+      var target = parseTargetUrl(rawUrl);
+      var pageOrigin = originBase();
+      if (pageOrigin && target.origin !== pageOrigin && (!base || target.origin !== base.origin)) return input;
 
-      var basePath = base.pathname.replace(/\\/+$/, "");
-      var rewritten = new URL(target.href);
-      rewritten.protocol = base.protocol;
-      rewritten.host = base.host;
-      rewritten.pathname = basePath + target.pathname;
+      if (base && pageOrigin && target.origin === pageOrigin && isDatusApiPath(target.pathname)) {
+        var basePath = base.pathname.replace(/\\/+$/, "");
+        var rewritten = new URL(target.href);
+        rewritten.protocol = base.protocol;
+        rewritten.host = base.host;
+        rewritten.pathname = basePath + target.pathname;
+        return withUrlInput(input, rewritten.href);
+      }
 
-      if (input instanceof Request) return new Request(rewritten.href, input);
-      return rewritten.href;
+      if (configuredPathMatches(target.pathname)) return withUrlInput(input, target.href);
+      return input;
     } catch (error) {
       return input;
     }
@@ -154,14 +188,11 @@ export function withArtifactPreviewRuntime(html: string, baseUrl: string, access
 
   function isConfiguredDatusApiTarget(input) {
     try {
-      var target = new URL(requestUrl(input), window.location.href);
+      var target = parseTargetUrl(requestUrl(input));
       var base = apiBaseUrl();
-      if (!base) return isDatusApiPath(target.pathname) && target.origin === window.location.origin;
+      if (!base) return configuredPathMatches(target.pathname) && target.origin === originBase();
 
-      var basePath = base.pathname.replace(/\\/+$/, "");
-      var expectedPath = basePath ? basePath + "/api/" : "/api/";
-      return target.origin === base.origin
-        && (target.pathname === basePath + "/api" || target.pathname.indexOf(expectedPath) === 0 || target.pathname === basePath + "/health");
+      return target.origin === base.origin && configuredPathMatches(target.pathname);
     } catch (error) {
       return false;
     }
