@@ -15,6 +15,7 @@ import {
   LayoutDashboardIcon,
   ListChecksIcon,
   LoaderCircleIcon,
+  LogOutIcon,
   MessageCircleIcon,
   MoreHorizontalIcon,
   PlusIcon,
@@ -93,6 +94,7 @@ const emit = defineEmits<{
   openChat: [sessionId?: string | null]
   openView: [view: WorkspaceView]
   openArtifactTab: [tab: ArtifactViewTab]
+  logout: []
 }>()
 
 const searchQuery = shallowRef("")
@@ -274,6 +276,11 @@ function openSession(sessionId: string) {
 function openView(view: WorkspaceView) {
   closeMobileSidebar()
   emit("openView", view)
+}
+
+function logout() {
+  closeMobileSidebar()
+  emit("logout")
 }
 
 function openArtifactTab(tab: ArtifactViewTab) {
@@ -821,6 +828,16 @@ async function deleteSession(sessionId: string) {
                   </DropdownMenuRadioGroup>
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
+
+              <DropdownMenuSeparator />
+
+              <DropdownMenuItem
+                class="h-10 rounded-xl px-2.5 text-sm text-destructive focus:text-destructive"
+                @select="logout"
+              >
+                <LogOutIcon />
+                <span>退出登录</span>
+              </DropdownMenuItem>
             </DropdownMenuGroup>
         </DropdownMenuContent>
       </DropdownMenu>

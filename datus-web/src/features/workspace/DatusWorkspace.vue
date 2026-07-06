@@ -39,7 +39,7 @@ const McpPanel = defineAsyncComponent(() => import("@/features/mcp/McpPanel.vue"
 const ProfilePanel = defineAsyncComponent(() => import("@/features/profile/ProfilePanel.vue"))
 
 const workspace = useChatWorkspace()
-const { state: authState, checkAuth } = useAuth()
+const { state: authState, checkAuth, logout } = useAuth()
 const permission = usePermission()
 const { theme, toggleTheme } = useTheme()
 const sqlDialogOpen = shallowRef(false)
@@ -147,6 +147,10 @@ const headerTitle = computed(() => {
 function openSqlDialog() {
   sqlDialogOpen.value = true
 }
+
+function handleLogout() {
+  void logout()
+}
 </script>
 
 <template>
@@ -193,6 +197,7 @@ function openSqlDialog() {
           @open-chat="openChat"
           @open-view="navigateToView"
           @open-artifact-tab="openArtifactTab"
+          @logout="handleLogout"
         />
 
         <SidebarInset class="min-h-0 min-w-0 overflow-hidden">
