@@ -8,7 +8,7 @@ import { useModels } from "@/composables/useModels";
 import { usePermission } from "@/composables/usePermission";
 import { useTheme } from "@/composables/useTheme";
 import { agentApi } from "@/lib/api";
-import type { AgentInfo, SelectOption } from "@/types";
+import type { AgentInfo, NormalizedProbeResult, SelectOption } from "@/types";
 
 const STATUS_REFRESH_DELAYS = [1500, 5000] as const;
 
@@ -28,11 +28,10 @@ export function useChatWorkspace() {
     connection,
     config,
     datasourceOptions,
-    isTestingDatasource,
+    isTestingDatasource: isTestingConfigDatasource,
     checkConnection,
     effectiveBase,
     setApiBase,
-    testDatasource,
   } = useConnection();
   const permission = usePermission();
   const {
@@ -87,10 +86,14 @@ export function useChatWorkspace() {
   const selectedAgent = shallowRef("");
   const selectedModel = shallowRef("");
   const selectedDatasource = shallowRef("");
+  const isTestingCatalogDatasource = shallowRef(false);
   const defaultDatasource = computed(() => config.value?.current_datasource?.trim() ?? "");
   const currentDatasource = computed(() => selectedDatasource.value || defaultDatasource.value);
   const visibleDatasourceOptions = computed(() =>
     datasourceOptions.value.filter((option) => permission.hasDatasourcePermission(option.value))
+  );
+  const isTestingDatasource = computed(() =>
+    isTestingConfigDatasource.value || isTestingCatalogDatasource.value
   );
   const initialized = shallowRef(false);
   const currentDatasourceStatus = computed(() => {
@@ -157,8 +160,30 @@ export function useChatWorkspace() {
     warmDatasource(currentDatasource.value);
   }
 
-  async function handleDatasourceTest(name?: string) {
-    return testDatasource(name);
+  async function handleDatasourceTest(name?: string): Promise<NormalizedProbeResult> {
+    const datasourceName = (name?.trim() || currentDatasource.value.trim());
+    if (!datasourceName) {
+      return { ok: false, message: "当前数据源未选择" };
+    }
+    if (!canUseDatasource(datasourceName)) {
+      return { ok: false, message: "当前用户无权访问该数据源" };
+    }
+
+    isTestingCatalogDatasource.value = true;
+    try {
+      const ok = await loadCatalog(undefined, datasourceName);
+      await loadDatasourceStatuses(datasourceName);
+      if (ok) {
+        return { ok: true, message: "连接正常" };
+      }
+      const status = datasourceStatuses.value[datasourceName];
+      return {
+        ok: false,
+        message: status?.error_message || "连接失败，请确认权限或数据源配置",
+      };
+    } finally {
+      isTestingCatalogDatasource.value = false;
+    }
   }
 
   function refreshCatalog(databaseName?: string) {

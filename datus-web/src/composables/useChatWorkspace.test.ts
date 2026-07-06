@@ -24,7 +24,7 @@ describe("useChatWorkspace", () => {
       { agent_id: "research", name: "Research", node_class: "chat", status: "published", source: "enterprise" },
       { agent_id: "draft_bot", name: "Draft Bot", node_class: "chat", status: "draft", source: "enterprise" },
     ]);
-    const loadCatalog = vi.fn(async () => {});
+    const loadCatalog = vi.fn(async () => true);
     const loadDatasourceStatuses = vi.fn(async () => true);
     const prewarmDatasource = vi.fn(async () => false);
     const compactSession = vi.fn(async () => ({ session_id: "s1", success: true }));
@@ -166,8 +166,9 @@ describe("useChatWorkspace", () => {
       { value: "blocked", label: "blocked" },
     ]);
     const switchDatasource = vi.fn();
+    const testDatasource = vi.fn();
     const loadAgentOptions = vi.fn(async () => []);
-    const loadCatalog = vi.fn(async () => {});
+    const loadCatalog = vi.fn(async () => true);
     const loadDatasourceStatuses = vi.fn(async () => true);
     const prewarmDatasource = vi.fn(async () => true);
     const selectCatalogDatasource = vi.fn();
@@ -202,7 +203,7 @@ describe("useChatWorkspace", () => {
         checkConnection: vi.fn(),
         effectiveBase: () => "http://api.test",
         setApiBase: vi.fn(),
-        testDatasource: vi.fn(),
+        testDatasource,
         switchDatasource,
       }),
     }));
@@ -286,5 +287,12 @@ describe("useChatWorkspace", () => {
     expect(prewarmDatasource).toHaveBeenCalledWith("demo");
     expect(loadCatalog).toHaveBeenCalledWith(undefined, "demo");
     expect(workspace.currentDatasource.value).toBe("demo");
+
+    loadCatalog.mockClear();
+    loadDatasourceStatuses.mockClear();
+    await expect(workspace.handleDatasourceTest("demo")).resolves.toEqual({ ok: true, message: "连接正常" });
+    expect(loadCatalog).toHaveBeenCalledWith(undefined, "demo");
+    expect(loadDatasourceStatuses).toHaveBeenCalledWith("demo");
+    expect(testDatasource).not.toHaveBeenCalled();
   });
 });
