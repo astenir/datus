@@ -32,6 +32,9 @@ interface UseWorkspaceRoutingOptions {
   workspace: ChatWorkspace
   authState: Ref<AuthState>
   canManagePermissions: ComputedRef<boolean>
+  canManageConfiguration: ComputedRef<boolean>
+  canUseMcp: ComputedRef<boolean>
+  canManageAgents: ComputedRef<boolean>
   checkAuth: () => Promise<void>
 }
 
@@ -60,6 +63,9 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
   const routeWorkspaceContext = computed(() => workspaceContextFromQuery(route.query))
   const canRenderAdminPanel = computed(() => canRenderWorkspaceView("admin", {
     canManagePermissions: options.canManagePermissions.value,
+    canManageConfiguration: options.canManageConfiguration.value,
+    canUseMcp: options.canUseMcp.value,
+    canManageAgents: options.canManageAgents.value,
   }))
 
   function workspaceRouteForView(view: WorkspaceView, tab: ArtifactViewTab = artifactTab.value) {
@@ -378,14 +384,20 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
     () => [
       activeView.value,
       options.canManagePermissions.value,
+      options.canManageConfiguration.value,
+      options.canUseMcp.value,
+      options.canManageAgents.value,
       options.authState.value.loading,
       options.authState.value.authenticated,
     ] as const,
-    ([view, canManage, loading, authenticated]) => {
+    ([view, canManage, canManageConfiguration, canUseMcp, canManageAgents, loading, authenticated]) => {
       const redirectTarget = workspaceRedirectTarget(view, {
         authenticated,
         loading,
         canManagePermissions: canManage,
+        canManageConfiguration,
+        canUseMcp,
+        canManageAgents,
       })
       if (!redirectTarget) return
       void navigateToView(redirectTarget, { replace: true })

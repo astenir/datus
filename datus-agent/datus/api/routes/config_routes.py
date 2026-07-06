@@ -7,7 +7,8 @@ and supported provider/database type listings.
 
 import asyncio
 import copy
-from typing import Annotated, Any, Dict, Optional
+from dataclasses import asdict, is_dataclass
+from typing import Annotated, Any, Dict, Mapping, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -23,6 +24,7 @@ from datus.configuration.agent_config_loader import configuration_manager
 from datus.models.base import LLMBaseModel
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
+from datus.utils.text_utils import redact_uri
 
 logger = get_logger(__name__)
 
@@ -32,6 +34,24 @@ _require_config_view = require_module("module.config.view")
 _require_config_edit = require_module("module.config.edit")
 ConfigViewCtx = Annotated[AppContext, Depends(_require_config_view)]
 ConfigEditCtx = Annotated[AppContext, Depends(_require_config_edit)]
+
+REDACTED_CONFIG_VALUE = "********"
+_SENSITIVE_FIELD_NAMES = {
+    "api_key",
+    "apikey",
+    "password",
+    "secret",
+    "client_secret",
+    "access_token",
+    "refresh_token",
+    "private_key",
+    "private_key_file",
+    "bearer_token",
+    "auth_token",
+    "token",
+    "authorization",
+}
+_URI_FIELD_NAMES = {"uri", "dsn", "url", "jdbc_url", "connection_string"}
 
 
 class UpdateDatasourcesRequest(BaseModel):
@@ -119,6 +139,87 @@ def _raise_bad_request(exc: DatusException) -> None:
     raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+def _field_name_parts(value: str) -> list[str]:
+    import re
+
+    acronym_spaced = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", value)
+    camel_spaced = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", acronym_spaced)
+    return [part for part in re.split(r"[^A-Za-z0-9]+", camel_spaced.lower()) if part]
+
+
+def _normalized_field_name(value: str) -> str:
+    return "_".join(_field_name_parts(value))
+
+
+def _is_sensitive_config_field(key: str) -> bool:
+    normalized = _normalized_field_name(key)
+    if normalized in _SENSITIVE_FIELD_NAMES:
+        return True
+    return normalized.endswith(("_api_key", "_password", "_secret", "_token"))
+
+
+def _is_uri_config_field(key: str) -> bool:
+    normalized = _normalized_field_name(key)
+    return normalized in _URI_FIELD_NAMES or normalized.endswith(("_uri", "_dsn", "_url", "_connection_string"))
+
+
+def _plain_config_value(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _plain_config_value(val) for key, val in value.items()}
+    if isinstance(value, list):
+        return [_plain_config_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_plain_config_value(item) for item in value]
+    if hasattr(value, "model_dump"):
+        return _plain_config_value(value.model_dump(exclude_none=True))
+    if hasattr(value, "to_dict"):
+        return _plain_config_value(value.to_dict())
+    if is_dataclass(value) and not isinstance(value, type):
+        return _plain_config_value(asdict(value))
+    return value
+
+
+def _redact_config_value(value: Any, *, key: str = "") -> Any:
+    plain = _plain_config_value(value)
+    if isinstance(plain, Mapping):
+        return {str(child_key): _redact_config_value(child_value, key=str(child_key)) for child_key, child_value in plain.items()}
+    if isinstance(plain, list):
+        return [_redact_config_value(item) for item in plain]
+    if _is_sensitive_config_field(key) and plain not in (None, ""):
+        return REDACTED_CONFIG_VALUE
+    if _is_uri_config_field(key) and isinstance(plain, str):
+        return redact_uri(plain)
+    return plain
+
+
+def _merge_redacted_placeholders(new_value: Any, previous_value: Any, *, key: str = "") -> Any:
+    if _is_sensitive_config_field(key) and new_value == REDACTED_CONFIG_VALUE:
+        return copy.deepcopy(previous_value)
+    if _is_uri_config_field(key) and isinstance(new_value, str) and isinstance(previous_value, str):
+        if new_value == redact_uri(previous_value):
+            return previous_value
+    if isinstance(new_value, Mapping):
+        previous_mapping = previous_value if isinstance(previous_value, Mapping) else {}
+        return {
+            str(child_key): _merge_redacted_placeholders(
+                child_value,
+                previous_mapping.get(child_key),
+                key=str(child_key),
+            )
+            for child_key, child_value in new_value.items()
+        }
+    if isinstance(new_value, list):
+        previous_list = previous_value if isinstance(previous_value, list) else []
+        return [
+            _merge_redacted_placeholders(
+                child_value,
+                previous_list[index] if index < len(previous_list) else None,
+            )
+            for index, child_value in enumerate(new_value)
+        ]
+    return new_value
+
+
 async def _evict_current_project(project_id: str) -> None:
     """Drop the cached DatusService so the next request reloads from YAML."""
     try:
@@ -144,13 +245,13 @@ async def get_agent_config_endpoint(
     for db_name, db_config in config.datasource_configs.items():
         if db_config is None:
             continue
-        flat_datasources[db_name] = db_config
+        flat_datasources[db_name] = _redact_config_value(db_config)
 
     return Result(
         success=True,
         data={
-            "target": config.target,
-            "models": config.models or {},
+            "target": _redact_config_value(config.target),
+            "models": _redact_config_value(config.models or {}),
             "current_datasource": config.current_datasource,
             "datasources": flat_datasources,
             "home": config.home,
@@ -181,7 +282,8 @@ async def update_datasources_endpoint(
     cm = configuration_manager()
     previous_data = copy.deepcopy(cm.data)
     services = cm.data.setdefault("services", {})
-    services["datasources"] = dict(body.datasources)
+    previous_datasources = previous_data.get("services", {}).get("datasources", {})
+    services["datasources"] = _merge_redacted_placeholders(dict(body.datasources), previous_datasources)
     try:
         cm.save()
     except Exception:
@@ -232,7 +334,7 @@ async def update_models_endpoint(
 
     previous_data = copy.deepcopy(cm.data)
     if body.models is not None:
-        cm.data["models"] = dict(body.models)
+        cm.data["models"] = _merge_redacted_placeholders(dict(body.models), previous_data.get("models", {}))
     if body.target is not None:
         cm.data["target"] = body.target
     try:

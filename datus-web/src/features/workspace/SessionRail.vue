@@ -88,6 +88,9 @@ const props = defineProps<{
   activeView: WorkspaceView
   artifactTab: ArtifactViewTab
   canManagePermissions: boolean
+  canManageConfiguration: boolean
+  canUseMcp: boolean
+  canManageAgents: boolean
 }>()
 
 const emit = defineEmits<{
@@ -218,9 +221,9 @@ const isWorkbenchActive = computed(() => {
   return props.activeView === "catalog"
     || props.activeView === "semantic"
     || props.activeView === "knowledge"
-    || props.activeView === "mcp"
-    || props.activeView === "agents"
-    || props.activeView === "configuration"
+    || (props.canUseMcp && props.activeView === "mcp")
+    || (props.canManageAgents && props.activeView === "agents")
+    || (props.canManageConfiguration && props.activeView === "configuration")
 })
 const visibleSessions = computed(() => {
   const needle = searchQuery.value.trim().toLocaleLowerCase()
@@ -462,7 +465,10 @@ async function deleteSession(sessionId: string) {
                         <span>知识库</span>
                       </SidebarMenuSubButton>
                     </SidebarMenuSubItem>
-                    <SidebarMenuSubItem class="w-full">
+                    <SidebarMenuSubItem
+                      v-if="canUseMcp"
+                      class="w-full"
+                    >
                       <SidebarMenuSubButton
                         as="button"
                         :is-active="activeView === 'mcp'"
@@ -473,7 +479,10 @@ async function deleteSession(sessionId: string) {
                         <span>MCP</span>
                       </SidebarMenuSubButton>
                     </SidebarMenuSubItem>
-                    <SidebarMenuSubItem class="w-full">
+                    <SidebarMenuSubItem
+                      v-if="canManageAgents"
+                      class="w-full"
+                    >
                       <SidebarMenuSubButton
                         as="button"
                         :is-active="activeView === 'agents'"
@@ -484,7 +493,10 @@ async function deleteSession(sessionId: string) {
                         <span>Agent</span>
                       </SidebarMenuSubButton>
                     </SidebarMenuSubItem>
-                    <SidebarMenuSubItem class="w-full">
+                    <SidebarMenuSubItem
+                      v-if="canManageConfiguration"
+                      class="w-full"
+                    >
                       <SidebarMenuSubButton
                         as="button"
                         :is-active="activeView === 'configuration'"

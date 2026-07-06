@@ -92,6 +92,9 @@ export function useChatWorkspace() {
   const visibleDatasourceOptions = computed(() =>
     datasourceOptions.value.filter((option) => permission.hasDatasourcePermission(option.value))
   );
+  const canAccessDatasourceCatalog = computed(() =>
+    permission.isAdmin() || permission.hasFeaturePermission("datasource_catalog")
+  );
   const isTestingDatasource = computed(() =>
     isTestingConfigDatasource.value || isTestingCatalogDatasource.value
   );
@@ -118,15 +121,32 @@ export function useChatWorkspace() {
     for (const delay of STATUS_REFRESH_DELAYS) {
       const timer = setTimeout(() => {
         statusRefreshTimers.delete(timer);
-        void loadDatasourceStatuses(datasource);
+        void loadAuthorizedDatasourceStatuses(datasource);
       }, delay);
       statusRefreshTimers.add(timer);
     }
   }
 
+  function canQueryDatasourceCatalog(datasource?: string) {
+    if (!canAccessDatasourceCatalog.value) return false;
+    const datasourceName = datasource?.trim();
+    if (!datasourceName) {
+      return visibleDatasourceOptions.value.length > 0;
+    }
+    return canUseDatasource(datasourceName);
+  }
+
+  function loadAuthorizedDatasourceStatuses(datasource?: string) {
+    if (!canQueryDatasourceCatalog(datasource)) {
+      return false;
+    }
+    void loadDatasourceStatuses(datasource);
+    return true;
+  }
+
   function warmDatasource(datasource: string) {
     const datasourceName = datasource.trim();
-    if (!datasourceName) return;
+    if (!datasourceName || !canQueryDatasourceCatalog(datasourceName)) return;
     void loadDatasourceStatuses(datasourceName);
     void prewarmDatasource(datasourceName).then((started) => {
       if (started) {
@@ -165,6 +185,9 @@ export function useChatWorkspace() {
     if (!datasourceName) {
       return { ok: false, message: "当前数据源未选择" };
     }
+    if (!canAccessDatasourceCatalog.value) {
+      return { ok: false, message: "当前用户无权访问数据源目录" };
+    }
     if (!canUseDatasource(datasourceName)) {
       return { ok: false, message: "当前用户无权访问该数据源" };
     }
@@ -187,6 +210,9 @@ export function useChatWorkspace() {
   }
 
   function refreshCatalog(databaseName?: string) {
+    if (!canQueryDatasourceCatalog(currentDatasource.value)) {
+      return Promise.resolve(false);
+    }
     return loadCatalog(databaseName, currentDatasource.value);
   }
 
@@ -209,8 +235,10 @@ export function useChatWorkspace() {
 
     selectedDatasource.value = datasourceName;
     selectCatalogDatasource(datasourceName);
-    warmDatasource(datasourceName);
-    void loadCatalog(undefined, datasourceName);
+    if (canQueryDatasourceCatalog(datasourceName)) {
+      warmDatasource(datasourceName);
+      void loadCatalog(undefined, datasourceName);
+    }
     return true;
   }
 
@@ -246,7 +274,7 @@ export function useChatWorkspace() {
         loadModels(),
         loadAgentOptions(),
       ]);
-      void loadDatasourceStatuses();
+      loadAuthorizedDatasourceStatuses();
       warmDatasource(currentDatasource.value);
       initialized.value = true;
     })();
@@ -264,7 +292,7 @@ export function useChatWorkspace() {
   });
 
   watch(database, (db) => {
-    if (db) {
+    if (db && canQueryDatasourceCatalog(currentDatasource.value)) {
       loadCatalog(db, currentDatasource.value);
     }
   });

@@ -59,6 +59,18 @@ function normalizeMeSummary(payload: MeSummaryPayload | null | undefined): UserP
   };
 }
 
+function permissionMatches(required: string, granted: string): boolean {
+  const requiredCode = required.trim();
+  const grantedCode = granted.trim();
+  if (!requiredCode || !grantedCode) return false;
+  if (grantedCode === "*" || grantedCode === requiredCode) return true;
+
+  const pattern = grantedCode
+    .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*");
+  return new RegExp(`^${pattern}$`).test(requiredCode);
+}
+
 /**
  * 权限管理 Composable
  */
@@ -92,6 +104,11 @@ export function usePermission() {
   function hasFeaturePermission(featureCode: string): boolean {
     if (!permissions.value) return false;
     return permissions.value.features.includes(featureCode);
+  }
+
+  function hasPermission(permissionCode: string): boolean {
+    if (!permissions.value) return false;
+    return permissions.value.permissions.some((permission) => permissionMatches(permissionCode, permission));
   }
 
   /**
@@ -138,6 +155,7 @@ export function usePermission() {
     isLoaded,
     fetchPermissions,
     hasFeaturePermission,
+    hasPermission,
     hasDatasourcePermission,
     isAdmin,
     clearPermissions,

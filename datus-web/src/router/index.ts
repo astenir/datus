@@ -128,7 +128,11 @@ export function createDatusRouter(history: RouterHistory = createWebHistory(impo
   })
 
   router.beforeEach(async (to) => {
-    if (!to.meta.requiresAdmin) return true
+    const protectedView = to.meta.requiresAdmin
+      || to.meta.workspaceView === "configuration"
+      || to.meta.workspaceView === "mcp"
+      || to.meta.workspaceView === "agents"
+    if (!protectedView) return true
 
     const auth = useAuth()
     const permission = usePermission()
@@ -140,7 +144,22 @@ export function createDatusRouter(history: RouterHistory = createWebHistory(impo
       return { name: workspaceRouteNames.chat }
     }
 
-    if (!permission.isAdmin() && !permission.hasFeaturePermission("admin")) {
+    if (to.meta.requiresAdmin && !permission.isAdmin() && !permission.hasFeaturePermission("admin")) {
+      return { name: workspaceRouteNames.chat }
+    }
+
+    if (to.meta.workspaceView === "configuration"
+      && !permission.isAdmin()
+      && !permission.hasPermission("module.config.edit")) {
+      return { name: workspaceRouteNames.chat }
+    }
+
+    if (to.meta.workspaceView === "mcp"
+      && (!permission.hasPermission("module.mcp") || !permission.hasPermission("mcp.server.list"))) {
+      return { name: workspaceRouteNames.chat }
+    }
+
+    if (to.meta.workspaceView === "agents" && !permission.hasPermission("module.admin.agents")) {
       return { name: workspaceRouteNames.chat }
     }
 

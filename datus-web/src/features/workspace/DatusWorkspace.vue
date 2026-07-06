@@ -45,6 +45,11 @@ const { theme, toggleTheme } = useTheme()
 const sqlDialogOpen = shallowRef(false)
 
 const canManagePermissions = computed(() => permission.isAdmin() || permission.hasFeaturePermission("admin"))
+const canManageConfiguration = computed(() => permission.isAdmin() || permission.hasPermission("module.config.edit"))
+const canUseMcp = computed(() =>
+  permission.hasPermission("module.mcp") && permission.hasPermission("mcp.server.list")
+)
+const canManageAgents = computed(() => permission.hasPermission("module.admin.agents"))
 const canExecuteSql = computed(() => {
   return permission.isAdmin()
     || permission.hasFeaturePermission("sql_generation")
@@ -82,6 +87,9 @@ const {
   workspace,
   authState,
   canManagePermissions,
+  canManageConfiguration,
+  canUseMcp,
+  canManageAgents,
   checkAuth,
 })
 
@@ -194,6 +202,9 @@ function handleLogout() {
           :active-view="activeView"
           :artifact-tab="artifactTab"
           :can-manage-permissions="canManagePermissions"
+          :can-manage-configuration="canManageConfiguration"
+          :can-use-mcp="canUseMcp"
+          :can-manage-agents="canManageAgents"
           @open-chat="openChat"
           @open-view="navigateToView"
           @open-artifact-tab="openArtifactTab"
@@ -267,19 +278,19 @@ function handleLogout() {
           value="mcp"
           class="m-0 flex min-h-0 flex-1"
         >
-          <McpPanel />
+          <McpPanel v-if="canUseMcp" />
         </TabsContent>
         <TabsContent
           value="agents"
           class="m-0 flex min-h-0 flex-1"
         >
-          <AgentManagerPanel />
+          <AgentManagerPanel v-if="canManageAgents" />
         </TabsContent>
         <TabsContent
           value="configuration"
           class="m-0 flex min-h-0 flex-1"
         >
-          <ConfigurationPanel />
+          <ConfigurationPanel v-if="canManageConfiguration" />
         </TabsContent>
         <TabsContent
           value="artifacts"

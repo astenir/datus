@@ -68,6 +68,8 @@ describe("useChatWorkspace", () => {
     }));
     vi.doMock("@/composables/usePermission", () => ({
       usePermission: () => ({
+        isAdmin: vi.fn(() => false),
+        hasFeaturePermission: vi.fn(() => false),
         hasDatasourcePermission: vi.fn(() => false),
       }),
     }));
@@ -134,7 +136,7 @@ describe("useChatWorkspace", () => {
     expect(loadModels).toHaveBeenCalledTimes(1);
     expect(loadAgentOptions).toHaveBeenCalledTimes(1);
     expect(loadCatalog).not.toHaveBeenCalled();
-    expect(loadDatasourceStatuses).toHaveBeenCalledTimes(1);
+    expect(loadDatasourceStatuses).not.toHaveBeenCalled();
     expect(prewarmDatasource).not.toHaveBeenCalled();
     expect(workspace.agentOptions.value).toEqual([{ value: "research", label: "Research" }]);
 
@@ -214,6 +216,8 @@ describe("useChatWorkspace", () => {
     }));
     vi.doMock("@/composables/usePermission", () => ({
       usePermission: () => ({
+        isAdmin: () => false,
+        hasFeaturePermission: (feature: string) => feature === "datasource_catalog",
         hasDatasourcePermission: (name: string) => name !== "blocked",
       }),
     }));

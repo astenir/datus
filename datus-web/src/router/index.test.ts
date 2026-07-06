@@ -18,6 +18,7 @@ const authMock = vi.hoisted(() => ({
 const permissionMock = vi.hoisted(() => ({
   isAdmin: vi.fn(() => true),
   hasFeaturePermission: vi.fn(() => false),
+  hasPermission: vi.fn<(permission: string) => boolean>(() => true),
 }))
 
 vi.mock("@/features/workspace/DatusWorkspace.vue", () => ({
@@ -55,6 +56,8 @@ describe("workspace router", () => {
     permissionMock.isAdmin.mockReturnValue(true)
     permissionMock.hasFeaturePermission.mockReset()
     permissionMock.hasFeaturePermission.mockReturnValue(false)
+    permissionMock.hasPermission.mockReset()
+    permissionMock.hasPermission.mockReturnValue(true)
   })
 
   it("maps workspace feature URLs to typed route meta", async () => {
@@ -180,6 +183,34 @@ describe("workspace router", () => {
     })
 
     await expect(routeTo("/missing-view")).resolves.toMatchObject({
+      name: workspaceRouteNames.chat,
+      path: "/chat",
+    })
+  })
+
+  it("redirects MCP and Agent routes when required permissions are missing", async () => {
+    permissionMock.hasPermission.mockImplementation((permission: string) => {
+      return permission !== "module.mcp"
+        && permission !== "mcp.server.list"
+        && permission !== "module.admin.agents"
+    })
+
+    await expect(routeTo("/mcp")).resolves.toMatchObject({
+      name: workspaceRouteNames.chat,
+      path: "/chat",
+    })
+
+    await expect(routeTo("/agents")).resolves.toMatchObject({
+      name: workspaceRouteNames.chat,
+      path: "/chat",
+    })
+  })
+
+  it("redirects configuration route when the user only has config view permission", async () => {
+    permissionMock.isAdmin.mockReturnValue(false)
+    permissionMock.hasPermission.mockImplementation((permission: string) => permission === "module.config.view")
+
+    await expect(routeTo("/configuration")).resolves.toMatchObject({
       name: workspaceRouteNames.chat,
       path: "/chat",
     })

@@ -20,7 +20,7 @@ describe("usePermission", () => {
       data: {
         user_id: "alice",
         is_admin: false,
-        permissions: ["feature:sql"],
+        permissions: ["feature:sql", "module.admin.*", "mcp.server.list"],
         features: {
           chat: true,
           admin: false,
@@ -43,7 +43,7 @@ describe("usePermission", () => {
       user_id: "alice",
       features: ["chat"],
       datasources: ["fund"],
-      permissions: ["feature:sql"],
+      permissions: ["feature:sql", "module.admin.*", "mcp.server.list"],
       datasource_grants: {
         fund: { effect: "allow" },
         blocked: null,
@@ -52,6 +52,9 @@ describe("usePermission", () => {
     });
     expect(permission.hasFeaturePermission("chat")).toBe(true);
     expect(permission.hasFeaturePermission("admin")).toBe(false);
+    expect(permission.hasPermission("module.admin.agents")).toBe(true);
+    expect(permission.hasPermission("mcp.server.list")).toBe(true);
+    expect(permission.hasPermission("module.mcp")).toBe(false);
     expect(permission.hasDatasourcePermission("fund")).toBe(true);
     expect(permission.hasDatasourcePermission("blocked")).toBe(false);
   });

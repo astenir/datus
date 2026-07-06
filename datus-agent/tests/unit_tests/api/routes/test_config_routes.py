@@ -22,6 +22,7 @@ from datus.api.enterprise.defaults import (
 from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.routes import config_routes
 from datus.api.routes.config_routes import (
+    REDACTED_CONFIG_VALUE,
     ProbeDatasourceRequest,
     ProbeModelRequest,
     UpdateDatasourcesRequest,
@@ -87,6 +88,47 @@ async def test_get_agent_config_handles_empty_datasources():
     result = await get_agent_config_endpoint(svc=svc, _ctx=_ctx())
 
     assert result.data["datasources"] == {}
+
+
+@pytest.mark.asyncio
+async def test_get_agent_config_redacts_model_and_datasource_secrets():
+    svc = _mock_svc(
+        datasources={
+            "pg": {
+                "type": "postgresql",
+                "host": "db.internal",
+                "username": "alice",
+                "password": "db-secret",
+                "extra": {
+                    "client_secret": "client-secret",
+                    "readonly": True,
+                },
+            },
+            "uri_db": {
+                "type": "postgresql",
+                "uri": "postgresql://alice:uri-secret@db.internal:5432/app",
+            },
+        },
+        models={
+            "main": {
+                "type": "openai",
+                "model": "gpt-4.1",
+                "api_key": "sk-live-secret",
+                "max_tokens": 1000,
+                "nested": {"accessToken": "token-secret"},
+            },
+        },
+    )
+
+    result = await get_agent_config_endpoint(svc=svc, _ctx=_ctx())
+
+    assert result.data["models"]["main"]["api_key"] == REDACTED_CONFIG_VALUE
+    assert result.data["models"]["main"]["nested"]["accessToken"] == REDACTED_CONFIG_VALUE
+    assert result.data["models"]["main"]["max_tokens"] == 1000
+    assert result.data["datasources"]["pg"]["password"] == REDACTED_CONFIG_VALUE
+    assert result.data["datasources"]["pg"]["extra"]["client_secret"] == REDACTED_CONFIG_VALUE
+    assert result.data["datasources"]["pg"]["host"] == "db.internal"
+    assert result.data["datasources"]["uri_db"]["uri"] == "postgresql://alice:***@db.internal:5432/app"
 
 
 class _FakeConfigManager:
@@ -207,6 +249,44 @@ async def test_update_datasources_rejects_invalid_name(patched_cm, patched_cache
 
 
 @pytest.mark.asyncio
+async def test_update_datasources_preserves_redacted_secret_placeholders(patched_cm, patched_cache):
+    patched_cm.data = {
+        "services": {
+            "datasources": {
+                "pg": {
+                    "type": "postgresql",
+                    "password": "db-secret",
+                    "uri": "postgresql://alice:uri-secret@db.internal:5432/app",
+                    "extra": {"client_secret": "client-secret"},
+                }
+            }
+        }
+    }
+
+    await update_datasources_endpoint(
+        UpdateDatasourcesRequest(
+            datasources={
+                "pg": {
+                    "type": "postgresql",
+                    "password": REDACTED_CONFIG_VALUE,
+                    "uri": "postgresql://alice:***@db.internal:5432/app",
+                    "extra": {"client_secret": REDACTED_CONFIG_VALUE},
+                    "host": "db.internal",
+                }
+            }
+        ),
+        ctx=_ctx(),
+    )
+
+    saved = patched_cm.data["services"]["datasources"]["pg"]
+    assert saved["password"] == "db-secret"
+    assert saved["uri"] == "postgresql://alice:uri-secret@db.internal:5432/app"
+    assert saved["extra"]["client_secret"] == "client-secret"
+    assert saved["host"] == "db.internal"
+    patched_cache.evict.assert_awaited_once_with("proj_a")
+
+
+@pytest.mark.asyncio
 async def test_update_datasources_initializes_services_when_missing(patched_cm, patched_cache):
     patched_cm.data = {}
 
@@ -282,6 +362,41 @@ async def test_update_models_models_only(patched_cm, patched_cache):
 
     assert patched_cm.data["models"] == {"old": {"type": "openai"}}
     assert patched_cm.data["target"] == "old"
+
+
+@pytest.mark.asyncio
+async def test_update_models_preserves_redacted_secret_placeholders(patched_cm, patched_cache):
+    patched_cm.data = {
+        "models": {
+            "main": {
+                "type": "openai",
+                "model": "gpt-4.1",
+                "api_key": "sk-live-secret",
+                "nested": {"accessToken": "token-secret"},
+            }
+        },
+        "target": "main",
+    }
+
+    await update_models_endpoint(
+        UpdateModelsRequest(
+            models={
+                "main": {
+                    "type": "openai",
+                    "model": "gpt-4.1",
+                    "api_key": REDACTED_CONFIG_VALUE,
+                    "nested": {"accessToken": REDACTED_CONFIG_VALUE},
+                }
+            },
+            target="main",
+        ),
+        ctx=_ctx(),
+    )
+
+    saved = patched_cm.data["models"]["main"]
+    assert saved["api_key"] == "sk-live-secret"
+    assert saved["nested"]["accessToken"] == "token-secret"
+    patched_cache.evict.assert_awaited_once_with("proj_a")
 
 
 @pytest.mark.asyncio
@@ -572,6 +687,35 @@ def test_get_config_http_allows_config_view_permission(monkeypatch):
     assert response.status_code == 200
     assert response.json()["success"] is True
     assert response.json()["data"]["datasources"] == {"db_a": {"type": "duckdb"}}
+
+
+def test_get_config_http_redacts_secrets_for_config_view_permission(monkeypatch):
+    app = FastAPI()
+    app.include_router(config_routes.router)
+    ctx = AppContext(user_id="u1", project_id="proj_a", permissions={"module.config.view"})
+    svc = _mock_svc(
+        datasources={"pg": {"type": "postgresql", "password": "db-secret"}},
+        target="m1",
+        models={"m1": {"type": "openai", "api_key": "sk-secret"}},
+    )
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return svc
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
+    monkeypatch.setattr(config_routes.deps, "_enterprise_extensions", _enterprise_extensions(enabled=True))
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/config/agent")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["models"]["m1"]["api_key"] == REDACTED_CONFIG_VALUE
+    assert payload["datasources"]["pg"]["password"] == REDACTED_CONFIG_VALUE
+    assert "sk-secret" not in response.text
+    assert "db-secret" not in response.text
 
 
 def test_config_probe_http_requires_config_edit_permission(monkeypatch):
