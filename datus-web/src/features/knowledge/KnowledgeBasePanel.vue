@@ -48,6 +48,7 @@ type KnowledgeTreeMode = "catalog" | "subject"
 const props = defineProps<{
   workspace: ChatWorkspace
   selectedTable?: string | null
+  canViewSubjectTree?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -71,6 +72,7 @@ const selectedTable = computed(() => props.selectedTable?.trim() ?? "")
 const tableIndexCount = computed(() => semantic.tableDetail.value?.indexes.length ?? 0)
 const schemaRows = computed(() => catalogSchemaRows(props.workspace.catalogEntries.value))
 const tableRows = computed(() => catalogTableRows(props.workspace.catalogEntries.value))
+const canUseSubjectTree = computed(() => props.canViewSubjectTree !== false)
 const selectedTableRow = computed(() =>
   tableRows.value.find((row) => row.fullName === selectedTable.value) ?? null,
 )
@@ -100,6 +102,8 @@ const treeRefreshing = computed(() =>
 )
 
 function switchTreeMode(mode: KnowledgeTreeMode) {
+  if (mode === "subject" && !canUseSubjectTree.value) return
+
   treeMode.value = mode
   if (mode === "subject" && subjects.value.length === 0 && !loadingSubjects.value) {
     void loadSubjects()
@@ -111,6 +115,8 @@ function refreshTree() {
     void props.workspace.loadCatalog()
     return
   }
+
+  if (!canUseSubjectTree.value) return
 
   void loadSubjects()
 }
@@ -132,6 +138,8 @@ function requestTableLoad(value: string) {
 }
 
 async function loadSubjects() {
+  if (!canUseSubjectTree.value) return
+
   loadingSubjects.value = true
   try {
     const result = await subjectApi.list(connection.effectiveBase())
@@ -176,6 +184,18 @@ async function selectSubject(node: SubjectTreeNode) {
 }
 
 watch(
+  canUseSubjectTree,
+  (canView) => {
+    if (canView || treeMode.value !== "subject") return
+    treeMode.value = "catalog"
+    selectedSubject.value = null
+    metricInfo.value = null
+    metricDimensions.value = null
+    referenceSql.value = null
+  },
+)
+
+watch(
   selectedTable,
   (table) => {
     if (!table || table === semantic.tableName.value.trim()) return
@@ -185,7 +205,9 @@ watch(
 )
 
 onMounted(() => {
-  void loadSubjects()
+  if (canUseSubjectTree.value) {
+    void loadSubjects()
+  }
 })
 </script>
 
@@ -203,7 +225,12 @@ onMounted(() => {
           </div>
           <Badge variant="secondary">模式 {{ schemaRows.length }}</Badge>
           <Badge variant="secondary">表 {{ tableRows.length }}</Badge>
-          <Badge variant="secondary">主题 {{ subjects.length }}</Badge>
+          <Badge
+            v-if="canUseSubjectTree"
+            variant="secondary"
+          >
+            主题 {{ subjects.length }}
+          </Badge>
           <Badge variant="outline">
             {{ treeMode === "catalog" ? "目录树" : "主题树" }}
           </Badge>
@@ -248,6 +275,7 @@ onMounted(() => {
                       目录树
                     </Button>
                     <Button
+                      v-if="canUseSubjectTree"
                       size="sm"
                       :variant="treeMode === 'subject' ? 'default' : 'outline'"
                       @click="switchTreeMode('subject')"
@@ -284,7 +312,7 @@ onMounted(() => {
               @select-table="requestTableLoad"
             />
             <SubjectTree
-              v-else
+              v-else-if="canUseSubjectTree"
               class="min-h-0 flex-1"
               embedded
               :subjects="subjects"

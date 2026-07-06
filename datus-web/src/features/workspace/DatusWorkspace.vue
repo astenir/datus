@@ -29,6 +29,7 @@ import SessionRail from "@/features/workspace/SessionRail.vue"
 import type { WorkspaceNavItem } from "@/features/workspace/types"
 import { useWorkspaceRouting } from "@/features/workspace/useWorkspaceRouting"
 import { sessionUserQueryText } from "@/lib/chat"
+import { canViewSubjectTree as canViewSubjectTreeWithPermission } from "@/lib/knowledge-access"
 
 const AdminPanel = defineAsyncComponent(() => import("@/features/admin/AdminPanel.vue"))
 const AgentManagerPanel = defineAsyncComponent(() => import("@/features/agent/AgentManagerPanel.vue"))
@@ -50,6 +51,7 @@ const canUseMcp = computed(() =>
   permission.hasPermission("module.mcp") && permission.hasPermission("mcp.server.list")
 )
 const canManageAgents = computed(() => permission.hasPermission("module.admin.agents"))
+const canViewSubjectTree = computed(() => canViewSubjectTreeWithPermission(permission))
 const canExecuteSql = computed(() => {
   return permission.isAdmin()
     || permission.hasFeaturePermission("sql_generation")
@@ -271,6 +273,7 @@ function handleLogout() {
           <KnowledgeBasePanel
             :workspace="workspace"
             :selected-table="knowledgeTable"
+            :can-view-subject-tree="canViewSubjectTree"
             @update-table="openKnowledgeTable"
           />
         </TabsContent>
