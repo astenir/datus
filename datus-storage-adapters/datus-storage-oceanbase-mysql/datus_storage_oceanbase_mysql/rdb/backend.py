@@ -55,6 +55,16 @@ def _literal(value: Any) -> str:
 
 
 _INDEXABLE_TEXT_TYPE = "VARCHAR(1024)"
+_TYPES_WITHOUT_DEFAULT = {
+    "TINYTEXT",
+    "TEXT",
+    "MEDIUMTEXT",
+    "LONGTEXT",
+    "TINYBLOB",
+    "BLOB",
+    "MEDIUMBLOB",
+    "LONGBLOB",
+}
 
 _OB_TYPE_MAP: Dict[str, str] = {
     "INTEGER": "BIGINT",
@@ -72,20 +82,26 @@ def _ob_map_type(col_type: str, *, indexed: bool = False) -> str:
     return _OB_TYPE_MAP.get(col_type.upper(), col_type)
 
 
+def _supports_column_default(mapped_type: str) -> bool:
+    base_type = mapped_type.upper().split("(", 1)[0].strip()
+    return base_type not in _TYPES_WITHOUT_DEFAULT
+
+
 def _ob_col_ddl(col: ColumnDef, *, indexed: bool = False) -> str:
     col_name = _quote_ident(col.name)
     parts: List[str] = [col_name]
     if col.primary_key and col.autoincrement:
         parts.append("BIGINT PRIMARY KEY AUTO_INCREMENT")
     else:
-        parts.append(_ob_map_type(col.col_type, indexed=indexed or col.unique or col.primary_key))
+        mapped_type = _ob_map_type(col.col_type, indexed=indexed or col.unique or col.primary_key)
+        parts.append(mapped_type)
         if col.primary_key:
             parts.append("PRIMARY KEY")
         if col.unique:
             parts.append("UNIQUE")
         if not col.nullable:
             parts.append("NOT NULL")
-        if col.default is not None:
+        if col.default is not None and _supports_column_default(mapped_type):
             parts.append(f"DEFAULT {_literal(col.default)}")
     return " ".join(parts)
 

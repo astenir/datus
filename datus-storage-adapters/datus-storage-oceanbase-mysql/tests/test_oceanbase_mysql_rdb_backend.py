@@ -52,6 +52,18 @@ def _keyed_table_def() -> TableDefinition:
     )
 
 
+def _default_text_table_def() -> TableDefinition:
+    return TableDefinition(
+        table_name="default_text_items",
+        columns=[
+            ColumnDef(name="id", col_type="INTEGER", primary_key=True, autoincrement=True),
+            ColumnDef(name="lookup_key", col_type="TEXT", default="", unique=True),
+            ColumnDef(name="body", col_type="TEXT", default=""),
+            ColumnDef(name="status", col_type="TEXT", default="running"),
+        ],
+    )
+
+
 class TestBackendConfig:
     def test_initialize_requires_connection_config(self):
         backend = OceanBaseMySQLRdbBackend()
@@ -134,6 +146,26 @@ class TestLogicalDdl:
         assert "`key_col`, `_datus_namespace`" in joined
         assert "`key_col` VARCHAR(1024) NOT NULL" in joined
         assert "`value` LONGTEXT" in joined
+
+    def test_longtext_columns_do_not_emit_defaults(self, monkeypatch):
+        backend = OceanBaseMySQLRdbBackend()
+        backend.initialize(
+            {
+                "host": "127.0.0.1",
+                "port": 2881,
+                "user": "root@test",
+                "password": "",
+                "database": "datus_storage",
+                "isolation": "logical",
+            }
+        )
+        monkeypatch.setattr(OceanBaseMySQLRdbDatabase, "_ensure_database", lambda self: None)
+        db = backend.connect("project_a", "store_a")
+
+        joined = "\n".join(db._generate_ddl(_default_text_table_def()))
+        assert "`lookup_key` VARCHAR(1024) UNIQUE DEFAULT ''" in joined
+        assert "`body` LONGTEXT DEFAULT" not in joined
+        assert "`status` LONGTEXT DEFAULT" not in joined
 
 
 @pytest.fixture(scope="module")
