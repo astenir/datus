@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { setCurrentAccessToken } from "@/lib/request";
+
 const dashboardList = vi.fn();
 const dashboardDetail = vi.fn();
 const dashboardHtmlUrl = vi.fn();
@@ -59,6 +61,7 @@ describe("useArtifacts", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+    setCurrentAccessToken(null);
     dashboardList.mockResolvedValue([
       {
         slug: "fund-overview",
@@ -320,6 +323,52 @@ describe("useArtifacts", () => {
     expect(openedWindow.location.href).toBe("blob:artifact-preview");
     expect(artifacts.previewLoadingKey.value).toBeNull();
     expect(artifacts.previewError.value).toBeNull();
+  });
+
+  it("injects bearer auth into dashboard preview live-query requests", async () => {
+    dashboardHtml.mockResolvedValue(
+      [
+        "<!doctype html><html><head><title>Dashboard</title></head><body>",
+        "<script>window.DatusArtifact.initDashboard({",
+        "queryEndpoint: 'http://api.test/api/v1/dashboard/query'",
+        "});</script></body></html>",
+      ].join(""),
+    );
+    setCurrentAccessToken("dev-alice-token");
+    let previewBlob: Blob | null = null;
+    const openedWindow = {
+      location: { href: "" },
+      opener: {},
+      close: vi.fn(),
+    };
+    vi.stubGlobal("window", { open: vi.fn(() => openedWindow) });
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn((blob: Blob) => {
+        previewBlob = blob;
+        return "blob:dashboard-preview";
+      }),
+      revokeObjectURL: vi.fn(),
+    });
+    const { useArtifacts } = await import("./useArtifacts");
+    const artifacts = useArtifacts();
+
+    await artifacts.openHtmlPreview("dashboard", "fund-overview");
+
+    expect(dashboardHtml).toHaveBeenCalledWith("http://api.test", "fund-overview");
+    expect(openedWindow.location.href).toBe("blob:dashboard-preview");
+    expect(previewBlob).not.toBeNull();
+    const html = await previewBlob!.text();
+    expect(html).toContain("Bearer \" + token");
+    expect(html).toContain("dev-alice-token");
+    expect(html).toContain("http://api.test/api/v1/dashboard/query");
+  });
+
+  it("leaves dashboard preview HTML unchanged when no live query endpoint is present", async () => {
+    const { withDashboardPreviewAuth } = await import("./useArtifacts");
+    const html = "<!doctype html><html><head></head><body>dashboard</body></html>";
+
+    expect(withDashboardPreviewAuth(html, "dev-alice-token")).toBe(html);
+    expect(withDashboardPreviewAuth(html, null)).toBe(html);
   });
 
   it("runs dashboard queries with route-selected slug and template params", async () => {

@@ -3,6 +3,7 @@ import { toast } from "vue-sonner";
 
 import { useConnection } from "@/composables/useConnection";
 import { artifactShareApi, dashboardApi, reportApi } from "@/lib/api";
+import { getCurrentAccessToken } from "@/lib/request";
 import type {
   ArtifactManifest,
   ArtifactShare,
@@ -66,6 +67,81 @@ export function putArtifactShare(
 
 export function createArtifactPreviewUrl(html: string): string {
   return URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
+}
+
+function safeScriptString(value: string): string {
+  return JSON.stringify(value).replace(/</g, "\\u003c");
+}
+
+function decodeJsSingleQuotedString(value: string): string {
+  return value
+    .replace(/<\\\//g, "</")
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\r")
+    .replace(/\\'/g, "'")
+    .replace(/\\\\/g, "\\");
+}
+
+function dashboardQueryEndpointFromHtml(html: string): string | null {
+  const match = html.match(/queryEndpoint:\s*'((?:\\.|[^'\\])*)'/);
+  return match?.[1] ? decodeJsSingleQuotedString(match[1]) : null;
+}
+
+function injectPreviewHeadScript(html: string, script: string): string {
+  const marker = "</head>";
+  const index = html.toLowerCase().indexOf(marker);
+  if (index === -1) return `${script}\n${html}`;
+
+  return `${html.slice(0, index)}${script}\n${html.slice(index)}`;
+}
+
+export function withDashboardPreviewAuth(html: string, accessToken: string | null): string {
+  const token = accessToken?.trim();
+  const queryEndpoint = dashboardQueryEndpointFromHtml(html);
+  if (!token || !queryEndpoint) return html;
+
+  const script = `<script>
+(function () {
+  var token = ${safeScriptString(token)};
+  var allowedEndpoint = ${safeScriptString(queryEndpoint)};
+  if (!token || !allowedEndpoint || !window.fetch || window.__datusPreviewAuthInstalled) return;
+  window.__datusPreviewAuthInstalled = true;
+  var originalFetch = window.fetch.bind(window);
+
+  function requestUrl(input) {
+    if (typeof input === "string" || input instanceof URL) return String(input);
+    if (input && typeof input.url === "string") return input.url;
+    return "";
+  }
+
+  function matchesQueryEndpoint(input) {
+    try {
+      var target = new URL(requestUrl(input), window.location.href);
+      var allowed = new URL(allowedEndpoint, window.location.href);
+      return target.origin === allowed.origin && target.pathname === allowed.pathname;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  window.fetch = function (input, init) {
+    if (!matchesQueryEndpoint(input)) {
+      return originalFetch(input, init);
+    }
+
+    var nextInit = init ? Object.assign({}, init) : {};
+    var requestHeaders = input instanceof Request ? input.headers : undefined;
+    var headers = new Headers(nextInit.headers || requestHeaders);
+    if (!headers.has("Authorization")) {
+      headers.set("Authorization", "Bearer " + token);
+    }
+    nextInit.headers = headers;
+    return originalFetch(input, nextInit);
+  };
+})();
+</script>`;
+
+  return injectPreviewHeadScript(html, script);
 }
 
 function userOption(user: ArtifactShareUserSummary): ArtifactSharePrincipalOption {
@@ -177,7 +253,10 @@ export function useArtifacts() {
     }
 
     try {
-      const html = await artifactHtml(connection.effectiveBase(), tab, slug);
+      const rawHtml = await artifactHtml(connection.effectiveBase(), tab, slug);
+      const html = tab === "dashboard"
+        ? withDashboardPreviewAuth(rawHtml, getCurrentAccessToken())
+        : rawHtml;
       const url = createArtifactPreviewUrl(html);
       rememberPreviewUrl(url);
 
