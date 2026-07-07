@@ -17,6 +17,7 @@ import type {
 } from "@/types";
 
 const DEFAULT_PROBE_FAILURE = "连接测试失败，请检查配置";
+const REDACTED_SECRET_PATTERN = /^\*{6,}$/;
 
 function prettyJson(value: unknown): string {
   return JSON.stringify(value ?? {}, null, 2);
@@ -24,6 +25,61 @@ function prettyJson(value: unknown): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSecretLikeProbeField(key: string): boolean {
+  const normalized = key.trim().toLowerCase();
+  return normalized === "password"
+    || normalized.endsWith("_password")
+    || normalized === "private_key_file_pwd"
+    || normalized === "api_key"
+    || normalized === "token"
+    || normalized.endsWith("_token")
+    || normalized.includes("secret");
+}
+
+function isRedactedSecretValue(value: unknown): value is string {
+  return typeof value === "string" && REDACTED_SECRET_PATTERN.test(value.trim());
+}
+
+function normalizeProbeFieldValue(key: string, value: unknown): unknown {
+  if (isSecretLikeProbeField(key) && isRedactedSecretValue(value)) return "";
+  return value;
+}
+
+function redactedDatasourceProbeFieldsFromConfig(config: Record<string, unknown>): string[] {
+  const fields: string[] = [];
+  for (const [key, value] of Object.entries(config)) {
+    if (key === "extra") continue;
+    if (isSecretLikeProbeField(key) && isRedactedSecretValue(value)) {
+      fields.push(key);
+    }
+  }
+
+  if (isRecord(config.extra)) {
+    for (const [key, value] of Object.entries(config.extra)) {
+      if (fields.includes(key)) continue;
+      if (isSecretLikeProbeField(key) && isRedactedSecretValue(value)) {
+        fields.push(key);
+      }
+    }
+  }
+  return fields;
+}
+
+function maskedProbeSecretFields(source: Record<string, unknown>, prefix = ""): string[] {
+  const fields: string[] = [];
+  for (const [key, value] of Object.entries(source)) {
+    const fieldPath = prefix ? `${prefix}.${key}` : key;
+    if (isSecretLikeProbeField(key) && isRedactedSecretValue(value)) {
+      fields.push(fieldPath);
+      continue;
+    }
+    if (isRecord(value)) {
+      fields.push(...maskedProbeSecretFields(value, fieldPath));
+    }
+  }
+  return fields;
 }
 
 function parseRecordText(text: string, label: string): Record<string, unknown> {
@@ -94,13 +150,13 @@ function datasourceProbeFromConfig(config: Record<string, unknown>): DatasourceP
   const probe: DatasourceProbeInput = { type };
   for (const [key, value] of Object.entries(config)) {
     if (key === "type" || !shouldIncludeProbeField(key, value)) continue;
-    probe[key] = value;
+    probe[key] = normalizeProbeFieldValue(key, value);
   }
 
   if (isRecord(config.extra)) {
     for (const [key, value] of Object.entries(config.extra)) {
       if (key in probe || !shouldIncludeProbeField(key, value)) continue;
-      probe[key] = value;
+      probe[key] = normalizeProbeFieldValue(key, value);
     }
   }
 
@@ -133,6 +189,7 @@ export function useConfigurationManager() {
   const selectedDatasourceName = shallowRef("");
   const modelProbeResult = shallowRef<NormalizedProbeResult | null>(null);
   const datasourceProbeResult = shallowRef<NormalizedProbeResult | null>(null);
+  const datasourceProbeSecretFields = shallowRef<string[]>([]);
 
   const configuredModelEntries = computed(() => Object.entries(config.value?.models ?? {}));
   const configuredDatasourceEntries = computed(() => Object.entries(config.value?.datasources ?? {}));
@@ -181,6 +238,7 @@ export function useConfigurationManager() {
     selectedDatasourceName.value = name;
     const datasource = sourceConfig?.datasources?.[name];
     const probe = datasource ? datasourceProbeFromConfig(datasource) : null;
+    datasourceProbeSecretFields.value = datasource ? redactedDatasourceProbeFieldsFromConfig(datasource) : [];
     forms.value.datasourceProbeText = prettyJson(probe ?? {});
     datasourceProbeResult.value = null;
   }
@@ -273,6 +331,25 @@ export function useConfigurationManager() {
       return;
     }
 
+    const maskedFields = maskedProbeSecretFields(probe);
+    if (maskedFields.length > 0) {
+      const message = `请先填写真实密钥字段，不能使用脱敏值：${maskedFields.join(", ")}`;
+      datasourceProbeResult.value = { ok: false, message };
+      toast.error(message);
+      return;
+    }
+
+    const missingSecretFields = datasourceProbeSecretFields.value.filter((field) => {
+      const value = probe[field];
+      return value == null || (typeof value === "string" && !value.trim());
+    });
+    if (missingSecretFields.length > 0) {
+      const message = `请先填写真实密钥字段：${missingSecretFields.join(", ")}`;
+      datasourceProbeResult.value = { ok: false, message };
+      toast.error(message);
+      return;
+    }
+
     testingDatasource.value = true;
     try {
       const result = await configApi.testDatasource(connection.effectiveBase(), probe as DatasourceProbeInput);
@@ -299,6 +376,7 @@ export function useConfigurationManager() {
     selectedDatasourceName,
     modelProbeResult,
     datasourceProbeResult,
+    datasourceProbeSecretFields,
     configuredModelEntries,
     configuredDatasourceEntries,
     availableModels,
@@ -318,4 +396,6 @@ export const configurationManagerInternals = {
   normalizeProbeResult,
   modelProbeFromTarget,
   datasourceProbeFromConfig,
+  maskedProbeSecretFields,
+  redactedDatasourceProbeFieldsFromConfig,
 };

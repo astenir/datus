@@ -48,6 +48,7 @@ const agentConfig = {
     fund: {
       type: "postgres",
       host: "db.internal",
+      password: "********",
       account: "",
       extra: { sslmode: "require" },
     },
@@ -84,8 +85,10 @@ describe("useConfigurationManager", () => {
     expect(JSON.parse(manager.forms.value.datasourceProbeText)).toEqual({
       type: "postgres",
       host: "db.internal",
+      password: "",
       sslmode: "require",
     });
+    expect(manager.datasourceProbeSecretFields.value).toEqual(["password"]);
   });
 
   it("saves full model desired state and can clear the target", async () => {
@@ -155,6 +158,51 @@ describe("useConfigurationManager", () => {
     expect(manager.modelProbeResult.value).toEqual({ ok: true, message: "model ok" });
     expect(manager.datasourceProbeResult.value).toEqual({ ok: true, message: "datasource ok" });
   });
+
+  it("requires real secret values before testing a probe generated from redacted config", async () => {
+    const { useConfigurationManager } = await import("./useConfigurationManager");
+    const manager = useConfigurationManager();
+    await manager.loadConfiguration();
+
+    await manager.testDatasourceProbe();
+
+    expect(testDatasource).not.toHaveBeenCalled();
+    expect(manager.datasourceProbeResult.value).toEqual({
+      ok: false,
+      message: "请先填写真实密钥字段：password",
+    });
+
+    manager.forms.value.datasourceProbeText = JSON.stringify({
+      type: "postgres",
+      host: "db.internal",
+      password: "real-secret",
+      sslmode: "require",
+    });
+
+    await manager.testDatasourceProbe();
+
+    expect(testDatasource).toHaveBeenCalledWith("http://api.test", {
+      type: "postgres",
+      host: "db.internal",
+      password: "real-secret",
+      sslmode: "require",
+    });
+  });
+
+  it("blocks datasource probes that still contain redacted secrets", async () => {
+    const { useConfigurationManager } = await import("./useConfigurationManager");
+    const manager = useConfigurationManager();
+    manager.forms.value.datasourceProbeText = "{\"type\":\"postgres\",\"host\":\"db.internal\",\"password\":\"********\"}";
+
+    await manager.testDatasourceProbe();
+
+    expect(testDatasource).not.toHaveBeenCalled();
+    expect(manager.datasourceProbeResult.value).toEqual({
+      ok: false,
+      message: "请先填写真实密钥字段，不能使用脱敏值：password",
+    });
+    expect(toastError).toHaveBeenCalledWith("请先填写真实密钥字段，不能使用脱敏值：password");
+  });
 });
 
 describe("configurationManagerInternals", () => {
@@ -164,11 +212,31 @@ describe("configurationManagerInternals", () => {
     expect(configurationManagerInternals.datasourceProbeFromConfig({
       type: "postgres",
       host: "db.internal",
+      password: "********",
       extra: { sslmode: "require" },
     })).toEqual({
       type: "postgres",
       host: "db.internal",
+      password: "",
       sslmode: "require",
     });
+  });
+
+  it("detects redacted nested secret fields", async () => {
+    const { configurationManagerInternals } = await import("./useConfigurationManager");
+
+    expect(configurationManagerInternals.maskedProbeSecretFields({
+      type: "postgres",
+      extra: { client_secret: "********" },
+    })).toEqual(["extra.client_secret"]);
+  });
+
+  it("maps redacted extra secret fields to flattened probe fields", async () => {
+    const { configurationManagerInternals } = await import("./useConfigurationManager");
+
+    expect(configurationManagerInternals.redactedDatasourceProbeFieldsFromConfig({
+      type: "postgres",
+      extra: { client_secret: "********" },
+    })).toEqual(["client_secret"]);
   });
 });

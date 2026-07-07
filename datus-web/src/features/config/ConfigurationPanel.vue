@@ -404,7 +404,7 @@ onMounted(() => {
                         </SelectGroup>
                       </SelectContent>
                     </Select>
-                    <FieldDescription>会把 extra 中的字段展开到探测载荷。</FieldDescription>
+                    <FieldDescription>会把 extra 中的字段展开；脱敏密钥会置空，请填入真实值后再测试。</FieldDescription>
                   </Field>
                   <Field>
                     <FieldLabel for="datasource-probe-json">探测 JSON</FieldLabel>
