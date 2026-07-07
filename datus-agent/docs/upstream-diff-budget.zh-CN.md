@@ -6,7 +6,7 @@
 
 基线采样日期：2026-07-07
 
-说明：这是完成首轮公开文档和默认配置示例低风险迁移后的采样结果。迁移起点是 `210 files changed`、`96 added`、`109 modified`、`5 deleted`。
+说明：这是完成公开文档、默认配置示例和 legacy auth 示例低风险迁移后的采样结果。迁移起点是 `210 files changed`、`96 added`、`109 modified`、`5 deleted`。
 
 对比口径：
 
@@ -19,10 +19,10 @@ git diff --name-status -M v0.3.7 HEAD:datus-agent
 当前结果：
 
 ```text
-205 files changed, 49132 insertions(+), 2894 deletions(-)
+204 files changed, 49144 insertions(+), 2858 deletions(-)
 99 added
 101 modified
-5 deleted
+4 deleted
 ```
 
 修改的上游既有文件按类型拆分：
@@ -80,6 +80,18 @@ conf/agent.downstream.zh-CN.yml.example
 ```
 
 预期效果：提交后，`conf/agent.yml.example` 不再计入相对 `v0.3.7` 的 modified 文件；下游中文示例保留在新增文件中。企业平台片段仍保留在 `conf/agent.enterprise.*.yml.example`。
+
+### 2026-07-07：legacy auth 示例低风险恢复
+
+处理方式：恢复上游 `conf/auth_clients.yml.example`。该文件只是 legacy OAuth2 client credentials 的示例配置，当前下游没有把企业认证逻辑迁入这里；恢复后可以减少一个 deleted 上游文件。
+
+已恢复为 `v0.3.7` 内容的上游示例：
+
+```text
+conf/auth_clients.yml.example
+```
+
+预期效果：提交后，`conf/auth_clients.yml.example` 不再计入相对 `v0.3.7` 的 deleted 文件；企业认证仍以 `conf/agent.enterprise.*.yml.example` 和企业认证 provider 配置为准。
 
 ## 收敛原则
 
