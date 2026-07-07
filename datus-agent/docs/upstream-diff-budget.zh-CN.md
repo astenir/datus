@@ -6,7 +6,7 @@
 
 基线采样日期：2026-07-07
 
-说明：这是完成公开文档、配置示例、legacy route gate 和第一轮测试迁移后的采样结果。迁移起点是 `210 files changed`、`96 added`、`109 modified`、`5 deleted`。
+说明：这是完成公开文档、配置示例、legacy route gate 和两轮测试迁移后的采样结果。迁移起点是 `210 files changed`、`96 added`、`109 modified`、`5 deleted`。
 
 对比口径：
 
@@ -19,9 +19,9 @@ git diff --name-status -M v0.3.7 HEAD:datus-agent
 当前结果：
 
 ```text
-199 files changed, 49227 insertions(+), 2845 deletions(-)
-103 added
-92 modified
+199 files changed, 49279 insertions(+), 2844 deletions(-)
+107 added
+88 modified
 4 deleted
 ```
 
@@ -29,7 +29,7 @@ git diff --name-status -M v0.3.7 HEAD:datus-agent
 
 ```text
 55 production/package files
-34 tests
+30 tests
 0 docs
 3 config/meta files
 ```
@@ -138,6 +138,30 @@ tests/unit_tests/utils/test_csv_utils_downstream.py
 ```
 
 预期效果：提交后，上游原测试 modified 文件减少 5 个；对应下游覆盖仍保留在独立测试文件中。
+
+### 2026-07-07：测试迁移第二轮
+
+处理方式：继续把下游新增测试从上游原测试文件迁到独立下游测试文件，减少升级时原测试文件的 merge 冲突。`tests/unit_tests/api/test_api_endpoints.py` 中的 `enterprise_config = {}` 是为了避免 `MagicMock` 影响 app 初始化，本轮保留不动。
+
+已恢复为 `v0.3.7` 内容的上游测试：
+
+```text
+tests/unit_tests/agent/node/test_node_factory.py
+tests/unit_tests/agent/node/test_token_usage_hook.py
+tests/unit_tests/api/services/test_datus_service.py
+tests/unit_tests/models/test_session_manager.py
+```
+
+下游新增测试迁入：
+
+```text
+tests/unit_tests/agent/node/test_node_factory_downstream.py
+tests/unit_tests/agent/node/test_token_usage_hook_downstream.py
+tests/unit_tests/api/services/test_datus_service_downstream.py
+tests/unit_tests/models/test_session_manager_downstream.py
+```
+
+预期效果：提交后，上游原测试 modified 文件再减少 4 个；对应下游覆盖仍保留在独立测试文件中。
 
 ## 收敛原则
 
