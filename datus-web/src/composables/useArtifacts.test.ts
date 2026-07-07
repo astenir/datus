@@ -411,6 +411,25 @@ describe("useArtifacts", () => {
     expect(html).toContain("queryEndpoint: 'https://datus.example.com/datus-api/api/v1/dashboard/query'");
   });
 
+  it("passes bearer auth as dashboard query headers for the sandboxed iframe runtime", async () => {
+    vi.stubGlobal("window", {
+      location: { origin: "https://datus.example.com" },
+    });
+    const { withArtifactPreviewRuntime } = await import("./useArtifacts");
+    const html = withArtifactPreviewRuntime(
+      [
+        "<!doctype html><html><head><title>Dashboard</title></head><body>",
+        "<script>window.DatusArtifact.initDashboard({",
+        "queryEndpoint: '/datus-api/api/v1/dashboard/query'",
+        "});</script></body></html>",
+      ].join(""),
+      "/datus-api",
+      "dev-alice-token",
+    );
+
+    expect(html).toContain('queryHeaders: {"Authorization":"Bearer dev-alice-token"}');
+  });
+
   it("runs dashboard queries with route-selected slug and template params", async () => {
     const { useArtifacts } = await import("./useArtifacts");
     const artifacts = useArtifacts();

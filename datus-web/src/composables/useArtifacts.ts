@@ -120,6 +120,19 @@ function withAbsoluteDashboardQueryEndpoint(html: string, appOrigin: string): st
   return `${html.slice(0, match.index)}${nextConfig}${html.slice(match.index + match[0].length)}`;
 }
 
+function withDashboardQueryHeaders(html: string, accessToken: string): string {
+  const token = accessToken.trim();
+  if (!token || html.includes("queryHeaders:")) return html;
+
+  const match = html.match(/queryEndpoint:\s*'((?:\\.|[^'\\])*)'\s*,?/);
+  if (!match?.[0] || match.index === undefined) return html;
+
+  const headers = `{"Authorization":${safeScriptString(`Bearer ${token}`)}}`;
+  const separator = /,\s*$/.test(match[0]) ? "" : ",";
+  const nextConfig = `${match[0]}${separator}\n            queryHeaders: ${headers}`;
+  return `${html.slice(0, match.index)}${nextConfig}${html.slice(match.index + match[0].length)}`;
+}
+
 function injectPreviewHeadScript(html: string, script: string): string {
   const marker = "</head>";
   const index = html.toLowerCase().indexOf(marker);
@@ -245,7 +258,11 @@ export function withArtifactPreviewRuntime(html: string, baseUrl: string, access
 })();
 </script>`;
 
-  return injectPreviewHeadScript(withAbsoluteDashboardQueryEndpoint(html, appOrigin), script);
+  const htmlWithRuntimeConfig = withDashboardQueryHeaders(
+    withAbsoluteDashboardQueryEndpoint(html, appOrigin),
+    token,
+  );
+  return injectPreviewHeadScript(htmlWithRuntimeConfig, script);
 }
 
 export function withDashboardPreviewAuth(html: string, accessToken: string | null): string {
