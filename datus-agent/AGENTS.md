@@ -78,6 +78,12 @@ Per-project KB content lives under `./subject/{semantic_models,sql_summaries}/`.
 - Use English in code and comments. Chinese is fine in Chinese user-facing docs.
 - Do not commit secrets, real tokens, generated caches, venvs, build output, or machine-local config.
 
+## Upstream Diff Budget
+
+Use `docs/upstream-diff-budget.zh-CN.md` when changing files inherited from upstream. New downstream enterprise behavior should default to `datus_enterprise/`, enterprise config examples, scripts, or enterprise tests. Keep upstream-owned files as thin hooks only: startup registration, dependency adapters, request context, config projection, storage/execution extension points, and route security matrix integration.
+
+When a change adds or keeps a modification to an upstream original file, classify it as one of: core hook, move-to-enterprise candidate, upstreamable fix, docs/config/meta, or test-only. Prefer moving enterprise policy logic out of route/service bodies before adding more branches there. For release upgrades, refresh the diff budget numbers after comparing `vX.Y.Z` with `HEAD:datus-agent`.
+
 CLI UI colors, symbols, and helpers live in `datus/cli/cli_styles.py`. Use existing helpers such as `print_error`, `print_success`, `print_warning`, `print_info`, `print_status`, `print_usage`, and `print_empty_set`. For full-screen TUI components, follow `ModelApp` in `model_app.py`.
 
 ## Extension Points

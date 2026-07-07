@@ -144,8 +144,6 @@ my_postgresql:
   username: ${POSTGRES_USER}
   password: ${POSTGRES_PASSWORD}
   database: analytics
-  # Optional: list every reachable database on the same server in catalog/list.
-  enumerate_databases: false
 ```
 
 ### Path Pattern (Multiple Files)
@@ -174,7 +172,6 @@ Supported patterns: `*.sqlite`, `**/*.sqlite`, `data/2024/*.db`
 | `username` | For server DBs | Database username |
 | `password` | For server DBs | Database password |
 | `database` | No | Database/schema name |
-| `enumerate_databases` | No | When `true`, `catalog/list` enumerates all reachable server databases instead of only the configured `database` |
 
 ### Database-Specific Parameters
 

@@ -97,6 +97,12 @@ Clients must handle at least:
 - `ping`: keepalive, usually ignored
 - `end`: mark the run complete
 
+#### Persisted Interaction Summary
+
+Persisted history (`GET /chat/history`) may return an `interaction-summary` block for an `ask_user`
+interaction that already happened. This is a read-only transcript block: it intentionally has no
+`interactionKey`, and clients must not submit it to `POST /chat/user_interaction`.
+
 ### Knowledge Base Streams
 
 Endpoints:

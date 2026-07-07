@@ -1,0 +1,211 @@
+# 下游本地开发示例配置。
+#
+# 该文件保留下游中文化、前端联调和企业试点常用的简化默认项。
+# 上游默认示例保留在 conf/agent.yml.example，后续合并上游 release 时优先保持它接近上游。
+# 企业平台专用片段见 conf/agent.enterprise.*.yml.example。
+
+agent:
+  # Datus 的工作目录。会话、向量索引、日志、运行时文件等默认都放在这里。
+  home: ~/.datus
+
+  # 可选：固定当前项目名。默认会根据启动命令所在目录自动生成。
+  # 当你从软链接、monorepo 子目录或 CI 沙箱启动，但希望复用同一份会话/索引时再配置它。
+  # project_name: my_project
+
+  # 推荐使用 provider 级模型配置。可用 provider 和模型清单来自 conf/providers.yml。
+  # API key 可以直接写环境变量占位符，也可以完全省略，让 Datus 从 providers.yml 声明的环境变量读取。
+  providers:
+    openai:
+      api_key: ${OPENAI_API_KEY}
+    claude:
+      api_key: ${ANTHROPIC_API_KEY}
+    deepseek:
+      api_key: ${DEEPSEEK_API_KEY}
+    gemini:
+      api_key: ${GEMINI_API_KEY}
+    # Claude Pro/Max 订阅 token。通常通过 `claude setup-token` 准备，Datus 会自动读取。
+    claude_subscription:
+      auth_type: subscription
+    # ChatGPT Plus/Pro 浏览器 OAuth。通常通过 `datus init` 完成授权。
+    codex:
+      auth_type: oauth
+
+  # 当当前项目没有 ./.datus/config.yml 时，使用这里的默认模型选择。
+  # 正常开发中更推荐在 CLI 里运行 /model，由它写入项目级选择。
+  target_provider: openai
+  target_model: gpt-4.1
+
+  # 可选：只在自托管或私有模型端点不在 conf/providers.yml 覆盖范围内时使用。
+  # models:
+  #   internal_gpt:
+  #     type: openai
+  #     base_url: https://internal.example.com/v1
+  #     api_key: ${INTERNAL_LLM_API_KEY}
+  #     model: internal-gpt-4
+
+  # 工具权限 profile。可运行 /permission 调整；/profile 仍作为兼容别名保留。
+  # normal: 读操作自动允许，写操作询问，危险操作拒绝。
+  # auto: 允许工作区写入，数据库写入和危险操作仍询问。
+  # dangerous: 大部分操作自动允许，工作区外写入仍询问。
+  # permissions:
+  #   profile: normal
+  #   rules:
+  #     - tool: db_tools
+  #       pattern: execute_ddl
+  #       permission: deny
+
+  nodes:
+    schema_linking:
+      matching_rate: fast
+    reasoning:
+      max_table_schemas_length: 4000
+      max_data_details_length: 2000
+      max_context_length: 8000
+      max_value_length: 500
+    output:
+      check_result: true
+    chat:
+      workspace_root: sql2
+      max_turns: 25
+
+  export:
+    # 单次导出结果的最大行数。
+    max_lines: 1000
+
+  services:
+    datasources: {}
+    # 数据源示例：复制到 datasources 下并改成你的真实连接。
+    # local_sqlite:
+    #   type: sqlite
+    #   uri: sqlite:////absolute/path/to/database.sqlite
+    #   default: true
+    # local_duckdb:
+    #   type: duckdb
+    #   uri: duckdb:////absolute/path/to/database.duckdb
+    # snowflake:
+    #   type: snowflake
+    #   account: ${SNOWFLAKE_ACCOUNT}
+    #   username: ${SNOWFLAKE_USER}
+    #   password: ${SNOWFLAKE_PASSWORD}
+    #   role: ${SNOWFLAKE_ROLE}
+    #   database: ${SNOWFLAKE_DATABASE}
+    #   schema: ${SNOWFLAKE_SCHEMA}
+    # starrocks:
+    #   type: starrocks
+    #   host: ${STARROCKS_HOST}
+    #   port: ${STARROCKS_PORT}
+    #   username: ${STARROCKS_USER}
+    #   password: ${STARROCKS_PASSWORD}
+    #   database: ${STARROCKS_DATABASE}
+    #   # Optional: when true, catalog/list enumerates all reachable databases
+    #   # on the same server instead of only this configured database.
+    #   enumerate_databases: false
+
+    # 新版语义层要求显式写出条目；空对象表示启用默认 MetricFlow 配置。
+    semantic_layer:
+      metricflow: {}
+
+    # BI / 调度器配置按需打开。每组最多设置一个 default: true。
+    bi_platforms: {}
+    # superset:
+    #   type: superset
+    #   api_base_url: http://localhost:8088
+    #   username: ${SUPERSET_USERNAME}
+    #   password: ${SUPERSET_PASSWORD}
+    #   extra:
+    #     provider: db
+    schedulers: {}
+    # airflow_local:
+    #   type: airflow
+    #   api_base_url: http://localhost:8080/api/v1
+    #   username: ${AIRFLOW_USERNAME}
+    #   password: ${AIRFLOW_PASSWORD}
+    #   dags_folder: /path/to/airflow/dags
+
+  storage:
+    # 未配置时使用默认本地存储 backend。这里只保留常用 embedding 调整项。
+    embedding_device_type: cpu
+    # database:
+    #   registry_name: sentence-transformers
+    #   model_name: all-MiniLM-L6-v2
+    #   dim_size: 384
+    # document:
+    #   model_name: all-MiniLM-L6-v2
+    #   dim_size: 384
+    # metric:
+    #   model_name: all-MiniLM-L6-v2
+    #   dim_size: 384
+    # semantic_model:
+    #   model_name: all-MiniLM-L6-v2
+    #   dim_size: 384
+    # reference_sql:
+    #   model_name: all-MiniLM-L6-v2
+    #   dim_size: 384
+
+  workflow:
+    # 默认工作流：生成 SQL 并输出结果，不自动执行 SQL。
+    plan: planA
+    planA:
+      - schema_linking
+      - gen_sql
+      - output
+
+    # 需要自动执行 SQL 并反思修正时，可切换到 planB。
+    planB:
+      - schema_linking
+      - gen_sql
+      - execute_sql
+      - reflect
+      - output
+
+  reflection_nodes:
+    schema_linking:
+      - schema_linking
+      - gen_sql
+      - execute_sql
+      - reflect
+    simple_regenerate:
+      - execute_sql
+      - reflect
+
+  skills:
+    directories:
+      - ~/.datus/skills
+      - ./skills
+
+  autocomplete:
+    # 切换或编辑数据源后，后台刷新 schema 索引，方便 @Table 自动补全。
+    background_sync_enabled: true
+    # REPL 启动时也为默认数据源刷新一次。
+    background_sync_on_startup: true
+    # 是否同步样例行。大库上会明显变慢，只有需要更丰富补全提示时再打开。
+    background_sync_include_values: false
+
+  agentic_nodes:
+    # 内置 subagent 默认会加载自己的技能。只有需要覆盖模型、工具或 turn 数时才配置。
+    gen_sql:
+      max_turns: 30
+    gen_report:
+      max_turns: 40
+    gen_dashboard:
+      max_turns: 40
+
+  # 平台文档配置。文档会进入 {home}/data/document/{platform}/，不依赖某个 datasource。
+  document:
+    tavily_api_key: ${TAVILY_API_KEY}
+    # starrocks:
+    #   type: github
+    #   source: StarRocks/starrocks
+    #   paths: ["docs/sql-reference"]
+    #   chunk_size: 1024
+    #   github_token: ${GITHUB_TOKEN}
+    # snowflake:
+    #   type: website
+    #   source: https://docs.snowflake.com/en/
+    #   max_depth: 3
+    #   include_patterns: ["/en/user-guide", "/en/sql-reference"]
+    # local_docs:
+    #   type: local
+    #   source: /path/to/docs
+    #   include_patterns: ["*.md"]
+    #   exclude_patterns: ["CHANGELOG.md"]

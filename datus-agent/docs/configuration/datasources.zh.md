@@ -149,8 +149,6 @@ my_postgresql:
   username: ${POSTGRES_USER}
   password: ${POSTGRES_PASSWORD}
   database: analytics
-  # 可选：catalog/list 返回同一服务上可连接的所有数据库。
-  enumerate_databases: false
 ```
 
 ### 路径模式（批量发现多个文件）
@@ -179,7 +177,6 @@ bird_benchmark:
 | `username` | 服务型数据库必填 | 用户名 |
 | `password` | 服务型数据库必填 | 密码 |
 | `database` | 否 | 数据库名 |
-| `enumerate_databases` | 否 | 设为 `true` 时，`catalog/list` 枚举同一服务上可连接的所有数据库，而不是只返回配置的 `database` |
 
 ### 数据库特定参数
 

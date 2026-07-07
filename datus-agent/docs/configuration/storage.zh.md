@@ -237,33 +237,3 @@ storage:
   vector:
     type: lance    # 默认，无需额外安装
 ```
-
-### OceanBase MySQL 后端
-
-OceanBase MySQL 模式可以安装 `datus-storage-oceanbase-mysql` 并作为 RDB 和/或 vector 后端使用。RDB 后端存结构化 metadata；vector 后端把 embedding 写入 OceanBase `VECTOR(N)` 列，并使用 OceanBase 向量距离函数做近邻检索。
-
-```yaml
-storage:
-  isolation: logical
-  rdb:
-    type: oceanbase-mysql
-    host: ${OB_HOST:-127.0.0.1}
-    port: ${OB_PORT:-2881}
-    user: ${OB_USER}
-    password: ${OB_PASSWORD}
-    database: datus_storage
-    pool_max_size: 5
-
-  vector:
-    type: oceanbase-mysql
-    host: ${OB_HOST:-127.0.0.1}
-    port: ${OB_PORT:-2881}
-    user: ${OB_USER}
-    password: ${OB_PASSWORD}
-    database: datus_storage
-    pool_max_size: 5
-```
-
-`logical` 隔离会把所有项目存到配置的 OceanBase database，并在表内增加 Datus 内部 namespace 列。`physical` 隔离会按 `<project>__<store>` 创建项目/存储级 OceanBase database；配置用户需要具备创建 database 的权限。
-
-OceanBase vector 表需要数据库版本支持 `VECTOR` 列和向量索引。适配器会创建 heap-organized vector 表，并通过 OceanBase `CREATE VECTOR INDEX` 支持 HNSW 向量索引。
