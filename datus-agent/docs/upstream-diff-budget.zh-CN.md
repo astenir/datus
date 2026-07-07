@@ -6,7 +6,7 @@
 
 基线采样日期：2026-07-07
 
-说明：这是完成公开文档、默认配置示例和 legacy auth 示例低风险迁移后的采样结果。迁移起点是 `210 files changed`、`96 added`、`109 modified`、`5 deleted`。
+说明：这是完成公开文档、配置示例和 legacy route gate 低风险迁移后的采样结果。迁移起点是 `210 files changed`、`96 added`、`109 modified`、`5 deleted`。
 
 对比口径：
 
@@ -19,16 +19,16 @@ git diff --name-status -M v0.3.7 HEAD:datus-agent
 当前结果：
 
 ```text
-204 files changed, 49144 insertions(+), 2858 deletions(-)
+200 files changed, 49155 insertions(+), 2849 deletions(-)
 99 added
-101 modified
+97 modified
 4 deleted
 ```
 
 修改的上游既有文件按类型拆分：
 
 ```text
-59 production/package files
+55 production/package files
 39 tests
 0 docs
 3 config/meta files
@@ -93,6 +93,27 @@ conf/auth_clients.yml.example
 
 预期效果：提交后，`conf/auth_clients.yml.example` 不再计入相对 `v0.3.7` 的 deleted 文件；企业认证仍以 `conf/agent.enterprise.*.yml.example` 和企业认证 provider 配置为准。
 
+### 2026-07-07：legacy route gate 注册层迁移
+
+处理方式：把企业模式下禁用 legacy route 的依赖从多个上游 route 模块迁到 `create_app()` 的 route registration 层。这样保留企业 fail-closed 行为和审计 operation，同时让不承载下游业务逻辑的上游 route 文件回到 `v0.3.7` 内容。
+
+已恢复为 `v0.3.7` 内容的上游 route：
+
+```text
+datus/api/routes/explorer_routes.py
+datus/api/routes/success_story_routes.py
+datus/api/routes/tool_routes.py
+datus/api/routes/visualization_routes.py
+```
+
+仍保留的下游 hook：
+
+```text
+datus/api/service.py
+```
+
+预期效果：提交后，上述 4 个 route 文件不再计入相对 `v0.3.7` 的 modified 文件；legacy 禁用策略集中在 app 注册边界，后续上游 route 合并冲突更少。
+
 ## 收敛原则
 
 1. 下游企业能力优先放在 `datus_enterprise/`、企业配置示例、企业脚本和企业测试中。
@@ -139,15 +160,11 @@ datus/api/routes/cli_routes.py
 datus/api/routes/config_routes.py
 datus/api/routes/dashboard_routes.py
 datus/api/routes/database_routes.py
-datus/api/routes/explorer_routes.py
 datus/api/routes/kb_routes.py
 datus/api/routes/mcp_routes.py
 datus/api/routes/models_routes.py
 datus/api/routes/report_routes.py
-datus/api/routes/success_story_routes.py
 datus/api/routes/table_routes.py
-datus/api/routes/tool_routes.py
-datus/api/routes/visualization_routes.py
 datus/api/services/action_sse_converter.py
 datus/api/services/chat_service.py
 datus/api/services/chat_task_manager.py

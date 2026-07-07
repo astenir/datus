@@ -2,18 +2,13 @@
 
 from typing import Annotated, Dict, Optional
 
-from fastapi import APIRouter, Body, Depends, Path
+from fastapi import APIRouter, Body, Path
 
 from datus.api.deps import ServiceDep
-from datus.api.enterprise.deps import require_enterprise_route_disabled
 from datus.api.models.base_models import Result
 from datus.tools.func_tool.base import FuncToolResult
 
-router = APIRouter(
-    prefix="/api/v1/tools",
-    tags=["tools"],
-    dependencies=[Depends(require_enterprise_route_disabled(operation="tools.direct_dispatch"))],
-)
+router = APIRouter(prefix="/api/v1/tools", tags=["tools"])
 
 
 @router.post(

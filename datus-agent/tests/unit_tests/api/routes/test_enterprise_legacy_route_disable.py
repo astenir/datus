@@ -14,6 +14,7 @@ from datus.api.enterprise.defaults import (
 )
 from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.routes import agent_routes, explorer_routes, success_story_routes, tool_routes, visualization_routes
+from datus.api.service import _include_api_router
 
 
 class CollectingAuditSink:
@@ -47,10 +48,10 @@ def _install_extensions(monkeypatch, audit_sink):
     )
 
 
-def _client(monkeypatch, router, ctx: AppContext):
+def _client(monkeypatch, router, route_name: str, ctx: AppContext):
     monkeypatch.setattr(deps, "_auth_provider", StaticAuthProvider(ctx))
     app = FastAPI()
-    app.include_router(router)
+    _include_api_router(app, router, route_name)
 
     async def reject_service(request: Request):
         raise AssertionError("legacy disabled route resolved DatusService")
@@ -60,20 +61,22 @@ def _client(monkeypatch, router, ctx: AppContext):
 
 
 @pytest.mark.parametrize(
-    ("router", "method", "path", "json_body", "operation"),
+    ("router", "route_name", "method", "path", "json_body", "operation"),
     [
-        (explorer_routes.router, "get", "/api/v1/subject/list", None, "explorer.legacy"),
-        (agent_routes.router, "get", "/api/v1/agent/list", None, "agent.config_legacy"),
+        (explorer_routes.router, "explorer", "get", "/api/v1/subject/list", None, "explorer.legacy"),
+        (agent_routes.router, "agent", "get", "/api/v1/agent/list", None, "agent.config_legacy"),
         (
             visualization_routes.router,
+            "visualization",
             "post",
             "/api/v1/data_visualization",
             {"csv_data": "id,value\n1,2\n", "chart_type": None, "sql": None, "user_question": None},
             "visualization.legacy",
         ),
-        (tool_routes.router, "post", "/api/v1/tools/db_tools.read_query", {}, "tools.direct_dispatch"),
+        (tool_routes.router, "tool", "post", "/api/v1/tools/db_tools.read_query", {}, "tools.direct_dispatch"),
         (
             success_story_routes.router,
+            "success_story",
             "post",
             "/api/v1/success-stories",
             {"messages": [], "metadata": {}},
@@ -81,12 +84,14 @@ def _client(monkeypatch, router, ctx: AppContext):
         ),
     ],
 )
-def test_legacy_routes_are_disabled_in_enterprise_mode(monkeypatch, router, method, path, json_body, operation):
+def test_legacy_routes_are_disabled_in_enterprise_mode(
+    monkeypatch, router, route_name, method, path, json_body, operation
+):
     audit_sink = CollectingAuditSink()
     _install_extensions(monkeypatch, audit_sink)
     ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.admin.*"})
 
-    with _client(monkeypatch, router, ctx) as client:
+    with _client(monkeypatch, router, route_name, ctx) as client:
         response = getattr(client, method)(path, json=json_body) if json_body is not None else getattr(client, method)(path)
 
     assert response.status_code == 403

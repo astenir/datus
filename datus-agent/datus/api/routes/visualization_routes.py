@@ -7,10 +7,9 @@ configuration recommendation (chart type, axes, reason).
 
 import asyncio
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter
 
 from datus.api.deps import ServiceDep
-from datus.api.enterprise.deps import require_enterprise_route_disabled
 from datus.api.models.base_models import Result
 from datus.api.models.visualization_models import (
     ChartData,
@@ -19,11 +18,7 @@ from datus.api.models.visualization_models import (
     DataVisualizationRequest,
 )
 
-router = APIRouter(
-    prefix="/api/v1",
-    tags=["visualization"],
-    dependencies=[Depends(require_enterprise_route_disabled(operation="visualization.legacy"))],
-)
+router = APIRouter(prefix="/api/v1", tags=["visualization"])
 
 
 @router.post(

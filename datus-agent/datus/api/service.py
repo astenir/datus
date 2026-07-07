@@ -11,7 +11,7 @@ from datetime import datetime
 from io import StringIO
 from typing import Any, AsyncGenerator, Dict, List
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -46,6 +46,29 @@ _LEGACY_ENTERPRISE_DISABLED_DETAIL = {
     "errorCode": "ENTERPRISE_LEGACY_API_DISABLED",
     "errorMessage": "Legacy workflow APIs are disabled when enterprise.enabled=true. Use /api/v1 routes.",
 }
+
+_ROUTE_DISABLED_OPERATIONS = {
+    "agent": "agent.config_legacy",
+    "explorer": "explorer.legacy",
+    "visualization": "visualization.legacy",
+    "tool": "tools.direct_dispatch",
+    "success_story": "success_stories.write_legacy",
+}
+
+
+def _include_api_router(app: FastAPI, router: APIRouter, name: str) -> None:
+    """Register a route module, applying enterprise legacy gates at the app edge."""
+    disabled_operation = _ROUTE_DISABLED_OPERATIONS.get(name)
+    if disabled_operation:
+        from datus.api.enterprise.deps import require_enterprise_route_disabled
+
+        app.include_router(
+            router,
+            dependencies=[Depends(require_enterprise_route_disabled(operation=disabled_operation))],
+        )
+        return
+
+    app.include_router(router)
 
 
 class DatusAPIService:
@@ -534,7 +557,7 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
     for module_path, name in _route_modules:
         try:
             mod = importlib.import_module(module_path)
-            app.include_router(mod.router)
+            _include_api_router(app, mod.router, name)
         except ImportError:
             logger.info(f"{name} routes not available (module not found)")
         except Exception:
