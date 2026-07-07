@@ -86,9 +86,38 @@ function decodeJsSingleQuotedString(value: string): string {
     .replace(/\\\\/g, "\\");
 }
 
+function encodeJsSingleQuotedString(value: string): string {
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/'/g, "\\'")
+    .replace(/<\//g, "<\\/");
+}
+
 function dashboardQueryEndpointFromHtml(html: string): string | null {
   const match = html.match(/queryEndpoint:\s*'((?:\\.|[^'\\])*)'/);
   return match?.[1] ? decodeJsSingleQuotedString(match[1]) : null;
+}
+
+function withAbsoluteDashboardQueryEndpoint(html: string, appOrigin: string): string {
+  if (!appOrigin) return html;
+
+  const match = html.match(/queryEndpoint:\s*'((?:\\.|[^'\\])*)'/);
+  if (!match?.[1] || match.index === undefined) return html;
+
+  const endpoint = decodeJsSingleQuotedString(match[1]);
+  let absoluteEndpoint: string;
+  try {
+    absoluteEndpoint = new URL(endpoint, appOrigin).href;
+  } catch {
+    return html;
+  }
+
+  if (absoluteEndpoint === endpoint) return html;
+
+  const nextConfig = match[0].replace(match[1], encodeJsSingleQuotedString(absoluteEndpoint));
+  return `${html.slice(0, match.index)}${nextConfig}${html.slice(match.index + match[0].length)}`;
 }
 
 function injectPreviewHeadScript(html: string, script: string): string {
@@ -216,7 +245,7 @@ export function withArtifactPreviewRuntime(html: string, baseUrl: string, access
 })();
 </script>`;
 
-  return injectPreviewHeadScript(html, script);
+  return injectPreviewHeadScript(withAbsoluteDashboardQueryEndpoint(html, appOrigin), script);
 }
 
 export function withDashboardPreviewAuth(html: string, accessToken: string | null): string {
