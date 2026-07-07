@@ -6,7 +6,7 @@
 
 基线采样日期：2026-07-07
 
-说明：这是完成公开文档、配置示例和 legacy route gate 低风险迁移后的采样结果。迁移起点是 `210 files changed`、`96 added`、`109 modified`、`5 deleted`。
+说明：这是完成公开文档、配置示例、legacy route gate 和第一轮测试迁移后的采样结果。迁移起点是 `210 files changed`、`96 added`、`109 modified`、`5 deleted`。
 
 对比口径：
 
@@ -19,9 +19,9 @@ git diff --name-status -M v0.3.7 HEAD:datus-agent
 当前结果：
 
 ```text
-200 files changed, 49155 insertions(+), 2849 deletions(-)
-99 added
-97 modified
+199 files changed, 49227 insertions(+), 2845 deletions(-)
+103 added
+92 modified
 4 deleted
 ```
 
@@ -29,7 +29,7 @@ git diff --name-status -M v0.3.7 HEAD:datus-agent
 
 ```text
 55 production/package files
-39 tests
+34 tests
 0 docs
 3 config/meta files
 ```
@@ -113,6 +113,31 @@ datus/api/service.py
 ```
 
 预期效果：提交后，上述 4 个 route 文件不再计入相对 `v0.3.7` 的 modified 文件；legacy 禁用策略集中在 app 注册边界，后续上游 route 合并冲突更少。
+
+### 2026-07-07：通用修复测试迁移
+
+处理方式：把 MCP、CSV 和 proxy timeout 等通用修复的新增测试从上游原测试文件迁到下游独立测试文件。`test_tool_result_channel.py` 中有一条新增 timeout 用例与上游已有 timeout 用例语义重复，直接恢复上游原文件。
+
+已恢复为 `v0.3.7` 内容的上游测试：
+
+```text
+tests/unit_tests/api/services/test_mcp_service.py
+tests/unit_tests/tools/mcp_tools/test_mcp_config.py
+tests/unit_tests/tools/mcp_tools/test_mcp_manager.py
+tests/unit_tests/tools/proxy/test_tool_result_channel.py
+tests/unit_tests/utils/test_csv_utils.py
+```
+
+下游新增测试迁入：
+
+```text
+tests/unit_tests/api/services/test_mcp_service_downstream.py
+tests/unit_tests/tools/mcp_tools/test_mcp_config_downstream.py
+tests/unit_tests/tools/mcp_tools/test_mcp_manager_downstream.py
+tests/unit_tests/utils/test_csv_utils_downstream.py
+```
+
+预期效果：提交后，上游原测试 modified 文件减少 5 个；对应下游覆盖仍保留在独立测试文件中。
 
 ## 收敛原则
 

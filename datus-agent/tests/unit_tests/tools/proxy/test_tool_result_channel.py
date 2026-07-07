@@ -67,15 +67,6 @@ class TestToolResultChannel:
         assert len(channel._futures) == 0
 
     @pytest.mark.asyncio
-    async def test_wait_for_timeout_settles_future(self):
-        channel = ToolResultChannel()
-
-        with pytest.raises(TimeoutError):
-            await channel.wait_for("call_timeout", timeout=0.01)
-
-        assert channel._futures["call_timeout"].done()
-
-    @pytest.mark.asyncio
     async def test_future_done_after_wait(self):
         channel = ToolResultChannel()
 

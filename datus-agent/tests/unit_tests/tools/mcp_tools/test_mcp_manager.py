@@ -130,30 +130,6 @@ class TestMCPManagerCRUD:
         assert success is False
         assert "already exists" in msg
 
-    def test_update_server_success(self, tmp_path):
-        manager = _make_manager(tmp_path)
-        manager.add_server(STDIOServerConfig(name="srv", command="python"))
-        success, msg = manager.update_server("srv", STDIOServerConfig(name="srv", command="node", cwd="/workspace"))
-        assert success is True
-        assert "updated server" in msg
-        assert manager.config.servers["srv"].command == "node"
-        assert manager.config.servers["srv"].cwd == "/workspace"
-
-    def test_update_server_preserves_tool_filter(self, tmp_path):
-        manager = _make_manager(tmp_path)
-        tool_filter = ToolFilterConfig(allowed_tool_names=["read"])
-        manager.add_server(STDIOServerConfig(name="srv", command="python", tool_filter=tool_filter))
-        success, msg = manager.update_server("srv", STDIOServerConfig(name="srv", command="node"))
-        assert success is True
-        assert "updated server" in msg
-        assert manager.config.servers["srv"].tool_filter == tool_filter
-
-    def test_update_server_not_found(self, tmp_path):
-        manager = _make_manager(tmp_path)
-        success, msg = manager.update_server("missing", STDIOServerConfig(name="missing", command="python"))
-        assert success is False
-        assert "not found" in msg
-
     def test_remove_server_success(self, tmp_path):
         manager = _make_manager(tmp_path)
         srv = STDIOServerConfig(name="to-remove", command="python")

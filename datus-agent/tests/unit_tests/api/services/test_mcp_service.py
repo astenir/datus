@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from datus.api.models.base_models import Result
-from datus.api.models.mcp_models import AddServerInput, ToolFilterInput, UpdateServerInput
+from datus.api.models.mcp_models import AddServerInput, ToolFilterInput
 from datus.api.services.mcp_service import MCPService
 
 
@@ -67,24 +67,6 @@ class TestMCPServiceAddRemoveServer:
         """remove_server for nonexistent server returns error."""
         svc = MCPService(agent_config=real_agent_config)
         result = svc.remove_server("ghost_server")
-        assert result.success is False
-
-    def test_update_server_replaces_existing_config(self, real_agent_config):
-        """update_server replaces an existing server config."""
-        svc = MCPService(agent_config=real_agent_config)
-        svc.add_server(AddServerInput(name="to_update", type="stdio", command="echo"))
-
-        result = svc.update_server("to_update", UpdateServerInput(type="stdio", command="node", cwd="/workspace"))
-
-        assert result.success is True
-        assert result.data["server"]["command"] == "node"
-        assert result.data["server"]["cwd"] == "/workspace"
-        svc.remove_server("to_update")
-
-    def test_update_nonexistent_server(self, real_agent_config):
-        """update_server for nonexistent server returns error."""
-        svc = MCPService(agent_config=real_agent_config)
-        result = svc.update_server("ghost_server", UpdateServerInput(type="stdio", command="echo"))
         assert result.success is False
 
 
