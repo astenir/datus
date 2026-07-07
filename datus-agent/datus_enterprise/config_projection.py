@@ -11,6 +11,11 @@ from datus.api.auth.context import AppContext
 from datus.api.enterprise.models import ProjectionInput, ProjectionResult
 from datus.configuration.agent_config import AgentConfig
 from datus.utils.exceptions import DatusException, ErrorCode
+from datus_enterprise.personal_datasources import (
+    datasource_id_from_key,
+    datasource_record_to_db_config,
+    personal_datasource_key,
+)
 
 
 @dataclass(frozen=True)
@@ -32,11 +37,28 @@ class DatasourceGrantConfigProjector:
     async def project(self, request: ProjectionInput) -> ProjectionResult:
         projected = copy.deepcopy(request.base_config)
         configured_datasources = dict(getattr(projected.services, "datasources", {}) or {})
+        personal_grants: dict[str, Any] = {}
+        if request.ctx.user_id:
+            personal_datasources = await _load_personal_datasources(request.ctx.user_id)
+            for record in personal_datasources:
+                if not record.get("enabled"):
+                    continue
+                datasource_key = personal_datasource_key(str(record["id"]))
+                if datasource_key in configured_datasources:
+                    continue
+                configured_datasources[datasource_key] = datasource_record_to_db_config(record)
+                personal_grants[datasource_key] = {
+                    "effect": "allow",
+                    "allow_catalog": True,
+                    "allow_sql": True,
+                    "owner": "user",
+                }
         allowed_grants = _allowed_datasource_grants(
             request.ctx.datasource_grants,
             operation=request.operation,
             configured_datasources=configured_datasources,
         )
+        allowed_grants.update(personal_grants)
         if not allowed_grants:
             return ProjectionResult(
                 config=projected,
@@ -87,6 +109,7 @@ class DatasourceGrantConfigProjector:
             key: value for key, value in configured_datasources.items() if key in allowed_grants
         }
         projected.current_datasource = selected_datasource
+        await _touch_personal_datasource_if_needed(request.ctx.user_id, selected_datasource)
 
         principal = dict(request.ctx.principal or {})
         principal["user_id"] = request.ctx.user_id
@@ -154,6 +177,21 @@ def _allowed_datasource_grants(
             continue
         allowed[datasource_key] = normalized
     return allowed
+
+
+async def _load_personal_datasources(user_id: str) -> list[dict[str, Any]]:
+    from datus.api import deps
+
+    return await deps.get_enterprise_extensions().user_datasource_store.list_datasources(user_id)
+
+
+async def _touch_personal_datasource_if_needed(user_id: str | None, datasource_key: str) -> None:
+    datasource_id = datasource_id_from_key(datasource_key)
+    if not user_id or datasource_id is None:
+        return
+    from datus.api import deps
+
+    await deps.get_enterprise_extensions().user_datasource_store.touch_datasource_used(user_id, datasource_id)
 
 
 def _normalize_grant(grant: Any) -> dict[str, Any] | None:

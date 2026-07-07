@@ -691,6 +691,27 @@ describe("api client", () => {
     await meApi.features();
     await meApi.sessions();
     await meApi.usage();
+    await meApi.modelProviders();
+    await meApi.modelCredentials();
+    await meApi.createModelCredential({
+      provider: "openai",
+      model: "gpt-4.1",
+      api_key: "sk-test",
+      enabled: true,
+    });
+    await meApi.updateModelCredential("cred-1", {
+      provider: "openai",
+      model: "gpt-4.1",
+      api_key: "sk-test-2",
+      enabled: false,
+    });
+    await meApi.testModelCredential("cred-1");
+    await meApi.modelPreference();
+    await meApi.updateModelPreference({
+      default_credential_id: "cred-1",
+      default_model: "gpt-4.1",
+    });
+    await meApi.deleteModelCredential("cred-1");
 
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("/api/v1/me");
     expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe("/api/v1/me/permissions");
@@ -698,6 +719,57 @@ describe("api client", () => {
     expect(vi.mocked(fetch).mock.calls[3]?.[0]).toBe("/api/v1/me/features");
     expect(vi.mocked(fetch).mock.calls[4]?.[0]).toBe("/api/v1/me/sessions");
     expect(vi.mocked(fetch).mock.calls[5]?.[0]).toBe("/api/v1/me/usage");
+    expect(vi.mocked(fetch).mock.calls[6]?.[0]).toBe("/api/v1/me/model-providers");
+    expect(vi.mocked(fetch).mock.calls[7]?.[0]).toBe("/api/v1/me/model-credentials");
+    expect(vi.mocked(fetch).mock.calls[8]?.[0]).toBe("/api/v1/me/model-credentials");
+    expect((vi.mocked(fetch).mock.calls[8]?.[1] as RequestInit).method).toBe("POST");
+    expect(vi.mocked(fetch).mock.calls[9]?.[0]).toBe("/api/v1/me/model-credentials/cred-1");
+    expect((vi.mocked(fetch).mock.calls[9]?.[1] as RequestInit).method).toBe("PUT");
+    expect(vi.mocked(fetch).mock.calls[10]?.[0]).toBe("/api/v1/me/model-credentials/cred-1/test");
+    expect(vi.mocked(fetch).mock.calls[11]?.[0]).toBe("/api/v1/me/model-preferences");
+    expect(vi.mocked(fetch).mock.calls[12]?.[0]).toBe("/api/v1/me/model-preferences");
+    expect((vi.mocked(fetch).mock.calls[12]?.[1] as RequestInit).method).toBe("PUT");
+    expect(vi.mocked(fetch).mock.calls[13]?.[0]).toBe("/api/v1/me/model-credentials/cred-1");
+    expect((vi.mocked(fetch).mock.calls[13]?.[1] as RequestInit).method).toBe("DELETE");
+  });
+
+  it("uses current enterprise personal datasource routes", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(mockJsonResponse({ success: true, data: {} }))
+    );
+
+    await meApi.datasourceProviders();
+    await meApi.personalDatasources();
+    await meApi.createPersonalDatasource({
+      type: "postgresql",
+      host: "localhost",
+      port: "5432",
+      username: "alice",
+      password: "secret",
+      database: "finance",
+      enabled: true,
+    });
+    await meApi.updatePersonalDatasource("ds-1", {
+      type: "postgresql",
+      host: "localhost",
+      port: "5432",
+      username: "alice",
+      password: "secret-2",
+      database: "finance",
+      enabled: false,
+    });
+    await meApi.testPersonalDatasource("ds-1");
+    await meApi.deletePersonalDatasource("ds-1");
+
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("/api/v1/me/datasource-providers");
+    expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe("/api/v1/me/datasources");
+    expect(vi.mocked(fetch).mock.calls[2]?.[0]).toBe("/api/v1/me/datasources");
+    expect((vi.mocked(fetch).mock.calls[2]?.[1] as RequestInit).method).toBe("POST");
+    expect(vi.mocked(fetch).mock.calls[3]?.[0]).toBe("/api/v1/me/datasources/ds-1");
+    expect((vi.mocked(fetch).mock.calls[3]?.[1] as RequestInit).method).toBe("PUT");
+    expect(vi.mocked(fetch).mock.calls[4]?.[0]).toBe("/api/v1/me/datasources/ds-1/test");
+    expect(vi.mocked(fetch).mock.calls[5]?.[0]).toBe("/api/v1/me/datasources/ds-1");
+    expect((vi.mocked(fetch).mock.calls[5]?.[1] as RequestInit).method).toBe("DELETE");
   });
 
   it("keeps support-only visualization, success-story, and tool helper routes behind API helpers", async () => {

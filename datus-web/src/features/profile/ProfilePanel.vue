@@ -21,6 +21,8 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { useProfileOverview } from "@/composables/useProfileOverview"
+import ModelCredentialsPanel from "@/features/profile/ModelCredentialsPanel.vue"
+import PersonalDatasourcesPanel from "@/features/profile/PersonalDatasourcesPanel.vue"
 import type { AuthState } from "@/composables/useAuth"
 
 const props = defineProps<{
@@ -38,6 +40,11 @@ const displayName = computed(() => {
 })
 const username = computed(() => principalUserId.value)
 const userFallback = computed(() => displayName.value.slice(0, 1).toUpperCase())
+const hasChatFeature = computed(() =>
+  profile.features.value.chat === true ||
+  profile.permissions.value.includes("*") ||
+  profile.permissions.value.includes("module.chat"),
+)
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("zh-CN").format(value)
@@ -55,8 +62,8 @@ onMounted(loadProfile)
 </script>
 
 <template>
-  <section class="flex min-h-0 flex-1 overflow-y-auto p-4 xl:overflow-hidden">
-    <div class="flex min-h-0 flex-1 flex-col gap-3">
+  <section class="flex min-h-0 flex-1 overflow-y-auto p-4">
+    <div class="flex w-full min-w-0 flex-col gap-3">
       <div class="flex shrink-0 flex-wrap items-center gap-3">
         <div class="min-w-0 flex-1">
           <h1 class="text-lg font-semibold">我的权限</h1>
@@ -83,7 +90,7 @@ onMounted(loadProfile)
 
       <div
         v-if="profile.loading.value && !profile.loaded.value"
-        class="grid gap-3 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,1fr)_24rem]"
+        class="grid gap-3 xl:grid-cols-[minmax(0,1fr)_24rem]"
       >
         <Card>
           <CardHeader>
@@ -110,7 +117,7 @@ onMounted(loadProfile)
 
       <div
         v-else
-        class="grid gap-3 xl:min-h-0 xl:flex-1 xl:grid-rows-[auto_minmax(0,1fr)]"
+        class="grid gap-3"
       >
         <Card
           size="sm"
@@ -180,16 +187,20 @@ onMounted(loadProfile)
           </CardContent>
         </Card>
 
-        <div class="grid gap-3 xl:min-h-0 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-          <Card class="xl:flex xl:min-h-0 xl:flex-col xl:overflow-hidden">
-            <CardHeader class="px-4 py-3 xl:shrink-0">
+        <ModelCredentialsPanel v-if="hasChatFeature" />
+
+        <PersonalDatasourcesPanel />
+
+        <div class="grid gap-3 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <Card>
+            <CardHeader class="px-4 py-3">
               <CardTitle class="text-lg">功能与权限</CardTitle>
               <CardDescription class="text-sm">
                 后端由权限集投影出的功能可用性。
               </CardDescription>
             </CardHeader>
-            <CardContent class="flex flex-col px-4 pb-4 xl:min-h-0 xl:flex-1 xl:overflow-hidden">
-              <div class="rounded-md border xl:min-h-0 xl:flex-1 xl:overflow-y-auto">
+            <CardContent class="flex flex-col px-4 pb-4">
+              <div class="rounded-md border">
                 <div
                   v-for="feature in profile.featureList.value"
                   :key="feature.code"
@@ -213,14 +224,14 @@ onMounted(loadProfile)
             </CardContent>
           </Card>
 
-          <Card class="xl:flex xl:min-h-0 xl:flex-col xl:overflow-hidden">
-            <CardHeader class="px-4 py-3 xl:shrink-0">
+          <Card>
+            <CardHeader class="px-4 py-3">
               <CardTitle class="text-lg">数据源授权</CardTitle>
               <CardDescription class="text-sm">
                 当前请求上下文中的有效 datasource grant；后端仍是最终授权边界。
               </CardDescription>
             </CardHeader>
-            <CardContent class="overflow-x-auto px-4 pb-4 xl:min-h-0 xl:flex-1 xl:overflow-auto">
+            <CardContent class="overflow-x-auto px-4 pb-4">
               <div class="min-w-full">
                 <Table>
                   <TableHeader>

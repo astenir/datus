@@ -541,6 +541,8 @@ def create_app(agent_args: argparse.Namespace) -> FastAPI:
         ("datus.api.routes.dashboard_routes", "dashboard"),
         ("datus.api.routes.report_routes", "report"),
         ("datus_enterprise.api.me_routes", "enterprise_me"),
+        ("datus_enterprise.api.model_credential_routes", "enterprise_model_credentials"),
+        ("datus_enterprise.api.personal_datasource_routes", "enterprise_personal_datasources"),
         ("datus_enterprise.api.artifact_routes", "enterprise_artifacts"),
         ("datus_enterprise.api.agent_routes", "enterprise_agents"),
         ("datus_enterprise.api.admin_datasource_routes", "enterprise_datasource_admin"),

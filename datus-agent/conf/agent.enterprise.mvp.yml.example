@@ -46,6 +46,22 @@ enterprise:
     enabled: false
     default_role_ids: []
 
+  # 普通用户自建 OpenAI 兼容模型，默认关闭。开启前务必收窄 allowed_base_urls。
+  user_model_credentials:
+    custom_openai_compatible:
+      enabled: false
+      allowed_base_urls: ["http://localhost:8000/v1", "https://models.corp/*"]
+
+  # 普通用户个人数据源，默认关闭。开启前务必按部署网络边界收窄 allowed_hosts。
+  user_datasources:
+    enabled: false
+    allowed_types: [postgresql, mysql, oceanbase]
+    allowed_hosts: [localhost, 127.0.0.1]
+    default_ports:
+      postgresql: "5432"
+      mysql: "3306"
+      oceanbase: "2881"
+
   # 单节点 metadata store。多个 store 可以共用一个 SQLite 文件，因为各自管理独立表。
   # 多 worker、滚动发布或 HA 试点前，应切换到 PostgreSQL store。
   user_store:
@@ -77,6 +93,18 @@ enterprise:
   # 如果省略该项，已接入 quota 的路径会以 QUOTA_STORE_UNAVAILABLE fail closed。
   quota_store:
     class: datus.api.enterprise.defaults:InMemoryEnterpriseQuotaStore
+
+  user_model_credential_store:
+    class: datus.api.enterprise.defaults:SqliteUserModelCredentialStore
+    kwargs:
+      db_path: .datus/enterprise.db
+      encryption_secret: ${DATUS_USER_MODEL_CREDENTIAL_SECRET}
+
+  user_datasource_store:
+    class: datus.api.enterprise.defaults:SqliteUserDatasourceStore
+    kwargs:
+      db_path: .datus/enterprise.db
+      encryption_secret: ${DATUS_USER_DATASOURCE_SECRET}
 
 # 可选：SQL policy。
 # 当 datasource grant 还需要通过 SQL rewrite/deny 兜底时，配置具体 provider。

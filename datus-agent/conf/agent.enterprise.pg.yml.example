@@ -49,6 +49,22 @@ enterprise:
     enabled: false
     default_role_ids: []
 
+  # 普通用户自建 OpenAI 兼容模型，默认关闭。开启前务必收窄 allowed_base_urls。
+  user_model_credentials:
+    custom_openai_compatible:
+      enabled: false
+      allowed_base_urls: ["http://localhost:8000/v1", "https://models.corp/*"]
+
+  # 普通用户个人数据源，默认关闭。开启前务必按部署网络边界收窄 allowed_hosts。
+  user_datasources:
+    enabled: false
+    allowed_types: [postgresql, mysql, oceanbase]
+    allowed_hosts: [localhost, 127.0.0.1, "*.corp"]
+    default_ports:
+      postgresql: "5432"
+      mysql: "3306"
+      oceanbase: "2881"
+
   user_store:
     class: datus_enterprise.postgres_stores:PgEnterpriseUserStore
     kwargs:
@@ -124,6 +140,26 @@ enterprise:
       dsn: ${DATUS_ENTERPRISE_PG_DSN}
       min_size: 1
       max_size: 2
+
+  # 普通用户 BYOK 模型密钥。只存加密后的 API key blob，接口不会返回明文。
+  # DATUS_USER_MODEL_CREDENTIAL_SECRET 至少 32 字符；发布时需要和 PG 备份一起纳入密钥恢复 runbook。
+  user_model_credential_store:
+    class: datus_enterprise.postgres_stores:PgUserModelCredentialStore
+    kwargs:
+      dsn: ${DATUS_ENTERPRISE_PG_DSN}
+      min_size: 1
+      max_size: 2
+      encryption_secret: ${DATUS_USER_MODEL_CREDENTIAL_SECRET}
+
+  # 普通用户个人数据源凭据。只存加密后的 password blob，接口不会返回明文。
+  # DATUS_USER_DATASOURCE_SECRET 至少 32 字符；发布时需要和 PG 备份一起纳入密钥恢复 runbook。
+  user_datasource_store:
+    class: datus_enterprise.postgres_stores:PgUserDatasourceStore
+    kwargs:
+      dsn: ${DATUS_ENTERPRISE_PG_DSN}
+      min_size: 1
+      max_size: 2
+      encryption_secret: ${DATUS_USER_DATASOURCE_SECRET}
 
 # 可选：SQL policy。
 # 当 datasource grant 还需要通过 SQL rewrite/deny 兜底时，配置具体 provider。

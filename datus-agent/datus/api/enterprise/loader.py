@@ -13,6 +13,8 @@ from datus.api.enterprise.defaults import (
     InMemoryEnterpriseRoleStore,
     InMemoryEnterpriseUserStore,
     InMemorySessionOwnerStore,
+    InMemoryUserDatasourceStore,
+    InMemoryUserModelCredentialStore,
     LocalAuthorizationProvider,
     NoopAuditSink,
     PassthroughConfigProjector,
@@ -30,6 +32,8 @@ from datus.api.enterprise.protocols import (
     EnterpriseUserStore,
     SessionBodyStore,
     SessionOwnerStore,
+    UserDatasourceStore,
+    UserModelCredentialStore,
 )
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus.utils.loggings import get_logger
@@ -60,6 +64,8 @@ class EnterpriseExtensions:
     artifact_acl_store: ArtifactAclStore | None = None
     quota_store: EnterpriseQuotaStore | None = None
     secret_store: EnterpriseSecretStore | None = None
+    user_model_credential_store: UserModelCredentialStore = field(default_factory=InMemoryUserModelCredentialStore)
+    user_datasource_store: UserDatasourceStore = field(default_factory=InMemoryUserDatasourceStore)
     user_auto_provisioning: UserAutoProvisioningConfig = field(default_factory=UserAutoProvisioningConfig)
     user_store: EnterpriseUserStore = field(default_factory=InMemoryEnterpriseUserStore)
     role_store: EnterpriseRoleStore = field(default_factory=InMemoryEnterpriseRoleStore)
@@ -80,6 +86,8 @@ class EnterpriseExtensions:
             self.artifact_acl_store,
             self.quota_store,
             self.secret_store,
+            self.user_model_credential_store,
+            self.user_datasource_store,
             self.user_store,
             self.role_store,
             self.datasource_grant_store,
@@ -131,6 +139,8 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
             artifact_acl_store=None,
             quota_store=None,
             secret_store=None,
+            user_model_credential_store=InMemoryUserModelCredentialStore(),
+            user_datasource_store=InMemoryUserDatasourceStore(),
             user_auto_provisioning=UserAutoProvisioningConfig(),
             user_store=InMemoryEnterpriseUserStore(),
             role_store=InMemoryEnterpriseRoleStore(),
@@ -197,6 +207,18 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         EnterpriseSecretStore,
         None,
     )
+    user_model_credential_store = _load_optional_component(
+        raw,
+        "user_model_credential_store",
+        UserModelCredentialStore,
+        InMemoryUserModelCredentialStore(),
+    )
+    user_datasource_store = _load_optional_component(
+        raw,
+        "user_datasource_store",
+        UserDatasourceStore,
+        InMemoryUserDatasourceStore(),
+    )
     agent_store = _load_optional_component(
         raw,
         "agent_store",
@@ -215,6 +237,8 @@ def load_enterprise_extensions(enterprise_config: dict[str, Any] | None) -> Ente
         artifact_acl_store=artifact_acl_store,
         quota_store=quota_store,
         secret_store=secret_store,
+        user_model_credential_store=user_model_credential_store,
+        user_datasource_store=user_datasource_store,
         user_auto_provisioning=user_auto_provisioning,
         user_store=user_store,
         role_store=role_store,

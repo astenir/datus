@@ -65,6 +65,7 @@ from datus.utils.time_utils import now_utc_iso
 from datus_enterprise.agent_registry import agent_record_to_runtime_entry, resolve_enterprise_agent_for_dispatch
 from datus_enterprise.artifact_acl import require_artifact_access
 from datus_enterprise.audit import AuditEvent, audit_decision
+from datus_enterprise.model_credentials import apply_user_model_credential
 from datus_enterprise.model_policy import is_model_ref_allowed
 from datus_enterprise.quota import consume_enterprise_quota
 
@@ -490,6 +491,28 @@ async def stream_chat(
             headers=_sse_headers(),
         )
 
+    try:
+        await apply_user_model_credential(
+            store=api_deps.get_enterprise_extensions().user_model_credential_store,
+            user_id=ctx.user_id,
+            agent_config=projection.config,
+            requested_model=request.model,
+        )
+    except Exception as exc:
+        logger.info("User model credential resolution failed: %s", exc)
+        return StreamingResponse(
+            _emit_pre_check_denial(
+                request,
+                ChatPreCheckOutcome(
+                    allow=False,
+                    error="User model credential is unavailable for this request.",
+                    error_type="MODEL_CREDENTIAL_UNAVAILABLE",
+                ),
+            ),
+            media_type="text/event-stream",
+            headers=_sse_headers(),
+        )
+
     sql_policy_denial = _sql_policy_principal_pre_check(
         svc,
         ctx,
@@ -636,6 +659,28 @@ async def stream_chat_feedback(
                     allow=False,
                     error=str(exc),
                     error_type=error_type,
+                ),
+            ),
+            media_type="text/event-stream",
+            headers=_sse_headers(),
+        )
+
+    try:
+        await apply_user_model_credential(
+            store=api_deps.get_enterprise_extensions().user_model_credential_store,
+            user_id=ctx.user_id,
+            agent_config=projection.config,
+            requested_model=stream_input.model,
+        )
+    except Exception as exc:
+        logger.info("User model credential resolution failed: %s", exc)
+        return StreamingResponse(
+            _emit_pre_check_denial(
+                stream_input,
+                ChatPreCheckOutcome(
+                    allow=False,
+                    error="User model credential is unavailable for this request.",
+                    error_type="MODEL_CREDENTIAL_UNAVAILABLE",
                 ),
             ),
             media_type="text/event-stream",

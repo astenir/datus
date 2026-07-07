@@ -266,6 +266,124 @@ class EnterpriseSecretStore(Protocol):
 
 
 @runtime_checkable
+class UserModelCredentialStore(Protocol):
+    """Persist per-user model API credentials and default model preferences.
+
+    Store records returned by this protocol are internal server-side shapes and
+    may include the decrypted ``api_key`` field for execution. API routes must
+    never return that value.
+    """
+
+    async def list_credentials(self, user_id: str) -> list[dict[str, Any]]:
+        """Return all model credential records owned by ``user_id``."""
+        ...
+
+    async def get_credential(self, user_id: str, credential_id: str) -> dict[str, Any] | None:
+        """Return one credential owned by ``user_id``, if present."""
+        ...
+
+    async def put_credential(
+        self,
+        *,
+        user_id: str,
+        credential_id: str,
+        provider: str,
+        model: str,
+        api_key: str,
+        base_url: str | None = None,
+        display_name: str | None = None,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        """Create or replace one user-owned model credential."""
+        ...
+
+    async def set_credential_enabled(
+        self,
+        user_id: str,
+        credential_id: str,
+        enabled: bool,
+    ) -> dict[str, Any] | None:
+        """Enable or disable one user-owned model credential."""
+        ...
+
+    async def delete_credential(self, user_id: str, credential_id: str) -> bool:
+        """Delete one user-owned model credential."""
+        ...
+
+    async def get_preference(self, user_id: str) -> dict[str, Any]:
+        """Return the user's model preference record, or an empty preference."""
+        ...
+
+    async def put_preference(
+        self,
+        *,
+        user_id: str,
+        default_credential_id: str | None,
+        default_model: str | None,
+    ) -> dict[str, Any]:
+        """Create or replace the user's default model preference."""
+        ...
+
+    async def touch_credential_used(self, user_id: str, credential_id: str) -> None:
+        """Mark a credential as used by request execution."""
+        ...
+
+
+@runtime_checkable
+class UserDatasourceStore(Protocol):
+    """Persist per-user private datasource definitions and credentials.
+
+    Store records returned by this protocol are internal server-side shapes and
+    may include decrypted secret fields such as ``password`` for request-scoped
+    execution. API routes must never return those values.
+    """
+
+    async def list_datasources(self, user_id: str) -> list[dict[str, Any]]:
+        """Return all private datasource records owned by ``user_id``."""
+        ...
+
+    async def get_datasource(self, user_id: str, datasource_id: str) -> dict[str, Any] | None:
+        """Return one private datasource owned by ``user_id``, if present."""
+        ...
+
+    async def put_datasource(
+        self,
+        *,
+        user_id: str,
+        datasource_id: str,
+        datasource_type: str,
+        host: str,
+        port: str,
+        username: str,
+        password: str,
+        database: str,
+        display_name: str | None = None,
+        schema: str | None = None,
+        catalog: str | None = None,
+        enabled: bool = True,
+    ) -> dict[str, Any]:
+        """Create or replace one user-owned private datasource."""
+        ...
+
+    async def set_datasource_enabled(
+        self,
+        user_id: str,
+        datasource_id: str,
+        enabled: bool,
+    ) -> dict[str, Any] | None:
+        """Enable or disable one user-owned datasource."""
+        ...
+
+    async def delete_datasource(self, user_id: str, datasource_id: str) -> bool:
+        """Delete one user-owned private datasource."""
+        ...
+
+    async def touch_datasource_used(self, user_id: str, datasource_id: str) -> None:
+        """Mark a datasource as used by request execution."""
+        ...
+
+
+@runtime_checkable
 class SessionOwnerStore(Protocol):
     """Persist and query session owner metadata."""
 

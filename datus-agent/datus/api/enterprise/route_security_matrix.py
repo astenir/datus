@@ -581,6 +581,70 @@ _add(
     _policy(SESSION_OWNER, SYSTEM_READONLY, note="Lists only the current user's sessions."),
 )
 _add("GET", "/api/v1/me/usage", _policy(QUOTA, SYSTEM_READONLY))
+_add_many(
+    "GET",
+    [
+        "/api/v1/me/datasource-providers",
+        "/api/v1/me/datasources",
+        "/api/v1/me/datasources/{datasource_id}",
+    ],
+    _policy(
+        MODULE_RBAC,
+        DATASOURCE_PROJECTION,
+        SYSTEM_READONLY,
+        module_permission="module.datasource_catalog",
+        note="Current-user private datasource metadata only; raw credentials are never returned.",
+        data_boundaries={DATASOURCE_PROJECTION},
+    ),
+)
+_add(
+    "POST",
+    "/api/v1/me/datasources",
+    _policy(
+        MODULE_RBAC,
+        DATASOURCE_PROJECTION,
+        PLATFORM_STATUS_GATE,
+        MUTATION_EXECUTION,
+        module_permission="module.datasource_catalog",
+        data_boundaries={DATASOURCE_PROJECTION},
+    ),
+)
+_add(
+    "PUT",
+    "/api/v1/me/datasources/{datasource_id}",
+    _policy(
+        MODULE_RBAC,
+        DATASOURCE_PROJECTION,
+        PLATFORM_STATUS_GATE,
+        MUTATION_EXECUTION,
+        module_permission="module.datasource_catalog",
+        data_boundaries={DATASOURCE_PROJECTION},
+    ),
+)
+_add(
+    "DELETE",
+    "/api/v1/me/datasources/{datasource_id}",
+    _policy(
+        MODULE_RBAC,
+        DATASOURCE_PROJECTION,
+        PLATFORM_STATUS_GATE,
+        MUTATION_EXECUTION,
+        module_permission="module.datasource_catalog",
+        data_boundaries={DATASOURCE_PROJECTION},
+    ),
+)
+_add(
+    "POST",
+    "/api/v1/me/datasources/{datasource_id}/test",
+    _policy(
+        MODULE_RBAC,
+        DATASOURCE_PROJECTION,
+        PLATFORM_STATUS_GATE,
+        MUTATION_EXECUTION,
+        module_permission="module.datasource_catalog",
+        data_boundaries={DATASOURCE_PROJECTION},
+    ),
+)
 
 _add_many(
     "GET",
@@ -845,6 +909,48 @@ _add(
     "DELETE",
     "/api/v1/admin/secrets/{name:path}",
     _policy(MODULE_RBAC, AUDIT, PLATFORM_STATUS_GATE, MUTATION_EXECUTION, module_permission="module.admin.secrets"),
+)
+
+_add_many(
+    "GET",
+    [
+        "/api/v1/me/model-providers",
+        "/api/v1/me/model-credentials",
+        "/api/v1/me/model-credentials/{credential_id}",
+        "/api/v1/me/model-preferences",
+    ],
+    _policy(
+        MODULE_RBAC,
+        MODEL_POLICY,
+        SYSTEM_READONLY,
+        module_permission="module.chat",
+        note="Current-user BYOK metadata only; raw API keys are never returned.",
+    ),
+)
+_add(
+    "POST",
+    "/api/v1/me/model-credentials",
+    _policy(MODULE_RBAC, MODEL_POLICY, PLATFORM_STATUS_GATE, MUTATION_EXECUTION, module_permission="module.chat"),
+)
+_add(
+    "PUT",
+    "/api/v1/me/model-credentials/{credential_id}",
+    _policy(MODULE_RBAC, MODEL_POLICY, PLATFORM_STATUS_GATE, MUTATION_EXECUTION, module_permission="module.chat"),
+)
+_add(
+    "DELETE",
+    "/api/v1/me/model-credentials/{credential_id}",
+    _policy(MODULE_RBAC, MODEL_POLICY, PLATFORM_STATUS_GATE, MUTATION_EXECUTION, module_permission="module.chat"),
+)
+_add(
+    "POST",
+    "/api/v1/me/model-credentials/{credential_id}/test",
+    _policy(MODULE_RBAC, MODEL_POLICY, PLATFORM_STATUS_GATE, MUTATION_EXECUTION, module_permission="module.chat"),
+)
+_add(
+    "PUT",
+    "/api/v1/me/model-preferences",
+    _policy(MODULE_RBAC, MODEL_POLICY, PLATFORM_STATUS_GATE, MUTATION_EXECUTION, module_permission="module.chat"),
 )
 
 _add(

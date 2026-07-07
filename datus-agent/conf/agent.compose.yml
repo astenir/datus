@@ -43,6 +43,20 @@ agent:
       enabled: false
       default_role_ids: []
 
+    user_model_credentials:
+      custom_openai_compatible:
+        enabled: false
+        allowed_base_urls: ["http://localhost:8000/v1", "https://models.corp/*"]
+
+    user_datasources:
+      enabled: false
+      allowed_types: [postgresql, mysql, oceanbase]
+      allowed_hosts: [localhost, 127.0.0.1, "*.corp"]
+      default_ports:
+        postgresql: "5432"
+        mysql: "3306"
+        oceanbase: "2881"
+
     user_store:
       class: datus_enterprise.postgres_stores:PgEnterpriseUserStore
       kwargs: &enterprise_pg
@@ -85,6 +99,18 @@ agent:
     secret_store:
       class: datus_enterprise.postgres_stores:PgEnterpriseSecretStore
       kwargs: *enterprise_pg
+
+    user_model_credential_store:
+      class: datus_enterprise.postgres_stores:PgUserModelCredentialStore
+      kwargs:
+        <<: *enterprise_pg
+        encryption_secret: ${DATUS_USER_MODEL_CREDENTIAL_SECRET}
+
+    user_datasource_store:
+      class: datus_enterprise.postgres_stores:PgUserDatasourceStore
+      kwargs:
+        <<: *enterprise_pg
+        encryption_secret: ${DATUS_USER_DATASOURCE_SECRET}
 
   sql_policy:
     enabled: false

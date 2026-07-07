@@ -17,6 +17,8 @@ from datus_enterprise.postgres_stores import (
     PgEnterpriseSecretStore,
     PgEnterpriseUserStore,
     PgSessionOwnerStore,
+    PgUserDatasourceStore,
+    PgUserModelCredentialStore,
 )
 
 NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
@@ -81,6 +83,9 @@ class FakeConnection:
         self.quotas = {}
         self.usage = {}
         self.secrets = {}
+        self.model_credentials = {}
+        self.model_preferences = {}
+        self.user_datasources = {}
         self.queries = []
         self.transaction_count = 0
 
@@ -154,6 +159,32 @@ class FakeConnection:
         if "DELETE FROM enterprise_secrets" in normalized:
             deleted = self.secrets.pop(args[0], None)
             return f"DELETE {1 if deleted else 0}"
+        if "DELETE FROM user_model_credentials" in normalized:
+            deleted = self.model_credentials.pop((args[0], args[1]), None)
+            return f"DELETE {1 if deleted else 0}"
+        if "UPDATE user_model_preferences SET default_credential_id = NULL" in normalized:
+            preference = self.model_preferences.get(args[0])
+            if preference and preference["default_credential_id"] == args[1]:
+                preference["default_credential_id"] = None
+                preference["default_model"] = None
+                preference["updated_at"] = NOW
+                return "UPDATE 1"
+            return "UPDATE 0"
+        if "UPDATE user_model_credentials SET last_used_at" in normalized:
+            row = self.model_credentials.get((args[0], args[1]))
+            if row is None:
+                return "UPDATE 0"
+            row["last_used_at"] = NOW
+            return "UPDATE 1"
+        if "DELETE FROM user_datasources" in normalized:
+            deleted = self.user_datasources.pop((args[0], args[1]), None)
+            return f"DELETE {1 if deleted else 0}"
+        if "UPDATE user_datasources SET last_used_at" in normalized:
+            row = self.user_datasources.get((args[0], args[1]))
+            if row is None:
+                return "UPDATE 0"
+            row["last_used_at"] = NOW
+            return "UPDATE 1"
         raise AssertionError(f"Unhandled execute: {normalized}")
 
     async def executemany(self, query, records):
@@ -291,6 +322,94 @@ class FakeConnection:
             return row
         if "FROM enterprise_secrets" in normalized and "WHERE name" in normalized:
             return self.secrets.get(args[0])
+        if "INSERT INTO user_model_credentials" in normalized:
+            user_id, credential_id, provider, model, api_key_blob, api_key_hint, base_url, display_name, enabled = args
+            existing = self.model_credentials.get((user_id, credential_id), {})
+            row = Row(
+                user_id=user_id,
+                credential_id=credential_id,
+                provider=provider,
+                model=model,
+                api_key_blob=api_key_blob,
+                api_key_hint=api_key_hint,
+                base_url=base_url,
+                display_name=display_name,
+                enabled=enabled,
+                last_used_at=existing.get("last_used_at"),
+                created_at=existing.get("created_at", NOW),
+                updated_at=NOW,
+            )
+            self.model_credentials[(user_id, credential_id)] = row
+            return row
+        if "FROM user_model_credentials" in normalized and "WHERE user_id" in normalized:
+            return self.model_credentials.get((args[0], args[1]))
+        if "UPDATE user_model_credentials" in normalized and "RETURNING" in normalized:
+            row = self.model_credentials.get((args[0], args[1]))
+            if row is None:
+                return None
+            row["enabled"] = args[2]
+            row["updated_at"] = NOW
+            return row
+        if "INSERT INTO user_model_preferences" in normalized:
+            user_id, default_credential_id, default_model = args
+            existing = self.model_preferences.get(user_id, {})
+            row = Row(
+                user_id=user_id,
+                default_credential_id=default_credential_id,
+                default_model=default_model,
+                created_at=existing.get("created_at", NOW),
+                updated_at=NOW,
+            )
+            self.model_preferences[user_id] = row
+            return row
+        if "FROM user_model_preferences" in normalized and "WHERE user_id" in normalized:
+            return self.model_preferences.get(args[0])
+        if "INSERT INTO user_datasources" in normalized:
+            (
+                user_id,
+                datasource_id,
+                datasource_type,
+                host,
+                port,
+                username,
+                password_blob,
+                password_hint,
+                database_name,
+                schema_name,
+                catalog_name,
+                display_name,
+                enabled,
+            ) = args
+            existing = self.user_datasources.get((user_id, datasource_id), {})
+            row = Row(
+                user_id=user_id,
+                datasource_id=datasource_id,
+                datasource_type=datasource_type,
+                host=host,
+                port=port,
+                username=username,
+                password_blob=password_blob,
+                password_hint=password_hint,
+                database_name=database_name,
+                schema_name=schema_name,
+                catalog_name=catalog_name,
+                display_name=display_name,
+                enabled=enabled,
+                last_used_at=existing.get("last_used_at"),
+                created_at=existing.get("created_at", NOW),
+                updated_at=NOW,
+            )
+            self.user_datasources[(user_id, datasource_id)] = row
+            return row
+        if "FROM user_datasources" in normalized and "WHERE user_id" in normalized:
+            return self.user_datasources.get((args[0], args[1]))
+        if "UPDATE user_datasources" in normalized and "RETURNING" in normalized:
+            row = self.user_datasources.get((args[0], args[1]))
+            if row is None:
+                return None
+            row["enabled"] = args[2]
+            row["updated_at"] = NOW
+            return row
         raise AssertionError(f"Unhandled fetchrow: {normalized}")
 
     async def fetch(self, query, *args):
@@ -358,6 +477,12 @@ class FakeConnection:
                 prefix = _unescape_like_prefix(args[0])
                 rows = [row for row in rows if row["name"].startswith(prefix)]
             return sorted(rows, key=lambda row: row["name"])
+        if "FROM user_model_credentials" in normalized:
+            rows = [row for (user_id, _), row in self.model_credentials.items() if user_id == args[0]]
+            return sorted(rows, key=lambda row: (row["created_at"], row["credential_id"]))
+        if "FROM user_datasources" in normalized:
+            rows = [row for (user_id, _), row in self.user_datasources.items() if user_id == args[0]]
+            return sorted(rows, key=lambda row: (row["created_at"], row["datasource_id"]))
         raise AssertionError(f"Unhandled fetch: {normalized}")
 
     def _role_row(self, role_id):
@@ -762,6 +887,82 @@ async def test_pg_secret_store_prefix_escapes_sql_like_wildcards(fake_pg):
     query, args = fetch_queries[-1][1], fetch_queries[-1][2]
     assert "ESCAPE" in query
     assert args == ("datasource\\_%",)
+
+
+@pytest.mark.asyncio
+async def test_pg_user_model_credential_store_encrypts_and_clears_default(fake_pg):
+    store = PgUserModelCredentialStore(
+        dsn="postgresql://metadata",
+        encryption_secret="test-user-model-credential-secret-32",
+    )
+
+    credential = await store.put_credential(
+        user_id="alice",
+        credential_id="cred-openai",
+        provider="openai",
+        model="gpt-4.1-mini",
+        api_key="sk-test-secret",
+        base_url="https://models.corp/v1",
+        display_name="OpenAI",
+    )
+    preference = await store.put_preference(
+        user_id="alice",
+        default_credential_id="cred-openai",
+        default_model="gpt-4.1-mini",
+    )
+
+    stored_blob = fake_pg.model_credentials[("alice", "cred-openai")]["api_key_blob"]
+    assert stored_blob != "sk-test-secret"
+    assert credential["api_key"] == "sk-test-secret"
+    assert credential["base_url"] == "https://models.corp/v1"
+    assert credential["ref_hint"] == "***cret"
+    assert preference["default_credential_id"] == "cred-openai"
+    assert await store.get_credential("bob", "cred-openai") is None
+
+    disabled = await store.set_credential_enabled("alice", "cred-openai", False)
+    assert disabled["enabled"] is False
+
+    await store.touch_credential_used("alice", "cred-openai")
+    assert (await store.get_credential("alice", "cred-openai"))["last_used_at"] == "2026-01-01T00:00:00+00:00"
+    assert [item["id"] for item in await store.list_credentials("alice")] == ["cred-openai"]
+
+    assert await store.delete_credential("alice", "cred-openai") is True
+    assert (await store.get_preference("alice"))["default_credential_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_pg_user_datasource_store_encrypts_and_isolates_password(fake_pg):
+    store = PgUserDatasourceStore(
+        dsn="postgresql://metadata",
+        encryption_secret="test-user-datasource-secret-32xxxx",
+    )
+
+    datasource = await store.put_datasource(
+        user_id="alice",
+        datasource_id="ds-finance",
+        datasource_type="postgresql",
+        host="localhost",
+        port="5432",
+        username="alice",
+        password="alice-db-secret",
+        database="finance",
+        schema="public",
+        display_name="Finance",
+    )
+
+    stored_blob = fake_pg.user_datasources[("alice", "ds-finance")]["password_blob"]
+    assert stored_blob != "alice-db-secret"
+    assert datasource["password"] == "alice-db-secret"
+    assert datasource["password_hint"] == "***cret"
+    assert await store.get_datasource("bob", "ds-finance") is None
+
+    disabled = await store.set_datasource_enabled("alice", "ds-finance", False)
+    assert disabled["enabled"] is False
+
+    await store.touch_datasource_used("alice", "ds-finance")
+    assert (await store.get_datasource("alice", "ds-finance"))["last_used_at"] == "2026-01-01T00:00:00+00:00"
+    assert [item["id"] for item in await store.list_datasources("alice")] == ["ds-finance"]
+    assert await store.delete_datasource("alice", "ds-finance") is True
 
 
 def _unescape_like_prefix(pattern: str) -> str:

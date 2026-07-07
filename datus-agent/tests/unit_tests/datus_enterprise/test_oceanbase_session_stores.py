@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -20,7 +22,49 @@ from datus_enterprise.oceanbase_stores import (
     ObEnterpriseSecretStore,
     ObEnterpriseUserStore,
     ObSessionOwnerStore,
+    ObUserDatasourceStore,
+    ObUserModelCredentialStore,
 )
+
+
+class FakeObCursor:
+    def __init__(self, *, existing_base_url: bool) -> None:
+        self.existing_base_url = existing_base_url
+        self.statements: list[tuple[str, tuple[object, ...]]] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, query: str, params: tuple[object, ...] = ()) -> None:
+        self.statements.append((query, params))
+
+    def fetchone(self) -> dict[str, str] | None:
+        return {"Field": "base_url"} if self.existing_base_url else None
+
+
+class FakeObConnection:
+    def __init__(self, cursor: FakeObCursor) -> None:
+        self._cursor = cursor
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def cursor(self) -> FakeObCursor:
+        return self._cursor
+
+
+class FakeObPool:
+    def __init__(self, cursor: FakeObCursor) -> None:
+        self._cursor = cursor
+
+    def connection(self, *, database: str | None = None) -> FakeObConnection:
+        return FakeObConnection(self._cursor)
 
 
 def test_ob_session_store_schemas_are_additive_and_have_no_tenant_id():
@@ -34,6 +78,9 @@ def test_ob_session_store_schemas_are_additive_and_have_no_tenant_id():
     assert "create table if not exists enterprise_audit_logs" in normalized
     assert "create table if not exists enterprise_quotas" in normalized
     assert "create table if not exists enterprise_secrets" in normalized
+    assert "create table if not exists user_model_credentials" in normalized
+    assert "create table if not exists user_model_preferences" in normalized
+    assert "create table if not exists user_datasources" in normalized
     assert "create table if not exists enterprise_session_bodies" in normalized
     assert "create table if not exists enterprise_session_messages" in normalized
     assert "create table if not exists enterprise_session_turn_usage" in normalized
@@ -42,6 +89,27 @@ def test_ob_session_store_schemas_are_additive_and_have_no_tenant_id():
     assert "tenant_id" not in normalized
     assert "drop table" not in normalized
     assert "alter table" not in normalized
+
+
+def test_ob_user_model_credential_store_adds_base_url_column_for_existing_table():
+    cursor = FakeObCursor(existing_base_url=False)
+    store = ObUserModelCredentialStore.__new__(ObUserModelCredentialStore)
+    store._config = SimpleNamespace(database="datus_enterprise")
+    store._pool = FakeObPool(cursor)
+    store._schema_lock = threading.Lock()
+    store._user_model_credential_schema_ready = False
+    ensured = []
+    store._ensure_database_and_schema_sync = lambda schema_sql: ensured.append(schema_sql)
+
+    store._ensure_user_model_credential_columns_sync()
+    first_statement_count = len(cursor.statements)
+    store._ensure_user_model_credential_columns_sync()
+
+    normalized = [" ".join(query.lower().split()) for query, _ in cursor.statements]
+    assert ensured
+    assert normalized[0] == "show columns from user_model_credentials like %s"
+    assert normalized[1] == "alter table user_model_credentials add column base_url varchar(512)"
+    assert len(cursor.statements) == first_statement_count
 
 
 def test_ob_session_stores_reject_invalid_config():
@@ -118,6 +186,20 @@ def test_oceanbase_session_store_loader_wires_optional_providers():
                 "class": "datus_enterprise.oceanbase_stores:ObEnterpriseSecretStore",
                 "kwargs": kwargs,
             },
+            "user_model_credential_store": {
+                "class": "datus_enterprise.oceanbase_stores:ObUserModelCredentialStore",
+                "kwargs": {
+                    **kwargs,
+                    "encryption_secret": "test-user-model-credential-secret-32",
+                },
+            },
+            "user_datasource_store": {
+                "class": "datus_enterprise.oceanbase_stores:ObUserDatasourceStore",
+                "kwargs": {
+                    **kwargs,
+                    "encryption_secret": "test-user-datasource-secret-32xxxx",
+                },
+            },
             "session_body_store": {
                 "class": "datus_enterprise.oceanbase_session_store:ObSessionBodyStore",
                 "kwargs": kwargs,
@@ -134,4 +216,6 @@ def test_oceanbase_session_store_loader_wires_optional_providers():
     assert isinstance(extensions.audit_sink, ObAuditSink)
     assert isinstance(extensions.quota_store, ObEnterpriseQuotaStore)
     assert isinstance(extensions.secret_store, ObEnterpriseSecretStore)
+    assert isinstance(extensions.user_model_credential_store, ObUserModelCredentialStore)
+    assert isinstance(extensions.user_datasource_store, ObUserDatasourceStore)
     assert isinstance(extensions.session_body_store, ObSessionBodyStore)
