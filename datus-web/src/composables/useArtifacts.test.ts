@@ -301,16 +301,9 @@ describe("useArtifacts", () => {
     expect(artifacts.shareDirectoryError.value).toBeNull();
   });
 
-  it("opens artifact previews from authenticated HTML responses instead of raw backend URLs", async () => {
-    const openedWindow = {
-      location: { href: "" },
-      opener: {},
-      close: vi.fn(),
-    };
-    const openWindow = vi.fn(() => openedWindow);
+  it("loads artifact previews into an embedded viewer from authenticated HTML responses", async () => {
     const createObjectUrl = vi.fn(() => "blob:artifact-preview");
     const revokeObjectUrl = vi.fn();
-    vi.stubGlobal("window", { open: openWindow });
     vi.stubGlobal("URL", {
       createObjectURL: createObjectUrl,
       revokeObjectURL: revokeObjectUrl,
@@ -318,13 +311,14 @@ describe("useArtifacts", () => {
     const { useArtifacts } = await import("./useArtifacts");
     const artifacts = useArtifacts();
 
-    await artifacts.openHtmlPreview("report", "fund-report");
+    const url = await artifacts.openHtmlPreview("report", "fund-report");
 
-    expect(openWindow).toHaveBeenCalledWith("about:blank", "_blank");
-    expect(openedWindow.opener).toBeNull();
     expect(reportHtml).toHaveBeenCalledWith("http://api.test", "fund-report");
     expect(createObjectUrl).toHaveBeenCalled();
-    expect(openedWindow.location.href).toBe("blob:artifact-preview");
+    expect(url).toBe("blob:artifact-preview");
+    expect(artifacts.activePreviewUrl.value).toBe("blob:artifact-preview");
+    expect(artifacts.activePreviewTab.value).toBe("report");
+    expect(artifacts.activePreviewSlug.value).toBe("fund-report");
     expect(artifacts.previewLoadingKey.value).toBeNull();
     expect(artifacts.previewError.value).toBeNull();
   });
@@ -340,12 +334,6 @@ describe("useArtifacts", () => {
     );
     setCurrentAccessToken("dev-alice-token");
     let previewBlob: Blob | null = null;
-    const openedWindow = {
-      location: { href: "" },
-      opener: {},
-      close: vi.fn(),
-    };
-    vi.stubGlobal("window", { open: vi.fn(() => openedWindow) });
     vi.stubGlobal("URL", {
       createObjectURL: vi.fn((blob: Blob) => {
         previewBlob = blob;
@@ -359,7 +347,7 @@ describe("useArtifacts", () => {
     await artifacts.openHtmlPreview("dashboard", "fund-overview");
 
     expect(dashboardHtml).toHaveBeenCalledWith("http://api.test", "fund-overview");
-    expect(openedWindow.location.href).toBe("blob:dashboard-preview");
+    expect(artifacts.activePreviewUrl.value).toBe("blob:dashboard-preview");
     expect(previewBlob).not.toBeNull();
     const html = await previewBlob!.text();
     expect(html).toContain("Bearer \" + token");

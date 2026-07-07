@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ExternalLinkIcon, FileSearchIcon, Share2Icon } from "@lucide/vue"
+import { EyeIcon, FileSearchIcon, Share2Icon } from "@lucide/vue"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -85,8 +85,8 @@ const emit = defineEmits<{
             :disabled="props.openingSlug === item.slug"
             @click="emit('openPreview', item.slug)"
           >
-            <ExternalLinkIcon data-icon="inline-start" />
-            {{ props.openingSlug === item.slug ? "打开中" : "打开" }}
+            <EyeIcon data-icon="inline-start" />
+            {{ props.openingSlug === item.slug ? "加载中" : "查看" }}
           </Button>
           <Button
             v-if="item.can_manage_share"

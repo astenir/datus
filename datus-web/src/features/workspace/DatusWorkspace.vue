@@ -148,6 +148,10 @@ const headerTitle = computed(() => {
   }
 
   if (activeView.value === "artifacts") {
+    if (artifactSlug.value) {
+      return artifactTab.value === "report" ? "报表预览" : "仪表盘预览"
+    }
+
     return artifactTab.value === "report" ? "报表" : "仪表盘"
   }
 
@@ -303,7 +307,6 @@ function handleLogout() {
             :tab="artifactTab"
             :selected-slug="artifactSlug"
             @open-artifact="openArtifactDetail"
-            @close-detail="openArtifactTab(artifactTab)"
           />
         </TabsContent>
         <TabsContent

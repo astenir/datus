@@ -13,6 +13,7 @@ import { artifactPreviewKey, useArtifacts } from "@/composables/useArtifacts"
 import ArtifactCollectionGrid from "@/features/artifacts/ArtifactCollectionGrid.vue"
 import ArtifactDetailPanel from "@/features/artifacts/ArtifactDetailPanel.vue"
 import ArtifactShareDialog from "@/features/artifacts/ArtifactShareDialog.vue"
+import ArtifactViewerFrame from "@/features/artifacts/ArtifactViewerFrame.vue"
 import type { ArtifactShareUpdate } from "@/types"
 import type { ArtifactViewTab } from "@/features/workspace/types"
 
@@ -25,27 +26,37 @@ const props = withDefaults(defineProps<{
 })
 const emit = defineEmits<{
   "open-artifact": [tab: ArtifactViewTab, slug: string]
-  "close-detail": []
 }>()
 
 const artifacts = useArtifacts()
 const shareDialogOpen = shallowRef(false)
 const shareTargetTab = shallowRef<ArtifactViewTab>("dashboard")
 const shareTargetSlug = shallowRef<string | null>(null)
+const detailDialogOpen = shallowRef(false)
+const detailTargetSlug = shallowRef<string | null>(null)
 
-const selectedDetailSlug = computed(() => props.selectedSlug?.trim() || null)
-const detailDialogOpen = computed(() => Boolean(selectedDetailSlug.value))
+const selectedViewerSlug = computed(() => props.selectedSlug?.trim() || null)
+const selectedDetailSlug = computed(() => detailTargetSlug.value)
 const detailKindLabel = computed(() => props.tab === "report" ? "报表" : "仪表盘")
-const selectedPreviewKey = computed(() => {
-  const slug = selectedDetailSlug.value
+const viewerPreviewKey = computed(() => {
+  const slug = selectedViewerSlug.value
   return slug ? artifactPreviewKey(props.tab, slug) : null
 })
 
-const selectedPreviewOpening = computed(() => {
-  return Boolean(selectedPreviewKey.value && artifacts.previewLoadingKey.value === selectedPreviewKey.value)
+const viewerPreviewOpening = computed(() => {
+  return Boolean(viewerPreviewKey.value && artifacts.previewLoadingKey.value === viewerPreviewKey.value)
+})
+const viewerPreviewUrl = computed(() => {
+  if (!viewerPreviewKey.value) return null
+  const activeKey = artifacts.activePreviewTab.value && artifacts.activePreviewSlug.value
+    ? artifactPreviewKey(artifacts.activePreviewTab.value, artifacts.activePreviewSlug.value)
+    : null
+  return activeKey === viewerPreviewKey.value ? artifacts.activePreviewUrl.value : null
 })
 const selectedShareLoading = computed(() => {
-  return Boolean(selectedPreviewKey.value && artifacts.shareLoadingKey.value === selectedPreviewKey.value)
+  const slug = selectedDetailSlug.value
+  if (!slug) return false
+  return artifacts.shareLoadingKey.value === artifactPreviewKey(props.tab, slug)
 })
 const selectedDetailCanManageShare = computed(() => {
   const slug = selectedDetailSlug.value
@@ -72,17 +83,27 @@ function sharingSlugFor(tab: ArtifactViewTab): string | null {
   return key?.startsWith(prefix) ? key.slice(prefix.length) : null
 }
 
-function openArtifact(tab: ArtifactViewTab, slug: string) {
-  emit("open-artifact", tab, slug)
-}
-
 function runDashboardQuery(querySlug: string, params: Record<string, unknown>) {
   if (props.tab !== "dashboard" || !selectedDetailSlug.value) return
   void artifacts.runDashboardQuery(selectedDetailSlug.value, querySlug, params)
 }
 
 function openPreview(tab: ArtifactViewTab, slug: string | null | undefined) {
-  void artifacts.openHtmlPreview(tab, slug)
+  const normalizedSlug = slug?.trim() || null
+  if (!normalizedSlug) return
+
+  detailDialogOpen.value = false
+  detailTargetSlug.value = null
+  emit("open-artifact", tab, normalizedSlug)
+}
+
+function openDetail(tab: ArtifactViewTab, slug: string | null | undefined) {
+  const normalizedSlug = slug?.trim() || null
+  if (!normalizedSlug) return
+
+  detailTargetSlug.value = normalizedSlug
+  detailDialogOpen.value = true
+  void artifacts.loadDetail(tab, normalizedSlug)
 }
 
 function openShare(tab: ArtifactViewTab, slug: string | null | undefined) {
@@ -113,25 +134,45 @@ function handleShareDialogOpen(open: boolean) {
 }
 
 function handleDetailDialogOpen(open: boolean) {
+  detailDialogOpen.value = open
   if (!open) {
-    emit("close-detail")
+    detailTargetSlug.value = null
   }
 }
 
 onMounted(artifacts.loadArtifacts)
 
 watch(
-  () => [props.tab, selectedDetailSlug.value] as const,
+  () => [props.tab, selectedViewerSlug.value] as const,
   ([tab, slug]) => {
-    void artifacts.loadDetail(tab, slug)
+    if (slug) {
+      void artifacts.openHtmlPreview(tab, slug)
+      return
+    }
+
+    artifacts.clearPreview()
   },
   { immediate: true },
 )
 </script>
 
 <template>
-  <section class="min-h-0 flex-1 overflow-y-auto p-4">
-    <div class="flex flex-col gap-4">
+  <section class="min-h-0 flex-1 overflow-hidden">
+    <ArtifactViewerFrame
+      v-if="selectedViewerSlug"
+      class="h-full rounded-none border-0"
+      :title="detailKindLabel"
+      :url="viewerPreviewUrl"
+      :loading="viewerPreviewOpening"
+      :error="artifacts.previewError.value"
+      :show-chrome="false"
+      @reload="artifacts.openHtmlPreview(props.tab, selectedViewerSlug)"
+    />
+
+    <div
+      v-else
+      class="flex h-full flex-col gap-4 overflow-y-auto p-4"
+    >
       <div class="flex items-center justify-end">
         <Button
           variant="outline"
@@ -151,7 +192,7 @@ watch(
           :opening-slug="dashboardOpeningSlug"
           :sharing-slug="dashboardSharingSlug"
           empty-title="暂无仪表盘"
-          @select="openArtifact('dashboard', $event)"
+          @select="openDetail('dashboard', $event)"
           @open-preview="openPreview('dashboard', $event)"
           @share="openShare('dashboard', $event)"
         />
@@ -164,7 +205,7 @@ watch(
           :opening-slug="reportOpeningSlug"
           :sharing-slug="reportSharingSlug"
           empty-title="暂无报表"
-          @select="openArtifact('report', $event)"
+          @select="openDetail('report', $event)"
           @open-preview="openPreview('report', $event)"
           @share="openShare('report', $event)"
         />
@@ -190,7 +231,7 @@ watch(
             :detail="artifacts.activeDetail.value"
             :loading="artifacts.detailLoading.value"
             :error="artifacts.detailError.value"
-            :preview-opening="selectedPreviewOpening"
+            :preview-opening="false"
             :share-loading="selectedShareLoading"
             :can-manage-share="selectedDetailCanManageShare"
             :query-result="artifacts.queryResult.value"

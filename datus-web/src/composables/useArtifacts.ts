@@ -353,6 +353,10 @@ export function useArtifacts() {
   const queryRequestId = shallowRef(0);
   const previewLoadingKey = shallowRef<string | null>(null);
   const previewError = shallowRef<string | null>(null);
+  const activePreviewUrl = shallowRef<string | null>(null);
+  const activePreviewTab = shallowRef<ArtifactViewTab | null>(null);
+  const activePreviewSlug = shallowRef<string | null>(null);
+  const previewRequestId = shallowRef(0);
   const activeShare = ref<ArtifactShare | null>(null);
   const activeShareTab = shallowRef<ArtifactViewTab | null>(null);
   const activeShareSlug = shallowRef<string | null>(null);
@@ -409,38 +413,66 @@ export function useArtifacts() {
     if (stale) URL.revokeObjectURL(stale);
   }
 
+  function revokePreviewUrl(url: string | null) {
+    if (!url) return;
+
+    URL.revokeObjectURL(url);
+    const index = previewUrls.indexOf(url);
+    if (index !== -1) {
+      previewUrls.splice(index, 1);
+    }
+  }
+
+  function clearPreview() {
+    previewRequestId.value += 1;
+    previewLoadingKey.value = null;
+    previewError.value = null;
+    revokePreviewUrl(activePreviewUrl.value);
+    activePreviewUrl.value = null;
+    activePreviewTab.value = null;
+    activePreviewSlug.value = null;
+  }
+
   async function openHtmlPreview(tab: ArtifactViewTab, slugValue: string | null | undefined) {
     const slug = nonEmptySlug(slugValue);
-    if (!slug) return;
+    const requestId = previewRequestId.value + 1;
+    previewRequestId.value = requestId;
+
+    if (!slug) {
+      clearPreview();
+      return null;
+    }
 
     const key = artifactPreviewKey(tab, slug);
     previewLoadingKey.value = key;
     previewError.value = null;
-
-    const previewWindow = window.open("about:blank", "_blank");
-    if (previewWindow) {
-      previewWindow.opener = null;
-    }
+    activePreviewTab.value = tab;
+    activePreviewSlug.value = slug;
 
     try {
       const rawHtml = await artifactHtml(connection.effectiveBase(), tab, slug);
       const html = withArtifactPreviewRuntime(rawHtml, connection.effectiveBase(), getCurrentAccessToken());
       const url = createArtifactPreviewUrl(html);
-      rememberPreviewUrl(url);
 
-      if (previewWindow) {
-        previewWindow.location.href = url;
-        return;
+      if (previewRequestId.value !== requestId) {
+        URL.revokeObjectURL(url);
+        return null;
       }
 
-      window.open(url, "_blank", "noopener,noreferrer");
+      revokePreviewUrl(activePreviewUrl.value);
+      rememberPreviewUrl(url);
+      activePreviewUrl.value = url;
+      return url;
     } catch (err) {
       console.error("打开产物 HTML 预览失败:", err);
-      previewWindow?.close();
       previewError.value = "打开 HTML 预览失败";
       toast.error("打开 HTML 预览失败");
+      if (previewRequestId.value === requestId) {
+        activePreviewUrl.value = null;
+      }
+      return null;
     } finally {
-      if (previewLoadingKey.value === key) {
+      if (previewRequestId.value === requestId && previewLoadingKey.value === key) {
         previewLoadingKey.value = null;
       }
     }
@@ -676,6 +708,9 @@ export function useArtifacts() {
     activeQuerySlug: readonly(activeQuerySlug),
     previewLoadingKey: readonly(previewLoadingKey),
     previewError: readonly(previewError),
+    activePreviewUrl: readonly(activePreviewUrl),
+    activePreviewTab: readonly(activePreviewTab),
+    activePreviewSlug: readonly(activePreviewSlug),
     activeShare: readonly(activeShare),
     activeShareTab: readonly(activeShareTab),
     activeShareSlug: readonly(activeShareSlug),
@@ -691,6 +726,7 @@ export function useArtifacts() {
     runDashboardQuery,
     htmlUrl,
     openHtmlPreview,
+    clearPreview,
     loadShare,
     loadShareDirectory,
     saveShare,

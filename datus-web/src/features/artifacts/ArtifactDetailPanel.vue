@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue"
-import { ExternalLinkIcon, Share2Icon } from "@lucide/vue"
+import { EyeIcon, Share2Icon } from "@lucide/vue"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -176,8 +176,8 @@ const templates = computed(() => isDashboardDetail(props.detail) ? props.detail.
           :disabled="props.previewOpening"
           @click="emit('openPreview')"
         >
-          <ExternalLinkIcon data-icon="inline-start" />
-          {{ props.previewOpening ? "打开中" : "打开 HTML 预览" }}
+          <EyeIcon data-icon="inline-start" />
+          {{ props.previewOpening ? "加载中" : "查看" }}
         </Button>
         <Button
           v-if="props.canManageShare"
