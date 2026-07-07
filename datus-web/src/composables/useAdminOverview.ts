@@ -65,8 +65,13 @@ function parseScope(text: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-function standardGrantScopeMode(scope: Record<string, unknown> | undefined): DatasourceScopeMode {
+function isWildcardDatasourceKey(datasourceKey: string): boolean {
+  return datasourceKey.trim() === "*";
+}
+
+function standardGrantScopeMode(datasourceKey: string, scope: Record<string, unknown> | undefined): DatasourceScopeMode {
   if (!scope || Object.keys(scope).length === 0) return "all";
+  if (isWildcardDatasourceKey(datasourceKey)) return "json";
   return isStandardDatasourceGrantScope(scope) ? "picker" : "json";
 }
 
@@ -229,7 +234,7 @@ export function useAdminOverview() {
       effect: grant.effect === "deny" ? "deny" : "allow",
       scope_text: scopeText(scope),
     };
-    grantScopeMode.value = standardGrantScopeMode(scope);
+    grantScopeMode.value = standardGrantScopeMode(grant.datasource_key, scope);
     selectedGrantNodes.value = grantScopeMode.value === "picker"
       ? datasourceNodeIdsFromScope(grant.datasource_key, scope, grantCatalogDatabases.value)
       : [];
@@ -349,6 +354,7 @@ export function useAdminOverview() {
     grantCatalogError.value = null;
     grantCatalogDatabases.value = [];
     if (!normalizedDatasourceKey) return;
+    if (isWildcardDatasourceKey(normalizedDatasourceKey)) return;
 
     const requestId = grantCatalogRequestId + 1;
     grantCatalogRequestId = requestId;
@@ -494,6 +500,10 @@ export function useAdminOverview() {
 
   function setGrantScopeMode(value: unknown) {
     if (value !== "all" && value !== "picker" && value !== "json") return;
+    if (value === "picker" && isWildcardDatasourceKey(grantForm.value.datasource_key)) {
+      toast.error("通配数据源 * 不支持目录选择器，请使用整个数据源或 JSON 范围");
+      return;
+    }
     grantScopeMode.value = value;
     if (value === "all") {
       selectedGrantNodes.value = [];

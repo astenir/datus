@@ -68,6 +68,23 @@ const grantSubjectOptions = computed(() => {
     label: user.display_name ? `${user.display_name} (${user.user_id})` : user.user_id,
   }))
 })
+const grantDatasourceOptions = computed(() => {
+  const options = props.overview.data.value.datasources.map((datasource) => ({
+    value: datasource.name,
+    label: datasource.name,
+  }))
+  const currentDatasourceKey = props.overview.grantForm.value.datasource_key.trim()
+  if (currentDatasourceKey && !options.some((option) => option.value === currentDatasourceKey)) {
+    return [
+      {
+        value: currentDatasourceKey,
+        label: `当前：${currentDatasourceKey}`,
+      },
+      ...options,
+    ]
+  }
+  return options
+})
 const quotaSubjectOptions = computed(() => {
   const subjectType = props.overview.quotaForm.value.subject_type
   if (subjectType === "global") return []
@@ -1001,11 +1018,11 @@ function selectedPresetCount(group: PermissionPresetGroup): number {
               <SelectContent>
                 <SelectGroup>
                   <SelectItem
-                    v-for="datasource in overview.data.value.datasources"
-                    :key="datasource.name"
-                    :value="datasource.name"
+                    v-for="datasource in grantDatasourceOptions"
+                    :key="datasource.value"
+                    :value="datasource.value"
                   >
-                    {{ datasource.name }}
+                    {{ datasource.label }}
                   </SelectItem>
                 </SelectGroup>
               </SelectContent>

@@ -365,6 +365,44 @@ describe("useAdminOverview", () => {
     expect(overview.editingGrant.value).toBeNull();
   });
 
+  it("does not request the runtime catalog for wildcard datasource grants", async () => {
+    const wildcardGrant = {
+      ...grant,
+      datasource_key: "*",
+      scope: { schemas: ["public"] },
+    };
+    getGrant.mockResolvedValueOnce({ data: wildcardGrant });
+
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+
+    await overview.openGrantDetail("role", "analyst", "*");
+
+    expect(getGrant).toHaveBeenCalledWith("role", "analyst", "*");
+    expect(listCatalog).not.toHaveBeenCalled();
+    expect(overview.grantForm.value.datasource_key).toBe("*");
+    expect(overview.grantScopeMode.value).toBe("json");
+    expect(overview.grantCatalogError.value).toBeNull();
+  });
+
+  it("keeps wildcard datasource grants out of picker mode", async () => {
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+    overview.grantForm.value = {
+      subject_type: "role",
+      subject_id: "analyst",
+      datasource_key: "*",
+      effect: "allow",
+      scope_text: "{}",
+    };
+
+    overview.setGrantScopeMode("picker");
+
+    expect(overview.grantScopeMode.value).toBe("all");
+    expect(listCatalog).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledWith("通配数据源 * 不支持目录选择器，请使用整个数据源或 JSON 范围");
+  });
+
   it("rejects invalid datasource grant scope JSON before calling the API", async () => {
     const { useAdminOverview } = await import("./useAdminOverview");
     const overview = useAdminOverview();
