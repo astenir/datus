@@ -5,6 +5,7 @@ import {
   adminArtifactFromQuery,
   adminGrantFromQuery,
   adminRoleFromQuery,
+  adminSecretFromQuery,
   adminTabFromQuery,
   adminSessionFromQuery,
   adminUserFromQuery,
@@ -37,7 +38,7 @@ describe("workspace route state", () => {
   it("reads admin tab query state with a stable fallback", () => {
     expect(adminTabFromQuery({ tab: "sessions" })).toBe("sessions")
     expect(adminTabFromQuery({ tab: ["", "artifacts"] })).toBe("artifacts")
-    expect(adminTabFromQuery({ tab: "secrets" })).toBe("users")
+    expect(adminTabFromQuery({ tab: "secrets" })).toBe("secrets")
     expect(adminTabFromQuery({ tab: "legacy-permissions" })).toBe("users")
     expect(adminTabFromQuery({ tab: " " })).toBe("users")
   })
@@ -58,6 +59,12 @@ describe("workspace route state", () => {
     expect(adminRoleFromQuery({ role: " analyst " })).toBe("analyst")
     expect(adminRoleFromQuery({ role: ["", "admin"] })).toBe("admin")
     expect(adminRoleFromQuery({ role: " " })).toBeNull()
+  })
+
+  it("reads admin secret detail query state", () => {
+    expect(adminSecretFromQuery({ secret: " openai.default " })).toBe("openai.default")
+    expect(adminSecretFromQuery({ secret: ["", "llm.deepseek"] })).toBe("llm.deepseek")
+    expect(adminSecretFromQuery({ secret: " " })).toBeNull()
   })
 
   it("reads admin datasource grant query state", () => {

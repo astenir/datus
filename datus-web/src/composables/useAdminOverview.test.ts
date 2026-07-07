@@ -8,6 +8,10 @@ const deleteGrant = vi.fn();
 const listQuotas = vi.fn();
 const upsertQuota = vi.fn();
 const listUsage = vi.fn();
+const listSecrets = vi.fn();
+const getSecret = vi.fn();
+const upsertSecret = vi.fn();
+const deleteSecret = vi.fn();
 const listSessions = vi.fn();
 const getSession = vi.fn();
 const stopSession = vi.fn();
@@ -33,6 +37,12 @@ vi.mock("@/lib/api", () => ({
     listQuotas,
     upsertQuota,
     listUsage,
+  },
+  adminSecretApi: {
+    listSecrets,
+    getSecret,
+    upsertSecret,
+    deleteSecret,
   },
   adminSessionApi: {
     listSessions,
@@ -82,6 +92,16 @@ const artifactAcl = {
   datasources: ["fund"],
 };
 
+const secret = {
+  name: "openai.default",
+  provider: "env",
+  ref_hint: "***KEY",
+  description: "默认 OpenAI 密钥引用",
+  enabled: true,
+  created_at: null,
+  updated_at: null,
+};
+
 describe("useAdminOverview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -90,6 +110,10 @@ describe("useAdminOverview", () => {
     getGrant.mockResolvedValue({ data: grant });
     listQuotas.mockResolvedValue({ data: [] });
     listUsage.mockResolvedValue({ data: [] });
+    listSecrets.mockResolvedValue({ data: [secret] });
+    getSecret.mockResolvedValue({ data: secret });
+    upsertSecret.mockResolvedValue({ data: secret });
+    deleteSecret.mockResolvedValue({ data: {} });
     listSessions.mockResolvedValue({ data: [] });
     getSession.mockResolvedValue({
       data: {
@@ -130,10 +154,12 @@ describe("useAdminOverview", () => {
     expect(listGrants).toHaveBeenCalled();
     expect(listQuotas).toHaveBeenCalled();
     expect(listUsage).toHaveBeenCalled();
+    expect(listSecrets).toHaveBeenCalled();
     expect(listSessions).toHaveBeenCalled();
     expect(listArtifacts).toHaveBeenCalled();
     expect(overview.defaultDatasourceName.value).toBe("fund");
     expect(overview.data.value.datasourceGrants).toEqual([grant]);
+    expect(overview.data.value.secrets).toEqual([secret]);
   });
 
   it("refreshes focused overview slices without overfetching unrelated tab data", async () => {
@@ -176,12 +202,17 @@ describe("useAdminOverview", () => {
         slug: "risk-report",
       },
     };
+    const nextSecret = {
+      ...secret,
+      name: "deepseek.default",
+    };
 
     vi.clearAllMocks();
     listDatasources.mockResolvedValue({ data: [{ name: "risk", type: "postgres", is_default: false }] });
     listGrants.mockResolvedValue({ data: [nextGrant] });
     listQuotas.mockResolvedValue({ data: [nextQuota] });
     listUsage.mockResolvedValue({ data: [nextUsage] });
+    listSecrets.mockResolvedValue({ data: [nextSecret] });
     listSessions.mockResolvedValue({ data: [nextSession] });
     listArtifacts.mockResolvedValue({ data: [nextArtifact] });
 
@@ -190,6 +221,7 @@ describe("useAdminOverview", () => {
     expect(listDatasources).toHaveBeenCalledTimes(1);
     expect(listGrants).toHaveBeenCalledTimes(1);
     expect(listQuotas).not.toHaveBeenCalled();
+    expect(listSecrets).not.toHaveBeenCalled();
     expect(listSessions).not.toHaveBeenCalled();
     expect(listArtifacts).not.toHaveBeenCalled();
     expect(overview.data.value.datasourceGrants).toEqual([nextGrant]);
@@ -203,6 +235,7 @@ describe("useAdminOverview", () => {
     expect(listUsage).toHaveBeenCalledTimes(1);
     expect(listDatasources).not.toHaveBeenCalled();
     expect(listGrants).not.toHaveBeenCalled();
+    expect(listSecrets).not.toHaveBeenCalled();
     expect(overview.data.value.quotas).toEqual([nextQuota]);
     expect(overview.data.value.usage).toEqual([nextUsage]);
     expect(overview.data.value.datasourceGrants).toEqual([nextGrant]);
@@ -213,9 +246,20 @@ describe("useAdminOverview", () => {
 
     expect(listSessions).toHaveBeenCalledTimes(1);
     expect(listQuotas).not.toHaveBeenCalled();
+    expect(listSecrets).not.toHaveBeenCalled();
     expect(listArtifacts).not.toHaveBeenCalled();
     expect(overview.data.value.sessions).toEqual([nextSession]);
     expect(overview.data.value.quotas).toEqual([nextQuota]);
+
+    vi.clearAllMocks();
+
+    await overview.loadSecrets();
+
+    expect(listSecrets).toHaveBeenCalledTimes(1);
+    expect(listSessions).not.toHaveBeenCalled();
+    expect(listGrants).not.toHaveBeenCalled();
+    expect(overview.data.value.secrets).toEqual([nextSecret]);
+    expect(overview.data.value.sessions).toEqual([nextSession]);
 
     vi.clearAllMocks();
 
@@ -481,6 +525,54 @@ describe("useAdminOverview", () => {
 
     expect(upsertQuota).not.toHaveBeenCalled();
     expect(toastError).toHaveBeenCalledWith("请填写有效的额度主体、资源、限制和窗口");
+  });
+
+  it("loads and saves secret reference details without exposing plaintext values", async () => {
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+
+    const detailPromise = overview.openSecretDetail(" openai.default ");
+
+    expect(overview.showSecretDialog.value).toBe(true);
+    expect(overview.selectedSecretName.value).toBe("openai.default");
+    expect(overview.loadingSecretDetail.value).toBe(true);
+
+    await detailPromise;
+
+    expect(getSecret).toHaveBeenCalledWith("openai.default");
+    expect(overview.editingSecret.value).toEqual(secret);
+    expect(overview.secretForm.value).toEqual({
+      name: "openai.default",
+      provider: "env",
+      reference: "",
+      description: "默认 OpenAI 密钥引用",
+      enabled: true,
+    });
+
+    overview.secretForm.value.reference = "OPENAI_API_KEY_NEXT";
+    overview.secretForm.value.description = "更新后的引用";
+    overview.secretForm.value.enabled = false;
+
+    await overview.saveSecret();
+
+    expect(upsertSecret).toHaveBeenCalledWith("openai.default", {
+      provider: "env",
+      reference: "OPENAI_API_KEY_NEXT",
+      description: "更新后的引用",
+      enabled: false,
+    });
+    expect(overview.showSecretDialog.value).toBe(false);
+    expect(overview.selectedSecretName.value).toBeNull();
+  });
+
+  it("routes secret deletion through the admin secret API", async () => {
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+
+    await overview.deleteSecret(secret);
+
+    expect(deleteSecret).toHaveBeenCalledWith("openai.default");
+    expect(overview.deletingSecretName.value).toBeNull();
   });
 
   it("routes session stop and delete actions through admin session APIs", async () => {

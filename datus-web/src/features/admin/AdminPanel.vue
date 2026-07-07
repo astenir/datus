@@ -28,6 +28,7 @@ const props = withDefaults(defineProps<AdminPanelProps>(), {
   activeRoleId: null,
   activeGrant: null,
   activeSessionId: null,
+  activeSecretName: null,
   activeArtifact: null,
   activeAudit: null,
 })
@@ -37,6 +38,7 @@ const emit = defineEmits<{
   "update:activeRoleId": [value: string | null]
   "update:activeGrant": [value: AdminGrantRouteState | null]
   "update:activeSessionId": [value: string | null]
+  "update:activeSecretName": [value: string | null]
   "update:activeArtifact": [value: AdminArtifactRouteState | null]
   "update:activeAudit": [value: AdminAuditRouteState]
 }>()
@@ -73,6 +75,9 @@ function refreshActiveTab() {
       return
     case "quotas":
       void overview.loadQuotasAndUsage()
+      return
+    case "secrets":
+      void overview.loadSecrets()
       return
     case "artifacts":
       void overview.loadArtifacts()
@@ -123,6 +128,10 @@ function setActiveTab(value: unknown) {
 
 function requestSessionDetail(sessionId: string) {
   emit("update:activeSessionId", sessionId)
+}
+
+function requestSecretDetail(name: string) {
+  emit("update:activeSecretName", name)
 }
 
 function requestUserDetail(userId: string) {
@@ -231,6 +240,19 @@ function setSessionDetailDialogOpen(open: boolean) {
   emit("update:activeSessionId", null)
 }
 
+function setSecretDialogOpen(open: boolean) {
+  if (open) return
+  overview.closeSecretDialog()
+  emit("update:activeSecretName", null)
+}
+
+async function saveSecretAndCloseRoute() {
+  await overview.saveSecret()
+  if (!overview.showSecretDialog.value) {
+    emit("update:activeSecretName", null)
+  }
+}
+
 function setArtifactAclDialogOpen(open: boolean) {
   if (open) return
   overview.closeArtifactAclDialog()
@@ -253,9 +275,10 @@ watch(
     props.activeRoleId,
     props.activeGrant,
     props.activeSessionId,
+    props.activeSecretName,
     props.activeArtifact,
   ] as const,
-  ([tab, userId, roleId, grant, sessionId, artifact]) => {
+  ([tab, userId, roleId, grant, sessionId, secretName, artifact]) => {
     const normalizedUserId = userId?.trim() ?? ""
     if (tab !== "users" || !normalizedUserId) {
       if (users.selectedUserDetailId.value) {
@@ -311,6 +334,18 @@ watch(
       || !overview.showSessionDetailDialog.value
     ) {
       void overview.openSessionDetail(normalizedSessionId)
+    }
+
+    const normalizedSecretName = secretName?.trim() ?? ""
+    if (tab !== "secrets" || !normalizedSecretName) {
+      if (overview.selectedSecretName.value) {
+        overview.closeSecretDialog()
+      }
+    } else if (
+      overview.selectedSecretName.value !== normalizedSecretName
+      || !overview.showSecretDialog.value
+    ) {
+      void overview.openSecretDetail(normalizedSecretName)
     }
 
     const normalizedArtifactSlug = artifact?.slug.trim() ?? ""
@@ -375,6 +410,7 @@ watch(
         :request-grant-detail="requestGrantDetail"
         :request-refresh-active-tab="refreshActiveTab"
         :request-role-detail="requestRoleDetail"
+        :request-secret-detail="requestSecretDetail"
         :request-session-detail="requestSessionDetail"
         :request-user-detail="requestUserDetail"
         :roles="roles"
@@ -393,11 +429,13 @@ watch(
       :roles="roles"
       :save-artifact-acl-and-close-route="saveArtifactAclAndCloseRoute"
       :save-grant-and-close-route="saveGrantAndCloseRoute"
+      :save-secret-and-close-route="saveSecretAndCloseRoute"
       :set-artifact-acl-dialog-open="setArtifactAclDialogOpen"
       :set-grant-dialog-open="setGrantDialogOpen"
       :set-quota-limit="setQuotaLimit"
       :set-quota-window="setQuotaWindow"
       :set-role-detail-dialog-open="setRoleDetailDialogOpen"
+      :set-secret-dialog-open="setSecretDialogOpen"
       :set-session-detail-dialog-open="setSessionDetailDialogOpen"
       :set-user-detail-dialog-open="setUserDetailDialogOpen"
       :users="users"

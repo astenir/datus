@@ -50,6 +50,7 @@ export interface AdminManagementTabProps {
   requestGrantDetail: (grant: AdminGrantListItem) => void
   requestRefreshActiveTab: () => void
   requestRoleDetail: (roleId: string) => void
+  requestSecretDetail: (name: string) => void
   requestSessionDetail: (sessionId: string) => void
   requestUserDetail: (userId: string) => void
   roles: AdminRoleController
@@ -67,11 +68,13 @@ export interface AdminDialogProps {
   roles: AdminRoleController
   saveArtifactAclAndCloseRoute: () => Promise<void>
   saveGrantAndCloseRoute: () => Promise<void>
+  saveSecretAndCloseRoute: () => Promise<void>
   setArtifactAclDialogOpen: (open: boolean) => void
   setGrantDialogOpen: (open: boolean) => void
   setQuotaLimit: SetNumericField
   setQuotaWindow: SetNumericField
   setRoleDetailDialogOpen: (open: boolean) => void
+  setSecretDialogOpen: (open: boolean) => void
   setSessionDetailDialogOpen: (open: boolean) => void
   setUserDetailDialogOpen: (open: boolean) => void
   users: AdminUserController
@@ -82,6 +85,7 @@ export interface AdminPanelProps {
   activeAudit?: AdminAuditRouteState | null
   activeGrant?: AdminGrantRouteState | null
   activeRoleId?: string | null
+  activeSecretName?: string | null
   activeSessionId?: string | null
   activeTab?: AdminViewTab
   activeUserId?: string | null

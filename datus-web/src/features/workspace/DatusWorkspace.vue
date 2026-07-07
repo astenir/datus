@@ -67,6 +67,7 @@ const {
   adminSessionId,
   adminUserId,
   adminRoleId,
+  adminSecretName,
   adminGrant,
   adminArtifact,
   adminAudit,
@@ -81,6 +82,7 @@ const {
   openAdminTab,
   openAdminUser,
   openAdminRole,
+  openAdminSecret,
   openAdminGrant,
   openAdminSession,
   openAdminArtifact,
@@ -324,6 +326,7 @@ function handleLogout() {
             :active-tab="adminTab"
             :active-user-id="adminUserId"
             :active-role-id="adminRoleId"
+            :active-secret-name="adminSecretName"
             :active-grant="adminGrant"
             :active-session-id="adminSessionId"
             :active-artifact="adminArtifact"
@@ -331,6 +334,7 @@ function handleLogout() {
             @update:active-tab="openAdminTab"
             @update:active-user-id="openAdminUser"
             @update:active-role-id="openAdminRole"
+            @update:active-secret-name="openAdminSecret"
             @update:active-grant="openAdminGrant"
             @update:active-session-id="openAdminSession"
             @update:active-artifact="openAdminArtifact"
