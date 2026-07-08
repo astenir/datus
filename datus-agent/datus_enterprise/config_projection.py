@@ -224,27 +224,28 @@ def _requested_scope_denial(
     selected_datasource: str,
 ) -> str | None:
     checks = [
-        ("catalogs", "catalog", request.requested_catalog),
-        ("databases", "database", request.requested_database),
-        ("schemas", "schema", request.requested_schema),
+        ("catalogs", "catalog", [request.requested_catalog]),
+        ("databases", "database", [request.requested_database]),
+        ("schemas", "schema", _requested_schema_scope_candidates(request)),
     ]
-    for scope_key, label, value in checks:
-        if _scope_allows(grant, scope_key, value):
+    for scope_key, label, values in checks:
+        if _scope_allows(grant, scope_key, values):
             continue
+        value = next((candidate for candidate in values if candidate), None)
         return f"Requested {label} '{value}' is not authorized for datasource '{selected_datasource}'."
     return None
 
 
-def _scope_allows(grant: dict[str, Any], scope_key: str, value: str | None) -> bool:
+def _scope_allows(grant: dict[str, Any], scope_key: str, values: list[str | None]) -> bool:
     patterns = _scope_patterns(grant, scope_key)
     if patterns is None:
         return True
-    requested_value = (value or "").strip()
-    if not requested_value:
+    candidates = [str(value).strip() for value in values if str(value or "").strip()]
+    if not candidates:
         return True
     if not patterns:
         return False
-    return any(fnmatchcase(requested_value, pattern) for pattern in patterns)
+    return any(fnmatchcase(value, pattern) for value in candidates for pattern in patterns)
 
 
 def _scope_patterns(grant: dict[str, Any], scope_key: str) -> list[str] | None:
@@ -255,7 +256,22 @@ def _scope_patterns(grant: dict[str, Any], scope_key: str) -> list[str] | None:
         raw_patterns = [part.strip() for part in raw_patterns.split(",")]
     if not isinstance(raw_patterns, (list, tuple, set)):
         return []
-    return [str(pattern).strip() for pattern in raw_patterns if str(pattern).strip()]
+    patterns = [str(pattern).strip() for pattern in raw_patterns if str(pattern).strip()]
+    return patterns or None
+
+
+def _requested_schema_scope_candidates(request: ProjectionInput) -> list[str | None]:
+    schema = (request.requested_schema or "").strip()
+    database = (request.requested_database or "").strip()
+    catalog = (request.requested_catalog or "").strip()
+    candidates: list[str | None] = [schema or None]
+    if database and schema:
+        candidates.append(f"{database}.{schema}")
+    if catalog and schema:
+        candidates.append(f"{catalog}.{schema}")
+    if catalog and database and schema:
+        candidates.append(f"{catalog}.{database}.{schema}")
+    return candidates
 
 
 def _select_default_datasource(agent_config: AgentConfig, allowed_grants: dict[str, Any]) -> str | None:

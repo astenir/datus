@@ -188,12 +188,12 @@ def _table_scope_denial(
         return f"Datasource '{datasource}' is not authorized for this request."
 
     parsed = _parse_table_name(table, dialect=dialect)
-    for scope_key, label, value in (
-        ("catalogs", "catalog", parsed["catalog"]),
-        ("databases", "database", parsed["database"]),
-        ("schemas", "schema", parsed["schema"]),
+    for scope_key, label, values in (
+        ("catalogs", "catalog", [parsed["catalog"]]),
+        ("databases", "database", [parsed["database"]]),
+        ("schemas", "schema", _schema_scope_candidates(parsed)),
     ):
-        denial = _scope_denial(grant, scope_key, label, value)
+        denial = _scope_denial(grant, scope_key, label, values)
         if denial:
             return denial
 
@@ -205,15 +205,16 @@ def _table_scope_denial(
     return f"Table '{table}' is not authorized for datasource '{datasource}'."
 
 
-def _scope_denial(grant: dict[str, Any], scope_key: str, label: str, value: str | None) -> str | None:
+def _scope_denial(grant: dict[str, Any], scope_key: str, label: str, values: list[str | None]) -> str | None:
     patterns = _scope_patterns(grant, scope_key)
     if patterns is None:
         return None
-    if not patterns or not value:
+    candidates = [value for value in values if value]
+    if not patterns or not candidates:
         return f"Requested table is not sufficiently qualified for scoped {label} authorization."
-    if any(fnmatchcase(value, pattern) for pattern in patterns):
+    if _matches_any(candidates, patterns):
         return None
-    return f"Requested {label} '{value}' is not authorized."
+    return f"Requested {label} '{candidates[0]}' is not authorized."
 
 
 def _scope_patterns(grant: dict[str, Any], scope_key: str) -> list[str] | None:
@@ -224,7 +225,8 @@ def _scope_patterns(grant: dict[str, Any], scope_key: str) -> list[str] | None:
         raw_patterns = [part.strip() for part in raw_patterns.split(",")]
     if not isinstance(raw_patterns, (list, tuple, set)):
         return []
-    return [str(pattern).strip() for pattern in raw_patterns if str(pattern).strip()]
+    patterns = [str(pattern).strip() for pattern in raw_patterns if str(pattern).strip()]
+    return patterns or None
 
 
 def _table_parser_dialect(svc: ServiceDep, datasource: str) -> str | None:
@@ -280,6 +282,20 @@ def _table_scope_candidates(parsed: dict[str, str | None]) -> list[str]:
         candidates.append(f"{catalog}.{database}.{table}")
     if catalog and database and schema and table:
         candidates.append(f"{catalog}.{database}.{schema}.{table}")
+    return candidates
+
+
+def _schema_scope_candidates(parsed: dict[str, str | None]) -> list[str | None]:
+    schema = parsed["schema"]
+    database = parsed["database"]
+    catalog = parsed["catalog"]
+    candidates = [schema]
+    if database and schema:
+        candidates.append(f"{database}.{schema}")
+    if catalog and schema:
+        candidates.append(f"{catalog}.{schema}")
+    if catalog and database and schema:
+        candidates.append(f"{catalog}.{database}.{schema}")
     return candidates
 
 

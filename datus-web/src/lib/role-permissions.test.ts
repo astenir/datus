@@ -117,8 +117,6 @@ describe("role permission helpers", () => {
         permission_type: "datasource",
         resource_code: "fund",
         permission_value: JSON.stringify({
-          databases: [],
-          schemas: [],
           tables: ["analytics.public.orders", "analytics.risk.limits"],
         }),
       },
@@ -131,8 +129,14 @@ describe("role permission helpers", () => {
       "schema:fund:analytics:public",
       "table:fund:analytics:public:orders",
     ])).toEqual({
-      databases: [],
-      schemas: [],
+      tables: ["analytics.public.orders"],
+    });
+  });
+
+  it("omits empty scope arrays so unrelated grant dimensions stay unrestricted", () => {
+    expect(datasourceScopeFromNodeIds("fund", [
+      "table:fund:analytics:public:orders",
+    ])).toEqual({
       tables: ["analytics.public.orders"],
     });
   });

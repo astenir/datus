@@ -196,11 +196,11 @@ def _prune_databases_for_datasource_grant(
 
     visible_databases: list[DatabaseInfo] = []
     for database in databases:
-        if not _scope_allows(grant, "catalogs", database.catalog_name):
+        if not _scope_matches(grant, "catalogs", [database.catalog_name]):
             continue
-        if not _scope_allows(grant, "databases", database.name):
+        if not _scope_matches(grant, "databases", [database.name]):
             continue
-        if not _scope_allows(grant, "schemas", database.schema_name):
+        if not _scope_matches(grant, "schemas", _schema_scope_candidates(database)):
             continue
 
         table_patterns = _scope_patterns(grant, "tables")
@@ -240,13 +240,14 @@ def _table_scope_candidates(database: DatabaseInfo, table: str) -> list[str]:
     return candidates
 
 
-def _scope_allows(grant: dict[str, Any], scope_key: str, value: str | None) -> bool:
+def _scope_matches(grant: dict[str, Any], scope_key: str, values: list[str | None]) -> bool:
     patterns = _scope_patterns(grant, scope_key)
     if patterns is None:
         return True
-    if not patterns or not value:
+    candidates = [value for value in values if value]
+    if not patterns or not candidates:
         return False
-    return _matches_any([value], patterns)
+    return _matches_any(candidates, patterns)
 
 
 def _scope_patterns(grant: dict[str, Any], scope_key: str) -> list[str] | None:
@@ -257,7 +258,20 @@ def _scope_patterns(grant: dict[str, Any], scope_key: str) -> list[str] | None:
         raw_patterns = [part.strip() for part in raw_patterns.split(",")]
     if not isinstance(raw_patterns, (list, tuple, set)):
         return []
-    return [str(pattern).strip() for pattern in raw_patterns if str(pattern).strip()]
+    patterns = [str(pattern).strip() for pattern in raw_patterns if str(pattern).strip()]
+    return patterns or None
+
+
+def _schema_scope_candidates(database: DatabaseInfo) -> list[str | None]:
+    schema_name = database.schema_name
+    candidates = [schema_name]
+    if database.name and schema_name:
+        candidates.append(f"{database.name}.{schema_name}")
+    if database.catalog_name and schema_name:
+        candidates.append(f"{database.catalog_name}.{schema_name}")
+    if database.catalog_name and database.name and schema_name:
+        candidates.append(f"{database.catalog_name}.{database.name}.{schema_name}")
+    return candidates
 
 
 def _matches_any(values: list[str], patterns: list[str]) -> bool:

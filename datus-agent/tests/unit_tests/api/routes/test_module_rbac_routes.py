@@ -739,6 +739,35 @@ def test_datasource_catalog_rejects_unauthorized_requested_schema_before_query(m
     svc.datasource.list_databases.assert_not_called()
 
 
+def test_datasource_catalog_accepts_database_qualified_requested_schema(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config(current_datasource="finance")
+    svc.datasource.current_datasource = "finance"
+    svc.datasource.list_databases.return_value = Result[ListDatabasesData](
+        success=True,
+        data=ListDatabasesData(databases=[], total_count=0, current_database=None),
+    )
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.datasource_catalog"},
+        datasource_grants={
+            "finance": {
+                "effect": "allow",
+                "allow_catalog": True,
+                "schemas": ["finance.mart"],
+            }
+        },
+    )
+
+    with _client(database_routes.router, ctx, svc) as client:
+        response = client.get("/api/v1/catalog/list?database_name=finance&schema_name=mart")
+
+    assert response.status_code == 200
+    svc.datasource.list_databases.assert_called_once()
+
+
 def test_datasource_catalog_false_grant_returns_empty_catalog(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()
@@ -896,7 +925,7 @@ def test_datasource_catalog_prunes_tables_by_grant_scope(monkeypatch):
                 "allow_catalog": True,
                 "catalogs": ["prod"],
                 "databases": ["finance"],
-                "schemas": ["mart"],
+                "schemas": ["finance.mart"],
                 "tables": ["fnd_*", "dim_date"],
             }
         },
@@ -912,6 +941,55 @@ def test_datasource_catalog_prunes_tables_by_grant_scope(monkeypatch):
     assert databases[0]["schema_name"] == "mart"
     assert databases[0]["tables"] == ["fnd_balance", "dim_date"]
     assert databases[0]["tables_count"] == 2
+
+
+def test_datasource_catalog_ignores_empty_scope_arrays_when_table_scope_is_set(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config(current_datasource="finance")
+    svc.datasource.current_datasource = "finance"
+    svc.datasource.list_databases.return_value = Result[ListDatabasesData](
+        success=True,
+        data=ListDatabasesData(
+            databases=[
+                DatabaseInfo(
+                    name="finance",
+                    uri="sqlite:///finance.db",
+                    type="sqlite",
+                    current=True,
+                    schema_name="mart",
+                    connection_status="connected",
+                    tables_count=2,
+                    tables=["orders", "payroll"],
+                ),
+            ],
+            total_count=1,
+            current_database="finance",
+        ),
+    )
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.datasource_catalog"},
+        datasource_grants={
+            "finance": {
+                "effect": "allow",
+                "allow_catalog": True,
+                "databases": [],
+                "schemas": [],
+                "tables": ["finance.mart.orders"],
+            }
+        },
+    )
+
+    with _client(database_routes.router, ctx, svc) as client:
+        response = client.get("/api/v1/catalog/list")
+
+    assert response.status_code == 200
+    databases = response.json()["data"]["databases"]
+    assert len(databases) == 1
+    assert databases[0]["tables"] == ["orders"]
+    assert databases[0]["tables_count"] == 1
 
 
 def test_datasource_catalog_table_scope_accepts_catalog_database_table_grant(monkeypatch):

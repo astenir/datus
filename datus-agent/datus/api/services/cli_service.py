@@ -58,7 +58,8 @@ def _scope_patterns(grant: dict, scope_key: str) -> list[str] | None:
         raw_patterns = [part.strip() for part in raw_patterns.split(",")]
     if not isinstance(raw_patterns, (list, tuple, set)):
         return []
-    return [str(pattern).strip() for pattern in raw_patterns if str(pattern).strip()]
+    patterns = [str(pattern).strip() for pattern in raw_patterns if str(pattern).strip()]
+    return patterns or None
 
 
 def _compose_scope_tokens(

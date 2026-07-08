@@ -268,7 +268,10 @@ def test_admin_datasource_grants_upsert_get_list_delete_and_audit(monkeypatch):
     with TestClient(app) as client:
         put_response = client.put(
             "/api/v1/admin/datasource-grants/role/analyst/db_a",
-            json={"effect": "allow", "scope": {"schemas": ["public"], "tables": ["orders", "orders"]}},
+            json={
+                "effect": "allow",
+                "scope": {"databases": [], "schemas": ["public"], "tables": ["orders", "orders"]},
+            },
         )
         replace_response = client.put(
             "/api/v1/admin/datasource-grants/role/analyst/db_a",

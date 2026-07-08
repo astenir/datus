@@ -231,14 +231,12 @@ export function rolePermissionsFromSelections(
   const permissions: RolePermissionRecord[] = [];
   for (const [datasourceName, grant] of grants) {
     pruneBroaderDatasourceGrants(grant);
-    const databases = grant.unrestricted ? [] : Array.from(grant.databases);
-    const schemas = grant.unrestricted ? [] : Array.from(grant.schemas);
-    const tables = grant.unrestricted ? [] : Array.from(grant.tables);
-    if (grant.unrestricted || databases.length > 0 || schemas.length > 0 || tables.length > 0) {
+    const scope = datasourceScopeFromGrant(grant);
+    if (grant.unrestricted || Object.keys(scope).length > 0) {
       permissions.push({
         permission_type: "datasource",
         resource_code: datasourceName,
-        permission_value: JSON.stringify({ databases, schemas, tables }),
+        permission_value: JSON.stringify(scope),
       });
     }
   }
@@ -272,6 +270,19 @@ function pruneBroaderDatasourceGrants(grant: DatasourceGrant) {
     const { databaseName } = parseGrantSchema(schema);
     if (databaseName) grant.databases.delete(databaseName);
   }
+}
+
+function datasourceScopeFromGrant(grant: DatasourceGrant): DatasourceGrantScope {
+  if (grant.unrestricted) return {};
+
+  const databases = Array.from(grant.databases);
+  const schemas = Array.from(grant.schemas);
+  const tables = Array.from(grant.tables);
+  const scope: DatasourceGrantScope = {};
+  if (databases.length > 0) scope.databases = databases;
+  if (schemas.length > 0) scope.schemas = schemas;
+  if (tables.length > 0) scope.tables = tables;
+  return scope;
 }
 
 export function parseGrantSchema(value: string): { databaseName: string; schemaName: string } {
@@ -352,11 +363,14 @@ function parseDatasourceGrantScope(value: string): DatasourceGrantScope {
 }
 
 function normalizeDatasourceGrantScope(scope: Record<string, unknown>): DatasourceGrantScope {
-  return {
-    databases: stringArray(scope.databases),
-    schemas: stringArray(scope.schemas),
-    tables: stringArray(scope.tables),
-  };
+  const normalized: DatasourceGrantScope = {};
+  const databases = stringArray(scope.databases);
+  const schemas = stringArray(scope.schemas);
+  const tables = stringArray(scope.tables);
+  if (databases.length > 0) normalized.databases = databases;
+  if (schemas.length > 0) normalized.schemas = schemas;
+  if (tables.length > 0) normalized.tables = tables;
+  return normalized;
 }
 
 function stringArray(value: unknown): string[] {

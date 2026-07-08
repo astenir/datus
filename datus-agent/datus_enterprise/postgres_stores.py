@@ -1862,7 +1862,9 @@ def _normalized_grant_scope(scope: Any) -> dict[str, Any]:
                 ErrorCode.COMMON_FIELD_INVALID,
                 message=f"Datasource grant scope.{key} must be a list of strings.",
             )
-        normalized[key] = _normalized_grant_scope_patterns(values, key)
+        patterns = _normalized_grant_scope_patterns(values, key)
+        if patterns:
+            normalized[key] = patterns
     return normalized
 
 

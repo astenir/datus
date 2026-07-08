@@ -193,6 +193,7 @@ def test_table_detail_rejects_when_catalog_access_is_disabled(monkeypatch):
 def test_semantic_model_routes_allow_catalog_when_sql_access_is_disabled(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = _svc()
+    svc.agent_config.services.datasources["finance"] = SimpleNamespace(type="postgresql")
     ctx = _ctx(
         permissions={"module.datasource_catalog", "module.config.edit"},
         grants={
@@ -240,6 +241,54 @@ def test_table_detail_allows_authorized_table(monkeypatch):
     assert response.status_code == 200
     assert response.json()["success"] is True
     svc.datasource.get_table_schema.assert_called_once_with("public.accounts")
+
+
+def test_table_detail_ignores_empty_scope_arrays_with_table_scope(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = _svc()
+    ctx = _ctx(
+        permissions={"module.datasource_catalog"},
+        grants={
+            "finance": {
+                "effect": "allow",
+                "allow_catalog": True,
+                "databases": [],
+                "schemas": [],
+                "tables": ["public.accounts"],
+            }
+        },
+    )
+
+    with _client(ctx, svc) as client:
+        response = client.get("/api/v1/table/detail?table=public.accounts")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    svc.datasource.get_table_schema.assert_called_once_with("public.accounts")
+
+
+def test_table_detail_allows_database_qualified_schema_scope(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = _svc()
+    svc.agent_config.services.datasources["finance"] = SimpleNamespace(type="postgresql")
+    ctx = _ctx(
+        permissions={"module.datasource_catalog"},
+        grants={
+            "finance": {
+                "effect": "allow",
+                "allow_catalog": True,
+                "schemas": ["finance.public"],
+                "tables": ["finance.public.accounts"],
+            }
+        },
+    )
+
+    with _client(ctx, svc) as client:
+        response = client.get("/api/v1/table/detail?table=finance.public.accounts")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    svc.datasource.get_table_schema.assert_called_once_with("finance.public.accounts")
 
 
 def test_table_detail_allows_starrocks_catalog_database_table_grant(monkeypatch):
