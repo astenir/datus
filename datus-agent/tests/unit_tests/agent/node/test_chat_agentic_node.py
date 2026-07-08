@@ -27,7 +27,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from datus.configuration.node_type import NodeType
-from datus.schemas.action_history import ActionHistoryManager, ActionRole, ActionStatus
+from datus.schemas.action_history import ActionHistory, ActionHistoryManager, ActionRole, ActionStatus
 from datus.schemas.chat_agentic_node_models import ChatNodeInput, ChatNodeResult
 from tests.unit_tests.mock_llm_model import MockToolCall, build_simple_response, build_tool_then_response
 
@@ -984,6 +984,78 @@ class TestChatAgenticNodeExecuteStreamErrors:
             assert "不能让 AI 直接修改服务器文件" in error_text
             assert "STOP retrying" not in error_text
             assert "permissions.rules" not in error_text
+        finally:
+            mock_llm_create.generate_with_tools_stream = original_method
+
+    @pytest.mark.asyncio
+    async def test_execute_stream_preserves_usage_after_permission_denial(self, real_agent_config, mock_llm_create):
+        """Tool-denial failures still report tokens already spent by the model."""
+        from agents.exceptions import UserError
+
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+        from datus.tools.permission.permission_hooks import PermissionDeniedException
+
+        node = ChatAgenticNode(
+            node_id="test_permission_denied_usage",
+            description="Test permission denial token usage",
+            node_type=NodeType.TYPE_CHAT,
+            agent_config=real_agent_config,
+        )
+
+        original_method = mock_llm_create.generate_with_tools_stream
+
+        async def raising_stream(*args, **kwargs):
+            manager = kwargs["action_history_manager"]
+            manager.add_action(
+                ActionHistory(
+                    action_id="token_usage_before_denial",
+                    role=ActionRole.ASSISTANT,
+                    messages="Token usage update",
+                    action_type="token_usage",
+                    input={},
+                    output={
+                        "cumulative": {
+                            "requests": 1,
+                            "input_tokens": 1200,
+                            "output_tokens": 80,
+                            "total_tokens": 1280,
+                            "cached_tokens": 256,
+                        },
+                        "delta": {"requests": 1, "input_tokens": 1200, "output_tokens": 80, "total_tokens": 1280},
+                        "context_length": 128000,
+                        "last_call_input_tokens": 1200,
+                    },
+                    status=ActionStatus.SUCCESS,
+                )
+            )
+            denied = PermissionDeniedException(
+                "PERMISSION_DENIED: Tool 'write_file' (filesystem_tools) is blocked by the "
+                "'normal' permission profile.",
+                tool_category="filesystem_tools",
+                tool_name="write_file",
+            )
+            raise UserError(f"Error running tool write_file: {denied}") from denied
+            yield  # noqa: unreachable - makes this an async generator
+
+        mock_llm_create.generate_with_tools_stream = raising_stream
+
+        node.input = ChatNodeInput(user_message="Create a file", database="california_schools")
+        ahm = ActionHistoryManager()
+
+        try:
+            actions = []
+            async for action in node.execute_stream(ahm):
+                actions.append(action)
+
+            final_action = actions[-1]
+            assert final_action.status == ActionStatus.FAILED
+            assert final_action.output.get("tokens_used") == 1280
+
+            turn_usage = await node.get_last_turn_usage()
+            assert turn_usage is not None
+            assert turn_usage.total_tokens == 1280
+            assert turn_usage.cached_tokens == 256
+            assert turn_usage.session_total_tokens == 1200
         finally:
             mock_llm_create.generate_with_tools_stream = original_method
 

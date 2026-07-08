@@ -2907,11 +2907,13 @@ class AgenticNode(Node):
 
             error_result = self._build_error_result(exc, ctx)
             self.result = error_result
-            ahm.update_current_action(
-                status=ActionStatus.FAILED,
-                output=error_result.model_dump(),
-                messages=f"Error: {error_msg}",
-            )
+            current_actions = ahm.get_actions()
+            if current_actions and current_actions[-1].status == ActionStatus.PROCESSING:
+                ahm.update_current_action(
+                    status=ActionStatus.FAILED,
+                    output=error_result.model_dump(),
+                    messages=f"Error: {error_msg}",
+                )
             error_action = ActionHistory.create_action(
                 role=ActionRole.ASSISTANT,
                 action_type="error",
@@ -3143,7 +3145,7 @@ class AgenticNode(Node):
 
         Builds an instance of ``self.result_class`` populated with
         ``success=False``, ``error=<formatted>``, ``response=""``,
-        ``tokens_used=0``. Automatically fills ``action_history`` for
+        ``tokens_used=<usage observed before failure>``. Automatically fills ``action_history`` for
         NodeResult subtypes that declare that field.
 
         Subclasses MUST declare ``result_class`` for this to work; the
@@ -3155,11 +3157,15 @@ class AgenticNode(Node):
                 f"`result_class` attribute pointing to its BaseResult subtype"
             )
 
+        running_usage = getattr(self, "running_turn_usage", None)
+        running_tokens = int(getattr(running_usage, "total_tokens", 0) or 0)
+        action_tokens = self._extract_total_tokens(ctx.action_history_manager.get_actions())
+
         kwargs: Dict[str, Any] = {
             "success": False,
             "error": self._format_execution_error(exc),
             "response": "",
-            "tokens_used": 0,
+            "tokens_used": max(running_tokens, action_tokens),
         }
         if "action_history" in getattr(self.result_class, "model_fields", {}):
             kwargs["action_history"] = [a.model_dump() for a in ctx.action_history_manager.get_actions()]
@@ -3316,18 +3322,40 @@ class AgenticNode(Node):
             # Stop at the last root-level user message to scope to the current turn
             if action.role == ActionRole.USER and action.depth == 0:
                 break
-            if (
-                action.role == ActionRole.ASSISTANT
-                and action.depth == 0
-                and isinstance(action.output, dict)
-                and isinstance(action.output.get("usage"), dict)
-            ):
-                usage_dict = action.output["usage"]
+            if action.role == ActionRole.ASSISTANT and action.depth == 0 and isinstance(action.output, dict):
+                usage_dict = action.output.get("usage")
+                context_length = self.context_length or 0
+                session_total_tokens = 0
+
+                if not isinstance(usage_dict, dict) and action.action_type == "token_usage":
+                    usage_dict = action.output.get("cumulative")
+                    try:
+                        context_length = int(action.output.get("context_length", context_length) or 0)
+                    except (TypeError, ValueError):
+                        context_length = self.context_length or 0
+                    try:
+                        session_total_tokens = int(
+                            action.output.get("last_call_input_tokens", 0)
+                            or usage_dict.get("last_call_input_tokens", 0)
+                            or usage_dict.get("input_tokens", 0)
+                            or 0
+                        )
+                    except (AttributeError, TypeError, ValueError):
+                        session_total_tokens = 0
+
+                if not isinstance(usage_dict, dict):
+                    continue
+                if not session_total_tokens:
+                    try:
+                        session_total_tokens = int(
+                            usage_dict.get("last_call_input_tokens", 0) or usage_dict.get("input_tokens", 0) or 0
+                        )
+                    except (TypeError, ValueError):
+                        session_total_tokens = 0
                 return _TokenUsage.from_usage_dict(
                     usage_dict,
-                    session_total_tokens=usage_dict.get("last_call_input_tokens", 0)
-                    or usage_dict.get("input_tokens", 0),
-                    context_length=self.context_length or 0,
+                    session_total_tokens=session_total_tokens,
+                    context_length=context_length,
                 )
         return None
 
@@ -3665,6 +3693,8 @@ class AgenticNode(Node):
             if not isinstance(output, dict):
                 continue
             usage_info = output.get("usage")
+            if not isinstance(usage_info, dict) and action.action_type == "token_usage":
+                usage_info = output.get("cumulative")
             if not isinstance(usage_info, dict):
                 continue
             total = usage_info.get("total_tokens")
