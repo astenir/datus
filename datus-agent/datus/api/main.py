@@ -177,6 +177,7 @@ def _run_server(args: argparse.Namespace, agent_args: argparse.Namespace) -> Non
             reload=True,
             log_level=args.log_level.lower(),
             access_log=True,
+            timeout_graceful_shutdown=args.timeout_graceful_shutdown,
         )
         return
 
@@ -188,6 +189,7 @@ def _run_server(args: argparse.Namespace, agent_args: argparse.Namespace) -> Non
             workers=args.workers,
             log_level=args.log_level.lower(),
             access_log=True,
+            timeout_graceful_shutdown=args.timeout_graceful_shutdown,
         )
         return
 
@@ -199,6 +201,7 @@ def _run_server(args: argparse.Namespace, agent_args: argparse.Namespace) -> Non
         workers=1,
         log_level=args.log_level.lower(),
         access_log=True,
+        timeout_graceful_shutdown=args.timeout_graceful_shutdown,
     )
     server = uvicorn.Server(config)
     asyncio.run(server.serve())
@@ -213,6 +216,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=8000, help="Port to bind the server to (default: 8000)")
     parser.add_argument("--reload", action="store_true", help="Enable auto-reload for development")
     parser.add_argument("--workers", type=int, default=1, help="Number of worker processes (default: 1)")
+    parser.add_argument(
+        "--timeout-graceful-shutdown",
+        type=int,
+        default=10,
+        help="Maximum seconds to wait for open connections during shutdown (default: 10)",
+    )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
 
     # Configuration

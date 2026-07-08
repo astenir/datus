@@ -78,6 +78,7 @@ class OceanBaseMySQLPool:
     def __init__(self, config: OceanBaseMySQLConfig) -> None:
         self._config = config
         self._available: queue.LifoQueue[Any] = queue.LifoQueue(maxsize=config.pool_max_size)
+        self._connections: set[Any] = set()
         self._created = 0
         self._closed = False
         self._lock = threading.Lock()
@@ -98,12 +99,15 @@ class OceanBaseMySQLPool:
             self._release(conn, use_shared=use_shared)
 
     def close(self) -> None:
-        self._closed = True
+        with self._lock:
+            self._closed = True
+            connections = list(self._connections)
         while True:
             try:
-                conn = self._available.get_nowait()
+                self._available.get_nowait()
             except queue.Empty:
                 break
+        for conn in connections:
             try:
                 conn.close()
             except Exception:
@@ -139,7 +143,7 @@ class OceanBaseMySQLPool:
         import pymysql
         from pymysql.cursors import DictCursor
 
-        return pymysql.connect(
+        conn = pymysql.connect(
             host=self._config.host,
             port=self._config.port,
             user=self._config.user,
@@ -152,6 +156,9 @@ class OceanBaseMySQLPool:
             autocommit=False,
             cursorclass=DictCursor,
         )
+        with self._lock:
+            self._connections.add(conn)
+        return conn
 
 
 class OceanBaseSchemaMixin:

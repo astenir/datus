@@ -46,6 +46,7 @@ class TestAPIArgumentParser:
         assert args.host == "0.0.0.0"
         assert args.port == 8000
         assert args.workers == 1
+        assert args.timeout_graceful_shutdown == 10
         assert args.reload is False
         assert args.debug is False
         assert args.config is None
@@ -483,6 +484,7 @@ def _server_args(**overrides):
         reload=False,
         workers=1,
         log_level="INFO",
+        timeout_graceful_shutdown=10,
     )
     base.update(overrides)
     return argparse.Namespace(**base)
@@ -501,6 +503,7 @@ class TestRunServer:
         kwargs = mock_run.call_args.kwargs
         assert mock_run.call_args.args[0] == "datus.api.service:app"
         assert kwargs["reload"] is True
+        assert kwargs["timeout_graceful_shutdown"] == 10
 
     def test_workers_gt_one_uses_import_string(self):
         """--workers >1 passes import target to uvicorn and skips create_app."""
@@ -513,6 +516,7 @@ class TestRunServer:
         mock_create.assert_not_called()
         assert mock_run.call_args.args[0] == "datus.api.service:app"
         assert mock_run.call_args.kwargs["workers"] == 4
+        assert mock_run.call_args.kwargs["timeout_graceful_shutdown"] == 10
 
     def test_single_worker_creates_app_instance(self):
         """Default single-worker mode creates an app instance and passes it to uvicorn.Server."""
@@ -533,6 +537,7 @@ class TestRunServer:
         config_kwargs = patched_config.call_args
         assert config_kwargs.args[0] is sentinel_app
         assert config_kwargs.kwargs["workers"] == 1
+        assert config_kwargs.kwargs["timeout_graceful_shutdown"] == 10
         patched_server.assert_called_once_with(patched_config.return_value)
         mock_asyncio_run.assert_called_once()
 

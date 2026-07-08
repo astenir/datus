@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import queue
 import threading
 from types import SimpleNamespace
 
 import pytest
 
 from datus.api.enterprise.loader import load_enterprise_extensions
+from datus_enterprise.oceanbase_common import OceanBaseMySQLConfig, OceanBaseMySQLPool
 from datus_enterprise.oceanbase_session_store import _SCHEMA_SQL as BODY_SCHEMA_SQL
 from datus_enterprise.oceanbase_session_store import ObSessionBodyStore
 from datus_enterprise.oceanbase_stores import _SCHEMA_SQL as METADATA_SCHEMA_SQL
@@ -67,6 +69,16 @@ class FakeObPool:
         return FakeObConnection(self._cursor)
 
 
+class FakeTrackedConnection:
+    def __init__(self) -> None:
+        self.close_count = 0
+        self.open = True
+
+    def close(self) -> None:
+        self.close_count += 1
+        self.open = False
+
+
 def test_ob_session_store_schemas_are_additive_and_have_no_tenant_id():
     normalized = " ".join(f"{METADATA_SCHEMA_SQL}\n{BODY_SCHEMA_SQL}".lower().split())
     assert "create table if not exists enterprise_users" in normalized
@@ -120,6 +132,30 @@ def test_ob_session_stores_reject_invalid_config():
     with pytest.raises(Exception) as body_exc:
         ObSessionBodyStore(host="127.0.0.1", user="root@test", password="testpass", database="bad-name")
     assert "Invalid OceanBase identifier" in str(body_exc.value)
+
+
+def test_oceanbase_pool_close_closes_idle_and_borrowed_connections():
+    pool = OceanBaseMySQLPool(
+        OceanBaseMySQLConfig(
+            host="127.0.0.1",
+            port=2881,
+            user="root@test",
+            password="testpass",
+            database="datus_enterprise",
+        )
+    )
+    idle = FakeTrackedConnection()
+    borrowed = FakeTrackedConnection()
+    pool._available = queue.LifoQueue()
+    pool._available.put(idle)
+    pool._connections.update({idle, borrowed})
+
+    pool.close()
+
+    assert pool._closed is True
+    assert pool._available.empty()
+    assert idle.close_count == 1
+    assert borrowed.close_count == 1
 
 
 def test_ob_session_body_store_run_sync_bridge():
