@@ -137,6 +137,92 @@ async def require_artifact_access(ctx: AppContext, *, artifact_type: str, slug: 
     )
 
 
+async def require_artifact_edit_access(ctx: AppContext, *, artifact_type: str, slug: str) -> None:
+    """Require owner/admin edit access for one artifact slug.
+
+    Sharing a report for view/query must not grant mutation rights. Edit is
+    intentionally narrower: the stored ACL owner, or a caller authorized for
+    ``module.admin.artifacts``. In enterprise mode without an ACL store, fail
+    closed; local-compatible mode keeps the older allow-by-default behavior.
+    """
+
+    permission_action = f"module.{artifact_type}.edit"
+    decision = await authorize(ctx, action=permission_action, resource=ResourceRef(type=artifact_type, id=slug))
+    admin_decision = None
+    if not decision.allowed:
+        admin_decision = await authorize(
+            ctx,
+            action="module.admin.artifacts",
+            resource=ResourceRef(type="artifact_acl", id="module.admin.artifacts"),
+        )
+    if not decision.allowed and (admin_decision is None or not admin_decision.allowed):
+        await _audit_artifact_access(
+            ctx,
+            AuditEvent(
+                action=permission_action,
+                resource_type=artifact_type,
+                resource_id=slug,
+                decision="deny",
+                reason=decision.reason or getattr(admin_decision, "reason", None),
+            ),
+        )
+        raise HTTPException(status_code=403, detail=decision.reason or "Permission denied.")
+
+    store = get_artifact_acl_store()
+    if store is not None:
+        raw_acl = await _load_store_acl_for_access(store, artifact_type=artifact_type, slug=slug)
+        if raw_acl is None or not await _acl_allows_edit(ctx, raw_acl):
+            await _audit_artifact_access(
+                ctx,
+                AuditEvent(
+                    action=permission_action,
+                    resource_type=artifact_type,
+                    resource_id=slug,
+                    decision="deny",
+                    reason="artifact edit ACL denied",
+                ),
+            )
+            raise HTTPException(status_code=404, detail="Artifact not found.")
+
+        await _audit_artifact_access(
+            ctx,
+            AuditEvent(action=permission_action, resource_type=artifact_type, resource_id=slug, decision="allow"),
+        )
+        return
+
+    if _enterprise_enabled():
+        await _audit_artifact_access(
+            ctx,
+            AuditEvent(
+                action=permission_action,
+                resource_type=artifact_type,
+                resource_id=slug,
+                decision="deny",
+                reason="artifact ACL store unavailable",
+            ),
+        )
+        raise HTTPException(status_code=404, detail="Artifact not found.")
+
+    allowed_slugs = _allowed_slugs(ctx, artifact_type)
+    if allowed_slugs is not None and slug not in allowed_slugs:
+        await _audit_artifact_access(
+            ctx,
+            AuditEvent(
+                action=permission_action,
+                resource_type=artifact_type,
+                resource_id=slug,
+                decision="deny",
+                reason="artifact ACL denied",
+            ),
+        )
+        raise HTTPException(status_code=404, detail="Artifact not found.")
+
+    await _audit_artifact_access(
+        ctx,
+        AuditEvent(action=permission_action, resource_type=artifact_type, resource_id=slug, decision="allow"),
+    )
+
+
 async def _audit_artifact_access(ctx: AppContext, event: AuditEvent) -> None:
     try:
         await audit_decision(ctx, event)
@@ -151,11 +237,17 @@ async def _audit_artifact_access(ctx: AppContext, event: AuditEvent) -> None:
 
 
 async def _store_acl_allows(store: Any, ctx: AppContext, *, artifact_type: str, slug: str) -> bool:
-    try:
-        raw_acl = await store.get_acl(artifact_type=artifact_type, slug=slug)
-    except Exception:
+    raw_acl = await _load_store_acl_for_access(store, artifact_type=artifact_type, slug=slug)
+    if raw_acl is None:
         return False
     return await _acl_allows(ctx, raw_acl)
+
+
+async def _load_store_acl_for_access(store: Any, *, artifact_type: str, slug: str) -> Any | None:
+    try:
+        return await store.get_acl(artifact_type=artifact_type, slug=slug)
+    except Exception:
+        return None
 
 
 async def _acl_allows(ctx: AppContext, raw_acl: Any) -> bool:
@@ -178,6 +270,24 @@ async def _acl_allows(ctx: AppContext, raw_acl: Any) -> bool:
         allowed_roles = _string_set(raw_acl.get("allowed_roles"))
         return bool(allowed_roles.intersection(ctx.roles))
     return False
+
+
+async def _acl_allows_edit(ctx: AppContext, raw_acl: Any) -> bool:
+    if not isinstance(raw_acl, dict):
+        return False
+    owner_user_id = raw_acl.get("owner_user_id")
+    if owner_user_id and ctx.user_id == str(owner_user_id):
+        return True
+    return await _is_authorized(ctx, "module.admin.artifacts", resource_type="artifact_acl")
+
+
+def _enterprise_enabled() -> bool:
+    try:
+        from datus.api import deps as api_deps
+
+        return bool(api_deps.get_enterprise_extensions().enabled)
+    except Exception:
+        return False
 
 
 async def _is_authorized(ctx: AppContext, permission_key: str, *, resource_type: str) -> bool:

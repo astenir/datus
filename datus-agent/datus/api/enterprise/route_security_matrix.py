@@ -215,6 +215,28 @@ _ARTIFACT_REPORT_VIEW_POLICY = _policy(
     module_permission="module.report.view",
     data_boundaries={ARTIFACT_ACL},
 )
+_ARTIFACT_REPORT_EDIT_SESSION_POLICY = _policy(
+    MODULE_RBAC,
+    ARTIFACT_ACL,
+    AUDIT,
+    PLATFORM_STATUS_GATE,
+    MUTATION_EXECUTION,
+    module_permission="module.report.edit",
+    audit_action="report.edit_session.create",
+    data_boundaries={ARTIFACT_ACL},
+    note="Creates a process-local report edit subagent after owner/admin artifact edit authorization.",
+)
+_ARTIFACT_DASHBOARD_EDIT_SESSION_POLICY = _policy(
+    MODULE_RBAC,
+    ARTIFACT_ACL,
+    AUDIT,
+    PLATFORM_STATUS_GATE,
+    MUTATION_EXECUTION,
+    module_permission="module.dashboard.edit",
+    audit_action="dashboard.edit_session.create",
+    data_boundaries={ARTIFACT_ACL},
+    note="Creates a process-local dashboard edit subagent after owner/admin artifact edit authorization.",
+)
 
 _add("GET", "/", _LOCAL_READ_POLICY)
 _add("GET", "/health", _LOCAL_READ_POLICY)
@@ -545,6 +567,7 @@ _add_many(
 )
 
 _add("GET", "/api/v1/dashboard/detail", _ARTIFACT_DASHBOARD_VIEW_POLICY)
+_add("POST", "/api/v1/dashboards/{slug}/edit-sessions", _ARTIFACT_DASHBOARD_EDIT_SESSION_POLICY)
 _add(
     "POST",
     "/api/v1/dashboard/query",
@@ -564,6 +587,7 @@ _add(
     ),
 )
 _add("GET", "/api/v1/report/detail", _ARTIFACT_REPORT_VIEW_POLICY)
+_add("POST", "/api/v1/reports/{slug}/edit-sessions", _ARTIFACT_REPORT_EDIT_SESSION_POLICY)
 
 _add_many(
     "GET",

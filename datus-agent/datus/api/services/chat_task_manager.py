@@ -10,7 +10,7 @@ the client can reconnect and resume from where it left off.
 import asyncio
 import copy
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Literal, Optional
 
 from datus.agent.node.agentic_node import AgenticNode
@@ -27,6 +27,8 @@ from datus.api.models.cli_models import (
     SSEUsageData,
     StreamChatInput,
 )
+from datus.api.models.dashboard_models import DashboardEditSession
+from datus.api.models.report_models import ReportEditSession
 from datus.api.services.action_sse_converter import action_to_sse_event
 from datus.cli.autocomplete import AtReferenceCompleter
 from datus.configuration.agent_config import AgentConfig
@@ -45,6 +47,10 @@ if TYPE_CHECKING:
     from datus.api.enterprise.protocols import ArtifactAclStore, SessionBodyStore, SessionOwnerStore
 
 HEARTBEAT_INTERVAL = 10  # seconds
+REPORT_EDIT_SESSION_PREFIX = "report_edit__"
+DASHBOARD_EDIT_SESSION_PREFIX = "dashboard_edit__"
+ARTIFACT_EDIT_SESSION_TTL_SECONDS = 6 * 60 * 60
+ArtifactEditSession = ReportEditSession | DashboardEditSession
 
 
 def is_thinking_only_content(content_items) -> bool:
@@ -293,6 +299,7 @@ class ChatTaskManager:
         session_owner_store: Optional["SessionOwnerStore"] = None,
         session_body_store: Optional["SessionBodyStore"] = None,
         artifact_acl_store: Optional["ArtifactAclStore"] = None,
+        enterprise_enabled: bool = False,
     ) -> None:
         self._tasks: Dict[str, ChatTask] = {}
         self._completed_tasks: Dict[str, ChatTask] = {}
@@ -304,10 +311,87 @@ class ChatTaskManager:
         self._session_owner_store = session_owner_store
         self._session_body_store = session_body_store
         self._artifact_acl_store = artifact_acl_store
+        self._enterprise_enabled = enterprise_enabled
+        self._supports_artifact_edit_sessions = True
+        self._supports_report_edit_sessions = True
+        self._artifact_edit_sessions: Dict[str, ArtifactEditSession] = {}
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+
+    def create_report_edit_session(self, *, user_id: Optional[str], report_slug: str) -> ReportEditSession:
+        """Register a process-local edit session locked to one report slug.
+
+        Chat/SSE task state is already process-local in the current trial
+        boundary. This registry follows the same sticky-session requirement
+        instead of writing ephemeral agent definitions into shared config.
+        """
+
+        self._purge_expired_artifact_edit_sessions()
+        edit_session_id = uuid.uuid4().hex
+        subagent_id = f"{REPORT_EDIT_SESSION_PREFIX}{edit_session_id}"
+        session = ReportEditSession(
+            edit_session_id=edit_session_id,
+            subagent_id=subagent_id,
+            artifact_type="report",
+            artifact_slug=report_slug,
+            owner_user_id=user_id,
+            created_at=now_utc_iso(),
+        )
+        self._artifact_edit_sessions[subagent_id] = session
+        return session
+
+    def get_report_edit_session(self, subagent_id: Optional[str]) -> Optional[ReportEditSession]:
+        """Return a live report edit session by its chat subagent id."""
+
+        session = self.get_artifact_edit_session(subagent_id)
+        if isinstance(session, ReportEditSession):
+            return session
+        return None
+
+    def create_dashboard_edit_session(self, *, user_id: Optional[str], dashboard_slug: str) -> DashboardEditSession:
+        """Register a process-local edit session locked to one dashboard slug."""
+
+        self._purge_expired_artifact_edit_sessions()
+        edit_session_id = uuid.uuid4().hex
+        subagent_id = f"{DASHBOARD_EDIT_SESSION_PREFIX}{edit_session_id}"
+        session = DashboardEditSession(
+            edit_session_id=edit_session_id,
+            subagent_id=subagent_id,
+            artifact_type="dashboard",
+            artifact_slug=dashboard_slug,
+            owner_user_id=user_id,
+            created_at=now_utc_iso(),
+        )
+        self._artifact_edit_sessions[subagent_id] = session
+        return session
+
+    def get_artifact_edit_session(self, subagent_id: Optional[str]) -> Optional[ArtifactEditSession]:
+        """Return a live report/dashboard edit session by its chat subagent id."""
+
+        if not subagent_id:
+            return None
+        self._purge_expired_artifact_edit_sessions()
+        return self._artifact_edit_sessions.get(subagent_id)
+
+    def _purge_expired_artifact_edit_sessions(self) -> None:
+        if not self._artifact_edit_sessions:
+            return
+        now = datetime.now(timezone.utc)
+        expired: list[str] = []
+        for subagent_id, session in self._artifact_edit_sessions.items():
+            try:
+                created = datetime.fromisoformat(session.created_at.replace("Z", "+00:00"))
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone.utc)
+            except ValueError:
+                expired.append(subagent_id)
+                continue
+            if (now - created).total_seconds() > ARTIFACT_EDIT_SESSION_TTL_SECONDS:
+                expired.append(subagent_id)
+        for subagent_id in expired:
+            self._artifact_edit_sessions.pop(subagent_id, None)
 
     async def start_chat(
         self,
@@ -329,6 +413,8 @@ class ChatTaskManager:
         agent_config.principal = dict(principal or {})
         agent_config._request_user_id = user_id
         agent_config._artifact_acl_store = self._artifact_acl_store
+        agent_config._enterprise_enabled = self._enterprise_enabled
+        agent_config._protect_artifact_filesystem = self._enterprise_enabled
         # API surface has no interactive broker to confirm EXTERNAL file
         # access, so force filesystem strict mode — every node constructed
         # below reads this flag via AgenticNode._resolve_filesystem_strict().

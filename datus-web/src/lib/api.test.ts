@@ -230,7 +230,29 @@ describe("api client", () => {
       .mockResolvedValueOnce(mockJsonResponse({ success: true, data: [] }))
       .mockResolvedValueOnce(mockJsonResponse({ success: true, data: [] }))
       .mockResolvedValueOnce(new Response("<!doctype html><html></html>", { status: 200 }))
-      .mockResolvedValueOnce(new Response("<!doctype html><html></html>", { status: 200 }));
+      .mockResolvedValueOnce(new Response("<!doctype html><html></html>", { status: 200 }))
+      .mockResolvedValueOnce(mockJsonResponse({
+        success: true,
+        data: {
+          edit_session_id: "edit-1",
+          subagent_id: "report_edit__edit_1",
+          artifact_type: "report",
+          artifact_slug: "fund_report",
+          owner_user_id: "alice",
+          created_at: "2026-07-08T00:00:00Z",
+        },
+      }))
+      .mockResolvedValueOnce(mockJsonResponse({
+        success: true,
+        data: {
+          edit_session_id: "edit-2",
+          subagent_id: "dashboard_edit__edit_2",
+          artifact_type: "dashboard",
+          artifact_slug: "fund_overview",
+          owner_user_id: "alice",
+          created_at: "2026-07-08T00:00:00Z",
+        },
+      }));
 
     await dashboardApi.list("http://localhost:8000/");
     await reportApi.list("http://localhost:8000/");
@@ -252,6 +274,8 @@ describe("api client", () => {
     });
     await dashboardApi.html("http://localhost:8000/", "fund_overview");
     await reportApi.html("http://localhost:8000/", "fund_report");
+    await reportApi.createEditSession("http://localhost:8000/", "fund_report");
+    await dashboardApi.createEditSession("http://localhost:8000/", "fund_overview");
 
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/dashboards");
     expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe("http://localhost:8000/api/v1/reports");
@@ -267,6 +291,10 @@ describe("api client", () => {
       "http://localhost:8000/api/v1/dashboards/fund_overview/html?query_endpoint=http%3A%2F%2Flocalhost%3A8000%2Fapi%2Fv1%2Fdashboard%2Fquery",
     );
     expect(vi.mocked(fetch).mock.calls[7]?.[0]).toBe("http://localhost:8000/api/v1/reports/fund_report/html");
+    expect(vi.mocked(fetch).mock.calls[8]?.[0]).toBe("http://localhost:8000/api/v1/reports/fund_report/edit-sessions");
+    expect((vi.mocked(fetch).mock.calls[8]?.[1] as RequestInit).method).toBe("POST");
+    expect(vi.mocked(fetch).mock.calls[9]?.[0]).toBe("http://localhost:8000/api/v1/dashboards/fund_overview/edit-sessions");
+    expect((vi.mocked(fetch).mock.calls[9]?.[1] as RequestInit).method).toBe("POST");
     expect((vi.mocked(fetch).mock.calls[3]?.[1] as RequestInit).method).toBe("PUT");
     expect(JSON.parse(String((vi.mocked(fetch).mock.calls[3]?.[1] as RequestInit).body))).toEqual({
       visibility: "role",

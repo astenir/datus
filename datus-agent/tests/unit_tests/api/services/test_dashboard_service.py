@@ -112,6 +112,12 @@ def _write_dashboard(
     return dashboard_dir
 
 
+def _seed_dist(dist_dir: Path) -> None:
+    dist_dir.mkdir(parents=True, exist_ok=True)
+    (dist_dir / "index.css").write_text("/* offline css */", encoding="utf-8")
+    (dist_dir / "index.umd.js").write_text("/* offline js */", encoding="utf-8")
+
+
 def _patch_executor(monkeypatch, *, captured: dict) -> None:
     """Replace the DB-execution suffix of ``run_query`` so tests focus on
     the template-source switch / render output, not the live connector path.
@@ -397,6 +403,37 @@ async def test_get_detail_missing_manifest_returns_not_found(tmp_path: Path):
 
     assert result.success is False
     assert result.errorCode == "DASHBOARD_NOT_FOUND"
+
+
+# ---------------------------------------------------------------------------
+# DashboardService.render_html
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_render_html_uses_configured_dashboard_dist(tmp_path: Path):
+    _write_dashboard(tmp_path, dashboard_slug="html_offline")
+    dist_dir = tmp_path / "vendor" / "web-artifact-render" / "dist"
+    _seed_dist(dist_dir)
+    agent_config = SimpleNamespace(
+        agentic_nodes={
+            "gen_visual_dashboard": {
+                "dashboard_dist": str(dist_dir),
+            },
+        },
+    )
+
+    result = await DashboardService(agent_config=agent_config).render_html(
+        project_files_root=tmp_path,
+        dashboard_slug="html_offline",
+        query_endpoint="/api/v1/dashboard/query",
+    )
+
+    assert result.success is True
+    assert "data:text/css;base64," in result.data
+    assert "data:text/javascript;base64," in result.data
+    assert "https://unpkg.com/" not in result.data
+    assert not (tmp_path / "dashboards" / "html_offline" / "_assets").exists()
 
 
 # ---------------------------------------------------------------------------

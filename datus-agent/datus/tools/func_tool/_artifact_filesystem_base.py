@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import ClassVar, Optional
+from typing import ClassVar, Iterator, Optional
 
 from datus.tools.func_tool.base import FuncToolResult
 from datus.tools.func_tool.filesystem_tools import FilesystemFuncTool
@@ -58,6 +58,7 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
 
     _RENDER_PATH_RE: ClassVar[re.Pattern[str]] = re.compile(r"^$")
     _QUERIES_PATH_RE: ClassVar[re.Pattern[str]] = re.compile(r"^$")
+    _ARTIFACT_PATH_RE: ClassVar[re.Pattern[str]] = re.compile(r"^$")
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -70,6 +71,11 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
         slug = r"[a-z0-9_]{1,80}"
         cls._RENDER_PATH_RE = re.compile(rf"^{root}/{slug}/render(?:/.+)?$")
         cls._QUERIES_PATH_RE = re.compile(rf"^{root}/{slug}/queries/.+$")
+        cls._ARTIFACT_PATH_RE = re.compile(rf"^{root}/({slug})(?:/.*)?$")
+
+    def __init__(self, *args, locked_artifact_slug: str | None = None, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._locked_artifact_slug = locked_artifact_slug if locked_artifact_slug else None
 
     # ── Path classification ──────────────────────────────────────────────
 
@@ -97,6 +103,48 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
         if not self._RENDER_PATH_RE.match(rel.as_posix()):
             return None
         return "render"
+
+    def _artifact_slug_for_path(self, path: str) -> Optional[str]:
+        try:
+            resolved = self._classify(path)
+        except Exception:  # pragma: no cover - defensive
+            return None
+        try:
+            rel = resolved.resolved.relative_to(self._root_resolved).as_posix()
+        except ValueError:
+            return None
+        match = self._ARTIFACT_PATH_RE.match(rel)
+        return match.group(1) if match else None
+
+    def _artifact_slug_for_resolved_path(self, path: Path) -> Optional[str]:
+        try:
+            rel = path.resolve(strict=False).relative_to(self._root_resolved).as_posix()
+        except ValueError:
+            return None
+        match = self._ARTIFACT_PATH_RE.match(rel)
+        return match.group(1) if match else None
+
+    def _violates_locked_artifact(self, path: str) -> bool:
+        if not self._locked_artifact_slug:
+            return False
+        slug = self._artifact_slug_for_path(path)
+        return slug is not None and slug != self._locked_artifact_slug
+
+    def _locked_artifact_not_found(self, path: str) -> FuncToolResult:
+        return FuncToolResult(success=0, error=f"File not found: {path}")
+
+    def _locked_artifact_mutation_reject(self, path: str) -> FuncToolResult:
+        return FuncToolResult(
+            success=0,
+            error=(
+                f"Artifact edit session is locked to "
+                f"{self.ARTIFACT_ROOT_DIR_NAME}/{self._locked_artifact_slug}/; cannot modify {path}."
+            ),
+        )
+
+    def _artifact_protection_active(self) -> bool:  # type: ignore[override]
+        """Artifact-bound filesystem tools enforce artifact ACLs at construction time."""
+        return False
 
     # ── Error templates (override-friendly) ──────────────────────────────
 
@@ -132,6 +180,8 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
     # ── Overrides ────────────────────────────────────────────────────────
 
     def write_file(self, path: str, content: str, file_type: str = "") -> FuncToolResult:  # type: ignore[override]
+        if self._violates_locked_artifact(path):
+            return self._locked_artifact_mutation_reject(path)
         if self._is_queries_path(path):
             return FuncToolResult(success=0, error=self._queries_write_reject())
         if self._classify_render_path(path) == "render":
@@ -141,6 +191,8 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
         return super().write_file(path, content, file_type)
 
     def edit_file(self, path: str, old_string: str, new_string: str) -> FuncToolResult:  # type: ignore[override]
+        if self._violates_locked_artifact(path):
+            return self._locked_artifact_mutation_reject(path)
         if self._is_queries_path(path):
             return FuncToolResult(success=0, error=self._queries_edit_reject())
         if self._classify_render_path(path) == "render":
@@ -150,6 +202,8 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
         return super().edit_file(path, old_string, new_string)
 
     def delete_file(self, path: str) -> FuncToolResult:  # type: ignore[override]
+        if self._violates_locked_artifact(path):
+            return self._locked_artifact_mutation_reject(path)
         if self._is_queries_path(path):
             return FuncToolResult(success=0, error=self._queries_delete_reject())
         if self._classify_render_path(path) == "render":
@@ -157,3 +211,16 @@ class ArtifactFilesystemFuncTool(FilesystemFuncTool):
             if suffix not in RENDER_ALLOWED_SUFFIXES:
                 return self._render_extension_reject(path)
         return super().delete_file(path)
+
+    def read_file(self, path: str, offset: int = 0, limit: int = 0) -> FuncToolResult:  # type: ignore[override]
+        if self._violates_locked_artifact(path):
+            return self._locked_artifact_not_found(path)
+        return super().read_file(path, offset, limit)
+
+    def _walk_files(self, seed, include_pattern: str = "", include_dirs: bool = False) -> Iterator[Path]:  # type: ignore[override]
+        for path in super()._walk_files(seed, include_pattern, include_dirs):
+            if self._locked_artifact_slug:
+                slug = self._artifact_slug_for_resolved_path(path)
+                if slug is not None and slug != self._locked_artifact_slug:
+                    continue
+            yield path

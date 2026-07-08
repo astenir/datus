@@ -10,6 +10,7 @@ import type {
   ArtifactShareRoleSummary,
   ArtifactShareUpdate,
   ArtifactShareUserSummary,
+  ArtifactEditSession,
   DashboardDetail,
   ReportDetail,
   SqlQueryResultEnvelope,
@@ -63,6 +64,16 @@ export function putArtifactShare(
   return tab === "report"
     ? reportApi.putAcl(baseUrl, slug, share)
     : dashboardApi.putAcl(baseUrl, slug, share);
+}
+
+export function artifactEditSession(
+  baseUrl: string,
+  tab: ArtifactViewTab,
+  slug: string,
+): Promise<ArtifactEditSession | null> {
+  return tab === "report"
+    ? reportApi.createEditSession(baseUrl, slug)
+    : dashboardApi.createEditSession(baseUrl, slug);
 }
 
 export function createArtifactPreviewUrl(html: string): string {
@@ -369,6 +380,9 @@ export function useArtifacts() {
   const shareDirectoryLoading = shallowRef(false);
   const shareDirectoryError = shallowRef<string | null>(null);
   const shareDirectoryRequestId = shallowRef(0);
+  const editLoadingKey = shallowRef<string | null>(null);
+  const editError = shallowRef<string | null>(null);
+  const editRequestId = shallowRef(0);
   const previewUrls: string[] = [];
 
   const activeDetail = computed<ArtifactDetail | null>(() => {
@@ -586,6 +600,58 @@ export function useArtifacts() {
     }
   }
 
+  async function createArtifactEditSession(
+    tab: ArtifactViewTab,
+    slugValue: string | null | undefined,
+  ): Promise<ArtifactEditSession | null> {
+    const slug = nonEmptySlug(slugValue);
+    const requestId = editRequestId.value + 1;
+    editRequestId.value = requestId;
+    editError.value = null;
+    const kindLabel = tab === "report" ? "报表" : "仪表盘";
+
+    if (!slug) {
+      editLoadingKey.value = null;
+      editError.value = `请选择要编辑的${kindLabel}`;
+      toast.error(`请选择要编辑的${kindLabel}`);
+      return null;
+    }
+
+    const key = artifactPreviewKey(tab, slug);
+    editLoadingKey.value = key;
+
+    try {
+      const session = await artifactEditSession(connection.effectiveBase(), tab, slug);
+      if (editRequestId.value !== requestId) return null;
+      if (!session) {
+        editError.value = `创建${kindLabel}编辑会话失败`;
+        toast.error(`创建${kindLabel}编辑会话失败`);
+        return null;
+      }
+      toast.success(`${kindLabel}编辑会话已创建`);
+      return session;
+    } catch (err) {
+      if (editRequestId.value !== requestId) return null;
+
+      console.error(`创建${kindLabel}编辑会话失败:`, err);
+      editError.value = `创建${kindLabel}编辑会话失败`;
+      toast.error(`创建${kindLabel}编辑会话失败`);
+      return null;
+    } finally {
+      if (editRequestId.value === requestId) {
+        editLoadingKey.value = null;
+      }
+    }
+  }
+
+  function createReportEditSession(slugValue: string | null | undefined): Promise<ArtifactEditSession | null> {
+    return createArtifactEditSession("report", slugValue);
+  }
+
+  function createDashboardEditSession(slugValue: string | null | undefined): Promise<ArtifactEditSession | null> {
+    return createArtifactEditSession("dashboard", slugValue);
+  }
+
   async function loadDetail(tab: ArtifactViewTab, slugValue: string | null | undefined) {
     const slug = nonEmptySlug(slugValue);
     const requestId = detailRequestId.value + 1;
@@ -721,6 +787,8 @@ export function useArtifacts() {
     shareRoleOptions: readonly(shareRoleOptions),
     shareDirectoryLoading: readonly(shareDirectoryLoading),
     shareDirectoryError: readonly(shareDirectoryError),
+    editLoadingKey: readonly(editLoadingKey),
+    editError: readonly(editError),
     loadArtifacts,
     loadDetail,
     runDashboardQuery,
@@ -731,5 +799,8 @@ export function useArtifacts() {
     loadShareDirectory,
     saveShare,
     clearShare,
+    createArtifactEditSession,
+    createReportEditSession,
+    createDashboardEditSession,
   };
 }

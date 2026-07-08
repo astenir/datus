@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue"
-import { EyeIcon, Share2Icon } from "@lucide/vue"
+import { EyeIcon, FilePenLineIcon, Share2Icon } from "@lucide/vue"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -19,6 +19,8 @@ const props = defineProps<{
   previewOpening: boolean
   shareLoading: boolean
   canManageShare: boolean
+  canEdit: boolean
+  editLoading: boolean
   queryResult: SqlQueryResultEnvelope | null
   queryLoading: boolean
   queryError: string | null
@@ -28,6 +30,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   openPreview: []
   share: []
+  edit: []
   runDashboardQuery: [querySlug: string, params: Record<string, unknown>]
 }>()
 
@@ -188,6 +191,16 @@ const templates = computed(() => isDashboardDetail(props.detail) ? props.detail.
         >
           <Share2Icon data-icon="inline-start" />
           {{ props.shareLoading ? "加载中" : "分享设置" }}
+        </Button>
+        <Button
+          v-if="props.canEdit"
+          variant="outline"
+          size="sm"
+          :disabled="props.editLoading"
+          @click="emit('edit')"
+        >
+          <FilePenLineIcon data-icon="inline-start" />
+          {{ props.editLoading ? "创建中" : `编辑${kindLabel}` }}
         </Button>
       </div>
     </div>

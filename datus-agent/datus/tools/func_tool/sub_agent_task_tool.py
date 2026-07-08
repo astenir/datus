@@ -17,6 +17,7 @@ import json
 import uuid
 from contextlib import nullcontext
 from datetime import datetime
+from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from agents import FunctionTool, Tool
@@ -45,6 +46,20 @@ if TYPE_CHECKING:
     from datus.schemas.base import BaseInput
 
 logger = get_logger(__name__)
+
+_SUBAGENT_MODULE_PERMISSIONS = {
+    "gen_sql": "module.sql_executor",
+    "gen_report": "module.report.query",
+    "gen_visual_report": "module.report.query",
+    "ask_report": "module.report.query",
+    "gen_dashboard": "module.dashboard.query",
+    "gen_visual_dashboard": "module.dashboard.query",
+    "ask_dashboard": "module.dashboard.query",
+}
+
+
+def _matches_permission(action: str, permissions: list[str]) -> bool:
+    return any(permission == "*" or fnmatchcase(action, permission) for permission in permissions)
 
 # Mapping from subagent type string to NodeType constants
 NODE_CLASS_MAP = {
@@ -695,6 +710,10 @@ class SubAgentTaskTool:
                 ),
             )
 
+        permission_denial = self._enterprise_permission_denial(subagent_type)
+        if permission_denial is not None:
+            return permission_denial
+
         effective_cfg = self._resolve_effective_sub_agent_config(subagent_type)
         inherited_parent = self._resolve_inherited_memory_node(subagent_type)
         inherited_cm = inherited_memory(subagent_type, inherited_parent) if inherited_parent else nullcontext()
@@ -865,6 +884,62 @@ class SubAgentTaskTool:
                     logger.debug("Failed to release sub-agent session handle", exc_info=True)
 
         return self._convert_to_func_result(final_output, session_id=node.session_id)
+
+    def _enterprise_permission_denial(self, subagent_type: str) -> Optional[FuncToolResult]:
+        """Re-apply enterprise module permissions for in-chat task() dispatch.
+
+        Route-level checks cover ``/api/v1/chat/stream`` when the caller passes
+        ``subagent_id`` directly. A normal chat turn can still invoke this tool
+        later, so privileged subagents must be checked here as well.
+        """
+        if not bool(getattr(self.agent_config, "_enterprise_enabled", False)):
+            return None
+
+        permission_key = self._required_module_permission(subagent_type)
+        if permission_key is None:
+            return None
+
+        permissions = self._request_permissions()
+        if _matches_permission(permission_key, permissions):
+            return None
+
+        logger.warning(
+            "Enterprise task dispatch denied: subagent=%s permission=%s user=%r",
+            subagent_type,
+            permission_key,
+            getattr(self.agent_config, "_request_user_id", None),
+        )
+        return FuncToolResult(
+            success=0,
+            error=(
+                f"PERMISSION_DENIED: task(type={subagent_type!r}) requires {permission_key}. "
+                "Ask an administrator to grant the module permission or use an artifact that has been shared with you."
+            ),
+        )
+
+    def _required_module_permission(self, subagent_type: str) -> Optional[str]:
+        permission_key = _SUBAGENT_MODULE_PERMISSIONS.get(subagent_type)
+        if permission_key is not None:
+            return permission_key
+
+        try:
+            entry = self.agent_config.sub_agent_config(subagent_type)
+        except Exception:
+            entry = None
+        if not isinstance(entry, dict):
+            return None
+
+        node_class = entry.get("node_class") or entry.get("type") or subagent_type
+        return _SUBAGENT_MODULE_PERMISSIONS.get(node_class)
+
+    def _request_permissions(self) -> list[str]:
+        principal = getattr(self.agent_config, "principal", None) or {}
+        raw = principal.get("permissions")
+        if isinstance(raw, str):
+            return [raw]
+        if isinstance(raw, (list, set, tuple)):
+            return [item for item in raw if isinstance(item, str)]
+        return []
 
     def _resolve_inherited_memory_node(self, subagent_type: str) -> Optional[str]:
         """Pick the memory node a sub-agent should inherit (read-only inline).

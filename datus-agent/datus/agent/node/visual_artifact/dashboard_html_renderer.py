@@ -20,13 +20,13 @@ it with ``datus --web --datasource <ds>`` and the compiled HTML at
 
 Three asset / runtime modes:
 
-* **CDN mode (default)** — the rendered HTML loads
-  ``@datus/web-artifact-render`` from ``unpkg.com``. Needs network access
-  for the bundle; the query backend is still the local ``datus --web``
-  server unless overridden.
 * **Offline mode** — caller passes ``dashboard_dist`` and the CSS/UMD
   pair is copied next to the HTML under ``_assets/`` so it opens through
   ``file://`` without hitting the CDN.
+* **Bundled mode (default)** — when no explicit dist is configured, Datus uses
+  the vendored ``@datus/web-artifact-render`` dist shipped inside this package.
+* **CDN fallback** — if the selected local dist is missing or incomplete, the
+  rendered HTML loads the pinned renderer from ``unpkg.com``.
 * **Custom backend** — ``query_endpoint`` is baked into the HTML at
   compile time. Default points at ``http://localhost:8501/api/v1/dashboard/query``
   (matches the ``--host`` / ``--port`` defaults of ``datus --web``);
@@ -126,8 +126,9 @@ def render_dashboard_html(
             ``index.umd.js``. When provided and valid, the two files
             are copied next to the generated HTML and the template links to
             them via relative paths (so the page works offline through
-            ``file://``). When ``None`` (or the directory is missing /
-            incomplete), the template links to the pinned unpkg CDN instead.
+            ``file://``). When ``None``, the bundled renderer dist is used.
+            If the selected local dist is missing or incomplete, the template
+            falls back to the pinned unpkg CDN.
         query_endpoint: absolute URL the rendered HTML will POST to for
             every dashboard query. Defaults to
             :data:`DEFAULT_QUERY_ENDPOINT` (``http://localhost:8501/api/v1/dashboard/query``).
@@ -167,6 +168,7 @@ def render_dashboard_html_str(
     project_root: Path,
     dashboard_slug: str,
     query_endpoint: Optional[str] = None,
+    dashboard_dist: Optional[Path] = None,
 ) -> str:
     """Return the compiled HTML string for a dashboard without writing to disk.
 
@@ -206,4 +208,5 @@ def render_dashboard_html_str(
         spec=spec,
         project_root=project_root,
         slug=dashboard_slug,
+        dist=dashboard_dist,
     )

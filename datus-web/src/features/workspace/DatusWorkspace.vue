@@ -30,6 +30,7 @@ import type { WorkspaceNavItem } from "@/features/workspace/types"
 import { useWorkspaceRouting } from "@/features/workspace/useWorkspaceRouting"
 import { sessionUserQueryText } from "@/lib/chat"
 import { canViewSubjectTree as canViewSubjectTreeWithPermission } from "@/lib/knowledge-access"
+import type { ArtifactEditSession } from "@/types"
 
 const AdminPanel = defineAsyncComponent(() => import("@/features/admin/AdminPanel.vue"))
 const AgentManagerPanel = defineAsyncComponent(() => import("@/features/agent/AgentManagerPanel.vue"))
@@ -162,6 +163,11 @@ const headerTitle = computed(() => {
 
 function openSqlDialog() {
   sqlDialogOpen.value = true
+}
+
+function startArtifactEdit(session: ArtifactEditSession) {
+  openChat()
+  workspace.startArtifactEditSession(session)
 }
 
 function handleLogout() {
@@ -309,6 +315,7 @@ function handleLogout() {
             :tab="artifactTab"
             :selected-slug="artifactSlug"
             @open-artifact="openArtifactDetail"
+            @edit-artifact="startArtifactEdit"
           />
         </TabsContent>
         <TabsContent

@@ -304,9 +304,13 @@ class ReportArtifactTools:
         agent_config,
         db_func_tool,
         user_message: str = "",
+        locked_report_slug: str | None = None,
+        allow_create: bool = True,
     ) -> None:
         self.agent_config = agent_config
         self._db_func_tool = db_func_tool
+        self._locked_report_slug = locked_report_slug
+        self._allow_create = allow_create
         # Raw user prompt that drove this node invocation — appended to
         # analysis/intent.md verbatim when the artifact is created / bound,
         # so the file becomes the authoritative log of what the user asked
@@ -390,6 +394,15 @@ class ReportArtifactTools:
             user's original prompt (append-only fenced-code-block section)
             so the follow-up subagent has the raw question to anchor on.
         """
+        if not self._allow_create or self._locked_report_slug:
+            locked = self._locked_report_slug or "<locked>"
+            return FuncToolResult(
+                success=0,
+                error=(
+                    f"This report edit session is locked to reports/{locked}/. "
+                    f"Call bind_existing_report(report_slug='{locked}') instead of start_new_report()."
+                ),
+            )
         if not slug or not REPORT_SLUG_RE.fullmatch(slug):
             return FuncToolResult(
                 success=0,
@@ -478,6 +491,14 @@ class ReportArtifactTools:
             section appended with the user's prompt so the running log of
             "what the user has asked over time" stays complete.
         """
+        if self._locked_report_slug and report_slug != self._locked_report_slug:
+            return FuncToolResult(
+                success=0,
+                error=(
+                    f"This report edit session is locked to reports/{self._locked_report_slug}/; "
+                    f"cannot bind reports/{report_slug}/."
+                ),
+            )
         if not report_slug or not REPORT_SLUG_RE.fullmatch(report_slug):
             return FuncToolResult(
                 success=0,
@@ -492,7 +513,43 @@ class ReportArtifactTools:
                     "Use start_new_report() if you intended to create a new report."
                 ),
             )
-        if not (candidate / "render" / "app.jsx").is_file():
+        manifest_path = candidate / "manifest.json"
+        manifest_missing = not manifest_path.is_file()
+        required_dirs = {
+            "render": candidate / "render",
+            "queries": candidate / "queries",
+            "analysis": candidate / "analysis",
+        }
+        missing_dirs = [name for name, path in required_dirs.items() if not path.is_dir()]
+        missing_app = not (candidate / "render" / "app.jsx").is_file()
+        if self._locked_report_slug == report_slug and (manifest_missing or missing_dirs or missing_app):
+            manifest = None
+            if manifest_missing:
+                manifest = ArtifactManifest(
+                    slug=report_slug,
+                    name=report_slug,
+                    description=(
+                        "Recovered incomplete report artifact. Replace this description after the "
+                        "report render tree is rebuilt."
+                    ),
+                    kind="report",
+                    created_at=utc_now_iso(),
+            )
+            result = self._activate(report_slug, mode="edit", create_dirs=True, manifest=manifest)
+            if result.success == 1 and isinstance(result.result, dict):
+                missing_items = []
+                if manifest_missing:
+                    missing_items.append("manifest.json")
+                missing_items.extend(f"{name}/" for name in missing_dirs)
+                if missing_app:
+                    missing_items.append("render/app.jsx")
+                missing_text = ", ".join(missing_items)
+                result.result["bootstrap_warning"] = (
+                    f"reports/{report_slug}/ was incomplete ({missing_text}); inspect the restored tree, "
+                    "write or repair render/app.jsx if needed, then call validate_render()."
+                )
+            return result
+        if missing_app:
             return FuncToolResult(
                 success=0,
                 error=(

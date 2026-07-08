@@ -72,6 +72,25 @@ DashboardQueryConfigProjector = Callable[[str | None], Awaitable[AgentConfig]]
 DashboardQueryBeforeExecute = Callable[[], Awaitable[Result | None]]
 
 
+def _configured_dashboard_dist(agent_config: Optional[AgentConfig]) -> Optional[Path]:
+    if agent_config is None:
+        return None
+
+    agentic_nodes = getattr(agent_config, "agentic_nodes", None)
+    if isinstance(agentic_nodes, dict):
+        node_config = agentic_nodes.get("gen_visual_dashboard")
+        if isinstance(node_config, dict):
+            dashboard_dist = node_config.get("dashboard_dist")
+            if dashboard_dist:
+                return Path(str(dashboard_dist)).expanduser()
+
+    cli_override = getattr(agent_config, "report_dist_cli_override", None)
+    if cli_override:
+        return Path(str(cli_override)).expanduser()
+
+    return None
+
+
 def _resolve_dashboard_dir(project_files_root: Path, dashboard_slug: str) -> Optional[Path]:
     """Resolve ``<project_files_root>/dashboards/<slug>`` safely.
 
@@ -350,6 +369,7 @@ class DashboardService:
                 project_root=project_files_root,
                 dashboard_slug=dashboard_slug,
                 query_endpoint=query_endpoint,
+                dashboard_dist=_configured_dashboard_dist(self.agent_config),
             )
         except FileNotFoundError:
             return Result(

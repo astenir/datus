@@ -33,6 +33,7 @@ from datus.tools.func_tool import (
 )
 from tests.unit_tests.mock_llm_model import (
     MockToolCall,
+    build_simple_response,
     build_tool_then_response,
 )
 
@@ -104,6 +105,18 @@ class TestGenVisualDashboardInit:
         assert "save_query_template" not in tool_names
         assert "validate_render" not in tool_names
         assert "start_new_dashboard" not in tool_names
+
+    def test_input_backed_init_includes_artifact_tools(self, real_agent_config, mock_llm_create):
+        node = _make_node(
+            real_agent_config,
+            input_data=GenVisualDashboardNodeInput(user_message="编辑 existing_demo"),
+        )
+        tool_names = {t.name for t in node.tools}
+
+        assert "start_new_dashboard" in tool_names
+        assert "bind_existing_dashboard" in tool_names
+        assert "save_query_template" in tool_names
+        assert "validate_render" in tool_names
 
     def test_tool_registry_registers_filesystem_tools(self, real_agent_config, mock_llm_create):
         """Same contract as the visual report node: filesystem tools must
@@ -211,6 +224,29 @@ class TestPrepareDashboardArtifacts:
         artifact_names = {"start_new_dashboard", "bind_existing_dashboard", "save_query_template", "validate_render"}
         assert artifact_names.issubset(set(names))
 
+    def test_locked_edit_session_auto_binds_and_bootstraps(self, real_agent_config, mock_llm_create):
+        node_name = "dashboard_edit__unit"
+        slug = "existing_demo"
+        artifact_dir = Path(real_agent_config.project_root) / "dashboards" / slug
+        artifact_dir.mkdir(parents=True)
+        real_agent_config.agentic_nodes[node_name] = {
+            "node_class": "gen_visual_dashboard",
+            "artifact_slug": slug,
+            "edit_locked": True,
+        }
+        node = _make_node(real_agent_config, node_name=node_name)
+        user_input = GenVisualDashboardNodeInput(user_message="看看这个仪表盘")
+        node.input = user_input
+
+        node._prepare_artifacts(user_input)
+
+        assert node.dashboard_artifact_tools.dashboard_slug == slug
+        assert node.dashboard_artifact_tools.mode == "edit"
+        assert (artifact_dir / "manifest.json").is_file()
+        assert (artifact_dir / "render").is_dir()
+        assert (artifact_dir / "queries").is_dir()
+        assert (artifact_dir / "analysis").is_dir()
+
 
 # --------------------------------------------------------------------------- #
 # Enhanced-message wiring                                                     #
@@ -311,6 +347,9 @@ async def test_execute_stream_end_to_end(real_agent_config, mock_llm_create):
     assert isinstance(result, dict)
     assert result["success"] is True
     assert result["dashboard_slug"] == existing_slug
+    stream_call = next(call for call in mock_llm_create.call_history if call["method"] == "generate_with_tools_stream")
+    assert "bind_existing_dashboard" in stream_call["tools"]
+    assert "validate_render" in stream_call["tools"]
     assert result["app_jsx_path"] == f"dashboards/{existing_slug}/render/app.jsx"
     assert result["render_file_count"] == 1
     # No save_query_template in this run — the seed wrote the template directly.
@@ -344,6 +383,32 @@ async def test_execute_stream_end_to_end(real_agent_config, mock_llm_create):
     # The launch command names the active datasource (so it's copy-pasteable)
     # AND keeps the executable + flag stable for docs-link references.
     assert path_action.output["datus_web_command"].startswith("datus --web --datasource ")
+
+
+@pytest.mark.asyncio
+async def test_locked_edit_session_auto_validates_when_model_only_answers(real_agent_config, mock_llm_create):
+    node_name = "dashboard_edit__unit"
+    existing_slug = "existing_demo"
+    _seed_dashboard_on_disk(Path(real_agent_config.project_root), existing_slug)
+    real_agent_config.agentic_nodes[node_name] = {
+        "node_class": "gen_visual_dashboard",
+        "artifact_slug": existing_slug,
+        "edit_locked": True,
+    }
+    mock_llm_create.reset(responses=[build_simple_response("这是一个已有仪表盘。")])
+
+    node = _make_node(real_agent_config, node_name=node_name)
+    node.input = GenVisualDashboardNodeInput(user_message="什么仪表盘？")
+
+    actions = []
+    async for action in node.execute_stream(ActionHistoryManager()):
+        actions.append(action)
+
+    final = actions[-1]
+    assert final.status == ActionStatus.SUCCESS
+    assert final.output["success"] is True
+    assert final.output["dashboard_slug"] == existing_slug
+    assert final.output["app_jsx_path"] == f"dashboards/{existing_slug}/render/app.jsx"
 
 
 @pytest.mark.asyncio

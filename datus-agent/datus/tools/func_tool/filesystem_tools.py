@@ -70,6 +70,10 @@ class FilesystemFuncTool(BaseTool):
     """
 
     permission_category: str = "filesystem_tools"
+    _PROTECTED_ARTIFACT_ROOTS: frozenset[str] = frozenset({"reports", "dashboards"})
+    _ARTIFACT_BOUND_NODES: frozenset[str] = frozenset(
+        {"gen_visual_report", "gen_visual_dashboard", "ask_report", "ask_dashboard"}
+    )
 
     def __init__(
         self,
@@ -79,6 +83,7 @@ class FilesystemFuncTool(BaseTool):
         datus_home: Optional[str] = None,
         strict: bool = False,
         session_data_dir: Optional[str] = None,
+        protect_artifact_paths: bool = False,
         **kwargs,
     ):
         """
@@ -96,6 +101,10 @@ class FilesystemFuncTool(BaseTool):
                 qualifies as a read-only WHITELIST anchor so the LLM can
                 ``read_file`` archived tool I/O without triggering a permission
                 prompt. Other sessions' archive directories stay EXTERNAL.
+            protect_artifact_paths: When True, generic filesystem access to
+                ``reports/`` and ``dashboards/`` is hidden from ordinary chat
+                nodes. Enterprise report/dashboard access must flow through the
+                artifact routes and ACL-aware subagents, not raw file scans.
         """
         super().__init__(**kwargs)
         self.root_path = root_path or os.getcwd()
@@ -105,6 +114,7 @@ class FilesystemFuncTool(BaseTool):
         self._root_resolved = Path(self.root_path).expanduser().resolve(strict=False)
         self._strict = strict
         self._session_data_dir = Path(session_data_dir).expanduser().resolve(strict=False) if session_data_dir else None
+        self._protect_artifact_paths = protect_artifact_paths
 
     @property
     def strict(self) -> bool:
@@ -192,6 +202,33 @@ class FilesystemFuncTool(BaseTool):
             error=f"Path outside workspace is not allowed in strict mode: {resolved.display}",
         )
 
+    def _artifact_protection_active(self) -> bool:
+        return self._protect_artifact_paths and self._current_node not in self._ARTIFACT_BOUND_NODES
+
+    def _is_protected_artifact_path(self, resolved: ResolvedPath) -> bool:
+        if not self._artifact_protection_active():
+            return False
+        if resolved.zone not in (PathZone.INTERNAL, PathZone.WHITELIST):
+            return False
+        try:
+            rel = resolved.resolved.relative_to(self._root_resolved).as_posix()
+        except ValueError:
+            return False
+        head = rel.split("/", 1)[0]
+        return head in self._PROTECTED_ARTIFACT_ROOTS
+
+    def _artifact_not_found(self, resolved: ResolvedPath) -> FuncToolResult:
+        return FuncToolResult(success=0, error=f"File not found: {resolved.display}")
+
+    def _artifact_mutation_reject(self, resolved: ResolvedPath) -> FuncToolResult:
+        return FuncToolResult(
+            success=0,
+            error=(
+                f"Artifact path is protected by report/dashboard ACLs: {resolved.display}. "
+                "Use the report/dashboard artifact APIs or an ACL-bound artifact agent."
+            ),
+        )
+
     def _get_safe_path(self, path: str) -> Optional[Path]:
         """Deprecated sandbox helper kept for backward compat.
 
@@ -238,6 +275,8 @@ class FilesystemFuncTool(BaseTool):
             resolved = self._classify(path)
             if resolved.zone == PathZone.HIDDEN:
                 return self._not_found(resolved)
+            if self._is_protected_artifact_path(resolved):
+                return self._artifact_not_found(resolved)
             if self._strict and resolved.zone == PathZone.EXTERNAL:
                 return self._strict_reject(resolved)
 
@@ -321,6 +360,8 @@ class FilesystemFuncTool(BaseTool):
             resolved = self._classify(path)
             if resolved.zone == PathZone.HIDDEN:
                 return self._not_found(resolved)
+            if self._is_protected_artifact_path(resolved):
+                return self._artifact_mutation_reject(resolved)
             if self._strict and resolved.zone == PathZone.EXTERNAL:
                 return self._strict_reject(resolved)
             if resolved.read_only:
@@ -366,6 +407,8 @@ class FilesystemFuncTool(BaseTool):
             resolved = self._classify(path)
             if resolved.zone == PathZone.HIDDEN:
                 return self._not_found(resolved)
+            if self._is_protected_artifact_path(resolved):
+                return self._artifact_mutation_reject(resolved)
             if self._strict and resolved.zone == PathZone.EXTERNAL:
                 return self._strict_reject(resolved)
             if resolved.read_only:
@@ -422,6 +465,8 @@ class FilesystemFuncTool(BaseTool):
             resolved = self._classify(path)
             if resolved.zone == PathZone.HIDDEN:
                 return self._not_found(resolved)
+            if self._is_protected_artifact_path(resolved):
+                return self._artifact_mutation_reject(resolved)
             if self._strict and resolved.zone == PathZone.EXTERNAL:
                 return self._strict_reject(resolved)
             if resolved.read_only:
@@ -508,8 +553,8 @@ class FilesystemFuncTool(BaseTool):
 
         return patterns
 
-    def _walk_files(self, seed: ResolvedPath, include_pattern: str = "") -> Iterator[Path]:
-        """Walk a directory tree yielding files.
+    def _walk_files(self, seed: ResolvedPath, include_pattern: str = "", include_dirs: bool = False) -> Iterator[Path]:
+        """Walk a directory tree yielding files, and optionally directories.
 
         Traversal honors:
 
@@ -580,7 +625,7 @@ class FilesystemFuncTool(BaseTool):
                     return
                 visited_inodes.add(current_inode)
 
-                for item in current_path.iterdir():
+                for item in sorted(current_path.iterdir(), key=lambda p: p.name):
                     try:
                         if should_gitignore_exclude(item):
                             continue
@@ -594,13 +639,16 @@ class FilesystemFuncTool(BaseTool):
                         # level itself).
                         item_is_hidden = False
                         if seed_is_project_relative:
-                            item_zone = classify_path(
+                            item_resolved_path = classify_path(
                                 str(item_resolved),
                                 root_path=self._root_resolved,
                                 current_node=self._current_node,
                                 datus_home=self._datus_home,
                                 session_data_dir=self._session_data_dir,
-                            ).zone
+                            )
+                            if self._is_protected_artifact_path(item_resolved_path):
+                                continue
+                            item_zone = item_resolved_path.zone
                             if item_zone == PathZone.EXTERNAL:
                                 # Symlink escape from project tree; skip.
                                 continue
@@ -611,6 +659,8 @@ class FilesystemFuncTool(BaseTool):
                                     continue
 
                         if item_resolved.is_dir():
+                            if include_dirs and not item_is_hidden:
+                                yield item_resolved
                             yield from walk_recursive(item_resolved)
                         elif item_resolved.is_file() and not item_is_hidden:
                             if include_pattern:
@@ -698,6 +748,8 @@ class FilesystemFuncTool(BaseTool):
             seed = self._classify(path)
             if seed.zone == PathZone.HIDDEN:
                 return FuncToolResult(result={"files": [], "truncated": False})
+            if self._is_protected_artifact_path(seed):
+                return FuncToolResult(result={"files": [], "truncated": False})
             if self._strict and seed.zone == PathZone.EXTERNAL:
                 return self._strict_reject(seed)
 
@@ -712,7 +764,7 @@ class FilesystemFuncTool(BaseTool):
                 report_relative_to = self._root_resolved
 
             matches: List[str] = []
-            for file_path in self._walk_files(seed):
+            for file_path in self._walk_files(seed, include_dirs=True):
                 try:
                     match_rel = str(file_path.relative_to(target_path))
                 except ValueError:
@@ -774,6 +826,8 @@ class FilesystemFuncTool(BaseTool):
         try:
             seed = self._classify(path)
             if seed.zone == PathZone.HIDDEN:
+                return FuncToolResult(result={"matches": [], "truncated": False})
+            if self._is_protected_artifact_path(seed):
                 return FuncToolResult(result={"matches": [], "truncated": False})
             if self._strict and seed.zone == PathZone.EXTERNAL:
                 return self._strict_reject(seed)

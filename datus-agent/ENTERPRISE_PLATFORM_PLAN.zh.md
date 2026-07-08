@@ -90,6 +90,7 @@ module.datasource_catalog
 module.report.view
 module.report.query
 module.report.export
+module.report.edit
 module.dashboard.view
 module.dashboard.query
 module.dashboard.export

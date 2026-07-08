@@ -117,7 +117,12 @@ exclude = ["benchmark*", "docs*"]
     "sample_data/superset/*",
 ]
 "datus.cli.web" = ["templates/*.html"]
-"datus.agent.node.visual_artifact" = ["templates/*.html"]
+"datus.agent.node.visual_artifact" = [
+    "templates/*.html",
+    "vendor/web_artifact_render_dist/*.css",
+    "vendor/web_artifact_render_dist/*.js",
+    "vendor/web_artifact_render_dist/*.md",
+]
 "datus.prompts" = ["*.txt", "*.md", "*.j2"]
 "datus.prompts.prompt_templates" = ["*.j2"]
 

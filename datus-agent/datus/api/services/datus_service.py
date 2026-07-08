@@ -36,6 +36,7 @@ class DatusService:
         session_owner_store: "SessionOwnerStore | None" = None,
         session_body_store: "SessionBodyStore | None" = None,
         artifact_acl_store: "ArtifactAclStore | None" = None,
+        enterprise_enabled: bool = False,
     ):
         self._agent_config = agent_config
         self._project_id = project_id
@@ -55,6 +56,7 @@ class DatusService:
             session_owner_store=session_owner_store,
             session_body_store=session_body_store,
             artifact_acl_store=artifact_acl_store,
+            enterprise_enabled=enterprise_enabled,
         )
 
         # Lazy service slots

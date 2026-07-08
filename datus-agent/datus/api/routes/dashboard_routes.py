@@ -21,18 +21,19 @@ from fastapi import APIRouter, Depends, Query, Request
 
 from datus.api import deps
 from datus.api.auth.context import AppContext
-from datus.api.deps import ServiceDep
+from datus.api.deps import ServiceDep, get_request_app_context
 from datus.api.enterprise.deps import project_request_config, require_module, require_platform_active
 from datus.api.models.base_models import Result
 from datus.api.models.dashboard_models import (
     DashboardDetail,
+    DashboardEditSession,
     DashboardQueryRequest,
     SqlQueryResultEnvelope,
 )
 from datus.configuration.agent_config import AgentConfig
 from datus.utils.exceptions import DatusException
 from datus.utils.loggings import get_logger
-from datus_enterprise.artifact_acl import require_artifact_access
+from datus_enterprise.artifact_acl import require_artifact_access, require_artifact_edit_access
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.quota import consume_enterprise_quota
 
@@ -42,6 +43,7 @@ _require_dashboard_view = require_module("module.dashboard.view")
 _require_dashboard_query = require_module("module.dashboard.query")
 DashboardViewModuleCtx = Annotated[AppContext, Depends(_require_dashboard_view)]
 DashboardQueryModuleCtx = Annotated[AppContext, Depends(_require_dashboard_query)]
+DashboardEditCtx = Annotated[AppContext, Depends(get_request_app_context)]
 
 
 def _project_files_root(svc: ServiceDep) -> Path:
@@ -79,6 +81,36 @@ async def get_dashboard_detail(
         project_files_root=_project_files_root(svc),
         dashboard_slug=slug,
     )
+
+
+@router.post(
+    "/dashboards/{slug}/edit-sessions",
+    response_model=Result[DashboardEditSession],
+    summary="Create Dashboard Edit Session",
+    description=(
+        "Create an ephemeral, ACL-bound edit subagent for one dashboard. The returned "
+        "subagent_id can be passed to /api/v1/chat/stream; it is locked to dashboards/<slug>/."
+    ),
+    dependencies=[
+        Depends(require_platform_active(operation="dashboard.edit_session.create", resource_type="dashboard"))
+    ],
+)
+async def create_dashboard_edit_session(
+    ctx: DashboardEditCtx,
+    svc: ServiceDep,
+    slug: str,
+) -> Result[DashboardEditSession]:
+    await require_artifact_edit_access(ctx, artifact_type="dashboard", slug=slug)
+    detail = await svc.dashboard.get_detail(project_files_root=_project_files_root(svc), dashboard_slug=slug)
+    if not detail.success:
+        return Result(
+            success=False,
+            errorCode=detail.errorCode or "DASHBOARD_NOT_FOUND",
+            errorMessage=detail.errorMessage or "Dashboard not found.",
+        )
+
+    session = svc.task_manager.create_dashboard_edit_session(user_id=ctx.user_id, dashboard_slug=slug)
+    return Result(success=True, data=session)
 
 
 @router.post(

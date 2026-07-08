@@ -191,6 +191,42 @@ class TestGetAvailableTypes:
         assert "explore" in types
 
 
+@pytest.mark.ci
+class TestEnterprisePermissionGate:
+    @pytest.mark.asyncio
+    async def test_denies_privileged_builtin_task_without_module_permission(self, mock_agent_config):
+        mock_agent_config._enterprise_enabled = True
+        mock_agent_config._request_user_id = "user-1"
+        mock_agent_config.principal = {"permissions": ["module.chat"]}
+        tool = SubAgentTaskTool(agent_config=mock_agent_config)
+
+        result = await tool._execute_node("gen_visual_dashboard", "edit dashboards", "edit dashboards")
+
+        assert result.success == 0
+        assert "PERMISSION_DENIED" in result.error
+        assert "module.dashboard.query" in result.error
+
+    def test_allows_privileged_builtin_task_with_matching_permission(self, mock_agent_config):
+        mock_agent_config._enterprise_enabled = True
+        mock_agent_config.principal = {"permissions": ["module.dashboard.*"]}
+        tool = SubAgentTaskTool(agent_config=mock_agent_config)
+
+        assert tool._enterprise_permission_denial("gen_visual_dashboard") is None
+
+    def test_custom_ask_agent_maps_to_artifact_module_permission(self):
+        config = Mock(spec=AgentConfig)
+        config.agentic_nodes = {
+            "sales_dashboard_ask": {
+                "node_class": "ask_dashboard",
+                "artifact_slug": "sales",
+            }
+        }
+        config.sub_agent_config.side_effect = lambda name: config.agentic_nodes.get(name)
+        tool = SubAgentTaskTool(agent_config=config)
+
+        assert tool._required_module_permission("sales_dashboard_ask") == "module.dashboard.query"
+
+
 # ── _resolve_node_type ─────────────────────────────────────────────
 
 

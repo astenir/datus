@@ -179,13 +179,14 @@
         <h2>Failed to load Datus Report</h2>
       </div>
       <p>
-        If this page stays blank, your environment cannot reach
-        <code>__DATUS_REPORT_JS_URL__</code>.
+        The report renderer did not finish loading or initialization. The
+        browser may have blocked <code>__DATUS_REPORT_JS_URL__</code>, or the
+        renderer may have thrown before mounting the report.
       </p>
       <p>
         Use the CLI's <code>--report-dist</code> flag to point at a local copy
-        of the renderer, or open this file in an environment with network access
-        to the host above.
+        of the renderer, or check the browser console for the exact script,
+        policy, or initialization error.
       </p>
       <details class="datus-error-details">
         <summary>Show raw artifact JSON</summary>

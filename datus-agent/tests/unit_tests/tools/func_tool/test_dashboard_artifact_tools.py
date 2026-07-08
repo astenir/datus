@@ -494,6 +494,25 @@ class TestStartNewDashboard:
         assert result.success == 0
         assert "already exists" in (result.error or "").lower()
 
+    def test_locked_edit_session_rejects_new_dashboard(self, db_func_tool: DBFuncTool, project_root: Path):
+        tools = DashboardArtifactTools(
+            agent_config=SimpleNamespace(project_root=str(project_root)),
+            db_func_tool=db_func_tool,
+            locked_dashboard_slug="existing_demo",
+            allow_create=False,
+        )
+
+        result = _start_new_dashboard(
+            tools,
+            slug="new_demo",
+            name="new demo",
+            description="Should not be created from a locked edit session.",
+        )
+
+        assert result.success == 0
+        assert "locked to dashboards/existing_demo" in (result.error or "")
+        assert not (project_root / "dashboards" / "new_demo").exists()
+
 
 class TestBindExistingDashboard:
     def test_binds_when_directory_and_app_jsx_exist(self, unbound_tools: DashboardArtifactTools, project_root: Path):
@@ -525,6 +544,81 @@ class TestBindExistingDashboard:
         result = unbound_tools.bind_existing_dashboard("Not-A-Valid-Slug!")
         assert result.success == 0
         assert "match" in (result.error or "").lower()
+
+    def test_locked_edit_session_allows_only_locked_slug(self, db_func_tool: DBFuncTool, project_root: Path):
+        for slug in ("existing_demo", "other_demo"):
+            existing = project_root / "dashboards" / slug
+            (existing / "queries").mkdir(parents=True)
+            (existing / "render").mkdir()
+            (existing / "render" / "app.jsx").write_text("export default function D() { return null; }\n")
+        tools = DashboardArtifactTools(
+            agent_config=SimpleNamespace(project_root=str(project_root)),
+            db_func_tool=db_func_tool,
+            locked_dashboard_slug="existing_demo",
+            allow_create=False,
+        )
+
+        rejected = tools.bind_existing_dashboard("other_demo")
+        accepted = tools.bind_existing_dashboard("existing_demo")
+
+        assert rejected.success == 0
+        assert "locked to dashboards/existing_demo" in (rejected.error or "")
+        assert accepted.success == 1, accepted.error
+        assert tools.dashboard_slug == "existing_demo"
+
+    def test_locked_edit_session_can_bind_incomplete_dashboard_dir(
+        self,
+        db_func_tool: DBFuncTool,
+        project_root: Path,
+    ):
+        incomplete = project_root / "dashboards" / "existing_demo"
+        incomplete.mkdir(parents=True)
+        tools = DashboardArtifactTools(
+            agent_config=SimpleNamespace(project_root=str(project_root)),
+            db_func_tool=db_func_tool,
+            locked_dashboard_slug="existing_demo",
+            allow_create=False,
+        )
+
+        result = tools.bind_existing_dashboard("existing_demo")
+
+        assert result.success == 1, result.error
+        assert result.result["mode"] == "edit"
+        assert "bootstrap_warning" in result.result
+        assert tools.dashboard_slug == "existing_demo"
+        assert (incomplete / "manifest.json").is_file()
+        assert (incomplete / "render").is_dir()
+        assert (incomplete / "queries").is_dir()
+
+    def test_locked_edit_session_repairs_missing_manifest_after_bind(
+        self,
+        db_func_tool: DBFuncTool,
+        project_root: Path,
+    ):
+        incomplete = project_root / "dashboards" / "existing_demo"
+        (incomplete / "render").mkdir(parents=True)
+        (incomplete / "render" / "app.jsx").write_text("export default function D() { return null; }\n")
+        tools = DashboardArtifactTools(
+            agent_config=SimpleNamespace(project_root=str(project_root)),
+            db_func_tool=db_func_tool,
+            locked_dashboard_slug="existing_demo",
+            allow_create=False,
+        )
+
+        result = tools.bind_existing_dashboard("existing_demo")
+
+        assert result.success == 1, result.error
+        assert result.result["manifest_path"] == "dashboards/existing_demo/manifest.json"
+        assert "manifest.json" in result.result["bootstrap_warning"]
+        assert (incomplete / "manifest.json").is_file()
+        assert (incomplete / "queries").is_dir()
+        assert (incomplete / "analysis").is_dir()
+        fs = DashboardFilesystemFuncTool(root_path=str(project_root), locked_artifact_slug="existing_demo")
+        read_manifest = fs.read_file("dashboards/existing_demo/manifest.json")
+        tree = fs.glob("dashboards/existing_demo/**/*")
+        assert read_manifest.success == 1, read_manifest.error
+        assert "dashboards/existing_demo/manifest.json" in tree.result["files"]
+        assert "dashboards/existing_demo/render/app.jsx" in tree.result["files"]
 
 
 class TestRequireActive:
@@ -1329,3 +1423,27 @@ class TestDashboardFilesystemFuncTool:
         result = fs.delete_file("dashboards/x/queries/q.params.json")
         assert result.success == 0
         assert target.exists()
+
+    def test_locked_edit_session_bypasses_generic_artifact_protection(self, project_root: Path):
+        for slug in ("allowed", "other"):
+            render = project_root / "dashboards" / slug / "render"
+            render.mkdir(parents=True)
+            (project_root / "dashboards" / slug / "manifest.json").write_text(
+                f'{{"slug":"{slug}","name":"{slug}","description":"demo","kind":"dashboard",'
+                '"created_at":"2026-07-08T00:00:00Z"}\n',
+                encoding="utf-8",
+            )
+            (render / "app.jsx").write_text("export default function App() { return null; }\n", encoding="utf-8")
+        fs = DashboardFilesystemFuncTool(
+            root_path=str(project_root),
+            current_node="dashboard_edit__dynamic",
+            protect_artifact_paths=True,
+            locked_artifact_slug="allowed",
+        )
+
+        manifest = fs.read_file("dashboards/allowed/manifest.json")
+        tree = fs.glob("dashboards/*/manifest.json")
+
+        assert manifest.success == 1, manifest.error
+        assert tree.success == 1
+        assert tree.result["files"] == ["dashboards/allowed/manifest.json"]

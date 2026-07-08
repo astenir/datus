@@ -163,14 +163,17 @@ def test_render_report_html_missing_app_jsx_raises(tmp_path: Path):
         render_report_html(project_root=tmp_path, report_slug="missing")
 
 
-def test_render_report_html_defaults_to_cdn(tmp_path: Path):
-    _seed_report(tmp_path, report_slug="cdn_default")
-    out_path = render_report_html(project_root=tmp_path, report_slug="cdn_default")
+def test_render_report_html_defaults_to_bundled_dist(tmp_path: Path):
+    _seed_report(tmp_path, report_slug="bundled_default")
+    out_path = render_report_html(project_root=tmp_path, report_slug="bundled_default")
     body = out_path.read_text(encoding="utf-8")
-    assert "https://unpkg.com/@datus/web-artifact-render" in body
-    assert "index.css" in body
-    assert "index.umd.js" in body
-    assert not (tmp_path / "reports" / "cdn_default" / "_assets").exists()
+    assert "_assets/index.css" in body
+    assert "_assets/index.umd.js" in body
+    assert "https://unpkg.com/" not in body
+
+    copied_assets = tmp_path / "reports" / "bundled_default" / "_assets"
+    assert (copied_assets / "index.css").is_file()
+    assert (copied_assets / "index.umd.js").is_file()
 
 
 def _seed_dist(dist_dir: Path) -> None:
@@ -224,8 +227,11 @@ def test_render_report_html_ignores_environment_variables(tmp_path: Path, monkey
 
     out_path = render_report_html(project_root=tmp_path, report_slug="no_env_lookup")
     body = out_path.read_text(encoding="utf-8")
-    assert "https://unpkg.com/@datus/web-artifact-render" in body
-    assert not (tmp_path / "reports" / "no_env_lookup" / "_assets").exists()
+    assert "_assets/index.css" in body
+    assert "_assets/index.umd.js" in body
+    assert "https://unpkg.com/" not in body
+    copied_assets = tmp_path / "reports" / "no_env_lookup" / "_assets"
+    assert (copied_assets / "index.css").read_text(encoding="utf-8") != "/* offline css */"
 
 
 def test_render_report_html_falls_back_to_report_slug_for_title(tmp_path: Path):

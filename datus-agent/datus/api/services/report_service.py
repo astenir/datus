@@ -54,6 +54,26 @@ _REPORT_ARTIFACT_DIRS: Dict[str, Tuple[Tuple[str, ...], bool]] = {
 REPORT_SLUG_RE = re.compile(r"^[a-z0-9_]{1,80}$")
 
 
+def _configured_report_dist(agent_config: Optional[AgentConfig]) -> Optional[Path]:
+    if agent_config is None:
+        return None
+
+    cli_override = getattr(agent_config, "report_dist_cli_override", None)
+    if cli_override:
+        return Path(str(cli_override)).expanduser()
+
+    agentic_nodes = getattr(agent_config, "agentic_nodes", None)
+    if not isinstance(agentic_nodes, dict):
+        return None
+
+    node_config = agentic_nodes.get("gen_visual_report")
+    if not isinstance(node_config, dict):
+        return None
+
+    report_dist = node_config.get("report_dist")
+    return Path(str(report_dist)).expanduser() if report_dist else None
+
+
 def _resolve_report_dir(project_files_root: Path, report_slug: str) -> Optional[Path]:
     """Resolve ``<project_files_root>/reports/<slug>`` safely.
 
@@ -199,6 +219,7 @@ class ReportService:
                 render_report_html_str,
                 project_root=project_files_root,
                 report_slug=report_slug,
+                report_dist=_configured_report_dist(self.agent_config),
             )
         except FileNotFoundError:
             return Result(

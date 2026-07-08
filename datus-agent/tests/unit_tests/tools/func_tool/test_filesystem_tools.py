@@ -218,6 +218,21 @@ class TestReadFile:
         assert result.success == 1
         assert result.result == "line1\nline2\nline3"
 
+    def test_protected_artifact_path_is_hidden_from_generic_chat(self, tmp_path):
+        dashboard = tmp_path / "dashboards" / "sales" / "manifest.json"
+        dashboard.parent.mkdir(parents=True)
+        dashboard.write_text('{"slug":"sales"}')
+        tool = FilesystemFuncTool(
+            root_path=str(tmp_path),
+            current_node="chat",
+            protect_artifact_paths=True,
+        )
+
+        result = tool.read_file("dashboards/sales/manifest.json")
+
+        assert result.success == 0
+        assert "not found" in result.error.lower()
+
 
 # ---------------------------------------------------------------------------
 # FilesystemFuncTool - write_file
@@ -258,6 +273,19 @@ class TestWriteFile:
         tool = _make_tool(str(tmp_path))
         resolved = tool._classify("../../evil.txt")
         assert resolved.zone == PathZone.EXTERNAL
+
+    def test_protected_artifact_path_rejects_generic_chat_write(self, tmp_path):
+        tool = FilesystemFuncTool(
+            root_path=str(tmp_path),
+            current_node="chat",
+            protect_artifact_paths=True,
+        )
+
+        result = tool.write_file("reports/private/render/app.jsx", "export default null")
+
+        assert result.success == 0
+        assert "protected by report/dashboard ACLs" in result.error
+        assert not (tmp_path / "reports" / "private" / "render" / "app.jsx").exists()
 
     def test_write_overwrites_existing(self, tmp_path):
         f = tmp_path / "existing.txt"
@@ -414,6 +442,35 @@ class TestGlobSearch:
         assert result.success == 1
         assert result.result["files"] == []
         assert result.result["truncated"] is False
+
+    def test_glob_returns_matching_directories(self, tmp_path):
+        (tmp_path / "reports" / "fund_analysis").mkdir(parents=True)
+        (tmp_path / "reports" / "risk_review").mkdir(parents=True)
+        tool = _make_tool(str(tmp_path))
+
+        result = tool.glob("reports/*")
+
+        assert result.success == 1
+        assert result.result["files"] == ["reports/fund_analysis", "reports/risk_review"]
+
+    def test_protected_artifact_tree_is_pruned_from_generic_chat_glob(self, tmp_path):
+        dashboard = tmp_path / "dashboards" / "sales" / "manifest.json"
+        dashboard.parent.mkdir(parents=True)
+        dashboard.write_text('{"slug":"sales"}')
+        (tmp_path / "README.md").write_text("ok")
+        tool = FilesystemFuncTool(
+            root_path=str(tmp_path),
+            current_node="chat",
+            protect_artifact_paths=True,
+        )
+
+        root_result = tool.glob("**/*.json")
+        direct_result = tool.glob("**/*.json", path="dashboards")
+
+        assert root_result.success == 1
+        assert root_result.result["files"] == []
+        assert direct_result.success == 1
+        assert direct_result.result["files"] == []
 
     def test_glob_excludes_gitignore_patterns(self, tmp_path):
         (tmp_path / ".gitignore").write_text("*.log\nbuild/\n__pycache__\n")

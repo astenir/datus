@@ -25,16 +25,17 @@ demand and renders the default export of ``render/app.jsx``. The UMD
 global ``DatusArtifact`` exposes ``initReport`` / ``initDashboard``;
 this renderer drives ``initReport``.
 
-Two asset-loading modes, mirroring ``datus.cli.web.chatbot``:
+Asset-loading order:
 
-* **CDN mode (default)** — the rendered HTML loads
-  ``@datus/web-artifact-render`` from ``unpkg.com`` at a pinned version.
-  Requires network at view time.
-* **Offline mode** — caller passes ``report_dist`` (resolved upstream from
+* **Explicit offline mode** — caller passes ``report_dist`` (resolved upstream from
   the ``--report-dist`` CLI flag or ``agentic_nodes.gen_visual_report.report_dist``).
   The two assets are copied next to the ``index.html`` under ``_assets/``
   and the template is rewritten to reference them via relative paths so
   the result opens through ``file://`` with no network access.
+* **Bundled mode (default)** — when no explicit dist is configured, Datus uses
+  the vendored ``@datus/web-artifact-render`` dist shipped inside this package.
+* **CDN fallback** — if the selected local dist is missing or incomplete, the
+  rendered HTML loads the pinned renderer from ``unpkg.com``.
 
 The shared walker / template-slotting / asset-resolution machinery
 lives in :mod:`datus.agent.node.visual_artifact._artifact_html_renderer`;
@@ -104,8 +105,9 @@ def render_report_html(
             ``index.umd.js``. When provided and valid, the two files
             are copied next to the generated HTML and the template links to
             them via relative paths (so the page works offline through
-            ``file://``). When ``None`` (or the directory is missing /
-            incomplete), the template links to the pinned unpkg CDN instead.
+            ``file://``). When ``None``, the bundled renderer dist is used.
+            If the selected local dist is missing or incomplete, the template
+            falls back to the pinned unpkg CDN.
 
     Returns:
         Absolute path to the generated ``index.html``.
@@ -127,6 +129,7 @@ def render_report_html_str(
     *,
     project_root: Path,
     report_slug: str,
+    report_dist: Optional[Path] = None,
 ) -> str:
     """Return the compiled HTML string for a report without writing to disk.
 
@@ -138,4 +141,5 @@ def render_report_html_str(
         spec=_REPORT_SPEC,
         project_root=project_root,
         slug=report_slug,
+        dist=report_dist,
     )

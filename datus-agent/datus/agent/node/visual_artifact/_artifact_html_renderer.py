@@ -37,6 +37,7 @@ one UMD bundle now serves both viewers (Datus-saas#412).
 
 from __future__ import annotations
 
+import base64
 import datetime as _dt
 import html
 import json
@@ -68,6 +69,10 @@ CDN_BUNDLE_JS = f"https://unpkg.com/@datus/web-artifact-render@{_CDN_BUNDLE_VERS
 # Subdirectory under ``<artifact_dir>/`` where local dist assets are copied
 # in offline mode.
 _ASSETS_SUBDIR = "_assets"
+
+# Bundled renderer used by default so enterprise/offline deployments do not
+# depend on unpkg at view time.
+_BUNDLED_DIST_DIR = Path(__file__).parent / "vendor" / "web_artifact_render_dist"
 
 # Best-effort title extraction from a JSDoc-style annotation at the top of
 # render/app.jsx, e.g. ``/** @datus-title 2026 Q1 NA Sales Report */``. The
@@ -192,29 +197,38 @@ def _escape_for_script_tag(payload: str) -> str:
     return payload.replace("</", "<\\/")
 
 
-def _resolve_dist(dist: Optional[Path]) -> Optional[Path]:
-    """Validate ``dist`` and return the resolved directory or ``None``.
+def _validate_dist(dist: Path, *, warn: bool) -> Optional[Path]:
+    """Validate ``dist`` and return the resolved directory or ``None``."""
 
-    Returns ``None`` (caller falls back to CDN) when the path is unset,
-    not a directory, or missing one of the required asset files.
-    """
-    if not dist:
-        return None
-
-    resolved = Path(dist).expanduser().resolve()
+    resolved = dist.expanduser().resolve()
     if not resolved.is_dir():
-        logger.warning("artifact dist %s is not a directory; falling back to CDN.", resolved)
+        if warn:
+            logger.warning("artifact dist %s is not a directory; falling back to CDN.", resolved)
         return None
 
     missing = [name for name in (_DIST_CSS_NAME, _DIST_JS_NAME) if not (resolved / name).is_file()]
     if missing:
-        logger.warning(
-            "artifact dist %s is missing required assets %s; falling back to CDN.",
-            resolved,
-            missing,
-        )
+        if warn:
+            logger.warning(
+                "artifact dist %s is missing required assets %s; falling back to CDN.",
+                resolved,
+                missing,
+            )
         return None
     return resolved
+
+
+def _resolve_dist(dist: Optional[Path]) -> Optional[Path]:
+    """Resolve an explicit dist, then the bundled dist, then CDN fallback.
+
+    Invalid explicit paths intentionally fall back to CDN rather than silently
+    switching to the bundled runtime; if an operator points at a custom dist,
+    a warning should reflect exactly what happened.
+    """
+    if dist:
+        return _validate_dist(Path(dist), warn=True)
+
+    return _validate_dist(_BUNDLED_DIST_DIR, warn=False)
 
 
 def _copy_offline_assets(artifact_dir: Path, dist_dir: Path) -> Tuple[str, str]:
@@ -234,12 +248,25 @@ def _copy_offline_assets(artifact_dir: Path, dist_dir: Path) -> Tuple[str, str]:
     )
 
 
+def _dist_asset_data_url(dist_dir: Path, filename: str, mime_type: str) -> str:
+    encoded = base64.b64encode((dist_dir / filename).read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def _inline_offline_assets(dist_dir: Path) -> Tuple[str, str]:
+    return (
+        _dist_asset_data_url(dist_dir, _DIST_CSS_NAME, "text/css"),
+        _dist_asset_data_url(dist_dir, _DIST_JS_NAME, "text/javascript"),
+    )
+
+
 def render_artifact_html_str(
     *,
     spec: ArtifactHtmlSpec,
     project_root: Path,
     slug: str,
     dist: Optional[Path] = None,
+    inline_dist_assets: bool = True,
 ) -> str:
     """Compile the HTML string for an artifact without writing to disk.
 
@@ -253,6 +280,10 @@ def render_artifact_html_str(
         project_root: resolved project root.
         slug: artifact slug.
         dist: optional local dist directory (offline mode).
+        inline_dist_assets: when ``True``, local assets are embedded as data
+            URLs. This is the API/blob-preview-safe mode. When ``False``,
+            local assets are copied next to ``index.html`` and referenced via
+            relative URLs.
 
     Returns:
         The rendered HTML string.
@@ -274,8 +305,12 @@ def render_artifact_html_str(
 
     dist_dir = _resolve_dist(dist)
     if dist_dir is not None:
-        css_url, js_url = _copy_offline_assets(artifact_dir, dist_dir)
-        logger.info("Offline mode: copied web-artifact-render assets from %s", dist_dir)
+        if inline_dist_assets:
+            css_url, js_url = _inline_offline_assets(dist_dir)
+            logger.info("Offline mode: inlined web-artifact-render assets from %s", dist_dir)
+        else:
+            css_url, js_url = _copy_offline_assets(artifact_dir, dist_dir)
+            logger.info("Offline mode: copied web-artifact-render assets from %s", dist_dir)
     else:
         css_url, js_url = CDN_BUNDLE_CSS, CDN_BUNDLE_JS
 
@@ -326,8 +361,9 @@ def render_artifact_html(
             When provided and valid, the two files are copied next to the
             generated HTML and the template links to them via relative
             paths (so the page works offline through ``file://``). When
-            ``None`` (or the directory is missing / incomplete), the
-            template links to the pinned unpkg CDN instead.
+            ``None``, the bundled renderer dist is used. If the selected
+            local dist is missing or incomplete, the template falls back to
+            the pinned unpkg CDN.
 
     Returns:
         Absolute path to the generated ``index.html``.
@@ -337,7 +373,13 @@ def render_artifact_html(
         FileNotFoundError: if ``render/app.jsx`` is missing.
         OSError: on read/write failures.
     """
-    rendered = render_artifact_html_str(spec=spec, project_root=project_root, slug=slug, dist=dist)
+    rendered = render_artifact_html_str(
+        spec=spec,
+        project_root=project_root,
+        slug=slug,
+        dist=dist,
+        inline_dist_assets=False,
+    )
 
     project_root = project_root.resolve()
     artifact_dir = project_root / spec.root_dir_name / slug

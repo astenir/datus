@@ -446,9 +446,13 @@ class DashboardArtifactTools:
         agent_config,
         db_func_tool,
         user_message: str = "",
+        locked_dashboard_slug: str | None = None,
+        allow_create: bool = True,
     ) -> None:
         self.agent_config = agent_config
         self._db_func_tool = db_func_tool
+        self._locked_dashboard_slug = locked_dashboard_slug
+        self._allow_create = allow_create
         # See ReportArtifactTools.__init__ for the rationale — mirror logic.
         self._user_message = user_message or ""
 
@@ -522,6 +526,15 @@ class DashboardArtifactTools:
 
             ``analysis/intent.md`` is seeded with the user's original prompt.
         """
+        if not self._allow_create or self._locked_dashboard_slug:
+            locked = self._locked_dashboard_slug or "<locked>"
+            return FuncToolResult(
+                success=0,
+                error=(
+                    f"This dashboard edit session is locked to dashboards/{locked}/. "
+                    f"Call bind_existing_dashboard(dashboard_slug='{locked}') instead of start_new_dashboard()."
+                ),
+            )
         if not slug or not DASHBOARD_SLUG_RE.fullmatch(slug):
             return FuncToolResult(
                 success=0,
@@ -609,6 +622,14 @@ class DashboardArtifactTools:
             ``analysis/intent.md`` gets a new ``### [timestamp] mode: edit``
             section appended with the user's latest prompt.
         """
+        if self._locked_dashboard_slug and dashboard_slug != self._locked_dashboard_slug:
+            return FuncToolResult(
+                success=0,
+                error=(
+                    f"This dashboard edit session is locked to dashboards/{self._locked_dashboard_slug}/; "
+                    f"cannot bind dashboards/{dashboard_slug}/."
+                ),
+            )
         if not dashboard_slug or not DASHBOARD_SLUG_RE.fullmatch(dashboard_slug):
             return FuncToolResult(
                 success=0,
@@ -623,7 +644,43 @@ class DashboardArtifactTools:
                     "Use start_new_dashboard() if you intended to create a new dashboard."
                 ),
             )
-        if not (candidate / "render" / "app.jsx").is_file():
+        manifest_path = candidate / "manifest.json"
+        manifest_missing = not manifest_path.is_file()
+        required_dirs = {
+            "render": candidate / "render",
+            "queries": candidate / "queries",
+            "analysis": candidate / "analysis",
+        }
+        missing_dirs = [name for name, path in required_dirs.items() if not path.is_dir()]
+        missing_app = not (candidate / "render" / "app.jsx").is_file()
+        if self._locked_dashboard_slug == dashboard_slug and (manifest_missing or missing_dirs or missing_app):
+            manifest = None
+            if manifest_missing:
+                manifest = ArtifactManifest(
+                    slug=dashboard_slug,
+                    name=dashboard_slug,
+                    description=(
+                        "Recovered incomplete dashboard artifact. Replace this description after the "
+                        "dashboard render tree is rebuilt."
+                    ),
+                    kind="dashboard",
+                    created_at=utc_now_iso(),
+            )
+            result = self._activate(dashboard_slug, mode="edit", create_dirs=True, manifest=manifest)
+            if result.success == 1 and isinstance(result.result, dict):
+                missing_items = []
+                if manifest_missing:
+                    missing_items.append("manifest.json")
+                missing_items.extend(f"{name}/" for name in missing_dirs)
+                if missing_app:
+                    missing_items.append("render/app.jsx")
+                missing_text = ", ".join(missing_items)
+                result.result["bootstrap_warning"] = (
+                    f"dashboards/{dashboard_slug}/ was incomplete ({missing_text}); inspect the restored tree, "
+                    "write or repair render/app.jsx if needed, then call validate_render()."
+                )
+            return result
+        if missing_app:
             return FuncToolResult(
                 success=0,
                 error=(

@@ -14,7 +14,7 @@ import ArtifactCollectionGrid from "@/features/artifacts/ArtifactCollectionGrid.
 import ArtifactDetailPanel from "@/features/artifacts/ArtifactDetailPanel.vue"
 import ArtifactShareDialog from "@/features/artifacts/ArtifactShareDialog.vue"
 import ArtifactViewerFrame from "@/features/artifacts/ArtifactViewerFrame.vue"
-import type { ArtifactShareUpdate } from "@/types"
+import type { ArtifactEditSession, ArtifactShareUpdate } from "@/types"
 import type { ArtifactViewTab } from "@/features/workspace/types"
 
 const props = withDefaults(defineProps<{
@@ -26,6 +26,7 @@ const props = withDefaults(defineProps<{
 })
 const emit = defineEmits<{
   "open-artifact": [tab: ArtifactViewTab, slug: string]
+  "edit-artifact": [session: ArtifactEditSession]
 }>()
 
 const artifacts = useArtifacts()
@@ -65,11 +66,14 @@ const selectedDetailCanManageShare = computed(() => {
   const items = props.tab === "report" ? artifacts.reports.value : artifacts.dashboards.value
   return items.some(item => item.slug === slug && item.can_manage_share === true)
 })
+const selectedDetailCanEdit = computed(() => selectedDetailCanManageShare.value)
 
 const dashboardOpeningSlug = computed(() => loadingSlugFor("dashboard"))
 const reportOpeningSlug = computed(() => loadingSlugFor("report"))
 const dashboardSharingSlug = computed(() => sharingSlugFor("dashboard"))
 const reportSharingSlug = computed(() => sharingSlugFor("report"))
+const dashboardEditingSlug = computed(() => editingSlugFor("dashboard"))
+const reportEditingSlug = computed(() => editingSlugFor("report"))
 
 function loadingSlugFor(tab: ArtifactViewTab): string | null {
   const key = artifacts.previewLoadingKey.value
@@ -79,6 +83,12 @@ function loadingSlugFor(tab: ArtifactViewTab): string | null {
 
 function sharingSlugFor(tab: ArtifactViewTab): string | null {
   const key = artifacts.shareLoadingKey.value
+  const prefix = `${tab}:`
+  return key?.startsWith(prefix) ? key.slice(prefix.length) : null
+}
+
+function editingSlugFor(tab: ArtifactViewTab): string | null {
+  const key = artifacts.editLoadingKey.value
   const prefix = `${tab}:`
   return key?.startsWith(prefix) ? key.slice(prefix.length) : null
 }
@@ -123,6 +133,18 @@ async function saveShare(share: ArtifactShareUpdate) {
     shareDialogOpen.value = false
     artifacts.clearShare()
   }
+}
+
+async function editArtifact(tab: ArtifactViewTab, slug: string | null | undefined) {
+  const normalizedSlug = slug?.trim() || null
+  if (!normalizedSlug) return
+
+  const session = await artifacts.createArtifactEditSession(tab, normalizedSlug)
+  if (!session) return
+
+  detailDialogOpen.value = false
+  detailTargetSlug.value = null
+  emit("edit-artifact", session)
 }
 
 function handleShareDialogOpen(open: boolean) {
@@ -191,10 +213,13 @@ watch(
           :loading="artifacts.listLoading.value"
           :opening-slug="dashboardOpeningSlug"
           :sharing-slug="dashboardSharingSlug"
+          :editing-slug="dashboardEditingSlug"
+          :edit-enabled="true"
           empty-title="暂无仪表盘"
           @select="openDetail('dashboard', $event)"
           @open-preview="openPreview('dashboard', $event)"
           @share="openShare('dashboard', $event)"
+          @edit="editArtifact('dashboard', $event)"
         />
       </template>
 
@@ -204,10 +229,13 @@ watch(
           :loading="artifacts.listLoading.value"
           :opening-slug="reportOpeningSlug"
           :sharing-slug="reportSharingSlug"
+          :editing-slug="reportEditingSlug"
+          :edit-enabled="true"
           empty-title="暂无报表"
           @select="openDetail('report', $event)"
           @open-preview="openPreview('report', $event)"
           @share="openShare('report', $event)"
+          @edit="editArtifact('report', $event)"
         />
       </template>
     </div>
@@ -234,12 +262,15 @@ watch(
             :preview-opening="false"
             :share-loading="selectedShareLoading"
             :can-manage-share="selectedDetailCanManageShare"
+            :can-edit="selectedDetailCanEdit"
+            :edit-loading="editingSlugFor(props.tab) === selectedDetailSlug"
             :query-result="artifacts.queryResult.value"
             :query-loading="artifacts.queryLoading.value"
             :query-error="artifacts.queryError.value"
             :active-query-slug="artifacts.activeQuerySlug.value"
             @open-preview="openPreview(props.tab, selectedDetailSlug)"
             @share="openShare(props.tab, selectedDetailSlug)"
+            @edit="editArtifact(props.tab, selectedDetailSlug)"
             @run-dashboard-query="runDashboardQuery"
           />
         </div>

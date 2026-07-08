@@ -8,7 +8,9 @@ import type {
   ArtifactShareUpdate,
   ArtifactShareUserSummary,
   DashboardDetail,
+  DashboardEditSession,
   ReportDetail,
+  ReportEditSession,
   SqlQueryResultEnvelope,
   VisualizationResult,
 } from "@/types";
@@ -55,6 +57,10 @@ export const dashboardApi = {
     return apiResult(baseUrl, `/api/v1/dashboards/${encodeURIComponent(slug)}/acl`, putBody(share));
   },
 
+  createEditSession(baseUrl: string, slug: string): Promise<DashboardEditSession | null> {
+    return apiResult(baseUrl, `/api/v1/dashboards/${encodeURIComponent(slug)}/edit-sessions`, { method: "POST" });
+  },
+
   query(
     baseUrl: string,
     dashboardSlug: string,
@@ -90,6 +96,10 @@ export const reportApi = {
 
   putAcl(baseUrl: string, slug: string, share: ArtifactShareUpdate): Promise<ArtifactShare | null> {
     return apiResult(baseUrl, `/api/v1/reports/${encodeURIComponent(slug)}/acl`, putBody(share));
+  },
+
+  createEditSession(baseUrl: string, slug: string): Promise<ReportEditSession | null> {
+    return apiResult(baseUrl, `/api/v1/reports/${encodeURIComponent(slug)}/edit-sessions`, { method: "POST" });
   },
 };
 

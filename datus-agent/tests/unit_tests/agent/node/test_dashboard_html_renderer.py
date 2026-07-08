@@ -217,14 +217,17 @@ def test_render_dashboard_html_missing_render_raises(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_render_dashboard_html_defaults_to_cdn(tmp_path: Path):
-    _seed_dashboard(tmp_path, dashboard_slug="cdn_default")
-    out_path = render_dashboard_html(project_root=tmp_path, dashboard_slug="cdn_default")
+def test_render_dashboard_html_defaults_to_bundled_dist(tmp_path: Path):
+    _seed_dashboard(tmp_path, dashboard_slug="bundled_default")
+    out_path = render_dashboard_html(project_root=tmp_path, dashboard_slug="bundled_default")
     body = out_path.read_text(encoding="utf-8")
-    assert "https://unpkg.com/@datus/web-artifact-render" in body
-    assert "index.css" in body
-    assert "index.umd.js" in body
-    assert not (tmp_path / "dashboards" / "cdn_default" / "_assets").exists()
+    assert "_assets/index.css" in body
+    assert "_assets/index.umd.js" in body
+    assert "https://unpkg.com/" not in body
+
+    copied_assets = tmp_path / "dashboards" / "bundled_default" / "_assets"
+    assert (copied_assets / "index.css").is_file()
+    assert (copied_assets / "index.umd.js").is_file()
 
 
 def _seed_dist(dist_dir: Path) -> None:

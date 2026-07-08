@@ -56,6 +56,8 @@ from datus.api.models.cli_models import (
     UserInteractionData,
     UserInteractionInput,
 )
+from datus.api.models.dashboard_models import DashboardEditSession
+from datus.api.models.report_models import ReportEditSession
 from datus.api.services.background_drain import track_background_task
 from datus.tools.sql_policy import SqlPolicyConfig
 from datus.utils.exceptions import DatusException
@@ -63,7 +65,7 @@ from datus.utils.feedback_prompt import build_reaction_feedback_prompt
 from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso
 from datus_enterprise.agent_registry import agent_record_to_runtime_entry, resolve_enterprise_agent_for_dispatch
-from datus_enterprise.artifact_acl import require_artifact_access
+from datus_enterprise.artifact_acl import require_artifact_access, require_artifact_edit_access
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.model_credentials import apply_user_model_credential
 from datus_enterprise.model_policy import is_model_ref_allowed
@@ -111,10 +113,13 @@ _SUBAGENT_MODULE_PERMISSIONS = {
     "gen_visual_dashboard": "module.dashboard.query",
     "ask_dashboard": "module.dashboard.query",
 }
+ArtifactEditSession = ReportEditSession | DashboardEditSession
 
 
 def _is_valid_subagent_id(svc, subagent_id: str) -> bool:
     """Return True if *subagent_id* resolves to a builtin or custom sub-agent."""
+    if _resolve_artifact_edit_session(svc, subagent_id) is not None:
+        return True
     if subagent_id in BUILTIN_SUBAGENTS or subagent_id in _EXTRA_BUILTIN_SUBAGENTS:
         return True
     if _resolve_agentic_node_entry(svc, subagent_id) is not None:
@@ -139,15 +144,40 @@ def _resolve_agentic_node_entry_with_name(svc, subagent_id: str) -> tuple[Option
     return None, None
 
 
+def _resolve_artifact_edit_session(svc, subagent_id: Optional[str]) -> Optional[ArtifactEditSession]:
+    task_manager = getattr(svc, "task_manager", None)
+    if getattr(task_manager, "_supports_artifact_edit_sessions", False) is True:
+        getter = getattr(task_manager, "get_artifact_edit_session", None)
+        if getter is None:
+            return None
+        return getter(subagent_id)
+    if getattr(task_manager, "_supports_report_edit_sessions", False) is not True:
+        return None
+    getter = getattr(task_manager, "get_report_edit_session", None)
+    if getter is None:
+        return None
+    return getter(subagent_id)
+
+
 async def _authorize_subagent_dispatch(
     svc,
     ctx: AppContext,
     subagent_id: Optional[str],
     enterprise_agent_record: Optional[dict[str, Any]] = None,
+    artifact_edit_session: Optional[ArtifactEditSession] = None,
 ) -> None:
     """Enforce module permissions before dispatching privileged builtin subagents."""
 
     if not subagent_id:
+        return
+    if artifact_edit_session is not None and artifact_edit_session.owner_user_id != ctx.user_id:
+        raise HTTPException(status_code=404, detail=f"Subagent '{subagent_id}' not found")
+    if artifact_edit_session is not None:
+        await require_artifact_edit_access(
+            ctx,
+            artifact_type=artifact_edit_session.artifact_type,
+            slug=artifact_edit_session.artifact_slug,
+        )
         return
     permission_key = _subagent_module_permission(svc, subagent_id, enterprise_agent_record)
     if permission_key is None:
@@ -168,6 +198,9 @@ def _subagent_module_permission(
     subagent_id: str,
     enterprise_agent_record: Optional[dict[str, Any]] = None,
 ) -> Optional[str]:
+    edit_session = _resolve_artifact_edit_session(svc, subagent_id)
+    if edit_session is not None:
+        return f"module.{edit_session.artifact_type}.edit"
     permission_key = _SUBAGENT_MODULE_PERMISSIONS.get(subagent_id)
     if permission_key is not None or svc is None:
         return permission_key
@@ -212,6 +245,47 @@ def _materialize_enterprise_agent(agent_config: Any, record: dict[str, Any]) -> 
 
     agentic_nodes = dict(getattr(agent_config, "agentic_nodes", None) or {})
     agentic_nodes[str(record["agent_id"])] = agent_record_to_runtime_entry(record)
+    agent_config.agentic_nodes = agentic_nodes
+
+
+def _materialize_artifact_edit_agent(agent_config: Any, session: ArtifactEditSession) -> None:
+    """Install one artifact-edit subagent into a request-scoped AgentConfig clone."""
+
+    agentic_nodes = dict(getattr(agent_config, "agentic_nodes", None) or {})
+    if session.artifact_type == "dashboard":
+        node_type = "gen_visual_dashboard"
+        root_dir = "dashboards"
+        bind_call = f"bind_existing_dashboard('{session.artifact_slug}')"
+        start_call = "start_new_dashboard"
+    else:
+        node_type = "gen_visual_report"
+        root_dir = "reports"
+        bind_call = f"bind_existing_report('{session.artifact_slug}')"
+        start_call = "start_new_report"
+    agentic_nodes[session.subagent_id] = {
+        "id": session.subagent_id,
+        "type": node_type,
+        "node_class": node_type,
+        "artifact_slug": session.artifact_slug,
+        "edit_locked": True,
+        "agent_description": (
+            f"This is a private edit session locked to {root_dir}/{session.artifact_slug}. "
+            f"Call {bind_call} first; do not create a new {session.artifact_type}."
+        ),
+        "rules": [
+            f"You are editing exactly {root_dir}/{session.artifact_slug}/.",
+            f"Your first artifact tool call must be {bind_call}.",
+            f"Do not call read_file, glob, list_tables, describe_table, execute_sql, or any other tool before {bind_call}.",
+            (
+                f"If {root_dir}/{session.artifact_slug}/ is empty, missing manifest.json, or missing render/app.jsx, "
+                f"still call {bind_call}; the bind tool bootstraps incomplete locked edit artifacts."
+            ),
+            "After bind returns bootstrap_warning, inspect the restored tree, write or repair render/app.jsx, "
+            "save required queries, and call validate_render.",
+            f"Do not call {start_call} in this edit session.",
+            f"Do not inspect, write, edit, or delete any other {session.artifact_type} artifact.",
+        ],
+    }
     agent_config.agentic_nodes = agentic_nodes
 
 
@@ -421,8 +495,10 @@ async def stream_chat(
     svc = await api_deps.resolve_datus_service_for_request(http_request)
     sub_agent_id = request.subagent_id
     enterprise_agent_record: Optional[dict[str, Any]] = None
+    artifact_edit_session: Optional[ArtifactEditSession] = None
     if sub_agent_id:
         if _is_valid_subagent_id(svc, sub_agent_id):
+            artifact_edit_session = _resolve_artifact_edit_session(svc, sub_agent_id)
             pass
         elif api_deps.get_enterprise_extensions().enabled:
             try:
@@ -439,7 +515,7 @@ async def stream_chat(
                 status_code=404,
                 detail=f"Subagent '{sub_agent_id}' not found",
             )
-    await _authorize_subagent_dispatch(svc, ctx, sub_agent_id, enterprise_agent_record)
+    await _authorize_subagent_dispatch(svc, ctx, sub_agent_id, enterprise_agent_record, artifact_edit_session)
 
     if request.session_id:
         access = await authorize_session_access(
@@ -547,6 +623,8 @@ async def stream_chat(
 
     if enterprise_agent_record is not None:
         _materialize_enterprise_agent(projection.config, enterprise_agent_record)
+    if artifact_edit_session is not None:
+        _materialize_artifact_edit_agent(projection.config, artifact_edit_session)
 
     hooks = get_chat_hooks()
     pre_outcome = await _run_pre_chat_hook(hooks, http_request, request, ctx.user_id)

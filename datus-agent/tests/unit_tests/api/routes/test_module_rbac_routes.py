@@ -25,9 +25,9 @@ from datus.api.enterprise.defaults import (
 from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.models.base_models import Result
 from datus.api.models.cli_models import ChatSessionData, ExecuteContextData, ExecuteSQLData, StopExecuteSQLData
-from datus.api.models.dashboard_models import DashboardDetail, SqlQueryResultEnvelope
+from datus.api.models.dashboard_models import DashboardDetail, DashboardEditSession, SqlQueryResultEnvelope
 from datus.api.models.database_models import DatabaseInfo, DatabasesData, ListDatabasesData
-from datus.api.models.report_models import ReportDetail
+from datus.api.models.report_models import ReportDetail, ReportEditSession
 from datus.api.routes import (
     chat_routes,
     cli_routes,
@@ -37,6 +37,7 @@ from datus.api.routes import (
     subject_routes,
     table_routes,
 )
+from datus.api.services.chat_task_manager import ChatTaskManager
 from datus.api.services.cli_service import CLIService, _SQLTaskRecord
 from datus.api.services.dashboard_service import DashboardService
 from datus.schemas.artifact_manifest import ArtifactManifest
@@ -44,6 +45,20 @@ from datus_enterprise.api import agent_routes as enterprise_agent_routes
 from datus_enterprise.config_projection import DatasourceGrantConfigProjector
 
 _UNSET = object()
+
+
+class MemoryArtifactAclStore:
+    def __init__(self, acl=None):
+        self.acls = {}
+        if acl is not None:
+            self.acls[("report", "sales_overview")] = dict(acl)
+            self.acls[("dashboard", "sales_overview")] = dict(acl)
+
+    async def get_acl(self, *, artifact_type: str, slug: str):
+        key = (artifact_type, slug)
+        if key not in self.acls:
+            raise KeyError(key)
+        return dict(self.acls[key])
 
 
 class CollectingAuditSink:
@@ -54,7 +69,12 @@ class CollectingAuditSink:
         self.events.append(event)
 
 
-def _enterprise_extensions(config_projector=None, audit_sink=None, quota_store=_UNSET) -> EnterpriseExtensions:
+def _enterprise_extensions(
+    config_projector=None,
+    audit_sink=None,
+    quota_store=_UNSET,
+    artifact_acl_store=None,
+) -> EnterpriseExtensions:
     if quota_store is _UNSET:
         quota_store = InMemoryEnterpriseQuotaStore()
     return EnterpriseExtensions(
@@ -63,6 +83,7 @@ def _enterprise_extensions(config_projector=None, audit_sink=None, quota_store=_
         config_projector=config_projector or PassthroughConfigProjector(),
         session_owner_store=InMemorySessionOwnerStore(),
         audit_sink=audit_sink or NoopAuditSink(),
+        artifact_acl_store=artifact_acl_store,
         quota_store=quota_store,
     )
 
@@ -572,6 +593,98 @@ def test_chat_stream_denies_builtin_name_ask_artifact_subagent_for_acl_miss(
 
     assert response.status_code == 404
     svc.chat.stream_chat.assert_not_called()
+
+
+def test_chat_stream_denies_report_edit_session_without_edit_permission(monkeypatch):
+    acl_store = MemoryArtifactAclStore({"owner_user_id": "u1", "visibility": "private"})
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(artifact_acl_store=acl_store))
+    task_manager = ChatTaskManager(artifact_acl_store=acl_store, enterprise_enabled=True)
+    session = task_manager.create_report_edit_session(user_id="u1", report_slug="sales_overview")
+    svc = MagicMock()
+    svc.task_manager = task_manager
+    svc.agent_config = _datasource_agent_config()
+    svc.agent_config.agentic_nodes = {}
+    svc.chat.stream_chat = MagicMock()
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    with _client(chat_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/chat/stream",
+            json={"message": "edit report", "subagent_id": session.subagent_id},
+        )
+
+    assert response.status_code == 403
+    svc.chat.stream_chat.assert_not_called()
+
+
+def test_chat_stream_materializes_report_edit_session_subagent(monkeypatch):
+    async def empty_stream(*_args, **_kwargs):
+        if False:
+            yield
+
+    acl_store = MemoryArtifactAclStore({"owner_user_id": "u1", "visibility": "private"})
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(artifact_acl_store=acl_store))
+    task_manager = ChatTaskManager(artifact_acl_store=acl_store, enterprise_enabled=True)
+    session = task_manager.create_report_edit_session(user_id="u1", report_slug="sales_overview")
+    svc = MagicMock()
+    svc.task_manager = task_manager
+    svc.agent_config = _datasource_agent_config()
+    svc.agent_config.agentic_nodes = {}
+    svc.chat.stream_chat = MagicMock(return_value=empty_stream())
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat", "module.report.edit"})
+
+    with _client(chat_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/chat/stream",
+            json={"message": "edit report", "subagent_id": session.subagent_id},
+        )
+
+    assert response.status_code == 200
+    svc.chat.stream_chat.assert_called_once()
+    projected_config = svc.chat.stream_chat.call_args.kwargs["agent_config"]
+    edit_entry = projected_config.agentic_nodes[session.subagent_id]
+    assert edit_entry["node_class"] == "gen_visual_report"
+    assert edit_entry["artifact_slug"] == "sales_overview"
+    assert edit_entry["edit_locked"] is True
+    rules_text = "\n".join(edit_entry["rules"])
+    assert "Your first artifact tool call must be bind_existing_report('sales_overview')" in rules_text
+    assert "Do not call read_file, glob" in rules_text
+    assert "bootstraps incomplete locked edit artifacts" in rules_text
+
+
+def test_chat_stream_materializes_dashboard_edit_session_subagent(monkeypatch):
+    async def empty_stream(*_args, **_kwargs):
+        if False:
+            yield
+
+    acl_store = MemoryArtifactAclStore({"owner_user_id": "u1", "visibility": "private"})
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(artifact_acl_store=acl_store))
+    task_manager = ChatTaskManager(artifact_acl_store=acl_store, enterprise_enabled=True)
+    session = task_manager.create_dashboard_edit_session(user_id="u1", dashboard_slug="sales_overview")
+    svc = MagicMock()
+    svc.task_manager = task_manager
+    svc.agent_config = _datasource_agent_config()
+    svc.agent_config.agentic_nodes = {}
+    svc.chat.stream_chat = MagicMock(return_value=empty_stream())
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat", "module.dashboard.edit"})
+
+    with _client(chat_routes.router, ctx, svc) as client:
+        response = client.post(
+            "/api/v1/chat/stream",
+            json={"message": "edit dashboard", "subagent_id": session.subagent_id},
+        )
+
+    assert response.status_code == 200
+    svc.chat.stream_chat.assert_called_once()
+    projected_config = svc.chat.stream_chat.call_args.kwargs["agent_config"]
+    edit_entry = projected_config.agentic_nodes[session.subagent_id]
+    assert edit_entry["node_class"] == "gen_visual_dashboard"
+    assert edit_entry["artifact_slug"] == "sales_overview"
+    assert edit_entry["edit_locked"] is True
+    rules_text = "\n".join(edit_entry["rules"])
+    assert "Your first artifact tool call must be bind_existing_dashboard('sales_overview')" in rules_text
+    assert "Do not call read_file, glob" in rules_text
+    assert "bootstraps incomplete locked edit artifacts" in rules_text
 
 
 def test_datasource_catalog_routes_require_module_datasource_catalog(monkeypatch):
@@ -1087,6 +1200,150 @@ def test_report_detail_rejects_artifact_acl_denial(monkeypatch):
 
     assert response.status_code == 404
     svc.report.get_detail.assert_not_awaited()
+
+
+def test_report_edit_session_requires_module_report_edit(monkeypatch):
+    acl_store = MemoryArtifactAclStore({"owner_user_id": "u1", "visibility": "private"})
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(artifact_acl_store=acl_store))
+    svc = MagicMock()
+    svc.agent_config.project_root = "/tmp/project"
+    svc.report.get_detail = AsyncMock(return_value=Result[ReportDetail](success=True, data=_report_detail()))
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    with _client(report_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/reports/sales_overview/edit-sessions")
+
+    assert response.status_code == 403
+    svc.report.get_detail.assert_not_awaited()
+
+
+def test_report_edit_session_allows_owner_and_returns_locked_subagent(monkeypatch):
+    acl_store = MemoryArtifactAclStore({"owner_user_id": "u1", "visibility": "private"})
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(artifact_acl_store=acl_store))
+    svc = MagicMock()
+    svc.agent_config.project_root = "/tmp/project"
+    svc.report.get_detail = AsyncMock(return_value=Result[ReportDetail](success=True, data=_report_detail()))
+    svc.task_manager.create_report_edit_session.return_value = ReportEditSession(
+        edit_session_id="edit-1",
+        subagent_id="report_edit__edit-1",
+        artifact_type="report",
+        artifact_slug="sales_overview",
+        owner_user_id="u1",
+        created_at="2026-07-08T00:00:00Z",
+    )
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.report.edit"})
+
+    with _client(report_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/reports/sales_overview/edit-sessions")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["data"]["subagent_id"] == "report_edit__edit-1"
+    assert payload["data"]["artifact_slug"] == "sales_overview"
+    svc.task_manager.create_report_edit_session.assert_called_once_with(user_id="u1", report_slug="sales_overview")
+
+
+def test_report_edit_session_denies_shared_non_owner(monkeypatch):
+    acl_store = MemoryArtifactAclStore(
+        {"owner_user_id": "owner-1", "visibility": "private", "allowed_user_ids": ["u1"]}
+    )
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(artifact_acl_store=acl_store))
+    svc = MagicMock()
+    svc.agent_config.project_root = "/tmp/project"
+    svc.report.get_detail = AsyncMock(return_value=Result[ReportDetail](success=True, data=_report_detail()))
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.report.edit"})
+
+    with _client(report_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/reports/sales_overview/edit-sessions")
+
+    assert response.status_code == 404
+    svc.report.get_detail.assert_not_awaited()
+
+
+def test_report_edit_session_allows_artifact_admin(monkeypatch):
+    acl_store = MemoryArtifactAclStore({"owner_user_id": "owner-1", "visibility": "private"})
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(artifact_acl_store=acl_store))
+    svc = MagicMock()
+    svc.agent_config.project_root = "/tmp/project"
+    svc.report.get_detail = AsyncMock(return_value=Result[ReportDetail](success=True, data=_report_detail()))
+    svc.task_manager.create_report_edit_session.return_value = ReportEditSession(
+        edit_session_id="edit-admin",
+        subagent_id="report_edit__edit-admin",
+        artifact_type="report",
+        artifact_slug="sales_overview",
+        owner_user_id="admin-1",
+        created_at="2026-07-08T00:00:00Z",
+    )
+    ctx = AppContext(user_id="admin-1", project_id="proj", permissions={"module.admin.artifacts"})
+
+    with _client(report_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/reports/sales_overview/edit-sessions")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["subagent_id"] == "report_edit__edit-admin"
+
+
+def test_dashboard_edit_session_requires_module_dashboard_edit(monkeypatch):
+    acl_store = MemoryArtifactAclStore({"owner_user_id": "u1", "visibility": "private"})
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(artifact_acl_store=acl_store))
+    svc = MagicMock()
+    svc.agent_config.project_root = "/tmp/project"
+    svc.dashboard.get_detail = AsyncMock(return_value=Result[DashboardDetail](success=True, data=_dashboard_detail()))
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    with _client(dashboard_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/dashboards/sales_overview/edit-sessions")
+
+    assert response.status_code == 403
+    svc.dashboard.get_detail.assert_not_awaited()
+
+
+def test_dashboard_edit_session_allows_owner_and_returns_locked_subagent(monkeypatch):
+    acl_store = MemoryArtifactAclStore({"owner_user_id": "u1", "visibility": "private"})
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(artifact_acl_store=acl_store))
+    svc = MagicMock()
+    svc.agent_config.project_root = "/tmp/project"
+    svc.dashboard.get_detail = AsyncMock(return_value=Result[DashboardDetail](success=True, data=_dashboard_detail()))
+    svc.task_manager.create_dashboard_edit_session.return_value = DashboardEditSession(
+        edit_session_id="edit-2",
+        subagent_id="dashboard_edit__edit-2",
+        artifact_type="dashboard",
+        artifact_slug="sales_overview",
+        owner_user_id="u1",
+        created_at="2026-07-08T00:00:00Z",
+    )
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.dashboard.edit"})
+
+    with _client(dashboard_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/dashboards/sales_overview/edit-sessions")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["data"]["subagent_id"] == "dashboard_edit__edit-2"
+    assert payload["data"]["artifact_slug"] == "sales_overview"
+    svc.task_manager.create_dashboard_edit_session.assert_called_once_with(
+        user_id="u1",
+        dashboard_slug="sales_overview",
+    )
+
+
+def test_dashboard_edit_session_denies_shared_non_owner(monkeypatch):
+    acl_store = MemoryArtifactAclStore(
+        {"owner_user_id": "owner-1", "visibility": "private", "allowed_user_ids": ["u1"]}
+    )
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(artifact_acl_store=acl_store))
+    svc = MagicMock()
+    svc.agent_config.project_root = "/tmp/project"
+    svc.dashboard.get_detail = AsyncMock(return_value=Result[DashboardDetail](success=True, data=_dashboard_detail()))
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.dashboard.edit"})
+
+    with _client(dashboard_routes.router, ctx, svc) as client:
+        response = client.post("/api/v1/dashboards/sales_overview/edit-sessions")
+
+    assert response.status_code == 404
+    svc.dashboard.get_detail.assert_not_awaited()
 
 
 def test_dashboard_detail_requires_module_dashboard_view(monkeypatch):

@@ -28,6 +28,8 @@ describe("useChatWorkspace", () => {
     const loadDatasourceStatuses = vi.fn(async () => true);
     const prewarmDatasource = vi.fn(async () => false);
     const compactSession = vi.fn(async () => ({ session_id: "s1", success: true }));
+    const selectSession = vi.fn();
+    const sendMessage = vi.fn();
 
     vi.doMock("@/composables/useTheme", () => ({
       useTheme: () => ({}),
@@ -82,8 +84,8 @@ describe("useChatWorkspace", () => {
         isLoadingSessions: readonly(shallowRef(false)),
         activeInteractionKey: readonly(shallowRef(null)),
         loadSessions,
-        selectSession: vi.fn(),
-        sendMessage: vi.fn(),
+        selectSession,
+        sendMessage,
         insertMessage: vi.fn(),
         stopSession: vi.fn(),
         deleteSession: vi.fn(),
@@ -142,6 +144,39 @@ describe("useChatWorkspace", () => {
 
     await expect(workspace.compactSession("s1")).resolves.toEqual({ session_id: "s1", success: true });
     expect(compactSession).toHaveBeenCalledWith("s1");
+
+    workspace.startReportEditSession({
+      edit_session_id: "edit-1",
+      subagent_id: "report_edit__edit_1",
+      artifact_type: "report",
+      artifact_slug: "fund-report",
+      owner_user_id: "alice",
+      created_at: "2026-07-08T00:00:00Z",
+    });
+
+    expect(workspace.selectedAgent.value).toBe("report_edit__edit_1");
+    expect(workspace.agentOptions.value).toEqual([
+      { value: "research", label: "Research" },
+      { value: "report_edit__edit_1", label: "编辑报表：fund-report" },
+    ]);
+    expect(selectSession).toHaveBeenCalledWith(null);
+    expect(sendMessage).not.toHaveBeenCalled();
+
+    workspace.startArtifactEditSession({
+      edit_session_id: "edit-2",
+      subagent_id: "dashboard_edit__edit_2",
+      artifact_type: "dashboard",
+      artifact_slug: "fund-overview",
+      owner_user_id: "alice",
+      created_at: "2026-07-08T00:00:00Z",
+    });
+
+    expect(workspace.selectedAgent.value).toBe("dashboard_edit__edit_2");
+    expect(workspace.agentOptions.value).toEqual([
+      { value: "research", label: "Research" },
+      { value: "dashboard_edit__edit_2", label: "编辑仪表盘：fund-overview" },
+    ]);
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("filters datasource switching through current permissions", async () => {

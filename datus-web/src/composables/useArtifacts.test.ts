@@ -8,6 +8,7 @@ const dashboardHtmlUrl = vi.fn();
 const dashboardHtml = vi.fn();
 const dashboardGetAcl = vi.fn();
 const dashboardPutAcl = vi.fn();
+const dashboardCreateEditSession = vi.fn();
 const dashboardQuery = vi.fn();
 const listShareUsers = vi.fn();
 const listShareRoles = vi.fn();
@@ -17,6 +18,7 @@ const reportHtmlUrl = vi.fn();
 const reportHtml = vi.fn();
 const reportGetAcl = vi.fn();
 const reportPutAcl = vi.fn();
+const reportCreateEditSession = vi.fn();
 const toastError = vi.fn();
 const toastSuccess = vi.fn();
 
@@ -28,6 +30,7 @@ vi.mock("@/lib/api", () => ({
     html: dashboardHtml,
     getAcl: dashboardGetAcl,
     putAcl: dashboardPutAcl,
+    createEditSession: dashboardCreateEditSession,
     query: dashboardQuery,
   },
   artifactShareApi: {
@@ -41,6 +44,7 @@ vi.mock("@/lib/api", () => ({
     html: reportHtml,
     getAcl: reportGetAcl,
     putAcl: reportPutAcl,
+    createEditSession: reportCreateEditSession,
   },
 }));
 
@@ -125,6 +129,14 @@ describe("useArtifacts", () => {
       allowed_roles: [],
       allowed_user_ids: [],
     });
+    dashboardCreateEditSession.mockResolvedValue({
+      edit_session_id: "edit-2",
+      subagent_id: "dashboard_edit__edit_2",
+      artifact_type: "dashboard",
+      artifact_slug: "fund-overview",
+      owner_user_id: "alice",
+      created_at: "2026-07-08T00:00:00Z",
+    });
     reportGetAcl.mockResolvedValue({
       owner_user_id: "alice",
       visibility: "role",
@@ -136,6 +148,14 @@ describe("useArtifacts", () => {
       visibility: "role",
       allowed_roles: ["analyst"],
       allowed_user_ids: ["bob", "charlie"],
+    });
+    reportCreateEditSession.mockResolvedValue({
+      edit_session_id: "edit-1",
+      subagent_id: "report_edit__edit_1",
+      artifact_type: "report",
+      artifact_slug: "fund-report",
+      owner_user_id: "alice",
+      created_at: "2026-07-08T00:00:00Z",
     });
     listShareUsers.mockResolvedValue([
       {
@@ -269,6 +289,32 @@ describe("useArtifacts", () => {
     expect(artifacts.activeShare.value?.allowed_user_ids).toEqual(["bob", "charlie"]);
     expect(artifacts.shareSaving.value).toBe(false);
     expect(toastSuccess).toHaveBeenCalledWith("分享设置已保存");
+  });
+
+  it("creates report edit sessions through the report API helper", async () => {
+    const { useArtifacts } = await import("./useArtifacts");
+    const artifacts = useArtifacts();
+
+    const session = await artifacts.createReportEditSession("fund-report");
+
+    expect(reportCreateEditSession).toHaveBeenCalledWith("http://api.test", "fund-report");
+    expect(session?.subagent_id).toBe("report_edit__edit_1");
+    expect(artifacts.editLoadingKey.value).toBeNull();
+    expect(artifacts.editError.value).toBeNull();
+    expect(toastSuccess).toHaveBeenCalledWith("报表编辑会话已创建");
+  });
+
+  it("creates dashboard edit sessions through the dashboard API helper", async () => {
+    const { useArtifacts } = await import("./useArtifacts");
+    const artifacts = useArtifacts();
+
+    const session = await artifacts.createDashboardEditSession("fund-overview");
+
+    expect(dashboardCreateEditSession).toHaveBeenCalledWith("http://api.test", "fund-overview");
+    expect(session?.subagent_id).toBe("dashboard_edit__edit_2");
+    expect(artifacts.editLoadingKey.value).toBeNull();
+    expect(artifacts.editError.value).toBeNull();
+    expect(toastSuccess).toHaveBeenCalledWith("仪表盘编辑会话已创建");
   });
 
   it("loads candidate users and roles for the share picker", async () => {

@@ -2124,6 +2124,9 @@ class AgenticNode(Node):
             # Read by ask_report / ask_dashboard nodes to resolve the
             # bound artifact directory at startup.
             "artifact_slug",
+            # Read by report/dashboard edit sessions to lock creation and
+            # filesystem writes to one existing artifact.
+            "edit_locked",
         ]
         for attr in direct_attributes:
             # Handle both dict and object access patterns
@@ -3391,6 +3394,7 @@ class AgenticNode(Node):
             datus_home=datus_home,
             strict=strict,
             session_data_dir=session_data_dir,
+            protect_artifact_paths=bool(getattr(self.agent_config, "_protect_artifact_filesystem", False)),
             **kwargs,
         )
 

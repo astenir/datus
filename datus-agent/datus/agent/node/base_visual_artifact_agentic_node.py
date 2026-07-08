@@ -186,6 +186,16 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
         if not self.filesystem_func_tool:
             self._setup_filesystem_tools()
 
+        if self.input is not None:
+            try:
+                self._register_artifact_tools(self.input)
+            except Exception as exc:
+                logger.debug(
+                    "Deferred %s artifact-tool setup until execution: %s",
+                    self.ARTIFACT_KIND,
+                    exc,
+                )
+
         self._setup_sub_agent_task_tool()
         if self.sub_agent_task_tool:
             self.tools.extend(self.sub_agent_task_tool.available_tools())
@@ -212,11 +222,14 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
         if strict is None:
             strict = self._resolve_filesystem_strict()
         current_node = kwargs.pop("current_node", None) or self.get_node_name()
+        locked_artifact_slug = self.node_config.get("artifact_slug") if self.node_config.get("edit_locked") else None
         return self.FILESYSTEM_TOOL_CLS(
             root_path=root_path,
             current_node=current_node,
             datus_home=datus_home,
             strict=strict,
+            protect_artifact_paths=bool(getattr(self.agent_config, "_protect_artifact_filesystem", False)),
+            locked_artifact_slug=locked_artifact_slug,
             **kwargs,
         )
 
@@ -510,14 +523,7 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
             return {}
         return data if isinstance(data, dict) else {}
 
-    def _prepare_artifacts(self, user_input: InputT) -> None:
-        """Wire artifact tools into ``self.tools`` and reset the active slug.
-
-        The LLM decides between ``start_new_<kind>`` (create) and
-        ``bind_existing_<kind>`` (edit) at execution time; we just make
-        both tools available. ``_active_artifact_slug`` stays ``None``
-        until the LLM commits to one or the other.
-        """
+    def _assert_artifact_tool_prerequisites(self) -> None:
         if not self.agent_config or not getattr(self.agent_config, "project_root", None):
             raise ValueError(f"agent_config.project_root is required for gen_visual_{self.ARTIFACT_KIND}")
         if not self.db_func_tool:
@@ -535,17 +541,62 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
                 "(DEFAULT_TOOLS includes db_tools.*)."
             )
 
+    def _register_artifact_tools(self, user_input: InputT) -> None:
+        """Register or refresh artifact-specific tools on ``self.tools``."""
+        self._assert_artifact_tool_prerequisites()
         self._active_artifact_slug = None
         self.artifact_tools = self._make_artifact_tools(user_input)
+        new_tools = self.artifact_tools.available_tools()
+        replaced_names = {getattr(t, "name", None) for t in new_tools}
+        self.tools = [t for t in self.tools if getattr(t, "name", None) not in replaced_names]
+        self.tools.extend(new_tools)
+
+    def _auto_bind_locked_artifact(self) -> None:
+        """Bind locked edit artifacts before the LLM can inspect the tree."""
+        if not self.node_config.get("edit_locked"):
+            return
+        artifact_slug = self.node_config.get("artifact_slug")
+        if not artifact_slug or self.artifact_tools is None:
+            return
+        bind_name = f"bind_existing_{self.ARTIFACT_KIND}"
+        bind_tool = getattr(self.artifact_tools, bind_name, None)
+        if bind_tool is None:
+            return
+        result = bind_tool(artifact_slug)
+        if getattr(result, "success", 0) != 1:
+            raise ValueError(
+                f"Failed to bind locked {self.ARTIFACT_KIND} artifact "
+                f"{self.ARTIFACT_ROOT_DIR_NAME}/{artifact_slug}: {getattr(result, 'error', None) or result}"
+            )
+        self._active_artifact_slug = artifact_slug
+        logger.info(
+            "%s auto-bound locked %s artifact %s/%s",
+            self.get_node_name(),
+            self.ARTIFACT_KIND,
+            self.ARTIFACT_ROOT_DIR_NAME,
+            artifact_slug,
+        )
+
+    def _prepare_artifacts(self, user_input: InputT) -> None:
+        """Wire artifact tools into ``self.tools`` and reset the active slug.
+
+        The LLM decides between ``start_new_<kind>`` (create) and
+        ``bind_existing_<kind>`` (edit) at execution time; we just make
+        both tools available. ``_active_artifact_slug`` stays ``None``
+        until the LLM commits to one or the other.
+        """
         # Repeated ``execute_stream`` calls on the same node instance
         # would otherwise stack stale tool wrappers bound to the previous
         # artifact tools instance, which could resolve calls against an
         # outdated artifact id. Replace any prior registration by name
         # before extending with the freshly-built tools.
-        new_tools = self.artifact_tools.available_tools()
-        replaced_names = {getattr(t, "name", None) for t in new_tools}
-        self.tools = [t for t in self.tools if getattr(t, "name", None) not in replaced_names]
-        self.tools.extend(new_tools)
+        self._register_artifact_tools(user_input)
+        self._auto_bind_locked_artifact()
+        logger.info(
+            "%s artifact tools ready: %s",
+            self.get_node_name(),
+            [t.name for t in self.artifact_tools.available_tools()] if self.artifact_tools is not None else [],
+        )
 
     # ── Result construction (subclass overrides) ──────────────────────────
 
@@ -667,6 +718,39 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
         picked = self._read_artifact_slug_from_tools()
         if picked:
             self._active_artifact_slug = picked
+
+        if app_jsx_rel_path is None and self.node_config.get("edit_locked") and self._active_artifact_slug:
+            validate_render = getattr(self.artifact_tools, "validate_render", None) if self.artifact_tools else None
+            if validate_render is not None:
+                validate_result = validate_render()
+                output_data = (
+                    validate_result.model_dump() if hasattr(validate_result, "model_dump") else validate_result
+                )
+                validate_action = ActionHistory.create_action(
+                    role=ActionRole.TOOL,
+                    action_type="validate_render",
+                    messages="Auto validate locked artifact before finalizing.",
+                    input_data={"function_name": "validate_render", "arguments": "{}"},
+                    output_data={
+                        "success": getattr(validate_result, "success", 0) == 1,
+                        "raw_output": output_data,
+                        "summary": "Auto validate locked artifact",
+                    },
+                    status=(
+                        ActionStatus.SUCCESS
+                        if getattr(validate_result, "success", 0) == 1
+                        else ActionStatus.FAILED
+                    ),
+                )
+                ctx.action_history_manager.add_action(validate_action)
+                all_actions = ctx.action_history_manager.get_actions()
+                if validate_action.status == ActionStatus.SUCCESS:
+                    tool_calls.append(validate_action)
+                    candidate = extract_artifact_result_field(validate_action, "app_jsx_path")
+                    if candidate:
+                        app_jsx_rel_path = candidate
+                        render_files = extract_artifact_result_list(validate_action, "render_files")
+                        render_file_count = len(render_files) if render_files else 0
 
         response_content = ctx.response_content
         if not isinstance(response_content, str):

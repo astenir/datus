@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { EyeIcon, FileSearchIcon, Share2Icon } from "@lucide/vue"
+import { EyeIcon, FilePenLineIcon, FileSearchIcon, Share2Icon } from "@lucide/vue"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -19,12 +19,15 @@ const props = defineProps<{
   loading: boolean
   openingSlug: string | null
   sharingSlug: string | null
+  editingSlug: string | null
+  editEnabled: boolean
 }>()
 
 const emit = defineEmits<{
   select: [slug: string]
   openPreview: [slug: string]
   share: [slug: string]
+  edit: [slug: string]
 }>()
 </script>
 
@@ -97,6 +100,16 @@ const emit = defineEmits<{
           >
             <Share2Icon data-icon="inline-start" />
             {{ props.sharingSlug === item.slug ? "加载中" : "分享" }}
+          </Button>
+          <Button
+            v-if="props.editEnabled && item.can_manage_share"
+            variant="outline"
+            size="sm"
+            :disabled="Boolean(props.editingSlug)"
+            @click="emit('edit', item.slug)"
+          >
+            <FilePenLineIcon data-icon="inline-start" />
+            {{ props.editingSlug === item.slug ? "创建中" : "编辑" }}
           </Button>
         </div>
       </CardContent>

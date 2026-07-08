@@ -668,6 +668,18 @@ export type ReportDetail = {
   files: readonly ArtifactFile[];
 };
 
+export type ArtifactEditSession = {
+  edit_session_id: string;
+  subagent_id: string;
+  artifact_type: "report" | "dashboard" | string;
+  artifact_slug: string;
+  owner_user_id?: string | null;
+  created_at: string;
+};
+
+export type ReportEditSession = ArtifactEditSession;
+export type DashboardEditSession = ArtifactEditSession;
+
 // ─── Data Visualization ──────────────────────────────────────────────────────
 
 export type ChartRecommendation = {

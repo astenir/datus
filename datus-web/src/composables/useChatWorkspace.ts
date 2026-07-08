@@ -8,9 +8,11 @@ import { useModels } from "@/composables/useModels";
 import { usePermission } from "@/composables/usePermission";
 import { useTheme } from "@/composables/useTheme";
 import { agentApi } from "@/lib/api";
-import type { AgentInfo, NormalizedProbeResult, SelectOption } from "@/types";
+import type { AgentInfo, ArtifactEditSession, NormalizedProbeResult, SelectOption } from "@/types";
 
 const STATUS_REFRESH_DELAYS = [1500, 5000] as const;
+const REPORT_EDIT_SESSION_PREFIX = "report_edit__";
+const DASHBOARD_EDIT_SESSION_PREFIX = "dashboard_edit__";
 
 export function useChatWorkspace() {
   useTheme();
@@ -74,15 +76,24 @@ export function useChatWorkspace() {
 
   const availableAgents = shallowRef<AgentInfo[]>([]);
   const isLoadingAgents = shallowRef(false);
-  const agentOptions = computed<SelectOption[]>(() =>
-    availableAgents.value
+  const artifactEditSession = shallowRef<ArtifactEditSession | null>(null);
+  const agentOptions = computed<SelectOption[]>(() => [
+    ...availableAgents.value
       .filter((agent) => agent.agent_id !== "chat" && agent.status === "published")
       .map((agent) => ({
         value: agent.agent_id,
         label: agent.name || agent.agent_id,
       }))
-      .sort((left, right) => left.label.localeCompare(right.label) || left.value.localeCompare(right.value))
-  );
+      .sort((left, right) => left.label.localeCompare(right.label) || left.value.localeCompare(right.value)),
+    ...(artifactEditSession.value
+      ? [
+        {
+          value: artifactEditSession.value.subagent_id,
+          label: `编辑${artifactKindLabel(artifactEditSession.value)}：${artifactEditSession.value.artifact_slug}`,
+        },
+      ]
+      : []),
+  ]);
   const selectedAgent = shallowRef("");
   const selectedModel = shallowRef("");
   const selectedDatasource = shallowRef("");
@@ -170,6 +181,24 @@ export function useChatWorkspace() {
     insertMessage(message);
   }
 
+  function artifactKindLabel(session: ArtifactEditSession) {
+    return session.artifact_type === "dashboard" ? "仪表盘" : "报表";
+  }
+
+  function isArtifactEditAgent(agentId: string) {
+    return agentId.startsWith(REPORT_EDIT_SESSION_PREFIX) || agentId.startsWith(DASHBOARD_EDIT_SESSION_PREFIX);
+  }
+
+  function startArtifactEditSession(session: ArtifactEditSession) {
+    artifactEditSession.value = session;
+    selectedAgent.value = session.subagent_id;
+    selectSession(null);
+  }
+
+  function startReportEditSession(session: ArtifactEditSession) {
+    startArtifactEditSession(session);
+  }
+
   function handleRefreshConnection() {
     checkConnection();
   }
@@ -247,14 +276,16 @@ export function useChatWorkspace() {
     try {
       const loadedAgents = await agentApi.availableList(effectiveBase());
       availableAgents.value = loadedAgents ?? [];
-      if (selectedAgent.value && !agentOptions.value.some((option) => option.value === selectedAgent.value)) {
+      if (selectedAgent.value && !isArtifactEditAgent(selectedAgent.value) && !agentOptions.value.some((option) => option.value === selectedAgent.value)) {
         selectedAgent.value = "";
       }
       return true;
     } catch (error) {
       console.error("Failed to load chat agent options:", error);
       availableAgents.value = [];
-      selectedAgent.value = "";
+      if (!isArtifactEditAgent(selectedAgent.value)) {
+        selectedAgent.value = "";
+      }
       return false;
     } finally {
       isLoadingAgents.value = false;
@@ -346,6 +377,8 @@ export function useChatWorkspace() {
     schema,
     handleSend,
     handleInsert,
+    startArtifactEditSession,
+    startReportEditSession,
     handleRefreshConnection,
     handleDatasourceSwitched,
     handleDatasourceTest,
