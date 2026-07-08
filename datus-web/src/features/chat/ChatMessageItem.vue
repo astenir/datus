@@ -79,6 +79,7 @@ function openArtifact(kind: string, slug: string) {
         <MessageResponse
           v-else
           :content="message.content"
+          :streaming="streaming"
         />
       </div>
     </MessageContent>

@@ -334,4 +334,116 @@ describe("useChatWorkspace", () => {
     expect(loadDatasourceStatuses).toHaveBeenCalledWith("demo");
     expect(testDatasource).not.toHaveBeenCalled();
   });
+
+  it("forces ordinary users back to normal permission mode", async () => {
+    vi.doMock("vue", async () => {
+      const actual = await vi.importActual<typeof import("vue")>("vue");
+      return {
+        ...actual,
+        onBeforeUnmount: vi.fn(),
+      };
+    });
+
+    const { ref, shallowRef, readonly } = await import("vue");
+    const permissionMode = shallowRef("dangerous");
+    const setPermissionMode = vi.fn((value: string) => {
+      permissionMode.value = value;
+    });
+
+    vi.doMock("@/composables/useTheme", () => ({
+      useTheme: () => ({}),
+    }));
+    vi.doMock("@/composables/useChatSettings", () => ({
+      useChatSettings: () => ({
+        language: readonly(shallowRef("zh")),
+        permissionMode: readonly(permissionMode),
+        planMode: readonly(shallowRef(false)),
+        setLanguage: vi.fn(),
+        setPermissionMode,
+        setPlanMode: vi.fn(),
+      }),
+    }));
+    vi.doMock("@/composables/useConnection", () => ({
+      useConnection: () => ({
+        apiBase: readonly(shallowRef("")),
+        connection: readonly(shallowRef("online")),
+        config: readonly(ref(null)),
+        datasourceOptions: readonly(ref([])),
+        isTestingDatasource: readonly(shallowRef(false)),
+        checkConnection: vi.fn(),
+        effectiveBase: () => "http://api.test",
+        setApiBase: vi.fn(),
+        testDatasource: vi.fn(),
+        switchDatasource: vi.fn(),
+      }),
+    }));
+    vi.doMock("@/lib/api", () => ({
+      agentApi: {
+        availableList: vi.fn(async () => []),
+      },
+    }));
+    vi.doMock("@/composables/usePermission", () => ({
+      usePermission: () => ({
+        isLoaded: readonly(shallowRef(true)),
+        isAdmin: () => false,
+        hasPermission: () => false,
+        hasFeaturePermission: () => false,
+        hasDatasourcePermission: () => false,
+      }),
+    }));
+    vi.doMock("@/composables/useChatState", () => ({
+      useChatState: () => ({
+        messages: readonly(ref([])),
+        sessions: readonly(ref([])),
+        selectedSession: readonly(shallowRef(null)),
+        isStreaming: readonly(shallowRef(false)),
+        isLoadingSessions: readonly(shallowRef(false)),
+        activeInteractionKey: readonly(shallowRef(null)),
+        loadSessions: vi.fn(),
+        selectSession: vi.fn(),
+        sendMessage: vi.fn(),
+        insertMessage: vi.fn(),
+        stopSession: vi.fn(),
+        deleteSession: vi.fn(),
+        compactSession: vi.fn(),
+        resumeSession: vi.fn(),
+        sendInteraction: vi.fn(),
+        clearMessages: vi.fn(),
+        dispose: vi.fn(),
+      }),
+    }));
+    vi.doMock("@/composables/useModels", () => ({
+      useModels: () => ({
+        modelOptions: readonly(ref([])),
+        defaultModelLabel: readonly(shallowRef("")),
+        isLoadingModels: readonly(shallowRef(false)),
+        loadModels: vi.fn(),
+      }),
+    }));
+    vi.doMock("@/composables/useCatalog", () => ({
+      useCatalog: () => ({
+        catalogEntries: readonly(ref([])),
+        databaseOptions: readonly(ref([])),
+        database: shallowRef(""),
+        schema: shallowRef(""),
+        schemaOptions: readonly(ref([])),
+        isLoadingCatalog: readonly(shallowRef(false)),
+        datasourceStatuses: readonly(ref({})),
+        prewarmingDatasources: readonly(shallowRef(new Set<string>())),
+        selectCatalogDatasource: vi.fn(),
+        hasCatalogSnapshot: vi.fn(() => false),
+        loadCatalog: vi.fn(async () => true),
+        loadDatasourceStatuses: vi.fn(),
+        prewarmDatasource: vi.fn(),
+        setDatabase: vi.fn(),
+        setSchema: vi.fn(),
+      }),
+    }));
+
+    const { useChatWorkspace } = await import("./useChatWorkspace");
+    const workspace = useChatWorkspace();
+
+    expect(workspace.canUseElevatedPermissionMode.value).toBe(false);
+    expect(setPermissionMode).toHaveBeenCalledWith("normal");
+  });
 });

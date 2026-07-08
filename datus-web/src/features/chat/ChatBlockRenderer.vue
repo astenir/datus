@@ -125,11 +125,13 @@ function readOnlyInteractionDescription() {
   <MessageResponse
     v-if="block.type === 'markdown'"
     :content="block.content"
+    :streaming="streaming"
   />
 
   <MessageResponse
     v-else-if="block.type === 'thinking' && thinkingDisplay === 'answer'"
     :content="block.content"
+    :streaming="streaming"
   />
 
   <Reasoning
@@ -200,6 +202,7 @@ function readOnlyInteractionDescription() {
             <MessageResponse
               v-else
               :content="child.content"
+              :streaming="streaming"
             />
           </div>
         </div>
@@ -274,6 +277,7 @@ function readOnlyInteractionDescription() {
             <MessageResponse
               v-else
               :content="child.content"
+              :streaming="streaming"
             />
           </div>
         </div>

@@ -940,6 +940,54 @@ class TestChatAgenticNodeExecuteStreamErrors:
             mock_llm_create.generate_with_tools_stream = original_method
 
     @pytest.mark.asyncio
+    async def test_execute_stream_formats_permission_denial_as_user_message(self, real_agent_config, mock_llm_create):
+        """Permission denials are expected policy failures, not raw SDK tracebacks."""
+        from agents.exceptions import UserError
+
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+        from datus.tools.permission.permission_hooks import PermissionDeniedException
+
+        node = ChatAgenticNode(
+            node_id="test_permission_denied",
+            description="Test permission denial handling",
+            node_type=NodeType.TYPE_CHAT,
+            agent_config=real_agent_config,
+        )
+
+        original_method = mock_llm_create.generate_with_tools_stream
+
+        async def raising_stream(*args, **kwargs):
+            denied = PermissionDeniedException(
+                "PERMISSION_DENIED: Tool 'write_file' (filesystem_tools) is blocked by the "
+                "'normal' permission profile. STOP retrying this tool — different parameters "
+                "will not change the outcome.",
+                tool_category="filesystem_tools",
+                tool_name="write_file",
+            )
+            raise UserError(f"Error running tool write_file: {denied}") from denied
+            yield  # noqa: unreachable - makes this an async generator
+
+        mock_llm_create.generate_with_tools_stream = raising_stream
+
+        node.input = ChatNodeInput(user_message="Create a file", database="california_schools")
+        ahm = ActionHistoryManager()
+
+        try:
+            actions = []
+            async for action in node.execute_stream(ahm):
+                actions.append(action)
+
+            final_action = actions[-1]
+            assert final_action.status == ActionStatus.FAILED
+            error_text = str(final_action.output.get("error", ""))
+            assert "权限受限" in error_text
+            assert "不能让 AI 直接修改服务器文件" in error_text
+            assert "STOP retrying" not in error_text
+            assert "permissions.rules" not in error_text
+        finally:
+            mock_llm_create.generate_with_tools_stream = original_method
+
+    @pytest.mark.asyncio
     async def test_execute_stream_user_cancellation_via_execution_interrupted(self, real_agent_config, mock_llm_create):
         """User cancellations propagate as ``ExecutionInterrupted``.
 

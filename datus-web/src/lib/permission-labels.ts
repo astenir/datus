@@ -61,6 +61,7 @@ const permissionDefinitions: PermissionDefinition[] = [
   { code: "module.config.*", label: "全部配置权限", description: "匹配所有 module.config.* 权限。", risk: "high" },
   { code: "mcp.*", label: "全部 MCP 权限", description: "匹配所有 mcp.* 操作权限。", risk: "high", requires: ["module.mcp"] },
   { code: "module.chat", label: "对话", description: "进入对话和会话能力。", risk: "low" },
+  { code: "module.chat.permission_mode", label: "高危对话模式", description: "允许在对话中切换自动或危险工具权限模式。", risk: "high", requires: ["module.chat"] },
   { code: "module.sql_executor", label: "SQL 执行", description: "允许使用 SQL 执行能力。", risk: "medium" },
   { code: "module.datasource_catalog", label: "数据目录", description: "允许读取授权范围内的数据目录。", risk: "low" },
   { code: "module.report.view", label: "报表查看", description: "查看可访问报表。", risk: "low" },
@@ -117,6 +118,7 @@ const enterpriseRolePermissionCodes = [
   "module.config.*",
   "mcp.*",
   "module.chat",
+  "module.chat.permission_mode",
   "module.sql_executor",
   "module.datasource_catalog",
   "module.report.view",
@@ -170,6 +172,7 @@ const enterpriseRolePermissionGroupCodes = [
     label: "核心功能",
     codes: [
       "module.chat",
+      "module.chat.permission_mode",
       "module.sql_executor",
       "module.datasource_catalog",
       "module.kb",

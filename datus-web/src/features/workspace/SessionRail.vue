@@ -208,6 +208,7 @@ const datasourceTestResultClass = computed(() => cn(
   datasourceTestDisplayClass.value,
 ))
 const languageLabel = computed(() => props.workspace.language.value === "en" ? "英文" : "中文")
+const canUseElevatedPermissionMode = computed(() => props.workspace.canUseElevatedPermissionMode.value)
 const permissionModeLabel = computed(() => {
   switch (props.workspace.permissionMode.value) {
     case "auto":
@@ -319,9 +320,13 @@ function updateLanguage(value: unknown) {
 }
 
 function updatePermissionMode(value: unknown) {
-  if (typeof value === "string") {
-    props.workspace.setPermissionMode(value)
+  if (typeof value !== "string") return
+  if (value !== "normal" && !canUseElevatedPermissionMode.value) {
+    toast.error("当前用户无权切换高危权限模式")
+    props.workspace.setPermissionMode("normal")
+    return
   }
+  props.workspace.setPermissionMode(value)
 }
 
 async function updateDatasource(value: unknown) {
@@ -836,8 +841,8 @@ async function deleteSession(sessionId: string) {
                     @update:model-value="updatePermissionMode"
                   >
                     <DropdownMenuRadioItem value="normal">普通</DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="auto">自动</DropdownMenuRadioItem>
-                    <DropdownMenuRadioItem value="dangerous">危险</DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem v-if="canUseElevatedPermissionMode" value="auto">自动</DropdownMenuRadioItem>
+                    <DropdownMenuRadioItem v-if="canUseElevatedPermissionMode" value="dangerous">危险</DropdownMenuRadioItem>
                   </DropdownMenuRadioGroup>
                 </DropdownMenuSubContent>
               </DropdownMenuSub>

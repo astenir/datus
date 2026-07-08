@@ -9,6 +9,7 @@ import {
   chatSessionsPath,
   contentFromPayloadBlocks,
   filterVisibleChatSessions,
+  friendlyToolErrorText,
   isReviewableAssistantMessage,
   mergeToolExecutionBlocks,
   mergeToolExecutionMessages,
@@ -183,6 +184,48 @@ describe("tool execution blocks", () => {
         result: { rows: [] },
       },
     ]);
+  });
+
+  it("renders permission denied filesystem writes as a friendly message", () => {
+    const rawError =
+      "Error running tool write_file: PERMISSION_DENIED: Tool 'write_file' (filesystem_tools) is blocked by the 'normal' permission profile. STOP retrying this tool — different parameters will not change the outcome.";
+
+    const parsed = contentFromPayloadBlocks([
+      {
+        type: "call-tool-result",
+        payload: {
+          callToolId: "call-1",
+          toolName: "write_file",
+          result: {
+            success: 0,
+            error: rawError,
+          },
+        },
+      },
+    ]);
+
+    expect(parsed.blocks).toEqual([
+      {
+        type: "tool-result",
+        callToolId: "call-1",
+        toolName: "write_file",
+        errorText:
+          "权限受限：当前账号不能让 AI 直接修改服务器文件。write_file 已被“普通”权限模式拦截，换路径或重试不会绕过限制。如确需执行，请联系管理员授予“高危对话模式”权限。",
+        result: {
+          success: 0,
+          error: rawError,
+        },
+      },
+    ]);
+    const [block] = parsed.blocks;
+    expect(block.type === "tool-result" ? block.errorText : "").not.toContain("STOP retrying");
+  });
+
+  it("renders permission mode denial as a friendly message", () => {
+    expect(friendlyToolErrorText(
+      "chat",
+      "Permission mode 'auto' requires module.chat.permission_mode.",
+    )).toBe("权限受限：当前账号不能切换到 自动 对话模式。如确需使用自动或危险工具权限，请联系管理员授予“高危对话模式”权限。");
   });
 
   it("merges matching tool calls and results into a single display block", () => {

@@ -551,7 +551,7 @@ export function contentFromPayloadBlocks(
       const toolName = stringifyContent(payload.toolName ?? payload.tool_name ?? "tool");
       const duration = typeof payload.duration === "number" ? payload.duration : undefined;
       const shortDesc = stringifyContent(payload.shortDesc ?? payload.short_desc);
-      const errorText = toolErrorText(payload);
+      const errorText = toolErrorText(payload, toolName);
       const block: Extract<MessageBlock, { type: "tool-result" }> = {
         type: "tool-result",
         toolName,
@@ -644,14 +644,55 @@ function unwrapToolResult(value: unknown): unknown {
   return value;
 }
 
-function toolErrorText(payload: Record<string, unknown>): string | undefined {
+const permissionDeniedToolPattern =
+  /PERMISSION_DENIED:\s*Tool\s+'([^']+)'\s+\(([^)]+)\)\s+is blocked by the\s+'([^']+)'\s+permission profile/i;
+const permissionModeDeniedPattern = /Permission mode '([^']+)' requires module\.chat\.permission_mode/i;
+const filesystemWriteTools = new Set(["write_file", "edit_file", "delete_file"]);
+
+function permissionProfileLabel(profile: string) {
+  const labels: Record<string, string> = {
+    normal: "普通",
+    auto: "自动",
+    dangerous: "危险",
+  };
+  return labels[profile] ?? profile;
+}
+
+export function friendlyToolErrorText(toolName: string, rawError: string): string {
+  const error = rawError.trim();
+  if (!error) return "";
+
+  const toolDenied = error.match(permissionDeniedToolPattern);
+  if (toolDenied) {
+    const deniedTool = toolDenied[1] || toolName;
+    const category = toolDenied[2] || "";
+    const profile = toolDenied[3] || "";
+    const profileText = profile ? `“${permissionProfileLabel(profile)}”权限模式` : "当前权限策略";
+
+    if (category === "filesystem_tools" && filesystemWriteTools.has(deniedTool)) {
+      return `权限受限：当前账号不能让 AI 直接修改服务器文件。${deniedTool} 已被${profileText}拦截，换路径或重试不会绕过限制。如确需执行，请联系管理员授予“高危对话模式”权限。`;
+    }
+
+    return `权限受限：当前账号没有执行工具 ${deniedTool} 的权限，已被${profileText}拦截，换参数或重试不会绕过限制。`;
+  }
+
+  const modeDenied = error.match(permissionModeDeniedPattern);
+  if (modeDenied) {
+    const mode = modeDenied[1] || "高危";
+    return `权限受限：当前账号不能切换到 ${permissionProfileLabel(mode)} 对话模式。如确需使用自动或危险工具权限，请联系管理员授予“高危对话模式”权限。`;
+  }
+
+  return error;
+}
+
+function toolErrorText(payload: Record<string, unknown>, toolName: string): string | undefined {
   const directError = stringifyContent(payload.error).trim();
-  if (directError) return directError;
+  if (directError) return friendlyToolErrorText(toolName, directError);
 
   const result = payload.result;
   if (isRecord(result)) {
     const nestedError = stringifyContent(result.error).trim();
-    if (nestedError) return nestedError;
+    if (nestedError) return friendlyToolErrorText(toolName, nestedError);
   }
 
   return undefined;

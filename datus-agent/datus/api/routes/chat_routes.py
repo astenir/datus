@@ -11,6 +11,7 @@ asyncio.Task so that client disconnects do not cancel the computation.
 """
 
 import asyncio
+from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Annotated, Any, AsyncGenerator, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
@@ -59,6 +60,8 @@ from datus.api.models.cli_models import (
 from datus.api.models.dashboard_models import DashboardEditSession
 from datus.api.models.report_models import ReportEditSession
 from datus.api.services.background_drain import track_background_task
+from datus.tools.permission.permission_config import PermissionLevel, PermissionRule
+from datus.tools.permission.profiles import build_effective_config
 from datus.tools.sql_policy import SqlPolicyConfig
 from datus.utils.exceptions import DatusException
 from datus.utils.feedback_prompt import build_reaction_feedback_prompt
@@ -79,6 +82,9 @@ if TYPE_CHECKING:
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
 _require_chat_module = require_module("module.chat")
 ChatModuleCtx = Annotated[AppContext, Depends(_require_chat_module)]
+ELEVATED_CHAT_PERMISSION_MODE_PERMISSION = "module.chat.permission_mode"
+_ELEVATED_PERMISSION_MODES = {"auto", "dangerous"}
+_FILESYSTEM_WRITE_TOOL_NAMES = ("write_file", "edit_file", "delete_file")
 SSE_RESPONSE = {
     200: {
         "description": "Server-Sent Events stream",
@@ -114,6 +120,68 @@ _SUBAGENT_MODULE_PERMISSIONS = {
     "ask_dashboard": "module.dashboard.query",
 }
 ArtifactEditSession = ReportEditSession | DashboardEditSession
+
+
+def _permission_matches(required: str, granted: str) -> bool:
+    required_code = required.strip()
+    granted_code = granted.strip()
+    if not required_code or not granted_code:
+        return False
+    return granted_code == "*" or fnmatchcase(required_code, granted_code)
+
+
+def _can_use_elevated_permission_mode(ctx: AppContext) -> bool:
+    if getattr(ctx, "is_admin", False):
+        return True
+    permissions = getattr(ctx, "permissions", set()) or set()
+    return any(
+        _permission_matches(ELEVATED_CHAT_PERMISSION_MODE_PERMISSION, str(permission)) for permission in permissions
+    )
+
+
+def _filesystem_write_deny_rules() -> list[PermissionRule]:
+    return [
+        PermissionRule(tool="filesystem_tools", pattern=tool_name, permission=PermissionLevel.DENY)
+        for tool_name in _FILESYSTEM_WRITE_TOOL_NAMES
+    ]
+
+
+def _install_filesystem_write_deny_rules(agent_config: Any) -> None:
+    raw_permissions = getattr(agent_config, "_raw_permissions", {}) or {}
+    raw_user = {key: value for key, value in raw_permissions.items() if key != "profile"}
+    hardened_config = build_effective_config("normal", raw_user).model_copy(deep=True)
+
+    hardened_config.rules.extend(_filesystem_write_deny_rules())
+    agent_config.permissions_config = hardened_config
+
+
+def _harden_chat_permission_mode(
+    request: StreamChatInput,
+    ctx: AppContext,
+    agent_config: Any,
+    *,
+    enterprise_enabled: bool,
+) -> None:
+    """Fail closed for ordinary enterprise users on high-risk tool profiles."""
+
+    if not enterprise_enabled:
+        return
+    if _can_use_elevated_permission_mode(ctx):
+        return
+
+    requested_mode = request.permission_mode
+    if requested_mode in _ELEVATED_PERMISSION_MODES:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Permission mode '{requested_mode}' requires "
+                f"{ELEVATED_CHAT_PERMISSION_MODE_PERMISSION}."
+            ),
+        )
+
+    request.permission_mode = None
+    agent_config.active_profile_name = "normal"
+    _install_filesystem_write_deny_rules(agent_config)
 
 
 def _is_valid_subagent_id(svc, subagent_id: str) -> bool:
@@ -493,6 +561,7 @@ async def stream_chat(
     http_request: Request,
 ):
     svc = await api_deps.resolve_datus_service_for_request(http_request)
+    enterprise_extensions = api_deps.get_enterprise_extensions()
     sub_agent_id = request.subagent_id
     enterprise_agent_record: Optional[dict[str, Any]] = None
     artifact_edit_session: Optional[ArtifactEditSession] = None
@@ -500,7 +569,7 @@ async def stream_chat(
         if _is_valid_subagent_id(svc, sub_agent_id):
             artifact_edit_session = _resolve_artifact_edit_session(svc, sub_agent_id)
             pass
-        elif api_deps.get_enterprise_extensions().enabled:
+        elif enterprise_extensions.enabled:
             try:
                 enterprise_agent_record = await resolve_enterprise_agent_for_dispatch(ctx, sub_agent_id)
             except PermissionError as exc:
@@ -567,9 +636,16 @@ async def stream_chat(
             headers=_sse_headers(),
         )
 
+    _harden_chat_permission_mode(
+        request,
+        ctx,
+        projection.config,
+        enterprise_enabled=enterprise_extensions.enabled,
+    )
+
     try:
         await apply_user_model_credential(
-            store=api_deps.get_enterprise_extensions().user_model_credential_store,
+            store=getattr(enterprise_extensions, "user_model_credential_store", None),
             user_id=ctx.user_id,
             agent_config=projection.config,
             requested_model=request.model,
@@ -745,7 +821,7 @@ async def stream_chat_feedback(
 
     try:
         await apply_user_model_credential(
-            store=api_deps.get_enterprise_extensions().user_model_credential_store,
+            store=getattr(api_deps.get_enterprise_extensions(), "user_model_credential_store", None),
             user_id=ctx.user_id,
             agent_config=projection.config,
             requested_model=stream_input.model,

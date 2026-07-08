@@ -29,6 +29,9 @@ from datus.api.models.cli_models import (
 )
 from datus.api.routes.chat_routes import (
     _FUSE_IO_TIMEOUT,
+    ELEVATED_CHAT_PERMISSION_MODE_PERMISSION,
+    _can_use_elevated_permission_mode,
+    _harden_chat_permission_mode,
     _is_valid_subagent_id,
     delete_session,
     get_chat_history,
@@ -38,6 +41,8 @@ from datus.api.routes.chat_routes import (
     submit_tool_result,
     submit_user_interaction,
 )
+from datus.tools.permission.permission_config import PermissionConfig, PermissionLevel
+from datus.tools.permission.profiles import build_effective_config
 from datus.tools.proxy.tool_result_channel import ToolResultChannel
 from datus.tools.sql_policy import SqlPolicyConfig
 
@@ -69,6 +74,7 @@ def _mock_ctx(user_id=None, permissions=None):
     ctx.user_id = user_id
     ctx.permissions = permissions or set()
     ctx.principal = {}
+    ctx.is_admin = False
     return ctx
 
 
@@ -77,6 +83,79 @@ def _request_with_service(svc):
         return svc
 
     return SimpleNamespace(app=SimpleNamespace(dependency_overrides={api_deps.get_datus_service: override_service}))
+
+
+class TestChatPermissionModeHardening:
+    def test_elevated_permission_accepts_exact_wildcard_and_admin(self):
+        assert _can_use_elevated_permission_mode(
+            _mock_ctx(permissions={ELEVATED_CHAT_PERMISSION_MODE_PERMISSION})
+        )
+        assert _can_use_elevated_permission_mode(_mock_ctx(permissions={"module.chat.*"}))
+        assert _can_use_elevated_permission_mode(_mock_ctx(permissions={"*"}))
+
+        ctx = _mock_ctx()
+        ctx.is_admin = True
+        assert _can_use_elevated_permission_mode(ctx)
+
+    def test_enterprise_ordinary_user_cannot_request_auto_profile(self):
+        request = StreamChatInput(message="hi", permission_mode="auto")
+        agent_config = SimpleNamespace(
+            active_profile_name="auto",
+            permissions_config=PermissionConfig(default_permission=PermissionLevel.ALLOW),
+            _raw_permissions={},
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _harden_chat_permission_mode(request, _mock_ctx(), agent_config, enterprise_enabled=True)
+
+        assert exc_info.value.status_code == 403
+        assert ELEVATED_CHAT_PERMISSION_MODE_PERMISSION in str(exc_info.value.detail)
+
+    def test_enterprise_ordinary_user_normal_profile_denies_raw_filesystem_writes(self):
+        request = StreamChatInput(message="hi", permission_mode="normal")
+        agent_config = SimpleNamespace(
+            active_profile_name="auto",
+            permissions_config=PermissionConfig(default_permission=PermissionLevel.ALLOW),
+            _raw_permissions={},
+        )
+
+        _harden_chat_permission_mode(request, _mock_ctx(), agent_config, enterprise_enabled=True)
+
+        assert request.permission_mode is None
+        assert agent_config.active_profile_name == "normal"
+        assert agent_config.permissions_config.default_permission == PermissionLevel.ASK
+        deny_rules = [
+            rule.pattern
+            for rule in agent_config.permissions_config.rules
+            if rule.tool == "filesystem_tools" and rule.permission == PermissionLevel.DENY
+        ]
+        assert deny_rules == ["write_file", "edit_file", "delete_file"]
+
+    def test_enterprise_ordinary_user_downgrades_operator_auto_profile(self):
+        request = StreamChatInput(message="hi", permission_mode=None)
+        agent_config = SimpleNamespace(
+            active_profile_name="auto",
+            permissions_config=build_effective_config("auto"),
+            _raw_permissions={"profile": "auto"},
+        )
+
+        _harden_chat_permission_mode(request, _mock_ctx(), agent_config, enterprise_enabled=True)
+
+        assert agent_config.active_profile_name == "normal"
+        assert agent_config.permissions_config.default_permission == PermissionLevel.ASK
+        assert not any(
+            rule.tool == "tools" and rule.pattern == "todo_write" and rule.permission == PermissionLevel.ALLOW
+            for rule in agent_config.permissions_config.rules
+        )
+
+    def test_non_enterprise_keeps_permission_mode_unchanged(self):
+        request = StreamChatInput(message="hi", permission_mode="auto")
+        agent_config = SimpleNamespace(active_profile_name="auto", permissions_config=PermissionConfig())
+
+        _harden_chat_permission_mode(request, _mock_ctx(), agent_config, enterprise_enabled=False)
+
+        assert request.permission_mode == "auto"
+        assert agent_config.active_profile_name == "auto"
 
 
 class CollectingAuditSink:

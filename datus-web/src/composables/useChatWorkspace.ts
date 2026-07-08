@@ -100,6 +100,10 @@ export function useChatWorkspace() {
   const isTestingCatalogDatasource = shallowRef(false);
   const defaultDatasource = computed(() => config.value?.current_datasource?.trim() ?? "");
   const currentDatasource = computed(() => selectedDatasource.value || defaultDatasource.value);
+  const canUseElevatedPermissionMode = computed(() =>
+    permission.isAdmin() || permission.hasPermission?.("module.chat.permission_mode") === true
+  );
+  const isPermissionSummaryLoaded = computed(() => permission.isLoaded?.value ?? true);
   const visibleDatasourceOptions = computed(() =>
     datasourceOptions.value.filter((option) => permission.hasDatasourcePermission(option.value))
   );
@@ -328,10 +332,17 @@ export function useChatWorkspace() {
     }
   });
 
+  watch([isPermissionSummaryLoaded, canUseElevatedPermissionMode, permissionMode], ([loaded, canUseElevated, mode]) => {
+    if (loaded && !canUseElevated && mode !== "normal") {
+      setPermissionMode("normal");
+    }
+  }, { immediate: true });
+
   return {
     language,
     permissionMode,
     planMode,
+    canUseElevatedPermissionMode,
     apiBase,
     connection,
     config,
