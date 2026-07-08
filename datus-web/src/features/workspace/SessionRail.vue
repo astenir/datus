@@ -556,7 +556,7 @@ async function deleteSession(sessionId: string) {
             {{ sessionCountLabel }}
           </Badge>
         </SidebarGroupLabel>
-        <SidebarGroupContent class="flex min-h-0 flex-1 flex-col gap-2">
+        <SidebarGroupContent class="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
           <InputGroup class="mt-1 h-9 rounded-lg bg-sidebar-accent/45 ring-1 ring-sidebar-border/50">
             <InputGroupAddon>
               <SearchIcon data-icon="inline-start" />
@@ -569,7 +569,7 @@ async function deleteSession(sessionId: string) {
             />
           </InputGroup>
 
-          <ScrollArea class="-mr-3 h-full pr-0">
+          <ScrollArea class="-mr-3 min-h-0 flex-1 pr-0">
             <SidebarMenu class="gap-0.5 pr-4 pt-0.5">
               <SidebarMenuItem
                 v-for="session in visibleSessions"
