@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const listDatasources = vi.fn();
+const listAdminCatalog = vi.fn();
 const listGrants = vi.fn();
 const getGrant = vi.fn();
 const upsertGrant = vi.fn();
@@ -20,18 +21,15 @@ const listArtifacts = vi.fn();
 const getAcl = vi.fn();
 const putAcl = vi.fn();
 const toastError = vi.fn();
-const listCatalog = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   adminDatasourceApi: {
     listDatasources,
+    listCatalog: listAdminCatalog,
     listGrants,
     getGrant,
     upsertGrant,
     deleteGrant,
-  },
-  catalogApi: {
-    list: listCatalog,
   },
   adminQuotaApi: {
     listQuotas,
@@ -132,15 +130,17 @@ describe("useAdminOverview", () => {
     listArtifacts.mockResolvedValue({ data: [artifact] });
     getAcl.mockResolvedValue({ data: artifactAcl });
     putAcl.mockResolvedValue({ data: artifactAcl });
-    listCatalog.mockResolvedValue({
-      databases: [
-        {
-          name: "analytics",
-          type: "postgres",
-          schema_name: "public",
-          tables: ["orders", "accounts"],
-        },
-      ],
+    listAdminCatalog.mockResolvedValue({
+      data: {
+        databases: [
+          {
+            name: "analytics",
+            type: "postgres",
+            schema_name: "public",
+            tables: ["orders", "accounts"],
+          },
+        ],
+      },
     });
   });
 
@@ -311,11 +311,28 @@ describe("useAdminOverview", () => {
     expect(upsertGrant).toHaveBeenCalledWith("role", "analyst", "fund", {
       effect: "allow",
       scope: {
-        databases: [],
-        schemas: [],
         tables: ["analytics.public.orders"],
       },
     });
+  });
+
+  it("loads grant picker catalog through the admin datasource API", async () => {
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+
+    await overview.loadGrantCatalog("fund");
+
+    expect(listAdminCatalog).toHaveBeenCalledWith("fund");
+    expect(overview.grantCatalogDatabases.value).toEqual([
+      {
+        datasourceName: "fund",
+        name: "analytics",
+        type: "postgres",
+        catalogName: undefined,
+        schemaName: "public",
+        tables: ["orders", "accounts"],
+      },
+    ]);
   });
 
   it("narrows an inherited parent selection when a child node is selected", async () => {
@@ -341,8 +358,6 @@ describe("useAdminOverview", () => {
     expect(upsertGrant).toHaveBeenCalledWith("role", "analyst", "fund", {
       effect: "allow",
       scope: {
-        databases: [],
-        schemas: [],
         tables: ["analytics.public.orders"],
       },
     });
@@ -371,9 +386,7 @@ describe("useAdminOverview", () => {
     expect(upsertGrant).toHaveBeenCalledWith("role", "analyst", "fund", {
       effect: "allow",
       scope: {
-        databases: [],
         schemas: ["analytics.public"],
-        tables: [],
       },
     });
   });
@@ -423,7 +436,7 @@ describe("useAdminOverview", () => {
     await overview.openGrantDetail("role", "analyst", "*");
 
     expect(getGrant).toHaveBeenCalledWith("role", "analyst", "*");
-    expect(listCatalog).not.toHaveBeenCalled();
+    expect(listAdminCatalog).not.toHaveBeenCalled();
     expect(overview.grantForm.value.datasource_key).toBe("*");
     expect(overview.grantScopeMode.value).toBe("json");
     expect(overview.grantCatalogError.value).toBeNull();
@@ -443,7 +456,7 @@ describe("useAdminOverview", () => {
     overview.setGrantScopeMode("picker");
 
     expect(overview.grantScopeMode.value).toBe("all");
-    expect(listCatalog).not.toHaveBeenCalled();
+    expect(listAdminCatalog).not.toHaveBeenCalled();
     expect(toastError).toHaveBeenCalledWith("通配数据源 * 不支持目录选择器，请使用整个数据源或 JSON 范围");
   });
 

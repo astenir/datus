@@ -28,6 +28,7 @@ import type {
   AdminQuota,
   AdminSecret,
 } from "@/types/admin";
+import type { DatabaseInfo } from "@/types";
 
 function queryString(entries: Array<[string, string | number | boolean | undefined]>): string {
   const params = new URLSearchParams();
@@ -164,6 +165,21 @@ export const adminSessionApi = {
 export const adminDatasourceApi = {
   listDatasources(): Promise<ApiResponse<AdminDatasource[]>> {
     return get<ApiResponse<AdminDatasource[]>>("/api/v1/admin/datasources");
+  },
+
+  listCatalog(
+    datasourceKey: string,
+    params?: { catalog_name?: string; database_name?: string; schema_name?: string; include_sys_schemas?: boolean },
+  ): Promise<ApiResponse<{ databases: DatabaseInfo[] }>> {
+    const query = queryString([
+      ["catalog_name", params?.catalog_name],
+      ["database_name", params?.database_name],
+      ["schema_name", params?.schema_name],
+      ["include_sys_schemas", params?.include_sys_schemas || undefined],
+    ]);
+    return get<ApiResponse<{ databases: DatabaseInfo[] }>>(
+      `/api/v1/admin/datasources/${encodeURIComponent(datasourceKey)}/catalog${query}`,
+    );
   },
 
   listGrants(params?: DatasourceGrantListParams): Promise<ApiResponse<AdminDatasourceGrant[]>> {

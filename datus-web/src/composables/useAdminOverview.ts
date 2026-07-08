@@ -7,7 +7,6 @@ import {
   adminQuotaApi,
   adminSecretApi,
   adminSessionApi,
-  catalogApi,
 } from "@/lib/api";
 import { quotaResourceOptionFor } from "@/lib/quota-options";
 import {
@@ -16,7 +15,6 @@ import {
   datasourceScopeFromNodeIds,
   isStandardDatasourceGrantScope,
 } from "@/lib/role-permissions";
-import { useConnection } from "@/composables/useConnection";
 import type {
   AdminArtifact,
   AdminDatasourceGrant,
@@ -150,7 +148,6 @@ function collectDescendantNodeIds(node: RoleDatasourceTreeNode): string[] {
 export type DatasourceScopeMode = "all" | "picker" | "json";
 
 export function useAdminOverview() {
-  const connection = useConnection();
   const loading = shallowRef(false);
   const savingGrant = shallowRef(false);
   const savingQuota = shallowRef(false);
@@ -409,14 +406,12 @@ export function useAdminOverview() {
     grantCatalogRequestId = requestId;
     loadingGrantCatalog.value = true;
     try {
-      const result = await catalogApi.list(connection.effectiveBase(), {
-        datasource_id: normalizedDatasourceKey,
-      });
+      const result = await adminDatasourceApi.listCatalog(normalizedDatasourceKey);
       if (requestId !== grantCatalogRequestId) return;
 
       grantCatalogDatabases.value = catalogDatabasesForDatasource(
         normalizedDatasourceKey,
-        result?.databases ?? [],
+        result.data?.databases ?? [],
       );
       if (editingGrant.value?.datasource_key === normalizedDatasourceKey && grantScopeMode.value === "picker") {
         selectedGrantNodes.value = datasourceNodeIdsFromScope(

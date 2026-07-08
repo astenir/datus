@@ -640,6 +640,7 @@ describe("api client", () => {
       requestId: "req-1",
     });
     await adminSessionApi.stopSession("session-1");
+    await adminDatasourceApi.listCatalog("fund");
     await adminDatasourceApi.listGrants({ subjectType: "role", subjectId: "admin" });
     await adminDatasourceApi.getGrant("role", "admin", "fund");
     await adminQuotaApi.listUsage({ resource: "chat.stream" });
@@ -665,13 +666,14 @@ describe("api client", () => {
       content: "user_id,action\nalice,role_update\n",
     });
     expect(vi.mocked(fetch).mock.calls[2]?.[0]).toBe("/api/v1/admin/sessions/session-1/stop");
-    expect(vi.mocked(fetch).mock.calls[3]?.[0]).toBe("/api/v1/admin/datasource-grants?subject_type=role&subject_id=admin");
-    expect(vi.mocked(fetch).mock.calls[4]?.[0]).toBe("/api/v1/admin/datasource-grants/role/admin/fund");
-    expect(vi.mocked(fetch).mock.calls[5]?.[0]).toBe("/api/v1/admin/usage?resource=chat.stream");
-    expect(vi.mocked(fetch).mock.calls[6]?.[0]).toBe("/api/v1/admin/secrets?prefix=openai");
-    expect(vi.mocked(fetch).mock.calls[7]?.[0]).toBe("/api/v1/admin/secrets/openai.default");
-    expect(vi.mocked(fetch).mock.calls[8]?.[0]).toBe("/api/v1/admin/artifacts/dashboard/fund-overview/acl");
-    expect(JSON.parse(String((vi.mocked(fetch).mock.calls[8]?.[1] as RequestInit).body))).toEqual({
+    expect(vi.mocked(fetch).mock.calls[3]?.[0]).toBe("/api/v1/admin/datasources/fund/catalog");
+    expect(vi.mocked(fetch).mock.calls[4]?.[0]).toBe("/api/v1/admin/datasource-grants?subject_type=role&subject_id=admin");
+    expect(vi.mocked(fetch).mock.calls[5]?.[0]).toBe("/api/v1/admin/datasource-grants/role/admin/fund");
+    expect(vi.mocked(fetch).mock.calls[6]?.[0]).toBe("/api/v1/admin/usage?resource=chat.stream");
+    expect(vi.mocked(fetch).mock.calls[7]?.[0]).toBe("/api/v1/admin/secrets?prefix=openai");
+    expect(vi.mocked(fetch).mock.calls[8]?.[0]).toBe("/api/v1/admin/secrets/openai.default");
+    expect(vi.mocked(fetch).mock.calls[9]?.[0]).toBe("/api/v1/admin/artifacts/dashboard/fund-overview/acl");
+    expect(JSON.parse(String((vi.mocked(fetch).mock.calls[9]?.[1] as RequestInit).body))).toEqual({
       owner_user_id: "alice",
       visibility: "role",
       allowed_roles: ["analyst"],

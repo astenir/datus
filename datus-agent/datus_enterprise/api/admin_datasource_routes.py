@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from inspect import isawaitable
 from typing import Annotated, Any
 
@@ -14,6 +15,7 @@ from datus.api.constants import USER_ID_PATTERN
 from datus.api.deps import ServiceDep
 from datus.api.enterprise.deps import require_platform_active
 from datus.api.models.base_models import Result
+from datus.api.models.database_models import DatabasesData, ListDatabasesData, ListDatabasesInput
 from datus.configuration.project_config import ProjectOverride, load_project_override, save_project_override
 from datus.utils.loggings import get_logger
 from datus_enterprise.audit import AuditEvent, audit_decision
@@ -26,6 +28,7 @@ router = APIRouter(prefix="/api/v1", tags=["enterprise-datasources"])
 
 _require_admin_datasources = require_module("module.admin.datasources")
 AdminDatasourcesCtx = Annotated[AppContext, Depends(_require_admin_datasources)]
+_DB_IO_TIMEOUT = 30.0
 
 
 class SetDefaultDatasourceRequest(BaseModel):
@@ -95,6 +98,97 @@ async def list_admin_datasources_endpoint(
         ),
     )
     return Result(success=True, data=items)
+
+
+@router.get(
+    "/admin/datasources/{datasource_key}/catalog",
+    response_model=Result[DatabasesData],
+    summary="List Admin Datasource Catalog",
+    description="Admin-only raw datasource catalog for grant editing; not pruned by the caller's datasource grants.",
+    dependencies=[Depends(_require_admin_datasources)],
+)
+async def list_admin_datasource_catalog(
+    datasource_key: str,
+    svc: ServiceDep,
+    ctx: AdminDatasourcesCtx,
+    catalog_name: Annotated[str | None, Query(description="Catalog name")] = None,
+    database_name: Annotated[str | None, Query(description="Database name")] = None,
+    schema_name: Annotated[str | None, Query(description="Schema name")] = None,
+    include_sys_schemas: Annotated[bool, Query(description="Include system schemas")] = False,
+) -> Result[DatabasesData]:
+    """Return an unpruned datasource catalog for admin grant editing."""
+
+    normalized_datasource = datasource_key.strip()
+    datasources = getattr(svc.agent_config.services, "datasources", {}) or {}
+    if not normalized_datasource or normalized_datasource not in datasources:
+        await audit_decision(
+            ctx,
+            AuditEvent(
+                action="module.admin.datasources",
+                resource_type="datasource",
+                resource_id=normalized_datasource or None,
+                decision="deny",
+                reason="datasource not found",
+                metadata={"operation": "list_admin_datasource_catalog"},
+            ),
+        )
+        return _datasource_error("DATASOURCE_NOT_FOUND", "Datasource not found.")
+
+    request = ListDatabasesInput(
+        datasource_id=normalized_datasource,
+        catalog_name=catalog_name or "",
+        database_name=database_name or "",
+        schema_name=schema_name or "",
+        include_sys_schemas=include_sys_schemas,
+    )
+    try:
+        result: Result[ListDatabasesData] = await asyncio.wait_for(
+            asyncio.to_thread(svc.datasource.list_databases, request),
+            timeout=_DB_IO_TIMEOUT,
+        )
+    except TimeoutError:
+        record_timeout = getattr(svc.datasource, "record_datasource_timeout", None)
+        if callable(record_timeout):
+            record_timeout(normalized_datasource)
+        await audit_decision(
+            ctx,
+            AuditEvent(
+                action="module.admin.datasources",
+                resource_type="datasource",
+                resource_id=normalized_datasource,
+                decision="deny",
+                reason="datasource catalog timed out",
+                metadata={"operation": "list_admin_datasource_catalog"},
+            ),
+        )
+        return _datasource_error("REQUEST_TIMEOUT", "Datasource query timed out.")
+
+    if not result.success or result.data is None:
+        await audit_decision(
+            ctx,
+            AuditEvent(
+                action="module.admin.datasources",
+                resource_type="datasource",
+                resource_id=normalized_datasource,
+                decision="deny",
+                reason="datasource catalog failed",
+                metadata={"operation": "list_admin_datasource_catalog", "errorCode": result.errorCode},
+            ),
+        )
+        return Result(success=False, errorCode=result.errorCode, errorMessage=result.errorMessage)
+
+    databases = result.data.databases
+    await audit_decision(
+        ctx,
+        AuditEvent(
+            action="module.admin.datasources",
+            resource_type="datasource",
+            resource_id=normalized_datasource,
+            decision="allow",
+            metadata={"operation": "list_admin_datasource_catalog", "count": len(databases)},
+        ),
+    )
+    return Result(success=True, data=DatabasesData(databases=databases))
 
 
 @router.get(

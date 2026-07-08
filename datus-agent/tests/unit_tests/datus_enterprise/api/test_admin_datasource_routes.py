@@ -19,12 +19,14 @@ from datus.api.enterprise.defaults import (
     PassthroughConfigProjector,
 )
 from datus.api.enterprise.loader import EnterpriseExtensions
+from datus.api.models.base_models import Result
+from datus.api.models.database_models import DatabaseInfo, ListDatabasesData
 from datus.configuration.project_config import ProjectOverride
 from datus_enterprise.api import admin_datasource_routes
 from datus_enterprise.api.admin_datasource_routes import SetDefaultDatasourceRequest
 
 
-def _svc():
+def _svc(datasource=None):
     agent_config = SimpleNamespace(
         current_datasource="db_b",
         services=SimpleNamespace(
@@ -35,7 +37,9 @@ def _svc():
             },
         ),
     )
-    return SimpleNamespace(agent_config=agent_config)
+    if datasource is None:
+        datasource = SimpleNamespace()
+    return SimpleNamespace(agent_config=agent_config, datasource=datasource)
 
 
 class CollectingAuditSink:
@@ -148,10 +152,115 @@ def test_list_admin_datasources_rejects_without_admin_datasources(monkeypatch):
     assert "module.admin.datasources" in response.json()["detail"]
 
 
+def test_list_admin_datasource_catalog_returns_unpruned_catalog_for_grant_editing(monkeypatch):
+    audit_sink = CollectingAuditSink()
+    ctx = AppContext(
+        user_id="admin",
+        project_id="proj_a",
+        permissions={"module.admin.datasources"},
+        datasource_grants={
+            "db_b": {
+                "effect": "allow",
+                "tables": ["public.previously_granted"],
+            }
+        },
+    )
+    app = FastAPI()
+    app.include_router(admin_datasource_routes.router)
+    requests = []
+
+    class FakeDatasource:
+        def list_databases(self, request):
+            requests.append(request)
+            return Result(
+                success=True,
+                data=ListDatabasesData(
+                    databases=[
+                        DatabaseInfo(
+                            name="analytics",
+                            uri="duckdb://analytics",
+                            type="duckdb",
+                            current=False,
+                            schema_name="public",
+                            connection_status="connected",
+                            tables=["previously_granted", "new_table"],
+                        )
+                    ],
+                    total_count=1,
+                ),
+            )
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return _svc(FakeDatasource())
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
+    _install_extensions(monkeypatch, audit_sink=audit_sink)
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/admin/datasources/db_b/catalog")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"]["databases"][0]["tables"] == ["previously_granted", "new_table"]
+    assert requests[0].datasource_id == "db_b"
+    event = audit_sink.events[-1]
+    assert event.action == "module.admin.datasources"
+    assert event.resource_id == "db_b"
+    assert event.decision == "allow"
+    assert event.metadata == {"operation": "list_admin_datasource_catalog", "count": 1}
+
+
+def test_list_admin_datasource_catalog_rejects_without_admin_datasources(monkeypatch):
+    ctx = AppContext(project_id="proj_a", permissions={"module.datasource_catalog"})
+    app = FastAPI()
+    app.include_router(admin_datasource_routes.router)
+
+    async def reject_service(request: Request):
+        raise AssertionError("RBAC denial resolved DatusService")
+
+    app.dependency_overrides[deps.get_datus_service] = reject_service
+    _override_app_context(app, ctx)
+    _install_extensions(monkeypatch)
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.get("/api/v1/admin/datasources/db_b/catalog")
+
+    assert response.status_code == 403
+    assert "module.admin.datasources" in response.json()["detail"]
+
+
+def test_list_admin_datasource_catalog_returns_stable_error_for_unknown_datasource(monkeypatch):
+    audit_sink = CollectingAuditSink()
+    ctx = AppContext(user_id="admin", project_id="proj_a", permissions={"module.admin.datasources"})
+    app = FastAPI()
+    app.include_router(admin_datasource_routes.router)
+
+    async def override_service(request: Request):
+        request.state.app_context = ctx
+        return _svc(SimpleNamespace(list_databases=MagicMock()))
+
+    app.dependency_overrides[deps.get_datus_service] = override_service
+    _override_app_context(app, ctx)
+    _install_extensions(monkeypatch, audit_sink=audit_sink)
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/admin/datasources/missing/catalog")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "DATASOURCE_NOT_FOUND"
+    assert audit_sink.events[-1].decision == "deny"
+
+
 @pytest.mark.parametrize(
     ("method", "path", "json_body"),
     [
         ("get", "/api/v1/admin/datasources", None),
+        ("get", "/api/v1/admin/datasources/db_b/catalog", None),
         ("put", "/api/v1/admin/datasource-default", {"name": "db_a"}),
         (
             "put",
@@ -795,6 +904,7 @@ def test_admin_datasource_routes_do_not_register_legacy_switch_path():
         "/api/v1/admin/datasource-grants",
         "/api/v1/admin/datasource-grants/{subject_type}/{subject_id}/{datasource_key}",
         "/api/v1/admin/datasources",
+        "/api/v1/admin/datasources/{datasource_key}/catalog",
     }
 
 
