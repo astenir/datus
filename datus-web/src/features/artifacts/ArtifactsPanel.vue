@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, shallowRef, watch } from "vue"
+import { computed, shallowRef, watch } from "vue"
 import { RefreshCwIcon } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import {
@@ -162,7 +162,13 @@ function handleDetailDialogOpen(open: boolean) {
   }
 }
 
-onMounted(artifacts.loadArtifacts)
+watch(
+  () => props.tab,
+  tab => {
+    void artifacts.loadArtifacts(tab)
+  },
+  { immediate: true },
+)
 
 watch(
   () => [props.tab, selectedViewerSlug.value] as const,
@@ -200,7 +206,7 @@ watch(
           variant="outline"
           size="sm"
           :disabled="artifacts.listLoading.value"
-          @click="artifacts.loadArtifacts"
+          @click="artifacts.loadArtifacts(props.tab)"
         >
           <RefreshCwIcon data-icon="inline-start" />
           刷新

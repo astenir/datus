@@ -354,6 +354,7 @@ export function useArtifacts() {
   const detailLoading = shallowRef(false);
   const listError = shallowRef<string | null>(null);
   const detailError = shallowRef<string | null>(null);
+  const listRequestId = shallowRef(0);
   const activeDetailTab = shallowRef<ArtifactViewTab | null>(null);
   const activeDetailSlug = shallowRef<string | null>(null);
   const detailRequestId = shallowRef(0);
@@ -391,24 +392,44 @@ export function useArtifacts() {
     return null;
   });
 
-  async function loadArtifacts() {
+  async function loadArtifacts(tab?: ArtifactViewTab) {
+    const requestId = listRequestId.value + 1;
+    listRequestId.value = requestId;
     listLoading.value = true;
     listError.value = null;
 
     try {
       const base = connection.effectiveBase();
+      if (tab === "dashboard") {
+        const dashboardResult = await dashboardApi.list(base);
+        if (listRequestId.value !== requestId) return;
+        dashboards.value = dashboardResult ?? [];
+        return;
+      }
+
+      if (tab === "report") {
+        const reportResult = await reportApi.list(base);
+        if (listRequestId.value !== requestId) return;
+        reports.value = reportResult ?? [];
+        return;
+      }
+
       const [dashboardResult, reportResult] = await Promise.all([
         dashboardApi.list(base),
         reportApi.list(base),
       ]);
+      if (listRequestId.value !== requestId) return;
       dashboards.value = dashboardResult ?? [];
       reports.value = reportResult ?? [];
     } catch (err) {
+      if (listRequestId.value !== requestId) return;
       console.error("读取产物列表失败:", err);
       listError.value = "读取产物列表失败";
       toast.error("读取产物列表失败");
     } finally {
-      listLoading.value = false;
+      if (listRequestId.value === requestId) {
+        listLoading.value = false;
+      }
     }
   }
 

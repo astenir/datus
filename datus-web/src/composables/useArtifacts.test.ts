@@ -198,6 +198,19 @@ describe("useArtifacts", () => {
     expect(artifacts.listError.value).toBeNull();
   });
 
+  it("loads only the scoped artifact collection when refreshing a tab", async () => {
+    const { useArtifacts } = await import("./useArtifacts");
+    const artifacts = useArtifacts();
+
+    await artifacts.loadArtifacts("report");
+
+    expect(reportList).toHaveBeenCalledWith("http://api.test");
+    expect(dashboardList).not.toHaveBeenCalled();
+    expect(artifacts.reports.value).toHaveLength(1);
+    expect(artifacts.dashboards.value).toHaveLength(0);
+    expect(artifacts.listError.value).toBeNull();
+  });
+
   it("loads the route-selected artifact detail and clears the opposite family", async () => {
     const { useArtifacts } = await import("./useArtifacts");
     const artifacts = useArtifacts();
