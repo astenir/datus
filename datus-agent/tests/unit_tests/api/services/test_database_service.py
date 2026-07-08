@@ -256,6 +256,16 @@ class _FakeServerConnector:
         return ["t2", "t1"]
 
 
+class _FakeViewConnector(_FakeServerConnector):
+    """No-schema connector with queryable views for catalog listing."""
+
+    def get_views(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        return ["v_orders", "v_customers"]
+
+    def get_materialized_views(self, catalog_name: str = "", database_name: str = "", schema_name: str = ""):
+        return ["mv_rollup"]
+
+
 @pytest.fixture
 def _no_schema_dialect(monkeypatch):
     """Force the server-style (no per-database schema) code path."""
@@ -281,6 +291,16 @@ class TestGetConnectionInfoScoping:
         assert infos[0].current is True
         # tables are surfaced (and sorted) for the scoped database
         assert infos[0].tables == ["t1", "t2"]
+
+    def test_catalog_listing_includes_views_for_grant_picker(self, real_agent_config, _no_schema_dialect):
+        """Catalog entries include views so datasource-grant pickers can authorize them."""
+        svc = DatasourceService(agent_config=real_agent_config)
+        connector = _FakeViewConnector(database_name="benchmark")
+
+        infos = svc._get_connection_info(connector, "benchmark", ListDatabasesInput())
+
+        assert infos[0].tables == ["mv_rollup", "t1", "t2", "v_customers", "v_orders"]
+        assert infos[0].tables_count == 5
 
     def test_falls_back_to_server_enumeration_when_unconfigured(self, real_agent_config, _no_schema_dialect):
         """Only when no database is configured do we enumerate the server so the

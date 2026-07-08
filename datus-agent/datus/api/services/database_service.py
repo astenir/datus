@@ -36,6 +36,7 @@ from datus.utils.time_utils import now_utc_iso
 logger = get_logger(__name__)
 # Database types that do NOT support schema switching
 _NO_SCHEMA_TYPES = {"sqlite", "duckdb", "mysql"}
+_TABLE_LIKE_VIEW_METHODS = ("get_views", "get_materialized_views")
 
 
 class DatasourceService:
@@ -296,13 +297,13 @@ class DatasourceService:
                     schemas = ["public"]
 
                 for schema in schemas:
-                    # 3) Fetch tables for this (db, schema). A failure here only
+                    # 3) Fetch queryable table-like objects for this (db, schema). A failure here only
                     # invalidates this entry, not sibling schemas.
                     try:
-                        tables = connector.get_tables(
+                        tables = self._get_table_like_names(
+                            connector,
                             catalog_name=catalog_name, database_name=db_name, schema_name=schema
                         )
-                        tables.sort()
                     except Exception as e:
                         logger.warning(
                             "Failed to get tables for db=%s schema=%s: %s",
@@ -340,12 +341,12 @@ class DatasourceService:
                         )
                     )
             else:
-                # No schema support — get tables directly. Isolate per-db failures.
+                # No schema support — get queryable table-like objects directly. Isolate per-db failures.
                 try:
-                    tables = connector.get_tables(
+                    tables = self._get_table_like_names(
+                        connector,
                         catalog_name=catalog_name, database_name=db_name, schema_name=request.schema_name
                     )
-                    tables.sort()
                 except Exception as e:
                     logger.warning("Failed to get tables for db=%s: %s", db_name, e)
                     db_infos.append(_disconnected(db_name))
@@ -366,6 +367,51 @@ class DatasourceService:
                     )
                 )
         return db_infos
+
+    def _get_table_like_names(
+        self,
+        connector,
+        *,
+        catalog_name: str | None = "",
+        database_name: str | None = "",
+        schema_name: str | None = "",
+    ) -> List[str]:
+        """Return tables plus view-like objects for catalog browsing.
+
+        The catalog API keeps its legacy ``tables: list[str]`` response shape, but
+        admin grant pickers need all queryable objects to be discoverable. Views
+        and materialized views are therefore folded into the same name list while
+        unsupported view metadata remains best-effort.
+        """
+
+        names = [
+            str(table_name).strip()
+            for table_name in connector.get_tables(
+                catalog_name=catalog_name or "",
+                database_name=database_name or "",
+                schema_name=schema_name or "",
+            )
+            if str(table_name).strip()
+        ]
+
+        for method_name in _TABLE_LIKE_VIEW_METHODS:
+            method = getattr(connector, method_name, None)
+            if not callable(method):
+                continue
+            try:
+                names.extend(
+                    str(table_name).strip()
+                    for table_name in method(
+                        catalog_name=catalog_name or "",
+                        database_name=database_name or "",
+                        schema_name=schema_name or "",
+                    )
+                    if str(table_name).strip()
+                )
+            except Exception as e:
+                logger.debug("%s unavailable on %s: %s", method_name, getattr(connector, "dialect", "unknown"), e)
+
+        return sorted(set(names))
 
     def _should_enumerate_databases(self, datasource: str) -> bool:
         config = getattr(getattr(self.agent_config, "services", None), "datasources", {}).get(datasource)
