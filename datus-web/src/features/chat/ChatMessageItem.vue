@@ -10,6 +10,7 @@ const props = defineProps<{
   streaming?: boolean
   interactionDisabled?: boolean
   activeInteractionKey?: string | null
+  dockedInteractionKey?: string | null
   databaseName?: string
 }>()
 
@@ -69,6 +70,7 @@ function openArtifact(kind: string, slug: string) {
             :thinking-display="thinkingDisplay"
             :interaction-disabled="interactionDisabled"
             :active-interaction-key="activeInteractionKey"
+            :docked-interaction-key="dockedInteractionKey"
             :database-name="databaseName"
             @submit-interaction="submitInteraction"
             @open-artifact="openArtifact"

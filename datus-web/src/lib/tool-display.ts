@@ -94,6 +94,14 @@ export function shouldShowChartRecommendation(toolName: string, table: ToolTable
   return table.columns.some((column, columnIndex) => isChartMeasureColumn(column, table.rows, columnIndex));
 }
 
+export function isSqlExecutionTool(toolName: string) {
+  const normalized = toolName.trim().toLowerCase();
+  return normalized === "read_query" ||
+    normalized === "execute_sql" ||
+    normalized.endsWith(".read_query") ||
+    normalized.endsWith(".execute_sql");
+}
+
 function tableFromColumnDefinitions(value: unknown): ToolTable | null {
   const columns = columnDefinitionRows(value);
   if (!columns || columns.length === 0) return null;

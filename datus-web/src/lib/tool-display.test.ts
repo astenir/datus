@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { displayValueForTool, shouldShowChartRecommendation, sqlFromToolValue, summarizeValue, tableFromToolValue, toolResultStatus } from "./tool-display";
+import { displayValueForTool, isSqlExecutionTool, shouldShowChartRecommendation, sqlFromToolValue, summarizeValue, tableFromToolValue, toolResultStatus } from "./tool-display";
 
 describe("displayValueForTool", () => {
   it("uses result as the primary rendered value for tool results", () => {
@@ -216,6 +216,20 @@ describe("sqlFromToolValue", () => {
 
   it("ignores non-sql text", () => {
     expect(sqlFromToolValue({ query: "fund list" })).toBeNull();
+  });
+});
+
+describe("isSqlExecutionTool", () => {
+  it("treats legacy and unified SQL tools as runnable", () => {
+    expect(isSqlExecutionTool("read_query")).toBe(true);
+    expect(isSqlExecutionTool("db_tools.read_query")).toBe(true);
+    expect(isSqlExecutionTool("execute_sql")).toBe(true);
+    expect(isSqlExecutionTool("db_tools.execute_sql")).toBe(true);
+  });
+
+  it("does not mark metadata tools as runnable SQL actions", () => {
+    expect(isSqlExecutionTool("describe_table")).toBe(false);
+    expect(isSqlExecutionTool("semantic_tools.search_metrics")).toBe(false);
   });
 });
 

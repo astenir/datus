@@ -79,6 +79,7 @@ import type { AuthState } from "@/composables/useAuth"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import type { ArtifactViewTab, WorkspaceView } from "@/features/workspace/types"
 import { datasourceStatusDescription, datasourceStatusLabel, datasourceStatusToneClass } from "@/lib/datasource-status"
+import { APP_WORKSPACE_TITLE, FALLBACK_USERNAME_LABEL, FALLBACK_USER_LABEL } from "@/lib/constants"
 import { cn } from "@/lib/utils"
 import { toast } from "vue-sonner"
 
@@ -137,7 +138,7 @@ const profileMenuSwitchClass = "ml-auto flex w-14 shrink-0 justify-start"
 const datasourceTestStatusIconClass = "shrink-0"
 const historySessionActionClass = "rounded-md opacity-0 group-focus-within/menu-item:opacity-100 group-hover/menu-item:opacity-100 data-[state=open]:opacity-100"
 
-const userLabel = computed(() => props.auth.user?.realname || props.auth.user?.username || "Datus")
+const userLabel = computed(() => props.auth.user?.realname || props.auth.user?.username || FALLBACK_USER_LABEL)
 const userFallback = computed(() => userLabel.value.slice(0, 1).toUpperCase())
 const currentDatasourceName = computed(() => props.workspace.currentDatasource.value.trim())
 const currentDatasourceLabel = computed(() => currentDatasourceName.value || "当前数据源未选择")
@@ -386,7 +387,7 @@ async function deleteSession(sessionId: string) {
         </div>
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-1.5">
-            <span class="truncate text-base font-semibold">Datus</span>
+            <span class="truncate text-base font-semibold">{{ APP_WORKSPACE_TITLE }}</span>
             <Badge
               :variant="connectionBadgeVariant"
               class="h-5 shrink-0 px-1.5 text-xs"
@@ -664,7 +665,7 @@ async function deleteSession(sessionId: string) {
                 </Avatar>
                 <div class="min-w-0 flex-1">
                   <div class="truncate text-sm font-semibold leading-5">{{ userLabel }}</div>
-                  <div class="truncate text-xs leading-4 text-muted-foreground">{{ props.auth.user?.username || "Datus" }}</div>
+                  <div class="truncate text-xs leading-4 text-muted-foreground">{{ props.auth.user?.username || FALLBACK_USERNAME_LABEL }}</div>
                   <div class="mt-1.5 flex flex-wrap gap-1.5">
                     <Badge
                       variant="secondary"

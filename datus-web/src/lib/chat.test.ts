@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   activeStreamingMessageId,
   activeUserInteractionKey,
+  activeUserInteractionRequest,
   buildChatStreamRequest,
   buildUserInteractionInput,
   chatSessionsPath,
@@ -764,6 +765,34 @@ describe("activeUserInteractionKey", () => {
     ], { isStreaming: true })).toBe("permission-action-1");
   });
 
+  it("exposes the active nested interaction for the stable permission dock", () => {
+    const messages = [
+      {
+        id: "parent-task-call",
+        role: "assistant" as const,
+        content: "调用工具 task",
+        blocks: [{ type: "tool-call" as const, callToolId: "task-call-1", toolName: "task", params: {} }],
+      },
+      {
+        id: "child-permission",
+        role: "assistant" as const,
+        content: "需要用户确认",
+        depth: 1,
+        parentActionId: "task-call-1",
+        blocks: [interactionBlock],
+      },
+    ];
+
+    expect(activeUserInteractionKey(messages, { isStreaming: true })).toBe("permission-action-1");
+    expect(activeUserInteractionRequest(messages, "permission-action-1")).toEqual({
+      interactionKey: "permission-action-1",
+      block: interactionBlock,
+      messageId: "child-permission",
+      depth: 1,
+      parentActionId: "task-call-1",
+    });
+  });
+
   it("disables old interaction cards after the session moves forward", () => {
     expect(activeUserInteractionKey([
       { id: "prompt", role: "assistant" as const, content: "需要用户确认", blocks: [interactionBlock] },
@@ -800,6 +829,12 @@ describe("activeUserInteractionKey", () => {
         ],
       },
     ], { isStreaming: true })).toBeNull();
+  });
+
+  it("returns no dock request when there is no active interaction key", () => {
+    expect(activeUserInteractionRequest([
+      { id: "prompt", role: "assistant" as const, content: "需要用户确认", blocks: [interactionBlock] },
+    ], null)).toBeNull();
   });
 });
 

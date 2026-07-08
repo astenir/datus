@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { BundledLanguage } from "shiki"
-import { ExternalLinkIcon } from "@lucide/vue"
+import { CheckCircle2Icon, ExternalLinkIcon, WrenchIcon } from "@lucide/vue"
 import {
   Artifact,
   ArtifactAction,
@@ -35,17 +35,20 @@ import {
   ToolHeader,
 } from "@/components/ai-elements/tool"
 import { MessageResponse } from "@/components/ai-elements/message"
+import { Badge } from "@/components/ui/badge"
 import InteractionSummaryBlock from "@/features/chat/InteractionSummaryBlock.vue"
 import ToolPayloadView from "@/features/chat/ToolPayloadView.vue"
 import UserInteractionBlock from "@/features/chat/UserInteractionBlock.vue"
+import { parsePermissionRequest } from "@/lib/interaction-display"
 import type { MessageDisplayBlock, ToolChildMessage } from "@/types"
 
-defineProps<{
+const props = defineProps<{
   block: MessageDisplayBlock
   streaming?: boolean
   thinkingDisplay?: "answer" | "reasoning"
   interactionDisabled?: boolean
   activeInteractionKey?: string | null
+  dockedInteractionKey?: string | null
   databaseName?: string
 }>()
 
@@ -67,6 +70,10 @@ function toolOutputState(errorText?: string) {
   return errorText ? "output-error" : "output-available"
 }
 
+function isSubAgentTaskTool(toolName: string) {
+  return toolName.toLowerCase() === "task"
+}
+
 function codeLanguage(language: string) {
   return (language.trim().toLowerCase() || "text") as BundledLanguage
 }
@@ -86,6 +93,31 @@ function childMessageLabel(message: ToolChildMessage) {
   if (message.role === "system") return "系统事件"
   if (message.role === "user") return "用户输入"
   return message.depth && message.depth > 0 ? "子 Agent" : "关联消息"
+}
+
+function isDockedInteraction(block: MessageDisplayBlock) {
+  return block.type === "user-interaction" &&
+    Boolean(props.dockedInteractionKey) &&
+    block.interactionKey === props.dockedInteractionKey
+}
+
+function isReadOnlyInteraction(block: MessageDisplayBlock) {
+  return block.type === "user-interaction" &&
+    block.interactionKey !== props.activeInteractionKey
+}
+
+function userInteractionSummary(block: MessageDisplayBlock) {
+  if (block.type !== "user-interaction") return "用户交互"
+
+  const request = block.requests[0]
+  if (!request) return "用户交互"
+
+  const permissionRequest = parsePermissionRequest(request.content)
+  return permissionRequest?.operationName ?? permissionRequest?.toolName ?? request.title ?? request.content
+}
+
+function readOnlyInteractionDescription() {
+  return props.streaming ? "已提交，工具调用继续执行中" : "此交互请求已处理或已失效"
 }
 </script>
 
@@ -121,7 +153,10 @@ function childMessageLabel(message: ToolChildMessage) {
     </CodeBlockHeader>
   </CodeBlock>
 
-  <Tool v-else-if="block.type === 'tool-call'">
+  <Tool
+    v-else-if="block.type === 'tool-call'"
+    :default-open="isSubAgentTaskTool(block.toolName)"
+  >
     <ToolHeader
       :type="`tool-${block.toolName}` as never"
       state="input-available"
@@ -156,6 +191,7 @@ function childMessageLabel(message: ToolChildMessage) {
                 :thinking-display="thinkingDisplay"
                 :interaction-disabled="interactionDisabled"
                 :active-interaction-key="activeInteractionKey"
+                :docked-interaction-key="dockedInteractionKey"
                 :database-name="databaseName"
                 @submit-interaction="submitInteraction"
                 @open-artifact="openArtifact"
@@ -171,7 +207,10 @@ function childMessageLabel(message: ToolChildMessage) {
     </ToolContent>
   </Tool>
 
-  <Tool v-else-if="block.type === 'tool-result'">
+  <Tool
+    v-else-if="block.type === 'tool-result'"
+    :default-open="isSubAgentTaskTool(block.toolName)"
+  >
     <ToolHeader
       :type="`tool-${block.toolName}` as never"
       :state="toolOutputState(block.errorText)"
@@ -188,7 +227,10 @@ function childMessageLabel(message: ToolChildMessage) {
     </ToolContent>
   </Tool>
 
-  <Tool v-else-if="block.type === 'tool-execution'">
+  <Tool
+    v-else-if="block.type === 'tool-execution'"
+    :default-open="isSubAgentTaskTool(block.toolName)"
+  >
     <ToolHeader
       :type="`tool-${block.toolName}` as never"
       :state="toolOutputState(block.errorText)"
@@ -223,6 +265,7 @@ function childMessageLabel(message: ToolChildMessage) {
                 :thinking-display="thinkingDisplay"
                 :interaction-disabled="interactionDisabled"
                 :active-interaction-key="activeInteractionKey"
+                :docked-interaction-key="dockedInteractionKey"
                 :database-name="databaseName"
                 @submit-interaction="submitInteraction"
                 @open-artifact="openArtifact"
@@ -293,6 +336,48 @@ function childMessageLabel(message: ToolChildMessage) {
       {{ block.description || block.slug }}
     </ArtifactContent>
   </Artifact>
+
+  <div
+    v-else-if="isDockedInteraction(block)"
+    class="flex min-w-0 items-start gap-3 rounded-md border border-dashed bg-muted/20 p-3"
+  >
+    <Badge
+      variant="secondary"
+      class="shrink-0"
+    >
+      <WrenchIcon data-icon="inline-start" />
+      等待确认
+    </Badge>
+    <div class="min-w-0 flex-1">
+      <p class="truncate text-sm font-medium text-foreground">
+        {{ userInteractionSummary(block) }}
+      </p>
+      <p class="text-xs text-muted-foreground">
+        请在输入框上方处理此工具权限请求
+      </p>
+    </div>
+  </div>
+
+  <div
+    v-else-if="isReadOnlyInteraction(block)"
+    class="flex min-w-0 items-start gap-3 rounded-md border border-dashed bg-muted/20 p-3"
+  >
+    <Badge
+      variant="secondary"
+      class="shrink-0"
+    >
+      <CheckCircle2Icon data-icon="inline-start" />
+      已处理
+    </Badge>
+    <div class="min-w-0 flex-1">
+      <p class="truncate text-sm font-medium text-foreground">
+        {{ userInteractionSummary(block) }}
+      </p>
+      <p class="text-xs text-muted-foreground">
+        {{ readOnlyInteractionDescription() }}
+      </p>
+    </div>
+  </div>
 
   <UserInteractionBlock
     v-else-if="block.type === 'user-interaction'"

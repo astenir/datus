@@ -1,5 +1,6 @@
 import type {
   CatalogRecord,
+  ActiveUserInteraction,
   ChatDisplayMessage,
   ChatMessage,
   InteractionSummaryStatus,
@@ -338,13 +339,42 @@ export function activeUserInteractionKey(
   if (!options.isStreaming) return null;
 
   const latestMessage = messages[messages.length - 1];
-  const latestBlock = latestMessage?.blocks?.[latestMessage.blocks.length - 1];
+  const latestBlock = latestUserInteractionBlock(latestMessage);
   if (latestBlock?.type !== "user-interaction") return null;
 
   const interactionKey = latestBlock.interactionKey.trim();
   if (!interactionKey || options.submittedInteractionKeys?.has(interactionKey)) return null;
 
   return interactionKey;
+}
+
+export function activeUserInteractionRequest(
+  messages: readonly ChatMessage[],
+  activeInteractionKey: string | null | undefined,
+): ActiveUserInteraction | null {
+  const key = activeInteractionKey?.trim();
+  if (!key) return null;
+
+  for (const message of [...messages].reverse()) {
+    const block = latestUserInteractionBlock(message);
+    if (block?.interactionKey.trim() !== key) continue;
+
+    const interaction: ActiveUserInteraction = {
+      interactionKey: key,
+      block,
+      messageId: message.id,
+    };
+    if (message.depth != null) interaction.depth = message.depth;
+    if (message.parentActionId) interaction.parentActionId = message.parentActionId;
+    return interaction;
+  }
+
+  return null;
+}
+
+function latestUserInteractionBlock(message: ChatMessage | undefined) {
+  const block = message?.blocks?.[message.blocks.length - 1];
+  return block?.type === "user-interaction" ? block : null;
 }
 
 export function shouldRenderThinkingAsAnswer(message: Pick<ChatDisplayMessage, "role" | "depth" | "blocks">) {

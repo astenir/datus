@@ -43,7 +43,7 @@ defineProps<{
 
     <div
       v-if="request.argsRows.length > 0"
-      class="overflow-hidden rounded-md border"
+      class="max-h-48 overflow-auto rounded-md border"
     >
       <Table>
         <TableHeader>

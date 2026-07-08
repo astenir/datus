@@ -88,6 +88,14 @@ export type InteractionSummaryBlock = {
   error?: string;
 };
 
+export type ActiveUserInteraction = {
+  interactionKey: string;
+  block: Extract<MessageBlock, { type: "user-interaction" }>;
+  messageId: string;
+  depth?: number;
+  parentActionId?: string;
+};
+
 export type ParsedMessage = {
   message: ChatMessage;
   operation: MessageOperation;

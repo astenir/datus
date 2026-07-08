@@ -31,13 +31,15 @@ import {
   ModelSelectorTrigger,
 } from "@/components/ai-elements/model-selector"
 import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion"
-import { activeStreamingMessageId, mergeToolExecutionMessages } from "@/lib/chat"
+import { activeStreamingMessageId, activeUserInteractionRequest, mergeToolExecutionMessages } from "@/lib/chat"
+import { parsePermissionRequest } from "@/lib/interaction-display"
 import { useConnection } from "@/composables/useConnection"
 import { artifactHtml, createArtifactPreviewUrl, withArtifactPreviewRuntime } from "@/composables/useArtifacts"
 import { getCurrentAccessToken } from "@/lib/request"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import type { ArtifactViewTab } from "@/features/workspace/types"
 import type { SelectOption } from "@/types"
+import ActiveInteractionDock from "@/features/chat/ActiveInteractionDock.vue"
 import ChatContextPicker from "@/features/chat/ChatContextPicker.vue"
 
 const props = defineProps<{
@@ -59,6 +61,19 @@ const streamingMessageId = computed(() =>
   props.workspace.isStreaming.value ? activeStreamingMessageId(props.workspace.messages.value) : null,
 )
 const activeInteractionKey = computed(() => props.workspace.activeInteractionKey.value)
+const activeInteraction = computed(() =>
+  activeUserInteractionRequest(props.workspace.messages.value, activeInteractionKey.value),
+)
+const dockedInteraction = computed(() => {
+  const interaction = activeInteraction.value
+  const requests = interaction?.block.requests ?? []
+  const request = requests.length === 1 ? requests[0] : null
+  if (!interaction || !request) return null
+  if (request.allowFreeText || request.multiSelect || request.options.length === 0) return null
+  if (!parsePermissionRequest(request.content)) return null
+
+  return interaction
+})
 const modelSelectorOpen = shallowRef(false)
 const schemaOptions = computed(() => props.workspace.schemaOptions.value)
 const selectedModelValue = computed({
@@ -234,6 +249,7 @@ async function openArtifact(kind: string, slug: string) {
           :streaming="message.id === streamingMessageId"
           :interaction-disabled="Boolean(pendingInteractionKey)"
           :active-interaction-key="activeInteractionKey"
+          :docked-interaction-key="dockedInteraction?.interactionKey ?? null"
           :database-name="workspace.database.value"
           @submit-interaction="submitInteraction"
           @open-artifact="openArtifact"
@@ -244,6 +260,12 @@ async function openArtifact(kind: string, slug: string) {
 
     <footer class="shrink-0 px-4 pb-5 pt-3 md:px-8 md:pb-7">
       <div class="mx-auto max-w-[52rem]">
+        <ActiveInteractionDock
+          :interaction="dockedInteraction"
+          :disabled="Boolean(pendingInteractionKey)"
+          @submit="submitInteraction"
+        />
+
         <PromptInput
           :global-drop="false"
           :multiple="false"
@@ -289,6 +311,15 @@ async function openArtifact(kind: string, slug: string) {
             </PromptInputTools>
 
             <div class="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
+              <span
+                v-if="workspace.isStreaming.value"
+                role="status"
+                aria-live="polite"
+                class="sr-only"
+              >
+                AI 正在生成
+              </span>
+
               <ModelSelector v-model:open="modelSelectorOpen">
                 <ModelSelectorTrigger as-child>
                   <PromptInputButton
@@ -379,8 +410,8 @@ async function openArtifact(kind: string, slug: string) {
                 variant="default"
                 size="icon-sm"
                 type="button"
-                aria-label="停止生成"
-                title="停止生成"
+                aria-label="AI 正在生成，点击停止"
+                title="AI 正在生成，点击停止"
                 class="size-10 shrink-0 rounded-full shadow-none"
                 @click="workspace.stopSession"
               >

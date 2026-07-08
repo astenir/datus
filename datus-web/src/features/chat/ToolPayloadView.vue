@@ -23,6 +23,7 @@ import {
 import SqlExecutionDialog from "@/features/chat/SqlExecutionDialog.vue"
 import {
   displayValueForTool,
+  isSqlExecutionTool,
   sqlFromToolValue,
   sqlKeys,
   summarizeValue,
@@ -82,7 +83,7 @@ const fallbackLanguage = computed<BundledLanguage>(() => "json")
 const valueSummary = computed(() => table.value?.sourceLabel ?? summarizeValue(displayValue.value))
 const canExecuteSql = computed(() => (
   props.mode === "input"
-    && isReadQueryTool(props.toolName)
+    && isSqlExecutionTool(props.toolName)
     && Boolean(sql.value)
 ))
 
@@ -95,10 +96,6 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
 }
 
-function isReadQueryTool(toolName: string) {
-  const normalized = toolName.trim().toLowerCase()
-  return normalized === "read_query" || normalized.endsWith(".read_query")
-}
 </script>
 
 <template>
