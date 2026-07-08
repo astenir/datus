@@ -120,12 +120,20 @@ class OceanBaseMySQLPool:
         try:
             conn = self._available.get_nowait()
         except queue.Empty:
+            should_create = False
             with self._lock:
                 if self._created < self._config.pool_max_size:
-                    conn = self._create_connection(database=self._config.database)
                     self._created += 1
-                else:
-                    conn = self._available.get()
+                    should_create = True
+            if should_create:
+                try:
+                    conn = self._create_connection(database=self._config.database)
+                except Exception:
+                    with self._lock:
+                        self._created -= 1
+                    raise
+            else:
+                conn = self._available.get()
         if not getattr(conn, "open", True):
             conn = self._create_connection(database=self._config.database)
         return conn

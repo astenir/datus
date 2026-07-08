@@ -79,6 +79,14 @@ class FakeTrackedConnection:
         self.open = False
 
 
+class FakePymysqlConnection(FakeTrackedConnection):
+    def commit(self) -> None:
+        pass
+
+    def rollback(self) -> None:
+        pass
+
+
 def test_ob_session_store_schemas_are_additive_and_have_no_tenant_id():
     normalized = " ".join(f"{METADATA_SCHEMA_SQL}\n{BODY_SCHEMA_SQL}".lower().split())
     assert "create table if not exists enterprise_users" in normalized
@@ -156,6 +164,47 @@ def test_oceanbase_pool_close_closes_idle_and_borrowed_connections():
     assert pool._available.empty()
     assert idle.close_count == 1
     assert borrowed.close_count == 1
+
+
+def test_oceanbase_pool_first_shared_connection_does_not_deadlock(monkeypatch):
+    import pymysql
+
+    created_connections: list[FakePymysqlConnection] = []
+
+    def fake_connect(**_kwargs):
+        conn = FakePymysqlConnection()
+        created_connections.append(conn)
+        return conn
+
+    monkeypatch.setattr(pymysql, "connect", fake_connect)
+    pool = OceanBaseMySQLPool(
+        OceanBaseMySQLConfig(
+            host="127.0.0.1",
+            port=2881,
+            user="root@test",
+            password="testpass",
+            database="datus_enterprise",
+            pool_max_size=1,
+        )
+    )
+    acquired: list[FakePymysqlConnection] = []
+    errors: list[BaseException] = []
+
+    def acquire_once() -> None:
+        try:
+            with pool.connection(database="datus_enterprise") as conn:
+                acquired.append(conn)
+        except BaseException as exc:
+            errors.append(exc)
+
+    thread = threading.Thread(target=acquire_once, daemon=True)
+    thread.start()
+    thread.join(timeout=1.0)
+
+    assert thread.is_alive() is False
+    assert errors == []
+    assert acquired == created_connections
+    assert len(created_connections) == 1
 
 
 def test_ob_session_body_store_run_sync_bridge():
