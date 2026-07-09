@@ -1,5 +1,8 @@
 <script setup lang="ts">
+import { computed, shallowRef } from "vue"
+import { toast } from "vue-sonner"
 import {
+  CalendarIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   DownloadIcon,
@@ -12,13 +15,23 @@ import {
   ShieldCheckIcon,
   SquareIcon,
   Trash2Icon,
+  UserCheckIcon,
   UserPlusIcon,
+  UserXIcon,
 } from "@lucide/vue"
+import { parseDate } from "@internationalized/date"
+import type { DateValue } from "@internationalized/date"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
+import { RangeCalendar } from "@/components/ui/range-calendar"
+import { Separator } from "@/components/ui/separator"
 import {
   Select,
   SelectContent,
@@ -36,11 +49,259 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { usePermission } from "@/composables/usePermission"
 import type { AdminManagementTabProps } from "@/features/admin/types"
+import { userDisableBlockedReason as disableBlockedReasonForUser } from "@/features/admin/user-disable-guard"
 import { auditLogLimitOptions } from "@/lib/audit-log-pagination"
 import { permissionBadgeItems } from "@/lib/permission-labels"
+import type { AdminArtifact, AdminUser } from "@/types/admin"
 
-defineProps<AdminManagementTabProps>()
+const props = defineProps<AdminManagementTabProps>()
+const permission = usePermission()
+
+const currentUserId = computed(() => permission.permissions.value?.user_id.trim() ?? "")
+type EnabledStatusFilter = "all" | "enabled" | "disabled"
+type RoleTypeFilter = "all" | "built_in" | "custom"
+type GrantEffectFilter = "all" | "allow" | "deny"
+type SessionStateFilter = "all" | "running" | "stopped"
+type ArtifactTypeFilter = "all" | AdminArtifact["artifact_type"]
+type AuditDateRange = {
+  start: DateValue | undefined
+  end: DateValue | undefined
+}
+
+const userStatusFilter = shallowRef<EnabledStatusFilter>("all")
+const userSearchKeyword = shallowRef("")
+const roleTypeFilter = shallowRef<RoleTypeFilter>("all")
+const roleSearchKeyword = shallowRef("")
+const grantEffectFilter = shallowRef<GrantEffectFilter>("all")
+const grantSearchKeyword = shallowRef("")
+const sessionStateFilter = shallowRef<SessionStateFilter>("all")
+const sessionSearchKeyword = shallowRef("")
+const quotaStatusFilter = shallowRef<EnabledStatusFilter>("all")
+const quotaSearchKeyword = shallowRef("")
+const secretStatusFilter = shallowRef<EnabledStatusFilter>("all")
+const secretSearchKeyword = shallowRef("")
+const artifactTypeFilter = shallowRef<ArtifactTypeFilter>("all")
+const artifactSearchKeyword = shallowRef("")
+const auditDateRangeOpen = shallowRef(false)
+
+function parseAuditCalendarDate(value: string): DateValue | undefined {
+  const datePart = value.trim().slice(0, 10)
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+    return undefined
+  }
+
+  try {
+    return parseDate(datePart)
+  } catch {
+    return undefined
+  }
+}
+
+function auditDatePart(date: DateValue | undefined): string {
+  return date?.toString().slice(0, 10) ?? ""
+}
+
+const auditDateRange = computed<AuditDateRange>({
+  get: () => ({
+    start: parseAuditCalendarDate(props.audits.searchForm.value.created_after),
+    end: parseAuditCalendarDate(props.audits.searchForm.value.created_before),
+  }),
+  set: (range) => {
+    const start = auditDatePart(range.start)
+    const end = auditDatePart(range.end)
+    props.audits.searchForm.value.created_after = start ? `${start}T00:00:00` : ""
+    props.audits.searchForm.value.created_before = end ? `${end}T23:59:59` : ""
+  },
+})
+
+const auditDateRangeLabel = computed(() => {
+  const start = auditDatePart(auditDateRange.value.start)
+  const end = auditDatePart(auditDateRange.value.end)
+  if (start && end) {
+    return `${start} - ${end}`
+  }
+  if (start) {
+    return `${start} 起`
+  }
+  if (end) {
+    return `${end} 前`
+  }
+  return "日期范围"
+})
+
+const hasAuditDateRange = computed(() =>
+  Boolean(props.audits.searchForm.value.created_after.trim() || props.audits.searchForm.value.created_before.trim())
+)
+
+function clearAuditDateRange(): void {
+  props.audits.searchForm.value.created_after = ""
+  props.audits.searchForm.value.created_before = ""
+}
+
+function searchKeyword(value: string): string {
+  return value.trim().toLocaleLowerCase()
+}
+
+function matchesKeyword(keyword: string, values: readonly (string | number | null | undefined)[]): boolean {
+  if (!keyword) return true
+  return values
+    .filter((value): value is string | number => value !== null && value !== undefined)
+    .some((value) => String(value).toLocaleLowerCase().includes(keyword))
+}
+
+function matchesEnabledStatus(filter: EnabledStatusFilter, enabled: boolean): boolean {
+  if (filter === "enabled") return enabled
+  if (filter === "disabled") return !enabled
+  return true
+}
+
+const filteredUsers = computed(() => {
+  const statusFilter = userStatusFilter.value
+  const keyword = searchKeyword(userSearchKeyword.value)
+
+  return props.users.users.value.filter((user) =>
+    matchesEnabledStatus(statusFilter, user.enabled)
+    && matchesKeyword(keyword, [
+      user.user_id,
+      user.display_name,
+      user.email,
+      user.external_user_id,
+      user.department,
+      user.title,
+      user.role_ids?.join(" "),
+    ])
+  )
+})
+
+const filteredRoles = computed(() => {
+  const typeFilter = roleTypeFilter.value
+  const keyword = searchKeyword(roleSearchKeyword.value)
+
+  return props.roles.roles.value.filter((role) => {
+    if (typeFilter === "built_in" && !role.built_in) {
+      return false
+    }
+    if (typeFilter === "custom" && role.built_in) {
+      return false
+    }
+
+    return matchesKeyword(keyword, [
+      role.role_id,
+      role.name,
+      role.description,
+      role.permissions?.join(" "),
+    ])
+  })
+})
+
+const filteredGrants = computed(() => {
+  const effectFilter = grantEffectFilter.value
+  const keyword = searchKeyword(grantSearchKeyword.value)
+
+  return props.overview.data.value.datasourceGrants.filter((grant) => {
+    if (effectFilter !== "all" && grant.effect !== effectFilter) {
+      return false
+    }
+
+    return matchesKeyword(keyword, [
+      grant.subject_type,
+      grant.subject_id,
+      grant.datasource_key,
+      grant.effect,
+      props.formatScope(grant.scope),
+    ])
+  })
+})
+
+const filteredSessions = computed(() => {
+  const stateFilter = sessionStateFilter.value
+  const keyword = searchKeyword(sessionSearchKeyword.value)
+
+  return props.overview.data.value.sessions.filter((session) => {
+    if (stateFilter === "running" && !session.is_running) {
+      return false
+    }
+    if (stateFilter === "stopped" && session.is_running) {
+      return false
+    }
+
+    return matchesKeyword(keyword, [
+      session.session_id,
+      session.owner_user_id,
+      session.status,
+      session.event_count,
+    ])
+  })
+})
+
+const filteredQuotas = computed(() => {
+  const statusFilter = quotaStatusFilter.value
+  const keyword = searchKeyword(quotaSearchKeyword.value)
+
+  return props.overview.data.value.quotas.filter((quota) =>
+    matchesEnabledStatus(statusFilter, quota.enabled)
+    && matchesKeyword(keyword, [
+      quota.subject_type,
+      quota.subject_id,
+      quota.resource,
+      quota.limit,
+      quota.window_seconds,
+    ])
+  )
+})
+
+const filteredSecrets = computed(() => {
+  const statusFilter = secretStatusFilter.value
+  const keyword = searchKeyword(secretSearchKeyword.value)
+
+  return props.overview.data.value.secrets.filter((secret) =>
+    matchesEnabledStatus(statusFilter, secret.enabled)
+    && matchesKeyword(keyword, [
+      secret.name,
+      secret.provider,
+      secret.ref_hint,
+      secret.description,
+    ])
+  )
+})
+
+const filteredArtifacts = computed(() => {
+  const typeFilter = artifactTypeFilter.value
+  const keyword = searchKeyword(artifactSearchKeyword.value)
+
+  return props.overview.data.value.artifacts.filter((artifact) => {
+    if (typeFilter !== "all" && artifact.artifact_type !== typeFilter) {
+      return false
+    }
+    if (!keyword) {
+      return true
+    }
+
+    const manifest = artifact.manifest
+    return matchesKeyword(keyword, [
+      artifact.artifact_type,
+      manifest.slug,
+      manifest.name,
+      manifest.description,
+      manifest.datasources?.join(" "),
+    ])
+  })
+})
+
+function userDisableBlockedReason(user: AdminUser): string | null {
+  return disableBlockedReasonForUser(user, props.roles.roles.value, currentUserId.value)
+}
+
+function requestSetUserEnabled(user: AdminUser, enabled: boolean) {
+  const blockedReason = enabled ? null : userDisableBlockedReason(user)
+  if (blockedReason) {
+    toast.error(blockedReason)
+    return
+  }
+  void props.users.setUserEnabled(user, enabled)
+}
 </script>
 
 <template>
@@ -55,9 +316,9 @@ defineProps<AdminManagementTabProps>()
         <TabsTrigger value="roles">角色</TabsTrigger>
         <TabsTrigger value="grants">数据授权</TabsTrigger>
         <TabsTrigger value="sessions">会话</TabsTrigger>
+        <TabsTrigger value="artifacts">产物</TabsTrigger>
         <TabsTrigger value="quotas">额度</TabsTrigger>
         <TabsTrigger value="secrets">密钥</TabsTrigger>
-        <TabsTrigger value="artifacts">产物 ACL</TabsTrigger>
         <TabsTrigger value="audit">审计</TabsTrigger>
       </TabsList>
 
@@ -77,15 +338,43 @@ defineProps<AdminManagementTabProps>()
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
       <Card class="min-h-0 flex-1">
-        <CardHeader class="flex flex-row items-center justify-between gap-3">
+        <CardHeader class="flex min-h-8 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <CardTitle class="text-lg">用户</CardTitle>
-          <Button
-            size="sm"
-            @click="users.openAddUserDialog"
-          >
-            <UserPlusIcon data-icon="inline-start" />
-            新增用户
-          </Button>
+          <div class="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto">
+            <Select v-model="userStatusFilter">
+              <SelectTrigger
+                class="w-full sm:w-32"
+                size="sm"
+                aria-label="用户状态"
+              >
+                <SelectValue placeholder="全部状态" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="all">全部状态</SelectItem>
+                  <SelectItem value="enabled">启用</SelectItem>
+                  <SelectItem value="disabled">禁用</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <div class="relative w-full sm:w-64">
+              <SearchIcon class="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                v-model="userSearchKeyword"
+                class="h-8 pl-8"
+                placeholder="搜索 ID / 姓名 / 邮箱"
+                aria-label="搜索用户"
+              />
+            </div>
+            <Button
+              class="shrink-0"
+              size="sm"
+              @click="users.openAddUserDialog"
+            >
+              <UserPlusIcon data-icon="inline-start" />
+              新增用户
+            </Button>
+          </div>
         </CardHeader>
         <CardContent class="min-h-0 flex-1 overflow-auto">
           <Table>
@@ -94,33 +383,33 @@ defineProps<AdminManagementTabProps>()
                 <TableHead>User ID</TableHead>
                 <TableHead>姓名</TableHead>
                 <TableHead>部门</TableHead>
-                <TableHead>角色</TableHead>
-                <TableHead>直接授权</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead>最近活跃</TableHead>
-                <TableHead class="text-right">操作</TableHead>
+                <TableHead class="text-center">角色</TableHead>
+                <TableHead class="text-center">直接授权</TableHead>
+                <TableHead class="text-center">状态</TableHead>
+                <TableHead class="text-center">最近活跃</TableHead>
+                <TableHead class="pr-6 text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               <TableRow
-                v-for="user in users.users.value"
+                v-for="user in filteredUsers"
                 :key="user.user_id"
               >
                 <TableCell class="font-medium">{{ user.user_id }}</TableCell>
                 <TableCell>{{ user.display_name || "-" }}</TableCell>
                 <TableCell>{{ user.department || "-" }}</TableCell>
-                <TableCell>
+                <TableCell class="text-center">
                   <Badge variant="outline">{{ user.role_count }}</Badge>
                 </TableCell>
-                <TableCell>
+                <TableCell class="text-center">
                   <Badge variant="outline">{{ user.direct_datasource_grant_count }}</Badge>
                 </TableCell>
-                <TableCell>
+                <TableCell class="text-center">
                   <Badge :variant="user.enabled ? 'default' : 'secondary'">
                     {{ user.enabled ? "启用" : "禁用" }}
                   </Badge>
                 </TableCell>
-                <TableCell>{{ formatOptionalDate(user.last_seen_at || user.updated_at || user.created_at) }}</TableCell>
+                <TableCell class="text-center">{{ formatOptionalDate(user.last_seen_at || user.updated_at || user.created_at) }}</TableCell>
                 <TableCell>
                   <div class="flex justify-end gap-2">
                     <Button
@@ -142,11 +431,29 @@ defineProps<AdminManagementTabProps>()
                     <Button
                       variant="outline"
                       size="sm"
-                      @click="users.setUserEnabled(user, !user.enabled)"
+                      :disabled="Boolean(userDisableBlockedReason(user))"
+                      :title="userDisableBlockedReason(user) ?? undefined"
+                      @click="requestSetUserEnabled(user, !user.enabled)"
                     >
+                      <UserXIcon
+                        v-if="user.enabled"
+                        data-icon="inline-start"
+                      />
+                      <UserCheckIcon
+                        v-else
+                        data-icon="inline-start"
+                      />
                       {{ user.enabled ? "禁用" : "启用" }}
                     </Button>
                   </div>
+                </TableCell>
+              </TableRow>
+              <TableRow v-if="filteredUsers.length === 0">
+                <TableCell
+                  colspan="8"
+                  class="h-24 text-center text-sm text-muted-foreground"
+                >
+                  {{ users.users.value.length === 0 ? "暂无用户" : "没有匹配的用户" }}
                 </TableCell>
               </TableRow>
             </TableBody>
@@ -160,15 +467,43 @@ defineProps<AdminManagementTabProps>()
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
       <Card class="min-h-0 flex-1">
-        <CardHeader class="flex flex-row items-center justify-between gap-3">
+        <CardHeader class="flex min-h-8 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <CardTitle class="text-lg">角色</CardTitle>
-          <Button
-            size="sm"
-            @click="roles.openCreateDialog"
-          >
-            <PlusIcon data-icon="inline-start" />
-            新增角色
-          </Button>
+          <div class="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto">
+            <Select v-model="roleTypeFilter">
+              <SelectTrigger
+                class="w-full sm:w-32"
+                size="sm"
+                aria-label="角色类型"
+              >
+                <SelectValue placeholder="全部类型" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="all">全部类型</SelectItem>
+                  <SelectItem value="built_in">内置</SelectItem>
+                  <SelectItem value="custom">自定义</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <div class="relative w-full sm:w-64">
+              <SearchIcon class="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                v-model="roleSearchKeyword"
+                class="h-8 pl-8"
+                placeholder="搜索 Role ID / 名称 / 权限"
+                aria-label="搜索角色"
+              />
+            </div>
+            <Button
+              class="shrink-0"
+              size="sm"
+              @click="roles.openCreateDialog"
+            >
+              <PlusIcon data-icon="inline-start" />
+              新增角色
+            </Button>
+          </div>
         </CardHeader>
         <CardContent class="min-h-0 flex-1 overflow-auto">
           <Table>
@@ -176,20 +511,20 @@ defineProps<AdminManagementTabProps>()
               <TableRow>
                 <TableHead>Role ID</TableHead>
                 <TableHead>名称</TableHead>
-                <TableHead>类型</TableHead>
+                <TableHead class="text-center">类型</TableHead>
                 <TableHead>权限</TableHead>
-                <TableHead>更新时间</TableHead>
-                <TableHead class="text-right">操作</TableHead>
+                <TableHead class="text-center">更新时间</TableHead>
+                <TableHead class="pr-6 text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               <TableRow
-                v-for="role in roles.filteredRoles.value"
+                v-for="role in filteredRoles"
                 :key="role.role_id"
               >
                 <TableCell class="font-medium">{{ role.role_id }}</TableCell>
                 <TableCell>{{ role.name }}</TableCell>
-                <TableCell>
+                <TableCell class="text-center">
                   <Badge :variant="role.built_in ? 'secondary' : 'outline'">
                     {{ role.built_in ? "内置" : "自定义" }}
                   </Badge>
@@ -214,7 +549,7 @@ defineProps<AdminManagementTabProps>()
                     -
                   </span>
                 </TableCell>
-                <TableCell>{{ formatOptionalDate(role.updated_at || role.created_at) }}</TableCell>
+                <TableCell class="text-center">{{ formatOptionalDate(role.updated_at || role.created_at) }}</TableCell>
                 <TableCell>
                   <div class="flex justify-end gap-2">
                     <Button
@@ -245,6 +580,14 @@ defineProps<AdminManagementTabProps>()
                   </div>
                 </TableCell>
               </TableRow>
+              <TableRow v-if="filteredRoles.length === 0">
+                <TableCell
+                  colspan="6"
+                  class="h-24 text-center text-sm text-muted-foreground"
+                >
+                  {{ roles.roles.value.length === 0 ? "暂无角色" : "没有匹配的角色" }}
+                </TableCell>
+              </TableRow>
             </TableBody>
           </Table>
         </CardContent>
@@ -256,15 +599,43 @@ defineProps<AdminManagementTabProps>()
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
       <Card class="min-h-0 flex-1">
-        <CardHeader class="flex flex-row items-center justify-between gap-3">
+        <CardHeader class="flex min-h-8 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <CardTitle class="text-lg">数据授权</CardTitle>
-          <Button
-            size="sm"
-            @click="overview.openCreateGrantDialog"
-          >
-            <PlusIcon data-icon="inline-start" />
-            新增授权
-          </Button>
+          <div class="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto">
+            <Select v-model="grantEffectFilter">
+              <SelectTrigger
+                class="w-full sm:w-32"
+                size="sm"
+                aria-label="授权效果"
+              >
+                <SelectValue placeholder="全部效果" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="all">全部效果</SelectItem>
+                  <SelectItem value="allow">allow</SelectItem>
+                  <SelectItem value="deny">deny</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <div class="relative w-full sm:w-64">
+              <SearchIcon class="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                v-model="grantSearchKeyword"
+                class="h-8 pl-8"
+                placeholder="搜索主体 / 数据源 / 范围"
+                aria-label="搜索数据授权"
+              />
+            </div>
+            <Button
+              class="shrink-0"
+              size="sm"
+              @click="overview.openCreateGrantDialog"
+            >
+              <PlusIcon data-icon="inline-start" />
+              新增授权
+            </Button>
+          </div>
         </CardHeader>
         <CardContent class="min-h-0 flex-1 overflow-auto">
           <Table>
@@ -272,26 +643,26 @@ defineProps<AdminManagementTabProps>()
               <TableRow>
                 <TableHead>主体</TableHead>
                 <TableHead>数据源</TableHead>
-                <TableHead>效果</TableHead>
+                <TableHead class="text-center">效果</TableHead>
                 <TableHead>范围</TableHead>
-                <TableHead>更新时间</TableHead>
-                <TableHead class="text-right">操作</TableHead>
+                <TableHead class="text-center">更新时间</TableHead>
+                <TableHead class="pr-6 text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               <TableRow
-                v-for="grant in overview.data.value.datasourceGrants"
+                v-for="grant in filteredGrants"
                 :key="grantKey(grant.subject_type, grant.subject_id, grant.datasource_key)"
               >
                 <TableCell class="font-medium">{{ grant.subject_type }} / {{ grant.subject_id }}</TableCell>
                 <TableCell>{{ grant.datasource_key }}</TableCell>
-                <TableCell>
+                <TableCell class="text-center">
                   <Badge :variant="grant.effect === 'allow' ? 'default' : 'destructive'">
                     {{ grant.effect }}
                   </Badge>
                 </TableCell>
                 <TableCell class="max-w-md truncate">{{ formatScope(grant.scope) }}</TableCell>
-                <TableCell>{{ formatOptionalDate(grant.updated_at || grant.created_at) }}</TableCell>
+                <TableCell class="text-center">{{ formatOptionalDate(grant.updated_at || grant.created_at) }}</TableCell>
                 <TableCell>
                   <div class="flex justify-end gap-2">
                     <Button
@@ -314,6 +685,14 @@ defineProps<AdminManagementTabProps>()
                   </div>
                 </TableCell>
               </TableRow>
+              <TableRow v-if="filteredGrants.length === 0">
+                <TableCell
+                  colspan="6"
+                  class="h-24 text-center text-sm text-muted-foreground"
+                >
+                  {{ overview.data.value.datasourceGrants.length === 0 ? "暂无数据授权" : "没有匹配的数据授权" }}
+                </TableCell>
+              </TableRow>
             </TableBody>
           </Table>
         </CardContent>
@@ -325,8 +704,35 @@ defineProps<AdminManagementTabProps>()
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
       <Card class="min-h-0 flex-1">
-        <CardHeader>
+        <CardHeader class="flex min-h-8 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <CardTitle class="text-lg">会话</CardTitle>
+          <div class="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto">
+            <Select v-model="sessionStateFilter">
+              <SelectTrigger
+                class="w-full sm:w-32"
+                size="sm"
+                aria-label="会话状态"
+              >
+                <SelectValue placeholder="全部状态" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="all">全部状态</SelectItem>
+                  <SelectItem value="running">运行中</SelectItem>
+                  <SelectItem value="stopped">已停止</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <div class="relative w-full sm:w-64">
+              <SearchIcon class="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                v-model="sessionSearchKeyword"
+                class="h-8 pl-8"
+                placeholder="搜索 Session ID / 所有者"
+                aria-label="搜索会话"
+              />
+            </div>
+          </div>
         </CardHeader>
         <CardContent class="min-h-0 flex-1 overflow-auto">
           <Table>
@@ -334,26 +740,26 @@ defineProps<AdminManagementTabProps>()
               <TableRow>
                 <TableHead>Session ID</TableHead>
                 <TableHead>所有者</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead>事件数</TableHead>
-                <TableHead>更新时间</TableHead>
-                <TableHead class="text-right">操作</TableHead>
+                <TableHead class="text-center">状态</TableHead>
+                <TableHead class="text-center">事件数</TableHead>
+                <TableHead class="text-center">更新时间</TableHead>
+                <TableHead class="pr-6 text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               <TableRow
-                v-for="session in overview.data.value.sessions"
+                v-for="session in filteredSessions"
                 :key="session.session_id"
               >
                 <TableCell class="max-w-sm truncate font-medium">{{ session.session_id }}</TableCell>
                 <TableCell>{{ session.owner_user_id || "-" }}</TableCell>
-                <TableCell>
+                <TableCell class="text-center">
                   <Badge :variant="session.is_running ? 'default' : 'secondary'">
                     {{ session.status }}
                   </Badge>
                 </TableCell>
-                <TableCell>{{ session.event_count }}</TableCell>
-                <TableCell>{{ formatOptionalDate(session.updated_at || session.created_at) }}</TableCell>
+                <TableCell class="text-center">{{ session.event_count }}</TableCell>
+                <TableCell class="text-center">{{ formatOptionalDate(session.updated_at || session.created_at) }}</TableCell>
                 <TableCell>
                   <div class="flex justify-end gap-2">
                     <Button
@@ -385,6 +791,14 @@ defineProps<AdminManagementTabProps>()
                   </div>
                 </TableCell>
               </TableRow>
+              <TableRow v-if="filteredSessions.length === 0">
+                <TableCell
+                  colspan="6"
+                  class="h-24 text-center text-sm text-muted-foreground"
+                >
+                  {{ overview.data.value.sessions.length === 0 ? "暂无会话" : "没有匹配的会话" }}
+                </TableCell>
+              </TableRow>
             </TableBody>
           </Table>
         </CardContent>
@@ -396,15 +810,43 @@ defineProps<AdminManagementTabProps>()
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
       <Card class="min-h-0 flex-1">
-        <CardHeader class="flex flex-row items-center justify-between gap-3">
+        <CardHeader class="flex min-h-8 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <CardTitle class="text-lg">额度与用量</CardTitle>
-          <Button
-            size="sm"
-            @click="overview.openCreateQuotaDialog"
-          >
-            <PlusIcon data-icon="inline-start" />
-            新增额度
-          </Button>
+          <div class="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto">
+            <Select v-model="quotaStatusFilter">
+              <SelectTrigger
+                class="w-full sm:w-32"
+                size="sm"
+                aria-label="额度状态"
+              >
+                <SelectValue placeholder="全部状态" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="all">全部状态</SelectItem>
+                  <SelectItem value="enabled">启用</SelectItem>
+                  <SelectItem value="disabled">停用</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <div class="relative w-full sm:w-64">
+              <SearchIcon class="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                v-model="quotaSearchKeyword"
+                class="h-8 pl-8"
+                placeholder="搜索主体 / 资源"
+                aria-label="搜索额度"
+              />
+            </div>
+            <Button
+              class="shrink-0"
+              size="sm"
+              @click="overview.openCreateQuotaDialog"
+            >
+              <PlusIcon data-icon="inline-start" />
+              新增额度
+            </Button>
+          </div>
         </CardHeader>
         <CardContent class="min-h-0 flex-1 overflow-auto">
           <Table>
@@ -412,26 +854,26 @@ defineProps<AdminManagementTabProps>()
               <TableRow>
                 <TableHead>主体</TableHead>
                 <TableHead>资源</TableHead>
-                <TableHead>额度</TableHead>
-                <TableHead>已用</TableHead>
-                <TableHead>窗口</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead class="text-right">操作</TableHead>
+                <TableHead class="text-center">额度</TableHead>
+                <TableHead class="text-center">已用</TableHead>
+                <TableHead class="text-center">窗口</TableHead>
+                <TableHead class="text-center">状态</TableHead>
+                <TableHead class="pr-6 text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               <TableRow
-                v-for="quota in overview.data.value.quotas"
+                v-for="quota in filteredQuotas"
                 :key="`${quota.subject_type}:${quota.subject_id}:${quota.resource}`"
               >
                 <TableCell class="font-medium">{{ quota.subject_type }} / {{ quota.subject_id || "*" }}</TableCell>
                 <TableCell>{{ quota.resource }}</TableCell>
-                <TableCell>{{ quota.limit }}</TableCell>
-                <TableCell>
+                <TableCell class="text-center">{{ quota.limit }}</TableCell>
+                <TableCell class="text-center">
                   {{ usageByKey.get(`${quota.subject_type}:${quota.subject_id}:${quota.resource}`)?.used ?? 0 }}
                 </TableCell>
-                <TableCell>{{ quota.window_seconds }}s</TableCell>
-                <TableCell>
+                <TableCell class="text-center">{{ quota.window_seconds }}s</TableCell>
+                <TableCell class="text-center">
                   <Badge :variant="quota.enabled ? 'default' : 'secondary'">
                     {{ quota.enabled ? "启用" : "停用" }}
                   </Badge>
@@ -458,12 +900,12 @@ defineProps<AdminManagementTabProps>()
                   </div>
                 </TableCell>
               </TableRow>
-              <TableRow v-if="overview.data.value.quotas.length === 0">
+              <TableRow v-if="filteredQuotas.length === 0">
                 <TableCell
                   colspan="7"
                   class="h-24 text-center text-sm text-muted-foreground"
                 >
-                  暂无额度配置
+                  {{ overview.data.value.quotas.length === 0 ? "暂无额度配置" : "没有匹配的额度配置" }}
                 </TableCell>
               </TableRow>
             </TableBody>
@@ -477,37 +919,65 @@ defineProps<AdminManagementTabProps>()
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
       <Card class="min-h-0 flex-1">
-        <CardHeader class="flex flex-row items-center justify-between gap-3">
+        <CardHeader class="flex min-h-8 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <CardTitle class="text-lg">密钥引用</CardTitle>
-          <Button
-            size="sm"
-            @click="overview.openCreateSecretDialog"
-          >
-            <KeyRoundIcon data-icon="inline-start" />
-            新增密钥
-          </Button>
+          <div class="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto">
+            <Select v-model="secretStatusFilter">
+              <SelectTrigger
+                class="w-full sm:w-32"
+                size="sm"
+                aria-label="密钥状态"
+              >
+                <SelectValue placeholder="全部状态" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="all">全部状态</SelectItem>
+                  <SelectItem value="enabled">启用</SelectItem>
+                  <SelectItem value="disabled">停用</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <div class="relative w-full sm:w-64">
+              <SearchIcon class="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                v-model="secretSearchKeyword"
+                class="h-8 pl-8"
+                placeholder="搜索名称 / Provider / 说明"
+                aria-label="搜索密钥"
+              />
+            </div>
+            <Button
+              class="shrink-0"
+              size="sm"
+              @click="overview.openCreateSecretDialog"
+            >
+              <KeyRoundIcon data-icon="inline-start" />
+              新增密钥
+            </Button>
+          </div>
         </CardHeader>
         <CardContent class="min-h-0 flex-1 overflow-auto">
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>名称</TableHead>
-                <TableHead>Provider</TableHead>
+                <TableHead class="text-center">Provider</TableHead>
                 <TableHead>引用</TableHead>
-                <TableHead>状态</TableHead>
+                <TableHead class="text-center">状态</TableHead>
                 <TableHead>说明</TableHead>
-                <TableHead class="text-right">操作</TableHead>
+                <TableHead class="pr-6 text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               <TableRow
-                v-for="secret in overview.data.value.secrets"
+                v-for="secret in filteredSecrets"
                 :key="secret.name"
               >
                 <TableCell class="font-medium">{{ secret.name }}</TableCell>
-                <TableCell>{{ secret.provider }}</TableCell>
+                <TableCell class="text-center">{{ secret.provider }}</TableCell>
                 <TableCell>{{ secret.ref_hint }}</TableCell>
-                <TableCell>
+                <TableCell class="text-center">
                   <Badge :variant="secret.enabled ? 'default' : 'secondary'">
                     {{ secret.enabled ? "启用" : "停用" }}
                   </Badge>
@@ -535,12 +1005,12 @@ defineProps<AdminManagementTabProps>()
                   </div>
                 </TableCell>
               </TableRow>
-              <TableRow v-if="overview.data.value.secrets.length === 0">
+              <TableRow v-if="filteredSecrets.length === 0">
                 <TableCell
                   colspan="6"
                   class="h-24 text-center text-sm text-muted-foreground"
                 >
-                  暂无密钥引用
+                  {{ overview.data.value.secrets.length === 0 ? "暂无密钥引用" : "没有匹配的密钥引用" }}
                 </TableCell>
               </TableRow>
             </TableBody>
@@ -554,33 +1024,60 @@ defineProps<AdminManagementTabProps>()
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
       <Card class="min-h-0 flex-1">
-        <CardHeader>
-          <CardTitle class="text-lg">产物 ACL</CardTitle>
+        <CardHeader class="flex min-h-8 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <CardTitle class="text-lg">产物</CardTitle>
+          <div class="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto">
+            <Select v-model="artifactTypeFilter">
+              <SelectTrigger
+                class="w-full sm:w-32"
+                size="sm"
+                aria-label="产物类型"
+              >
+                <SelectValue placeholder="全部类型" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="all">全部类型</SelectItem>
+                  <SelectItem value="dashboard">Dashboard</SelectItem>
+                  <SelectItem value="report">Report</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <div class="relative w-full sm:w-64">
+              <SearchIcon class="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                v-model="artifactSearchKeyword"
+                class="h-8 pl-8"
+                placeholder="搜索 Slug / 名称 / 数据源"
+                aria-label="搜索产物"
+              />
+            </div>
+          </div>
         </CardHeader>
         <CardContent class="min-h-0 flex-1 overflow-auto">
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>类型</TableHead>
+                <TableHead class="text-center">类型</TableHead>
                 <TableHead>Slug</TableHead>
                 <TableHead>名称</TableHead>
                 <TableHead>数据源</TableHead>
-                <TableHead>更新时间</TableHead>
-                <TableHead class="text-right">操作</TableHead>
+                <TableHead class="text-center">更新时间</TableHead>
+                <TableHead class="pr-6 text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               <TableRow
-                v-for="artifact in overview.data.value.artifacts"
+                v-for="artifact in filteredArtifacts"
                 :key="overview.artifactKey(artifact)"
               >
-                <TableCell>
+                <TableCell class="text-center">
                   <Badge variant="outline">{{ artifact.artifact_type }}</Badge>
                 </TableCell>
                 <TableCell class="font-medium">{{ artifact.manifest.slug }}</TableCell>
                 <TableCell>{{ artifact.manifest.name }}</TableCell>
                 <TableCell>{{ artifact.manifest.datasources?.join(", ") || "-" }}</TableCell>
-                <TableCell>{{ formatOptionalDate(artifact.manifest.updated_at || artifact.manifest.created_at) }}</TableCell>
+                <TableCell class="text-center">{{ formatOptionalDate(artifact.manifest.updated_at || artifact.manifest.created_at) }}</TableCell>
                 <TableCell class="text-right">
                   <Button
                     variant="outline"
@@ -590,6 +1087,14 @@ defineProps<AdminManagementTabProps>()
                     <ShieldCheckIcon data-icon="inline-start" />
                     ACL
                   </Button>
+                </TableCell>
+              </TableRow>
+              <TableRow v-if="filteredArtifacts.length === 0">
+                <TableCell
+                  colspan="6"
+                  class="h-24 text-center text-sm text-muted-foreground"
+                >
+                  {{ overview.data.value.artifacts.length === 0 ? "暂无产物" : "没有匹配的产物" }}
                 </TableCell>
               </TableRow>
             </TableBody>
@@ -603,213 +1108,139 @@ defineProps<AdminManagementTabProps>()
       class="-m-1 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-1"
     >
       <Card class="flex min-h-0 min-w-0 flex-1 flex-col">
-        <CardContent class="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
-          <FieldGroup class="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-8 2xl:grid-cols-9">
-            <Field class="gap-1">
-              <FieldLabel
-                for="audit-user-id"
-                class="sr-only"
+        <CardHeader class="flex min-h-8 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <CardTitle class="text-lg">审计</CardTitle>
+          <div class="flex w-full flex-col gap-2 sm:flex-row sm:items-center lg:w-auto">
+            <Select v-model="audits.decisionFilterValue.value">
+              <SelectTrigger
+                class="w-full sm:w-32"
+                size="sm"
+                aria-label="审计决策"
               >
-                用户
-              </FieldLabel>
+                <SelectValue placeholder="全部决策" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value="__all__">全部决策</SelectItem>
+                  <SelectItem value="allow">allow</SelectItem>
+                  <SelectItem value="deny">deny</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Select v-model="audits.limitValue.value">
+              <SelectTrigger
+                class="w-full sm:w-28"
+                size="sm"
+                aria-label="审计每页数量"
+              >
+                <SelectValue placeholder="每页" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem
+                    v-for="limitOption in auditLogLimitOptions"
+                    :key="limitOption"
+                    :value="String(limitOption)"
+                  >
+                    {{ limitOption }} 条
+                  </SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <Popover v-model:open="auditDateRangeOpen">
+              <PopoverTrigger as-child>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  class="w-full justify-start sm:w-56"
+                  aria-label="审计日期范围"
+                >
+                  <CalendarIcon data-icon="inline-start" />
+                  <span :class="{ 'text-muted-foreground': !hasAuditDateRange }">
+                    {{ auditDateRangeLabel }}
+                  </span>
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent
+                class="w-auto gap-0 rounded-lg p-0"
+                align="end"
+              >
+                <RangeCalendar
+                  v-model="auditDateRange"
+                  :number-of-months="1"
+                />
+                <Separator />
+                <div class="flex items-center justify-end gap-2 px-3 py-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    :disabled="!hasAuditDateRange"
+                    @click="clearAuditDateRange"
+                  >
+                    清除
+                  </Button>
+                  <Button
+                    size="sm"
+                    @click="auditDateRangeOpen = false"
+                  >
+                    完成
+                  </Button>
+                </div>
+              </PopoverContent>
+            </Popover>
+            <div class="relative w-full sm:w-64">
+              <SearchIcon class="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
-                id="audit-user-id"
                 v-model="audits.searchForm.value.user_id"
-                placeholder="用户"
+                class="h-8 pl-8"
+                placeholder="搜索用户 ID"
+                aria-label="搜索审计用户"
                 @keydown.enter.prevent="requestAuditSearch"
               />
-            </Field>
-            <Field class="gap-1">
-              <FieldLabel
-                for="audit-request-id"
-                class="sr-only"
-              >
-                Request ID
-              </FieldLabel>
-              <Input
-                id="audit-request-id"
-                v-model="audits.searchForm.value.request_id"
-                placeholder="Request ID"
-                @keydown.enter.prevent="requestAuditSearch"
-              />
-            </Field>
-            <Field class="gap-1">
-              <FieldLabel
-                for="audit-action"
-                class="sr-only"
-              >
-                动作
-              </FieldLabel>
-              <Input
-                id="audit-action"
-                v-model="audits.searchForm.value.action"
-                placeholder="动作"
-                @keydown.enter.prevent="requestAuditSearch"
-              />
-            </Field>
-            <Field class="gap-1">
-              <FieldLabel
-                for="audit-resource-type"
-                class="sr-only"
-              >
-                资源类型
-              </FieldLabel>
-              <Input
-                id="audit-resource-type"
-                v-model="audits.searchForm.value.resource_type"
-                placeholder="资源类型"
-                @keydown.enter.prevent="requestAuditSearch"
-              />
-            </Field>
-            <Field class="gap-1">
-              <FieldLabel
-                for="audit-resource-id"
-                class="sr-only"
-              >
-                资源 ID
-              </FieldLabel>
-              <Input
-                id="audit-resource-id"
-                v-model="audits.searchForm.value.resource_id"
-                placeholder="资源 ID"
-                @keydown.enter.prevent="requestAuditSearch"
-              />
-            </Field>
-            <Field class="gap-1">
-              <FieldLabel
-                for="audit-decision"
-                class="sr-only"
-              >
-                决策
-              </FieldLabel>
-              <Select v-model="audits.decisionFilterValue.value">
-                <SelectTrigger
-                  id="audit-decision"
-                  class="w-full"
-                >
-                  <SelectValue placeholder="决策" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value="__all__">全部决策</SelectItem>
-                    <SelectItem value="allow">allow</SelectItem>
-                    <SelectItem value="deny">deny</SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field class="gap-1">
-              <FieldLabel
-                for="audit-limit"
-                class="sr-only"
-              >
-                每页数量
-              </FieldLabel>
-              <Select v-model="audits.limitValue.value">
-                <SelectTrigger
-                  id="audit-limit"
-                  class="w-full"
-                >
-                  <SelectValue placeholder="每页" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem
-                      v-for="limitOption in auditLogLimitOptions"
-                      :key="limitOption"
-                      :value="String(limitOption)"
-                    >
-                      {{ limitOption }} 条
-                    </SelectItem>
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field class="gap-1 md:col-span-2 2xl:col-span-1">
-              <FieldLabel
-                for="audit-created-after"
-                class="sr-only"
-              >
-                起始时间
-              </FieldLabel>
-              <Input
-                id="audit-created-after"
-                v-model="audits.searchForm.value.created_after"
-                type="datetime-local"
-              />
-            </Field>
-            <Field class="gap-1 md:col-span-2 2xl:col-span-1">
-              <FieldLabel
-                for="audit-created-before"
-                class="sr-only"
-              >
-                结束时间
-              </FieldLabel>
-              <Input
-                id="audit-created-before"
-                v-model="audits.searchForm.value.created_before"
-                type="datetime-local"
-              />
-            </Field>
-          </FieldGroup>
-
-          <div class="flex flex-wrap items-center justify-between gap-3">
-            <div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-              <span>第 {{ audits.currentPage.value }} 页，本页 {{ audits.total.value }} 条</span>
-              <Badge
-                v-if="audits.hasMore.value"
-                variant="outline"
-              >
-                还有更多
-              </Badge>
-              <Badge
-                v-if="audits.hasActiveFilters.value"
-                variant="secondary"
-              >
-                {{ audits.activeFilterCount.value }} 个筛选条件
-              </Badge>
             </div>
-            <div class="flex flex-wrap gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                :disabled="audits.exporting.value"
-                @click="audits.exportLogs"
-              >
-                <DownloadIcon data-icon="inline-start" />
-                导出 CSV
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                :disabled="audits.loading.value"
-                @click="requestAuditReset"
-              >
-                重置
-              </Button>
-              <Button
-                size="sm"
-                :disabled="audits.loading.value"
-                @click="requestAuditSearch"
-              >
-                <SearchIcon data-icon="inline-start" />
-                查询
-              </Button>
-            </div>
+            <Button
+              class="shrink-0"
+              size="sm"
+              :disabled="audits.loading.value"
+              @click="requestAuditSearch"
+            >
+              <SearchIcon data-icon="inline-start" />
+              查询
+            </Button>
+            <Button
+              class="shrink-0"
+              variant="outline"
+              size="sm"
+              :disabled="audits.loading.value"
+              @click="requestAuditReset"
+            >
+              重置
+            </Button>
+            <Button
+              class="shrink-0"
+              variant="outline"
+              size="sm"
+              :disabled="audits.exporting.value"
+              @click="audits.exportLogs"
+            >
+              <DownloadIcon data-icon="inline-start" />
+              导出 CSV
+            </Button>
           </div>
-
+        </CardHeader>
+        <CardContent class="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
           <div class="min-h-0 flex-1 overflow-auto">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>时间</TableHead>
+                  <TableHead class="text-center">时间</TableHead>
                   <TableHead>日志 ID</TableHead>
                   <TableHead>用户</TableHead>
-                  <TableHead>动作</TableHead>
+                  <TableHead class="text-center">动作</TableHead>
                   <TableHead>资源</TableHead>
-                  <TableHead>决策</TableHead>
+                  <TableHead class="text-center">决策</TableHead>
                   <TableHead>原因</TableHead>
-                  <TableHead class="text-right">操作</TableHead>
+                  <TableHead class="pr-6 text-right">操作</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -826,16 +1257,16 @@ defineProps<AdminManagementTabProps>()
                     v-for="(log, index) in audits.logs.value"
                     :key="audits.formatLogKey(log, index)"
                   >
-                    <TableCell>{{ formatOptionalDate(log.created_at) }}</TableCell>
+                    <TableCell class="text-center">{{ formatOptionalDate(log.created_at) }}</TableCell>
                     <TableCell class="font-mono text-xs">{{ log.id ?? "-" }}</TableCell>
                     <TableCell>{{ log.user_id || "-" }}</TableCell>
-                    <TableCell>
+                    <TableCell class="text-center">
                       <Badge :variant="audits.getActionVariant(log.action)">
                         {{ audits.getActionText(log.action) }}
                       </Badge>
                     </TableCell>
                     <TableCell>{{ log.resource_type }} / {{ log.resource_id || "-" }}</TableCell>
-                    <TableCell>
+                    <TableCell class="text-center">
                       <Badge :variant="log.decision === 'allow' ? 'default' : 'destructive'">
                         {{ log.decision }}
                       </Badge>
@@ -865,7 +1296,22 @@ defineProps<AdminManagementTabProps>()
             </Table>
           </div>
 
-          <div class="flex flex-wrap items-center justify-end gap-2">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+              <span>第 {{ audits.currentPage.value }} 页，本页 {{ audits.total.value }} 条</span>
+              <Badge
+                v-if="audits.hasMore.value"
+                variant="outline"
+              >
+                还有更多
+              </Badge>
+              <Badge
+                v-if="audits.hasActiveFilters.value"
+                variant="secondary"
+              >
+                {{ audits.activeFilterCount.value }} 个筛选条件
+              </Badge>
+            </div>
             <div class="flex flex-wrap gap-2">
               <Button
                 variant="outline"

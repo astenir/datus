@@ -137,6 +137,22 @@ describe("useUserManager", () => {
     expect(enableUser).toHaveBeenCalledWith("alice");
   });
 
+  it("shows backend safety errors when disabling protected users", async () => {
+    disableUser.mockResolvedValue({
+      success: false,
+      errorCode: "USER_DISABLE_ADMIN_FORBIDDEN",
+      errorMessage: "Cannot disable an enterprise administrator.",
+    });
+
+    const { useUserManager } = await import("./useUserManager");
+    const manager = useUserManager();
+
+    await manager.setUserEnabled(user, false);
+
+    expect(toastError).toHaveBeenCalledWith("不能禁用企业管理员；请先移除管理员角色");
+    expect(listUsers).not.toHaveBeenCalled();
+  });
+
   it("requires a user id before upserting a user", async () => {
     const { useUserManager } = await import("./useUserManager");
     const manager = useUserManager();
@@ -237,6 +253,29 @@ describe("useUserManager", () => {
     expect(manager.userDialogMode.value).toBe("create");
     expect(manager.editingUser.value).toBeNull();
     expect(listUsers).toHaveBeenCalled();
+  });
+
+  it("keeps the edit dialog open when backend blocks disabling a protected user", async () => {
+    getUserRoles.mockResolvedValue({ data: { user_id: "alice", role_ids: ["viewer"] } });
+    upsertUser.mockResolvedValue({
+      success: false,
+      errorCode: "USER_DISABLE_SELF_FORBIDDEN",
+      errorMessage: "Cannot disable the current user.",
+    });
+
+    const { useUserManager } = await import("./useUserManager");
+    const manager = useUserManager();
+    await manager.openEditUserDialog(user);
+    manager.newUserForm.value = {
+      ...manager.newUserForm.value,
+      enabled: false,
+    };
+
+    await manager.saveUser();
+
+    expect(toastError).toHaveBeenCalledWith("不能禁用当前登录用户");
+    expect(updateUserRoles).not.toHaveBeenCalled();
+    expect(manager.showAddUserDialog.value).toBe(true);
   });
 
   it("keeps the edit dialog open while role assignment is loading", async () => {

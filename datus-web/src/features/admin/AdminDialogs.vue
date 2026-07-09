@@ -31,12 +31,15 @@ import { Textarea } from "@/components/ui/textarea"
 import AdminAclMultiCombobox from "@/features/admin/AdminAclMultiCombobox.vue"
 import AdminRoleDropdown from "@/features/admin/AdminRoleDropdown.vue"
 import DatasourceGrantScopePicker from "@/features/admin/DatasourceGrantScopePicker.vue"
+import { usePermission } from "@/composables/usePermission"
 import type { AdminAclSelectOption, AdminDialogProps } from "@/features/admin/types"
+import { userDisableBlockedReason } from "@/features/admin/user-disable-guard"
 import { permissionBadgeItems, permissionRiskLabel } from "@/lib/permission-labels"
 import type { PermissionOptionGroup, PermissionPresetGroup, PermissionRisk } from "@/lib/permission-labels"
 import { quotaResourceOptionFor, quotaResourceOptions } from "@/lib/quota-options"
 
 const props = defineProps<AdminDialogProps>()
+const permission = usePermission()
 
 const quotaSubjectTypeOptions = [
   { value: "user", label: "用户" },
@@ -127,6 +130,12 @@ const effectiveQuotaResourceOptions = computed(() => {
     },
     ...quotaResourceOptions,
   ]
+})
+const currentUserId = computed(() => permission.permissions.value?.user_id.trim() ?? "")
+const userEditDisableBlockedReason = computed(() => {
+  const editingUser = props.users.editingUser.value
+  if (!props.users.isEditingUser.value || !editingUser?.enabled) return null
+  return userDisableBlockedReason(editingUser, props.roles.roles.value, currentUserId.value)
 })
 const selectedQuotaResourceDescription = computed(() => {
   const currentResource = props.overview.quotaForm.value.resource.trim()
@@ -747,12 +756,19 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
         <Field
           orientation="horizontal"
           class="items-center justify-between pr-3"
+          :data-disabled="Boolean(userEditDisableBlockedReason) || undefined"
         >
           <div class="flex flex-col gap-1">
             <FieldLabel>启用用户</FieldLabel>
-            <FieldDescription>禁用用户仍会保留元数据和审计关联。</FieldDescription>
+            <FieldDescription>
+              {{ userEditDisableBlockedReason ?? "禁用用户仍会保留元数据和审计关联。" }}
+            </FieldDescription>
           </div>
-          <Switch v-model="users.newUserForm.value.enabled" />
+          <Switch
+            v-model="users.newUserForm.value.enabled"
+            :disabled="Boolean(userEditDisableBlockedReason)"
+            :title="userEditDisableBlockedReason ?? undefined"
+          />
         </Field>
       </FieldGroup>
       <DialogFooter>

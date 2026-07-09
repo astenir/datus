@@ -247,6 +247,95 @@ def test_admin_users_enabled_filter_and_toggle(monkeypatch):
     assert audit_sink.events[-1].metadata["operation"] == "enable_admin_user"
 
 
+def test_admin_user_disable_rejects_current_user(monkeypatch):
+    user_store = InMemoryEnterpriseUserStore()
+    audit_sink = CollectingAuditSink()
+    asyncio.run(user_store.upsert_user(user_id="operator", display_name="Operator", email=None, enabled=True))
+    _install_extensions(monkeypatch, user_store, audit_sink)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.users"})
+
+    with _client(ctx) as client:
+        response = client.post("/api/v1/admin/users/operator/disable")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert response.json()["errorCode"] == "USER_DISABLE_SELF_FORBIDDEN"
+    assert asyncio.run(user_store.get_user("operator"))["enabled"] is True
+    assert audit_sink.events[-1].decision == "deny"
+    assert audit_sink.events[-1].reason == "cannot disable current user"
+
+
+def test_admin_user_disable_rejects_enterprise_admin(monkeypatch):
+    user_store = InMemoryEnterpriseUserStore()
+    role_store = InMemoryEnterpriseRoleStore()
+    audit_sink = CollectingAuditSink()
+    asyncio.run(user_store.upsert_user(user_id="alice", display_name="Alice", email=None, enabled=True))
+    asyncio.run(
+        role_store.upsert_role(
+            role_id="enterprise_admin",
+            name="Enterprise Admin",
+            permissions=["module.admin.users"],
+            built_in=True,
+        )
+    )
+    asyncio.run(role_store.set_user_roles("alice", ["enterprise_admin"]))
+    _install_extensions(monkeypatch, user_store, audit_sink, role_store=role_store)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.users"})
+
+    with _client(ctx) as client:
+        response = client.post("/api/v1/admin/users/alice/disable")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert response.json()["errorCode"] == "USER_DISABLE_ADMIN_FORBIDDEN"
+    assert asyncio.run(user_store.get_user("alice"))["enabled"] is True
+    assert audit_sink.events[-1].decision == "deny"
+    assert audit_sink.events[-1].reason == "cannot disable enterprise administrator"
+
+
+def test_admin_user_upsert_rejects_disabling_current_user(monkeypatch):
+    user_store = InMemoryEnterpriseUserStore()
+    audit_sink = CollectingAuditSink()
+    asyncio.run(user_store.upsert_user(user_id="operator", display_name="Operator", email=None, enabled=True))
+    _install_extensions(monkeypatch, user_store, audit_sink)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.users"})
+
+    with _client(ctx) as client:
+        response = client.put("/api/v1/admin/users/operator", json={"display_name": "Operator", "enabled": False})
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert response.json()["errorCode"] == "USER_DISABLE_SELF_FORBIDDEN"
+    assert asyncio.run(user_store.get_user("operator"))["enabled"] is True
+    assert audit_sink.events[-1].metadata["operation"] == "upsert_admin_user"
+
+
+def test_admin_user_upsert_rejects_disabling_enterprise_admin(monkeypatch):
+    user_store = InMemoryEnterpriseUserStore()
+    role_store = InMemoryEnterpriseRoleStore()
+    audit_sink = CollectingAuditSink()
+    asyncio.run(user_store.upsert_user(user_id="alice", display_name="Alice", email=None, enabled=True))
+    asyncio.run(
+        role_store.upsert_role(
+            role_id="analyst-admin",
+            name="Analyst Admin",
+            permissions=["module.admin.audit"],
+        )
+    )
+    asyncio.run(role_store.set_user_roles("alice", ["analyst-admin"]))
+    _install_extensions(monkeypatch, user_store, audit_sink, role_store=role_store)
+    ctx = AppContext(user_id="operator", permissions={"module.admin.users"})
+
+    with _client(ctx) as client:
+        response = client.put("/api/v1/admin/users/alice", json={"display_name": "Alice", "enabled": False})
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert response.json()["errorCode"] == "USER_DISABLE_ADMIN_FORBIDDEN"
+    assert asyncio.run(user_store.get_user("alice"))["enabled"] is True
+    assert audit_sink.events[-1].metadata["operation"] == "upsert_admin_user"
+
+
 @pytest.mark.asyncio
 async def test_admin_user_upsert_returns_success_when_post_write_audit_fails(monkeypatch):
     user_store = InMemoryEnterpriseUserStore()

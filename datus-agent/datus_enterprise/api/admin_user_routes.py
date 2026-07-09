@@ -210,6 +210,17 @@ async def upsert_admin_user(
             reason="user read failed",
         )
         return _user_error("USER_READ_FAILED", "User read failed.")
+
+    if before is not None and bool(before.get("enabled", True)) and not body.enabled:
+        blocked = await _deny_user_disable_if_protected(
+            ctx,
+            user_id=user_id,
+            operation="upsert_admin_user",
+            before=before,
+        )
+        if blocked is not None:
+            return blocked
+
     try:
         record = await store.upsert_user(
             user_id=user_id,
@@ -298,6 +309,11 @@ async def _set_user_enabled(
         await _audit_user_mutation(ctx, user_id=user_id, operation=operation, decision="deny", reason="user not found")
         return _user_error("RESOURCE_NOT_FOUND", "User not found.")
 
+    if not enabled:
+        blocked = await _deny_user_disable_if_protected(ctx, user_id=user_id, operation=operation, before=before)
+        if blocked is not None:
+            return blocked
+
     try:
         record = await store.set_user_enabled(user_id, enabled)
     except Exception:
@@ -324,6 +340,50 @@ async def _set_user_enabled(
         new_summary=_summary_for_audit(summary),
     )
     return Result(success=True, data=summary)
+
+
+async def _deny_user_disable_if_protected(
+    ctx: AppContext,
+    *,
+    user_id: str,
+    operation: str,
+    before: dict[str, Any],
+) -> Result[AdminUserSummary] | None:
+    before_summary = _summary_from_record(before)
+    if ctx.user_id == user_id:
+        await _audit_user_mutation(
+            ctx,
+            user_id=user_id,
+            operation=operation,
+            decision="deny",
+            reason="cannot disable current user",
+            old_summary=_summary_for_audit(before_summary),
+        )
+        return _user_error("USER_DISABLE_SELF_FORBIDDEN", "Cannot disable the current user.")
+
+    try:
+        detail = await _detail_from_record(before)
+    except Exception:
+        await _audit_user_mutation(
+            ctx,
+            user_id=user_id,
+            operation=operation,
+            decision="deny",
+            reason="user admin permissions read failed",
+            old_summary=_summary_for_audit(before_summary),
+        )
+        return _user_error("USER_READ_FAILED", "User read failed.")
+    if _has_enterprise_admin_access(detail):
+        await _audit_user_mutation(
+            ctx,
+            user_id=user_id,
+            operation=operation,
+            decision="deny",
+            reason="cannot disable enterprise administrator",
+            old_summary=_summary_for_audit(before_summary),
+        )
+        return _user_error("USER_DISABLE_ADMIN_FORBIDDEN", "Cannot disable an enterprise administrator.")
+    return None
 
 
 async def _audit_user_mutation(
@@ -420,6 +480,23 @@ async def _list_summaries_from_records(records: list[dict[str, Any]]) -> list[Ad
         summary.role_count = len(role_ids)
         summary.direct_datasource_grant_count = direct_grant_counts.get(summary.user_id, 0)
     return summaries
+
+
+def _has_enterprise_admin_access(detail: AdminUserDetail) -> bool:
+    if "enterprise_admin" in detail.role_ids or "local_admin" in detail.role_ids:
+        return True
+    return any(_is_enterprise_admin_permission(permission) for permission in detail.effective_permissions)
+
+
+def _is_enterprise_admin_permission(permission: str) -> bool:
+    normalized = permission.strip()
+    return (
+        normalized == "*"
+        or normalized == "module.*"
+        or normalized == "module.admin"
+        or normalized == "module.admin.*"
+        or normalized.startswith("module.admin.")
+    )
 
 
 async def _detail_from_record(record: dict[str, Any]) -> AdminUserDetail:

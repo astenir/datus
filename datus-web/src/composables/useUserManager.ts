@@ -2,7 +2,14 @@ import { computed, ref, shallowRef } from "vue";
 import { toast } from "vue-sonner";
 
 import { adminRoleApi, adminUserApi } from "@/lib/api";
-import type { AdminUser, AdminUserDetail, AdminUserFormData, AdminUserSearchForm, AssignableRole } from "@/types/admin";
+import type {
+  AdminUser,
+  AdminUserDetail,
+  AdminUserFormData,
+  AdminUserSearchForm,
+  ApiResponse,
+  AssignableRole,
+} from "@/types/admin";
 
 export const userStatusOptions = [
   { value: "all", label: "全部状态" },
@@ -40,6 +47,18 @@ function userFormFromUser(user: AdminUser): AdminUserFormData {
     title: user.title ?? "",
     enabled: user.enabled,
   };
+}
+
+function userStatusFailureMessage(result: ApiResponse<AdminUser>, enabled: boolean): string {
+  if (result.errorCode === "USER_DISABLE_SELF_FORBIDDEN") return "不能禁用当前登录用户";
+  if (result.errorCode === "USER_DISABLE_ADMIN_FORBIDDEN") return "不能禁用企业管理员；请先移除管理员角色";
+  return result.errorMessage || (enabled ? "启用失败，请重试" : "禁用失败，请重试");
+}
+
+function userSaveFailureMessage(result: ApiResponse<AdminUser>): string {
+  if (result.errorCode === "USER_DISABLE_SELF_FORBIDDEN") return "不能禁用当前登录用户";
+  if (result.errorCode === "USER_DISABLE_ADMIN_FORBIDDEN") return "不能禁用企业管理员；请先移除管理员角色";
+  return result.errorMessage || "保存失败，请重试";
 }
 
 export function useUserManager() {
@@ -186,10 +205,12 @@ export function useUserManager() {
 
   async function setUserEnabled(user: AdminUser, enabled: boolean) {
     try {
-      if (enabled) {
-        await adminUserApi.enableUser(user.user_id);
-      } else {
-        await adminUserApi.disableUser(user.user_id);
+      const result = enabled
+        ? await adminUserApi.enableUser(user.user_id)
+        : await adminUserApi.disableUser(user.user_id);
+      if (result?.success === false) {
+        toast.error(userStatusFailureMessage(result, enabled));
+        return;
       }
       void loadUsers();
     } catch (err) {
@@ -249,7 +270,7 @@ export function useUserManager() {
 
     savingUser.value = true;
     try {
-      await adminUserApi.upsertUser(userId, {
+      const result = await adminUserApi.upsertUser(userId, {
         display_name: newUserForm.value.display_name.trim() || null,
         email: newUserForm.value.email.trim() || null,
         external_user_id: newUserForm.value.external_user_id.trim() || null,
@@ -257,6 +278,10 @@ export function useUserManager() {
         title: newUserForm.value.title.trim() || null,
         enabled: newUserForm.value.enabled,
       });
+      if (result?.success === false) {
+        toast.error(userSaveFailureMessage(result));
+        return;
+      }
       if (isEditingUser.value && roleAssignmentLoaded.value && !roleAssignmentError.value) {
         await adminUserApi.updateUserRoles(userId, selectedRoleIds.value);
       }
