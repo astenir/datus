@@ -771,6 +771,29 @@ class ObEnterpriseQuotaStore(_ObStoreBase):
             raise DatusException(ErrorCode.COMMON_UNKNOWN, message="Failed to persist enterprise quota.")
         return quotas[0]
 
+    async def delete_quota(self, *, subject_type: str, subject_id: str, resource: str) -> bool:
+        return await asyncio.to_thread(self._delete_quota_sync, subject_type, subject_id, resource)
+
+    def _delete_quota_sync(self, subject_type: str, subject_id: str, resource: str) -> bool:
+        self._ensure_database_and_schema_sync(_SCHEMA_SQL)
+        with self._pool.connection(database=self._config.database) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    DELETE FROM enterprise_quota_usage
+                    WHERE subject_type = %s AND subject_id = %s AND resource = %s
+                    """,
+                    (subject_type, subject_id, resource),
+                )
+                cursor.execute(
+                    """
+                    DELETE FROM enterprise_quotas
+                    WHERE subject_type = %s AND subject_id = %s AND resource = %s
+                    """,
+                    (subject_type, subject_id, resource),
+                )
+                return int(cursor.rowcount or 0) > 0
+
     async def list_usage(
         self,
         *,

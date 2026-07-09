@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel, Field
 
 from datus.api import deps
@@ -159,6 +159,74 @@ async def upsert_admin_quota(body: UpsertQuotaRequest, ctx: AdminQuotasCtx) -> R
     return Result(success=True, data=summary)
 
 
+@router.delete(
+    "/admin/quotas/{subject_type}/{subject_id}/{resource}",
+    response_model=Result[dict[str, bool]],
+    summary="Delete Admin Quota",
+    dependencies=[
+        Depends(_require_admin_quotas),
+        Depends(require_platform_active(operation="admin.quotas.delete", resource_type="quota")),
+    ],
+)
+async def delete_admin_quota(
+    subject_type: Annotated[str, Path(description="Quota subject type: global, user, or role.")],
+    subject_id: Annotated[str, Path(description="Quota subject id, or * for global quotas.")],
+    resource: Annotated[str, Path(description="Quota resource key.")],
+    ctx: AdminQuotasCtx,
+) -> Result[dict[str, bool]]:
+    """Delete one enterprise quota metadata record and its current usage counters."""
+
+    normalized = _normalize_quota_identity(subject_type=subject_type, subject_id=subject_id, resource=resource)
+    if isinstance(normalized, str):
+        await _audit_quota(ctx, operation="delete_admin_quota", decision="deny", reason=normalized)
+        return _quota_error(_quota_validation_error_code(normalized), normalized)
+
+    store = deps.get_enterprise_extensions().quota_store
+    if store is None:
+        await _audit_quota(ctx, operation="delete_admin_quota", decision="deny", reason="quota store unavailable")
+        return _quota_error("QUOTA_STORE_UNAVAILABLE", "Quota store is not configured.")
+
+    old_summary = None
+    try:
+        old_records = await store.list_quotas(
+            subject_type=normalized["subject_type"],
+            subject_id=normalized["subject_id"],
+            resource=normalized["resource"],
+        )
+        if old_records:
+            old_summary = _quota_summary_for_audit(_quota_summary_from_record(old_records[0]))
+        deleted = await store.delete_quota(**normalized)
+    except Exception:
+        await _audit_quota(
+            ctx,
+            operation="delete_admin_quota",
+            decision="deny",
+            reason="quota delete failed",
+            resource_id=_quota_resource_id(normalized),
+        )
+        return _quota_error("QUOTA_DELETE_FAILED", "Quota delete failed.")
+
+    if not deleted:
+        await _audit_quota(
+            ctx,
+            operation="delete_admin_quota",
+            decision="deny",
+            reason="quota not found",
+            resource_id=_quota_resource_id(normalized),
+        )
+        return _quota_error("QUOTA_NOT_FOUND", "Quota not found.")
+
+    await _audit_quota_best_effort(
+        ctx,
+        operation="delete_admin_quota",
+        decision="allow",
+        resource_id=_quota_resource_id(normalized),
+        old_summary=old_summary,
+        metadata={"deleted": True},
+    )
+    return Result(success=True, data={"deleted": True})
+
+
 @router.get("/admin/usage", response_model=Result[list[AdminUsageSummary]], summary="List Admin Usage")
 async def list_admin_usage(
     ctx: AdminQuotasCtx,
@@ -247,6 +315,25 @@ def _validate_optional_filters(
     if resource is not None and _normalize_resource(resource) is None:
         return "Quota resource is invalid."
     return None
+
+
+def _normalize_quota_identity(*, subject_type: Any, subject_id: Any, resource: Any) -> dict[str, str] | str:
+    normalized_subject_type = str(subject_type or "").strip()
+    if normalized_subject_type not in SUBJECT_TYPES:
+        return "Quota subject_type must be global, user, or role."
+    if normalized_subject_type == "global" and str(subject_id or "").strip() != "*":
+        return "Quota subject_id is invalid."
+    normalized_subject_id = _normalize_subject_id(normalized_subject_type, subject_id)
+    if normalized_subject_id is None:
+        return "Quota subject_id is invalid."
+    normalized_resource = _normalize_resource(resource)
+    if normalized_resource is None:
+        return "Quota resource is invalid."
+    return {
+        "subject_type": normalized_subject_type,
+        "subject_id": normalized_subject_id,
+        "resource": normalized_resource,
+    }
 
 
 def _normalize_subject_id(subject_type: str, raw_subject_id: Any) -> str | None:

@@ -111,6 +111,9 @@ class _QuotaStore:
     async def put_quota(self, *, subject_type, subject_id, resource, limit, window_seconds, enabled=True):
         return {}
 
+    async def delete_quota(self, *, subject_type, subject_id, resource):
+        return False
+
     async def list_usage(self, *, subject_type=None, subject_id=None, resource=None):
         return []
 

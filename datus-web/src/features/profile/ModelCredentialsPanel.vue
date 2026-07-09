@@ -271,7 +271,7 @@ onMounted(refresh)
             <FieldDescription>停用后聊天不会自动使用这个密钥。</FieldDescription>
           </div>
           <Switch
-            v-model:checked="manager.form.value.enabled"
+            v-model="manager.form.value.enabled"
             :disabled="manager.saving.value"
           />
         </Field>

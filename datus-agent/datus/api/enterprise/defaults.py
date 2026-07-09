@@ -748,6 +748,12 @@ class InMemoryEnterpriseQuotaStore:
         self._quotas[key] = record
         return _copy_quota_record(record)
 
+    async def delete_quota(self, *, subject_type: str, subject_id: str, resource: str) -> bool:
+        key = (subject_type, subject_id, resource)
+        deleted = self._quotas.pop(key, None) is not None
+        self._usage.pop(key, None)
+        return deleted
+
     async def list_usage(
         self,
         *,

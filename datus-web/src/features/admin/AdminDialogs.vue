@@ -722,7 +722,7 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
             <FieldLabel>启用用户</FieldLabel>
             <FieldDescription>禁用用户仍会保留元数据和审计关联。</FieldDescription>
           </div>
-          <Switch v-model:checked="users.newUserForm.value.enabled" />
+          <Switch v-model="users.newUserForm.value.enabled" />
         </Field>
       </FieldGroup>
       <DialogFooter>
@@ -1316,7 +1316,10 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
           class="items-center justify-between"
         >
           <FieldLabel>启用额度</FieldLabel>
-          <Switch v-model:checked="overview.quotaForm.value.enabled" />
+          <Switch
+            :model-value="overview.quotaForm.value.enabled"
+            @update:model-value="overview.setQuotaEnabled"
+          />
         </Field>
       </FieldGroup>
       <DialogFooter>
@@ -1399,7 +1402,7 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
           class="items-center justify-between"
         >
           <FieldLabel>启用密钥引用</FieldLabel>
-          <Switch v-model:checked="overview.secretForm.value.enabled" />
+          <Switch v-model="overview.secretForm.value.enabled" />
         </Field>
       </FieldGroup>
       <DialogFooter>

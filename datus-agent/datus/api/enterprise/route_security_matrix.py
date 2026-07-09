@@ -919,6 +919,13 @@ _add(
         MODULE_RBAC, QUOTA, AUDIT, PLATFORM_STATUS_GATE, MUTATION_EXECUTION, module_permission="module.admin.quotas"
     ),
 )
+_add(
+    "DELETE",
+    "/api/v1/admin/quotas/{subject_type}/{subject_id}/{resource}",
+    _policy(
+        MODULE_RBAC, QUOTA, AUDIT, PLATFORM_STATUS_GATE, MUTATION_EXECUTION, module_permission="module.admin.quotas"
+    ),
+)
 
 _add_many(
     "GET",

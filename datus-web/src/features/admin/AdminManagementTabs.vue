@@ -437,15 +437,34 @@ defineProps<AdminManagementTabProps>()
                     {{ quota.enabled ? "启用" : "停用" }}
                   </Badge>
                 </TableCell>
-                <TableCell class="text-right">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    @click="overview.openEditQuotaDialog(quota)"
-                  >
-                    <PencilIcon data-icon="inline-start" />
-                    编辑
-                  </Button>
+                <TableCell>
+                  <div class="flex justify-end gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      @click="overview.openEditQuotaDialog(quota)"
+                    >
+                      <PencilIcon data-icon="inline-start" />
+                      编辑
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      :disabled="overview.deletingQuotaKey.value === `${quota.subject_type}:${quota.subject_id}:${quota.resource}`"
+                      @click="overview.deleteQuota(quota)"
+                    >
+                      <Trash2Icon data-icon="inline-start" />
+                      删除
+                    </Button>
+                  </div>
+                </TableCell>
+              </TableRow>
+              <TableRow v-if="overview.data.value.quotas.length === 0">
+                <TableCell
+                  colspan="7"
+                  class="h-24 text-center text-sm text-muted-foreground"
+                >
+                  暂无额度配置
                 </TableCell>
               </TableRow>
             </TableBody>

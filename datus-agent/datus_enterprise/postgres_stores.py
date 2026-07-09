@@ -1133,6 +1133,31 @@ class PgEnterpriseQuotaStore(_PgStoreBase):
             raise DatusException(ErrorCode.COMMON_UNKNOWN, message="Failed to persist enterprise quota.")
         return _quota_record(row)
 
+    async def delete_quota(self, *, subject_type: str, subject_id: str, resource: str) -> bool:
+        await self._ensure_schema()
+        pool = await self._get_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    """
+                    DELETE FROM enterprise_quota_usage
+                    WHERE subject_type = $1 AND subject_id = $2 AND resource = $3
+                    """,
+                    subject_type,
+                    subject_id,
+                    resource,
+                )
+                result = await conn.execute(
+                    """
+                    DELETE FROM enterprise_quotas
+                    WHERE subject_type = $1 AND subject_id = $2 AND resource = $3
+                    """,
+                    subject_type,
+                    subject_id,
+                    resource,
+                )
+        return _affected_rows(result) > 0
+
     async def list_usage(
         self,
         *,

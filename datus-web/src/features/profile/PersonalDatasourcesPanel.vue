@@ -264,7 +264,7 @@ onMounted(refresh)
             <FieldDescription>停用后不会进入当前用户的请求级数据源列表。</FieldDescription>
           </div>
           <Switch
-            v-model:checked="manager.form.value.enabled"
+            v-model="manager.form.value.enabled"
             :disabled="manager.saving.value"
           />
         </Field>

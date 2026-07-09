@@ -16,6 +16,7 @@ import type {
   AuditLogListResponse,
   AuditLogListParams,
   DatasourceGrantListParams,
+  DeleteQuotaInput,
   QuotaListParams,
   Role,
   SecretListParams,
@@ -232,6 +233,12 @@ export const adminQuotaApi = {
 
   upsertQuota(input: UpsertQuotaInput): Promise<ApiResponse<AdminQuota>> {
     return put<ApiResponse<AdminQuota>>("/api/v1/admin/quotas", input);
+  },
+
+  deleteQuota(input: DeleteQuotaInput): Promise<ApiResponse<Record<string, unknown>>> {
+    return del<ApiResponse<Record<string, unknown>>>(
+      `/api/v1/admin/quotas/${encodeURIComponent(input.subject_type)}/${encodeURIComponent(input.subject_id)}/${encodeURIComponent(input.resource)}`,
+    );
   },
 
   listUsage(params?: UsageListParams): Promise<ApiResponse<AdminUsage[]>> {

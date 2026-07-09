@@ -210,6 +210,10 @@ class EnterpriseQuotaStore(Protocol):
         """Create or replace one quota record."""
         ...
 
+    async def delete_quota(self, *, subject_type: str, subject_id: str, resource: str) -> bool:
+        """Delete one quota record and its current usage counters."""
+        ...
+
     async def list_usage(
         self,
         *,

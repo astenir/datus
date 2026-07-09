@@ -167,6 +167,73 @@ def test_admin_quota_upsert_list_usage_and_audit(monkeypatch):
     }
 
 
+def test_admin_quota_delete_removes_metadata_and_usage(monkeypatch):
+    quota_store = InMemoryEnterpriseQuotaStore()
+    audit_sink = CollectingAuditSink()
+    asyncio.run(
+        quota_store.put_quota(
+            subject_type="user",
+            subject_id="alice",
+            resource="llm.tokens",
+            limit=1000,
+            window_seconds=3600,
+            enabled=True,
+        )
+    )
+    asyncio.run(
+        quota_store.consume_quota(
+            subjects=[{"subject_type": "user", "subject_id": "alice"}],
+            resource="llm.tokens",
+        )
+    )
+    asyncio.run(
+        quota_store.put_quota(
+            subject_type="user",
+            subject_id="alice",
+            resource="llm.tokens",
+            limit=1000,
+            window_seconds=3600,
+            enabled=False,
+        )
+    )
+    _install_extensions(monkeypatch, quota_store=quota_store, audit_sink=audit_sink)
+    ctx = AppContext(user_id="admin", permissions={"module.admin.quotas"})
+
+    with _client(ctx) as client:
+        response = client.delete("/api/v1/admin/quotas/user/alice/llm.tokens")
+        list_response = client.get("/api/v1/admin/quotas", params={"subject_type": "user", "subject_id": "alice"})
+        usage_response = client.get("/api/v1/admin/usage", params={"resource": "llm.tokens"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"] == {"deleted": True}
+    assert list_response.json()["data"] == []
+    assert usage_response.json()["data"] == []
+
+    allow_events = [event for event in audit_sink.events if event.decision == "allow"]
+    assert allow_events[0].metadata["operation"] == "delete_admin_quota"
+    assert allow_events[0].metadata["old_summary"]["enabled"] is False
+    assert allow_events[0].metadata["deleted"] is True
+
+
+def test_admin_quota_delete_returns_not_found(monkeypatch):
+    quota_store = InMemoryEnterpriseQuotaStore()
+    audit_sink = CollectingAuditSink()
+    _install_extensions(monkeypatch, quota_store=quota_store, audit_sink=audit_sink)
+    ctx = AppContext(user_id="admin", permissions={"module.admin.quotas"})
+
+    with _client(ctx) as client:
+        response = client.delete("/api/v1/admin/quotas/user/missing/llm.tokens")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is False
+    assert body["errorCode"] == "QUOTA_NOT_FOUND"
+    assert audit_sink.events[-1].decision == "deny"
+    assert audit_sink.events[-1].reason == "quota not found"
+
+
 @pytest.mark.asyncio
 async def test_admin_quota_upsert_returns_success_when_post_write_audit_fails(monkeypatch):
     quota_store = InMemoryEnterpriseQuotaStore()
@@ -224,4 +291,5 @@ def test_enterprise_admin_quota_routes_are_registered():
     paths = {route.path for route in admin_quota_routes.router.routes}
 
     assert "/api/v1/admin/quotas" in paths
+    assert "/api/v1/admin/quotas/{subject_type}/{subject_id}/{resource}" in paths
     assert "/api/v1/admin/usage" in paths

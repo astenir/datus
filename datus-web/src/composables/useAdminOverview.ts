@@ -97,6 +97,10 @@ function artifactAclTargetKey(target: ArtifactAclTarget): string {
   return `${target.artifactType}:${target.slug}`;
 }
 
+function quotaKey(quota: Pick<AdminQuota, "subject_type" | "subject_id" | "resource">): string {
+  return `${quota.subject_type}:${quota.subject_id}:${quota.resource}`;
+}
+
 function catalogDatabasesForDatasource(datasourceKey: string, databases: readonly DatabaseInfo[]): CatalogDatabase[] {
   return databases.map((database) => ({
     datasourceName: datasourceKey,
@@ -155,6 +159,7 @@ export function useAdminOverview() {
   const savingArtifactAcl = shallowRef(false);
   const actingSessionId = shallowRef<string | null>(null);
   const deletingGrantKey = shallowRef<string | null>(null);
+  const deletingQuotaKey = shallowRef<string | null>(null);
   const deletingSecretName = shallowRef<string | null>(null);
   const loadingGrantDetail = shallowRef(false);
   const loadingGrantCatalog = shallowRef(false);
@@ -695,6 +700,11 @@ export function useAdminOverview() {
     quotaForm.value.resource = resource;
   }
 
+  function setQuotaEnabled(value: unknown) {
+    if (typeof value !== "boolean") return;
+    quotaForm.value.enabled = value;
+  }
+
   async function saveQuota() {
     const subjectType = quotaSubjectTypeFromValue(quotaForm.value.subject_type);
     const subjectId = subjectType === "global" ? "*" : quotaForm.value.subject_id.trim();
@@ -726,6 +736,24 @@ export function useAdminOverview() {
       toast.error("保存额度失败");
     } finally {
       savingQuota.value = false;
+    }
+  }
+
+  async function deleteQuota(quota: AdminQuota) {
+    const key = quotaKey(quota);
+    deletingQuotaKey.value = key;
+    try {
+      await adminQuotaApi.deleteQuota({
+        subject_type: quotaSubjectTypeFromValue(quota.subject_type),
+        subject_id: quota.subject_type === "global" ? "*" : quota.subject_id,
+        resource: quota.resource,
+      });
+      await loadOverview();
+    } catch (err) {
+      console.error("删除额度失败:", err);
+      toast.error("删除额度失败");
+    } finally {
+      deletingQuotaKey.value = null;
     }
   }
 
@@ -1031,6 +1059,7 @@ export function useAdminOverview() {
     savingArtifactAcl,
     actingSessionId,
     deletingGrantKey,
+    deletingQuotaKey,
     deletingSecretName,
     loadingGrantDetail,
     loadingGrantCatalog,
@@ -1094,7 +1123,9 @@ export function useAdminOverview() {
     setQuotaSubjectType,
     setQuotaSubjectId,
     setQuotaResource,
+    setQuotaEnabled,
     saveQuota,
+    deleteQuota,
     openCreateSecretDialog,
     openEditSecretDialog,
     openSecretDetail,

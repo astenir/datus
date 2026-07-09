@@ -8,6 +8,7 @@ const upsertGrant = vi.fn();
 const deleteGrant = vi.fn();
 const listQuotas = vi.fn();
 const upsertQuota = vi.fn();
+const deleteQuota = vi.fn();
 const listUsage = vi.fn();
 const listSecrets = vi.fn();
 const getSecret = vi.fn();
@@ -34,6 +35,7 @@ vi.mock("@/lib/api", () => ({
   adminQuotaApi: {
     listQuotas,
     upsertQuota,
+    deleteQuota,
     listUsage,
   },
   adminSecretApi: {
@@ -107,6 +109,7 @@ describe("useAdminOverview", () => {
     listGrants.mockResolvedValue({ data: [grant] });
     getGrant.mockResolvedValue({ data: grant });
     listQuotas.mockResolvedValue({ data: [] });
+    deleteQuota.mockResolvedValue({ data: { deleted: true } });
     listUsage.mockResolvedValue({ data: [] });
     listSecrets.mockResolvedValue({ data: [secret] });
     getSecret.mockResolvedValue({ data: secret });
@@ -502,6 +505,33 @@ describe("useAdminOverview", () => {
     });
   });
 
+  it("saves edited quotas with the selected enabled state", async () => {
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+    overview.openEditQuotaDialog({
+      subject_type: "user",
+      subject_id: "alice",
+      resource: "chat.stream",
+      limit: 5000,
+      window_seconds: 3600,
+      enabled: true,
+      created_at: null,
+      updated_at: null,
+    });
+    overview.setQuotaEnabled(false);
+
+    await overview.saveQuota();
+
+    expect(upsertQuota).toHaveBeenCalledWith({
+      subject_type: "user",
+      subject_id: "alice",
+      resource: "chat.stream",
+      limit: 5000,
+      window_seconds: 3600,
+      enabled: false,
+    });
+  });
+
   it("saves global quotas with wildcard subject id", async () => {
     const { useAdminOverview } = await import("./useAdminOverview");
     const overview = useAdminOverview();
@@ -538,6 +568,29 @@ describe("useAdminOverview", () => {
 
     expect(upsertQuota).not.toHaveBeenCalled();
     expect(toastError).toHaveBeenCalledWith("请填写有效的额度主体、资源、限制和窗口");
+  });
+
+  it("deletes quota records by their subject and resource identity", async () => {
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+
+    await overview.deleteQuota({
+      subject_type: "global",
+      subject_id: "*",
+      resource: "chat.stream",
+      limit: 5000,
+      window_seconds: 3600,
+      enabled: false,
+      created_at: null,
+      updated_at: null,
+    });
+
+    expect(deleteQuota).toHaveBeenCalledWith({
+      subject_type: "global",
+      subject_id: "*",
+      resource: "chat.stream",
+    });
+    expect(listDatasources).toHaveBeenCalled();
   });
 
   it("loads and saves secret reference details without exposing plaintext values", async () => {

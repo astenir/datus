@@ -226,6 +226,12 @@ export interface UpsertQuotaInput {
   enabled: boolean;
 }
 
+export interface DeleteQuotaInput {
+  subject_type: QuotaSubjectType;
+  subject_id: string;
+  resource: string;
+}
+
 export interface UpsertSecretInput {
   provider: string;
   reference: string;
