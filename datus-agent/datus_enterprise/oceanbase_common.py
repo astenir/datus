@@ -213,6 +213,8 @@ class OceanBaseMySQLPool:
             autocommit=False,
             cursorclass=DictCursor,
         )
+        with conn.cursor() as cursor:
+            cursor.execute("SET time_zone = '+00:00'")
         with self._lock:
             self._connections.add(conn)
         return conn

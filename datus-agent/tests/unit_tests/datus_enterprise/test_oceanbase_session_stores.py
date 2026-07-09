@@ -80,11 +80,26 @@ class FakeTrackedConnection:
 
 
 class FakePymysqlConnection(FakeTrackedConnection):
+    def __init__(self) -> None:
+        super().__init__()
+        self.statements: list[tuple[str, tuple[object, ...]]] = []
+
     def commit(self) -> None:
         pass
 
     def rollback(self) -> None:
         pass
+
+    def cursor(self) -> FakeObCursor:
+        cursor = FakeObCursor(existing_base_url=True)
+        original_execute = cursor.execute
+
+        def execute(query: str, params: tuple[object, ...] = ()) -> None:
+            original_execute(query, params)
+            self.statements.append((query, params))
+
+        cursor.execute = execute
+        return cursor
 
 
 class FakePingConnection(FakePymysqlConnection):
@@ -217,6 +232,7 @@ def test_oceanbase_pool_first_shared_connection_does_not_deadlock(monkeypatch):
     assert errors == []
     assert acquired == created_connections
     assert len(created_connections) == 1
+    assert created_connections[0].statements == [("SET time_zone = '+00:00'", ())]
 
 
 def test_oceanbase_pool_replaces_dead_idle_connection_before_reuse(monkeypatch):
