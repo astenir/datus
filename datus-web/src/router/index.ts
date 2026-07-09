@@ -3,6 +3,12 @@ import { createRouter, createWebHistory, type Router, type RouterHistory, type R
 import { useAuth } from "@/composables/useAuth"
 import { usePermission } from "@/composables/usePermission"
 import DatusWorkspace from "@/features/workspace/DatusWorkspace.vue"
+import {
+  canRenderArtifactTab,
+  canRenderWorkspaceView,
+  firstAvailableWorkspaceView,
+  workspaceAccessFromPermission,
+} from "@/features/workspace/access"
 import type { ArtifactViewTab, WorkspaceView } from "@/features/workspace/types"
 import { workspaceRouteNames } from "@/features/workspace/types"
 
@@ -128,11 +134,8 @@ export function createDatusRouter(history: RouterHistory = createWebHistory(impo
   })
 
   router.beforeEach(async (to) => {
-    const protectedView = to.meta.requiresAdmin
-      || to.meta.workspaceView === "configuration"
-      || to.meta.workspaceView === "mcp"
-      || to.meta.workspaceView === "agents"
-    if (!protectedView) return true
+    const workspaceView = to.meta.workspaceView
+    if (!workspaceView) return true
 
     const auth = useAuth()
     const permission = usePermission()
@@ -141,26 +144,25 @@ export function createDatusRouter(history: RouterHistory = createWebHistory(impo
     }
 
     if (!auth.state.value.authenticated) {
-      return { name: workspaceRouteNames.chat }
+      return workspaceView === "chat" ? true : { name: workspaceRouteNames.chat }
     }
 
-    if (to.meta.requiresAdmin && !permission.isAdmin() && !permission.hasFeaturePermission("admin")) {
-      return { name: workspaceRouteNames.chat }
+    const access = workspaceAccessFromPermission(permission)
+    if (workspaceView === "artifacts" && to.meta.artifactTab && !canRenderArtifactTab(to.meta.artifactTab, access)) {
+      if (access.canViewReportArtifacts) {
+        return { name: workspaceRouteNames.artifactReport }
+      }
+      if (access.canViewDashboardArtifacts) {
+        return { name: workspaceRouteNames.artifactDashboard }
+      }
     }
 
-    if (to.meta.workspaceView === "configuration"
-      && !permission.isAdmin()
-      && !permission.hasPermission("module.config.edit")) {
-      return { name: workspaceRouteNames.chat }
-    }
-
-    if (to.meta.workspaceView === "mcp"
-      && (!permission.hasPermission("module.mcp") || !permission.hasPermission("mcp.server.list"))) {
-      return { name: workspaceRouteNames.chat }
-    }
-
-    if (to.meta.workspaceView === "agents" && !permission.hasPermission("module.admin.agents")) {
-      return { name: workspaceRouteNames.chat }
+    if (!canRenderWorkspaceView(workspaceView, access)) {
+      const fallbackView = firstAvailableWorkspaceView(access)
+      if (fallbackView === "artifacts") {
+        return { name: access.canViewDashboardArtifacts ? workspaceRouteNames.artifactDashboard : workspaceRouteNames.artifactReport }
+      }
+      return { name: workspaceRouteNames[fallbackView] }
     }
 
     return true

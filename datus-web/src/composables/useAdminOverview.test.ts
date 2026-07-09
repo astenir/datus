@@ -22,6 +22,16 @@ const listArtifacts = vi.fn();
 const getAcl = vi.fn();
 const putAcl = vi.fn();
 const toastError = vi.fn();
+const fetchPermissions = vi.fn();
+const grantedPermissions = new Set<string>();
+
+function permissionMatches(required: string, granted: string): boolean {
+  if (granted === "*" || granted === required) return true;
+  const pattern = granted
+    .replace(/[.+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*");
+  return new RegExp(`^${pattern}$`).test(required);
+}
 
 vi.mock("@/lib/api", () => ({
   adminDatasourceApi: {
@@ -61,6 +71,15 @@ vi.mock("vue-sonner", () => ({
   toast: {
     error: toastError,
   },
+}));
+
+vi.mock("@/composables/usePermission", () => ({
+  usePermission: () => ({
+    isLoaded: { value: true },
+    fetchPermissions,
+    hasPermission: (permissionCode: string) =>
+      [...grantedPermissions].some((permission) => permissionMatches(permissionCode, permission)),
+  }),
 }));
 
 const grant = {
@@ -105,6 +124,12 @@ const secret = {
 describe("useAdminOverview", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    grantedPermissions.clear();
+    grantedPermissions.add("module.admin.datasources");
+    grantedPermissions.add("module.admin.quotas");
+    grantedPermissions.add("module.admin.secrets");
+    grantedPermissions.add("module.admin.sessions");
+    grantedPermissions.add("module.admin.artifacts");
     listDatasources.mockResolvedValue({ data: [{ name: "fund", type: "postgres", is_default: true }] });
     listGrants.mockResolvedValue({ data: [grant] });
     getGrant.mockResolvedValue({ data: grant });
@@ -163,6 +188,47 @@ describe("useAdminOverview", () => {
     expect(overview.defaultDatasourceName.value).toBe("fund");
     expect(overview.data.value.datasourceGrants).toEqual([grant]);
     expect(overview.data.value.secrets).toEqual([secret]);
+  });
+
+  it("skips optional admin overview APIs without matching permissions", async () => {
+    grantedPermissions.clear();
+    grantedPermissions.add("module.admin.users");
+    grantedPermissions.add("module.admin.roles");
+    const { useAdminOverview } = await import("./useAdminOverview");
+    const overview = useAdminOverview();
+
+    await overview.loadOverview();
+
+    expect(listDatasources).not.toHaveBeenCalled();
+    expect(listGrants).not.toHaveBeenCalled();
+    expect(listQuotas).not.toHaveBeenCalled();
+    expect(listUsage).not.toHaveBeenCalled();
+    expect(listSecrets).not.toHaveBeenCalled();
+    expect(listSessions).not.toHaveBeenCalled();
+    expect(listArtifacts).not.toHaveBeenCalled();
+    expect(overview.data.value).toEqual({
+      datasources: [],
+      datasourceGrants: [],
+      quotas: [],
+      usage: [],
+      secrets: [],
+      sessions: [],
+      artifacts: [],
+    });
+
+    await overview.loadDatasourceGrants();
+    await overview.loadQuotasAndUsage();
+    await overview.loadSessions();
+    await overview.loadSecrets();
+    await overview.loadArtifacts();
+
+    expect(listDatasources).not.toHaveBeenCalled();
+    expect(listGrants).not.toHaveBeenCalled();
+    expect(listQuotas).not.toHaveBeenCalled();
+    expect(listUsage).not.toHaveBeenCalled();
+    expect(listSecrets).not.toHaveBeenCalled();
+    expect(listSessions).not.toHaveBeenCalled();
+    expect(listArtifacts).not.toHaveBeenCalled();
   });
 
   it("refreshes focused overview slices without overfetching unrelated tab data", async () => {

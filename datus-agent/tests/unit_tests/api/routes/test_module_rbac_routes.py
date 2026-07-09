@@ -687,7 +687,7 @@ def test_chat_stream_materializes_dashboard_edit_session_subagent(monkeypatch):
     assert "bootstraps incomplete locked edit artifacts" in rules_text
 
 
-def test_datasource_catalog_routes_require_module_datasource_catalog(monkeypatch):
+def test_datasource_catalog_routes_require_chat_or_datasource_catalog(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
     svc = MagicMock()
     svc.datasource.current_datasource = "default"
@@ -695,7 +695,7 @@ def test_datasource_catalog_routes_require_module_datasource_catalog(monkeypatch
         success=True,
         data=ListDatabasesData(databases=[], total_count=0, current_database=None),
     )
-    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.report.view"})
 
     with _client(database_routes.router, ctx, svc) as client:
         response = client.get("/api/v1/catalog/list")
@@ -706,21 +706,24 @@ def test_datasource_catalog_routes_require_module_datasource_catalog(monkeypatch
 
 def test_catalog_and_table_rbac_denial_does_not_resolve_datus_service(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
-    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+    catalog_ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.report.view"})
+    table_ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
 
     async def reject_service(request: Request):
         raise AssertionError("RBAC denial resolved DatusService")
 
     async def override_context(request: Request):
-        request.state.app_context = ctx
-        return ctx
+        request.state.app_context = request.app.state.test_ctx
+        return request.state.app_context
 
     catalog_app = FastAPI()
+    catalog_app.state.test_ctx = catalog_ctx
     catalog_app.include_router(database_routes.router)
     catalog_app.dependency_overrides[deps.get_datus_service] = reject_service
     catalog_app.dependency_overrides[deps.get_request_app_context] = override_context
 
     table_app = FastAPI()
+    table_app.state.test_ctx = table_ctx
     table_app.include_router(table_routes.router)
     table_app.dependency_overrides[deps.get_datus_service] = reject_service
     table_app.dependency_overrides[deps.get_request_app_context] = override_context
@@ -764,6 +767,70 @@ def test_datasource_catalog_routes_allow_module_datasource_catalog(monkeypatch):
     assert response.json()["success"] is True
     assert response.json()["data"] == DatabasesData(databases=[]).model_dump()
     svc.datasource.list_databases.assert_called_once()
+
+
+def test_datasource_catalog_routes_allow_module_chat_with_datasource_grant(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config(current_datasource="finance")
+    svc.datasource.current_datasource = "finance"
+    svc.datasource.list_databases.return_value = Result[ListDatabasesData](
+        success=True,
+        data=ListDatabasesData(
+            databases=[
+                DatabaseInfo(
+                    name="finance",
+                    uri="sqlite:///finance.db",
+                    type="sqlite",
+                    current=True,
+                    schema_name="mart",
+                    connection_status="connected",
+                    tables=["position", "secret"],
+                ),
+            ],
+            total_count=1,
+            current_database="finance",
+        ),
+    )
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.chat"},
+        datasource_grants={
+            "finance": {
+                "effect": "allow",
+                "allow_catalog": True,
+                "schemas": ["mart"],
+                "tables": ["position"],
+            }
+        },
+    )
+
+    with _client(database_routes.router, ctx, svc) as client:
+        response = client.get("/api/v1/catalog/list")
+
+    assert response.status_code == 200
+    databases = response.json()["data"]["databases"]
+    assert len(databases) == 1
+    assert databases[0]["schema_name"] == "mart"
+    assert databases[0]["tables"] == ["position"]
+    svc.datasource.list_databases.assert_called_once()
+
+
+def test_datasource_catalog_routes_deny_module_chat_without_datasource_grant(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(DatasourceGrantConfigProjector()))
+    svc = MagicMock()
+    svc.agent_config = _datasource_agent_config(current_datasource="finance")
+    svc.datasource.current_datasource = "finance"
+    svc.datasource.list_databases = MagicMock()
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    with _client(database_routes.router, ctx, svc) as client:
+        response = client.get("/api/v1/catalog/list")
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "No datasource grant available."
+    svc.datasource.list_databases.assert_not_called()
 
 
 def test_datasource_catalog_rejects_unauthorized_requested_datasource(monkeypatch):

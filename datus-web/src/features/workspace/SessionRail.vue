@@ -77,6 +77,7 @@ import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import type { AuthState } from "@/composables/useAuth"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
+import type { WorkspaceAccessFlags } from "@/features/workspace/access"
 import type { ArtifactViewTab, WorkspaceView } from "@/features/workspace/types"
 import { datasourceStatusDescription, datasourceStatusLabel, datasourceStatusToneClass } from "@/lib/datasource-status"
 import { APP_WORKSPACE_TITLE, FALLBACK_USERNAME_LABEL, FALLBACK_USER_LABEL } from "@/lib/constants"
@@ -88,10 +89,8 @@ const props = defineProps<{
   workspace: ChatWorkspace
   activeView: WorkspaceView
   artifactTab: ArtifactViewTab
-  canManagePermissions: boolean
-  canManageConfiguration: boolean
-  canUseMcp: boolean
-  canManageAgents: boolean
+  viewAccess: WorkspaceAccessFlags
+  canExecuteSql: boolean
 }>()
 
 const emit = defineEmits<{
@@ -143,7 +142,7 @@ const userFallback = computed(() => userLabel.value.slice(0, 1).toUpperCase())
 const currentDatasourceName = computed(() => props.workspace.currentDatasource.value.trim())
 const currentDatasourceLabel = computed(() => currentDatasourceName.value || "当前数据源未选择")
 const userMeta = computed(() => props.auth.user?.department || props.auth.user?.title || currentDatasourceLabel.value)
-const userRoleLabel = computed(() => props.canManagePermissions ? "管理员" : "成员")
+const userRoleLabel = computed(() => props.viewAccess.canViewPermissions ? "管理员" : "成员")
 const userStatusLabel = computed(() => props.auth.user?.userStatus || "已登录")
 const datasourceTestOk = shallowRef<boolean | null>(null)
 const datasourceTestMessage = shallowRef("")
@@ -157,8 +156,18 @@ const datasourceTestActionLabel = computed(() => {
   if (datasourceTestOk.value === false) return "重新测试数据源连接"
   return "测试当前数据源连接"
 })
+const primaryCapabilityLabel = computed(() => {
+  if (props.canExecuteSql) return "SQL 执行可用"
+  if (props.viewAccess.canViewArtifacts) return "产物可用"
+  if (props.viewAccess.canViewKnowledge) return "知识库可用"
+  if (props.viewAccess.canViewMcp) return "MCP 可用"
+  if (props.viewAccess.canViewAgents) return "Agent 管理可用"
+  if (props.viewAccess.canViewConfiguration) return "配置可用"
+  if (props.viewAccess.canViewPermissions) return "权限管理可用"
+  return "已登录"
+})
 const workspaceStatusLabel = computed(() => {
-  if (!currentDatasourceName.value) return "未选择数据源"
+  if (!currentDatasourceName.value) return primaryCapabilityLabel.value
   return currentDatasourceLabel.value
 })
 const datasourceConnectionStatusLabel = computed(() => {
@@ -223,10 +232,16 @@ const isWorkbenchActive = computed(() => {
   return props.activeView === "catalog"
     || props.activeView === "semantic"
     || props.activeView === "knowledge"
-    || (props.canUseMcp && props.activeView === "mcp")
-    || (props.canManageAgents && props.activeView === "agents")
-    || (props.canManageConfiguration && props.activeView === "configuration")
+    || (props.viewAccess.canViewMcp && props.activeView === "mcp")
+    || (props.viewAccess.canViewAgents && props.activeView === "agents")
+    || (props.viewAccess.canViewConfiguration && props.activeView === "configuration")
 })
+const canViewWorkbench = computed(() =>
+  props.viewAccess.canViewKnowledge
+    || props.viewAccess.canViewMcp
+    || props.viewAccess.canViewAgents
+    || props.viewAccess.canViewConfiguration
+)
 const visibleSessions = computed(() => {
   const needle = searchQuery.value.trim().toLocaleLowerCase()
   if (!needle) return props.workspace.sessions.value
@@ -240,6 +255,8 @@ const sessionCountLabel = computed(() => {
   return count > 99 ? "99+" : String(count)
 })
 const connectionLabel = computed(() => {
+  if (!props.viewAccess.canViewChat) return "已授权"
+
   switch (props.workspace.connection.value) {
     case "online":
       return "在线"
@@ -252,6 +269,8 @@ const connectionLabel = computed(() => {
   }
 })
 const connectionBadgeVariant = computed<SidebarBadgeVariant>(() => {
+  if (!props.viewAccess.canViewChat) return "secondary"
+
   switch (props.workspace.connection.value) {
     case "online":
       return "secondary"
@@ -409,6 +428,7 @@ async function deleteSession(sessionId: string) {
       <SidebarGroup class="shrink-0 px-3 pb-1 pt-0">
         <SidebarGroupContent class="flex flex-col gap-2">
           <Button
+            v-if="viewAccess.canViewChat"
             :class="newSessionButtonClass"
             @click="createSession"
           >
@@ -417,7 +437,7 @@ async function deleteSession(sessionId: string) {
           </Button>
 
           <SidebarMenu class="gap-0.5">
-            <SidebarMenuItem>
+            <SidebarMenuItem v-if="viewAccess.canViewReportArtifacts">
               <SidebarMenuButton
                 :is-active="activeView === 'artifacts' && artifactTab === 'report'"
                 :class="secondaryNavButtonClass"
@@ -428,7 +448,7 @@ async function deleteSession(sessionId: string) {
               </SidebarMenuButton>
             </SidebarMenuItem>
 
-            <SidebarMenuItem>
+            <SidebarMenuItem v-if="viewAccess.canViewDashboardArtifacts">
               <SidebarMenuButton
                 :is-active="activeView === 'artifacts' && artifactTab === 'dashboard'"
                 :class="secondaryNavButtonClass"
@@ -440,6 +460,7 @@ async function deleteSession(sessionId: string) {
             </SidebarMenuItem>
 
             <Collapsible
+              v-if="canViewWorkbench"
               v-slot="{ open }"
               as-child
               :default-open="true"
@@ -460,7 +481,10 @@ async function deleteSession(sessionId: string) {
                 </CollapsibleTrigger>
                 <CollapsibleContent>
                   <SidebarMenuSub class="mx-2 my-0.5 gap-0.5 border-sidebar-border/60 px-1 py-0.5">
-                    <SidebarMenuSubItem class="w-full">
+                    <SidebarMenuSubItem
+                      v-if="viewAccess.canViewKnowledge"
+                      class="w-full"
+                    >
                       <SidebarMenuSubButton
                         as="button"
                         :is-active="activeView === 'knowledge'"
@@ -472,7 +496,7 @@ async function deleteSession(sessionId: string) {
                       </SidebarMenuSubButton>
                     </SidebarMenuSubItem>
                     <SidebarMenuSubItem
-                      v-if="canUseMcp"
+                      v-if="viewAccess.canViewMcp"
                       class="w-full"
                     >
                       <SidebarMenuSubButton
@@ -486,7 +510,7 @@ async function deleteSession(sessionId: string) {
                       </SidebarMenuSubButton>
                     </SidebarMenuSubItem>
                     <SidebarMenuSubItem
-                      v-if="canManageAgents"
+                      v-if="viewAccess.canViewAgents"
                       class="w-full"
                     >
                       <SidebarMenuSubButton
@@ -500,7 +524,7 @@ async function deleteSession(sessionId: string) {
                       </SidebarMenuSubButton>
                     </SidebarMenuSubItem>
                     <SidebarMenuSubItem
-                      v-if="canManageConfiguration"
+                      v-if="viewAccess.canViewConfiguration"
                       class="w-full"
                     >
                       <SidebarMenuSubButton
@@ -518,7 +542,7 @@ async function deleteSession(sessionId: string) {
               </SidebarMenuItem>
             </Collapsible>
 
-            <SidebarMenuItem v-if="canManagePermissions">
+            <SidebarMenuItem v-if="viewAccess.canViewPermissions">
               <SidebarMenuButton
                 :is-active="activeView === 'admin'"
                 :class="secondaryNavButtonClass"
@@ -546,7 +570,10 @@ async function deleteSession(sessionId: string) {
         <Separator class="bg-sidebar-border/70" />
       </div>
 
-      <SidebarGroup class="min-h-0 flex-1 px-3 pb-1.5 pt-1">
+      <SidebarGroup
+        v-if="viewAccess.canViewChat"
+        class="min-h-0 flex-1 px-3 pb-1.5 pt-1"
+      >
         <SidebarGroupLabel class="h-6 justify-between px-1.5 text-xs font-medium text-muted-foreground">
           <span>历史对话</span>
           <Badge

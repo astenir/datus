@@ -21,8 +21,10 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { useProfileOverview } from "@/composables/useProfileOverview"
+import { usePermission } from "@/composables/usePermission"
 import ModelCredentialsPanel from "@/features/profile/ModelCredentialsPanel.vue"
 import PersonalDatasourcesPanel from "@/features/profile/PersonalDatasourcesPanel.vue"
+import { workspaceAccessFromPermission } from "@/features/workspace/access"
 import type { AuthState } from "@/composables/useAuth"
 
 const props = defineProps<{
@@ -30,6 +32,7 @@ const props = defineProps<{
 }>()
 
 const profile = useProfileOverview()
+const permission = usePermission()
 
 const principalUserId = computed(() => profile.userId.value === "-" ? props.auth.user?.username ?? "-" : profile.userId.value)
 const displayName = computed(() => {
@@ -44,6 +47,13 @@ const hasChatFeature = computed(() =>
   profile.features.value.chat === true ||
   profile.permissions.value.includes("*") ||
   profile.permissions.value.includes("module.chat"),
+)
+const viewAccess = computed(() => workspaceAccessFromPermission(permission))
+const canManagePersonalDatasources = computed(() =>
+  viewAccess.value.canViewKnowledge ||
+  profile.features.value.datasource_catalog === true ||
+  profile.permissions.value.includes("*") ||
+  profile.permissions.value.includes("module.datasource_catalog"),
 )
 
 function formatNumber(value: number) {
@@ -189,7 +199,7 @@ onMounted(loadProfile)
 
         <ModelCredentialsPanel v-if="hasChatFeature" />
 
-        <PersonalDatasourcesPanel />
+        <PersonalDatasourcesPanel v-if="canManagePersonalDatasources" />
 
         <div class="grid gap-3 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
           <Card>

@@ -90,6 +90,12 @@ def test_me_returns_current_context_summary(monkeypatch):
     assert body["data"]["features"]["chat"] is True
     assert body["data"]["features"]["dashboard_query"] is True
     assert body["data"]["features"]["sql_executor"] is False
+    assert body["data"]["views"]["chat"] is True
+    assert body["data"]["views"]["artifacts"] is True
+    assert body["data"]["views"]["artifact_dashboards"] is True
+    assert body["data"]["views"]["artifact_reports"] is False
+    assert body["data"]["views"]["configuration"] is False
+    assert body["data"]["views"]["profile"] is True
 
 
 def test_me_marks_wildcard_permission_as_admin_feature(monkeypatch):
@@ -111,6 +117,8 @@ def test_me_marks_wildcard_permission_as_admin_feature(monkeypatch):
     assert body["data"]["is_admin"] is True
     assert body["data"]["features"]["admin"] is True
     assert body["data"]["features"]["chat"] is True
+    assert body["data"]["views"]["permissions"] is True
+    assert body["data"]["views"]["configuration"] is True
 
 
 def test_me_permissions_merges_principal_compatibility(monkeypatch):
@@ -130,6 +138,24 @@ def test_me_permissions_merges_principal_compatibility(monkeypatch):
     assert summary_response.json()["data"]["roles"] == ["ctx-role", "principal-role"]
 
 
+def test_me_does_not_mark_catalog_support_permission_as_knowledge_view(monkeypatch):
+    _install_extensions(monkeypatch)
+    ctx = AppContext(
+        user_id="sql_user",
+        permissions={"module.sql_executor", "module.datasource_catalog"},
+    )
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/me")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"]["features"]["datasource_catalog"] is True
+    assert body["data"]["views"]["knowledge"] is False
+    assert body["data"]["views"]["profile"] is True
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -137,6 +163,7 @@ def test_me_permissions_merges_principal_compatibility(monkeypatch):
         "/api/v1/me/permissions",
         "/api/v1/me/datasource-grants",
         "/api/v1/me/features",
+        "/api/v1/me/views",
         "/api/v1/me/usage",
     ],
 )
@@ -226,5 +253,6 @@ def test_enterprise_me_routes_are_registered():
     assert "/api/v1/me/permissions" in route_paths
     assert "/api/v1/me/datasource-grants" in route_paths
     assert "/api/v1/me/features" in route_paths
+    assert "/api/v1/me/views" in route_paths
     assert "/api/v1/me/sessions" in route_paths
     assert "/api/v1/me/usage" in route_paths

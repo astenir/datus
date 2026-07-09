@@ -117,16 +117,32 @@ def _client(ctx: AppContext, svc: MagicMock) -> TestClient:
     return TestClient(app)
 
 
-def test_models_route_requires_config_view(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_models_route_rejects_users_without_chat_or_config_view(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_extensions(monkeypatch)
     svc = _make_svc(catalog=_basic_catalog(), available={"openai"})
-    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.datasource_catalog"})
 
     with _client(ctx, svc) as client:
         response = client.get("/api/v1/models")
 
     assert response.status_code == 403
     assert "module.config.view" in response.json()["detail"]
+
+
+def test_models_route_allows_chat_view(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_extensions(monkeypatch)
+    monkeypatch.setattr(models_routes, "load_cached_model_details", lambda: None)
+    monkeypatch.setattr(models_routes, "load_cache_fetched_at", lambda: None)
+    svc = _make_svc(catalog=_basic_catalog(), available={"openai"})
+    ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.chat"})
+
+    with _client(ctx, svc) as client:
+        response = client.get("/api/v1/models")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["data"]["providers"] == ["openai"]
 
 
 def test_models_route_allows_config_view(monkeypatch: pytest.MonkeyPatch) -> None:

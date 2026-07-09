@@ -4,7 +4,7 @@ import { useRoute, useRouter } from "vue-router"
 import { consumePostLoginRedirect, type AuthState } from "@/composables/useAuth"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import { defaultAuditLogLimit } from "@/lib/audit-log-pagination"
-import { canRenderWorkspaceView, workspaceRedirectTarget } from "@/features/workspace/access"
+import { canRenderWorkspaceView, workspaceRedirectTarget, type WorkspaceAccessFlags } from "@/features/workspace/access"
 import {
   adminAuditFromQuery,
   adminArtifactFromQuery,
@@ -32,10 +32,7 @@ import { isWorkspaceView, workspaceRouteNames } from "@/features/workspace/types
 interface UseWorkspaceRoutingOptions {
   workspace: ChatWorkspace
   authState: Ref<AuthState>
-  canManagePermissions: ComputedRef<boolean>
-  canManageConfiguration: ComputedRef<boolean>
-  canUseMcp: ComputedRef<boolean>
-  canManageAgents: ComputedRef<boolean>
+  viewAccess: ComputedRef<WorkspaceAccessFlags>
   checkAuth: () => Promise<void>
 }
 
@@ -64,10 +61,7 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
   const knowledgeTable = computed(() => tableFromQuery(route.query))
   const routeWorkspaceContext = computed(() => workspaceContextFromQuery(route.query))
   const canRenderAdminPanel = computed(() => canRenderWorkspaceView("admin", {
-    canManagePermissions: options.canManagePermissions.value,
-    canManageConfiguration: options.canManageConfiguration.value,
-    canUseMcp: options.canUseMcp.value,
-    canManageAgents: options.canManageAgents.value,
+    ...options.viewAccess.value,
   }))
 
   function workspaceRouteForView(view: WorkspaceView, tab: ArtifactViewTab = artifactTab.value) {
@@ -394,21 +388,15 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
   watch(
     () => [
       activeView.value,
-      options.canManagePermissions.value,
-      options.canManageConfiguration.value,
-      options.canUseMcp.value,
-      options.canManageAgents.value,
+      options.viewAccess.value,
       options.authState.value.loading,
       options.authState.value.authenticated,
     ] as const,
-    ([view, canManage, canManageConfiguration, canUseMcp, canManageAgents, loading, authenticated]) => {
+    ([view, access, loading, authenticated]) => {
       const redirectTarget = workspaceRedirectTarget(view, {
         authenticated,
         loading,
-        canManagePermissions: canManage,
-        canManageConfiguration,
-        canUseMcp,
-        canManageAgents,
+        ...access,
       })
       if (!redirectTarget) return
       void navigateToView(redirectTarget, { replace: true })

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from fnmatch import fnmatchcase
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
@@ -151,10 +152,22 @@ async def upsert_admin_role(
 ) -> Result[AdminRoleSummary]:
     """Create or replace sanitized enterprise role metadata and permissions."""
 
+    normalized_permissions = _normalized_permissions(body.permissions)
     invalid = _validate_role_id(role_id) or _validate_role_name(body.name) or _validate_permissions(body.permissions)
     if invalid is not None:
         await _audit_role_mutation(ctx, role_id=role_id, operation="upsert_admin_role", decision="deny", reason=invalid)
         return _role_error(_validation_error_code(invalid), invalid)
+    not_grantable = _permissions_not_grantable(ctx, normalized_permissions)
+    if not_grantable:
+        await _audit_role_mutation(
+            ctx,
+            role_id=role_id,
+            operation="upsert_admin_role",
+            decision="deny",
+            reason="permission grant exceeds actor permissions",
+            metadata={"permissions": not_grantable},
+        )
+        return _role_error("ROLE_PERMISSION_FORBIDDEN", "Cannot grant permissions that the actor does not have.")
 
     store = deps.get_enterprise_extensions().role_store
     try:
@@ -174,7 +187,7 @@ async def upsert_admin_role(
             role_id=role_id,
             name=_required_str(body.name),
             description=_optional_str(body.description),
-            permissions=_normalized_permissions(body.permissions),
+            permissions=normalized_permissions,
             built_in=bool((before or {}).get("built_in")),
         )
     except Exception:
@@ -216,6 +229,7 @@ async def set_admin_role_permissions(
 ) -> Result[AdminRoleSummary]:
     """Replace one enterprise role permission set."""
 
+    normalized_permissions = _normalized_permissions(body.permissions)
     invalid = _validate_role_id(role_id) or _validate_permissions(body.permissions)
     if invalid is not None:
         await _audit_role_mutation(
@@ -226,6 +240,17 @@ async def set_admin_role_permissions(
             reason=invalid,
         )
         return _role_error(_validation_error_code(invalid), invalid)
+    not_grantable = _permissions_not_grantable(ctx, normalized_permissions)
+    if not_grantable:
+        await _audit_role_mutation(
+            ctx,
+            role_id=role_id,
+            operation="set_admin_role_permissions",
+            decision="deny",
+            reason="permission grant exceeds actor permissions",
+            metadata={"permissions": not_grantable},
+        )
+        return _role_error("ROLE_PERMISSION_FORBIDDEN", "Cannot grant permissions that the actor does not have.")
 
     store = deps.get_enterprise_extensions().role_store
     try:
@@ -250,7 +275,7 @@ async def set_admin_role_permissions(
         return _role_error("RESOURCE_NOT_FOUND", "Role not found.")
 
     try:
-        record = await store.set_role_permissions(role_id, _normalized_permissions(body.permissions))
+        record = await store.set_role_permissions(role_id, normalized_permissions)
     except Exception:
         await _audit_role_mutation(
             ctx,
@@ -366,6 +391,7 @@ async def set_admin_user_roles(
         )
         return _role_error("USER_ROLES_READ_FAILED", "User roles read failed.")
 
+    assigned_permissions: set[str] = set()
     for role_id in normalized_role_ids:
         try:
             role = await store.get_role(role_id)
@@ -391,6 +417,20 @@ async def set_admin_user_roles(
                 metadata={"role_id": role_id},
             )
             return _role_error("RESOURCE_NOT_FOUND", f"Role not found: {role_id}.")
+        assigned_permissions.update(_normalized_permissions(role.get("permissions") or []))
+
+    not_grantable = _permissions_not_grantable(ctx, sorted(assigned_permissions))
+    if not_grantable:
+        await _audit_user_roles_mutation(
+            ctx,
+            user_id=user_id,
+            operation="set_admin_user_roles",
+            decision="deny",
+            reason="role assignment exceeds actor permissions",
+            old_summary={"user_id": user_id, "role_ids": before},
+            metadata={"permissions": not_grantable},
+        )
+        return _role_error("USER_ROLES_FORBIDDEN", "Cannot assign roles with permissions that the actor does not have.")
 
     try:
         role_ids = await store.set_user_roles(user_id, normalized_role_ids)
@@ -818,6 +858,35 @@ def _normalized_permissions(permissions: list[str]) -> list[str]:
 
 def _normalized_role_ids(role_ids: list[str]) -> list[str]:
     return sorted({role_id.strip() for role_id in role_ids if role_id.strip()})
+
+
+def _actor_permissions(ctx: AppContext) -> list[str] | None:
+    if ctx.is_admin:
+        return None
+    if ctx.permissions:
+        return sorted(ctx.permissions)
+    raw = ctx.principal.get("permissions")
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        return [raw]
+    if isinstance(raw, list):
+        return [item for item in raw if isinstance(item, str)]
+    return []
+
+
+def _permissions_not_grantable(ctx: AppContext, permissions: list[str]) -> list[str]:
+    actor_permissions = _actor_permissions(ctx)
+    if actor_permissions is None:
+        return []
+    return [
+        permission for permission in permissions
+        if not any(_permission_covers(permission, granted) for granted in actor_permissions)
+    ]
+
+
+def _permission_covers(requested: str, granted: str) -> bool:
+    return granted == "*" or fnmatchcase(requested, granted)
 
 
 def _required_str(value: str) -> str:

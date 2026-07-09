@@ -60,6 +60,12 @@ const selectedRolePermissionBadges = computed(() =>
 const grantScopeTextSummary = computed(() =>
   formatScopeText(props.overview.grantForm.value.scope_text),
 )
+const entryPermissionPresetGroup = computed(() =>
+  props.roles.permissionPresetGroups.find(group => group.id === "views") ?? null,
+)
+const advancedPermissionPresetGroups = computed(() =>
+  props.roles.permissionPresetGroups.filter(group => group.id !== "views"),
+)
 const grantSubjectOptions = computed(() => {
   if (props.overview.grantForm.value.subject_type === "role") {
     return props.roles.roles.value.map((role) => ({
@@ -675,6 +681,13 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
       <DialogHeader>
         <DialogTitle>{{ users.userDialogTitle.value }}</DialogTitle>
       </DialogHeader>
+      <div
+        v-if="users.userDialogError.value"
+        class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+        role="alert"
+      >
+        {{ users.userDialogError.value }}
+      </div>
       <FieldGroup class="grid min-h-0 grid-cols-1 gap-4 overflow-y-auto overflow-x-hidden p-1 sm:grid-cols-2 [&>[data-slot=field]]:min-w-0">
         <Field>
           <FieldLabel for="admin-user-id">User ID</FieldLabel>
@@ -792,8 +805,15 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
     <DialogContent class="flex max-h-[90vh] flex-col overflow-hidden sm:max-w-2xl">
       <DialogHeader>
         <DialogTitle>{{ roles.dialogMode.value === "create" ? "新增角色" : "编辑角色" }}</DialogTitle>
-        <DialogDescription>角色权限用于前端体验门控，后端仍是实际安全边界。</DialogDescription>
+        <DialogDescription>角色权限优先按工作区入口配置；后端仍是实际安全边界。</DialogDescription>
       </DialogHeader>
+      <div
+        v-if="roles.roleDialogError.value"
+        class="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+        role="alert"
+      >
+        {{ roles.roleDialogError.value }}
+      </div>
       <FieldGroup class="min-h-0 gap-4 overflow-y-auto pr-1">
         <Field>
           <FieldLabel for="admin-role-name">角色名称</FieldLabel>
@@ -811,7 +831,7 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
         </Field>
         <Field>
           <div class="flex flex-wrap items-center justify-between gap-2">
-            <FieldLabel>权限套餐</FieldLabel>
+            <FieldLabel>功能入口</FieldLabel>
             <div class="flex flex-wrap gap-2">
               <Badge variant="outline">{{ roles.selectedPermissionCount.value }} 项</Badge>
               <Badge
@@ -822,60 +842,49 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
               </Badge>
             </div>
           </div>
-          <div class="flex flex-col gap-3">
-            <div
-              v-for="group in roles.permissionPresetGroups"
-              :key="group.id"
-              class="flex flex-col gap-2 rounded-md border p-3"
+          <div
+            v-if="entryPermissionPresetGroup"
+            class="grid gap-2 md:grid-cols-2"
+          >
+            <Button
+              v-for="preset in entryPermissionPresetGroup.presets"
+              :key="preset.id"
+              variant="outline"
+              :class="[
+                'h-auto max-w-full justify-start whitespace-normal rounded-md px-3 py-2 text-left',
+                permissionTileClass(isPresetSelected(preset.id)),
+              ]"
+              :title="isPresetSelected(preset.id) ? '再次点击移除该入口' : '点击授予该入口'"
+              @click="roles.togglePermissionPreset(preset.id)"
             >
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="text-sm font-medium">{{ group.label }}</span>
-                <Badge variant="outline">
-                  {{ selectedPresetCount(group) }} / {{ group.presets.length }}
-                </Badge>
-              </div>
-              <div class="grid gap-2 md:grid-cols-2">
-                <Button
-                  v-for="preset in group.presets"
-                  :key="preset.id"
-                  variant="outline"
-                  :class="[
-                    'h-auto max-w-full justify-start whitespace-normal rounded-md px-3 py-2 text-left',
-                    permissionTileClass(isPresetSelected(preset.id)),
-                  ]"
-                  :title="isPresetSelected(preset.id) ? '再次点击移除该套餐' : '点击应用该套餐'"
-                  @click="roles.togglePermissionPreset(preset.id)"
-                >
-                  <span class="flex min-w-0 flex-1 flex-col gap-1">
-                    <span class="flex min-w-0 items-start justify-between gap-2">
-                      <span class="flex min-w-0 flex-wrap items-center gap-2">
-                        <span class="font-medium">{{ preset.label }}</span>
-                        <Badge :variant="riskBadgeVariant(preset.risk)">
-                          {{ permissionRiskLabel(preset.risk) }}
-                        </Badge>
-                      </span>
-                      <CheckIcon
-                        :class="[
-                          'mt-0.5 size-4 shrink-0 transition-opacity',
-                          selectedCheckClass(isPresetSelected(preset.id)),
-                        ]"
-                        aria-hidden="true"
-                      />
-                    </span>
-                    <span
-                      :class="[
-                        'text-xs leading-5',
-                        isPresetSelected(preset.id) ? 'text-foreground/70' : 'text-muted-foreground',
-                      ]"
-                    >
-                      {{ preset.description }}
-                    </span>
+              <span class="flex min-w-0 flex-1 flex-col gap-1">
+                <span class="flex min-w-0 items-start justify-between gap-2">
+                  <span class="flex min-w-0 flex-wrap items-center gap-2">
+                    <span class="font-medium">{{ preset.label }}</span>
+                    <Badge :variant="riskBadgeVariant(preset.risk)">
+                      {{ permissionRiskLabel(preset.risk) }}
+                    </Badge>
                   </span>
-                </Button>
-              </div>
-            </div>
+                  <CheckIcon
+                    :class="[
+                      'mt-0.5 size-4 shrink-0 transition-opacity',
+                      selectedCheckClass(isPresetSelected(preset.id)),
+                    ]"
+                    aria-hidden="true"
+                  />
+                </span>
+                <span
+                  :class="[
+                    'text-xs leading-5',
+                    isPresetSelected(preset.id) ? 'text-foreground/70' : 'text-muted-foreground',
+                  ]"
+                >
+                  {{ preset.description }}
+                </span>
+              </span>
+            </Button>
           </div>
-          <FieldDescription>点击套餐会应用权限；再次点击已应用套餐会移除该套餐权限，底层权限仍可继续微调。</FieldDescription>
+          <FieldDescription>普通角色优先选择入口；SQL 执行复用标题栏按钮和执行弹窗，不单独占用工作区视图。</FieldDescription>
         </Field>
         <Field>
           <Collapsible
@@ -885,8 +894,8 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
           >
             <div class="flex flex-wrap items-center justify-between gap-2">
               <div class="flex flex-wrap items-center gap-2">
-                <FieldLabel>高级权限</FieldLabel>
-                <Badge variant="secondary">已按依赖排序</Badge>
+                <FieldLabel>高级能力</FieldLabel>
+                <Badge variant="secondary">可选</Badge>
               </div>
               <CollapsibleTrigger as-child>
                 <Button
@@ -904,8 +913,55 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
                 </Button>
               </CollapsibleTrigger>
             </div>
-            <FieldDescription>需要精细调整时再展开底层权限；普通角色配置优先使用上方套餐。</FieldDescription>
+            <FieldDescription>只有需要导出、编辑配置、治理数据授权或超级管理员时再展开。</FieldDescription>
             <CollapsibleContent class="flex flex-col gap-3">
+              <FieldSet
+                v-for="group in advancedPermissionPresetGroups"
+                :key="group.id"
+                class="gap-2 rounded-md border p-3"
+              >
+                <FieldLegend
+                  variant="label"
+                  class="mb-0 text-muted-foreground"
+                >
+                  <span class="flex flex-wrap items-center gap-2">
+                    <span>{{ group.label }}</span>
+                    <Badge variant="outline">
+                      {{ selectedPresetCount(group) }} / {{ group.presets.length }}
+                    </Badge>
+                  </span>
+                </FieldLegend>
+                <div class="grid gap-2 md:grid-cols-2">
+                  <Button
+                    v-for="preset in group.presets"
+                    :key="preset.id"
+                    variant="outline"
+                    size="sm"
+                    :class="[
+                      'h-auto max-w-full justify-start whitespace-normal rounded-md px-3 py-2 text-left',
+                      permissionTileClass(isPresetSelected(preset.id)),
+                    ]"
+                    :title="preset.description"
+                    @click="roles.togglePermissionPreset(preset.id)"
+                  >
+                    <span class="flex min-w-0 flex-1 items-start justify-between gap-2">
+                      <span class="flex min-w-0 flex-wrap items-center gap-2">
+                        <span>{{ preset.label }}</span>
+                        <Badge :variant="riskBadgeVariant(preset.risk)">
+                          {{ permissionRiskLabel(preset.risk) }}
+                        </Badge>
+                      </span>
+                      <CheckIcon
+                        :class="[
+                          'mt-0.5 size-4 shrink-0 transition-opacity',
+                          selectedCheckClass(isPresetSelected(preset.id)),
+                        ]"
+                        aria-hidden="true"
+                      />
+                    </span>
+                  </Button>
+                </div>
+              </FieldSet>
               <FieldSet
                 v-for="group in roles.featureGroups"
                 :key="group.id"
@@ -929,7 +985,7 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
                     variant="outline"
                     size="sm"
                     :class="[
-                      'h-auto max-w-full whitespace-normal rounded-md py-2 text-left',
+                      'h-8 max-w-full rounded-md px-2.5 text-left',
                       permissionTileClass(
                         isPermissionSelected(option.value),
                         option.kind === 'wildcard' ? 'destructive' : 'primary',
@@ -938,33 +994,28 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
                     :title="option.description"
                     @click="roles.toggleSelectedFeature(option.value)"
                   >
-                    <span class="flex min-w-0 flex-col gap-1">
-                      <span class="flex min-w-0 items-start justify-between gap-2">
-                        <span class="flex min-w-0 flex-wrap items-center gap-2">
-                          <span>{{ option.label }}</span>
-                          <Badge :variant="riskBadgeVariant(option.risk)">
-                            {{ permissionRiskLabel(option.risk) }}
-                          </Badge>
-                        </span>
-                        <CheckIcon
-                          :class="[
-                            'mt-0.5 size-4 shrink-0 transition-opacity',
-                            selectedCheckClass(
-                              isPermissionSelected(option.value),
-                              option.kind === 'wildcard' ? 'destructive' : 'primary',
-                            ),
-                          ]"
-                          aria-hidden="true"
-                        />
-                      </span>
-                      <span
+                    <span class="flex min-w-0 items-center gap-2">
+                      <span class="truncate">{{ option.label }}</span>
+                      <Badge
+                        v-if="option.risk === 'high' || option.kind === 'wildcard'"
                         :class="[
-                          'break-all text-xs leading-5',
-                          isPermissionSelected(option.value) ? 'text-foreground/70' : 'text-muted-foreground',
+                          'h-5 shrink-0 px-1.5 text-xs',
+                          option.kind === 'wildcard' ? 'border-destructive/30 text-destructive' : '',
                         ]"
+                        :variant="option.kind === 'wildcard' ? 'outline' : riskBadgeVariant(option.risk)"
                       >
-                        {{ option.value }}
-                      </span>
+                        {{ option.kind === 'wildcard' ? '通配' : permissionRiskLabel(option.risk) }}
+                      </Badge>
+                      <CheckIcon
+                        :class="[
+                          'size-4 shrink-0 transition-opacity',
+                          selectedCheckClass(
+                            isPermissionSelected(option.value),
+                            option.kind === 'wildcard' ? 'destructive' : 'primary',
+                          ),
+                        ]"
+                        aria-hidden="true"
+                      />
                     </span>
                   </Button>
                 </div>

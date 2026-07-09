@@ -61,12 +61,13 @@ describe("permission labels", () => {
     const groupedValues = ROLE_PERMISSION_GROUPS.flatMap((group) => group.options.map((option) => option.value));
 
     expect(ROLE_PERMISSION_GROUPS.map((group) => group.label)).toEqual([
+      "功能入口",
+      "对话增强",
+      "产物操作",
+      "MCP 操作",
+      "配置与运维",
+      "治理权限",
       "特殊权限",
-      "核心功能",
-      "MCP 管理",
-      "报表与仪表盘",
-      "配置",
-      "管理后台",
     ]);
     expect(groupedValues).toHaveLength(ROLE_PERMISSION_OPTIONS.length);
     expect([...groupedValues].sort()).toEqual([...ROLE_PERMISSION_OPTIONS.map((option) => option.value)].sort());
@@ -91,16 +92,21 @@ describe("permission labels", () => {
 
   it("applies role permission presets with prerequisites", () => {
     expect(ROLE_PERMISSION_PRESETS.map((preset) => preset.id)).toEqual([
-      "workspace-basic",
-      "sql-analysis",
-      "artifact-viewer",
+      "view-chat",
+      "view-artifacts",
+      "view-sql",
+      "view-knowledge",
+      "view-mcp",
+      "view-agent",
+      "view-configuration",
+      "view-permissions",
       "artifact-operator",
-      "knowledge-user",
-      "mcp-observer",
+      "mcp-operator",
       "user-role-admin",
       "governance-admin",
       "audit-viewer",
       "platform-ops",
+      "config-editor",
       "enterprise-admin",
     ]);
     expect(ROLE_PERMISSION_PRESET_GROUPS.map((group) => ({
@@ -108,27 +114,55 @@ describe("permission labels", () => {
       presets: group.presets.map((preset) => preset.id),
     }))).toEqual([
       {
-        label: "基础使用",
-        presets: ["workspace-basic", "knowledge-user", "mcp-observer"],
+        label: "功能入口",
+        presets: [
+          "view-chat",
+          "view-artifacts",
+          "view-sql",
+          "view-knowledge",
+          "view-mcp",
+          "view-agent",
+          "view-configuration",
+          "view-permissions",
+        ],
       },
       {
-        label: "数据分析",
-        presets: ["sql-analysis", "artifact-viewer", "artifact-operator"],
+        label: "增强能力",
+        presets: ["artifact-operator", "mcp-operator"],
       },
       {
-        label: "治理管理",
+        label: "治理权限",
         presets: ["user-role-admin", "governance-admin", "audit-viewer"],
       },
       {
         label: "平台运维",
-        presets: ["platform-ops", "enterprise-admin"],
+        presets: ["platform-ops", "config-editor", "enterprise-admin"],
       },
+    ]);
+    expect(applyPermissionPresetSelection([], "view-artifacts")).toEqual([
+      "module.report.view",
+      "module.dashboard.view",
+      "module.report.query",
+      "module.dashboard.query",
+    ]);
+    expect(applyPermissionPresetSelection([], "view-mcp")).toEqual([
+      "module.mcp",
+      "mcp.server.list",
+      "mcp.server.tools",
+    ]);
+    expect(applyPermissionPresetSelection([], "view-sql")).toEqual([
+      "module.sql_executor",
+      "module.datasource_catalog",
+    ]);
+    expect(applyPermissionPresetSelection([], "view-configuration")).toEqual([
+      "module.config.view",
+      "module.system.status",
     ]);
     expect(applyPermissionPresetSelection([], "artifact-operator")).toEqual([
       "module.report.view",
+      "module.dashboard.view",
       "module.report.query",
       "module.report.export",
-      "module.dashboard.view",
       "module.dashboard.query",
       "module.dashboard.export",
     ]);
@@ -138,12 +172,12 @@ describe("permission labels", () => {
     const selected = applyPermissionPresetSelection([], "platform-ops");
 
     expect(selected).toEqual([
+      "module.admin.agents",
       "module.config.view",
       "module.config.edit",
       "module.admin.sessions",
       "module.admin.quotas",
       "module.admin.secrets",
-      "module.admin.agents",
       "module.system.status",
     ]);
     expect(togglePermissionPresetSelection(selected, "platform-ops")).toEqual([]);
@@ -151,18 +185,16 @@ describe("permission labels", () => {
 
   it("keeps shared permissions when toggling one selected preset off", () => {
     const selected = applyPermissionPresetSelection(
-      applyPermissionPresetSelection([], "workspace-basic"),
+      applyPermissionPresetSelection([], "view-configuration"),
       "audit-viewer",
     );
 
     expect(selected).toEqual([
-      "module.chat",
-      "module.datasource_catalog",
       "module.config.view",
       "module.admin.audit",
       "module.system.status",
     ]);
-    expect(togglePermissionPresetSelection(selected, "workspace-basic")).toEqual([
+    expect(togglePermissionPresetSelection(selected, "view-configuration")).toEqual([
       "module.admin.audit",
       "module.system.status",
     ]);

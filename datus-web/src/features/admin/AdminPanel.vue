@@ -2,6 +2,7 @@
 import { computed, onMounted, watch } from "vue"
 import { useAdminOverview } from "@/composables/useAdminOverview"
 import { useAuditLogs } from "@/composables/useAuditLogs"
+import { usePermission } from "@/composables/usePermission"
 import { useRoleManager } from "@/composables/useRoleManager"
 import { useUserManager } from "@/composables/useUserManager"
 import AdminDialogs from "@/features/admin/AdminDialogs.vue"
@@ -21,6 +22,7 @@ const users = useUserManager()
 const roles = useRoleManager()
 const audits = useAuditLogs()
 const overview = useAdminOverview()
+const permission = usePermission()
 
 const props = withDefaults(defineProps<AdminPanelProps>(), {
   activeTab: "users",
@@ -44,6 +46,25 @@ const emit = defineEmits<{
 }>()
 
 const loading = computed(() => users.loading.value || roles.loading.value || audits.loading.value || overview.loading.value)
+const canViewUsers = computed(() => permission.hasPermission("module.admin.users"))
+const canViewRoles = computed(() => permission.hasPermission("module.admin.roles"))
+const canViewDatasourceGrants = computed(() => permission.hasPermission("module.admin.datasources"))
+const canViewSessions = computed(() => permission.hasPermission("module.admin.sessions"))
+const canViewQuotas = computed(() => permission.hasPermission("module.admin.quotas"))
+const canViewSecrets = computed(() => permission.hasPermission("module.admin.secrets"))
+const canViewArtifacts = computed(() => permission.hasPermission("module.admin.artifacts"))
+const canViewAudit = computed(() => permission.hasPermission("module.admin.audit"))
+const firstAvailableAdminTab = computed<AdminViewTab | null>(() => {
+  if (canViewUsers.value) return "users"
+  if (canViewRoles.value) return "roles"
+  if (canViewDatasourceGrants.value) return "grants"
+  if (canViewSessions.value) return "sessions"
+  if (canViewArtifacts.value) return "artifacts"
+  if (canViewQuotas.value) return "quotas"
+  if (canViewSecrets.value) return "secrets"
+  if (canViewAudit.value) return "audit"
+  return null
+})
 const usageByKey = computed(() => {
   const map = new Map<string, (typeof overview.data.value.usage)[number]>()
   for (const item of overview.data.value.usage) {
@@ -52,37 +73,72 @@ const usageByKey = computed(() => {
   return map
 })
 
-function loadAll() {
-  void users.loadUsers()
-  void roles.loadRoles()
-  audits.loadActionTypes()
+async function ensurePermissionsLoaded() {
+  if (!permission.isLoaded.value) {
+    await permission.fetchPermissions()
+  }
+}
+
+function canViewAdminTab(tab: AdminViewTab) {
+  if (tab === "users") return canViewUsers.value
+  if (tab === "roles") return canViewRoles.value
+  if (tab === "grants") return canViewDatasourceGrants.value
+  if (tab === "sessions") return canViewSessions.value
+  if (tab === "quotas") return canViewQuotas.value
+  if (tab === "secrets") return canViewSecrets.value
+  if (tab === "artifacts") return canViewArtifacts.value
+  return canViewAudit.value
+}
+
+function redirectUnauthorizedActiveTab() {
+  if (canViewAdminTab(props.activeTab)) return
+  const fallbackTab = firstAvailableAdminTab.value
+  if (fallbackTab) {
+    emit("update:activeTab", fallbackTab)
+  }
+}
+
+async function loadAll() {
+  await ensurePermissionsLoaded()
+  redirectUnauthorizedActiveTab()
+  if (canViewUsers.value) void users.loadUsers()
+  if (canViewRoles.value) void roles.loadRoles()
+  if (canViewAudit.value) audits.loadActionTypes()
   void overview.loadOverview()
 }
 
 function refreshActiveTab() {
   switch (props.activeTab) {
     case "users":
+      if (!canViewUsers.value) return
       void users.loadUsers()
       return
     case "roles":
+      if (!canViewRoles.value) return
       void roles.loadRoles()
       return
     case "grants":
+      if (!canViewDatasourceGrants.value) return
       void overview.loadDatasourceGrants()
       return
     case "sessions":
+      if (!canViewSessions.value) return
       void overview.loadSessions()
       return
     case "quotas":
+      if (!canViewQuotas.value) return
       void overview.loadQuotasAndUsage()
       return
     case "secrets":
+      if (!canViewSecrets.value) return
       void overview.loadSecrets()
       return
     case "artifacts":
+      if (!canViewArtifacts.value) return
       void overview.loadArtifacts()
       return
     case "audit":
+      if (!canViewAudit.value) return
       audits.loadActionTypes()
       void audits.loadLogs()
   }
@@ -121,7 +177,7 @@ function setQuotaWindow(value: string | number) {
 }
 
 function setActiveTab(value: unknown) {
-  if (typeof value === "string" && isAdminViewTab(value)) {
+  if (typeof value === "string" && isAdminViewTab(value) && canViewAdminTab(value)) {
     emit("update:activeTab", value)
   }
 }
@@ -266,7 +322,27 @@ async function saveArtifactAclAndCloseRoute() {
   }
 }
 
-onMounted(loadAll)
+onMounted(() => {
+  void loadAll()
+})
+
+watch(
+  () => [
+    props.activeTab,
+    canViewUsers.value,
+    canViewRoles.value,
+    canViewDatasourceGrants.value,
+    canViewSessions.value,
+    canViewArtifacts.value,
+    canViewQuotas.value,
+    canViewSecrets.value,
+    canViewAudit.value,
+  ] as const,
+  () => {
+    if (!permission.isLoaded.value) return
+    redirectUnauthorizedActiveTab()
+  },
+)
 
 watch(
   () => [
@@ -280,7 +356,7 @@ watch(
   ] as const,
   ([tab, userId, roleId, grant, sessionId, secretName, artifact]) => {
     const normalizedUserId = userId?.trim() ?? ""
-    if (tab !== "users" || !normalizedUserId) {
+    if (tab !== "users" || !normalizedUserId || !canViewUsers.value) {
       if (users.selectedUserDetailId.value) {
         users.closeUserDetail()
       }
@@ -292,7 +368,7 @@ watch(
     }
 
     const normalizedRoleId = roleId?.trim() ?? ""
-    if (tab !== "roles" || !normalizedRoleId) {
+    if (tab !== "roles" || !normalizedRoleId || !canViewRoles.value) {
       if (roles.selectedRoleDetailId.value) {
         roles.closeRoleDetail()
       }
@@ -309,7 +385,7 @@ watch(
     const normalizedGrantKey = normalizedGrantSubjectType && normalizedGrantSubjectId && normalizedGrantDatasourceKey
       ? grantKey(normalizedGrantSubjectType, normalizedGrantSubjectId, normalizedGrantDatasourceKey)
       : ""
-    if (tab !== "grants" || !normalizedGrantKey) {
+    if (tab !== "grants" || !normalizedGrantKey || !canViewDatasourceGrants.value) {
       if (overview.selectedGrantRouteKey.value) {
         overview.closeGrantDialog()
       }
@@ -325,7 +401,7 @@ watch(
     }
 
     const normalizedSessionId = sessionId?.trim() ?? ""
-    if (tab !== "sessions" || !normalizedSessionId) {
+    if (tab !== "sessions" || !normalizedSessionId || !canViewSessions.value) {
       if (overview.selectedSessionDetailId.value) {
         overview.closeSessionDetail()
       }
@@ -337,7 +413,7 @@ watch(
     }
 
     const normalizedSecretName = secretName?.trim() ?? ""
-    if (tab !== "secrets" || !normalizedSecretName) {
+    if (tab !== "secrets" || !normalizedSecretName || !canViewSecrets.value) {
       if (overview.selectedSecretName.value) {
         overview.closeSecretDialog()
       }
@@ -349,7 +425,7 @@ watch(
     }
 
     const normalizedArtifactSlug = artifact?.slug.trim() ?? ""
-    if (tab !== "artifacts" || !artifact || !normalizedArtifactSlug) {
+    if (tab !== "artifacts" || !artifact || !normalizedArtifactSlug || !canViewArtifacts.value) {
       if (overview.selectedArtifactAclKey.value) {
         overview.closeArtifactAclDialog()
       }
@@ -369,7 +445,7 @@ watch(
 watch(
   () => [props.activeTab, props.activeAudit] as const,
   ([tab, audit]) => {
-    if (tab !== "audit") return
+    if (tab !== "audit" || !canViewAudit.value) return
 
     const changed = audits.applyRouteFilters(audit ?? {
       userId: null,

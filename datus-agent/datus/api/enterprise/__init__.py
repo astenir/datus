@@ -20,6 +20,7 @@ from datus.api.enterprise.deps import (
     authorize,
     authorize_session_access,
     delete_session_owner,
+    require_any_module,
     require_module,
 )
 from datus.api.enterprise.loader import EnterpriseExtensions, load_enterprise_extensions
@@ -80,5 +81,6 @@ __all__ = [
     "authorize_session_access",
     "delete_session_owner",
     "load_enterprise_extensions",
+    "require_any_module",
     "require_module",
 ]

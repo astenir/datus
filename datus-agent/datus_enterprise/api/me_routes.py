@@ -33,6 +33,18 @@ _FEATURE_PERMISSIONS = {
     "config_edit": "module.config.edit",
 }
 
+_VIEW_PERMISSIONS = {
+    "chat": ("module.chat",),
+    "artifacts": ("module.report.view", "module.dashboard.view"),
+    "artifact_reports": ("module.report.view",),
+    "artifact_dashboards": ("module.dashboard.view",),
+    "knowledge": ("module.kb",),
+    "mcp": ("module.mcp",),
+    "agents": ("module.admin.agents",),
+    "configuration": ("module.config.view", "module.config.edit"),
+    "permissions": ("module.admin.users", "module.admin.roles"),
+}
+
 
 class MeSummary(BaseModel):
     user_id: str | None = None
@@ -41,6 +53,7 @@ class MeSummary(BaseModel):
     permissions: list[str] = Field(default_factory=list)
     datasource_grants: dict[str, Any] = Field(default_factory=dict)
     features: dict[str, bool] = Field(default_factory=dict)
+    views: dict[str, bool] = Field(default_factory=dict)
     is_admin: bool = False
 
 
@@ -66,6 +79,11 @@ async def get_my_datasource_grants(ctx: RequestContextDep) -> Result[dict[str, A
 @router.get("/me/features", response_model=Result[dict[str, bool]], summary="Get Current User Features")
 async def get_my_features(ctx: RequestContextDep) -> Result[dict[str, bool]]:
     return Result(success=True, data=_features(ctx))
+
+
+@router.get("/me/views", response_model=Result[dict[str, bool]], summary="Get Current User Workspace Views")
+async def get_my_views(ctx: RequestContextDep) -> Result[dict[str, bool]]:
+    return Result(success=True, data=_views(ctx))
 
 
 @router.get("/me/sessions", response_model=Result[ChatSessionData], summary="Get Current User Sessions")
@@ -94,6 +112,7 @@ def _me_summary(ctx: AppContext) -> MeSummary:
         permissions=permissions,
         datasource_grants=_datasource_grants(ctx),
         features=_features_for_permissions(permissions),
+        views=_views_for_permissions(permissions, is_admin=bool(ctx.is_admin)),
         is_admin=bool(ctx.is_admin),
     )
 
@@ -131,8 +150,26 @@ def _features(ctx: AppContext) -> dict[str, bool]:
     return _features_for_permissions(_permissions(ctx))
 
 
+def _views(ctx: AppContext) -> dict[str, bool]:
+    return _views_for_permissions(_permissions(ctx), is_admin=bool(ctx.is_admin))
+
+
 def _features_for_permissions(permissions: list[str]) -> dict[str, bool]:
     return {
         feature: any(permission == "*" or fnmatchcase(required, permission) for permission in permissions)
         for feature, required in _FEATURE_PERMISSIONS.items()
     }
+
+
+def _views_for_permissions(permissions: list[str], *, is_admin: bool = False) -> dict[str, bool]:
+    views = {
+        view: is_admin
+        or any(
+            permission == "*" or fnmatchcase(required, permission)
+            for required in required_permissions
+            for permission in permissions
+        )
+        for view, required_permissions in _VIEW_PERMISSIONS.items()
+    }
+    views["profile"] = True
+    return views

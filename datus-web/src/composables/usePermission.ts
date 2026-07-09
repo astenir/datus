@@ -25,6 +25,7 @@ interface ApiResponse<T> {
 export interface UserPermissions {
   user_id: string;
   features: string[];      // 功能权限代码数组
+  views: string[];         // 工作区视图代码数组
   datasources: string[];   // 数据源名称数组
   permissions: string[];
   datasource_grants: Record<string, unknown>;
@@ -36,6 +37,7 @@ type MeSummaryPayload = {
   permissions?: string[];
   datasource_grants?: Record<string, unknown>;
   features?: Record<string, boolean>;
+  views?: Record<string, boolean>;
   is_admin?: boolean;
 };
 
@@ -48,14 +50,56 @@ function normalizeMeSummary(payload: MeSummaryPayload | null | undefined): UserP
   if (!payload) return null;
 
   const featureEntries = Object.entries(payload.features ?? {});
+  const viewEntries = Object.entries(payload.views ?? deriveViews(payload));
   const datasourceGrants = payload.datasource_grants ?? {};
   return {
     user_id: payload.user_id ?? "",
     features: featureEntries.filter(([, enabled]) => enabled).map(([feature]) => feature),
+    views: viewEntries.filter(([, enabled]) => enabled).map(([view]) => view),
     datasources: Object.keys(datasourceGrants).filter((datasource) => Boolean(datasourceGrants[datasource])),
     permissions: payload.permissions ?? [],
     datasource_grants: datasourceGrants,
     is_admin: payload.is_admin === true,
+  };
+}
+
+function deriveViews(payload: MeSummaryPayload): Record<string, boolean> {
+  const permissions = payload.permissions ?? [];
+  const features = payload.features ?? {};
+  const isAdmin = payload.is_admin === true;
+  const hasPermission = (permissionCode: string) =>
+    permissions.some((permission) => permissionMatches(permissionCode, permission));
+  const hasFeature = (featureCode: string) => features[featureCode] === true;
+
+  return {
+    chat: isAdmin || hasFeature("chat") || hasPermission("module.chat"),
+    artifacts: isAdmin
+      || hasFeature("report")
+      || hasFeature("dashboard")
+      || hasFeature("report_view")
+      || hasFeature("dashboard_view")
+      || hasPermission("module.report.view")
+      || hasPermission("module.dashboard.view"),
+    artifact_reports: isAdmin || hasFeature("report") || hasFeature("report_view") || hasPermission("module.report.view"),
+    artifact_dashboards: isAdmin
+      || hasFeature("dashboard")
+      || hasFeature("dashboard_view")
+      || hasPermission("module.dashboard.view"),
+    knowledge: isAdmin
+      || hasFeature("kb")
+      || hasPermission("module.kb"),
+    mcp: isAdmin || hasFeature("mcp") || hasPermission("module.mcp"),
+    agents: isAdmin || hasPermission("module.admin.agents"),
+    configuration: isAdmin
+      || hasFeature("config_view")
+      || hasFeature("config_edit")
+      || hasPermission("module.config.view")
+      || hasPermission("module.config.edit"),
+    permissions: isAdmin
+      || hasFeature("admin")
+      || hasPermission("module.admin.users")
+      || hasPermission("module.admin.roles"),
+    profile: true,
   };
 }
 
@@ -111,6 +155,11 @@ export function usePermission() {
     return permissions.value.permissions.some((permission) => permissionMatches(permissionCode, permission));
   }
 
+  function hasViewPermission(viewCode: string): boolean {
+    if (!permissions.value) return viewCode === "profile";
+    return permissions.value.views.includes(viewCode);
+  }
+
   /**
    * 检查是否有数据源访问权限
    * @param datasourceName 数据源名称
@@ -123,7 +172,7 @@ export function usePermission() {
       return true;
     }
 
-    return permissions.value.datasources.includes(datasourceName);
+    return permissions.value.datasources.includes(datasourceName) || permissions.value.datasources.includes("*");
   }
 
   /**
@@ -155,6 +204,7 @@ export function usePermission() {
     isLoaded,
     fetchPermissions,
     hasFeaturePermission,
+    hasViewPermission,
     hasPermission,
     hasDatasourcePermission,
     isAdmin,

@@ -377,6 +377,45 @@ def require_module(permission_key: str):
     return _dependency
 
 
+def require_any_module(*permission_keys: str):
+    """FastAPI dependency factory that accepts any one module permission."""
+
+    normalized_keys = tuple(key.strip() for key in permission_keys if key.strip())
+    if not normalized_keys:
+        raise ValueError("At least one module permission is required.")
+
+    async def _dependency(request: Request) -> AppContext:
+        ctx = await _module_auth_context(request)
+        denial_reasons: list[str] = []
+        for permission_key in normalized_keys:
+            decision = await authorize(
+                ctx,
+                action=permission_key,
+                resource=ResourceRef(type="module", id=permission_key),
+            )
+            if decision.allowed:
+                return ctx
+            if decision.reason:
+                denial_reasons.append(decision.reason)
+
+        reason = f"Requires one of: {', '.join(normalized_keys)}."
+        if denial_reasons:
+            reason = denial_reasons[0]
+        await _write_audit_best_effort(
+            AuditEvent(
+                user_id=ctx.user_id,
+                action="module.any",
+                resource_type="module",
+                resource_id="|".join(normalized_keys),
+                decision="deny",
+                reason=reason,
+            )
+        )
+        raise HTTPException(status_code=403, detail=reason)
+
+    return _dependency
+
+
 async def _module_auth_context(request: Request) -> AppContext:
     from datus.api.deps import get_enterprise_extensions, get_request_app_context
 

@@ -6,6 +6,7 @@ import type {
   AdminUser,
   AdminUserDetail,
   AdminUserFormData,
+  AdminUserRolesData,
   AdminUserSearchForm,
   ApiResponse,
   AssignableRole,
@@ -61,6 +62,11 @@ function userSaveFailureMessage(result: ApiResponse<AdminUser>): string {
   return result.errorMessage || "保存失败，请重试";
 }
 
+function userRoleAssignmentFailureMessage(result: ApiResponse<AdminUserRolesData>): string {
+  if (result.errorCode === "USER_ROLES_FORBIDDEN") return "不能分配包含自己尚未拥有权限的角色";
+  return result.errorMessage || "角色分配失败，请重试";
+}
+
 export function useUserManager() {
   const searchForm = ref<AdminUserSearchForm>({
     status: "all",
@@ -87,6 +93,7 @@ export function useUserManager() {
   const userDialogMode = shallowRef<UserDialogMode>("create");
   const editingUser = shallowRef<AdminUser | null>(null);
   const newUserForm = ref<AdminUserFormData>(emptyUserForm());
+  const userDialogError = shallowRef<string | null>(null);
   const savingUser = shallowRef(false);
 
   const activeUserCount = computed(() => users.value.filter((user) => user.enabled).length);
@@ -228,6 +235,7 @@ export function useUserManager() {
     roleAssignmentError.value = null;
     loadingRoleAssignment.value = false;
     newUserForm.value = emptyUserForm();
+    userDialogError.value = null;
     showAddUserDialog.value = true;
   }
 
@@ -236,6 +244,7 @@ export function useUserManager() {
     editingUser.value = user;
     selectedRoleIds.value = [...(user.role_ids ?? [])];
     newUserForm.value = userFormFromUser(user);
+    userDialogError.value = null;
     showAddUserDialog.value = true;
     await loadRoleAssignment(user);
   }
@@ -249,6 +258,7 @@ export function useUserManager() {
     roleAssignmentError.value = null;
     loadingRoleAssignment.value = false;
     userDialogMode.value = "create";
+    userDialogError.value = null;
   }
 
   async function saveUser() {
@@ -256,19 +266,23 @@ export function useUserManager() {
       ? editingUser.value?.user_id ?? newUserForm.value.user_id.trim()
       : newUserForm.value.user_id.trim();
     if (!userId) {
+      userDialogError.value = "请输入用户 ID";
       toast.error("请输入用户 ID");
       return;
     }
     if (isEditingUser.value && loadingRoleAssignment.value) {
+      userDialogError.value = "请等待角色加载完成";
       toast.error("请等待角色加载完成");
       return;
     }
     if (isEditingUser.value && roleAssignmentError.value) {
+      userDialogError.value = "角色加载失败，请重新打开后再保存";
       toast.error("角色加载失败，请重新打开后再保存");
       return;
     }
 
     savingUser.value = true;
+    userDialogError.value = null;
     try {
       const result = await adminUserApi.upsertUser(userId, {
         display_name: newUserForm.value.display_name.trim() || null,
@@ -279,16 +293,25 @@ export function useUserManager() {
         enabled: newUserForm.value.enabled,
       });
       if (result?.success === false) {
-        toast.error(userSaveFailureMessage(result));
+        const message = userSaveFailureMessage(result);
+        userDialogError.value = message;
+        toast.error(message);
         return;
       }
       if (isEditingUser.value && roleAssignmentLoaded.value && !roleAssignmentError.value) {
-        await adminUserApi.updateUserRoles(userId, selectedRoleIds.value);
+        const roleResult = await adminUserApi.updateUserRoles(userId, selectedRoleIds.value);
+        if (roleResult?.success === false) {
+          const message = userRoleAssignmentFailureMessage(roleResult);
+          userDialogError.value = message;
+          toast.error(message);
+          return;
+        }
       }
       closeUserDialog();
       void loadUsers();
     } catch (err) {
       console.error("保存用户失败:", err);
+      userDialogError.value = "保存失败，请重试";
       toast.error("保存失败，请重试");
     } finally {
       savingUser.value = false;
@@ -313,6 +336,7 @@ export function useUserManager() {
     roleAssignmentError,
     showAddUserDialog,
     newUserForm,
+    userDialogError,
     savingUser,
     activeUserCount,
     disabledUserCount,

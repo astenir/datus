@@ -55,11 +55,21 @@ import { userDisableBlockedReason as disableBlockedReasonForUser } from "@/featu
 import { auditLogLimitOptions } from "@/lib/audit-log-pagination"
 import { permissionBadgeItems } from "@/lib/permission-labels"
 import type { AdminArtifact, AdminUser } from "@/types/admin"
+import type { AdminViewTab } from "@/features/workspace/types"
+import { isAdminViewTab } from "@/features/workspace/types"
 
 const props = defineProps<AdminManagementTabProps>()
 const permission = usePermission()
 
 const currentUserId = computed(() => permission.permissions.value?.user_id.trim() ?? "")
+const canViewUsers = computed(() => permission.hasPermission("module.admin.users"))
+const canViewRoles = computed(() => permission.hasPermission("module.admin.roles"))
+const canViewDatasourceGrants = computed(() => permission.hasPermission("module.admin.datasources"))
+const canViewSessions = computed(() => permission.hasPermission("module.admin.sessions"))
+const canViewQuotas = computed(() => permission.hasPermission("module.admin.quotas"))
+const canViewSecrets = computed(() => permission.hasPermission("module.admin.secrets"))
+const canViewArtifacts = computed(() => permission.hasPermission("module.admin.artifacts"))
+const canViewAudit = computed(() => permission.hasPermission("module.admin.audit"))
 type EnabledStatusFilter = "all" | "enabled" | "disabled"
 type RoleTypeFilter = "all" | "built_in" | "custom"
 type GrantEffectFilter = "all" | "allow" | "deny"
@@ -302,24 +312,81 @@ function requestSetUserEnabled(user: AdminUser, enabled: boolean) {
   }
   void props.users.setUserEnabled(user, enabled)
 }
+
+function canViewAdminTab(tab: AdminViewTab): boolean {
+  if (tab === "users") return canViewUsers.value
+  if (tab === "roles") return canViewRoles.value
+  if (tab === "grants") return canViewDatasourceGrants.value
+  if (tab === "sessions") return canViewSessions.value
+  if (tab === "quotas") return canViewQuotas.value
+  if (tab === "secrets") return canViewSecrets.value
+  if (tab === "artifacts") return canViewArtifacts.value
+  return canViewAudit.value
+}
+
+function setPermittedActiveTab(value: unknown): void {
+  if (typeof value === "string" && isAdminViewTab(value) && canViewAdminTab(value)) {
+    props.setActiveTab(value)
+  }
+}
 </script>
 
 <template>
   <Tabs
     :model-value="activeTab"
     class="flex min-h-0 min-w-0 flex-1 flex-col gap-4"
-    @update:model-value="setActiveTab"
+    @update:model-value="setPermittedActiveTab"
   >
     <div class="flex min-w-0 flex-wrap items-center justify-between gap-3">
       <TabsList class="flex h-auto max-w-full !flex-row flex-wrap justify-start overflow-x-auto">
-        <TabsTrigger value="users">用户</TabsTrigger>
-        <TabsTrigger value="roles">角色</TabsTrigger>
-        <TabsTrigger value="grants">数据授权</TabsTrigger>
-        <TabsTrigger value="sessions">会话</TabsTrigger>
-        <TabsTrigger value="artifacts">产物</TabsTrigger>
-        <TabsTrigger value="quotas">额度</TabsTrigger>
-        <TabsTrigger value="secrets">密钥</TabsTrigger>
-        <TabsTrigger value="audit">审计</TabsTrigger>
+        <TabsTrigger
+          v-if="canViewUsers"
+          value="users"
+        >
+          用户
+        </TabsTrigger>
+        <TabsTrigger
+          v-if="canViewRoles"
+          value="roles"
+        >
+          角色
+        </TabsTrigger>
+        <TabsTrigger
+          v-if="canViewDatasourceGrants"
+          value="grants"
+        >
+          数据授权
+        </TabsTrigger>
+        <TabsTrigger
+          v-if="canViewSessions"
+          value="sessions"
+        >
+          会话
+        </TabsTrigger>
+        <TabsTrigger
+          v-if="canViewArtifacts"
+          value="artifacts"
+        >
+          产物
+        </TabsTrigger>
+        <TabsTrigger
+          v-if="canViewQuotas"
+          value="quotas"
+        >
+          额度
+        </TabsTrigger>
+        <TabsTrigger
+          v-if="canViewSecrets"
+          value="secrets"
+        >
+          密钥
+        </TabsTrigger>
+        <TabsTrigger
+          v-if="canViewAudit"
+          value="audit"
+        >
+          审计
+        </TabsTrigger>
       </TabsList>
 
       <Button
@@ -334,6 +401,7 @@ function requestSetUserEnabled(user: AdminUser, enabled: boolean) {
     </div>
 
     <TabsContent
+      v-if="canViewUsers"
       value="users"
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
@@ -463,6 +531,7 @@ function requestSetUserEnabled(user: AdminUser, enabled: boolean) {
     </TabsContent>
 
     <TabsContent
+      v-if="canViewRoles"
       value="roles"
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
@@ -595,6 +664,7 @@ function requestSetUserEnabled(user: AdminUser, enabled: boolean) {
     </TabsContent>
 
     <TabsContent
+      v-if="canViewDatasourceGrants"
       value="grants"
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
@@ -700,6 +770,7 @@ function requestSetUserEnabled(user: AdminUser, enabled: boolean) {
     </TabsContent>
 
     <TabsContent
+      v-if="canViewSessions"
       value="sessions"
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
@@ -806,6 +877,7 @@ function requestSetUserEnabled(user: AdminUser, enabled: boolean) {
     </TabsContent>
 
     <TabsContent
+      v-if="canViewQuotas"
       value="quotas"
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
@@ -915,6 +987,7 @@ function requestSetUserEnabled(user: AdminUser, enabled: boolean) {
     </TabsContent>
 
     <TabsContent
+      v-if="canViewSecrets"
       value="secrets"
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
@@ -1020,6 +1093,7 @@ function requestSetUserEnabled(user: AdminUser, enabled: boolean) {
     </TabsContent>
 
     <TabsContent
+      v-if="canViewArtifacts"
       value="artifacts"
       class="-m-1 flex min-h-0 flex-1 flex-col overflow-hidden p-1"
     >
@@ -1104,6 +1178,7 @@ function requestSetUserEnabled(user: AdminUser, enabled: boolean) {
     </TabsContent>
 
     <TabsContent
+      v-if="canViewAudit"
       value="audit"
       class="-m-1 flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-1"
     >

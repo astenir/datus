@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from datus.api.enterprise import AccessDecision as AuthorizationDecision
-from datus.api.enterprise import LocalAuthorizationProvider, ResourceRef, authorize, require_module
+from datus.api.enterprise import LocalAuthorizationProvider, ResourceRef, authorize, require_any_module, require_module
 
 __all__ = [
     "AuthorizationDecision",
     "LocalAuthorizationProvider",
     "ResourceRef",
     "authorize",
+    "require_any_module",
     "require_module",
 ]

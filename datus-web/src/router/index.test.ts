@@ -18,6 +18,7 @@ const authMock = vi.hoisted(() => ({
 const permissionMock = vi.hoisted(() => ({
   isAdmin: vi.fn(() => true),
   hasFeaturePermission: vi.fn(() => false),
+  hasViewPermission: vi.fn<(view: string) => boolean>(() => false),
   hasPermission: vi.fn<(permission: string) => boolean>(() => true),
 }))
 
@@ -56,6 +57,8 @@ describe("workspace router", () => {
     permissionMock.isAdmin.mockReturnValue(true)
     permissionMock.hasFeaturePermission.mockReset()
     permissionMock.hasFeaturePermission.mockReturnValue(false)
+    permissionMock.hasViewPermission.mockReset()
+    permissionMock.hasViewPermission.mockReturnValue(false)
     permissionMock.hasPermission.mockReset()
     permissionMock.hasPermission.mockReturnValue(true)
   })
@@ -195,9 +198,9 @@ describe("workspace router", () => {
   })
 
   it("redirects MCP and Agent routes when required permissions are missing", async () => {
+    permissionMock.isAdmin.mockReturnValue(false)
     permissionMock.hasPermission.mockImplementation((permission: string) => {
       return permission !== "module.mcp"
-        && permission !== "mcp.server.list"
         && permission !== "module.admin.agents"
     })
 
@@ -212,13 +215,34 @@ describe("workspace router", () => {
     })
   })
 
-  it("redirects configuration route when the user only has config view permission", async () => {
+  it("allows configuration route when the user has config view permission", async () => {
     permissionMock.isAdmin.mockReturnValue(false)
     permissionMock.hasPermission.mockImplementation((permission: string) => permission === "module.config.view")
 
     await expect(routeTo("/configuration")).resolves.toMatchObject({
-      name: workspaceRouteNames.chat,
-      path: "/chat",
+      name: workspaceRouteNames.configuration,
+      path: "/configuration",
+    })
+  })
+
+  it("redirects artifact tabs to an authorized artifact tab when needed", async () => {
+    permissionMock.isAdmin.mockReturnValue(false)
+    permissionMock.hasPermission.mockImplementation((permission: string) => permission === "module.report.view")
+
+    await expect(routeTo("/artifacts/dashboards")).resolves.toMatchObject({
+      name: workspaceRouteNames.artifactReport,
+      path: "/artifacts/reports",
+    })
+  })
+
+  it("falls back to profile when no workspace view is available", async () => {
+    permissionMock.isAdmin.mockReturnValue(false)
+    permissionMock.hasPermission.mockReturnValue(false)
+    permissionMock.hasFeaturePermission.mockReturnValue(false)
+
+    await expect(routeTo("/mcp")).resolves.toMatchObject({
+      name: workspaceRouteNames.profile,
+      path: "/profile",
     })
   })
 
@@ -246,10 +270,11 @@ describe("workspace router", () => {
   it("redirects unauthorized admin URLs before entering the guarded workspace route", async () => {
     permissionMock.isAdmin.mockReturnValue(false)
     permissionMock.hasFeaturePermission.mockReturnValue(false)
+    permissionMock.hasPermission.mockReturnValue(false)
 
     await expect(routeTo("/admin?tab=users&user=alice")).resolves.toMatchObject({
-      name: workspaceRouteNames.chat,
-      path: "/chat",
+      name: workspaceRouteNames.profile,
+      path: "/profile",
     })
   })
 

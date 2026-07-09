@@ -16,7 +16,6 @@ import {
 } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar"
-import { Toaster } from "@/components/ui/sonner"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsContent } from "@/components/ui/tabs"
 import { useAuth } from "@/composables/useAuth"
@@ -27,6 +26,7 @@ import ChatPanel from "@/features/chat/ChatPanel.vue"
 import SqlExecutionDialog from "@/features/chat/SqlExecutionDialog.vue"
 import SessionRail from "@/features/workspace/SessionRail.vue"
 import type { WorkspaceNavItem } from "@/features/workspace/types"
+import { workspaceAccessFromPermission } from "@/features/workspace/access"
 import { useWorkspaceRouting } from "@/features/workspace/useWorkspaceRouting"
 import { sessionUserQueryText } from "@/lib/chat"
 import { canViewSubjectTree as canViewSubjectTreeWithPermission } from "@/lib/knowledge-access"
@@ -46,17 +46,13 @@ const permission = usePermission()
 const { theme, toggleTheme } = useTheme()
 const sqlDialogOpen = shallowRef(false)
 
-const canManagePermissions = computed(() => permission.isAdmin() || permission.hasFeaturePermission("admin"))
-const canManageConfiguration = computed(() => permission.isAdmin() || permission.hasPermission("module.config.edit"))
-const canUseMcp = computed(() =>
-  permission.hasPermission("module.mcp") && permission.hasPermission("mcp.server.list")
-)
-const canManageAgents = computed(() => permission.hasPermission("module.admin.agents"))
+const viewAccess = computed(() => workspaceAccessFromPermission(permission))
 const canViewSubjectTree = computed(() => canViewSubjectTreeWithPermission(permission))
 const canExecuteSql = computed(() => {
   return permission.isAdmin()
-    || permission.hasFeaturePermission("sql_generation")
+    || permission.hasPermission("module.sql_executor")
     || permission.hasFeaturePermission("sql_executor")
+    || permission.hasFeaturePermission("sql_generation")
 })
 const themeToggleLabel = computed(() => theme.value === "dark" ? "切换到亮色模式" : "切换到暗色模式")
 
@@ -91,10 +87,7 @@ const {
 } = useWorkspaceRouting({
   workspace,
   authState,
-  canManagePermissions,
-  canManageConfiguration,
-  canUseMcp,
-  canManageAgents,
+  viewAccess,
   checkAuth,
 })
 
@@ -161,13 +154,13 @@ const headerTitle = computed(() => {
   return activeNavItem.value.label
 })
 
-function openSqlDialog() {
-  sqlDialogOpen.value = true
-}
-
 function startArtifactEdit(session: ArtifactEditSession) {
   openChat()
   workspace.startArtifactEditSession(session)
+}
+
+function openSqlDialog() {
+  sqlDialogOpen.value = true
 }
 
 function handleLogout() {
@@ -215,10 +208,8 @@ function handleLogout() {
           :workspace="workspace"
           :active-view="activeView"
           :artifact-tab="artifactTab"
-          :can-manage-permissions="canManagePermissions"
-          :can-manage-configuration="canManageConfiguration"
-          :can-use-mcp="canUseMcp"
-          :can-manage-agents="canManageAgents"
+          :view-access="viewAccess"
+          :can-execute-sql="canExecuteSql"
           @open-chat="openChat"
           @open-view="navigateToView"
           @open-artifact-tab="openArtifactTab"
@@ -247,6 +238,7 @@ function handleLogout() {
                 <TerminalIcon data-icon="inline-start" />
               </Button>
               <Button
+                v-if="viewAccess.canViewConfiguration"
                 variant="ghost"
                 size="icon-sm"
                 aria-label="刷新连接"
@@ -293,25 +285,29 @@ function handleLogout() {
           value="mcp"
           class="m-0 flex min-h-0 flex-1"
         >
-          <McpPanel v-if="canUseMcp" />
+          <McpPanel v-if="viewAccess.canViewMcp" />
         </TabsContent>
         <TabsContent
           value="agents"
           class="m-0 flex min-h-0 flex-1"
         >
-          <AgentManagerPanel v-if="canManageAgents" />
+          <AgentManagerPanel v-if="viewAccess.canViewAgents" />
         </TabsContent>
         <TabsContent
           value="configuration"
           class="m-0 flex min-h-0 flex-1"
         >
-          <ConfigurationPanel v-if="canManageConfiguration" />
+          <ConfigurationPanel
+            v-if="viewAccess.canViewConfiguration"
+            :can-edit="viewAccess.canEditConfiguration"
+          />
         </TabsContent>
         <TabsContent
           value="artifacts"
           class="m-0 flex min-h-0 flex-1"
         >
           <ArtifactsPanel
+            v-if="viewAccess.canViewArtifacts"
             :tab="artifactTab"
             :selected-slug="artifactSlug"
             @open-artifact="openArtifactDetail"
@@ -355,7 +351,7 @@ function handleLogout() {
               <ShieldIcon class="size-8 text-muted-foreground" />
               <h1 class="text-lg font-semibold">无权限访问</h1>
               <p class="text-sm text-muted-foreground">
-                正在返回可用工作区。权限管理入口仅对管理员开放。
+                正在返回可用工作区。权限管理入口仅对授权管理员开放。
               </p>
             </div>
           </section>
@@ -365,17 +361,11 @@ function handleLogout() {
     </SidebarProvider>
 
     <SqlExecutionDialog
-      v-if="canExecuteSql"
       v-model:open="sqlDialogOpen"
       initial-sql=""
       :datasource-name="workspace.currentDatasource.value"
       :datasource-options="workspace.visibleDatasourceOptions.value"
       :database-name="workspace.database.value || undefined"
-    />
-
-    <Toaster
-      rich-colors
-      :visible-toasts="2"
     />
   </div>
 </template>

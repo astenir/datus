@@ -34,12 +34,21 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
 import { useConfigurationManager } from "@/composables/useConfigurationManager"
+import { usePermission } from "@/composables/usePermission"
 import { useSystemStatus } from "@/composables/useSystemStatus"
 import type { NormalizedProbeResult } from "@/types"
 
+const props = withDefaults(defineProps<{
+  canEdit?: boolean
+}>(), {
+  canEdit: false,
+})
+
 const manager = useConfigurationManager()
+const permission = usePermission()
 const systemStatus = useSystemStatus()
 
+const canViewSystemStatus = computed(() => permission.hasPermission("module.system.status"))
 const currentDatasource = computed(() => manager.config.value?.current_datasource?.trim() || "未选择")
 const configHome = computed(() => manager.config.value?.home?.trim() || "-")
 const modelsSource = computed(() => manager.modelsData.value?.source || "-")
@@ -48,6 +57,12 @@ const platformStatus = computed(() => systemStatus.status.value?.platform_status
 const systemProjectId = computed(() => systemStatus.status.value?.project_id || "-")
 const systemDatasource = computed(() => systemStatus.status.value?.current_datasource || "-")
 const enterpriseEnabledLabel = computed(() => systemStatus.status.value?.enterprise_enabled ? "已启用" : "未启用")
+const configurationDescription = computed(() => {
+  if (props.canEdit) return "模型、数据源和连接探测配置，保存操作会写回后端运行配置。"
+  return canViewSystemStatus.value
+    ? "模型、数据源和系统状态配置。当前角色仅可查看。"
+    : "模型和数据源配置。当前角色仅可查看。"
+})
 const modelProbeApiKey = computed({
   get: () => manager.modelProbe.value.api_key ?? "",
   set: (value: string) => {
@@ -116,9 +131,18 @@ function selectDatasource(value: unknown) {
   }
 }
 
-onMounted(() => {
+async function initializeConfigPanel() {
   void manager.loadConfiguration()
-  void systemStatus.loadStatus()
+  if (!permission.isLoaded.value) {
+    await permission.fetchPermissions()
+  }
+  if (canViewSystemStatus.value) {
+    void systemStatus.loadStatus()
+  }
+}
+
+onMounted(() => {
+  void initializeConfigPanel()
 })
 </script>
 
@@ -129,7 +153,7 @@ onMounted(() => {
         <div class="min-w-0 flex-1">
           <h1 class="text-lg font-semibold">配置中心</h1>
           <p class="text-sm text-muted-foreground">
-            模型、数据源和连接探测配置，保存操作会写回后端运行配置。
+            {{ configurationDescription }}
           </p>
         </div>
         <Button
@@ -172,6 +196,7 @@ onMounted(() => {
                     <Input
                       id="config-target"
                       v-model="manager.forms.value.target"
+                      :disabled="!props.canEdit"
                       placeholder="openai/gpt-4.1"
                     />
                     <FieldDescription>格式通常为 provider/model。</FieldDescription>
@@ -182,6 +207,7 @@ onMounted(() => {
                       id="config-models-json"
                       v-model="manager.forms.value.modelsText"
                       class="min-h-72 font-mono text-xs leading-6"
+                      :disabled="!props.canEdit"
                       spellcheck="false"
                     />
                     <FieldDescription>保存时会作为完整 models 映射提交。</FieldDescription>
@@ -190,7 +216,7 @@ onMounted(() => {
                 <div class="flex justify-end">
                   <Button
                     size="sm"
-                    :disabled="manager.savingModels.value"
+                    :disabled="!props.canEdit || manager.savingModels.value"
                     @click="manager.saveModels"
                   >
                     <SaveIcon data-icon="inline-start" />
@@ -215,6 +241,7 @@ onMounted(() => {
                       <Input
                         id="model-probe-type"
                         v-model="manager.modelProbe.value.type"
+                        :disabled="!props.canEdit"
                         placeholder="openai"
                       />
                     </Field>
@@ -223,6 +250,7 @@ onMounted(() => {
                       <Input
                         id="model-probe-model"
                         v-model="manager.modelProbe.value.model"
+                        :disabled="!props.canEdit"
                         placeholder="gpt-4.1"
                       />
                     </Field>
@@ -232,6 +260,7 @@ onMounted(() => {
                         id="model-probe-api-key"
                         v-model="modelProbeApiKey"
                         type="password"
+                        :disabled="!props.canEdit"
                         autocomplete="off"
                         placeholder="仅本次测试使用"
                       />
@@ -241,6 +270,7 @@ onMounted(() => {
                       <Input
                         id="model-probe-base-url"
                         v-model="modelProbeBaseUrl"
+                        :disabled="!props.canEdit"
                         placeholder="https://api.example.com/v1"
                       />
                     </Field>
@@ -256,7 +286,7 @@ onMounted(() => {
                     <Button
                       variant="outline"
                       size="sm"
-                      :disabled="manager.testingModel.value"
+                      :disabled="!props.canEdit || manager.testingModel.value"
                       @click="manager.testModelProbe"
                     >
                       <PlugZapIcon data-icon="inline-start" />
@@ -356,6 +386,7 @@ onMounted(() => {
                       id="config-datasources-json"
                       v-model="manager.forms.value.datasourcesText"
                       class="min-h-96 font-mono text-xs leading-6"
+                      :disabled="!props.canEdit"
                       spellcheck="false"
                     />
                     <FieldDescription>保存时会作为完整 datasources 映射提交。</FieldDescription>
@@ -364,7 +395,7 @@ onMounted(() => {
                 <div class="flex justify-end">
                   <Button
                     size="sm"
-                    :disabled="manager.savingDatasources.value"
+                    :disabled="!props.canEdit || manager.savingDatasources.value"
                     @click="manager.saveDatasources"
                   >
                     <SaveIcon data-icon="inline-start" />
@@ -387,6 +418,7 @@ onMounted(() => {
                     <FieldLabel>选择数据源</FieldLabel>
                     <Select
                       :model-value="manager.selectedDatasourceName.value"
+                      :disabled="!props.canEdit"
                       @update:model-value="selectDatasource"
                     >
                       <SelectTrigger class="w-full">
@@ -412,6 +444,7 @@ onMounted(() => {
                       id="datasource-probe-json"
                       v-model="manager.forms.value.datasourceProbeText"
                       class="min-h-80 font-mono text-xs leading-6"
+                      :disabled="!props.canEdit"
                       spellcheck="false"
                     />
                   </Field>
@@ -427,7 +460,7 @@ onMounted(() => {
                   <Button
                     variant="outline"
                     size="sm"
-                    :disabled="manager.testingDatasource.value"
+                    :disabled="!props.canEdit || manager.testingDatasource.value"
                     @click="manager.testDatasourceProbe"
                   >
                     <DatabaseIcon data-icon="inline-start" />
@@ -444,7 +477,10 @@ onMounted(() => {
           class="m-0 min-h-0 flex-1 overflow-auto lg:overflow-visible"
         >
           <div class="grid min-h-full gap-4 lg:h-full lg:min-h-0 lg:grid-cols-2 lg:grid-rows-2">
-            <Card class="flex min-h-0 flex-col lg:row-span-2">
+            <Card
+              v-if="canViewSystemStatus"
+              class="flex min-h-0 flex-col lg:row-span-2"
+            >
               <CardHeader class="flex shrink-0 flex-row items-start justify-between gap-3">
                 <div class="min-w-0">
                   <CardTitle class="text-lg">平台状态</CardTitle>

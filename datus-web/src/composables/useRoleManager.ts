@@ -14,6 +14,21 @@ import {
 } from "@/lib/permission-labels";
 import type { Role, RoleFormData, RoleSearchForm } from "@/types/admin";
 
+interface BackendFailure {
+  errorCode?: string;
+  errorMessage?: string;
+}
+
+function roleSaveFailureMessage(result: BackendFailure): string {
+  if (result.errorCode === "ROLE_PERMISSION_FORBIDDEN") return "不能授予自己尚未拥有的权限";
+  return result.errorMessage || "保存失败，请重试";
+}
+
+function roleDeleteFailureMessage(result: BackendFailure): string {
+  if (result.errorCode === "ROLE_DELETE_FORBIDDEN") return "角色仍是系统内置角色或已分配给用户，不能删除";
+  return result.errorMessage || "删除失败，请重试";
+}
+
 export function useRoleManager() {
   const featureOptions = ROLE_PERMISSION_OPTIONS;
   const featureGroups = ROLE_PERMISSION_GROUPS;
@@ -37,6 +52,7 @@ export function useRoleManager() {
   const showDialog = shallowRef(false);
   const dialogMode = shallowRef<"create" | "edit">("create");
   const editingRole = shallowRef<Role | null>(null);
+  const roleDialogError = shallowRef<string | null>(null);
   const roleForm = ref<RoleFormData>({
     name: "",
     description: "",
@@ -144,6 +160,7 @@ export function useRoleManager() {
     };
     selectedFeatures.value = [];
     advancedPermissionsOpen.value = false;
+    roleDialogError.value = null;
     showDialog.value = true;
   }
 
@@ -157,28 +174,38 @@ export function useRoleManager() {
     };
     selectedFeatures.value = normalizePermissionSelection(role.permissions ?? []);
     advancedPermissionsOpen.value = false;
+    roleDialogError.value = null;
     showDialog.value = true;
   }
 
   async function saveRole() {
     const name = roleForm.value.name.trim();
     if (!name) {
+      roleDialogError.value = "请填写角色名称";
       toast.error("请填写角色名称");
       return;
     }
 
     const roleId = editingRole.value?.role_id ?? name;
     saving.value = true;
+    roleDialogError.value = null;
     try {
-      await adminRoleApi.upsertRole(roleId, {
+      const result = await adminRoleApi.upsertRole(roleId, {
         name,
         description: roleForm.value.description.trim() || null,
         permissions: normalizePermissionSelection(selectedFeatures.value),
       });
+      if (result?.success === false) {
+        const message = roleSaveFailureMessage(result);
+        roleDialogError.value = message;
+        toast.error(message);
+        return;
+      }
       showDialog.value = false;
       void loadRoles();
     } catch (err) {
       console.error("保存角色失败:", err);
+      roleDialogError.value = "保存失败，请重试";
       toast.error("保存失败，请重试");
     } finally {
       saving.value = false;
@@ -208,7 +235,11 @@ export function useRoleManager() {
 
     deleting.value = true;
     try {
-      await adminRoleApi.deleteRole(roleToDelete.value.role_id);
+      const result = await adminRoleApi.deleteRole(roleToDelete.value.role_id);
+      if (result?.success === false) {
+        toast.error(roleDeleteFailureMessage(result));
+        return;
+      }
       void loadRoles();
     } catch (err) {
       console.error("删除角色失败:", err);
@@ -238,6 +269,7 @@ export function useRoleManager() {
     showDialog,
     dialogMode,
     editingRole,
+    roleDialogError,
     roleForm,
     saving,
     showDeleteConfirm,

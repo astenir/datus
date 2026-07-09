@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from datus.api.auth.context import AppContext
 from datus.api.deps import ServiceDep
-from datus.api.enterprise.deps import project_request_config, require_module, require_platform_active
+from datus.api.enterprise.deps import project_request_config, require_any_module, require_platform_active
 from datus.api.models.base_models import Result
 from datus.api.models.database_models import (
     DatabaseInfo,
@@ -24,8 +24,8 @@ from datus.api.services.background_drain import track_background_task
 from datus.utils.exceptions import DatusException
 
 router = APIRouter(prefix="/api/v1", tags=["databases"])
-_require_catalog_module = require_module("module.datasource_catalog")
-CatalogModuleCtx = Annotated[AppContext, Depends(_require_catalog_module)]
+_require_catalog_read = require_any_module("module.datasource_catalog", "module.chat")
+CatalogReadCtx = Annotated[AppContext, Depends(_require_catalog_read)]
 
 # Timeout for datasource network I/O (test_connection, get_databases, get_schemas,
 # get_tables). Matches the adapter-level timeout_seconds=30 so the connector gets
@@ -45,11 +45,11 @@ INCLUDE_SYS_SCHEMAS_QUERY = Query(False, description="Include system schemas")
     response_model=Result[DatabasesData],
     summary="List Catalogs",
     description="List available catalogs",
-    dependencies=[Depends(_require_catalog_module)],
+    dependencies=[Depends(_require_catalog_read)],
 )
 async def list_catalogs(
     svc: ServiceDep,
-    _ctx: CatalogModuleCtx,
+    _ctx: CatalogReadCtx,
     datasource_id: Optional[str] = DATASOURCE_QUERY,
     catalog_name: Optional[str] = CATALOG_NAME_QUERY,
     database_name: Optional[str] = DATABASE_NAME_QUERY,
@@ -106,11 +106,11 @@ async def list_catalogs(
     response_model=Result[DatasourceStatusData],
     summary="Get Datasource Connection Status",
     description="Return cached datasource connection status without opening new database connections.",
-    dependencies=[Depends(_require_catalog_module)],
+    dependencies=[Depends(_require_catalog_read)],
 )
 async def datasource_status(
     svc: ServiceDep,
-    _ctx: CatalogModuleCtx,
+    _ctx: CatalogReadCtx,
     datasource_id: Optional[str] = DATASOURCE_QUERY,
 ) -> Result[DatasourceStatusData]:
     """Return cached connection status for authorized datasources."""
@@ -135,13 +135,13 @@ async def datasource_status(
     summary="Prewarm Datasource Connection",
     description="Queue a background connection prewarm for the selected datasource.",
     dependencies=[
-        Depends(_require_catalog_module),
+        Depends(_require_catalog_read),
         Depends(require_platform_active(operation="catalog.prewarm", resource_type="datasource")),
     ],
 )
 async def prewarm_datasource(
     svc: ServiceDep,
-    _ctx: CatalogModuleCtx,
+    _ctx: CatalogReadCtx,
     datasource_id: Optional[str] = DATASOURCE_QUERY,
 ) -> Result[DatasourcePrewarmData]:
     """Queue a background prewarm for one authorized datasource."""

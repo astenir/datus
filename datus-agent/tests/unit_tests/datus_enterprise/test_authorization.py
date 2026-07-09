@@ -17,7 +17,7 @@ from datus.api.enterprise.deps import (
 )
 from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.enterprise.models import AccessDecision, ProjectionResult
-from datus_enterprise.authorization import authorize, require_module
+from datus_enterprise.authorization import authorize, require_any_module, require_module
 
 
 @pytest.mark.asyncio
@@ -41,6 +41,31 @@ async def test_local_authorization_checks_explicit_permissions():
 @pytest.mark.asyncio
 async def test_require_module_raises_403_for_missing_permission():
     dependency = require_module("module.config.edit")
+    ctx = AppContext(principal={"permissions": ["module.report.view"]})
+    request = type("Request", (), {})()
+    request.state = State()
+    request.state.app_context = ctx
+
+    with pytest.raises(HTTPException) as exc:
+        await dependency(request)
+
+    assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_require_any_module_allows_one_matching_permission():
+    dependency = require_any_module("module.datasource_catalog", "module.chat")
+    ctx = AppContext(principal={"permissions": ["module.chat"]})
+    request = type("Request", (), {})()
+    request.state = State()
+    request.state.app_context = ctx
+
+    assert await dependency(request) == ctx
+
+
+@pytest.mark.asyncio
+async def test_require_any_module_raises_403_when_all_missing():
+    dependency = require_any_module("module.datasource_catalog", "module.chat")
     ctx = AppContext(principal={"permissions": ["module.report.view"]})
     request = type("Request", (), {})()
     request.state = State()

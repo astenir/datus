@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, Request
 
 from datus.api.deps import ServiceDep
-from datus.api.enterprise.deps import require_module
+from datus.api.enterprise.deps import require_any_module
 from datus.api.models.base_models import Result
 from datus.api.models.config_models import ModelInfo, ModelPricing, ModelsData
 from datus.cli.provider_model_catalog import load_cache_fetched_at, load_cached_model_details
@@ -23,6 +23,8 @@ from datus_enterprise.model_policy import filter_allowed_models, is_model_ref_al
 logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["models"])
+
+_require_model_catalog_access = require_any_module("module.config.view", "module.chat")
 
 
 def _model_spec(catalog: Dict[str, Any], slug: str) -> Dict[str, Any]:
@@ -125,7 +127,7 @@ def _resolve_current_model(
     response_model=Result[ModelsData],
     summary="List Available Models",
     description="Return models for providers with credentials configured in agent.yml.",
-    dependencies=[Depends(require_module("module.config.view"))],
+    dependencies=[Depends(_require_model_catalog_access)],
 )
 async def list_models(svc: ServiceDep, request: Request = None) -> Result[ModelsData]:
     """Return every model exposed by providers the current project has credentials for.

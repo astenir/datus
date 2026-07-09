@@ -8,6 +8,7 @@ import {
   adminSecretApi,
   adminSessionApi,
 } from "@/lib/api";
+import { usePermission } from "@/composables/usePermission";
 import { quotaResourceOptionFor } from "@/lib/quota-options";
 import {
   buildDatasourceTreeOptions,
@@ -152,6 +153,7 @@ function collectDescendantNodeIds(node: RoleDatasourceTreeNode): string[] {
 export type DatasourceScopeMode = "all" | "picker" | "json";
 
 export function useAdminOverview() {
+  const permission = usePermission();
   const loading = shallowRef(false);
   const savingGrant = shallowRef(false);
   const savingQuota = shallowRef(false);
@@ -241,6 +243,17 @@ export function useAdminOverview() {
     if (grantScopeMode.value === "json") return grantForm.value.scope_text.trim() || "{}";
     return JSON.stringify(datasourceScopeFromNodeIds(grantForm.value.datasource_key, selectedGrantNodes.value), null, 2);
   });
+  const canManageDatasources = computed(() => permission.hasPermission("module.admin.datasources"));
+  const canManageQuotas = computed(() => permission.hasPermission("module.admin.quotas"));
+  const canManageSessions = computed(() => permission.hasPermission("module.admin.sessions"));
+  const canManageSecrets = computed(() => permission.hasPermission("module.admin.secrets"));
+  const canManageArtifacts = computed(() => permission.hasPermission("module.admin.artifacts"));
+
+  async function fetchPermissionsIfNeeded(): Promise<void> {
+    if (!permission.isLoaded.value) {
+      await permission.fetchPermissions();
+    }
+  }
 
   function grantRouteKey(subjectType: string, subjectId: string, datasourceKey: string): string {
     return `${subjectType}:${subjectId}:${datasourceKey}`;
@@ -276,6 +289,7 @@ export function useAdminOverview() {
   async function loadOverview() {
     loading.value = true;
     try {
+      await fetchPermissionsIfNeeded();
       const [
         datasourceResult,
         grantResult,
@@ -285,23 +299,23 @@ export function useAdminOverview() {
         sessionResult,
         artifactResult,
       ] = await Promise.all([
-        adminDatasourceApi.listDatasources(),
-        adminDatasourceApi.listGrants(),
-        adminQuotaApi.listQuotas(),
-        adminQuotaApi.listUsage(),
-        adminSecretApi.listSecrets(),
-        adminSessionApi.listSessions(),
-        adminArtifactApi.listArtifacts(),
+        canManageDatasources.value ? adminDatasourceApi.listDatasources() : Promise.resolve(null),
+        canManageDatasources.value ? adminDatasourceApi.listGrants() : Promise.resolve(null),
+        canManageQuotas.value ? adminQuotaApi.listQuotas() : Promise.resolve(null),
+        canManageQuotas.value ? adminQuotaApi.listUsage() : Promise.resolve(null),
+        canManageSecrets.value ? adminSecretApi.listSecrets() : Promise.resolve(null),
+        canManageSessions.value ? adminSessionApi.listSessions() : Promise.resolve(null),
+        canManageArtifacts.value ? adminArtifactApi.listArtifacts() : Promise.resolve(null),
       ]);
 
       data.value = {
-        datasources: datasourceResult.data ?? [],
-        datasourceGrants: grantResult.data ?? [],
-        quotas: quotaResult.data ?? [],
-        usage: usageResult.data ?? [],
-        secrets: secretResult.data ?? [],
-        sessions: sessionResult.data ?? [],
-        artifacts: artifactResult.data ?? [],
+        datasources: datasourceResult?.data ?? [],
+        datasourceGrants: grantResult?.data ?? [],
+        quotas: quotaResult?.data ?? [],
+        usage: usageResult?.data ?? [],
+        secrets: secretResult?.data ?? [],
+        sessions: sessionResult?.data ?? [],
+        artifacts: artifactResult?.data ?? [],
       };
     } catch (err) {
       console.error("加载管理概览失败:", err);
@@ -315,6 +329,15 @@ export function useAdminOverview() {
   async function loadDatasourceGrants() {
     loading.value = true;
     try {
+      await fetchPermissionsIfNeeded();
+      if (!canManageDatasources.value) {
+        data.value = {
+          ...data.value,
+          datasources: [],
+          datasourceGrants: [],
+        };
+        return;
+      }
       const [datasourceResult, grantResult] = await Promise.all([
         adminDatasourceApi.listDatasources(),
         adminDatasourceApi.listGrants(),
@@ -335,6 +358,15 @@ export function useAdminOverview() {
   async function loadQuotasAndUsage() {
     loading.value = true;
     try {
+      await fetchPermissionsIfNeeded();
+      if (!canManageQuotas.value) {
+        data.value = {
+          ...data.value,
+          quotas: [],
+          usage: [],
+        };
+        return;
+      }
       const [quotaResult, usageResult] = await Promise.all([
         adminQuotaApi.listQuotas(),
         adminQuotaApi.listUsage(),
@@ -355,6 +387,14 @@ export function useAdminOverview() {
   async function loadSessions() {
     loading.value = true;
     try {
+      await fetchPermissionsIfNeeded();
+      if (!canManageSessions.value) {
+        data.value = {
+          ...data.value,
+          sessions: [],
+        };
+        return;
+      }
       const result = await adminSessionApi.listSessions();
       data.value = {
         ...data.value,
@@ -371,6 +411,14 @@ export function useAdminOverview() {
   async function loadSecrets() {
     loading.value = true;
     try {
+      await fetchPermissionsIfNeeded();
+      if (!canManageSecrets.value) {
+        data.value = {
+          ...data.value,
+          secrets: [],
+        };
+        return;
+      }
       const result = await adminSecretApi.listSecrets();
       data.value = {
         ...data.value,
@@ -387,6 +435,14 @@ export function useAdminOverview() {
   async function loadArtifacts() {
     loading.value = true;
     try {
+      await fetchPermissionsIfNeeded();
+      if (!canManageArtifacts.value) {
+        data.value = {
+          ...data.value,
+          artifacts: [],
+        };
+        return;
+      }
       const result = await adminArtifactApi.listArtifacts();
       data.value = {
         ...data.value,
@@ -401,9 +457,13 @@ export function useAdminOverview() {
   }
 
   async function loadGrantCatalog(datasourceKey = grantForm.value.datasource_key) {
+    if (!permission.isLoaded.value) {
+      await permission.fetchPermissions();
+    }
     const normalizedDatasourceKey = datasourceKey.trim();
     grantCatalogError.value = null;
     grantCatalogDatabases.value = [];
+    if (!canManageDatasources.value) return;
     if (!normalizedDatasourceKey) return;
     if (isWildcardDatasourceKey(normalizedDatasourceKey)) return;
 
@@ -438,6 +498,7 @@ export function useAdminOverview() {
   }
 
   function openCreateGrantDialog() {
+    if (!canManageDatasources.value) return;
     grantDetailRequestId += 1;
     selectedGrantRouteKey.value = null;
     grantDetailError.value = null;
@@ -457,6 +518,7 @@ export function useAdminOverview() {
   }
 
   function openEditGrantDialog(grant: AdminDatasourceGrant) {
+    if (!canManageDatasources.value) return;
     grantDetailRequestId += 1;
     selectedGrantRouteKey.value = grantRouteKey(grant.subject_type, grant.subject_id, grant.datasource_key);
     grantDetailError.value = null;
@@ -467,6 +529,10 @@ export function useAdminOverview() {
   }
 
   async function openGrantDetail(subjectType: string, subjectId: string, datasourceKey: string) {
+    if (!permission.isLoaded.value) {
+      await permission.fetchPermissions();
+    }
+    if (!canManageDatasources.value) return;
     const normalizedSubjectType = subjectType.trim();
     const normalizedSubjectId = subjectId.trim();
     const normalizedDatasourceKey = datasourceKey.trim();
@@ -605,6 +671,10 @@ export function useAdminOverview() {
   }
 
   async function saveGrant() {
+    if (!permission.isLoaded.value) {
+      await permission.fetchPermissions();
+    }
+    if (!canManageDatasources.value) return;
     const subjectType = grantForm.value.subject_type.trim();
     const subjectId = grantForm.value.subject_id.trim();
     const datasourceKey = grantForm.value.datasource_key.trim();
@@ -639,6 +709,10 @@ export function useAdminOverview() {
   }
 
   async function deleteGrant(grant: AdminDatasourceGrant) {
+    if (!permission.isLoaded.value) {
+      await permission.fetchPermissions();
+    }
+    if (!canManageDatasources.value) return;
     const key = `${grant.subject_type}:${grant.subject_id}:${grant.datasource_key}`;
     deletingGrantKey.value = key;
     try {
@@ -653,6 +727,7 @@ export function useAdminOverview() {
   }
 
   function openCreateQuotaDialog() {
+    if (!canManageQuotas.value) return;
     editingQuota.value = null;
     quotaForm.value = {
       subject_type: "user",
@@ -666,6 +741,7 @@ export function useAdminOverview() {
   }
 
   function openEditQuotaDialog(quota: AdminQuota) {
+    if (!canManageQuotas.value) return;
     editingQuota.value = quota;
     const subjectType = quotaSubjectTypeFromValue(quota.subject_type);
     quotaForm.value = {
@@ -706,6 +782,10 @@ export function useAdminOverview() {
   }
 
   async function saveQuota() {
+    if (!permission.isLoaded.value) {
+      await permission.fetchPermissions();
+    }
+    if (!canManageQuotas.value) return;
     const subjectType = quotaSubjectTypeFromValue(quotaForm.value.subject_type);
     const subjectId = subjectType === "global" ? "*" : quotaForm.value.subject_id.trim();
     const resource = quotaForm.value.resource.trim();
@@ -740,6 +820,10 @@ export function useAdminOverview() {
   }
 
   async function deleteQuota(quota: AdminQuota) {
+    if (!permission.isLoaded.value) {
+      await permission.fetchPermissions();
+    }
+    if (!canManageQuotas.value) return;
     const key = quotaKey(quota);
     deletingQuotaKey.value = key;
     try {
@@ -758,6 +842,7 @@ export function useAdminOverview() {
   }
 
   function openCreateSecretDialog() {
+    if (!canManageSecrets.value) return;
     secretDetailRequestId += 1;
     selectedSecretName.value = null;
     secretDetailError.value = null;
@@ -774,6 +859,7 @@ export function useAdminOverview() {
   }
 
   function openEditSecretDialog(secret: AdminSecret) {
+    if (!canManageSecrets.value) return;
     secretDetailRequestId += 1;
     selectedSecretName.value = secret.name;
     secretDetailError.value = null;
@@ -783,6 +869,10 @@ export function useAdminOverview() {
   }
 
   async function openSecretDetail(name: string) {
+    if (!permission.isLoaded.value) {
+      await permission.fetchPermissions();
+    }
+    if (!canManageSecrets.value) return;
     const normalizedName = name.trim();
     if (!normalizedName) return;
 
@@ -832,6 +922,10 @@ export function useAdminOverview() {
   }
 
   async function saveSecret() {
+    if (!permission.isLoaded.value) {
+      await permission.fetchPermissions();
+    }
+    if (!canManageSecrets.value) return;
     const name = secretForm.value.name.trim();
     const provider = secretForm.value.provider.trim();
     const reference = secretForm.value.reference.trim();
@@ -859,6 +953,10 @@ export function useAdminOverview() {
   }
 
   async function deleteSecret(secret: AdminSecret) {
+    if (!permission.isLoaded.value) {
+      await permission.fetchPermissions();
+    }
+    if (!canManageSecrets.value) return;
     deletingSecretName.value = secret.name;
     try {
       await adminSecretApi.deleteSecret(secret.name);
@@ -880,6 +978,10 @@ export function useAdminOverview() {
   }
 
   async function openArtifactAclTarget(target: ArtifactAclTarget) {
+    if (!permission.isLoaded.value) {
+      await permission.fetchPermissions();
+    }
+    if (!canManageArtifacts.value) return;
     const requestId = artifactAclRequestId + 1;
     artifactAclRequestId = requestId;
     setArtifactAclTarget(target);
@@ -958,6 +1060,10 @@ export function useAdminOverview() {
   }
 
   async function saveArtifactAcl() {
+    if (!permission.isLoaded.value) {
+      await permission.fetchPermissions();
+    }
+    if (!canManageArtifacts.value) return;
     if (!editingArtifactAclTarget.value) return;
 
     const ownerUserId = artifactAclForm.value.owner_user_id.trim();
@@ -986,6 +1092,10 @@ export function useAdminOverview() {
   }
 
   async function openSessionDetail(sessionId: string) {
+    if (!permission.isLoaded.value) {
+      await permission.fetchPermissions();
+    }
+    if (!canManageSessions.value) return;
     const normalizedSessionId = sessionId.trim();
     if (!normalizedSessionId) return;
 
@@ -1026,6 +1136,10 @@ export function useAdminOverview() {
   }
 
   async function stopSession(session: AdminSession) {
+    if (!permission.isLoaded.value) {
+      await permission.fetchPermissions();
+    }
+    if (!canManageSessions.value) return;
     actingSessionId.value = session.session_id;
     try {
       await adminSessionApi.stopSession(session.session_id);
@@ -1039,6 +1153,10 @@ export function useAdminOverview() {
   }
 
   async function deleteSession(session: AdminSession) {
+    if (!permission.isLoaded.value) {
+      await permission.fetchPermissions();
+    }
+    if (!canManageSessions.value) return;
     actingSessionId.value = session.session_id;
     try {
       await adminSessionApi.deleteSession(session.session_id);

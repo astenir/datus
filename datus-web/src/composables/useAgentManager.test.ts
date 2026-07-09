@@ -11,8 +11,16 @@ const listDatasources = vi.fn();
 const listArtifacts = vi.fn();
 const listMcpServers = vi.fn();
 const listMcpTools = vi.fn();
+const fetchPermissions = vi.fn();
 const toastError = vi.fn();
 const toastSuccess = vi.fn();
+const grantedPermissions = new Set<string>();
+
+function permissionMatches(required: string, granted: string) {
+  if (granted === "*" || granted === required) return true;
+  if (!granted.endsWith("*")) return false;
+  return required.startsWith(granted.slice(0, -1));
+}
 
 vi.mock("@/lib/api", () => ({
   agentApi: {
@@ -42,6 +50,15 @@ vi.mock("@/composables/useConnection", () => ({
   }),
 }));
 
+vi.mock("@/composables/usePermission", () => ({
+  usePermission: () => ({
+    isLoaded: { value: true },
+    fetchPermissions,
+    hasPermission: (permissionCode: string) =>
+      [...grantedPermissions].some((permission) => permissionMatches(permissionCode, permission)),
+  }),
+}));
+
 vi.mock("vue-sonner", () => ({
   toast: {
     error: toastError,
@@ -52,6 +69,11 @@ vi.mock("vue-sonner", () => ({
 describe("useAgentManager", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    grantedPermissions.clear();
+    grantedPermissions.add("module.admin.datasources");
+    grantedPermissions.add("module.admin.artifacts");
+    grantedPermissions.add("mcp.server.list");
+    grantedPermissions.add("mcp.server.tools");
     listAgents.mockResolvedValue([
       { agent_id: "writer", name: "writer", node_class: "text", status: "published", source: "custom" },
       { agent_id: "analyst", name: "analyst", node_class: "gen_sql", status: "draft", source: "custom" },
@@ -292,6 +314,33 @@ describe("useAgentManager", () => {
     expect(manager.mcpServerOptions.value[0]?.selected).toBe(true);
   });
 
+  it("skips MCP catalog requests without MCP list permission", async () => {
+    grantedPermissions.delete("mcp.server.list");
+    grantedPermissions.delete("mcp.server.tools");
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.loadMcpCatalog();
+
+    expect(listMcpServers).not.toHaveBeenCalled();
+    expect(listMcpTools).not.toHaveBeenCalled();
+    expect(manager.mcpServerOptions.value).toEqual([]);
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("loads MCP servers without tools when only server list is authorized", async () => {
+    grantedPermissions.delete("mcp.server.tools");
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.loadMcpCatalog();
+
+    expect(listMcpServers).toHaveBeenCalledWith("http://api.test");
+    expect(listMcpTools).not.toHaveBeenCalled();
+    expect(manager.mcpServerOptions.value.map(server => server.name)).toEqual(["filesystem", "remote_api"]);
+    expect(manager.mcpServerOptions.value[0]?.tools).toEqual([]);
+  });
+
   it("loads datasource and artifact option catalogs for picker fields", async () => {
     const { useAgentManager } = await import("./useAgentManager");
     const manager = useAgentManager();
@@ -303,6 +352,34 @@ describe("useAgentManager", () => {
     expect(manager.datasourceOptions.value.map(option => option.value)).toEqual(["fund_pg", "warehouse"]);
     expect(manager.datasourceOptions.value[0]?.label).toContain("默认");
     expect(manager.artifactOptions.value.map(option => option.value)).toEqual(["risk_dashboard", "weekly_report"]);
+  });
+
+  it("skips optional resource catalogs without admin datasource or artifact permissions", async () => {
+    grantedPermissions.delete("module.admin.datasources");
+    grantedPermissions.delete("module.admin.artifacts");
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.loadResourceCatalogs();
+
+    expect(listDatasources).not.toHaveBeenCalled();
+    expect(listArtifacts).not.toHaveBeenCalled();
+    expect(manager.datasourceOptions.value).toEqual([]);
+    expect(manager.artifactOptions.value).toEqual([]);
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("loads only the authorized optional resource catalog", async () => {
+    grantedPermissions.delete("module.admin.artifacts");
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.loadResourceCatalogs();
+
+    expect(listDatasources).toHaveBeenCalled();
+    expect(listArtifacts).not.toHaveBeenCalled();
+    expect(manager.datasourceOptions.value.map(option => option.value)).toEqual(["fund_pg", "warehouse"]);
+    expect(manager.artifactOptions.value).toEqual([]);
   });
 
   it("keeps selected values as fallback options when catalogs do not include them", async () => {

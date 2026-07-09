@@ -74,18 +74,19 @@ describe("useRoleManager", () => {
     const manager = useRoleManager();
 
     expect(manager.featureGroups.map((group) => group.label)).toEqual([
+      "功能入口",
+      "对话增强",
+      "产物操作",
+      "MCP 操作",
+      "配置与运维",
+      "治理权限",
       "特殊权限",
-      "核心功能",
-      "MCP 管理",
-      "报表与仪表盘",
-      "配置",
-      "管理后台",
     ]);
     expect(manager.featureGroups.flatMap((group) => group.options).length).toBe(manager.featureOptions.length);
     expect(manager.permissionPresetGroups.map((group) => group.label)).toEqual([
-      "基础使用",
-      "数据分析",
-      "治理管理",
+      "功能入口",
+      "增强能力",
+      "治理权限",
       "平台运维",
     ]);
   });
@@ -158,6 +159,31 @@ describe("useRoleManager", () => {
     expect(manager.showDialog.value).toBe(false);
   });
 
+  it("keeps the role dialog open when backend rejects ungrantable permissions", async () => {
+    upsertRole.mockResolvedValueOnce({
+      success: false,
+      errorCode: "ROLE_PERMISSION_FORBIDDEN",
+      errorMessage: "Cannot grant permissions that the actor does not have.",
+    });
+
+    const { useRoleManager } = await import("./useRoleManager");
+    const manager = useRoleManager();
+    manager.openCreateDialog();
+    manager.roleForm.value = {
+      name: "越权角色",
+      description: "",
+      permissions: [],
+    };
+    manager.selectedFeatures.value = ["module.admin.*"];
+
+    await manager.saveRole();
+
+    expect(toastError).toHaveBeenCalledWith("不能授予自己尚未拥有的权限");
+    expect(manager.roleDialogError.value).toBe("不能授予自己尚未拥有的权限");
+    expect(manager.showDialog.value).toBe(true);
+    expect(listRoles).not.toHaveBeenCalled();
+  });
+
   it("normalizes role permissions when toggling dependent MCP permissions", async () => {
     const { useRoleManager } = await import("./useRoleManager");
     const manager = useRoleManager();
@@ -179,7 +205,18 @@ describe("useRoleManager", () => {
     const { useRoleManager } = await import("./useRoleManager");
     const manager = useRoleManager();
 
-    manager.togglePermissionPreset("mcp-observer");
+    manager.togglePermissionPreset("view-mcp");
+
+    expect(manager.selectedFeatures.value).toEqual([
+      "module.mcp",
+      "mcp.server.list",
+      "mcp.server.tools",
+    ]);
+    expect(manager.selectedPresetIds.value).toContain("view-mcp");
+    expect(manager.selectedPresetIds.value).not.toContain("mcp-operator");
+
+    manager.togglePermissionPreset("view-mcp");
+    manager.togglePermissionPreset("mcp-operator");
 
     expect(manager.selectedFeatures.value).toEqual([
       "module.mcp",
@@ -187,7 +224,7 @@ describe("useRoleManager", () => {
       "mcp.server.tools",
       "mcp.server.connectivity",
     ]);
-    expect(manager.selectedPresetIds.value).toContain("mcp-observer");
+    expect(manager.selectedPresetIds.value).toContain("mcp-operator");
     expect(manager.selectedHighRiskCount.value).toBe(0);
   });
 
@@ -195,29 +232,36 @@ describe("useRoleManager", () => {
     const { useRoleManager } = await import("./useRoleManager");
     const manager = useRoleManager();
 
-    manager.togglePermissionPreset("workspace-basic");
+    manager.togglePermissionPreset("view-configuration");
 
     expect(manager.selectedFeatures.value).toEqual([
-      "module.chat",
-      "module.datasource_catalog",
       "module.config.view",
       "module.system.status",
     ]);
-    expect(manager.selectedPresetIds.value).toContain("workspace-basic");
+    expect(manager.selectedPresetIds.value).toContain("view-configuration");
 
-    manager.togglePermissionPreset("workspace-basic");
+    manager.togglePermissionPreset("view-configuration");
+    manager.togglePermissionPreset("view-knowledge");
+
+    expect(manager.selectedFeatures.value).toEqual([
+      "module.datasource_catalog",
+      "module.kb",
+    ]);
+    expect(manager.selectedPresetIds.value).toContain("view-knowledge");
+
+    manager.togglePermissionPreset("view-knowledge");
 
     expect(manager.selectedFeatures.value).toEqual([]);
-    expect(manager.selectedPresetIds.value).not.toContain("workspace-basic");
+    expect(manager.selectedPresetIds.value).not.toContain("view-knowledge");
   });
 
   it("keeps shared permissions when toggling one selected preset off", async () => {
     const { useRoleManager } = await import("./useRoleManager");
     const manager = useRoleManager();
 
-    manager.togglePermissionPreset("workspace-basic");
+    manager.togglePermissionPreset("view-configuration");
     manager.togglePermissionPreset("audit-viewer");
-    manager.togglePermissionPreset("workspace-basic");
+    manager.togglePermissionPreset("view-configuration");
 
     expect(manager.selectedFeatures.value).toEqual([
       "module.admin.audit",
@@ -282,5 +326,23 @@ describe("useRoleManager", () => {
     expect(toastError).toHaveBeenCalledWith("系统内置角色不可删除");
     expect(manager.showDeleteConfirm.value).toBe(false);
     expect(manager.roleToDelete.value).toBeNull();
+  });
+
+  it("shows backend role deletion failures", async () => {
+    deleteRole.mockResolvedValueOnce({
+      success: false,
+      errorCode: "ROLE_DELETE_FORBIDDEN",
+      errorMessage: "Role has assigned users.",
+    });
+
+    const { useRoleManager } = await import("./useRoleManager");
+    const manager = useRoleManager();
+
+    manager.requestDeleteRole(role);
+    await manager.deleteRole();
+
+    expect(deleteRole).toHaveBeenCalledWith("resource_admin");
+    expect(toastError).toHaveBeenCalledWith("角色仍是系统内置角色或已分配给用户，不能删除");
+    expect(listRoles).not.toHaveBeenCalled();
   });
 });

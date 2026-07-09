@@ -7,12 +7,38 @@ import { useConnection } from "@/composables/useConnection";
 import { useModels } from "@/composables/useModels";
 import { usePermission } from "@/composables/usePermission";
 import { useTheme } from "@/composables/useTheme";
+import { workspaceAccessFromPermission } from "@/features/workspace/access";
 import { agentApi } from "@/lib/api";
 import type { AgentInfo, ArtifactEditSession, NormalizedProbeResult, SelectOption } from "@/types";
 
 const STATUS_REFRESH_DELAYS = [1500, 5000] as const;
 const REPORT_EDIT_SESSION_PREFIX = "report_edit__";
 const DASHBOARD_EDIT_SESSION_PREFIX = "dashboard_edit__";
+const WILDCARD_DATASOURCE_GRANT = "*";
+
+function mergeSelectOptions(...groups: readonly SelectOption[][]): SelectOption[] {
+  const seen = new Set<string>();
+  const options: SelectOption[] = [];
+  for (const group of groups) {
+    for (const option of group) {
+      if (!option.value || seen.has(option.value)) continue;
+      seen.add(option.value);
+      options.push(option);
+    }
+  }
+  return options;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function datasourceGrantAllowsCatalog(grant: unknown): boolean {
+  if (grant === true) return true;
+  if (!isRecord(grant)) return false;
+  const effect = typeof grant.effect === "string" ? grant.effect.trim().toLowerCase() : "allow";
+  return effect === "allow" && grant.allow_catalog !== false;
+}
 
 export function useChatWorkspace() {
   useTheme();
@@ -98,17 +124,51 @@ export function useChatWorkspace() {
   const selectedModel = shallowRef("");
   const selectedDatasource = shallowRef("");
   const isTestingCatalogDatasource = shallowRef(false);
-  const defaultDatasource = computed(() => config.value?.current_datasource?.trim() ?? "");
+  const grantedDatasourceOptions = computed<SelectOption[]>(() =>
+    (permission.permissions?.value?.datasources ?? [])
+      .filter((name) => name !== WILDCARD_DATASOURCE_GRANT)
+      .map((name) => ({ value: name, label: name }))
+  );
+  const statusDatasourceOptions = computed<SelectOption[]>(() =>
+    Object.keys(datasourceStatuses.value).map((name) => ({ value: name, label: name }))
+  );
+  const availableDatasourceOptions = computed(() =>
+    datasourceOptions.value.length > 0
+      ? datasourceOptions.value
+      : mergeSelectOptions(grantedDatasourceOptions.value, statusDatasourceOptions.value)
+  );
+  const defaultDatasource = computed(() =>
+    config.value?.current_datasource?.trim() ?? availableDatasourceOptions.value[0]?.value ?? ""
+  );
   const currentDatasource = computed(() => selectedDatasource.value || defaultDatasource.value);
+  const viewAccess = computed(() => workspaceAccessFromPermission(permission));
   const canUseElevatedPermissionMode = computed(() =>
     permission.isAdmin() || permission.hasPermission?.("module.chat.permission_mode") === true
   );
   const isPermissionSummaryLoaded = computed(() => permission.isLoaded?.value ?? true);
   const visibleDatasourceOptions = computed(() =>
-    datasourceOptions.value.filter((option) => permission.hasDatasourcePermission(option.value))
+    availableDatasourceOptions.value.filter((option) => permission.hasDatasourcePermission(option.value))
+  );
+  const catalogDatasourceOptions = computed(() =>
+    visibleDatasourceOptions.value.filter((option) => canBrowseDatasourceCatalog(option.value))
+  );
+  const hasCatalogBrowseGrant = computed(() =>
+    catalogDatasourceOptions.value.length > 0 || hasWildcardCatalogGrant()
+  );
+  const canUseDatasourceCatalogSupport = computed(() =>
+    permission.hasPermission("module.datasource_catalog")
+    || permission.hasFeaturePermission("datasource_catalog")
   );
   const canAccessDatasourceCatalog = computed(() =>
-    permission.isAdmin() || permission.hasFeaturePermission("datasource_catalog")
+    viewAccess.value.canViewKnowledge
+    || canUseDatasourceCatalogSupport.value
+    || (viewAccess.value.canViewChat && hasCatalogBrowseGrant.value)
+  );
+  const canReadAgentConfig = computed(() =>
+    viewAccess.value.canViewConfiguration
+  );
+  const canReadModelOptions = computed(() =>
+    viewAccess.value.canViewChat || canReadAgentConfig.value
   );
   const isTestingDatasource = computed(() =>
     isTestingConfigDatasource.value || isTestingCatalogDatasource.value
@@ -146,9 +206,16 @@ export function useChatWorkspace() {
     if (!canAccessDatasourceCatalog.value) return false;
     const datasourceName = datasource?.trim();
     if (!datasourceName) {
-      return visibleDatasourceOptions.value.length > 0;
+      return hasCatalogBrowseGrant.value;
     }
-    return canUseDatasource(datasourceName);
+    return canUseDatasource(datasourceName) && (
+      viewAccess.value.canViewKnowledge
+      || canUseDatasourceCatalogSupport.value
+      || (viewAccess.value.canViewChat && (
+        canBrowseDatasourceCatalog(datasourceName)
+        || hasWildcardCatalogGrant()
+      ))
+    );
   }
 
   function loadAuthorizedDatasourceStatuses(datasource?: string) {
@@ -204,6 +271,7 @@ export function useChatWorkspace() {
   }
 
   function handleRefreshConnection() {
+    if (!canReadAgentConfig.value) return;
     checkConnection();
   }
 
@@ -261,6 +329,20 @@ export function useChatWorkspace() {
     return visibleDatasourceOptions.value.some((option) => option.value === datasourceName);
   }
 
+  function hasWildcardCatalogGrant() {
+    if (permission.isAdmin()) return true;
+    const grants = permission.permissions?.value?.datasource_grants ?? {};
+    return datasourceGrantAllowsCatalog(grants[WILDCARD_DATASOURCE_GRANT]);
+  }
+
+  function canBrowseDatasourceCatalog(name: string) {
+    if (permission.isAdmin()) return true;
+    const datasourceName = name.trim();
+    if (!datasourceName) return false;
+    const grants = permission.permissions?.value?.datasource_grants ?? {};
+    return datasourceGrantAllowsCatalog(grants[datasourceName]);
+  }
+
   async function handleDatasourceSwitch(name: string): Promise<boolean> {
     const datasourceName = name.trim();
     if (!datasourceName || !canUseDatasource(datasourceName)) return false;
@@ -301,14 +383,19 @@ export function useChatWorkspace() {
     if (initializePromise) return initializePromise;
 
     initializePromise = (async () => {
-      await checkConnection();
+      if (canReadAgentConfig.value) {
+        await checkConnection();
+      }
       selectedDatasource.value = defaultDatasource.value;
       selectCatalogDatasource(currentDatasource.value);
-      await Promise.all([
-        loadSessions(),
-        loadModels(),
-        loadAgentOptions(),
-      ]);
+      const startupTasks: Promise<unknown>[] = [];
+      if (viewAccess.value.canViewChat) {
+        startupTasks.push(loadSessions(), loadAgentOptions());
+      }
+      if (canReadModelOptions.value) {
+        startupTasks.push(loadModels());
+      }
+      await Promise.all(startupTasks);
       loadAuthorizedDatasourceStatuses();
       warmDatasource(currentDatasource.value);
       initialized.value = true;

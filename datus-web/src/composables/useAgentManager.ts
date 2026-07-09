@@ -2,6 +2,7 @@ import { computed, readonly, ref, shallowRef } from "vue";
 import { toast } from "vue-sonner";
 
 import { useConnection } from "@/composables/useConnection";
+import { usePermission } from "@/composables/usePermission";
 import { adminArtifactApi, adminDatasourceApi, agentApi, mcpApi } from "@/lib/api";
 import { ApiResultError } from "@/lib/chat";
 import type {
@@ -307,6 +308,7 @@ function uniqueAgentId(baseId: string, existingAgents: readonly AgentInfo[]): st
 
 export function useAgentManager() {
   const connection = useConnection();
+  const permission = usePermission();
 
   const agents = ref<AgentInfo[]>([]);
   const selectedAgent = ref<AgentDetail | null>(null);
@@ -387,6 +389,10 @@ export function useAgentManager() {
   const selectedMcpToolCount = computed(() =>
     [...selectedMcpNames.value].reduce((total, serverName) => total + (mcpToolsByServer.value[serverName]?.length ?? 0), 0)
   );
+  const canListMcpServers = computed(() => permission.hasPermission("mcp.server.list"));
+  const canListMcpTools = computed(() => permission.hasPermission("mcp.server.tools"));
+  const canListAdminDatasources = computed(() => permission.hasPermission("module.admin.datasources"));
+  const canListAdminArtifacts = computed(() => permission.hasPermission("module.admin.artifacts"));
   const canSubmitForm = computed(() => {
     if (saving.value) return false;
     if (formMode.value === "edit" && selectedIsBuiltin.value) return false;
@@ -404,6 +410,12 @@ export function useAgentManager() {
     }
 
     return fallback;
+  }
+
+  async function ensurePermissionsLoaded() {
+    if (!permission.isLoaded.value) {
+      await permission.fetchPermissions();
+    }
   }
 
   async function loadAgents() {
@@ -444,6 +456,15 @@ export function useAgentManager() {
   }
 
   async function loadMcpCatalog() {
+    await ensurePermissionsLoaded();
+
+    if (!canListMcpServers.value) {
+      mcpServers.value = [];
+      mcpToolsByServer.value = {};
+      mcpCatalogError.value = null;
+      return;
+    }
+
     mcpCatalogLoading.value = true;
     mcpCatalogError.value = null;
 
@@ -452,22 +473,26 @@ export function useAgentManager() {
       const servers = [...(result?.servers ?? [])].sort((left, right) => left.name.localeCompare(right.name));
       mcpServers.value = servers;
 
-      const toolEntries = await Promise.all(
-        servers.map(async (server) => {
-          try {
-            const toolsResult = await mcpApi.listTools(connection.effectiveBase(), server.name);
-            const toolNames = (toolsResult?.tools ?? [])
-              .map((tool) => tool.name)
-              .filter((name) => name.trim().length > 0)
-              .sort((left, right) => left.localeCompare(right));
-            return [server.name, toolNames] as const;
-          } catch (err) {
-            console.warn(`读取 MCP Server ${server.name} 工具失败`, err);
-            return [server.name, []] as const;
-          }
-        })
-      );
-      mcpToolsByServer.value = Object.fromEntries(toolEntries);
+      if (canListMcpTools.value) {
+        const toolEntries = await Promise.all(
+          servers.map(async (server) => {
+            try {
+              const toolsResult = await mcpApi.listTools(connection.effectiveBase(), server.name);
+              const toolNames = (toolsResult?.tools ?? [])
+                .map((tool) => tool.name)
+                .filter((name) => name.trim().length > 0)
+                .sort((left, right) => left.localeCompare(right));
+              return [server.name, toolNames] as const;
+            } catch (err) {
+              console.warn(`读取 MCP Server ${server.name} 工具失败`, err);
+              return [server.name, []] as const;
+            }
+          })
+        );
+        mcpToolsByServer.value = Object.fromEntries(toolEntries);
+      } else {
+        mcpToolsByServer.value = Object.fromEntries(servers.map((server) => [server.name, []]));
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "读取 MCP Server 失败";
       mcpServers.value = [];
@@ -493,16 +518,25 @@ export function useAgentManager() {
   }
 
   async function loadResourceCatalogs() {
+    await ensurePermissionsLoaded();
+
+    if (!canListAdminDatasources.value && !canListAdminArtifacts.value) {
+      datasources.value = [];
+      artifacts.value = [];
+      resourceCatalogError.value = null;
+      return;
+    }
+
     resourceCatalogLoading.value = true;
     resourceCatalogError.value = null;
 
     try {
       const [datasourceResult, artifactResult] = await Promise.all([
-        adminDatasourceApi.listDatasources(),
-        adminArtifactApi.listArtifacts(),
+        canListAdminDatasources.value ? adminDatasourceApi.listDatasources() : Promise.resolve(null),
+        canListAdminArtifacts.value ? adminArtifactApi.listArtifacts() : Promise.resolve(null),
       ]);
-      datasources.value = [...(datasourceResult.data ?? [])].sort((left, right) => left.name.localeCompare(right.name));
-      artifacts.value = [...(artifactResult.data ?? [])].sort((left, right) =>
+      datasources.value = [...(datasourceResult?.data ?? [])].sort((left, right) => left.name.localeCompare(right.name));
+      artifacts.value = [...(artifactResult?.data ?? [])].sort((left, right) =>
         left.artifact_type.localeCompare(right.artifact_type)
         || left.manifest.name.localeCompare(right.manifest.name)
         || left.manifest.slug.localeCompare(right.manifest.slug)

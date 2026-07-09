@@ -26,10 +26,12 @@ import {
 import McpServerDialog from "@/features/mcp/McpServerDialog.vue"
 import { mcpApi } from "@/lib/api"
 import { useConnection } from "@/composables/useConnection"
+import { usePermission } from "@/composables/usePermission"
 import { handleError } from "@/lib/utils"
 import type { McpConnectivityResult, McpServerInfo, McpToolInfo } from "@/types"
 
 const { effectiveBase } = useConnection()
+const permission = usePermission()
 const servers = ref<McpServerInfo[]>([])
 const selectedServer = shallowRef("")
 const tools = ref<McpToolInfo[]>([])
@@ -47,6 +49,16 @@ const deleteTarget = shallowRef<McpServerInfo | null>(null)
 const selected = computed(() => servers.value.find((server) => server.name === selectedServer.value))
 const selectedConnectivity = computed(() => selectedServer.value ? connectivityResults.value[selectedServer.value] : undefined)
 const serverCountLabel = computed(() => `${servers.value.length} 个 Server`)
+const canListServers = computed(() => permission.hasPermission("mcp.server.list"))
+const canListTools = computed(() => permission.hasPermission("mcp.server.tools"))
+const canCheckConnectivity = computed(() => permission.hasPermission("mcp.server.connectivity"))
+const canAddServer = computed(() => permission.hasPermission("mcp.server.add"))
+const canEditServer = computed(() => permission.hasPermission("mcp.server.edit"))
+const canRemoveServer = computed(() => permission.hasPermission("mcp.server.remove"))
+const toolsEmptyLabel = computed(() => {
+  if (!canListTools.value) return "当前角色没有查看工具列表的权限"
+  return toolsLoading.value ? "正在加载工具..." : "暂无工具"
+})
 const deleteDialogOpen = computed({
   get: () => deleteTarget.value !== null,
   set: (value: boolean) => {
@@ -55,6 +67,13 @@ const deleteDialogOpen = computed({
 })
 
 async function loadServers(preferredServer = "") {
+  if (!canListServers.value) {
+    servers.value = []
+    selectedServer.value = ""
+    tools.value = []
+    return
+  }
+
   loading.value = true
   try {
     const result = await mcpApi.listServers(effectiveBase())
@@ -63,7 +82,11 @@ async function loadServers(preferredServer = "") {
     selectedServer.value = servers.value.some((server) => server.name === targetServer)
       ? targetServer
       : servers.value[0]?.name ?? ""
-    await loadTools()
+    if (canListTools.value) {
+      await loadTools()
+    } else {
+      tools.value = []
+    }
   } catch (error) {
     handleError("加载 MCP Server 失败", error)
   } finally {
@@ -72,7 +95,7 @@ async function loadServers(preferredServer = "") {
 }
 
 async function loadTools() {
-  if (!selectedServer.value) {
+  if (!selectedServer.value || !canListTools.value) {
     tools.value = []
     return
   }
@@ -116,6 +139,9 @@ function openEditDialog(server: McpServerInfo) {
 }
 
 async function submitServer(server: McpServerInfo) {
+  if (serverDialogMode.value === "edit" && !canEditServer.value) return
+  if (serverDialogMode.value === "create" && !canAddServer.value) return
+
   submittingServer.value = true
   try {
     if (serverDialogMode.value === "edit" && editingServer.value) {
@@ -136,6 +162,8 @@ async function submitServer(server: McpServerInfo) {
 }
 
 async function checkConnectivity(serverName: string) {
+  if (!canCheckConnectivity.value) return
+
   checkingServer.value = serverName
   try {
     const result = await mcpApi.connectivity(effectiveBase(), serverName)
@@ -155,7 +183,7 @@ async function checkConnectivity(serverName: string) {
 
 async function confirmDelete() {
   const target = deleteTarget.value
-  if (!target) return
+  if (!target || !canRemoveServer.value) return
 
   deleting.value = true
   try {
@@ -173,8 +201,15 @@ async function confirmDelete() {
   }
 }
 
+async function initialize() {
+  if (!permission.isLoaded.value) {
+    await permission.fetchPermissions()
+  }
+  await loadServers()
+}
+
 onMounted(() => {
-  void loadServers()
+  void initialize()
 })
 </script>
 
@@ -192,13 +227,14 @@ onMounted(() => {
           <Button
             variant="outline"
             size="sm"
-            :disabled="loading"
+            :disabled="loading || !canListServers"
             @click="loadServers()"
           >
             <RefreshCwIcon data-icon="inline-start" />
             刷新
           </Button>
           <Button
+            v-if="canAddServer"
             size="sm"
             @click="openAddDialog"
           >
@@ -246,6 +282,7 @@ onMounted(() => {
                     </Button>
                     <div class="flex shrink-0 items-center gap-1">
                       <Button
+                        v-if="canCheckConnectivity"
                         variant="ghost"
                         size="icon-sm"
                         :aria-label="`检查 ${server.name} 连接`"
@@ -258,6 +295,7 @@ onMounted(() => {
                         <ActivityIcon v-else />
                       </Button>
                       <Button
+                        v-if="canEditServer"
                         variant="ghost"
                         size="icon-sm"
                         :aria-label="`编辑 ${server.name}`"
@@ -266,6 +304,7 @@ onMounted(() => {
                         <PencilIcon />
                       </Button>
                       <Button
+                        v-if="canRemoveServer"
                         variant="ghost"
                         size="icon-sm"
                         :aria-label="`删除 ${server.name}`"
@@ -284,7 +323,13 @@ onMounted(() => {
                 </div>
 
                 <div
-                  v-if="servers.length === 0 && !loading"
+                  v-if="!canListServers"
+                  class="rounded-lg border p-4 text-sm text-muted-foreground"
+                >
+                  当前角色没有查看 MCP Server 列表的权限
+                </div>
+                <div
+                  v-else-if="servers.length === 0 && !loading"
                   class="rounded-lg border p-4 text-sm text-muted-foreground"
                 >
                   暂无 MCP Server
@@ -334,7 +379,7 @@ onMounted(() => {
                         class="h-24 text-center text-muted-foreground"
                         colspan="2"
                       >
-                        {{ toolsLoading ? "正在加载工具..." : "暂无工具" }}
+                        {{ toolsEmptyLabel }}
                       </TableCell>
                     </TableRow>
                   </TableBody>

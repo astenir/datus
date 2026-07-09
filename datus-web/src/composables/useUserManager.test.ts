@@ -278,6 +278,29 @@ describe("useUserManager", () => {
     expect(manager.showAddUserDialog.value).toBe(true);
   });
 
+  it("keeps the edit dialog open when backend rejects ungrantable role assignment", async () => {
+    getUserRoles.mockResolvedValue({ data: { user_id: "alice", role_ids: ["viewer"] } });
+    upsertUser.mockResolvedValueOnce({ success: true, data: user });
+    updateUserRoles.mockResolvedValueOnce({
+      success: false,
+      errorCode: "USER_ROLES_FORBIDDEN",
+      errorMessage: "Cannot assign roles with permissions that the actor does not have.",
+    });
+
+    const { useUserManager } = await import("./useUserManager");
+    const manager = useUserManager();
+    await manager.openEditUserDialog(user);
+    manager.toggleSelectedRole("admin");
+
+    await manager.saveUser();
+
+    expect(updateUserRoles).toHaveBeenCalledWith("alice", ["viewer", "admin"]);
+    expect(toastError).toHaveBeenCalledWith("不能分配包含自己尚未拥有权限的角色");
+    expect(manager.userDialogError.value).toBe("不能分配包含自己尚未拥有权限的角色");
+    expect(manager.showAddUserDialog.value).toBe(true);
+    expect(listUsers).not.toHaveBeenCalled();
+  });
+
   it("keeps the edit dialog open while role assignment is loading", async () => {
     let resolveUserRoles: (value: { data: { user_id: string; role_ids: string[] } }) => void = () => {};
     getUserRoles.mockReturnValue(new Promise(resolve => {
