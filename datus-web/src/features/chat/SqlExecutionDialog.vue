@@ -21,21 +21,52 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { useSqlExecution } from "@/composables/useSqlExecution"
+import type { SelectOption } from "@/types"
 
 const props = defineProps<{
   initialSql: string
+  datasourceName?: string
+  datasourceOptions?: readonly SelectOption[]
   databaseName?: string
 }>()
 
 const open = defineModel<boolean>("open", { default: false })
 const execution = useSqlExecution()
 const sqlDraft = shallowRef(props.initialSql)
+const selectedDatasource = shallowRef("")
 
 const canExecute = computed(() => Boolean(sqlDraft.value.trim()) && !execution.running.value)
 const showResultTable = computed(() => execution.columns.value.length > 0)
 const showRawResult = computed(() => Boolean(execution.rawResult.value) && !showResultTable.value)
+const datasourceOptions = computed(() => props.datasourceOptions ?? [])
+const normalizedDatasourceName = computed(() => props.datasourceName?.trim() ?? "")
+const hasDatasourceOptions = computed(() => datasourceOptions.value.length > 0)
+const executionDatasourceName = computed(() => selectedDatasource.value.trim() || normalizedDatasourceName.value)
+const executionDatabaseName = computed(() => {
+  const selected = executionDatasourceName.value
+  if (selected && selected !== normalizedDatasourceName.value) return ""
+  return props.databaseName?.trim() ?? ""
+})
+const executionDatasourceLabel = computed(() =>
+  optionLabel(executionDatasourceName.value, datasourceOptions.value) || executionDatasourceName.value || "后端默认数据源",
+)
+const executionContextLabel = computed(() => {
+  const parts = [`数据源 ${executionDatasourceLabel.value}`]
+  if (executionDatabaseName.value) {
+    parts.push(`数据库 ${executionDatabaseName.value}`)
+  }
+  return parts.join(" / ")
+})
 const rowCountLabel = computed(() => {
   if (!execution.result.value) return "尚未执行"
   if (typeof execution.result.value.row_count === "number") return `${execution.result.value.row_count} 行`
@@ -58,11 +89,21 @@ watch(
 watch(open, (isOpen) => {
   if (isOpen) {
     sqlDraft.value = props.initialSql
+    selectedDatasource.value = normalizedDatasourceName.value
     return
   }
 
   execution.reset()
 })
+
+watch(
+  () => props.datasourceName,
+  () => {
+    if (!open.value) {
+      selectedDatasource.value = normalizedDatasourceName.value
+    }
+  },
+)
 
 onBeforeUnmount(() => {
   execution.reset()
@@ -70,12 +111,18 @@ onBeforeUnmount(() => {
 
 async function execute() {
   await execution.executeSql(sqlDraft.value, {
-    databaseName: props.databaseName,
+    datasourceName: executionDatasourceName.value,
+    databaseName: executionDatabaseName.value,
   })
 }
 
 function handleOpenUpdate(value: boolean) {
   open.value = value
+}
+
+function optionLabel(value: string, options: readonly SelectOption[]) {
+  if (!value) return ""
+  return options.find((option) => option.value === value)?.label ?? value
 }
 </script>
 
@@ -88,12 +135,47 @@ function handleOpenUpdate(value: boolean) {
       <DialogHeader>
         <DialogTitle>执行 SQL</DialogTitle>
         <DialogDescription>
-          输入 SQL，在当前数据源上下文中执行并查看返回结果。
+          在选定数据源上下文中执行 SQL 并查看返回结果。
         </DialogDescription>
       </DialogHeader>
 
       <div class="flex min-h-0 min-w-0 flex-col gap-4 overflow-y-auto px-2 pb-2">
         <FieldGroup>
+          <Field>
+            <FieldLabel for="read-query-datasource">执行数据源</FieldLabel>
+            <Select
+              v-if="hasDatasourceOptions"
+              v-model="selectedDatasource"
+              :disabled="execution.running.value"
+            >
+              <SelectTrigger
+                id="read-query-datasource"
+                class="h-11 w-full border-primary/40 bg-primary/5"
+              >
+                <SelectValue placeholder="选择数据源" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem
+                    v-for="option in datasourceOptions"
+                    :key="option.value"
+                    :value="option.value"
+                  >
+                    {{ option.label }}
+                  </SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <div
+              v-else
+              id="read-query-datasource"
+              class="flex h-11 min-w-0 items-center gap-2 rounded-md border border-primary/40 bg-primary/5 px-3 text-sm font-medium text-foreground"
+            >
+              <DatabaseIcon data-icon="inline-start" />
+              <span class="truncate">{{ executionDatasourceLabel }}</span>
+            </div>
+          </Field>
+
           <Field>
             <FieldLabel for="read-query-sql">SQL</FieldLabel>
             <div class="px-1 pb-1">
@@ -104,16 +186,26 @@ function handleOpenUpdate(value: boolean) {
                 spellcheck="false"
               />
             </div>
-            <FieldDescription>
-              {{ databaseName ? `Database: ${databaseName}` : "使用后端当前数据库上下文" }}
+            <FieldDescription v-if="executionDatabaseName">
+              Database: {{ executionDatabaseName }}
             </FieldDescription>
           </Field>
         </FieldGroup>
 
         <div class="flex flex-wrap items-center gap-2">
-          <Badge variant="outline">
+          <Badge
+            v-if="execution.result.value || execution.running.value || execution.error.value"
+            variant="default"
+          >
             <DatabaseIcon data-icon="inline-start" />
-            {{ databaseName || "默认数据库" }}
+            {{ executionDatasourceLabel }}
+          </Badge>
+          <Badge
+            v-if="executionDatabaseName"
+            variant="outline"
+          >
+            <DatabaseIcon data-icon="inline-start" />
+            {{ executionDatabaseName }}
           </Badge>
           <Badge
             v-if="execution.running.value"
@@ -141,7 +233,10 @@ function handleOpenUpdate(value: boolean) {
         >
           <AlertCircleIcon />
           <AlertTitle>执行失败</AlertTitle>
-          <AlertDescription>{{ execution.error.value }}</AlertDescription>
+          <AlertDescription class="flex flex-col gap-1">
+            <span>{{ execution.error.value }}</span>
+            <span class="text-xs opacity-90">执行上下文：{{ executionContextLabel }}</span>
+          </AlertDescription>
         </Alert>
 
         <div

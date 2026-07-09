@@ -368,6 +368,8 @@ function handleLogout() {
       v-if="canExecuteSql"
       v-model:open="sqlDialogOpen"
       initial-sql=""
+      :datasource-name="workspace.currentDatasource.value"
+      :datasource-options="workspace.visibleDatasourceOptions.value"
       :database-name="workspace.database.value || undefined"
     />
 

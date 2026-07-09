@@ -158,6 +158,7 @@ describe("api client", () => {
     );
 
     await sqlApi.execute("", "select 1", {
+      datasource: "fund",
       result_format: "json",
       execute_task_id: "task-1",
     });
@@ -165,6 +166,7 @@ describe("api client", () => {
     const init = vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit;
     expect(JSON.parse(String(init.body))).toMatchObject({
       sql_query: "select 1",
+      datasource: "fund",
       result_format: "json",
       execute_task_id: "task-1",
     });

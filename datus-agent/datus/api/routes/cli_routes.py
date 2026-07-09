@@ -78,6 +78,7 @@ async def execute_sql(
         ctx,
         svc.agent_config,
         operation="sql.execute",
+        requested_datasource=request.datasource,
         requested_database=request.database_name,
     )
     datasource = projection.principal.get("datasource") or getattr(projection.config, "current_datasource", None)
@@ -219,6 +220,7 @@ async def _audit_sql_execute(
     error_code = str(result.errorCode) if not result.success and result.errorCode is not None else None
     metadata = {
         "database": request.database_name,
+        "datasource": request.datasource,
         "result_format": request.result_format,
         "execute_task_id": getattr(data, "execute_task_id", None),
         "row_count": getattr(data, "row_count", None),

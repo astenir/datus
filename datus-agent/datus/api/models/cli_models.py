@@ -16,6 +16,7 @@ class ExecuteSQLInput(BaseModel):
         json_schema_extra={
             "example": {
                 "database_name": "sales_db",
+                "datasource": "warehouse",
                 "sql_query": "SELECT * FROM users WHERE status = 'active'",
                 "result_format": "csv",
                 "system": False,
@@ -24,6 +25,7 @@ class ExecuteSQLInput(BaseModel):
         }
     )
 
+    datasource: Optional[str] = Field(None, description="Datasource name")
     database_name: Optional[str] = Field(None, description="Database name")
     sql_query: str = Field(..., description="SQL query to execute")
     result_format: str = Field("arrow", description="Result format (arrow, csv, json)")

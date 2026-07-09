@@ -1,11 +1,18 @@
 import { apiResult, jsonBody } from "./helpers";
 import type { ContextCommandResult, InternalCommandResult, SqlExecuteResult } from "@/types";
 
+type SqlExecuteOptions = {
+  datasource?: string;
+  database_name?: string;
+  result_format?: string;
+  execute_task_id?: string;
+};
+
 export const sqlApi = {
   execute(
     baseUrl: string,
     sqlQuery: string,
-    options?: { database_name?: string; result_format?: string; execute_task_id?: string }
+    options?: SqlExecuteOptions,
   ): Promise<SqlExecuteResult | null> {
     return apiResult(baseUrl, "/api/v1/sql/execute", jsonBody({ sql_query: sqlQuery, ...options }));
   },

@@ -48,9 +48,10 @@ describe("useSqlExecution", () => {
     const { useSqlExecution } = await import("./useSqlExecution");
     const execution = useSqlExecution();
 
-    await execution.executeSql(" select 1 ", { databaseName: " fund " });
+    await execution.executeSql(" select 1 ", { datasourceName: " ccks_fund ", databaseName: " fund " });
 
     expect(execute).toHaveBeenCalledWith("http://api.test", "select 1", {
+      datasource: "ccks_fund",
       database_name: "fund",
       result_format: "json",
       execute_task_id: expect.stringMatching(/^frontend-sql-/),

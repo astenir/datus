@@ -3,7 +3,7 @@ import { computed } from "vue"
 import { Message, MessageContent, MessageResponse } from "@/components/ai-elements/message"
 import ChatBlockRenderer from "@/features/chat/ChatBlockRenderer.vue"
 import { shouldRenderThinkingAsAnswer } from "@/lib/chat"
-import type { ChatDisplayMessage } from "@/types"
+import type { ChatDisplayMessage, SelectOption } from "@/types"
 
 const props = defineProps<{
   message: ChatDisplayMessage
@@ -11,6 +11,8 @@ const props = defineProps<{
   interactionDisabled?: boolean
   activeInteractionKey?: string | null
   dockedInteractionKey?: string | null
+  datasourceName?: string
+  datasourceOptions?: readonly SelectOption[]
   databaseName?: string
 }>()
 
@@ -71,6 +73,8 @@ function openArtifact(kind: string, slug: string) {
             :interaction-disabled="interactionDisabled"
             :active-interaction-key="activeInteractionKey"
             :docked-interaction-key="dockedInteractionKey"
+            :datasource-name="datasourceName"
+            :datasource-options="datasourceOptions"
             :database-name="databaseName"
             @submit-interaction="submitInteraction"
             @open-artifact="openArtifact"

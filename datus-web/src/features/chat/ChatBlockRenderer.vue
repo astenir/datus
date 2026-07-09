@@ -40,7 +40,7 @@ import ChatCodeBlockCopyButton from "@/features/chat/ChatCodeBlockCopyButton.vue
 import ToolPayloadView from "@/features/chat/ToolPayloadView.vue"
 import UserInteractionBlock from "@/features/chat/UserInteractionBlock.vue"
 import { parsePermissionRequest } from "@/lib/interaction-display"
-import type { MessageDisplayBlock, ToolChildMessage } from "@/types"
+import type { MessageDisplayBlock, SelectOption, ToolChildMessage } from "@/types"
 
 const props = defineProps<{
   block: MessageDisplayBlock
@@ -49,6 +49,8 @@ const props = defineProps<{
   interactionDisabled?: boolean
   activeInteractionKey?: string | null
   dockedInteractionKey?: string | null
+  datasourceName?: string
+  datasourceOptions?: readonly SelectOption[]
   databaseName?: string
 }>()
 
@@ -169,6 +171,8 @@ function readOnlyInteractionDescription() {
         mode="input"
         :tool-name="block.toolName"
         :value="block.params"
+        :datasource-name="datasourceName"
+        :datasource-options="datasourceOptions"
         :database-name="databaseName"
       />
       <div
@@ -194,6 +198,8 @@ function readOnlyInteractionDescription() {
                 :interaction-disabled="interactionDisabled"
                 :active-interaction-key="activeInteractionKey"
                 :docked-interaction-key="dockedInteractionKey"
+                :datasource-name="datasourceName"
+                :datasource-options="datasourceOptions"
                 :database-name="databaseName"
                 @submit-interaction="submitInteraction"
                 @open-artifact="openArtifact"
@@ -225,6 +231,8 @@ function readOnlyInteractionDescription() {
         :tool-name="block.toolName"
         :value="block.result"
         :error-text="block.errorText"
+        :datasource-name="datasourceName"
+        :datasource-options="datasourceOptions"
         :database-name="databaseName"
       />
     </ToolContent>
@@ -244,6 +252,8 @@ function readOnlyInteractionDescription() {
         mode="input"
         :tool-name="block.toolName"
         :value="block.params"
+        :datasource-name="datasourceName"
+        :datasource-options="datasourceOptions"
         :database-name="databaseName"
       />
       <div
@@ -269,6 +279,8 @@ function readOnlyInteractionDescription() {
                 :interaction-disabled="interactionDisabled"
                 :active-interaction-key="activeInteractionKey"
                 :docked-interaction-key="dockedInteractionKey"
+                :datasource-name="datasourceName"
+                :datasource-options="datasourceOptions"
                 :database-name="databaseName"
                 @submit-interaction="submitInteraction"
                 @open-artifact="openArtifact"
@@ -287,6 +299,8 @@ function readOnlyInteractionDescription() {
         :tool-name="block.toolName"
         :value="block.result"
         :error-text="block.errorText"
+        :datasource-name="datasourceName"
+        :datasource-options="datasourceOptions"
         :database-name="databaseName"
       />
     </ToolContent>

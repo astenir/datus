@@ -31,8 +31,10 @@ async def test_execute_sql_returns_result_when_post_execute_audit_fails(monkeypa
         ),
     )
     ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.sql_executor"})
+    captured_projection_kwargs = {}
 
     async def project_config(*args, **kwargs):
+        captured_projection_kwargs.update(kwargs)
         return SimpleNamespace(config=agent_config, principal={"datasource": "default"})
 
     async def quota_ok(*args, **kwargs):
@@ -47,7 +49,7 @@ async def test_execute_sql_returns_result_when_post_execute_audit_fails(monkeypa
     monkeypatch.setattr(cli_routes, "audit_decision", fail_audit)
 
     result = await cli_routes.execute_sql(
-        ExecuteSQLInput(sql_query="SELECT 1", result_format="json"),
+        ExecuteSQLInput(sql_query="SELECT 1", result_format="json", datasource="fund"),
         ctx,
         SimpleNamespace(),
     )
@@ -55,4 +57,5 @@ async def test_execute_sql_returns_result_when_post_execute_audit_fails(monkeypa
     assert result.success is True
     assert result.data.execute_task_id == "task-1"
     assert result.data.row_count == 1
+    assert captured_projection_kwargs["requested_datasource"] == "fund"
     svc.cli.execute_sql.assert_awaited_once()

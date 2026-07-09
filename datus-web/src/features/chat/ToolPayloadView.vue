@@ -29,6 +29,7 @@ import {
   summarizeValue,
   tableFromToolValue,
 } from "@/lib/tool-display"
+import type { SelectOption } from "@/types"
 
 const MAX_VISIBLE_ROWS = 50
 
@@ -37,6 +38,8 @@ const props = defineProps<{
   toolName: string
   value?: unknown
   errorText?: string
+  datasourceName?: string
+  datasourceOptions?: readonly SelectOption[]
   databaseName?: string
 }>()
 
@@ -154,6 +157,8 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
       v-if="sql && canExecuteSql"
       v-model:open="sqlDialogOpen"
       :initial-sql="sql"
+      :datasource-name="datasourceName"
+      :datasource-options="datasourceOptions"
       :database-name="databaseName"
     />
 

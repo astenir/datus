@@ -6,6 +6,7 @@ import { useConnection } from "@/composables/useConnection";
 import type { SqlExecuteResult } from "@/types";
 
 type ExecuteSqlOptions = {
+  datasourceName?: string;
   databaseName?: string;
 };
 
@@ -62,6 +63,7 @@ export function useSqlExecution() {
 
     try {
       const data = await sqlApi.execute(effectiveBase(), query, {
+        datasource: normalizedOptionalString(options.datasourceName),
         database_name: normalizedOptionalString(options.databaseName),
         result_format: "json",
         execute_task_id: executeTaskId,
