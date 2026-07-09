@@ -13,7 +13,6 @@ import {
   SquareIcon,
   Trash2Icon,
   UserPlusIcon,
-  UsersIcon,
 } from "@lucide/vue"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -135,10 +134,10 @@ defineProps<AdminManagementTabProps>()
                     <Button
                       variant="outline"
                       size="sm"
-                      @click="users.openRoleDialog(user)"
+                      @click="users.openEditUserDialog(user)"
                     >
-                      <UsersIcon data-icon="inline-start" />
-                      角色
+                      <PencilIcon data-icon="inline-start" />
+                      编辑
                     </Button>
                     <Button
                       variant="outline"

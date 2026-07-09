@@ -10,10 +10,36 @@ export const userStatusOptions = [
   { value: "disabled", label: "禁用" },
 ] as const;
 
+type UserDialogMode = "create" | "edit";
+
 function statusToEnabled(status: AdminUserSearchForm["status"]): boolean | undefined {
   if (status === "enabled") return true;
   if (status === "disabled") return false;
   return undefined;
+}
+
+function emptyUserForm(): AdminUserFormData {
+  return {
+    user_id: "",
+    display_name: "",
+    email: "",
+    external_user_id: "",
+    department: "",
+    title: "",
+    enabled: true,
+  };
+}
+
+function userFormFromUser(user: AdminUser): AdminUserFormData {
+  return {
+    user_id: user.user_id,
+    display_name: user.display_name ?? "",
+    email: user.email ?? "",
+    external_user_id: user.external_user_id ?? "",
+    department: user.department ?? "",
+    title: user.title ?? "",
+    enabled: user.enabled,
+  };
 }
 
 export function useUserManager() {
@@ -31,33 +57,30 @@ export function useUserManager() {
   const userDetailError = shallowRef<string | null>(null);
   let userDetailRequestId = 0;
 
-  const showRoleDialog = shallowRef(false);
-  const selectedUser = shallowRef<AdminUser | null>(null);
   const allRoles = ref<AssignableRole[]>([]);
   const selectedRoleIds = ref<string[]>([]);
-  const savingRoles = shallowRef(false);
+  const loadingRoleAssignment = shallowRef(false);
+  const roleAssignmentLoaded = shallowRef(false);
+  const roleAssignmentError = shallowRef<string | null>(null);
+  let roleAssignmentRequestId = 0;
 
   const showAddUserDialog = shallowRef(false);
-  const newUserForm = ref<AdminUserFormData>({
-    user_id: "",
-    display_name: "",
-    email: "",
-    external_user_id: "",
-    department: "",
-    title: "",
-    last_seen_at: "",
-    enabled: true,
-  });
+  const userDialogMode = shallowRef<UserDialogMode>("create");
+  const editingUser = shallowRef<AdminUser | null>(null);
+  const newUserForm = ref<AdminUserFormData>(emptyUserForm());
   const savingUser = shallowRef(false);
 
   const activeUserCount = computed(() => users.value.filter((user) => user.enabled).length);
   const disabledUserCount = computed(() => users.value.filter((user) => !user.enabled).length);
+  const isEditingUser = computed(() => userDialogMode.value === "edit");
+  const userDialogTitle = computed(() => isEditingUser.value ? "编辑用户" : "新增用户");
   const roleOptions = computed(() =>
     allRoles.value.map((role) => ({
       value: role.role_id,
       label: role.name,
     }))
   );
+  const selectedRoleCount = computed(() => selectedRoleIds.value.length);
 
   async function loadUsers() {
     loading.value = true;
@@ -74,19 +97,6 @@ export function useUserManager() {
     }
   }
 
-  async function loadRoles() {
-    try {
-      const result = await adminRoleApi.listRoles();
-      allRoles.value = (result?.data ?? []).map((role) => ({
-        role_id: role.role_id,
-        name: role.name,
-      }));
-    } catch (err) {
-      console.error("加载角色列表失败:", err);
-      allRoles.value = [];
-    }
-  }
-
   function handleSearch() {
     void loadUsers();
   }
@@ -96,19 +106,36 @@ export function useUserManager() {
     void loadUsers();
   }
 
-  async function openRoleDialog(user: AdminUser) {
-    selectedUser.value = user;
+  async function loadRoleAssignment(user: AdminUser) {
+    const requestId = roleAssignmentRequestId + 1;
+    roleAssignmentRequestId = requestId;
+    selectedRoleIds.value = [...(user.role_ids ?? [])];
+    loadingRoleAssignment.value = true;
+    roleAssignmentLoaded.value = false;
+    roleAssignmentError.value = null;
 
     try {
-      const result = await adminUserApi.getUserRoles(user.user_id);
-      selectedRoleIds.value = result?.data?.role_ids ?? [];
+      const [userRoleResult, roleResult] = await Promise.all([
+        adminUserApi.getUserRoles(user.user_id),
+        adminRoleApi.listRoles(),
+      ]);
+      if (requestId !== roleAssignmentRequestId) return;
+      selectedRoleIds.value = userRoleResult?.data?.role_ids ?? [];
+      allRoles.value = (roleResult?.data ?? []).map((role) => ({
+        role_id: role.role_id,
+        name: role.name,
+      }));
+      roleAssignmentLoaded.value = true;
     } catch (err) {
+      if (requestId !== roleAssignmentRequestId) return;
       console.error("加载用户角色失败:", err);
-      selectedRoleIds.value = [];
+      selectedRoleIds.value = [...(user.role_ids ?? [])];
+      roleAssignmentError.value = "加载角色失败";
+    } finally {
+      if (requestId === roleAssignmentRequestId) {
+        loadingRoleAssignment.value = false;
+      }
     }
-
-    await loadRoles();
-    showRoleDialog.value = true;
   }
 
   async function openUserDetail(userId: string) {
@@ -151,22 +178,6 @@ export function useUserManager() {
     loadingUserDetail.value = false;
   }
 
-  async function saveRoles() {
-    if (!selectedUser.value) return;
-
-    savingRoles.value = true;
-    try {
-      await adminUserApi.updateUserRoles(selectedUser.value.user_id, selectedRoleIds.value);
-      showRoleDialog.value = false;
-      void loadUsers();
-    } catch (err) {
-      console.error("保存角色失败:", err);
-      toast.error("保存失败，请重试");
-    } finally {
-      savingRoles.value = false;
-    }
-  }
-
   function toggleSelectedRole(roleId: string) {
     selectedRoleIds.value = selectedRoleIds.value.includes(roleId)
       ? selectedRoleIds.value.filter(item => item !== roleId)
@@ -188,23 +199,51 @@ export function useUserManager() {
   }
 
   function openAddUserDialog() {
-    newUserForm.value = {
-      user_id: "",
-      display_name: "",
-      email: "",
-      external_user_id: "",
-      department: "",
-      title: "",
-      last_seen_at: "",
-      enabled: true,
-    };
+    roleAssignmentRequestId += 1;
+    userDialogMode.value = "create";
+    editingUser.value = null;
+    selectedRoleIds.value = [];
+    roleAssignmentLoaded.value = false;
+    roleAssignmentError.value = null;
+    loadingRoleAssignment.value = false;
+    newUserForm.value = emptyUserForm();
     showAddUserDialog.value = true;
   }
 
-  async function addUser() {
-    const userId = newUserForm.value.user_id.trim();
+  async function openEditUserDialog(user: AdminUser) {
+    userDialogMode.value = "edit";
+    editingUser.value = user;
+    selectedRoleIds.value = [...(user.role_ids ?? [])];
+    newUserForm.value = userFormFromUser(user);
+    showAddUserDialog.value = true;
+    await loadRoleAssignment(user);
+  }
+
+  function closeUserDialog() {
+    roleAssignmentRequestId += 1;
+    showAddUserDialog.value = false;
+    editingUser.value = null;
+    selectedRoleIds.value = [];
+    roleAssignmentLoaded.value = false;
+    roleAssignmentError.value = null;
+    loadingRoleAssignment.value = false;
+    userDialogMode.value = "create";
+  }
+
+  async function saveUser() {
+    const userId = isEditingUser.value
+      ? editingUser.value?.user_id ?? newUserForm.value.user_id.trim()
+      : newUserForm.value.user_id.trim();
     if (!userId) {
       toast.error("请输入用户 ID");
+      return;
+    }
+    if (isEditingUser.value && loadingRoleAssignment.value) {
+      toast.error("请等待角色加载完成");
+      return;
+    }
+    if (isEditingUser.value && roleAssignmentError.value) {
+      toast.error("角色加载失败，请重新打开后再保存");
       return;
     }
 
@@ -216,10 +255,12 @@ export function useUserManager() {
         external_user_id: newUserForm.value.external_user_id.trim() || null,
         department: newUserForm.value.department.trim() || null,
         title: newUserForm.value.title.trim() || null,
-        last_seen_at: newUserForm.value.last_seen_at.trim() || null,
         enabled: newUserForm.value.enabled,
       });
-      showAddUserDialog.value = false;
+      if (isEditingUser.value && roleAssignmentLoaded.value && !roleAssignmentError.value) {
+        await adminUserApi.updateUserRoles(userId, selectedRoleIds.value);
+      }
+      closeUserDialog();
       void loadUsers();
     } catch (err) {
       console.error("保存用户失败:", err);
@@ -240,28 +281,33 @@ export function useUserManager() {
     selectedUserDetailId,
     selectedUserDetail,
     userDetailError,
-    showRoleDialog,
-    selectedUser,
     allRoles,
     selectedRoleIds,
-    savingRoles,
+    loadingRoleAssignment,
+    roleAssignmentLoaded,
+    roleAssignmentError,
     showAddUserDialog,
     newUserForm,
     savingUser,
     activeUserCount,
     disabledUserCount,
+    userDialogMode,
+    editingUser,
+    isEditingUser,
+    userDialogTitle,
     roleOptions,
+    selectedRoleCount,
     loadUsers,
-    loadRoles,
     handleSearch,
     handleReset,
     openUserDetail,
     closeUserDetail,
-    openRoleDialog,
-    saveRoles,
     toggleSelectedRole,
     setUserEnabled,
     openAddUserDialog,
-    addUser,
+    openEditUserDialog,
+    closeUserDialog,
+    saveUser,
+    addUser: saveUser,
   };
 }

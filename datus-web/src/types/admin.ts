@@ -48,7 +48,6 @@ export interface AdminUserFormData {
   external_user_id: string;
   department: string;
   title: string;
-  last_seen_at: string;
   enabled: boolean;
 }
 

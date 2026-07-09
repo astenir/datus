@@ -29,6 +29,7 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import AdminAclMultiCombobox from "@/features/admin/AdminAclMultiCombobox.vue"
+import AdminRoleDropdown from "@/features/admin/AdminRoleDropdown.vue"
 import DatasourceGrantScopePicker from "@/features/admin/DatasourceGrantScopePicker.vue"
 import type { AdminAclSelectOption, AdminDialogProps } from "@/features/admin/types"
 import { permissionBadgeItems, permissionRiskLabel } from "@/lib/permission-labels"
@@ -658,18 +659,55 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
   </Dialog>
 
   <Dialog v-model:open="users.showAddUserDialog.value">
-    <DialogContent>
+    <DialogContent
+      class="flex max-h-[90vh] flex-col overflow-hidden sm:max-w-2xl"
+      :aria-describedby="undefined"
+    >
       <DialogHeader>
-        <DialogTitle>新增用户</DialogTitle>
-        <DialogDescription>创建或更新企业用户元数据。</DialogDescription>
+        <DialogTitle>{{ users.userDialogTitle.value }}</DialogTitle>
       </DialogHeader>
-      <FieldGroup class="gap-4">
+      <FieldGroup class="grid min-h-0 grid-cols-1 gap-4 overflow-y-auto overflow-x-hidden p-1 sm:grid-cols-2 [&>[data-slot=field]]:min-w-0">
         <Field>
           <FieldLabel for="admin-user-id">User ID</FieldLabel>
           <Input
             id="admin-user-id"
             v-model="users.newUserForm.value.user_id"
+            :disabled="users.isEditingUser.value"
           />
+        </Field>
+        <Field
+          v-if="users.isEditingUser.value"
+        >
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <FieldLabel>角色</FieldLabel>
+            <Badge variant="outline">{{ users.selectedRoleCount.value }} 项</Badge>
+          </div>
+          <div
+            v-if="users.loadingRoleAssignment.value"
+            class="rounded-md border p-3 text-sm text-muted-foreground"
+          >
+            正在加载可分配角色...
+          </div>
+          <div
+            v-else-if="users.roleAssignmentError.value"
+            class="rounded-md border p-3 text-sm text-muted-foreground"
+          >
+            {{ users.roleAssignmentError.value }}
+          </div>
+          <AdminRoleDropdown
+            v-else-if="users.roleOptions.value.length"
+            :options="users.roleOptions.value"
+            :selected-values="users.selectedRoleIds.value"
+            placeholder="选择用户角色"
+            empty-text="未分配角色"
+            @toggle="users.toggleSelectedRole"
+          />
+          <p
+            v-else
+            class="text-sm text-muted-foreground"
+          >
+            暂无可分配角色
+          </p>
         </Field>
         <Field>
           <FieldLabel for="admin-user-display-name">显示名</FieldLabel>
@@ -706,17 +744,9 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
             v-model="users.newUserForm.value.title"
           />
         </Field>
-        <Field>
-          <FieldLabel for="admin-user-last-seen">最近活跃时间</FieldLabel>
-          <Input
-            id="admin-user-last-seen"
-            v-model="users.newUserForm.value.last_seen_at"
-          />
-          <FieldDescription>可留空；用于导入或校正外部身份系统的最近活跃时间。</FieldDescription>
-        </Field>
         <Field
           orientation="horizontal"
-          class="items-center justify-between"
+          class="items-center justify-between pr-3"
         >
           <div class="flex flex-col gap-1">
             <FieldLabel>启用用户</FieldLabel>
@@ -728,47 +758,13 @@ function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" =
       <DialogFooter>
         <Button
           variant="outline"
-          @click="users.showAddUserDialog.value = false"
+          @click="users.closeUserDialog"
         >
           取消
         </Button>
         <Button
-          :disabled="users.savingUser.value"
-          @click="users.addUser"
-        >
-          保存
-        </Button>
-      </DialogFooter>
-    </DialogContent>
-  </Dialog>
-
-  <Dialog v-model:open="users.showRoleDialog.value">
-    <DialogContent class="sm:max-w-2xl">
-      <DialogHeader>
-        <DialogTitle>分配角色</DialogTitle>
-        <DialogDescription>{{ users.selectedUser.value?.user_id || "-" }}</DialogDescription>
-      </DialogHeader>
-      <div class="flex flex-wrap gap-2">
-        <Button
-          v-for="role in users.roleOptions.value"
-          :key="role.value"
-          :variant="users.selectedRoleIds.value.includes(role.value) ? 'default' : 'outline'"
-          size="sm"
-          @click="users.toggleSelectedRole(role.value)"
-        >
-          {{ role.label }}
-        </Button>
-      </div>
-      <DialogFooter>
-        <Button
-          variant="outline"
-          @click="users.showRoleDialog.value = false"
-        >
-          取消
-        </Button>
-        <Button
-          :disabled="users.savingRoles.value"
-          @click="users.saveRoles"
+          :disabled="users.savingUser.value || (users.isEditingUser.value && (users.loadingRoleAssignment.value || Boolean(users.roleAssignmentError.value)))"
+          @click="users.saveUser"
         >
           保存
         </Button>

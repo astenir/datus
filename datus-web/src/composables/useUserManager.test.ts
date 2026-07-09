@@ -81,25 +81,6 @@ describe("useUserManager", () => {
     expect(listUsers).toHaveBeenCalledWith({ enabled: undefined });
   });
 
-  it("opens role dialog with current and assignable role ids", async () => {
-    getUserRoles.mockResolvedValue({ data: { user_id: "alice", role_ids: ["viewer"] } });
-    listRoles.mockResolvedValue({
-      data: [{ role_id: "viewer", name: "查看员", description: null, permissions: [], built_in: false }],
-    });
-
-    const { useUserManager } = await import("./useUserManager");
-    const manager = useUserManager();
-
-    await manager.openRoleDialog(user);
-
-    expect(getUserRoles).toHaveBeenCalledWith("alice");
-    expect(listRoles).toHaveBeenCalled();
-    expect(manager.selectedUser.value).toEqual(user);
-    expect(manager.selectedRoleIds.value).toEqual(["viewer"]);
-    expect(manager.showRoleDialog.value).toBe(true);
-    expect(manager.roleOptions.value).toEqual([{ value: "viewer", label: "查看员" }]);
-  });
-
   it("opens user detail with a normalized route user id", async () => {
     getUser.mockResolvedValue({
       data: {
@@ -145,19 +126,6 @@ describe("useUserManager", () => {
     expect(manager.selectedUserDetailId.value).toBeNull();
   });
 
-  it("saves role assignment for selected user", async () => {
-    const { useUserManager } = await import("./useUserManager");
-    const manager = useUserManager();
-    manager.selectedUser.value = user;
-    manager.selectedRoleIds.value = ["admin", "viewer"];
-
-    await manager.saveRoles();
-
-    expect(updateUserRoles).toHaveBeenCalledWith("alice", ["admin", "viewer"]);
-    expect(manager.showRoleDialog.value).toBe(false);
-    expect(listUsers).toHaveBeenCalled();
-  });
-
   it("uses enable and disable endpoints for user state changes", async () => {
     const { useUserManager } = await import("./useUserManager");
     const manager = useUserManager();
@@ -179,7 +147,6 @@ describe("useUserManager", () => {
       external_user_id: "",
       department: "",
       title: "",
-      last_seen_at: "",
       enabled: true,
     };
 
@@ -199,7 +166,6 @@ describe("useUserManager", () => {
       external_user_id: " ext-alice ",
       department: " 数据部 ",
       title: " 分析师 ",
-      last_seen_at: " 2026-06-23T00:00:00Z ",
       enabled: true,
     };
 
@@ -211,10 +177,88 @@ describe("useUserManager", () => {
       external_user_id: "ext-alice",
       department: "数据部",
       title: "分析师",
-      last_seen_at: "2026-06-23T00:00:00Z",
       enabled: true,
     });
     expect(manager.showAddUserDialog.value).toBe(false);
     expect(listUsers).toHaveBeenCalled();
+  });
+
+  it("opens an existing user in edit mode with metadata prefilled", async () => {
+    const { useUserManager } = await import("./useUserManager");
+    const manager = useUserManager();
+
+    const roleLoad = manager.openEditUserDialog(user);
+
+    expect(manager.showAddUserDialog.value).toBe(true);
+    expect(manager.userDialogMode.value).toBe("edit");
+    expect(manager.userDialogTitle.value).toBe("编辑用户");
+    expect(manager.editingUser.value).toEqual(user);
+    expect(manager.newUserForm.value).toEqual({
+      user_id: "alice",
+      display_name: "Alice",
+      email: "alice@example.com",
+      external_user_id: "ext-alice",
+      department: "数据部",
+      title: "分析师",
+      enabled: true,
+    });
+
+    await roleLoad;
+    expect(getUserRoles).toHaveBeenCalledWith("alice");
+  });
+
+  it("updates the selected user and role assignment from the edit dialog", async () => {
+    getUserRoles.mockResolvedValue({ data: { user_id: "alice", role_ids: ["viewer"] } });
+
+    const { useUserManager } = await import("./useUserManager");
+    const manager = useUserManager();
+    await manager.openEditUserDialog(user);
+    manager.newUserForm.value = {
+      ...manager.newUserForm.value,
+      user_id: "bob",
+      display_name: " Alice Admin ",
+      email: " admin@example.com ",
+      enabled: false,
+    };
+    manager.toggleSelectedRole("admin");
+
+    await manager.saveUser();
+
+    expect(upsertUser).toHaveBeenCalledWith("alice", {
+      display_name: "Alice Admin",
+      email: "admin@example.com",
+      external_user_id: "ext-alice",
+      department: "数据部",
+      title: "分析师",
+      enabled: false,
+    });
+    expect(updateUserRoles).toHaveBeenCalledWith("alice", ["viewer", "admin"]);
+    expect(manager.showAddUserDialog.value).toBe(false);
+    expect(manager.userDialogMode.value).toBe("create");
+    expect(manager.editingUser.value).toBeNull();
+    expect(listUsers).toHaveBeenCalled();
+  });
+
+  it("keeps the edit dialog open while role assignment is loading", async () => {
+    let resolveUserRoles: (value: { data: { user_id: string; role_ids: string[] } }) => void = () => {};
+    getUserRoles.mockReturnValue(new Promise(resolve => {
+      resolveUserRoles = resolve;
+    }));
+
+    const { useUserManager } = await import("./useUserManager");
+    const manager = useUserManager();
+
+    const roleLoad = manager.openEditUserDialog(user);
+
+    expect(manager.showAddUserDialog.value).toBe(true);
+    expect(manager.loadingRoleAssignment.value).toBe(true);
+    expect(manager.selectedRoleIds.value).toEqual(["viewer"]);
+
+    resolveUserRoles({ data: { user_id: "alice", role_ids: ["admin"] } });
+    await roleLoad;
+
+    expect(manager.loadingRoleAssignment.value).toBe(false);
+    expect(manager.roleAssignmentLoaded.value).toBe(true);
+    expect(manager.selectedRoleIds.value).toEqual(["admin"]);
   });
 });
