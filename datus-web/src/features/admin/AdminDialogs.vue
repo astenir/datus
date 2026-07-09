@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue"
-import { ChevronDownIcon } from "@lucide/vue"
+import { CheckIcon, ChevronDownIcon } from "@lucide/vue"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -213,6 +213,27 @@ function selectedPermissionCount(group: PermissionOptionGroup): number {
 function selectedPresetCount(group: PermissionPresetGroup): number {
   const selected = new Set(props.roles.selectedPresetIds.value)
   return group.presets.filter(preset => selected.has(preset.id)).length
+}
+
+function isPresetSelected(presetId: string): boolean {
+  return props.roles.selectedPresetIds.value.includes(presetId)
+}
+
+function isPermissionSelected(permission: string): boolean {
+  return props.roles.selectedFeatures.value.includes(permission)
+}
+
+function permissionTileClass(selected: boolean, tone: "primary" | "destructive" = "primary"): string {
+  if (!selected) return "text-foreground"
+  if (tone === "destructive") {
+    return "border-destructive/50 bg-destructive/10 text-foreground shadow-sm hover:border-destructive/60 hover:bg-destructive/15 dark:bg-destructive/15 dark:hover:bg-destructive/20"
+  }
+  return "border-primary/50 bg-primary/10 text-foreground shadow-sm hover:border-primary/60 hover:bg-primary/15 dark:bg-primary/15 dark:hover:bg-primary/20"
+}
+
+function selectedCheckClass(selected: boolean, tone: "primary" | "destructive" = "primary"): string {
+  const colorClass = tone === "destructive" ? "text-destructive" : "text-primary"
+  return selected ? `opacity-100 ${colorClass}` : "opacity-0"
 }
 </script>
 
@@ -805,19 +826,38 @@ function selectedPresetCount(group: PermissionPresetGroup): number {
                 <Button
                   v-for="preset in group.presets"
                   :key="preset.id"
-                  :variant="roles.selectedPresetIds.value.includes(preset.id) ? 'default' : 'outline'"
-                  class="h-auto max-w-full justify-start whitespace-normal rounded-md px-3 py-2 text-left"
-                  :title="roles.selectedPresetIds.value.includes(preset.id) ? '再次点击移除该套餐' : '点击应用该套餐'"
+                  variant="outline"
+                  :class="[
+                    'h-auto max-w-full justify-start whitespace-normal rounded-md px-3 py-2 text-left',
+                    permissionTileClass(isPresetSelected(preset.id)),
+                  ]"
+                  :title="isPresetSelected(preset.id) ? '再次点击移除该套餐' : '点击应用该套餐'"
                   @click="roles.togglePermissionPreset(preset.id)"
                 >
                   <span class="flex min-w-0 flex-1 flex-col gap-1">
-                    <span class="flex min-w-0 flex-wrap items-center gap-2">
-                      <span class="font-medium">{{ preset.label }}</span>
-                      <Badge :variant="riskBadgeVariant(preset.risk)">
-                        {{ permissionRiskLabel(preset.risk) }}
-                      </Badge>
+                    <span class="flex min-w-0 items-start justify-between gap-2">
+                      <span class="flex min-w-0 flex-wrap items-center gap-2">
+                        <span class="font-medium">{{ preset.label }}</span>
+                        <Badge :variant="riskBadgeVariant(preset.risk)">
+                          {{ permissionRiskLabel(preset.risk) }}
+                        </Badge>
+                      </span>
+                      <CheckIcon
+                        :class="[
+                          'mt-0.5 size-4 shrink-0 transition-opacity',
+                          selectedCheckClass(isPresetSelected(preset.id)),
+                        ]"
+                        aria-hidden="true"
+                      />
                     </span>
-                    <span class="text-xs leading-5 text-muted-foreground">{{ preset.description }}</span>
+                    <span
+                      :class="[
+                        'text-xs leading-5',
+                        isPresetSelected(preset.id) ? 'text-foreground/70' : 'text-muted-foreground',
+                      ]"
+                    >
+                      {{ preset.description }}
+                    </span>
                   </span>
                 </Button>
               </div>
@@ -874,26 +914,45 @@ function selectedPresetCount(group: PermissionPresetGroup): number {
                   <Button
                     v-for="option in group.options"
                     :key="option.value"
-                    :variant="
-                      roles.selectedFeatures.value.includes(option.value)
-                        ? option.kind === 'wildcard'
-                          ? 'destructive'
-                          : 'default'
-                        : 'outline'
-                    "
+                    variant="outline"
                     size="sm"
-                    class="h-auto max-w-full whitespace-normal rounded-md py-2 text-left"
+                    :class="[
+                      'h-auto max-w-full whitespace-normal rounded-md py-2 text-left',
+                      permissionTileClass(
+                        isPermissionSelected(option.value),
+                        option.kind === 'wildcard' ? 'destructive' : 'primary',
+                      ),
+                    ]"
                     :title="option.description"
                     @click="roles.toggleSelectedFeature(option.value)"
                   >
                     <span class="flex min-w-0 flex-col gap-1">
-                      <span class="flex min-w-0 flex-wrap items-center gap-2">
-                        <span>{{ option.label }}</span>
-                        <Badge :variant="riskBadgeVariant(option.risk)">
-                          {{ permissionRiskLabel(option.risk) }}
-                        </Badge>
+                      <span class="flex min-w-0 items-start justify-between gap-2">
+                        <span class="flex min-w-0 flex-wrap items-center gap-2">
+                          <span>{{ option.label }}</span>
+                          <Badge :variant="riskBadgeVariant(option.risk)">
+                            {{ permissionRiskLabel(option.risk) }}
+                          </Badge>
+                        </span>
+                        <CheckIcon
+                          :class="[
+                            'mt-0.5 size-4 shrink-0 transition-opacity',
+                            selectedCheckClass(
+                              isPermissionSelected(option.value),
+                              option.kind === 'wildcard' ? 'destructive' : 'primary',
+                            ),
+                          ]"
+                          aria-hidden="true"
+                        />
                       </span>
-                      <span class="break-all text-xs leading-5 text-muted-foreground">{{ option.value }}</span>
+                      <span
+                        :class="[
+                          'break-all text-xs leading-5',
+                          isPermissionSelected(option.value) ? 'text-foreground/70' : 'text-muted-foreground',
+                        ]"
+                      >
+                        {{ option.value }}
+                      </span>
                     </span>
                   </Button>
                 </div>
