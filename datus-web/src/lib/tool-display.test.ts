@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 
-import { displayValueForTool, isSqlExecutionTool, shouldShowChartRecommendation, sqlFromToolValue, summarizeValue, tableFromToolValue, toolResultStatus } from "./tool-display";
+import {
+  displayValueForTool,
+  isSqlExecutionTool,
+  shouldShowChartRecommendation,
+  sqlExecutionContextFromToolValue,
+  sqlFromToolValue,
+  summarizeValue,
+  tableFromToolValue,
+  toolResultStatus,
+} from "./tool-display";
 
 describe("displayValueForTool", () => {
   it("uses result as the primary rendered value for tool results", () => {
@@ -230,6 +239,38 @@ describe("isSqlExecutionTool", () => {
   it("does not mark metadata tools as runnable SQL actions", () => {
     expect(isSqlExecutionTool("describe_table")).toBe(false);
     expect(isSqlExecutionTool("semantic_tools.search_metrics")).toBe(false);
+  });
+});
+
+describe("sqlExecutionContextFromToolValue", () => {
+  it("extracts datasource and database from unified SQL tool arguments", () => {
+    expect(sqlExecutionContextFromToolValue({
+      sql: "select 1",
+      datasource: " ccks_fund ",
+      database: " fund ",
+    })).toEqual({
+      datasourceName: "ccks_fund",
+      databaseName: "fund",
+    });
+  });
+
+  it("supports direct API-style datasource and database keys", () => {
+    expect(sqlExecutionContextFromToolValue({
+      sql_query: "select 1",
+      datasource_id: "warehouse",
+      database_name: "analytics",
+    })).toEqual({
+      datasourceName: "warehouse",
+      databaseName: "analytics",
+    });
+  });
+
+  it("ignores empty or non-string context fields", () => {
+    expect(sqlExecutionContextFromToolValue({
+      datasource: " ",
+      datasource_id: 42,
+      database: null,
+    })).toEqual({});
   });
 });
 

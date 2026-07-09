@@ -4,8 +4,15 @@ export type ToolTable = {
   sourceLabel: string;
 };
 
+export type SqlExecutionContext = {
+  datasourceName?: string;
+  databaseName?: string;
+};
+
 const tableKeys = ["rows", "data", "items", "records", "result", "results"];
 export const sqlKeys = ["sql", "query", "sql_query", "sqlQuery", "statement", "command"];
+const datasourceKeys = ["datasource", "datasource_id", "datasourceId"];
+const databaseKeys = ["database", "database_name", "databaseName"];
 
 type TableOptions = {
   omitKeys?: string[];
@@ -48,6 +55,15 @@ export function sqlFromToolValue(value: unknown): string | null {
   }
 
   return null;
+}
+
+export function sqlExecutionContextFromToolValue(value: unknown): SqlExecutionContext {
+  if (!isPlainRecord(value)) return {};
+
+  return {
+    datasourceName: stringFromKeys(value, datasourceKeys),
+    databaseName: stringFromKeys(value, databaseKeys),
+  };
 }
 
 export function tableFromToolValue(value: unknown, options: TableOptions = {}): ToolTable | null {
@@ -187,6 +203,17 @@ function findColumnsAndRows(value: unknown): { columns: unknown[]; rows: unknown
   }
 
   return null;
+}
+
+function stringFromKeys(value: Record<string, unknown>, keys: readonly string[]): string | undefined {
+  for (const key of keys) {
+    const candidate = value[key];
+    if (typeof candidate !== "string") continue;
+
+    const normalized = candidate.trim();
+    if (normalized) return normalized;
+  }
+  return undefined;
 }
 
 function tableFromCompressedValue(value: unknown, fallbackColumns: string[] = []): ToolTable | null {

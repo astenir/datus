@@ -24,6 +24,7 @@ import SqlExecutionDialog from "@/features/chat/SqlExecutionDialog.vue"
 import {
   displayValueForTool,
   isSqlExecutionTool,
+  sqlExecutionContextFromToolValue,
   sqlFromToolValue,
   sqlKeys,
   summarizeValue,
@@ -89,6 +90,17 @@ const canExecuteSql = computed(() => (
     && isSqlExecutionTool(props.toolName)
     && Boolean(sql.value)
 ))
+const sqlExecutionContext = computed(() => sqlExecutionContextFromToolValue(displayValue.value))
+const sqlExecutionDatasourceName = computed(() => sqlExecutionContext.value.datasourceName ?? props.datasourceName)
+const sqlExecutionDatabaseName = computed(() => {
+  const toolDatabaseName = sqlExecutionContext.value.databaseName
+  if (toolDatabaseName) return toolDatabaseName
+
+  const toolDatasourceName = sqlExecutionContext.value.datasourceName
+  if (toolDatasourceName && toolDatasourceName !== props.datasourceName?.trim()) return undefined
+
+  return props.databaseName
+})
 
 function formatCode(value: unknown): string {
   if (typeof value === "string") return value
@@ -157,9 +169,9 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
       v-if="sql && canExecuteSql"
       v-model:open="sqlDialogOpen"
       :initial-sql="sql"
-      :datasource-name="datasourceName"
+      :datasource-name="sqlExecutionDatasourceName"
       :datasource-options="datasourceOptions"
-      :database-name="databaseName"
+      :database-name="sqlExecutionDatabaseName"
     />
 
     <div
