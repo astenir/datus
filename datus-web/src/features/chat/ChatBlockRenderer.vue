@@ -13,7 +13,6 @@ import {
 import {
   CodeBlock,
   CodeBlockActions,
-  CodeBlockCopyButton,
   CodeBlockHeader,
   CodeBlockTitle,
 } from "@/components/ai-elements/code-block"
@@ -37,6 +36,7 @@ import {
 import { MessageResponse } from "@/components/ai-elements/message"
 import { Badge } from "@/components/ui/badge"
 import InteractionSummaryBlock from "@/features/chat/InteractionSummaryBlock.vue"
+import ChatCodeBlockCopyButton from "@/features/chat/ChatCodeBlockCopyButton.vue"
 import ToolPayloadView from "@/features/chat/ToolPayloadView.vue"
 import UserInteractionBlock from "@/features/chat/UserInteractionBlock.vue"
 import { parsePermissionRequest } from "@/lib/interaction-display"
@@ -150,7 +150,7 @@ function readOnlyInteractionDescription() {
     <CodeBlockHeader>
       <CodeBlockTitle>{{ block.language }}</CodeBlockTitle>
       <CodeBlockActions>
-        <CodeBlockCopyButton />
+        <ChatCodeBlockCopyButton :code="block.content" />
       </CodeBlockActions>
     </CodeBlockHeader>
   </CodeBlock>

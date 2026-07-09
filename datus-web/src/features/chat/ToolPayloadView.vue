@@ -8,7 +8,6 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import {
   CodeBlock,
   CodeBlockActions,
-  CodeBlockCopyButton,
   CodeBlockHeader,
   CodeBlockTitle,
 } from "@/components/ai-elements/code-block"
@@ -20,6 +19,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import ChatCodeBlockCopyButton from "@/features/chat/ChatCodeBlockCopyButton.vue"
 import SqlExecutionDialog from "@/features/chat/SqlExecutionDialog.vue"
 import {
   displayValueForTool,
@@ -145,7 +145,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
-          <CodeBlockCopyButton />
+          <ChatCodeBlockCopyButton :code="sql" />
         </CodeBlockActions>
       </CodeBlockHeader>
     </CodeBlock>
@@ -212,7 +212,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
       <CodeBlockHeader class="px-2 py-1">
         <CodeBlockTitle>{{ typeof displayValue === "string" ? "Text" : "JSON" }}</CodeBlockTitle>
         <CodeBlockActions>
-          <CodeBlockCopyButton />
+          <ChatCodeBlockCopyButton :code="fallbackCode" />
         </CodeBlockActions>
       </CodeBlockHeader>
     </CodeBlock>
