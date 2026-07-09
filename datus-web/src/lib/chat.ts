@@ -123,6 +123,95 @@ function normalizeInteractionSummaryStatus(value: unknown): InteractionSummarySt
   return "unknown";
 }
 
+const friendlyChatErrors: Record<string, { title: string; message: string }> = {
+  QUOTA_EXCEEDED: {
+    title: "对话额度已用完",
+    message: "本轮请求已停止，因为当前账号或角色的对话额度已达到上限。请稍后再试，或联系管理员调整额度。",
+  },
+  AUTH_REQUIRED: {
+    title: "需要重新登录",
+    message: "当前会话没有有效登录凭证。请重新登录或切换到可用账号后再试。",
+  },
+  FORBIDDEN: {
+    title: "没有操作权限",
+    message: "当前账号没有执行这次操作所需的权限。如需继续，请联系管理员开通对应权限。",
+  },
+  PERMISSION_DENIED: {
+    title: "权限受限",
+    message: "当前权限策略拦截了这次操作。换参数通常不会绕过限制，请联系管理员确认授权范围。",
+  },
+  DATASOURCE_UNAVAILABLE: {
+    title: "数据源不可用",
+    message: "当前数据源暂时无法访问。请检查数据源连接、授权范围或稍后重试。",
+  },
+  MODEL_UNAVAILABLE: {
+    title: "模型暂时不可用",
+    message: "当前模型服务没有完成请求。请稍后重试，或切换到其他可用模型。",
+  },
+  MODEL_CONFIG_REQUIRED: {
+    title: "模型配置缺失",
+    message: "系统还没有可用的模型配置。请先在配置中心设置模型 Provider 和模型名。",
+  },
+  RATE_LIMITED: {
+    title: "请求过于频繁",
+    message: "当前请求触发了限流保护。请稍后再试。",
+  },
+  TIMEOUT: {
+    title: "请求超时",
+    message: "服务处理时间过长，已停止等待。请稍后重试，或缩小本次问题范围。",
+  },
+};
+
+function canonicalErrorCode(code: string) {
+  if (code === "QUATA_EXCEEDED") return "QUOTA_EXCEEDED";
+  return code;
+}
+
+function errorCodeFromUnknown(value: unknown): string | undefined {
+  const text = stringifyContent(value).trim();
+  if (!/^[A-Z][A-Z0-9_]{2,}$/.test(text)) return undefined;
+  return canonicalErrorCode(text);
+}
+
+export function friendlyChatErrorBlock(input: {
+  code?: unknown;
+  message?: unknown;
+  fallback?: unknown;
+}): Extract<MessageBlock, { type: "error" }> {
+  const rawMessage = stringifyContent(input.message ?? input.fallback).trim();
+  const code = errorCodeFromUnknown(input.code) ?? errorCodeFromUnknown(rawMessage);
+  const meta = code ? friendlyChatErrors[code] : undefined;
+  const messageIsOnlyCode = Boolean(code && errorCodeFromUnknown(rawMessage) === code);
+  const detail = rawMessage && !messageIsOnlyCode && rawMessage !== meta?.message
+    ? rawMessage
+    : "";
+
+  if (meta) {
+    return {
+      type: "error",
+      title: meta.title,
+      message: meta.message,
+      code,
+      ...(detail ? { detail } : {}),
+    };
+  }
+
+  if (code) {
+    return {
+      type: "error",
+      title: "请求没有完成",
+      message: "服务返回了错误码，当前前端还没有对应说明。请联系管理员查看后台日志。",
+      code,
+    };
+  }
+
+  return {
+    type: "error",
+    title: "请求没有完成",
+    message: rawMessage || "服务没有返回可读的错误信息。请稍后重试，或联系管理员查看后台日志。",
+  };
+}
+
 function parseInteractionSummaryAnswers(rawAnswers: unknown) {
   if (!Array.isArray(rawAnswers)) return [];
 
@@ -563,7 +652,11 @@ export function contentFromPayloadBlocks(
       if (errorText) block.errorText = errorText;
       blocks.push(block);
     } else if (type === "error") {
-      blocks.push({ type: "markdown", content: `**错误**\n\n${stringifyContent(payload.content)}` });
+      blocks.push(friendlyChatErrorBlock({
+        code: payload.errorType ?? payload.error_type ?? payload.errorCode ?? payload.error_code ?? payload.code,
+        message: payload.error ?? payload.errorMessage ?? payload.error_message ?? payload.message ?? payload.content,
+        fallback: payload,
+      }));
     } else if (type === "user-interaction") {
       const interactionKey = stringifyContent(payload.interactionKey ?? payload.interaction_key);
       const actionType = stringifyContent(payload.actionType ?? payload.action_type ?? "interaction");
@@ -623,6 +716,7 @@ export function contentFromPayloadBlocks(
       if (block.type === "markdown") return block.content;
       if (block.type === "thinking") return block.content;
       if (block.type === "code") return block.content;
+      if (block.type === "error") return `${block.title}\n${block.message}`;
       if (block.type === "tool-call") return `调用工具 ${block.toolName}`;
       if (block.type === "tool-result") return `工具结果 ${block.toolName}${block.shortDesc ? `\n${block.shortDesc}` : ""}`;
       if (block.type === "user-interaction") return `需要用户确认 (${block.actionType})`;
@@ -822,6 +916,11 @@ export function messageFromEvent(event: SseEvent): ParsedMessage | null {
         payload?: SseMessagePayload;
         error?: string;
         error_type?: string;
+        error_code?: string;
+        errorCode?: string;
+        errorMessage?: string;
+        error_message?: string;
+        code?: string;
         session_id?: string;
         total_tokens?: number;
         duration?: number;
@@ -830,13 +929,21 @@ export function messageFromEvent(event: SseEvent): ParsedMessage | null {
 
   if (!data) return null;
 
-  if (event.event === "error" || data.error) {
+  const errorMessage = data.error ?? data.errorMessage ?? data.error_message;
+  const errorCode = data.error_type ?? data.error_code ?? data.errorCode ?? data.code;
+  if (event.event === "error" || errorMessage || errorCode) {
+    const errorBlock = friendlyChatErrorBlock({
+      code: errorCode,
+      message: errorMessage,
+      fallback: data,
+    });
     return {
       operation: "createMessage",
       message: {
         id: `error-${event.id ?? Date.now()}`,
         role: "system",
-        content: data.error ? `**${data.error_type ?? "Error"}**\n\n${data.error}` : stringifyContent(data)
+        content: `${errorBlock.title}\n${errorBlock.message}`,
+        blocks: [errorBlock],
       }
     };
   }

@@ -23,21 +23,26 @@ const emit = defineEmits<{
 
 const isUserMessage = computed(() => props.message.role === "user")
 const isSystemMessage = computed(() => props.message.role === "system")
+const hasErrorBlock = computed(() => props.message.blocks?.some((block) => block.type === "error") ?? false)
 const messageFrom = computed(() => isUserMessage.value ? "user" : "assistant")
 const thinkingDisplay = computed(() =>
   shouldRenderThinkingAsAnswer(props.message) ? "answer" : "reasoning",
 )
 const messageClass = computed(() =>
-  isSystemMessage.value
-    ? "mx-auto !max-w-3xl justify-center"
-    : "mx-auto !max-w-3xl",
+  hasErrorBlock.value
+    ? "mx-auto w-full !max-w-3xl justify-center"
+    : isSystemMessage.value
+      ? "mx-auto !max-w-3xl justify-center"
+      : "mx-auto !max-w-3xl",
 )
 const contentClass = computed(() =>
-  isSystemMessage.value
-    ? "w-fit rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground"
-    : isUserMessage.value
-      ? "w-auto rounded-2xl bg-muted px-4 py-3 text-sm leading-6"
-      : "w-full overflow-visible text-sm leading-7 text-foreground",
+  hasErrorBlock.value
+    ? "w-full overflow-visible text-sm leading-6"
+    : isSystemMessage.value
+      ? "w-fit rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground"
+      : isUserMessage.value
+        ? "w-auto rounded-2xl bg-muted px-4 py-3 text-sm leading-6"
+        : "w-full overflow-visible text-sm leading-7 text-foreground",
 )
 
 function submitInteraction(interactionKey: string, answers: string[][]) {

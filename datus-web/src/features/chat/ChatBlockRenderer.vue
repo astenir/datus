@@ -35,6 +35,7 @@ import {
 } from "@/components/ai-elements/tool"
 import { MessageResponse } from "@/components/ai-elements/message"
 import { Badge } from "@/components/ui/badge"
+import ChatErrorBlock from "@/features/chat/ChatErrorBlock.vue"
 import InteractionSummaryBlock from "@/features/chat/InteractionSummaryBlock.vue"
 import ChatCodeBlockCopyButton from "@/features/chat/ChatCodeBlockCopyButton.vue"
 import ToolPayloadView from "@/features/chat/ToolPayloadView.vue"
@@ -128,6 +129,11 @@ function readOnlyInteractionDescription() {
     v-if="block.type === 'markdown'"
     :content="block.content"
     :streaming="streaming"
+  />
+
+  <ChatErrorBlock
+    v-else-if="block.type === 'error'"
+    :block="block"
   />
 
   <MessageResponse

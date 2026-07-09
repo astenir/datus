@@ -45,8 +45,17 @@ export type ToolExecutionBlock = {
   childMessages?: readonly ToolChildMessage[];
 };
 
+export type ChatErrorBlock = {
+  type: "error";
+  title: string;
+  message: string;
+  code?: string;
+  detail?: string;
+};
+
 export type MessageBlock =
   | { type: "markdown"; content: string }
+  | ChatErrorBlock
   | { type: "thinking"; content: string }
   | { type: "code"; language: string; content: string }
   | ToolCallBlock

@@ -9,6 +9,7 @@ import {
   chatSessionsPath,
   contentFromPayloadBlocks,
   filterVisibleChatSessions,
+  friendlyChatErrorBlock,
   friendlyToolErrorText,
   isReviewableAssistantMessage,
   mergeToolExecutionBlocks,
@@ -425,6 +426,94 @@ describe("tool execution blocks", () => {
         ],
       },
     ]);
+  });
+});
+
+describe("chat error display", () => {
+  it("normalizes quota error codes into friendly copy", () => {
+    expect(friendlyChatErrorBlock({ code: "QUATA_EXCEEDED", message: "QUATA_EXCEEDED" })).toEqual({
+      type: "error",
+      title: "对话额度已用完",
+      message: "本轮请求已停止，因为当前账号或角色的对话额度已达到上限。请稍后再试，或联系管理员调整额度。",
+      code: "QUOTA_EXCEEDED",
+    });
+  });
+
+  it("keeps backend error details secondary when a known code has detail text", () => {
+    expect(friendlyChatErrorBlock({
+      code: "DATASOURCE_UNAVAILABLE",
+      message: "No active LLM model configured",
+    })).toEqual({
+      type: "error",
+      title: "数据源不可用",
+      message: "当前数据源暂时无法访问。请检查数据源连接、授权范围或稍后重试。",
+      code: "DATASOURCE_UNAVAILABLE",
+      detail: "No active LLM model configured",
+    });
+  });
+
+  it("parses SSE error events as dedicated error blocks instead of markdown pills", () => {
+    const parsed = messageFromEvent({
+      id: "quota-1",
+      event: "error",
+      data: {
+        error_type: "QUATA_EXCEEDED",
+        error: "QUATA_EXCEEDED",
+      },
+    });
+
+    expect(parsed).toEqual({
+      operation: "createMessage",
+      message: {
+        id: "error-quota-1",
+        role: "system",
+        content: "对话额度已用完\n本轮请求已停止，因为当前账号或角色的对话额度已达到上限。请稍后再试，或联系管理员调整额度。",
+        blocks: [{
+          type: "error",
+          title: "对话额度已用完",
+          message: "本轮请求已停止，因为当前账号或角色的对话额度已达到上限。请稍后再试，或联系管理员调整额度。",
+          code: "QUOTA_EXCEEDED",
+        }],
+      },
+    });
+  });
+
+  it("parses content error payloads as dedicated error blocks", () => {
+    const parsed = contentFromPayloadBlocks([
+      {
+        type: "error",
+        payload: {
+          error_type: "AUTH_REQUIRED",
+          content: "AUTH_REQUIRED",
+        },
+      },
+    ]);
+
+    expect(parsed.blocks).toEqual([{
+      type: "error",
+      title: "需要重新登录",
+      message: "当前会话没有有效登录凭证。请重新登录或切换到可用账号后再试。",
+      code: "AUTH_REQUIRED",
+    }]);
+    expect(parsed.text).toBe("需要重新登录\n当前会话没有有效登录凭证。请重新登录或切换到可用账号后再试。");
+  });
+
+  it("accepts camel-case API error shapes from stream events", () => {
+    const parsed = messageFromEvent({
+      id: "auth-1",
+      event: "message",
+      data: {
+        errorCode: "AUTH_REQUIRED",
+        errorMessage: "AUTH_REQUIRED",
+      },
+    });
+
+    expect(parsed?.message.blocks).toEqual([{
+      type: "error",
+      title: "需要重新登录",
+      message: "当前会话没有有效登录凭证。请重新登录或切换到可用账号后再试。",
+      code: "AUTH_REQUIRED",
+    }]);
   });
 });
 
