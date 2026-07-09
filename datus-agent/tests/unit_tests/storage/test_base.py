@@ -37,11 +37,13 @@ class _UnavailableEmbeddingModel:
 class _ReadOnlyTable:
     def __init__(self, rows):
         self.rows = rows
+        self.search_all_calls = []
 
     def count_rows(self, where=None):
         return len(self.rows)
 
     def search_all(self, where=None, select_fields=None, limit=None):
+        self.search_all_calls.append({"where": where, "select_fields": select_fields, "limit": limit})
         rows = self.rows[:limit] if limit is not None else list(self.rows)
         if select_fields is not None:
             rows = [{field: row.get(field) for field in select_fields if field in row} for row in rows]
@@ -359,6 +361,23 @@ class TestReadOnlyPathsWithoutEmbedding:
 
         assert result.to_pylist() == [{"name": "orders"}]
         assert db.open_table_calls == [("test_table", {})]
+        assert store._shared.initialized is False
+
+    def test_existing_table_read_path_does_not_fetch_vector_by_default(self):
+        table = _ReadOnlyTable(
+            [
+                {"name": "orders", "definition": "CREATE TABLE orders(id int)", "vector": [0.1, 0.2]},
+            ]
+        )
+        db = _ReadOnlyVectorDb(exists=True, table=table)
+        store = self._make_store(db)
+
+        result = store._search_all()
+
+        assert result.to_pylist() == [{"name": "orders", "definition": "CREATE TABLE orders(id int)"}]
+        assert table.search_all_calls == [
+            {"where": None, "select_fields": ["name", "definition"], "limit": 1}
+        ]
         assert store._shared.initialized is False
 
     def test_query_with_filter_zero_limit_without_embedding(self):

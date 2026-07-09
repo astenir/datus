@@ -9,7 +9,12 @@ import pytest
 
 from datus_storage_base.conditions import eq
 from datus_storage_base.vector.base import EmbeddingFunction
-from datus_storage_oceanbase_mysql.vector.backend import OceanBaseMySQLVectorBackend, OceanBaseMySQLVectorTable
+from datus_storage_oceanbase_mysql.vector.backend import (
+    OceanBaseMySQLVectorBackend,
+    OceanBaseMySQLVectorTable,
+    _parse_vector_dim_from_column_type,
+    _vector_dim_from_schema,
+)
 from datus_storage_oceanbase_mysql.vector.schema_converter import schema_to_create_table_sql
 
 
@@ -89,6 +94,24 @@ def test_schema_converter_uses_vector_and_indexable_unique_text():
     assert "`id` VARCHAR(1024)" in sql
     assert "`description` LONGTEXT" in sql
     assert "ORGANIZATION HEAP" in sql
+
+
+@pytest.mark.parametrize(
+    ("column_type", "expected"),
+    [
+        ("vector(1024)", 1024),
+        ("VECTOR(1536)", 1536),
+        (" Vector ( 2048 ) ", 2048),
+        ("longtext", None),
+    ],
+)
+def test_parse_vector_dim_from_column_type(column_type, expected):
+    assert _parse_vector_dim_from_column_type(column_type) == expected
+
+
+def test_vector_dim_from_schema_uses_fixed_size_vector_field():
+    assert _vector_dim_from_schema(_schema(), "vector") == 4
+    assert _vector_dim_from_schema(_schema(), "missing") is None
 
 
 def test_initialize_requires_connection_config():

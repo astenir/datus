@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Union
 
 import pandas as pd
@@ -17,6 +18,8 @@ from datus_storage_oceanbase_mysql.rdb.backend import (
     _validate_identifier,
 )
 from datus_storage_oceanbase_mysql.vector.schema_converter import schema_to_create_table_sql
+
+_VECTOR_TYPE_RE = re.compile(r"\bvector\s*\(\s*(\d+)\s*\)", re.IGNORECASE)
 
 
 def _vector_literal(value: Any) -> Optional[str]:
@@ -38,6 +41,22 @@ def _parse_vector(value: Any, dim: int) -> List[float]:
             return []
         return [float(part) for part in text.split(",")]
     return [float(v) for v in list(value)]
+
+
+def _parse_vector_dim_from_column_type(column_type: str) -> Optional[int]:
+    match = _VECTOR_TYPE_RE.search(column_type)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _vector_dim_from_schema(schema: Optional[pa.Schema], vector_column: str) -> Optional[int]:
+    if schema is None or vector_column not in schema.names:
+        return None
+    field_type = schema.field(vector_column).type
+    if pa.types.is_fixed_size_list(field_type):
+        return field_type.list_size
+    return None
 
 
 class OceanBaseMySQLVectorTable(VectorTable):
@@ -486,7 +505,7 @@ class OceanBaseMySQLVectorDb(VectorDatabase):
         _validate_identifier(table_name)
         vector_column = vector_column or "vector"
         source_column = source_column or "description"
-        vector_dim = embedding_function.ndims() if embedding_function else 384
+        vector_dim = embedding_function.ndims() if embedding_function else _vector_dim_from_schema(schema, vector_column) or 384
         unique_columns = unique_columns or []
         column_names: List[str] = []
         if schema is not None:
@@ -543,7 +562,7 @@ class OceanBaseMySQLVectorDb(VectorDatabase):
     ) -> OceanBaseMySQLVectorTable:
         vector_column = vector_column or "vector"
         source_column = source_column or "description"
-        vector_dim = embedding_function.ndims() if embedding_function else 384
+        vector_dim = embedding_function.ndims() if embedding_function else self._infer_vector_dim(table_name, vector_column) or 384
         cache_key = (table_name, id(embedding_function), vector_dim, vector_column, source_column)
         if cache_key in self._table_cache:
             return self._table_cache[cache_key]
@@ -598,6 +617,27 @@ class OceanBaseMySQLVectorDb(VectorDatabase):
             isolation=self._isolation,
             logical_namespace=self._logical_namespace,
         )
+
+    def _infer_vector_dim(self, table_name: str, vector_column: str) -> Optional[int]:
+        _validate_identifier(table_name)
+        _validate_identifier(vector_column)
+        with self._pool.connection(database=self._database_name) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT COLUMN_TYPE, DATA_TYPE FROM information_schema.COLUMNS "
+                    "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME = %s",
+                    (self._database_name, table_name, vector_column),
+                )
+                row = cursor.fetchone()
+        if not row:
+            return None
+        for key in ("COLUMN_TYPE", "DATA_TYPE"):
+            value = row.get(key)
+            if isinstance(value, str):
+                dim = _parse_vector_dim_from_column_type(value)
+                if dim is not None:
+                    return dim
+        return None
 
     def _fetch_column_names(self, table_name: str) -> List[str]:
         _validate_identifier(table_name)

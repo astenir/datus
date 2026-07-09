@@ -231,13 +231,20 @@ class BaseEmbeddingStore(StorageBase):
         table = self._open_existing_table_for_read()
         if table is None:
             return self._empty_result(select_fields)
+        effective_select_fields = select_fields
+        if self.vector_column_name and self._schema is not None:
+            schema_fields = [field.name for field in self._schema if field.name != self.vector_column_name]
+            if select_fields is None:
+                effective_select_fields = schema_fields
+            else:
+                effective_select_fields = [field for field in select_fields if field != self.vector_column_name]
         if limit is not None:
             row_limit = limit
         else:
             row_limit = table.count_rows(where) if where else table.count_rows()
         if row_limit == 0:
             return self._empty_result(select_fields)
-        result = table.search_all(where=where, select_fields=select_fields, limit=row_limit)
+        result = table.search_all(where=where, select_fields=effective_select_fields, limit=row_limit)
         if self.vector_column_name in result.column_names:
             result = result.drop([self.vector_column_name])
         return result
