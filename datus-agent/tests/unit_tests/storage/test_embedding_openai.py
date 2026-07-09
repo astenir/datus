@@ -112,10 +112,16 @@ class TestNdims:
         assert emb.ndims() == 512
 
     @pytest.mark.ci
-    def test_unknown_model_raises_value_error(self):
-        """An unknown model name should raise DatusException."""
+    def test_custom_openai_compatible_model_uses_configured_dims(self):
+        """Custom OpenAI-compatible models should use configured dimensions."""
+        emb = OpenAIEmbeddings(name="jina-embeddings-v3", dim=1024)
+        assert emb.ndims() == 1024
+
+    @pytest.mark.ci
+    def test_unknown_model_without_dims_raises_value_error(self):
+        """An unknown model name without configured dimensions should raise DatusException."""
         emb = OpenAIEmbeddings(name="nonexistent-model")
-        with pytest.raises(DatusException, match="Unknown embedding model name"):
+        with pytest.raises(DatusException, match="Set dim_size"):
             emb.ndims()
 
 

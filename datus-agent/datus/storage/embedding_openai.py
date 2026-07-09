@@ -78,11 +78,14 @@ class OpenAIEmbeddings(BaseModel, EmbeddingFunction):
             return self.dim or 3072
         elif self.name == "text-embedding-3-small":
             return self.dim or 1536
+        elif self.dim is not None:
+            return self.dim
         else:
             raise DatusException(
                 ErrorCode.COMMON_UNSUPPORTED,
                 message=f"Unknown embedding model name '{self.name}'. "
-                f"Supported models: {', '.join(self.model_names())}",
+                f"Supported models with inferred dimensions: {', '.join(self.model_names())}. "
+                "Set dim_size for OpenAI-compatible custom embedding models.",
             )
 
     def generate_embeddings(self, texts: Union[List[str], "np.ndarray"]) -> List["np.array"]:
