@@ -87,6 +87,18 @@ class FakePymysqlConnection(FakeTrackedConnection):
         pass
 
 
+class FakePingConnection(FakePymysqlConnection):
+    def __init__(self, *, ping_fails: bool = False) -> None:
+        super().__init__()
+        self.ping_fails = ping_fails
+        self.ping_count = 0
+
+    def ping(self, reconnect: bool = True) -> None:  # noqa: ARG002
+        self.ping_count += 1
+        if self.ping_fails:
+            raise RuntimeError("connection closed by server")
+
+
 def test_ob_session_store_schemas_are_additive_and_have_no_tenant_id():
     normalized = " ".join(f"{METADATA_SCHEMA_SQL}\n{BODY_SCHEMA_SQL}".lower().split())
     assert "create table if not exists enterprise_users" in normalized
@@ -205,6 +217,58 @@ def test_oceanbase_pool_first_shared_connection_does_not_deadlock(monkeypatch):
     assert errors == []
     assert acquired == created_connections
     assert len(created_connections) == 1
+
+
+def test_oceanbase_pool_replaces_dead_idle_connection_before_reuse(monkeypatch):
+    pool = OceanBaseMySQLPool(
+        OceanBaseMySQLConfig(
+            host="127.0.0.1",
+            port=2881,
+            user="root@test",
+            password="testpass",
+            database="datus_enterprise",
+            pool_max_size=1,
+        )
+    )
+    stale = FakePingConnection(ping_fails=True)
+    fresh = FakePingConnection()
+    pool._available.put(stale)
+    pool._connections.add(stale)
+    pool._created = 1
+
+    def fake_create_connection(*, database: str | None = None):  # noqa: ARG001
+        pool._connections.add(fresh)
+        return fresh
+
+    monkeypatch.setattr(pool, "_create_connection", fake_create_connection)
+
+    with pool.connection(database="datus_enterprise") as conn:
+        assert conn is fresh
+
+    assert stale.ping_count == 1
+    assert stale.close_count == 1
+    assert fresh.ping_count == 1
+    assert pool._created == 1
+
+
+def test_oceanbase_pool_waits_for_shared_connection_with_timeout():
+    pool = OceanBaseMySQLPool(
+        OceanBaseMySQLConfig(
+            host="127.0.0.1",
+            port=2881,
+            user="root@test",
+            password="testpass",
+            database="datus_enterprise",
+            connect_timeout=0.01,
+            read_timeout=0.01,
+            pool_max_size=1,
+        )
+    )
+    pool._created = 1
+
+    with pytest.raises(TimeoutError, match="Timed out waiting for an OceanBase MySQL connection"):
+        with pool.connection(database="datus_enterprise"):
+            pass
 
 
 def test_ob_session_body_store_run_sync_bridge():

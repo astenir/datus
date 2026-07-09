@@ -1056,6 +1056,88 @@ class TestGetDatusService:
         assert exc_info.value.detail == "USER_DISABLED"
         mock_cache.get_or_create.assert_not_called()
 
+    async def test_enterprise_user_status_timeout_fails_closed(self, monkeypatch):
+        """Hung enterprise metadata reads must return a stable deny instead of hanging /me."""
+        from datus.api.enterprise.defaults import (
+            InMemorySessionOwnerStore,
+            LocalAuthorizationProvider,
+            NoopAuditSink,
+            PassthroughConfigProjector,
+        )
+        from datus.api.enterprise.loader import EnterpriseExtensions
+
+        class HangingUserStore:
+            async def get_user(self, user_id):  # noqa: ARG002
+                await asyncio.sleep(3600)
+
+        monkeypatch.setattr(deps, "_ENTERPRISE_METADATA_TIMEOUT_SECONDS", 0.01)
+        mock_auth = MagicMock()
+        mock_auth.authenticate = AsyncMock(return_value=AppContext(user_id="alice", project_id="proj-1"))
+        mock_cache = MagicMock(spec=DatusServiceCache)
+        mock_cache.get_or_create = AsyncMock()
+        deps._auth_provider = mock_auth
+        deps._service_cache = mock_cache
+        deps._enterprise_extensions = EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=NoopAuditSink(),
+            user_store=HangingUserStore(),
+        )
+
+        request = MagicMock()
+        request.state = MagicMock()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_datus_service(request)
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "USER_STATUS_UNAVAILABLE"
+        mock_cache.get_or_create.assert_not_called()
+
+    async def test_enterprise_audit_timeout_does_not_mask_stable_deny(self, monkeypatch):
+        """A stuck audit sink must not turn fail-closed auth into an unbounded request."""
+        from datus.api.enterprise.defaults import (
+            InMemoryEnterpriseUserStore,
+            InMemorySessionOwnerStore,
+            LocalAuthorizationProvider,
+            PassthroughConfigProjector,
+        )
+        from datus.api.enterprise.loader import EnterpriseExtensions
+
+        class HangingAuditSink:
+            async def write(self, event):  # noqa: ARG002
+                await asyncio.sleep(3600)
+
+        monkeypatch.setattr(deps, "_ENTERPRISE_AUDIT_TIMEOUT_SECONDS", 0.01)
+        user_store = InMemoryEnterpriseUserStore()
+        await user_store.upsert_user(user_id="alice", enabled=False)
+        mock_auth = MagicMock()
+        mock_auth.authenticate = AsyncMock(return_value=AppContext(user_id="alice", project_id="proj-1"))
+        mock_cache = MagicMock(spec=DatusServiceCache)
+        mock_cache.get_or_create = AsyncMock()
+        deps._auth_provider = mock_auth
+        deps._service_cache = mock_cache
+        deps._enterprise_extensions = EnterpriseExtensions(
+            enabled=True,
+            authorization_provider=LocalAuthorizationProvider(),
+            config_projector=PassthroughConfigProjector(),
+            session_owner_store=InMemorySessionOwnerStore(),
+            audit_sink=HangingAuditSink(),
+            user_store=user_store,
+        )
+
+        request = MagicMock()
+        request.state = MagicMock()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await get_datus_service(request)
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == "USER_DISABLED"
+        mock_cache.get_or_create.assert_not_called()
+
     async def test_enterprise_role_context_still_returns_stable_deny_when_audit_sink_fails(self):
         """Audit sink failures must not mask role-context authorization denials."""
         from datus.api.enterprise.defaults import (

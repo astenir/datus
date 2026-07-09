@@ -1,5 +1,6 @@
 """FastAPI dependency injection — plugin-based auth + DatusService cache."""
 
+import asyncio
 import copy
 import hashlib
 import re
@@ -35,6 +36,8 @@ _DEFAULT_PROJECT_KEY = "default"
 _SAFE_CACHE_SEGMENT_RE = re.compile(r"[^A-Za-z0-9_.\-]")
 _SAFE_CACHE_SEGMENT_FULL_RE = re.compile(r"[A-Za-z0-9_.\-]+")
 _SCOPE_GLOB_META_CHARS = "*?["
+_ENTERPRISE_METADATA_TIMEOUT_SECONDS = 5.0
+_ENTERPRISE_AUDIT_TIMEOUT_SECONDS = 2.0
 
 
 def init_deps(
@@ -194,7 +197,10 @@ async def _validate_enterprise_context(ctx: AppContext, enterprise_extensions: E
     if not ctx.user_id:
         raise HTTPException(status_code=401, detail="AUTH_REQUIRED")
     try:
-        user = await enterprise_extensions.user_store.get_user(ctx.user_id)
+        user = await _enterprise_metadata_call(
+            enterprise_extensions.user_store.get_user(ctx.user_id),
+            operation="user_store.get_user",
+        )
     except Exception as e:
         await _write_enterprise_audit_best_effort(
             enterprise_extensions,
@@ -234,11 +240,17 @@ async def _refresh_enterprise_context(ctx: AppContext, enterprise_extensions: En
     provider_datasource_grants = copy.deepcopy(ctx.datasource_grants or {})
 
     try:
-        stored_role_ids = await enterprise_extensions.role_store.list_user_roles(ctx.user_id or "")
+        stored_role_ids = await _enterprise_metadata_call(
+            enterprise_extensions.role_store.list_user_roles(ctx.user_id or ""),
+            operation="role_store.list_user_roles",
+        )
         role_ids = _merge_string_lists(stored_role_ids)
         role_permissions: set[str] = set()
         for role_id in role_ids:
-            role = await enterprise_extensions.role_store.get_role(role_id)
+            role = await _enterprise_metadata_call(
+                enterprise_extensions.role_store.get_role(role_id),
+                operation="role_store.get_role",
+            )
             if role is None:
                 await _audit_enterprise_context_deny(
                     ctx,
@@ -283,16 +295,22 @@ async def _merged_datasource_grants(
 ) -> dict[str, Any]:
     grants: dict[str, Any] = {}
     for role_id in role_ids:
-        records = await enterprise_extensions.datasource_grant_store.list_grants(
-            subject_type="role",
-            subject_id=role_id,
+        records = await _enterprise_metadata_call(
+            enterprise_extensions.datasource_grant_store.list_grants(
+                subject_type="role",
+                subject_id=role_id,
+            ),
+            operation="datasource_grant_store.list_grants.role",
         )
         for record in records:
             _merge_grant_record(grants, record, mode="union")
 
-    records = await enterprise_extensions.datasource_grant_store.list_grants(
-        subject_type="user",
-        subject_id=ctx.user_id,
+    records = await _enterprise_metadata_call(
+        enterprise_extensions.datasource_grant_store.list_grants(
+            subject_type="user",
+            subject_id=ctx.user_id,
+        ),
+        operation="datasource_grant_store.list_grants.user",
     )
     for record in records:
         _merge_grant_record(grants, record, mode="narrow")
@@ -308,7 +326,10 @@ async def _auto_provision_enterprise_user(
     role_ids = list(enterprise_extensions.user_auto_provisioning.default_role_ids)
     for role_id in role_ids:
         try:
-            role = await enterprise_extensions.role_store.get_role(role_id)
+            role = await _enterprise_metadata_call(
+                enterprise_extensions.role_store.get_role(role_id),
+                operation="role_store.get_role.default",
+            )
         except Exception as e:
             await _audit_auto_provision(
                 ctx,
@@ -329,18 +350,24 @@ async def _auto_provision_enterprise_user(
             raise HTTPException(status_code=403, detail="USER_AUTO_PROVISION_ROLE_NOT_FOUND")
 
     try:
-        await enterprise_extensions.user_store.upsert_user(
-            user_id=ctx.user_id or "",
-            display_name=_principal_str(ctx, "display_name") or _principal_str(ctx, "realname") or ctx.user_id,
-            email=_principal_str(ctx, "email"),
-            enabled=True,
-            external_user_id=_principal_str(ctx, "external_user_id") or _principal_str(ctx, "userId"),
-            department=_principal_str(ctx, "department"),
-            title=_principal_str(ctx, "title"),
-            last_seen_at=datetime.now(timezone.utc).isoformat(),
+        await _enterprise_metadata_call(
+            enterprise_extensions.user_store.upsert_user(
+                user_id=ctx.user_id or "",
+                display_name=_principal_str(ctx, "display_name") or _principal_str(ctx, "realname") or ctx.user_id,
+                email=_principal_str(ctx, "email"),
+                enabled=True,
+                external_user_id=_principal_str(ctx, "external_user_id") or _principal_str(ctx, "userId"),
+                department=_principal_str(ctx, "department"),
+                title=_principal_str(ctx, "title"),
+                last_seen_at=datetime.now(timezone.utc).isoformat(),
+            ),
+            operation="user_store.upsert_user",
         )
         if role_ids:
-            await enterprise_extensions.role_store.set_user_roles(ctx.user_id or "", role_ids)
+            await _enterprise_metadata_call(
+                enterprise_extensions.role_store.set_user_roles(ctx.user_id or "", role_ids),
+                operation="role_store.set_user_roles",
+            )
     except Exception as e:
         await _audit_auto_provision(
             ctx,
@@ -594,7 +621,10 @@ async def _write_enterprise_audit_best_effort(
     event: AuditEvent,
 ) -> None:
     try:
-        await enterprise_extensions.audit_sink.write(event)
+        await asyncio.wait_for(
+            enterprise_extensions.audit_sink.write(event),
+            timeout=_ENTERPRISE_AUDIT_TIMEOUT_SECONDS,
+        )
     except Exception as exc:
         logger.warning(
             "Enterprise audit write failed for action '%s' decision '%s': %s",
@@ -602,6 +632,13 @@ async def _write_enterprise_audit_best_effort(
             event.decision,
             exc,
         )
+
+
+async def _enterprise_metadata_call(awaitable: Any, *, operation: str) -> Any:
+    try:
+        return await asyncio.wait_for(awaitable, timeout=_ENTERPRISE_METADATA_TIMEOUT_SECONDS)
+    except asyncio.TimeoutError as exc:
+        raise TimeoutError(f"Enterprise metadata operation timed out: {operation}") from exc
 
 
 def get_app_context(request: Request) -> AppContext:

@@ -89,14 +89,22 @@ class OceanBaseMySQLPool:
             raise RuntimeError("OceanBase MySQL connection pool is closed")
         conn = self._acquire(database=database)
         use_shared = database == self._config.database
+        can_reuse = True
         try:
             yield conn
-            conn.commit()
+            try:
+                conn.commit()
+            except Exception:
+                can_reuse = False
+                raise
         except Exception:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except Exception:
+                can_reuse = False
             raise
         finally:
-            self._release(conn, use_shared=use_shared)
+            self._release(conn, use_shared=use_shared and can_reuse)
 
     def close(self) -> None:
         with self._lock:
@@ -112,13 +120,24 @@ class OceanBaseMySQLPool:
                 conn.close()
             except Exception:
                 pass
+        with self._lock:
+            self._connections.clear()
+            self._created = 0
 
     def _acquire(self, *, database: str | None = None) -> Any:
         use_shared = database == self._config.database
         if not use_shared:
             return self._create_connection(database=database)
+
+        while True:
+            conn = self._acquire_shared_connection()
+            if self._ensure_connection_alive(conn):
+                return conn
+            self._discard_connection(conn, use_shared=True)
+
+    def _acquire_shared_connection(self) -> Any:
         try:
-            conn = self._available.get_nowait()
+            return self._available.get_nowait()
         except queue.Empty:
             should_create = False
             with self._lock:
@@ -132,20 +151,50 @@ class OceanBaseMySQLPool:
                     with self._lock:
                         self._created -= 1
                     raise
-            else:
-                conn = self._available.get()
-        if not getattr(conn, "open", True):
-            conn = self._create_connection(database=self._config.database)
-        return conn
+                return conn
+        try:
+            return self._available.get(timeout=self._shared_acquire_timeout())
+        except queue.Empty as e:
+            raise TimeoutError("Timed out waiting for an OceanBase MySQL connection from the pool.") from e
 
     def _release(self, conn: Any, *, use_shared: bool) -> None:
         if use_shared and not self._closed and getattr(conn, "open", True):
-            self._available.put(conn)
+            try:
+                self._available.put_nowait(conn)
+            except queue.Full:
+                self._discard_connection(conn, use_shared=True)
             return
+        self._discard_connection(conn, use_shared=use_shared)
+
+    def _discard_connection(self, conn: Any, *, use_shared: bool) -> None:
+        with self._lock:
+            self._connections.discard(conn)
+            if use_shared and self._created > 0:
+                self._created -= 1
         try:
             conn.close()
         except Exception:
             pass
+
+    def _ensure_connection_alive(self, conn: Any) -> bool:
+        if not getattr(conn, "open", True):
+            return False
+        ping = getattr(conn, "ping", None)
+        if not callable(ping):
+            return True
+        try:
+            ping(reconnect=True)
+        except TypeError:
+            try:
+                ping()
+            except Exception:
+                return False
+        except Exception:
+            return False
+        return bool(getattr(conn, "open", True))
+
+    def _shared_acquire_timeout(self) -> float:
+        return max(0.1, min(float(self._config.connect_timeout), float(self._config.read_timeout)))
 
     def _create_connection(self, *, database: str | None = None) -> Any:
         import pymysql
