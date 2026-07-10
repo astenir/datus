@@ -66,7 +66,7 @@ async function loadModels() {
     ]);
     if (catalogOutcome.status === "rejected") throw catalogOutcome.reason;
     const catalogResult = catalogOutcome.value;
-    models.value = catalogResult?.models ?? [];
+    models.value = (catalogResult?.models ?? []).filter(model => !model.capabilities?.includes("embedding"));
     personalCredentials.value = credentialOutcome.status === "fulfilled"
       ? resultData(credentialOutcome.value, [])
       : [];

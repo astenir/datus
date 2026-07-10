@@ -226,6 +226,7 @@ class ModelInfo(BaseModel):
         None, description="Actual model name (same as id for provider models, ModelConfig.model for custom)"
     )
     name: Optional[str] = Field(None, description="Human-readable model name")
+    capabilities: List[str] = Field(default_factory=lambda: ["chat"], description="Supported model capabilities")
     context_length: Optional[int] = Field(None, description="Maximum context window in tokens")
     max_tokens: Optional[int] = Field(None, description="Maximum completion tokens")
     pricing: Optional[ModelPricing] = Field(None, description="Per-token pricing, when available")
@@ -249,6 +250,8 @@ class AgentConfigSummaryData(BaseModel):
     model_config = ConfigDict(exclude_none=True)
 
     target: Optional[Any] = Field(None, description="Active target model configuration or legacy target value")
+    providers: Dict[str, Any] = Field(default_factory=dict, description="Configured shared provider credentials")
+    provider_options: List[Dict[str, Any]] = Field(default_factory=list, description="Provider catalog options")
     models: Dict[str, Any] = Field(default_factory=dict, description="Configured legacy/self-hosted model entries")
     current_datasource: Optional[str] = Field(None, description="Currently active datasource key")
     datasources: Dict[str, Any] = Field(default_factory=dict, description="Configured datasource entries")

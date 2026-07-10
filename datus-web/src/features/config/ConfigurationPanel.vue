@@ -1,24 +1,21 @@
 <script setup lang="ts">
-import { computed, onMounted, shallowRef } from "vue"
+import { computed, onMounted, ref, shallowRef } from "vue"
 import {
   ActivityIcon,
-  CheckCircle2Icon,
-  DatabaseIcon,
-  PlugZapIcon,
+  PlusIcon,
   RefreshCwIcon,
   ShieldCheckIcon,
-  XCircleIcon,
 } from "@lucide/vue"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
+import { Field, FieldLabel } from "@/components/ui/field"
 import {
   Select,
   SelectContent,
   SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
@@ -31,14 +28,13 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Textarea } from "@/components/ui/textarea"
 import { useConfigurationManager } from "@/composables/useConfigurationManager"
 import { usePermission } from "@/composables/usePermission"
 import { useSystemStatus } from "@/composables/useSystemStatus"
 import AdvancedJsonDialog from "@/features/config/AdvancedJsonDialog.vue"
 import DatasourceConfigEditor from "@/features/config/DatasourceConfigEditor.vue"
 import ModelConfigEditor from "@/features/config/ModelConfigEditor.vue"
-import type { NormalizedProbeResult } from "@/types"
+import ProviderConfigEditor from "@/features/config/ProviderConfigEditor.vue"
 import { datasourceLabel } from "@/lib/datasource-display"
 
 const props = withDefaults(defineProps<{
@@ -52,6 +48,9 @@ const permission = usePermission()
 const systemStatus = useSystemStatus()
 const modelsJsonOpen = shallowRef(false)
 const datasourcesJsonOpen = shallowRef(false)
+const providerEditor = ref<InstanceType<typeof ProviderConfigEditor> | null>(null)
+const modelEditor = ref<InstanceType<typeof ModelConfigEditor> | null>(null)
+const datasourceEditor = ref<InstanceType<typeof DatasourceConfigEditor> | null>(null)
 
 const canViewSystemStatus = computed(() => permission.hasPermission("module.system.status"))
 const currentDatasource = computed(() => {
@@ -71,17 +70,15 @@ const configurationDescription = computed(() => {
     ? "模型、数据源和系统状态配置。当前角色仅可查看。"
     : "模型和数据源配置。当前角色仅可查看。"
 })
-const modelProbeApiKey = computed({
-  get: () => manager.modelProbe.value.api_key ?? "",
-  set: (value: string) => {
-    manager.modelProbe.value.api_key = value
-  },
-})
-const modelProbeBaseUrl = computed({
-  get: () => manager.modelProbe.value.base_url ?? "",
-  set: (value: string) => {
-    manager.modelProbe.value.base_url = value
-  },
+const providerModelGroups = computed(() => {
+  const groups = new Map<string, typeof manager.availableModels.value>()
+  for (const model of manager.availableModels.value) {
+    if (model.provider === "custom" || model.capabilities?.includes("embedding")) continue
+    const entries = groups.get(model.provider) ?? []
+    entries.push(model)
+    groups.set(model.provider, entries)
+  }
+  return [...groups.entries()]
 })
 
 function configField(source: Record<string, unknown>, key: string, fallback = "-") {
@@ -102,25 +99,15 @@ function formatOptionalDate(value: string | undefined) {
   })
 }
 
-function probeBadgeVariant(result: NormalizedProbeResult | null) {
-  if (!result) return "outline"
-  return result.ok ? "secondary" : "destructive"
-}
-
-function probeIcon(result: NormalizedProbeResult | null) {
-  if (!result) return PlugZapIcon
-  return result.ok ? CheckCircle2Icon : XCircleIcon
-}
-
 function platformBadgeVariant(status: string) {
   if (status === "readonly") return "outline"
   if (status === "unknown") return "destructive"
   return "secondary"
 }
 
-function selectDatasource(value: unknown) {
+function selectTargetModel(value: unknown) {
   if (typeof value === "string") {
-    manager.selectDatasourceForProbe(value)
+    manager.forms.value.target = value
   }
 }
 
@@ -182,153 +169,123 @@ onMounted(() => {
           value="models"
           class="m-0 min-h-0 flex-1 overflow-auto xl:overflow-visible"
         >
-          <div class="grid min-h-full gap-4 xl:h-full xl:min-h-0 xl:grid-cols-[minmax(0,1fr)_26rem]">
-            <Card class="flex min-h-0 flex-col">
-              <CardHeader class="shrink-0">
-                <CardTitle class="text-lg">模型配置</CardTitle>
-                <CardDescription class="text-sm">
-                  维护完整模型映射和目标模型；目标留空会清除后端 target。
-                </CardDescription>
-              </CardHeader>
-              <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
-                <FieldGroup class="shrink-0">
-                  <Field>
-                    <FieldLabel for="config-target">目标模型</FieldLabel>
-                    <Input
-                      id="config-target"
-                      v-model="manager.forms.value.target"
-                      :disabled="!props.canEdit"
-                      placeholder="openai/gpt-4.1"
-                    />
-                    <FieldDescription>格式通常为 provider/model。</FieldDescription>
+          <div class="flex min-h-full flex-col gap-4 xl:h-full xl:min-h-0">
+            <Card class="shrink-0">
+              <CardContent class="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:px-4">
+                <div class="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <CardTitle class="text-sm">默认模型</CardTitle>
+                  <CardDescription class="text-xs">个人配置优先。</CardDescription>
+                </div>
+                <div class="flex min-w-0 flex-1 items-center gap-2 sm:justify-end">
+                  <Field class="min-w-0 flex-1 sm:max-w-80 lg:max-w-96">
+                    <FieldLabel for="config-target" class="sr-only">默认模型</FieldLabel>
+                  <Select
+                    :model-value="manager.forms.value.target"
+                    :disabled="!props.canEdit || (providerModelGroups.length === 0 && manager.configuredModelEntries.value.length === 0)"
+                    @update:model-value="selectTargetModel"
+                  >
+                    <SelectTrigger id="config-target" class="w-full">
+                      <SelectValue placeholder="选择默认模型" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup v-for="[provider, models] in providerModelGroups" :key="provider">
+                        <SelectLabel>{{ provider }}</SelectLabel>
+                        <SelectItem v-for="model in models" :key="`${model.provider}/${model.id}`" :value="`${model.provider}/${model.id}`">
+                          {{ model.name || model.model || model.id }}
+                        </SelectItem>
+                      </SelectGroup>
+                      <SelectGroup v-if="manager.configuredModelEntries.value.some(([name]) => !manager.embeddingModelNames.value.has(name))">
+                        <SelectLabel>自定义模型</SelectLabel>
+                        <SelectItem
+                          v-for="[name] in manager.configuredModelEntries.value.filter(([name]) => !manager.embeddingModelNames.value.has(name))"
+                          :key="name"
+                          :value="`custom/${name}`"
+                        >
+                          {{ name }}
+                        </SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                    </Select>
                   </Field>
-                </FieldGroup>
-                <ModelConfigEditor
-                  :models="manager.modelConfigs.value"
-                  :can-edit="props.canEdit"
-                  :saving="manager.savingModels.value"
-                  @update="manager.replaceModelConfigs"
-                  @save="manager.saveModels"
-                />
-                <div class="flex shrink-0 justify-end">
-                  <AdvancedJsonDialog
-                    v-model:open="modelsJsonOpen"
-                    v-model:text="manager.forms.value.modelsText"
-                    title="高级模型 JSON"
-                    description="直接编辑完整模型映射，适合处理结构化表单未覆盖的配置。"
-                    field-label="完整模型 JSON"
-                    field-description="应用后会替换当前尚未保存的模型列表。"
-                    textarea-id="config-models-json"
-                    :can-edit="props.canEdit"
-                    @apply="applyModelsJson"
-                  />
+                  <Button size="sm" :disabled="!props.canEdit || manager.savingModels.value" @click="manager.saveTargetModel">
+                    保存
+                  </Button>
                 </div>
               </CardContent>
             </Card>
 
-            <div class="grid min-h-0 gap-4 xl:grid-rows-2">
+            <div class="grid min-h-0 flex-1 gap-4 2xl:grid-cols-[minmax(22rem,2fr)_minmax(0,3fr)]">
               <Card class="flex min-h-0 flex-col">
-                <CardHeader class="shrink-0">
-                  <CardTitle class="text-lg">模型探测</CardTitle>
-                  <CardDescription class="text-sm">
-                    仅测试当前输入，不会保存 API Key 或 Base URL。
-                  </CardDescription>
+                <CardHeader class="flex shrink-0 flex-row items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <CardTitle class="text-lg">Provider 凭据</CardTitle>
+                    <CardDescription class="text-sm">管理项目共享的 API Key 和服务地址。</CardDescription>
+                  </div>
+                  <Button size="sm" :disabled="!props.canEdit" @click="providerEditor?.openCreate()">
+                    <PlusIcon data-icon="inline-start" />
+                    添加
+                  </Button>
                 </CardHeader>
                 <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
-                  <FieldGroup>
-                    <Field>
-                      <FieldLabel for="model-probe-type">Provider</FieldLabel>
-                      <Input
-                        id="model-probe-type"
-                        v-model="manager.modelProbe.value.type"
-                        :disabled="!props.canEdit"
-                        placeholder="openai"
-                      />
-                    </Field>
-                    <Field>
-                      <FieldLabel for="model-probe-model">模型</FieldLabel>
-                      <Input
-                        id="model-probe-model"
-                        v-model="manager.modelProbe.value.model"
-                        :disabled="!props.canEdit"
-                        placeholder="gpt-4.1"
-                      />
-                    </Field>
-                    <Field>
-                      <FieldLabel for="model-probe-api-key">API Key</FieldLabel>
-                      <Input
-                        id="model-probe-api-key"
-                        v-model="modelProbeApiKey"
-                        type="password"
-                        :disabled="!props.canEdit"
-                        autocomplete="off"
-                        placeholder="仅本次测试使用"
-                      />
-                    </Field>
-                    <Field>
-                      <FieldLabel for="model-probe-base-url">Base URL</FieldLabel>
-                      <Input
-                        id="model-probe-base-url"
-                        v-model="modelProbeBaseUrl"
-                        :disabled="!props.canEdit"
-                        placeholder="https://api.example.com/v1"
-                      />
-                    </Field>
-                  </FieldGroup>
-                  <div class="flex flex-wrap items-center justify-between gap-3">
-                    <Badge :variant="probeBadgeVariant(manager.modelProbeResult.value)">
-                      <component
-                        :is="probeIcon(manager.modelProbeResult.value)"
-                        data-icon="inline-start"
-                      />
-                      {{ manager.modelProbeResult.value?.message || "未测试" }}
-                    </Badge>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      :disabled="!props.canEdit || manager.testingModel.value"
-                      @click="manager.testModelProbe"
-                    >
-                      <PlugZapIcon data-icon="inline-start" />
-                      测试模型
+                  <ProviderConfigEditor
+                    ref="providerEditor"
+                    :providers="manager.providerConfigs.value"
+                    :saved-providers="Object.keys(manager.config.value?.providers ?? {})"
+                    :options="manager.config.value?.provider_options ?? []"
+                    :models="manager.availableModels.value"
+                    :probe-results="manager.savedModelProbeResults.value"
+                    :testing-keys="manager.testingSavedModels.value"
+                    :can-edit="props.canEdit"
+                    :show-heading="false"
+                    @update="manager.replaceProviderConfigs"
+                    @test="manager.testProviderConfig"
+                  />
+                  <div class="mt-auto flex shrink-0 justify-end border-t pt-4">
+                    <Button size="sm" :disabled="!props.canEdit || manager.savingProviders.value" @click="manager.saveProviders">
+                      保存
                     </Button>
                   </div>
                 </CardContent>
               </Card>
 
               <Card class="flex min-h-0 flex-col">
-                <CardHeader class="shrink-0">
-                  <CardTitle class="text-lg">可用模型</CardTitle>
+                <CardHeader class="flex shrink-0 flex-row items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <CardTitle class="text-lg">自定义模型</CardTitle>
+                    <CardDescription class="text-sm">用于独立凭据、Base URL 或特殊模型参数。</CardDescription>
+                  </div>
+                  <Button size="sm" :disabled="!props.canEdit" @click="modelEditor?.openCreate()">
+                    <PlusIcon data-icon="inline-start" />
+                    添加
+                  </Button>
                 </CardHeader>
-                <CardContent class="min-h-0 flex-1">
-                  <div class="h-full min-h-64 overflow-auto rounded-md border xl:min-h-0">
-                    <Table>
-                      <TableHeader>
-                        <TableRow>
-                          <TableHead>Provider</TableHead>
-                          <TableHead>模型</TableHead>
-                          <TableHead class="text-right">上下文</TableHead>
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        <TableRow
-                          v-for="model in manager.availableModels.value"
-                          :key="`${model.provider}:${model.id}`"
-                        >
-                          <TableCell>{{ model.provider }}</TableCell>
-                          <TableCell class="font-medium">{{ model.name || model.model || model.id }}</TableCell>
-                          <TableCell class="text-right">{{ model.context_length || "-" }}</TableCell>
-                        </TableRow>
-                        <TableRow v-if="manager.availableModels.value.length === 0">
-                          <TableCell
-                            colspan="3"
-                            class="h-20 text-center text-sm text-muted-foreground"
-                          >
-                            暂无模型目录数据
-                          </TableCell>
-                        </TableRow>
-                      </TableBody>
-                    </Table>
+                <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
+                  <ModelConfigEditor
+                    ref="modelEditor"
+                    :models="manager.modelConfigs.value"
+                    :saved-models="Object.keys(manager.config.value?.models ?? {})"
+                    :probe-results="manager.savedModelProbeResults.value"
+                    :testing-keys="manager.testingSavedModels.value"
+                    :embedding-models="manager.embeddingModelNames.value"
+                    :can-edit="props.canEdit"
+                    @update="manager.replaceModelConfigs"
+                    @test="manager.testCustomModel"
+                  />
+                  <div class="mt-auto flex shrink-0 items-center justify-between gap-3 border-t pt-4">
+                    <AdvancedJsonDialog
+                      v-model:open="modelsJsonOpen"
+                      v-model:text="manager.forms.value.modelsText"
+                      title="高级模型 JSON"
+                      description="直接编辑完整模型映射，适合处理结构化表单未覆盖的配置。"
+                      field-label="完整模型 JSON"
+                      field-description="应用后会替换当前尚未保存的模型列表。"
+                      textarea-id="config-models-json"
+                      :can-edit="props.canEdit"
+                      @apply="applyModelsJson"
+                    />
+                    <Button size="sm" :disabled="!props.canEdit || manager.savingModels.value" @click="manager.saveModels">
+                      保存
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
@@ -338,25 +295,32 @@ onMounted(() => {
 
         <TabsContent
           value="datasources"
-          class="m-0 min-h-0 flex-1 overflow-auto xl:overflow-visible"
+          class="m-0 min-h-0 flex-1 overflow-hidden p-1"
         >
-          <div class="grid min-h-full gap-4 xl:h-full xl:min-h-0 xl:grid-cols-[minmax(0,1fr)_26rem]">
-            <Card class="flex min-h-0 flex-col">
-              <CardHeader class="shrink-0">
-                <CardTitle class="text-lg">数据源配置</CardTitle>
-                <CardDescription class="text-sm">
-                  编辑完整 datasources 映射；保存后会刷新连接状态。
-                </CardDescription>
+          <div class="h-full min-h-0 w-full">
+            <Card class="flex h-full min-h-0 w-full flex-col">
+              <CardHeader class="flex shrink-0 flex-row items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <CardTitle class="text-lg">数据源配置</CardTitle>
+                  <CardDescription class="text-sm">编辑数据源配置；保存后会刷新连接状态。</CardDescription>
+                </div>
+                <Button size="sm" :disabled="!props.canEdit" @click="datasourceEditor?.openCreate()">
+                  <PlusIcon data-icon="inline-start" />
+                  添加
+                </Button>
               </CardHeader>
               <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
                 <DatasourceConfigEditor
+                  ref="datasourceEditor"
                   :datasources="manager.datasourceConfigs.value"
+                  :saved-datasources="Object.keys(manager.config.value?.datasources ?? {})"
+                  :probe-results="manager.savedDatasourceProbeResults.value"
+                  :testing-names="manager.testingSavedDatasources.value"
                   :can-edit="props.canEdit"
-                  :saving="manager.savingDatasources.value"
                   @update="manager.replaceDatasourceConfigs"
-                  @save="manager.saveDatasources"
+                  @test="manager.testSavedDatasource"
                 />
-                <div class="flex shrink-0 justify-end">
+                <div class="mt-auto flex shrink-0 items-center justify-between gap-3 border-t pt-4">
                   <AdvancedJsonDialog
                     v-model:open="datasourcesJsonOpen"
                     v-model:text="manager.forms.value.datasourcesText"
@@ -368,70 +332,8 @@ onMounted(() => {
                     :can-edit="props.canEdit"
                     @apply="applyDatasourcesJson"
                   />
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card class="flex min-h-0 flex-col">
-              <CardHeader class="shrink-0">
-                <CardTitle class="text-lg">数据源探测</CardTitle>
-                <CardDescription class="text-sm">
-                  可从现有数据源生成测试载荷，再按需调整 JSON。
-                </CardDescription>
-              </CardHeader>
-              <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
-                <FieldGroup>
-                  <Field>
-                    <FieldLabel>选择数据源</FieldLabel>
-                    <Select
-                      :model-value="manager.selectedDatasourceName.value"
-                      :disabled="!props.canEdit"
-                      @update:model-value="selectDatasource"
-                    >
-                      <SelectTrigger class="w-full">
-                        <SelectValue placeholder="选择数据源" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectItem
-                            v-for="[name, datasource] in manager.configuredDatasourceEntries.value"
-                            :key="name"
-                            :value="name"
-                          >
-                            {{ datasourceLabel(name, datasource) }}
-                          </SelectItem>
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                    <FieldDescription>会把 extra 中的字段展开；脱敏密钥会置空，请填入真实值后再测试。</FieldDescription>
-                  </Field>
-                  <Field>
-                    <FieldLabel for="datasource-probe-json">探测 JSON</FieldLabel>
-                    <Textarea
-                      id="datasource-probe-json"
-                      v-model="manager.forms.value.datasourceProbeText"
-                      class="min-h-80 font-mono text-xs leading-6"
-                      :disabled="!props.canEdit"
-                      spellcheck="false"
-                    />
-                  </Field>
-                </FieldGroup>
-                <div class="flex flex-wrap items-center justify-between gap-3">
-                  <Badge :variant="probeBadgeVariant(manager.datasourceProbeResult.value)">
-                    <component
-                      :is="probeIcon(manager.datasourceProbeResult.value)"
-                      data-icon="inline-start"
-                    />
-                    {{ manager.datasourceProbeResult.value?.message || "未测试" }}
-                  </Badge>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    :disabled="!props.canEdit || manager.testingDatasource.value"
-                    @click="manager.testDatasourceProbe"
-                  >
-                    <DatabaseIcon data-icon="inline-start" />
-                    测试数据源
+                  <Button size="sm" :disabled="!props.canEdit || manager.savingDatasources.value" @click="manager.saveDatasources">
+                    保存
                   </Button>
                 </div>
               </CardContent>

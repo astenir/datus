@@ -144,7 +144,9 @@ export type ChatSessionOption = {
 };
 
 export type ConfigSummary = {
-  target?: string;
+  target?: TargetModelConfig | string;
+  providers?: ProviderConfigMap;
+  provider_options?: ProviderConfigOption[];
   models?: Record<string, Record<string, unknown>>;
   current_datasource?: string;
   datasources?: Record<string, Record<string, unknown>>;
@@ -171,6 +173,25 @@ export type DatasourceStatusData = components["schemas"]["DatasourceStatusData"]
 export type DatasourcePrewarmData = components["schemas"]["DatasourcePrewarmData"];
 
 export type ModelConfigMap = Record<string, Record<string, unknown>>;
+
+export type ProviderConfigMap = Record<string, {
+  api_key?: string;
+  base_url?: string;
+  auth_type?: string;
+}>;
+
+export type ProviderConfigOption = {
+  value: string;
+  label: string;
+  auth_type: string;
+  base_url: string;
+};
+
+export type TargetModelConfig =
+  | { provider: string; model: string; custom?: never }
+  | { custom: string; provider?: never; model?: never };
+
+export type SavedModelProbeInput = TargetModelConfig;
 
 export type ModelProbeInput = {
   type: string;
@@ -399,6 +420,7 @@ export type ModelInfo = {
   id: string;
   model?: string;
   name?: string;
+  capabilities?: string[];
   context_length?: number;
   max_tokens?: number;
   pricing?: { prompt?: string; completion?: string };

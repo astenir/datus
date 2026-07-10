@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, shallowRef } from "vue"
-import { PencilIcon, PlusIcon, SaveIcon, Trash2Icon } from "@lucide/vue"
+import { PencilIcon, PlugZapIcon, Trash2Icon } from "@lucide/vue"
 import { toast } from "vue-sonner"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -16,17 +17,20 @@ import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui
 import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
-import type { ModelConfigMap } from "@/types"
+import type { ModelConfigMap, NormalizedProbeResult } from "@/types"
 
 const props = defineProps<{
   models: ModelConfigMap
+  savedModels: string[]
+  probeResults: Record<string, NormalizedProbeResult>
+  testingKeys: string[]
+  embeddingModels: Set<string>
   canEdit: boolean
-  saving: boolean
 }>()
 
 const emit = defineEmits<{
   update: [models: ModelConfigMap]
-  save: []
+  test: [name: string]
 }>()
 
 const dialogOpen = shallowRef(false)
@@ -119,30 +123,32 @@ function remove(key: string) {
   delete next[key]
   emit("update", next)
 }
+
+function probeResult(name: string) {
+  return props.probeResults[`custom:${name}`]
+}
+
+function isTesting(name: string) {
+  return props.testingKeys.includes(`custom:${name}`)
+}
+
+function isSaved(name: string) {
+  return props.savedModels.includes(name)
+}
+
+defineExpose({ openCreate })
 </script>
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col gap-4">
-    <div class="flex justify-end">
-      <Button
-        size="sm"
-        :disabled="!canEdit"
-        @click="openCreate"
-      >
-        <PlusIcon data-icon="inline-start" />
-        添加模型
-      </Button>
-    </div>
-
-    <div class="overflow-x-auto rounded-md border">
-      <Table class="min-w-[44rem]">
+    <div class="min-h-56 flex-1 overflow-auto rounded-md border">
+      <Table class="table-fixed">
         <TableHeader>
           <TableRow>
-            <TableHead>配置名称</TableHead>
-            <TableHead>Provider</TableHead>
-            <TableHead>模型</TableHead>
-            <TableHead>Base URL</TableHead>
-            <TableHead class="w-24 text-right">操作</TableHead>
+            <TableHead class="w-32">配置名称</TableHead>
+            <TableHead>模型配置</TableHead>
+            <TableHead class="w-24">状态</TableHead>
+            <TableHead class="w-36 text-right">操作</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -150,12 +156,40 @@ function remove(key: string) {
             v-for="(config, key) in models"
             :key="key"
           >
-            <TableCell class="font-medium">{{ key }}</TableCell>
-            <TableCell>{{ stringValue(config, "type") || stringValue(config, "provider") || "-" }}</TableCell>
-            <TableCell>{{ stringValue(config, "model") || "-" }}</TableCell>
-            <TableCell class="max-w-56 truncate">{{ stringValue(config, "base_url") || "-" }}</TableCell>
+            <TableCell class="max-w-32">
+              <div class="truncate font-medium">{{ key }}</div>
+            </TableCell>
+            <TableCell>
+              <div class="min-w-0 space-y-1">
+                <div class="truncate font-medium">{{ stringValue(config, "model") || "-" }}</div>
+                <div class="flex min-w-0 items-center gap-2">
+                  <div class="truncate text-xs text-muted-foreground">{{ stringValue(config, "type") || stringValue(config, "provider") || "-" }}</div>
+                  <Badge v-if="embeddingModels.has(String(key))" variant="outline">嵌入模型</Badge>
+                </div>
+              </div>
+            </TableCell>
+            <TableCell>
+              <Badge v-if="isTesting(String(key))" variant="outline">检测中</Badge>
+              <Badge
+                v-else-if="probeResult(String(key))"
+                :variant="probeResult(String(key))?.ok ? 'outline' : 'destructive'"
+                :class="probeResult(String(key))?.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : undefined"
+              >
+                {{ probeResult(String(key))?.ok ? "可用" : "不可用" }}
+              </Badge>
+              <span v-else class="text-xs text-muted-foreground">未检测</span>
+            </TableCell>
             <TableCell>
               <div class="flex justify-end gap-1">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  :disabled="!canEdit || !isSaved(String(key)) || isTesting(String(key))"
+                  :aria-label="`检测模型 ${key}`"
+                  @click="emit('test', String(key))"
+                >
+                  <PlugZapIcon />
+                </Button>
                 <Button
                   variant="ghost"
                   size="icon-sm"
@@ -179,7 +213,7 @@ function remove(key: string) {
           </TableRow>
           <TableRow v-if="Object.keys(models).length === 0">
             <TableCell
-              colspan="5"
+              colspan="4"
               class="h-24 text-center text-sm text-muted-foreground"
             >
               暂无模型配置
@@ -189,16 +223,6 @@ function remove(key: string) {
       </Table>
     </div>
 
-    <div class="flex justify-end">
-      <Button
-        size="sm"
-        :disabled="!canEdit || saving"
-        @click="emit('save')"
-      >
-        <SaveIcon data-icon="inline-start" />
-        保存模型
-      </Button>
-    </div>
   </div>
 
   <Dialog

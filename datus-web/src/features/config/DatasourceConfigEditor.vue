@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, shallowRef } from "vue"
-import { PencilIcon, PlusIcon, SaveIcon, Trash2Icon } from "@lucide/vue"
+import { PencilIcon, PlugZapIcon, Trash2Icon } from "@lucide/vue"
+import { Badge } from "@/components/ui/badge"
 import { toast } from "vue-sonner"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
 import { Button } from "@/components/ui/button"
@@ -19,17 +20,19 @@ import { Switch } from "@/components/ui/switch"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Textarea } from "@/components/ui/textarea"
 import { datasourceDisplayName } from "@/lib/datasource-display"
-import type { DatasourceConfigMap } from "@/types"
+import type { DatasourceConfigMap, NormalizedProbeResult } from "@/types"
 
 const props = defineProps<{
   datasources: DatasourceConfigMap
+  savedDatasources: string[]
+  probeResults: Record<string, NormalizedProbeResult>
+  testingNames: string[]
   canEdit: boolean
-  saving: boolean
 }>()
 
 const emit = defineEmits<{
   update: [datasources: DatasourceConfigMap]
-  save: []
+  test: [name: string]
 }>()
 
 const dialogOpen = shallowRef(false)
@@ -187,16 +190,24 @@ function remove(key: string) {
   delete next[key]
   emit("update", next)
 }
+
+function probeResult(name: string) {
+  return props.probeResults[name]
+}
+
+function isTesting(name: string) {
+  return props.testingNames.includes(name)
+}
+
+function isSaved(name: string) {
+  return props.savedDatasources.includes(name)
+}
+
+defineExpose({ openCreate })
 </script>
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col gap-4">
-    <div class="flex justify-end">
-      <Button size="sm" :disabled="!canEdit" @click="openCreate">
-        <PlusIcon data-icon="inline-start" />
-        添加数据源
-      </Button>
-    </div>
     <div class="overflow-x-auto rounded-md border">
       <Table class="min-w-[46rem]">
         <TableHeader>
@@ -205,7 +216,8 @@ function remove(key: string) {
             <TableHead>类型</TableHead>
             <TableHead>连接</TableHead>
             <TableHead>默认</TableHead>
-            <TableHead class="w-24 text-right">操作</TableHead>
+            <TableHead class="w-24">状态</TableHead>
+            <TableHead class="w-32 text-right">操作</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -218,7 +230,21 @@ function remove(key: string) {
             <TableCell class="max-w-72 truncate">{{ address(config) }}</TableCell>
             <TableCell>{{ config.default === true ? "是" : "否" }}</TableCell>
             <TableCell>
+              <Badge v-if="isTesting(String(key))" variant="outline">检测中</Badge>
+              <Badge
+                v-else-if="probeResult(String(key))"
+                :variant="probeResult(String(key))?.ok ? 'outline' : 'destructive'"
+                :class="probeResult(String(key))?.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : undefined"
+              >
+                {{ probeResult(String(key))?.ok ? "可用" : "不可用" }}
+              </Badge>
+              <span v-else class="text-xs text-muted-foreground">未检测</span>
+            </TableCell>
+            <TableCell>
               <div class="flex justify-end gap-1">
+                <Button variant="ghost" size="icon-sm" :disabled="!canEdit || !isSaved(String(key)) || isTesting(String(key))" :aria-label="`检测数据源 ${key}`" @click="emit('test', String(key))">
+                  <PlugZapIcon />
+                </Button>
                 <Button variant="ghost" size="icon-sm" :disabled="!canEdit" :aria-label="`编辑数据源 ${key}`" @click="openEdit(key, config)">
                   <PencilIcon />
                 </Button>
@@ -229,16 +255,10 @@ function remove(key: string) {
             </TableCell>
           </TableRow>
           <TableRow v-if="Object.keys(datasources).length === 0">
-            <TableCell colspan="5" class="h-24 text-center text-sm text-muted-foreground">暂无数据源配置</TableCell>
+            <TableCell colspan="6" class="h-24 text-center text-sm text-muted-foreground">暂无数据源配置</TableCell>
           </TableRow>
         </TableBody>
       </Table>
-    </div>
-    <div class="flex justify-end">
-      <Button size="sm" :disabled="!canEdit || saving" @click="emit('save')">
-        <SaveIcon data-icon="inline-start" />
-        保存数据源
-      </Button>
     </div>
   </div>
 

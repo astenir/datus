@@ -25,21 +25,41 @@ from datus.api.routes.config_routes import (
     REDACTED_CONFIG_VALUE,
     ProbeDatasourceRequest,
     ProbeModelRequest,
+    ProbeSavedDatasourceRequest,
+    ProbeSavedModelRequest,
+    TargetModelRequest,
     UpdateDatasourcesRequest,
     UpdateModelsRequest,
     get_agent_config_endpoint,
     probe_datasource_connectivity_endpoint,
     probe_model_connectivity_endpoint,
+    probe_saved_datasource_connectivity_endpoint,
+    probe_saved_model_connectivity_endpoint,
     update_datasources_endpoint,
     update_models_endpoint,
 )
 from datus.configuration.agent_config import DbConfig
 
 
-def _mock_svc(datasources, *, target="deepseek", current_datasource="starrocks", models=None, home="~/.datus"):
+def _mock_svc(
+    datasources,
+    *,
+    target="deepseek",
+    target_provider=None,
+    target_model=None,
+    current_datasource="starrocks",
+    models=None,
+    providers=None,
+    provider_catalog=None,
+    home="~/.datus",
+):
     svc = MagicMock()
     svc.agent_config.target = target
+    svc.agent_config._target_provider = target_provider
+    svc.agent_config._target_model = target_model
     svc.agent_config.models = models if models is not None else {}
+    svc.agent_config.providers = providers if providers is not None else {}
+    svc.agent_config.provider_catalog = provider_catalog if provider_catalog is not None else {"providers": {}}
     svc.agent_config.current_datasource = current_datasource
     svc.agent_config.datasource_configs = datasources
     svc.agent_config.home = home
@@ -65,9 +85,55 @@ async def test_get_agent_config_returns_datasources_flat():
         "starrocks": starrocks_cfg,
         "starrocks22": starrocks22_cfg,
     }
-    assert result.data["target"] == "deepseek"
+    assert result.data["target"] == {"custom": "deepseek"}
     assert result.data["current_datasource"] == "starrocks"
     assert result.data["home"] == "~/.datus"
+
+
+@pytest.mark.asyncio
+async def test_get_agent_config_returns_provider_target():
+    svc = _mock_svc(
+        datasources={},
+        target="",
+        target_provider="openai",
+        target_model="gpt-4.1",
+    )
+
+    result = await get_agent_config_endpoint(svc=svc, _ctx=_ctx())
+
+    assert result.data["target"] == {"provider": "openai", "model": "gpt-4.1"}
+
+
+@pytest.mark.asyncio
+async def test_get_agent_config_returns_redacted_providers_and_catalog_options():
+    svc = _mock_svc(
+        datasources={},
+        providers={"openai": {"api_key": "sk-secret", "base_url": "https://gateway/v1"}},
+        provider_catalog={
+            "providers": {
+                "openai": {"base_url": "https://api.openai.com/v1"},
+                "codex": {"auth_type": "oauth", "base_url": "https://chatgpt.com/backend-api/codex"},
+            }
+        },
+    )
+
+    result = await get_agent_config_endpoint(svc=svc, _ctx=_ctx())
+
+    assert result.data["providers"] == {"openai": {"api_key": REDACTED_CONFIG_VALUE, "base_url": "https://gateway/v1"}}
+    assert result.data["provider_options"] == [
+        {
+            "value": "openai",
+            "label": "openai",
+            "auth_type": "api_key",
+            "base_url": "https://api.openai.com/v1",
+        },
+        {
+            "value": "codex",
+            "label": "codex",
+            "auth_type": "oauth",
+            "base_url": "https://chatgpt.com/backend-api/codex",
+        },
+    ]
 
 
 @pytest.mark.asyncio
@@ -352,6 +418,62 @@ async def test_update_models_target_only(patched_cm, patched_cache):
 
 
 @pytest.mark.asyncio
+async def test_update_models_writes_provider_target_to_project_override(
+    monkeypatch,
+    patched_cm,
+    patched_cache,
+):
+    patched_cm.data = {"project_root": "/tmp/project", "models": {"m1": {"type": "openai"}}}
+    save_override = MagicMock()
+    monkeypatch.setattr(config_routes, "load_project_override", lambda cwd=None: None)
+    monkeypatch.setattr(config_routes, "save_project_override", save_override)
+
+    await update_models_endpoint(
+        UpdateModelsRequest(target=TargetModelRequest(provider="openai", model="gpt-4.1")),
+        ctx=_ctx(),
+    )
+
+    override = save_override.call_args.args[0]
+    assert override.target == config_routes.ProjectTarget(provider="openai", model="gpt-4.1")
+    assert save_override.call_args.kwargs == {"cwd": "/tmp/project"}
+    assert "target" not in patched_cm.data
+
+
+@pytest.mark.asyncio
+async def test_update_models_writes_custom_target_to_project_override(
+    monkeypatch,
+    patched_cm,
+    patched_cache,
+):
+    patched_cm.data = {"models": {"m1": {"type": "openai"}}}
+    save_override = MagicMock()
+    monkeypatch.setattr(config_routes, "load_project_override", lambda cwd=None: None)
+    monkeypatch.setattr(config_routes, "save_project_override", save_override)
+
+    await update_models_endpoint(
+        UpdateModelsRequest(target=TargetModelRequest(custom="m1")),
+        ctx=_ctx(),
+    )
+
+    override = save_override.call_args.args[0]
+    assert override.target == config_routes.ProjectTarget(custom="m1")
+
+
+@pytest.mark.asyncio
+async def test_update_models_rejects_unknown_structured_custom_target(patched_cm, patched_cache):
+    patched_cm.data = {"models": {"m1": {"type": "openai"}}}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await update_models_endpoint(
+            UpdateModelsRequest(target=TargetModelRequest(custom="ghost")),
+            ctx=_ctx(),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "target custom model 'ghost' does not exist in models" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
 async def test_update_models_models_only(patched_cm, patched_cache):
     patched_cm.data = {"models": {"old": {}}, "target": "old"}
 
@@ -362,6 +484,45 @@ async def test_update_models_models_only(patched_cm, patched_cache):
 
     assert patched_cm.data["models"] == {"old": {"type": "openai"}}
     assert patched_cm.data["target"] == "old"
+
+
+@pytest.mark.asyncio
+async def test_update_models_replaces_providers_and_preserves_redacted_keys(patched_cm, patched_cache):
+    patched_cm.data = {
+        "providers": {
+            "openai": {"api_key": "sk-live", "base_url": "https://old/v1"},
+            "deepseek": {"api_key": "ds-live"},
+        }
+    }
+
+    await update_models_endpoint(
+        UpdateModelsRequest(
+            providers={
+                "openai": {
+                    "api_key": REDACTED_CONFIG_VALUE,
+                    "base_url": "https://new/v1",
+                    "auth_type": "api_key",
+                }
+            }
+        ),
+        ctx=_ctx(),
+    )
+
+    assert patched_cm.data["providers"] == {
+        "openai": {"api_key": "sk-live", "base_url": "https://new/v1", "auth_type": "api_key"}
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_models_rejects_unsupported_provider_fields(patched_cm, patched_cache):
+    with pytest.raises(HTTPException) as exc_info:
+        await update_models_endpoint(
+            UpdateModelsRequest(providers={"openai": {"type": "custom"}}),
+            ctx=_ctx(),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "unsupported fields" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
@@ -420,7 +581,7 @@ async def test_update_models_requires_at_least_one_field(patched_cm, patched_cac
     with pytest.raises(HTTPException) as exc_info:
         await update_models_endpoint(UpdateModelsRequest(), ctx=_ctx())
     assert exc_info.value.status_code == 400
-    assert "At least one of 'models' or 'target' must be provided" in exc_info.value.detail
+    assert "At least one of 'providers', 'models', or 'target' must be provided" in exc_info.value.detail
     assert patched_cm.save_count == 0
 
 
@@ -829,6 +990,91 @@ async def test_test_model_connectivity_passes_extra_fields(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_test_saved_provider_model_uses_resolved_server_config(monkeypatch):
+    captured = {}
+    svc = _mock_svc(datasources={})
+    svc.agent_config._synthesize_model.return_value = {
+        "type": "openai",
+        "model": "gpt-4o",
+        "api_key": "real-secret",
+        "base_url": "https://api.openai.com/v1",
+    }
+
+    monkeypatch.setattr(config_routes, "_probe_llm_sync", lambda payload: captured.setdefault("payload", payload))
+
+    result = await probe_saved_model_connectivity_endpoint(
+        ProbeSavedModelRequest(provider="openai", model="gpt-4o"),
+        _ctx=_ctx(),
+        svc=svc,
+    )
+
+    assert result.data == {"ok": True}
+    svc.agent_config._synthesize_model.assert_called_once_with("openai", "gpt-4o")
+    assert captured["payload"]["api_key"] == "real-secret"
+
+
+@pytest.mark.asyncio
+async def test_test_saved_custom_model_uses_named_server_config(monkeypatch):
+    captured = {}
+    svc = _mock_svc(datasources={})
+    svc.agent_config.model_config.return_value = {
+        "type": "openai",
+        "model": "internal-model",
+        "api_key": "real-secret",
+        "base_url": None,
+    }
+    monkeypatch.setattr(config_routes, "_embedding_config_for_custom", lambda _name: None)
+    monkeypatch.setattr(config_routes, "_probe_llm_sync", lambda payload: captured.setdefault("payload", payload))
+
+    result = await probe_saved_model_connectivity_endpoint(
+        ProbeSavedModelRequest(custom="internal"),
+        _ctx=_ctx(),
+        svc=svc,
+    )
+
+    assert result.data == {"ok": True}
+    svc.agent_config.model_config.assert_called_once_with("internal")
+    assert captured["payload"]["model"] == "internal-model"
+
+
+@pytest.mark.asyncio
+async def test_test_saved_custom_embedding_model_uses_embeddings_probe(monkeypatch):
+    captured = {}
+    svc = _mock_svc(datasources={})
+    model_config = {
+        "type": "openai",
+        "model": "text-embedding-3-small",
+        "api_key": "real-secret",
+        "base_url": None,
+    }
+    embedding_config = {
+        "registry_name": "openai",
+        "model_name": "text-embedding-3-small",
+        "dim_size": 1536,
+        "target_model": "embedding_openai",
+    }
+    svc.agent_config.model_config.return_value = model_config
+    monkeypatch.setattr(config_routes, "_embedding_config_for_custom", lambda _name: embedding_config)
+    monkeypatch.setattr(
+        config_routes,
+        "_probe_embedding_sync",
+        lambda model, config: captured.update(model=model, config=config),
+    )
+    llm_probe = MagicMock()
+    monkeypatch.setattr(config_routes, "_probe_llm_sync", llm_probe)
+
+    result = await probe_saved_model_connectivity_endpoint(
+        ProbeSavedModelRequest(custom="embedding_openai"),
+        _ctx=_ctx(),
+        svc=svc,
+    )
+
+    assert result.data == {"ok": True}
+    assert captured == {"model": model_config, "config": embedding_config}
+    llm_probe.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_test_datasource_connectivity_ok(monkeypatch):
     """Successful datasource probe returns ok=True and forwards the payload unchanged."""
     captured = {}
@@ -844,6 +1090,25 @@ async def test_test_datasource_connectivity_ok(monkeypatch):
     assert result.data == {"ok": True}
     assert captured["payload"]["type"] == "duckdb"
     assert captured["payload"]["uri"] == "/tmp/test.duckdb"
+
+
+@pytest.mark.asyncio
+async def test_test_saved_datasource_uses_resolved_server_config(monkeypatch):
+    captured = {}
+    datasource = DbConfig(type="postgresql", host="db.internal", password="real-secret", database="fund")
+    svc = _mock_svc(datasources={"fund": datasource})
+    monkeypatch.setattr(
+        config_routes, "_probe_datasource_sync", lambda payload: captured.setdefault("payload", payload)
+    )
+
+    result = await probe_saved_datasource_connectivity_endpoint(
+        ProbeSavedDatasourceRequest(name="fund"),
+        _ctx=_ctx(),
+        svc=svc,
+    )
+
+    assert result.data == {"ok": True}
+    assert captured["payload"]["password"] == "real-secret"
 
 
 def test_probe_datasource_sync_uses_flat_db_config_map(monkeypatch):

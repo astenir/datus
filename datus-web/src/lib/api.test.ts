@@ -395,8 +395,14 @@ describe("api client", () => {
     );
 
     await configApi.updateModels("http://localhost:8000", {
-      local: { type: "openai", model: "local-model" },
-    }, null);
+      providers: {
+        openai: { api_key: "********", auth_type: "api_key" },
+      },
+      models: {
+        local: { type: "openai", model: "local-model" },
+      },
+      target: { provider: "openai", model: "gpt-4.1" },
+    });
     await configApi.updateDatasources("http://localhost:8000", {
       fund: { type: "postgres", host: "db.internal" },
     });
@@ -413,10 +419,13 @@ describe("api client", () => {
 
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/config/models");
     expect(JSON.parse(String((vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit).body))).toEqual({
+      providers: {
+        openai: { api_key: "********", auth_type: "api_key" },
+      },
       models: {
         local: { type: "openai", model: "local-model" },
       },
-      target: null,
+      target: { provider: "openai", model: "gpt-4.1" },
     });
     expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe("http://localhost:8000/api/v1/config/datasources");
     expect(JSON.parse(String((vi.mocked(fetch).mock.calls[1]?.[1] as RequestInit).body))).toEqual({
@@ -426,6 +435,33 @@ describe("api client", () => {
     });
     expect(vi.mocked(fetch).mock.calls[2]?.[0]).toBe("http://localhost:8000/api/v1/config/models/test");
     expect(vi.mocked(fetch).mock.calls[3]?.[0]).toBe("http://localhost:8000/api/v1/config/datasources/test");
+  });
+
+  it("tests saved model references without sending credentials", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(mockJsonResponse({ success: true, data: { ok: true } }))
+    );
+
+    await configApi.testSavedModel("http://localhost:8000", { provider: "openai", model: "gpt-4.1" });
+    await configApi.testSavedModel("http://localhost:8000", { custom: "internal" });
+
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/config/models/test-saved");
+    expect(JSON.parse(String((vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit).body))).toEqual({
+      provider: "openai",
+      model: "gpt-4.1",
+    });
+    expect(JSON.parse(String((vi.mocked(fetch).mock.calls[1]?.[1] as RequestInit).body))).toEqual({ custom: "internal" });
+  });
+
+  it("tests a saved datasource reference without sending credentials", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(mockJsonResponse({ success: true, data: { ok: true } }))
+    );
+
+    await configApi.testSavedDatasource("http://localhost:8000", "fund");
+
+    expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/config/datasources/test-saved");
+    expect(JSON.parse(String((vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit).body))).toEqual({ name: "fund" });
   });
 
   it("sends session ids when submitting frontend tool results", async () => {

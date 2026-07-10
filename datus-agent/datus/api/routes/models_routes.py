@@ -110,14 +110,16 @@ def _resolve_current_model(
     target = getattr(agent_config, "target", None)
     custom_models = getattr(agent_config, "models", None)
     if target and isinstance(custom_models, dict) and target in custom_models:
-        return f"custom/{target}"
+        if any(m.provider == "custom" and m.id == target and "chat" in m.capabilities for m in models):
+            return f"custom/{target}"
 
     for m in models:
-        if m.provider == "custom":
+        if m.provider == "custom" and "chat" in m.capabilities:
             return f"custom/{m.id}"
 
-    if models:
-        return f"{models[0].provider}/{models[0].id}"
+    for m in models:
+        if "chat" in m.capabilities:
+            return f"{m.provider}/{m.id}"
 
     return None
 
@@ -176,6 +178,7 @@ async def list_models(svc: ServiceDep, request: Request = None) -> Result[Models
             models.append(_build_model_info(provider_key, entry, catalog))
 
     custom_models = getattr(agent_config, "models", None)
+    embedding_targets = set(getattr(agent_config, "embedding_model_targets", set()) or set())
     if isinstance(custom_models, dict) and custom_models:
         for model_key, model_cfg in custom_models.items():
             if not isinstance(model_key, str) or not model_key:
@@ -192,6 +195,7 @@ async def list_models(svc: ServiceDep, request: Request = None) -> Result[Models
                     id=model_key,
                     model=actual_model,
                     name=model_key,
+                    capabilities=["embedding"] if model_key in embedding_targets else ["chat"],
                     context_length=spec_ctx if isinstance(spec_ctx, int) else None,
                     max_tokens=spec_max if isinstance(spec_max, int) else None,
                 )

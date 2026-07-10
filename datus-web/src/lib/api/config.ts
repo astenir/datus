@@ -10,7 +10,16 @@ import type {
   ModelProbeInput,
   ModelsData,
   ProbeResult,
+  ProviderConfigMap,
+  SavedModelProbeInput,
+  TargetModelConfig,
 } from "@/types";
+
+type UpdateModelsInput = {
+  providers?: ProviderConfigMap | null;
+  models?: ModelConfigMap | null;
+  target?: TargetModelConfig | string | null;
+};
 
 export const configApi = {
   getAgent(baseUrl: string): Promise<ConfigSummary | null> {
@@ -21,19 +30,24 @@ export const configApi = {
     return apiResult(baseUrl, "/api/v1/config/datasources", putBody({ datasources }));
   },
 
-  updateModels(baseUrl: string, models?: ModelConfigMap | null, target?: string | null): Promise<unknown> {
-    const body: { models?: ModelConfigMap | null; target?: string | null } = {};
-    if (models !== undefined) body.models = models;
-    if (target !== undefined) body.target = target;
-    return apiResult(baseUrl, "/api/v1/config/models", putBody(body));
+  updateModels(baseUrl: string, input: UpdateModelsInput): Promise<unknown> {
+    return apiResult(baseUrl, "/api/v1/config/models", putBody(input));
   },
 
   testModel(baseUrl: string, probe: ModelProbeInput): Promise<ProbeResult | null> {
     return apiResult(baseUrl, "/api/v1/config/models/test", jsonBody(probe));
   },
 
+  testSavedModel(baseUrl: string, probe: SavedModelProbeInput): Promise<ProbeResult | null> {
+    return apiResult(baseUrl, "/api/v1/config/models/test-saved", jsonBody(probe));
+  },
+
   testDatasource(baseUrl: string, probe: DatasourceProbeInput): Promise<ProbeResult | null> {
     return apiResult(baseUrl, "/api/v1/config/datasources/test", jsonBody(probe));
+  },
+
+  testSavedDatasource(baseUrl: string, name: string): Promise<ProbeResult | null> {
+    return apiResult(baseUrl, "/api/v1/config/datasources/test-saved", jsonBody({ name }));
   },
 
   switchDatasource(baseUrl: string, name: string): Promise<{ current_datasource: string } | null> {

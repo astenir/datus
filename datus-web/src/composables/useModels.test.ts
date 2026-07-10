@@ -46,6 +46,18 @@ describe("buildModelOption", () => {
   });
 });
 
+describe("chat model filtering", () => {
+  it("identifies embedding-only catalog entries", () => {
+    const model: ModelInfo = {
+      provider: "custom",
+      id: "qwen-ebd",
+      capabilities: ["embedding"],
+    };
+
+    expect(model.capabilities?.includes("embedding")).toBe(true);
+  });
+});
+
 describe("buildPersonalModelOption", () => {
   it("uses the credential ID so duplicate providers stay selectable", () => {
     const credential: ModelCredentialSummary = {

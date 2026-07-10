@@ -14,6 +14,9 @@ import type {
   ModelsData,
   NormalizedProbeResult,
   ProbeResult,
+  ProviderConfigMap,
+  SavedModelProbeInput,
+  TargetModelConfig,
 } from "@/types";
 
 const DEFAULT_PROBE_FAILURE = "连接测试失败，请检查配置";
@@ -136,6 +139,49 @@ function modelProbeFromTarget(target: string): ModelProbeInput {
   };
 }
 
+function targetModelRef(target: ConfigSummary["target"], fallback = ""): string {
+  if (typeof target === "string") return target ? `custom/${target}` : fallback;
+  if (target?.custom) return `custom/${target.custom}`;
+  if (target?.provider && target.model) return `${target.provider}/${target.model}`;
+  return fallback;
+}
+
+function targetModelConfig(reference: string): TargetModelConfig | null {
+  const [provider = "", ...modelParts] = reference.trim().split("/");
+  const model = modelParts.join("/").trim();
+  if (!provider || !model) return null;
+  return provider === "custom" ? { custom: model } : { provider, model };
+}
+
+function modelReference(model: ModelInfo): string {
+  return `${model.provider}/${model.id}`;
+}
+
+function isChatModel(model: ModelInfo): boolean {
+  return !model.capabilities?.includes("embedding");
+}
+
+function firstAvailableTargetRef(models: ModelsData | null, customModels: ModelConfigMap): string {
+  const providerModel = models?.models.find((model) => model.provider !== "custom" && isChatModel(model));
+  if (providerModel) return modelReference(providerModel);
+  const embeddingNames = new Set(
+    models?.models
+      .filter(model => model.provider === "custom" && !isChatModel(model))
+      .map(model => model.id) ?? [],
+  );
+  const customName = Object.keys(customModels).find(name => !embeddingNames.has(name));
+  return customName ? `custom/${customName}` : "";
+}
+
+function isTargetReferenceAvailable(reference: string, models: ModelsData | null, customModels: ModelConfigMap): boolean {
+  if (reference.startsWith("custom/")) {
+    const customName = reference.slice("custom/".length);
+    const catalogModel = models?.models.find(model => model.provider === "custom" && model.id === customName);
+    return Boolean(customModels[customName]) && (!catalogModel || isChatModel(catalogModel));
+  }
+  return Boolean(models?.models.some((model) => model.provider !== "custom" && isChatModel(model) && modelReference(model) === reference));
+}
+
 function shouldIncludeProbeField(key: string, value: unknown): boolean {
   if (key === "display_name" || key === "extra") return false;
   if (value == null) return false;
@@ -167,6 +213,7 @@ export function useConfigurationManager() {
   const connection = useConnection();
 
   const loading = shallowRef(false);
+  const savingProviders = shallowRef(false);
   const savingModels = shallowRef(false);
   const savingDatasources = shallowRef(false);
   const testingModel = shallowRef(false);
@@ -174,6 +221,7 @@ export function useConfigurationManager() {
 
   const config = ref<ConfigSummary | null>(null);
   const modelsData = ref<ModelsData | null>(null);
+  const providerConfigs = ref<ProviderConfigMap>({});
   const modelConfigs = ref<ModelConfigMap>({});
   const datasourceConfigs = ref<DatasourceConfigMap>({});
   const modelProbe = ref<ModelProbeInput>({
@@ -190,21 +238,32 @@ export function useConfigurationManager() {
   });
   const selectedDatasourceName = shallowRef("");
   const modelProbeResult = shallowRef<NormalizedProbeResult | null>(null);
+  const savedModelProbeResults = ref<Record<string, NormalizedProbeResult>>({});
+  const testingSavedModels = ref<string[]>([]);
   const datasourceProbeResult = shallowRef<NormalizedProbeResult | null>(null);
+  const savedDatasourceProbeResults = ref<Record<string, NormalizedProbeResult>>({});
+  const testingSavedDatasources = ref<string[]>([]);
   const datasourceProbeSecretFields = shallowRef<string[]>([]);
 
   const configuredModelEntries = computed(() => Object.entries(modelConfigs.value));
   const configuredDatasourceEntries = computed(() => Object.entries(datasourceConfigs.value));
   const availableModels = computed<ModelInfo[]>(() => modelsData.value?.models ?? []);
+  const embeddingModelNames = computed(() => new Set(
+    availableModels.value
+      .filter(model => model.provider === "custom" && model.capabilities?.includes("embedding"))
+      .map(model => model.id),
+  ));
   const providerCount = computed(() => modelsData.value?.providers?.length ?? 0);
-  const currentTarget = computed(() => forms.value.target.trim() || config.value?.target || modelsData.value?.current_model || "");
+  const currentTarget = computed(() => forms.value.target.trim() || modelsData.value?.current_model || "");
 
   function hydrateForms(nextConfig: ConfigSummary | null, nextModels: ModelsData | null) {
-    const target = typeof nextConfig?.target === "string"
-      ? nextConfig.target
-      : nextModels?.current_model ?? "";
+    providerConfigs.value = structuredClone(nextConfig?.providers ?? {});
     modelConfigs.value = structuredClone(nextConfig?.models ?? {});
     datasourceConfigs.value = structuredClone(nextConfig?.datasources ?? {});
+    const configuredTarget = targetModelRef(nextConfig?.target, nextModels?.current_model ?? "");
+    const target = isTargetReferenceAvailable(configuredTarget, nextModels, modelConfigs.value)
+      ? configuredTarget
+      : firstAvailableTargetRef(nextModels, modelConfigs.value);
     forms.value = {
       target,
       modelsText: prettyJson(modelConfigs.value),
@@ -252,8 +311,15 @@ export function useConfigurationManager() {
   async function saveModels() {
     savingModels.value = true;
     try {
-      const target = forms.value.target.trim() || null;
-      await configApi.updateModels(connection.effectiveBase(), modelConfigs.value, target);
+      const target = targetModelConfig(forms.value.target);
+      if (!target) {
+        toast.error("请选择默认模型");
+        return;
+      }
+      await configApi.updateModels(connection.effectiveBase(), {
+        models: modelConfigs.value,
+        target,
+      });
       await loadConfiguration();
       await connection.checkConnection();
       toast.success("模型配置已保存");
@@ -262,6 +328,43 @@ export function useConfigurationManager() {
       toast.error("保存模型配置失败");
     } finally {
       savingModels.value = false;
+    }
+  }
+
+  async function saveTargetModel() {
+    savingModels.value = true;
+    try {
+      const target = targetModelConfig(forms.value.target);
+      if (!target) {
+        toast.error("请选择默认模型");
+        return;
+      }
+      await configApi.updateModels(connection.effectiveBase(), { target });
+      await loadConfiguration();
+      await connection.checkConnection();
+      toast.success("默认模型已保存");
+    } catch (err) {
+      console.error("保存默认模型失败:", err);
+      toast.error("保存默认模型失败");
+    } finally {
+      savingModels.value = false;
+    }
+  }
+
+  async function saveProviders() {
+    savingProviders.value = true;
+    try {
+      await configApi.updateModels(connection.effectiveBase(), {
+        providers: providerConfigs.value,
+      });
+      await loadConfiguration();
+      await connection.checkConnection();
+      toast.success("Provider 凭据已保存");
+    } catch (err) {
+      console.error("保存 Provider 凭据失败:", err);
+      toast.error("保存 Provider 凭据失败");
+    } finally {
+      savingProviders.value = false;
     }
   }
 
@@ -283,6 +386,16 @@ export function useConfigurationManager() {
   function replaceModelConfigs(models: ModelConfigMap) {
     modelConfigs.value = structuredClone(models);
     forms.value.modelsText = prettyJson(modelConfigs.value);
+    if (forms.value.target.startsWith("custom/")) {
+      const selectedCustom = forms.value.target.slice("custom/".length);
+      if (!modelConfigs.value[selectedCustom]) {
+        forms.value.target = firstAvailableTargetRef(modelsData.value, modelConfigs.value);
+      }
+    }
+  }
+
+  function replaceProviderConfigs(providers: ProviderConfigMap) {
+    providerConfigs.value = structuredClone(providers);
   }
 
   function replaceDatasourceConfigs(datasources: DatasourceConfigMap) {
@@ -342,6 +455,35 @@ export function useConfigurationManager() {
     }
   }
 
+  async function testSavedModel(key: string, probe: SavedModelProbeInput) {
+    if (testingSavedModels.value.includes(key)) return;
+    testingSavedModels.value = [...testingSavedModels.value, key];
+    try {
+      const result = await configApi.testSavedModel(connection.effectiveBase(), probe);
+      savedModelProbeResults.value = {
+        ...savedModelProbeResults.value,
+        [key]: normalizeProbeResult(result),
+      };
+    } catch (err) {
+      console.error("检测已保存模型配置失败:", err);
+      savedModelProbeResults.value = {
+        ...savedModelProbeResults.value,
+        [key]: { ok: false, message: DEFAULT_PROBE_FAILURE },
+      };
+      toast.error("模型连接检测失败");
+    } finally {
+      testingSavedModels.value = testingSavedModels.value.filter((item) => item !== key);
+    }
+  }
+
+  function testProviderConfig(provider: string, model: string) {
+    return testSavedModel(`provider:${provider}`, { provider, model });
+  }
+
+  function testCustomModel(name: string) {
+    return testSavedModel(`custom:${name}`, { custom: name });
+  }
+
   async function testDatasourceProbe() {
     let probe: Record<string, unknown>;
     try {
@@ -388,37 +530,71 @@ export function useConfigurationManager() {
     }
   }
 
+  async function testSavedDatasource(name: string) {
+    if (testingSavedDatasources.value.includes(name)) return;
+    testingSavedDatasources.value = [...testingSavedDatasources.value, name];
+    try {
+      const result = await configApi.testSavedDatasource(connection.effectiveBase(), name);
+      savedDatasourceProbeResults.value = {
+        ...savedDatasourceProbeResults.value,
+        [name]: normalizeProbeResult(result),
+      };
+    } catch (err) {
+      console.error("检测已保存数据源失败:", err);
+      savedDatasourceProbeResults.value = {
+        ...savedDatasourceProbeResults.value,
+        [name]: { ok: false, message: DEFAULT_PROBE_FAILURE },
+      };
+      toast.error("数据源连接检测失败");
+    } finally {
+      testingSavedDatasources.value = testingSavedDatasources.value.filter(item => item !== name);
+    }
+  }
+
   return {
     loading,
+    savingProviders,
     savingModels,
     savingDatasources,
     testingModel,
     testingDatasource,
     config,
     modelsData,
+    providerConfigs,
     modelConfigs,
     datasourceConfigs,
     modelProbe,
     forms,
     selectedDatasourceName,
     modelProbeResult,
+    savedModelProbeResults,
+    testingSavedModels,
     datasourceProbeResult,
+    savedDatasourceProbeResults,
+    testingSavedDatasources,
     datasourceProbeSecretFields,
     configuredModelEntries,
     configuredDatasourceEntries,
     availableModels,
+    embeddingModelNames,
     providerCount,
     currentTarget,
     loadConfiguration,
     selectDatasourceForProbe,
+    replaceProviderConfigs,
     replaceModelConfigs,
     replaceDatasourceConfigs,
     applyModelsJson,
     applyDatasourcesJson,
+    saveProviders,
+    saveTargetModel,
     saveModels,
     saveDatasources,
     testModelProbe,
+    testProviderConfig,
+    testCustomModel,
     testDatasourceProbe,
+    testSavedDatasource,
   };
 }
 
@@ -429,4 +605,6 @@ export const configurationManagerInternals = {
   datasourceProbeFromConfig,
   maskedProbeSecretFields,
   redactedDatasourceProbeFieldsFromConfig,
+  targetModelRef,
+  targetModelConfig,
 };

@@ -1046,6 +1046,13 @@ class AgentConfig:
 
         storage_raw = kwargs.get("storage", {})
         storage_config = _resolve_nested_value(storage_raw) if isinstance(storage_raw, dict) else {}
+        self.embedding_model_targets = {
+            resolve_env(target).strip()
+            for config in storage_config.values()
+            if isinstance(config, dict)
+            and isinstance((target := config.get("target_model")), str)
+            and resolve_env(target).strip()
+        }
         # use default embedding model if not provided
         if storage_config:
             if self._skip_init_dirs:

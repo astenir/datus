@@ -49,6 +49,7 @@ def _make_svc(
     svc.agent_config._target_provider = target_provider
     svc.agent_config._target_model = target_model
     svc.agent_config.target = target
+    svc.agent_config.embedding_model_targets = set()
     return svc
 
 
@@ -488,6 +489,25 @@ class TestCustomModels:
         assert by_id["my-deepseek"].model == "deepseek-chat"
         assert by_id["my-gpt"].provider == "custom"
         assert by_id["my-gpt"].model == "gpt-4"
+
+    @pytest.mark.asyncio
+    async def test_custom_embedding_model_is_marked_and_not_selected_as_current(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(models_routes, "load_cached_model_details", lambda: None)
+        monkeypatch.setattr(models_routes, "load_cache_fetched_at", lambda: None)
+        svc = _make_svc(
+            catalog=_basic_catalog(),
+            available=set(),
+            custom_models={"qwen-ebd": _custom_model("Qwen/Qwen3-Embedding-0.6B")},
+            target="qwen-ebd",
+        )
+        svc.agent_config.embedding_model_targets = {"qwen-ebd"}
+
+        result = await list_models(svc)
+
+        assert result.data.models[0].capabilities == ["embedding"]
+        assert result.data.current_model is None
 
     @pytest.mark.asyncio
     async def test_custom_models_pick_up_model_specs(self, monkeypatch: pytest.MonkeyPatch) -> None:
