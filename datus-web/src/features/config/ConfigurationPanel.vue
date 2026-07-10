@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue"
+import { computed, onMounted, shallowRef } from "vue"
 import {
   ActivityIcon,
   CheckCircle2Icon,
   DatabaseIcon,
   PlugZapIcon,
   RefreshCwIcon,
-  SaveIcon,
   ShieldCheckIcon,
   XCircleIcon,
 } from "@lucide/vue"
@@ -36,8 +35,11 @@ import { Textarea } from "@/components/ui/textarea"
 import { useConfigurationManager } from "@/composables/useConfigurationManager"
 import { usePermission } from "@/composables/usePermission"
 import { useSystemStatus } from "@/composables/useSystemStatus"
+import AdvancedJsonDialog from "@/features/config/AdvancedJsonDialog.vue"
+import DatasourceConfigEditor from "@/features/config/DatasourceConfigEditor.vue"
+import ModelConfigEditor from "@/features/config/ModelConfigEditor.vue"
 import type { NormalizedProbeResult } from "@/types"
-import { datasourceDisplayName, datasourceLabel } from "@/lib/datasource-display"
+import { datasourceLabel } from "@/lib/datasource-display"
 
 const props = withDefaults(defineProps<{
   canEdit?: boolean
@@ -48,6 +50,8 @@ const props = withDefaults(defineProps<{
 const manager = useConfigurationManager()
 const permission = usePermission()
 const systemStatus = useSystemStatus()
+const modelsJsonOpen = shallowRef(false)
+const datasourcesJsonOpen = shallowRef(false)
 
 const canViewSystemStatus = computed(() => permission.hasPermission("module.system.status"))
 const currentDatasource = computed(() => {
@@ -80,26 +84,11 @@ const modelProbeBaseUrl = computed({
   },
 })
 
-function fieldText(source: Record<string, unknown>, key: string, fallback = "-") {
+function configField(source: Record<string, unknown>, key: string, fallback = "-") {
   const value = source[key]
   if (typeof value === "string" && value.trim()) return value
   if (typeof value === "number" || typeof value === "boolean") return String(value)
   return fallback
-}
-
-function formatModelName(source: Record<string, unknown>) {
-  return fieldText(source, "model", fieldText(source, "id"))
-}
-
-function formatProvider(source: Record<string, unknown>) {
-  return fieldText(source, "type", fieldText(source, "provider"))
-}
-
-function formatDatasourceHost(source: Record<string, unknown>) {
-  const host = fieldText(source, "host", "")
-  const database = fieldText(source, "database", "")
-  if (host && database) return `${host}/${database}`
-  return host || database || "-"
 }
 
 function formatOptionalDate(value: string | undefined) {
@@ -133,6 +122,14 @@ function selectDatasource(value: unknown) {
   if (typeof value === "string") {
     manager.selectDatasourceForProbe(value)
   }
+}
+
+function applyModelsJson() {
+  if (manager.applyModelsJson()) modelsJsonOpen.value = false
+}
+
+function applyDatasourcesJson() {
+  if (manager.applyDatasourcesJson()) datasourcesJsonOpen.value = false
 }
 
 async function initializeConfigPanel() {
@@ -194,7 +191,7 @@ onMounted(() => {
                 </CardDescription>
               </CardHeader>
               <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
-                <FieldGroup>
+                <FieldGroup class="shrink-0">
                   <Field>
                     <FieldLabel for="config-target">目标模型</FieldLabel>
                     <Input
@@ -205,27 +202,26 @@ onMounted(() => {
                     />
                     <FieldDescription>格式通常为 provider/model。</FieldDescription>
                   </Field>
-                  <Field>
-                    <FieldLabel for="config-models-json">模型 JSON</FieldLabel>
-                    <Textarea
-                      id="config-models-json"
-                      v-model="manager.forms.value.modelsText"
-                      class="min-h-72 font-mono text-xs leading-6"
-                      :disabled="!props.canEdit"
-                      spellcheck="false"
-                    />
-                    <FieldDescription>保存时会作为完整 models 映射提交。</FieldDescription>
-                  </Field>
                 </FieldGroup>
-                <div class="flex justify-end">
-                  <Button
-                    size="sm"
-                    :disabled="!props.canEdit || manager.savingModels.value"
-                    @click="manager.saveModels"
-                  >
-                    <SaveIcon data-icon="inline-start" />
-                    保存模型
-                  </Button>
+                <ModelConfigEditor
+                  :models="manager.modelConfigs.value"
+                  :can-edit="props.canEdit"
+                  :saving="manager.savingModels.value"
+                  @update="manager.replaceModelConfigs"
+                  @save="manager.saveModels"
+                />
+                <div class="flex shrink-0 justify-end">
+                  <AdvancedJsonDialog
+                    v-model:open="modelsJsonOpen"
+                    v-model:text="manager.forms.value.modelsText"
+                    title="高级模型 JSON"
+                    description="直接编辑完整模型映射，适合处理结构化表单未覆盖的配置。"
+                    field-label="完整模型 JSON"
+                    field-description="应用后会替换当前尚未保存的模型列表。"
+                    textarea-id="config-models-json"
+                    :can-edit="props.canEdit"
+                    @apply="applyModelsJson"
+                  />
                 </div>
               </CardContent>
             </Card>
@@ -353,66 +349,25 @@ onMounted(() => {
                 </CardDescription>
               </CardHeader>
               <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
-                <div class="rounded-md border">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>名称</TableHead>
-                        <TableHead>类型</TableHead>
-                        <TableHead>地址</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      <TableRow
-                        v-for="[name, datasource] in manager.configuredDatasourceEntries.value"
-                        :key="name"
-                      >
-                        <TableCell>
-                          <div class="font-medium">{{ datasourceDisplayName(datasource) || name }}</div>
-                          <div
-                            v-if="datasourceDisplayName(datasource)"
-                            class="text-xs text-muted-foreground"
-                          >
-                            {{ name }}
-                          </div>
-                        </TableCell>
-                        <TableCell>{{ fieldText(datasource, "type") }}</TableCell>
-                        <TableCell>{{ formatDatasourceHost(datasource) }}</TableCell>
-                      </TableRow>
-                      <TableRow v-if="manager.configuredDatasourceEntries.value.length === 0">
-                        <TableCell
-                          colspan="3"
-                          class="h-20 text-center text-sm text-muted-foreground"
-                        >
-                          暂无数据源配置
-                        </TableCell>
-                      </TableRow>
-                    </TableBody>
-                  </Table>
-                </div>
-
-                <FieldGroup>
-                  <Field>
-                    <FieldLabel for="config-datasources-json">数据源 JSON</FieldLabel>
-                    <Textarea
-                      id="config-datasources-json"
-                      v-model="manager.forms.value.datasourcesText"
-                      class="min-h-96 font-mono text-xs leading-6"
-                      :disabled="!props.canEdit"
-                      spellcheck="false"
-                    />
-                    <FieldDescription>保存时会作为完整 datasources 映射提交。</FieldDescription>
-                  </Field>
-                </FieldGroup>
-                <div class="flex justify-end">
-                  <Button
-                    size="sm"
-                    :disabled="!props.canEdit || manager.savingDatasources.value"
-                    @click="manager.saveDatasources"
-                  >
-                    <SaveIcon data-icon="inline-start" />
-                    保存数据源
-                  </Button>
+                <DatasourceConfigEditor
+                  :datasources="manager.datasourceConfigs.value"
+                  :can-edit="props.canEdit"
+                  :saving="manager.savingDatasources.value"
+                  @update="manager.replaceDatasourceConfigs"
+                  @save="manager.saveDatasources"
+                />
+                <div class="flex shrink-0 justify-end">
+                  <AdvancedJsonDialog
+                    v-model:open="datasourcesJsonOpen"
+                    v-model:text="manager.forms.value.datasourcesText"
+                    title="高级数据源 JSON"
+                    description="直接编辑完整数据源映射，适合批量修改或处理特殊连接字段。"
+                    field-label="完整数据源 JSON"
+                    field-description="应用后会替换当前尚未保存的数据源列表。"
+                    textarea-id="config-datasources-json"
+                    :can-edit="props.canEdit"
+                    @apply="applyDatasourcesJson"
+                  />
                 </div>
               </CardContent>
             </Card>
@@ -606,8 +561,8 @@ onMounted(() => {
                         :key="name"
                       >
                         <TableCell class="font-medium">{{ name }}</TableCell>
-                        <TableCell>{{ formatProvider(model) }}</TableCell>
-                        <TableCell>{{ formatModelName(model) }}</TableCell>
+                        <TableCell>{{ configField(model, "type", configField(model, "provider")) }}</TableCell>
+                        <TableCell>{{ configField(model, "model", configField(model, "id")) }}</TableCell>
                       </TableRow>
                       <TableRow v-if="manager.configuredModelEntries.value.length === 0">
                         <TableCell

@@ -174,6 +174,8 @@ export function useConfigurationManager() {
 
   const config = ref<ConfigSummary | null>(null);
   const modelsData = ref<ModelsData | null>(null);
+  const modelConfigs = ref<ModelConfigMap>({});
+  const datasourceConfigs = ref<DatasourceConfigMap>({});
   const modelProbe = ref<ModelProbeInput>({
     type: "",
     model: "",
@@ -191,8 +193,8 @@ export function useConfigurationManager() {
   const datasourceProbeResult = shallowRef<NormalizedProbeResult | null>(null);
   const datasourceProbeSecretFields = shallowRef<string[]>([]);
 
-  const configuredModelEntries = computed(() => Object.entries(config.value?.models ?? {}));
-  const configuredDatasourceEntries = computed(() => Object.entries(config.value?.datasources ?? {}));
+  const configuredModelEntries = computed(() => Object.entries(modelConfigs.value));
+  const configuredDatasourceEntries = computed(() => Object.entries(datasourceConfigs.value));
   const availableModels = computed<ModelInfo[]>(() => modelsData.value?.models ?? []);
   const providerCount = computed(() => modelsData.value?.providers?.length ?? 0);
   const currentTarget = computed(() => forms.value.target.trim() || config.value?.target || modelsData.value?.current_model || "");
@@ -201,10 +203,12 @@ export function useConfigurationManager() {
     const target = typeof nextConfig?.target === "string"
       ? nextConfig.target
       : nextModels?.current_model ?? "";
+    modelConfigs.value = structuredClone(nextConfig?.models ?? {});
+    datasourceConfigs.value = structuredClone(nextConfig?.datasources ?? {});
     forms.value = {
       target,
-      modelsText: prettyJson(nextConfig?.models ?? {}),
-      datasourcesText: prettyJson(nextConfig?.datasources ?? {}),
+      modelsText: prettyJson(modelConfigs.value),
+      datasourcesText: prettyJson(datasourceConfigs.value),
       datasourceProbeText: "{}",
     };
     modelProbe.value = modelProbeFromTarget(target);
@@ -236,7 +240,9 @@ export function useConfigurationManager() {
 
   function selectDatasourceForProbe(name: string, sourceConfig: ConfigSummary | null = config.value) {
     selectedDatasourceName.value = name;
-    const datasource = sourceConfig?.datasources?.[name];
+    const datasource = sourceConfig === config.value
+      ? datasourceConfigs.value[name]
+      : sourceConfig?.datasources?.[name];
     const probe = datasource ? datasourceProbeFromConfig(datasource) : null;
     datasourceProbeSecretFields.value = datasource ? redactedDatasourceProbeFieldsFromConfig(datasource) : [];
     forms.value.datasourceProbeText = prettyJson(probe ?? {});
@@ -244,18 +250,10 @@ export function useConfigurationManager() {
   }
 
   async function saveModels() {
-    let models: ModelConfigMap;
-    try {
-      models = parseConfigMap(forms.value.modelsText, "models");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "模型配置 JSON 无效");
-      return;
-    }
-
     savingModels.value = true;
     try {
       const target = forms.value.target.trim() || null;
-      await configApi.updateModels(connection.effectiveBase(), models, target);
+      await configApi.updateModels(connection.effectiveBase(), modelConfigs.value, target);
       await loadConfiguration();
       await connection.checkConnection();
       toast.success("模型配置已保存");
@@ -268,17 +266,9 @@ export function useConfigurationManager() {
   }
 
   async function saveDatasources() {
-    let datasources: DatasourceConfigMap;
-    try {
-      datasources = parseConfigMap(forms.value.datasourcesText, "datasources");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "数据源配置 JSON 无效");
-      return;
-    }
-
     savingDatasources.value = true;
     try {
-      await configApi.updateDatasources(connection.effectiveBase(), datasources);
+      await configApi.updateDatasources(connection.effectiveBase(), datasourceConfigs.value);
       await loadConfiguration();
       await connection.checkConnection();
       toast.success("数据源配置已保存");
@@ -287,6 +277,41 @@ export function useConfigurationManager() {
       toast.error("保存数据源配置失败");
     } finally {
       savingDatasources.value = false;
+    }
+  }
+
+  function replaceModelConfigs(models: ModelConfigMap) {
+    modelConfigs.value = structuredClone(models);
+    forms.value.modelsText = prettyJson(modelConfigs.value);
+  }
+
+  function replaceDatasourceConfigs(datasources: DatasourceConfigMap) {
+    datasourceConfigs.value = structuredClone(datasources);
+    forms.value.datasourcesText = prettyJson(datasourceConfigs.value);
+    if (!datasourceConfigs.value[selectedDatasourceName.value]) {
+      selectDatasourceForProbe(Object.keys(datasourceConfigs.value)[0] ?? "");
+    }
+  }
+
+  function applyModelsJson() {
+    try {
+      replaceModelConfigs(parseConfigMap(forms.value.modelsText, "models"));
+      toast.success("模型 JSON 已应用");
+      return true;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "模型配置 JSON 无效");
+      return false;
+    }
+  }
+
+  function applyDatasourcesJson() {
+    try {
+      replaceDatasourceConfigs(parseConfigMap(forms.value.datasourcesText, "datasources"));
+      toast.success("数据源 JSON 已应用");
+      return true;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "数据源配置 JSON 无效");
+      return false;
     }
   }
 
@@ -371,6 +396,8 @@ export function useConfigurationManager() {
     testingDatasource,
     config,
     modelsData,
+    modelConfigs,
+    datasourceConfigs,
     modelProbe,
     forms,
     selectedDatasourceName,
@@ -384,6 +411,10 @@ export function useConfigurationManager() {
     currentTarget,
     loadConfiguration,
     selectDatasourceForProbe,
+    replaceModelConfigs,
+    replaceDatasourceConfigs,
+    applyModelsJson,
+    applyDatasourcesJson,
     saveModels,
     saveDatasources,
     testModelProbe,

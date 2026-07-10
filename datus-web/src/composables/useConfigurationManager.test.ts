@@ -97,7 +97,7 @@ describe("useConfigurationManager", () => {
     const manager = useConfigurationManager();
     await manager.loadConfiguration();
     manager.forms.value.target = "";
-    manager.forms.value.modelsText = "{\"local\":{\"type\":\"openai\",\"model\":\"local-model\"}}";
+    manager.replaceModelConfigs({ local: { type: "openai", model: "local-model" } });
 
     await manager.saveModels();
 
@@ -108,12 +108,12 @@ describe("useConfigurationManager", () => {
     expect(toastSuccess).toHaveBeenCalledWith("模型配置已保存");
   });
 
-  it("rejects non-object model entries before saving", async () => {
+  it("rejects non-object model entries when applying advanced JSON", async () => {
     const { useConfigurationManager } = await import("./useConfigurationManager");
     const manager = useConfigurationManager();
     manager.forms.value.modelsText = "{\"bad\":true}";
 
-    await manager.saveModels();
+    manager.applyModelsJson();
 
     expect(updateModels).not.toHaveBeenCalled();
     expect(toastError).toHaveBeenCalledWith("models.bad 必须是 JSON 对象");
@@ -122,7 +122,7 @@ describe("useConfigurationManager", () => {
   it("saves full datasource desired state", async () => {
     const { useConfigurationManager } = await import("./useConfigurationManager");
     const manager = useConfigurationManager();
-    manager.forms.value.datasourcesText = "{\"fund\":{\"type\":\"postgres\",\"host\":\"db.internal\"}}";
+    manager.replaceDatasourceConfigs({ fund: { type: "postgres", host: "db.internal" } });
 
     await manager.saveDatasources();
 
@@ -130,6 +130,19 @@ describe("useConfigurationManager", () => {
       fund: { type: "postgres", host: "db.internal" },
     });
     expect(checkConnection).toHaveBeenCalled();
+  });
+
+  it("applies advanced JSON to the structured datasource state", async () => {
+    const { useConfigurationManager } = await import("./useConfigurationManager");
+    const manager = useConfigurationManager();
+    manager.forms.value.datasourcesText = "{\"fund\":{\"type\":\"postgres\",\"display_name\":\"基金库\"}}";
+
+    manager.applyDatasourcesJson();
+
+    expect(manager.datasourceConfigs.value).toEqual({
+      fund: { type: "postgres", display_name: "基金库" },
+    });
+    expect(toastSuccess).toHaveBeenCalledWith("数据源 JSON 已应用");
   });
 
   it("tests model and datasource probes through config endpoints", async () => {
