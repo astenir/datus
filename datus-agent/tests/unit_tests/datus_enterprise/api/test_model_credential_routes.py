@@ -256,6 +256,63 @@ async def test_apply_user_model_credential_uses_request_scoped_config_without_cr
 
 
 @pytest.mark.asyncio
+async def test_apply_user_model_credential_selects_the_requested_credential_id():
+    store = InMemoryUserModelCredentialStore()
+    await store.put_credential(
+        user_id="alice",
+        credential_id="first-key",
+        provider="openai",
+        model="gpt-4.1",
+        api_key="sk-first-secret",
+    )
+    await store.put_credential(
+        user_id="alice",
+        credential_id="second-key",
+        provider="openai",
+        model="gpt-4.1-mini",
+        api_key="sk-second-secret",
+    )
+
+    class Config:
+        def __init__(self):
+            self.provider_catalog = _agent_config().provider_catalog
+            self.providers = {}
+            self._target_provider = None
+            self._target_model = None
+
+        def set_active_provider_model(self, provider, model, persist=False):
+            self._target_provider = provider
+            self._target_model = model
+
+    config = Config()
+    applied = await apply_user_model_credential(
+        store=store,
+        user_id="alice",
+        agent_config=config,
+        requested_model=None,
+        requested_credential_id="second-key",
+    )
+
+    assert applied["credential_id"] == "second-key"
+    assert config.providers["openai"].api_key == "sk-second-secret"
+    assert config._target_model == "gpt-4.1-mini"
+
+
+@pytest.mark.asyncio
+async def test_apply_user_model_credential_rejects_an_unavailable_requested_id():
+    store = InMemoryUserModelCredentialStore()
+
+    with pytest.raises(Exception, match="User model credential is unavailable"):
+        await apply_user_model_credential(
+            store=store,
+            user_id="alice",
+            agent_config=_agent_config(),
+            requested_model=None,
+            requested_credential_id="missing-key",
+        )
+
+
+@pytest.mark.asyncio
 async def test_apply_user_model_credential_overlays_custom_endpoint_without_shared_mutation():
     store = InMemoryUserModelCredentialStore()
     await store.put_credential(

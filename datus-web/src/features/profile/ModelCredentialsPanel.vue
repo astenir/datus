@@ -96,7 +96,7 @@ onMounted(refresh)
 <template>
   <Card class="shrink-0">
     <CardHeader class="px-4 py-3">
-      <div class="flex flex-wrap items-center gap-3">
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div class="min-w-0 flex-1">
           <CardTitle class="flex items-center gap-2 text-lg">
             <KeyRoundIcon class="text-muted-foreground" />
@@ -106,7 +106,7 @@ onMounted(refresh)
             个人 API key 只保存在后端；页面不会缓存或回显明文。
           </CardDescription>
         </div>
-        <div class="flex gap-2">
+        <div class="flex justify-end gap-2">
           <Button
             variant="outline"
             size="sm"
@@ -137,7 +137,9 @@ onMounted(refresh)
 
         <ModelCredentialList
           :credentials="manager.credentials.value"
+          :default-credential-id="manager.preference.value?.default_credential_id ?? null"
           :saving="manager.saving.value"
+          :test-results="manager.testResults.value"
           :testing-id="manager.testingId.value"
           @delete="openDeleteDialog"
           @edit="openEditDialog"

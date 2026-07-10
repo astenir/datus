@@ -126,6 +126,7 @@ function optionLabel(value: string, options: readonly SelectOption[]) {
 }
 
 function providerKey(option: SelectOption) {
+  if (option.group) return option.group
   const [rawProvider] = option.value.split("/")
   if (rawProvider && rawProvider !== option.value) return rawProvider.trim().toLowerCase()
 
@@ -136,6 +137,7 @@ function providerKey(option: SelectOption) {
 }
 
 function providerLabel(option: SelectOption) {
+  if (option.group) return option.group
   const separatorIndex = option.label.indexOf(":")
   if (separatorIndex > 0) return option.label.slice(0, separatorIndex).trim()
 

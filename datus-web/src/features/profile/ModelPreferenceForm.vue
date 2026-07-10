@@ -2,7 +2,7 @@
 import { computed, shallowRef, watch } from "vue"
 import { SlidersHorizontalIcon } from "@lucide/vue"
 import { Button } from "@/components/ui/button"
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
+import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
 import {
   Select,
   SelectContent,
@@ -24,43 +24,31 @@ const emit = defineEmits<{
 }>()
 
 const selectedCredentialId = shallowRef("")
-const selectedModel = shallowRef("")
 
 const selectedCredential = computed(() =>
   props.credentials.find(item => item.id === selectedCredentialId.value) ?? null,
 )
 const credentialOptions = computed(() => props.credentials.filter(item => item.enabled))
-const canSave = computed(() => credentialOptions.value.length > 0 && Boolean(selectedCredentialId.value && selectedModel.value))
+const canSave = computed(() => credentialOptions.value.length > 0 && Boolean(selectedCredentialId.value && selectedCredential.value?.model))
 
 watch(
   () => props.preference,
   (preference) => {
     selectedCredentialId.value = preference?.default_credential_id ?? credentialOptions.value[0]?.id ?? ""
-    selectedModel.value = preference?.default_model ?? selectedCredential.value?.model ?? ""
   },
   { immediate: true },
 )
 
-watch(selectedCredential, (credential) => {
-  if (!credential) {
-    selectedModel.value = ""
-    return
-  }
-  if (!selectedModel.value || selectedModel.value !== credential.model) {
-    selectedModel.value = credential.model
-  }
-})
-
 function submit() {
   emit("save", {
     default_credential_id: selectedCredentialId.value || null,
-    default_model: selectedModel.value || null,
+    default_model: selectedCredential.value?.model || null,
   })
 }
 </script>
 
 <template>
-  <FieldGroup class="gap-3">
+  <div class="flex min-w-0 flex-col gap-3">
     <Field>
       <FieldLabel>默认密钥</FieldLabel>
       <Select
@@ -82,31 +70,27 @@ function submit() {
           </SelectGroup>
         </SelectContent>
       </Select>
-      <FieldDescription>聊天会优先使用这里选择的个人密钥；没有密钥时回退到平台共享模型配置。</FieldDescription>
+      <FieldDescription>仅可选择已经启用的个人密钥。</FieldDescription>
     </Field>
 
-    <Field>
-      <FieldLabel>默认模型</FieldLabel>
-      <Select
-        v-model="selectedModel"
-        :disabled="!selectedCredential || saving"
-      >
-        <SelectTrigger>
-          <SelectValue placeholder="选择默认模型" />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectGroup>
-            <SelectItem
-              v-if="selectedCredential"
-              :value="selectedCredential.model"
-            >
-              {{ selectedCredential.model }}
-            </SelectItem>
-          </SelectGroup>
-        </SelectContent>
-      </Select>
-      <FieldDescription>当前版本的模型列表跟随密钥记录；更换模型时编辑密钥记录。</FieldDescription>
-    </Field>
+    <div
+      v-if="selectedCredential"
+      class="rounded-md border px-3 py-2.5"
+    >
+      <div class="text-xs text-muted-foreground">随密钥使用的模型</div>
+      <div class="mt-1 truncate text-sm font-medium">{{ selectedCredential.model }}</div>
+      <div class="mt-1 flex min-w-0 items-center justify-between gap-3 text-xs text-muted-foreground">
+        <span class="truncate">{{ selectedCredential.base_url || selectedCredential.provider }}</span>
+        <span class="shrink-0 font-mono">{{ selectedCredential.ref_hint }}</span>
+      </div>
+    </div>
+
+    <div
+      v-else
+      class="rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground"
+    >
+      添加并启用模型密钥后，可在这里设置默认项。
+    </div>
 
     <div class="flex justify-end">
       <Button
@@ -117,5 +101,8 @@ function submit() {
         保存默认项
       </Button>
     </div>
-  </FieldGroup>
+    <div class="text-xs text-muted-foreground">
+      聊天页保持“默认”时会使用这里的设置，也可在输入框旁的模型菜单中直接选择；未设置时回退到平台共享模型。
+    </div>
+  </div>
 </template>

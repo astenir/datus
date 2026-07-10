@@ -209,6 +209,7 @@ async def apply_user_model_credential(
     user_id: str | None,
     agent_config: Any,
     requested_model: str | None,
+    requested_credential_id: str | None = None,
 ) -> dict[str, Any] | None:
     """Overlay a user's enabled credential onto a request-scoped AgentConfig clone.
 
@@ -224,6 +225,7 @@ async def apply_user_model_credential(
         store=store,
         user_id=user_id,
         requested_model=requested_model,
+        requested_credential_id=requested_credential_id,
     )
     if credential is None:
         return None
@@ -250,10 +252,19 @@ async def _resolve_execution_credential(
     store: Any,
     user_id: str,
     requested_model: str | None,
+    requested_credential_id: str | None,
 ) -> dict[str, Any] | None:
     credentials = [item for item in await store.list_credentials(user_id) if item.get("enabled") is True]
     if not credentials:
+        if requested_credential_id:
+            raise DatusException(ErrorCode.COMMON_FIELD_INVALID, message="User model credential is unavailable.")
         return None
+
+    if requested_credential_id:
+        for item in credentials:
+            if item.get("id") == requested_credential_id:
+                return dict(item)
+        raise DatusException(ErrorCode.COMMON_FIELD_INVALID, message="User model credential is unavailable.")
 
     requested_provider: str | None = None
     requested_model_id: str | None = None

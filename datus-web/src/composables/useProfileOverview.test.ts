@@ -53,38 +53,9 @@ describe("useProfileOverview", () => {
         config_edit: false,
       },
     });
-    sessions.mockResolvedValue({
-      data: {
-        sessions: [
-          {
-            session_id: "session-1",
-            user_query: "查询基金规模",
-            created_at: "2026-01-01T00:00:00Z",
-            last_updated: "2026-01-01T00:01:00Z",
-            total_turns: 2,
-            token_count: 120,
-            is_active: true,
-          },
-        ],
-        total_count: 1,
-      },
-    });
-    usage.mockResolvedValue({
-      data: [
-        {
-          subject_type: "user",
-          subject_id: "alice",
-          resource: "chat.stream",
-          used: 3,
-          window_start: "2026-01-01T00:00:00Z",
-          window_seconds: 3600,
-          updated_at: "2026-01-01T00:05:00Z",
-        },
-      ],
-    });
   });
 
-  it("loads current-user profile, permissions, grants, sessions, and usage", async () => {
+  it("loads the current-user permission overview", async () => {
     const { useProfileOverview } = await import("./useProfileOverview");
     const profile = useProfileOverview();
 
@@ -94,8 +65,8 @@ describe("useProfileOverview", () => {
     expect(permissions).toHaveBeenCalled();
     expect(datasourceGrants).toHaveBeenCalled();
     expect(features).toHaveBeenCalled();
-    expect(sessions).toHaveBeenCalled();
-    expect(usage).toHaveBeenCalled();
+    expect(sessions).not.toHaveBeenCalled();
+    expect(usage).not.toHaveBeenCalled();
     expect(profile.userId.value).toBe("alice");
     expect(profile.roles.value).toEqual(["analyst"]);
     expect(new Set(profile.enabledFeatures.value.map(item => item.code))).toEqual(new Set(["chat", "sql_executor"]));
@@ -115,9 +86,6 @@ describe("useProfileOverview", () => {
         raw: { effect: "allow", tables: ["public.accounts"], allow_sql: true },
       },
     ]);
-    expect(profile.runningSessionCount.value).toBe(1);
-    expect(profile.totalTokenCount.value).toBe(120);
-    expect(profile.totalUsageCount.value).toBe(3);
   });
 
   it("falls back to summary fields when detail endpoints return no data", async () => {
@@ -143,6 +111,6 @@ describe("useProfileOverview", () => {
     await profile.loadProfile();
 
     expect(profile.error.value).toBe("AUTH_REQUIRED");
-    expect(toastError).toHaveBeenCalledWith("加载个人权限与用量失败");
+    expect(toastError).toHaveBeenCalledWith("加载个人权限失败");
   });
 });

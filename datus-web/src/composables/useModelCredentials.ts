@@ -2,6 +2,7 @@ import { computed, ref, shallowRef } from "vue";
 import { toast } from "vue-sonner";
 
 import { meApi } from "@/lib/api";
+import { useModels } from "@/composables/useModels";
 import type {
   ApiResponse,
   ModelCredentialSummary,
@@ -19,6 +20,11 @@ export interface ModelCredentialForm {
   api_key: string;
   display_name: string;
   enabled: boolean;
+}
+
+export interface ModelCredentialTestState {
+  ok: boolean;
+  message: string;
 }
 
 export const CUSTOM_OPENAI_COMPATIBLE_PROVIDER = "custom_openai_compatible";
@@ -42,9 +48,11 @@ function defaultForm(provider = "", model = ""): ModelCredentialForm {
 }
 
 export function useModelCredentials() {
+  const { loadModels } = useModels();
   const loading = shallowRef(false);
   const saving = shallowRef(false);
   const testingId = shallowRef<string | null>(null);
+  const testResults = ref<Record<string, ModelCredentialTestState>>({});
   const error = shallowRef<string | null>(null);
   const providers = ref<ModelProviderOption[]>([]);
   const credentials = ref<ModelCredentialSummary[]>([]);
@@ -117,6 +125,7 @@ export function useModelCredentials() {
       resultData(result, null);
       toast.success(id ? "模型密钥已更新" : "模型密钥已添加");
       await load();
+      await loadModels();
     } catch (err) {
       console.error("保存模型密钥失败:", err);
       error.value = err instanceof Error ? err.message : "保存模型密钥失败";
@@ -134,6 +143,7 @@ export function useModelCredentials() {
       await meApi.deleteModelCredential(id);
       toast.success("模型密钥已删除");
       await load();
+      await loadModels();
     } catch (err) {
       console.error("删除模型密钥失败:", err);
       error.value = err instanceof Error ? err.message : "删除模型密钥失败";
@@ -145,17 +155,32 @@ export function useModelCredentials() {
 
   async function testCredential(id: string): Promise<ModelProbeResult | null> {
     testingId.value = id;
+    const credential = credentials.value.find(item => item.id === id);
     try {
       const result = resultData(await meApi.testModelCredential(id), { ok: false, message: "测试失败" });
+      const message = result.ok
+        ? "连接正常"
+        : result.message?.trim() || "连接失败";
+      testResults.value = {
+        ...testResults.value,
+        [id]: { ok: result.ok, message },
+      };
       if (result.ok) {
-        toast.success("模型连接可用");
+        toast.success("模型连接正常", {
+          description: credential?.display_name || credential?.model,
+        });
       } else {
-        toast.error(result.message || "模型连接不可用");
+        toast.error(message);
       }
       return result;
     } catch (err) {
       console.error("测试模型密钥失败:", err);
-      toast.error("测试模型密钥失败");
+      const message = err instanceof Error ? err.message : "测试请求失败";
+      testResults.value = {
+        ...testResults.value,
+        [id]: { ok: false, message },
+      };
+      toast.error(message);
       return null;
     } finally {
       testingId.value = null;
@@ -169,6 +194,7 @@ export function useModelCredentials() {
       const result = await meApi.updateModelPreference(input);
       preference.value = resultData<ModelPreferenceSummary | null>(result, null);
       toast.success("默认模型已更新");
+      await loadModels();
     } catch (err) {
       console.error("保存默认模型失败:", err);
       error.value = err instanceof Error ? err.message : "保存默认模型失败";
@@ -200,6 +226,7 @@ export function useModelCredentials() {
     loading,
     saving,
     testingId,
+    testResults,
     error,
     providers,
     credentials,

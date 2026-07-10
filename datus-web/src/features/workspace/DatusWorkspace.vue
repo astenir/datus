@@ -115,7 +115,7 @@ const navItems: WorkspaceNavItem[] = [
   { value: "agents", label: "Agent", icon: BotIcon },
   { value: "configuration", label: "配置", icon: SlidersHorizontalIcon },
   { value: "artifacts", label: "产物", icon: BarChart3Icon },
-  { value: "profile", label: "我的权限", icon: UserRoundIcon },
+  { value: "profile", label: "个人设置", icon: UserRoundIcon },
   { value: "admin", label: "权限管理", icon: ShieldIcon },
 ]
 

@@ -45,6 +45,7 @@ describe("buildChatStreamRequest", () => {
       session_id: null,
       subagent_id: null,
       model: "openai/gpt-4.1",
+      model_credential_id: null,
       datasource: "ccks_fund",
       database: null,
       db_schema: null,
@@ -52,6 +53,26 @@ describe("buildChatStreamRequest", () => {
       stream_response: true,
       plan_mode: true,
       permission_mode: null
+    });
+  });
+
+  it("sends a personal model selection as a credential ID", () => {
+    expect(
+      buildChatStreamRequest({
+        message: "hello",
+        sessionId: "",
+        selectedAgent: "",
+        model: "credential:cred-1",
+        datasource: "",
+        database: "",
+        schema: "",
+        language: "",
+        planMode: false,
+        permissionMode: "",
+      }),
+    ).toMatchObject({
+      model: null,
+      model_credential_id: "cred-1",
     });
   });
 });

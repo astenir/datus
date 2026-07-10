@@ -177,6 +177,7 @@ export type ConfigurationTextForms = {
 export type SelectOption = {
   value: string;
   label: string;
+  group?: string;
 };
 
 export type ConnectionState = "idle" | "checking" | "online" | "offline";

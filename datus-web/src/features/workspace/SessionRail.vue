@@ -559,7 +559,7 @@ async function deleteSession(sessionId: string) {
                 @click="openView('profile')"
               >
                 <UserRoundIcon />
-                <span>我的权限</span>
+                <span>个人设置</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
@@ -792,7 +792,7 @@ async function deleteSession(sessionId: string) {
                 @select="openView('profile')"
               >
                 <UserRoundIcon />
-                <span>我的权限与用量</span>
+                <span>个人设置</span>
               </DropdownMenuItem>
 
               <DropdownMenuSeparator />

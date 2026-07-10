@@ -163,10 +163,52 @@ describe("useModelCredentials", () => {
     });
 
     expect(probe).toEqual({ ok: true });
+    expect(manager.testResults.value["cred-1"]).toEqual({
+      ok: true,
+      message: "连接正常",
+    });
+    expect(toastSuccess).toHaveBeenCalledWith("模型连接正常", {
+      description: "个人 OpenAI",
+    });
     expect(testModelCredential).toHaveBeenCalledWith("cred-1");
     expect(updateModelPreference).toHaveBeenCalledWith({
       default_credential_id: "cred-1",
       default_model: "gpt-4.1",
     });
+  });
+
+  it("keeps failed credential probe details for inline feedback", async () => {
+    testModelCredential.mockResolvedValueOnce({
+      success: true,
+      data: { ok: false, message: "Invalid API key" },
+    });
+    const { useModelCredentials } = await import("./useModelCredentials");
+    const manager = useModelCredentials();
+    await manager.load();
+
+    const probe = await manager.testCredential("cred-1");
+
+    expect(probe).toEqual({ ok: false, message: "Invalid API key" });
+    expect(manager.testResults.value["cred-1"]).toEqual({
+      ok: false,
+      message: "Invalid API key",
+    });
+    expect(toastError).toHaveBeenCalledWith("Invalid API key");
+  });
+
+  it("keeps request failures for inline feedback", async () => {
+    testModelCredential.mockRejectedValueOnce(new Error("请求超时"));
+    const { useModelCredentials } = await import("./useModelCredentials");
+    const manager = useModelCredentials();
+    await manager.load();
+
+    const probe = await manager.testCredential("cred-1");
+
+    expect(probe).toBeNull();
+    expect(manager.testResults.value["cred-1"]).toEqual({
+      ok: false,
+      message: "请求超时",
+    });
+    expect(toastError).toHaveBeenCalledWith("请求超时");
   });
 });

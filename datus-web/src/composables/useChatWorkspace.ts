@@ -137,6 +137,13 @@ export function useChatWorkspace() {
       ? datasourceOptions.value
       : mergeSelectOptions(grantedDatasourceOptions.value, statusDatasourceOptions.value)
   );
+
+  watch(modelOptions, (options) => {
+    if (!selectedModel.value.startsWith("credential:")) return;
+    if (!options.some(option => option.value === selectedModel.value)) {
+      selectedModel.value = "";
+    }
+  });
   const defaultDatasource = computed(() =>
     config.value?.current_datasource?.trim() ?? availableDatasourceOptions.value[0]?.value ?? ""
   );

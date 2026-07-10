@@ -644,12 +644,15 @@ async def stream_chat(
     )
 
     try:
-        await apply_user_model_credential(
+        applied_credential = await apply_user_model_credential(
             store=getattr(enterprise_extensions, "user_model_credential_store", None),
             user_id=ctx.user_id,
             agent_config=projection.config,
             requested_model=request.model,
+            requested_credential_id=request.model_credential_id,
         )
+        if applied_credential is not None and (request.model_credential_id or not request.model):
+            request.model = f"{applied_credential['provider']}/{applied_credential['model']}"
     except Exception as exc:
         logger.info("User model credential resolution failed: %s", exc)
         return StreamingResponse(
@@ -820,12 +823,15 @@ async def stream_chat_feedback(
         )
 
     try:
-        await apply_user_model_credential(
+        applied_credential = await apply_user_model_credential(
             store=getattr(api_deps.get_enterprise_extensions(), "user_model_credential_store", None),
             user_id=ctx.user_id,
             agent_config=projection.config,
             requested_model=stream_input.model,
+            requested_credential_id=stream_input.model_credential_id,
         )
+        if applied_credential is not None and (stream_input.model_credential_id or not stream_input.model):
+            stream_input.model = f"{applied_credential['provider']}/{applied_credential['model']}"
     except Exception as exc:
         logger.info("User model credential resolution failed: %s", exc)
         return StreamingResponse(

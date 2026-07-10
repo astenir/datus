@@ -145,6 +145,14 @@ class ChatInput(BaseModel):
             "Takes highest priority over all other model config."
         ),
     )
+    model_credential_id: Optional[str] = Field(
+        default=None,
+        max_length=128,
+        description=(
+            "Current user's model credential ID to use for this request. "
+            "When set, the credential's configured provider and model take priority over model."
+        ),
+    )
     plan_mode: bool = Field(False, description="Whether in plan mode")
     source: Optional[str] = Field(None, description="chat source, web/vscode")
     interactive: Optional[bool] = Field(

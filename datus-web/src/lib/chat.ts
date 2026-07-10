@@ -28,6 +28,18 @@ export type ChatStreamRequestInput = {
   permissionMode: string;
 };
 
+const MODEL_CREDENTIAL_VALUE_PREFIX = "credential:";
+
+export function resolveChatModelSelection(value: string) {
+  if (value.startsWith(MODEL_CREDENTIAL_VALUE_PREFIX)) {
+    return {
+      model: null,
+      model_credential_id: value.slice(MODEL_CREDENTIAL_VALUE_PREFIX.length) || null,
+    };
+  }
+  return { model: value || null, model_credential_id: null };
+}
+
 export function buildChatStreamRequest({
   message,
   sessionId,
@@ -40,11 +52,12 @@ export function buildChatStreamRequest({
   planMode,
   permissionMode
 }: ChatStreamRequestInput) {
+  const modelSelection = resolveChatModelSelection(model);
   return {
     message,
     session_id: sessionId || null,
     subagent_id: selectedAgent || null,
-    model: model || null,
+    ...modelSelection,
     datasource: datasource || null,
     database: database || null,
     db_schema: schema || null,

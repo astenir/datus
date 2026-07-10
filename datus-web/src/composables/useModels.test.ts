@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { buildModelOption, resolveModelDisplayName } from "./useModels";
+import { buildModelOption, buildPersonalModelOption, resolveModelDisplayName } from "./useModels";
 import type { ModelInfo } from "@/types";
+import type { ModelCredentialSummary } from "@/types/profile";
 
 describe("buildModelOption", () => {
   it("uses the custom model key as the selected value", () => {
@@ -42,5 +43,24 @@ describe("buildModelOption", () => {
 
   it("keeps the raw current model when the option is missing", () => {
     expect(resolveModelDisplayName("deepseek/deepseek-v4-flash", [])).toBe("deepseek/deepseek-v4-flash");
+  });
+});
+
+describe("buildPersonalModelOption", () => {
+  it("uses the credential ID so duplicate providers stay selectable", () => {
+    const credential: ModelCredentialSummary = {
+      id: "cred-1",
+      provider: "openai",
+      model: "gpt-4.1",
+      ref_hint: "***cret",
+      display_name: "工作账号",
+      enabled: true,
+    };
+
+    expect(buildPersonalModelOption(credential)).toEqual({
+      value: "credential:cred-1",
+      label: "工作账号 / gpt-4.1",
+      group: "我的模型",
+    });
   });
 });
