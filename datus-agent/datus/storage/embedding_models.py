@@ -66,6 +66,7 @@ class EmbeddingModel:
         registry_name: str = EmbeddingProvider.SENTENCE_TRANSFORMERS,
         openai_config: Optional["ModelConfig"] = None,
         batch_size: int = 64,
+        single_input_only: bool = False,
     ):
         self.registry_name = registry_name
         self.model_name = model_name
@@ -73,6 +74,7 @@ class EmbeddingModel:
         self.device = EMBEDDING_DEVICE_TYPE
         self._model = None
         self.batch_size = batch_size
+        self.single_input_only = single_input_only
         self.openai_config = openai_config
         self.lock = Lock()
 
@@ -91,6 +93,7 @@ class EmbeddingModel:
         new.device = self.device
         new._model = self._model  # share the heavy model object
         new.batch_size = self.batch_size
+        new.single_input_only = self.single_input_only
         new.openai_config = copy.deepcopy(self.openai_config, memo)
         new.lock = Lock()
         new.is_model_failed = self.is_model_failed
@@ -241,9 +244,14 @@ class EmbeddingModel:
                     dim=self._dim_size,
                     api_key=self.openai_config.api_key,
                     base_url=self.openai_config.base_url,
+                    single_input_only=self.single_input_only,
                 )
             else:
-                self._model = OpenAIEmbeddings.create(name=self.model_name, dim=self._dim_size)
+                self._model = OpenAIEmbeddings.create(
+                    name=self.model_name,
+                    dim=self._dim_size,
+                    single_input_only=self.single_input_only,
+                )
             # check if the model is initialized
             self._model.generate_embeddings(["foo"])
             logger.debug(f"Model {self.registry_name}/{self.model_name} initialized successfully")
@@ -299,6 +307,7 @@ def init_embedding_models(
                 dim_size=config["dim_size"],
                 registry_name=config.get("registry_name", EmbeddingProvider.SENTENCE_TRANSFORMERS),
                 batch_size=config.get("batch_size", 32),
+                single_input_only=config.get("single_input_only", False),
                 openai_config=target_openai_config,
             )
             models[config["model_name"]] = target_model

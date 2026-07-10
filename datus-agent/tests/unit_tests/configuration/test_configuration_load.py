@@ -145,8 +145,16 @@ def test_init_embedding_models_returns_current_storage_models():
         default_model = ModelConfig(type="openai", api_key="mock-api-key", model="mock-model")
         storage_models = init_embedding_models(
             {
-                "database": {"model_name": "shared-embedding", "dim_size": 384},
-                "document": {"model_name": "shared-embedding", "dim_size": 384},
+                "database": {
+                    "model_name": "shared-embedding",
+                    "dim_size": 384,
+                    "single_input_only": True,
+                },
+                "document": {
+                    "model_name": "shared-embedding",
+                    "dim_size": 384,
+                    "single_input_only": True,
+                },
                 "base_path": "data",
                 "embedding_device_type": "cpu",
             },
@@ -158,6 +166,7 @@ def test_init_embedding_models_returns_current_storage_models():
         assert storage_models["database"] is storage_models["document"]
         assert EMBEDDING_MODELS["database"] is storage_models["database"]
         assert EMBEDDING_MODELS["document"] is storage_models["document"]
+        assert storage_models["database"].single_input_only is True
     finally:
         EMBEDDING_MODELS.clear()
         EMBEDDING_MODELS.update(original_models)

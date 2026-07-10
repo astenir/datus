@@ -34,6 +34,7 @@ class OpenAIEmbeddings(BaseModel, EmbeddingFunction):
     default_headers: Optional[dict] = None
     organization: Optional[str] = None
     api_key: Optional[str] = None
+    single_input_only: bool = False
 
     # Set true to use Azure OpenAI API
     use_azure: bool = False
@@ -96,17 +97,29 @@ class OpenAIEmbeddings(BaseModel, EmbeddingFunction):
                 valid_texts.append(text)
                 valid_indices.append(idx)
 
+        if not valid_texts:
+            return [None] * len(texts)
+
         try:
             kwargs = {
-                "input": valid_texts,
                 "model": self.name,
             }
             if self.name != "text-embedding-ada-002" and self.dim is not None:
                 kwargs["dimensions"] = self.dim
 
             logger.debug(f"Calling OpenAI API: model={self.name}, text_count={len(valid_texts)}")
-            rs = self._openai_client.embeddings.create(**kwargs)
-            valid_embeddings = {idx: v.embedding for v, idx in zip(rs.data, valid_indices)}
+            if self.single_input_only:
+                valid_embeddings = {}
+                for text, idx in zip(valid_texts, valid_indices):
+                    try:
+                        rs = self._openai_client.embeddings.create(input=text, **kwargs)
+                        if rs.data:
+                            valid_embeddings[idx] = rs.data[0].embedding
+                    except BadRequestError:
+                        logger.error(f"Bad request when generating embedding: model={self.name}, input_index={idx}")
+            else:
+                rs = self._openai_client.embeddings.create(input=valid_texts, **kwargs)
+                valid_embeddings = {idx: v.embedding for v, idx in zip(rs.data, valid_indices)}
             logger.debug(f"Successfully generated embeddings for {len(valid_embeddings)} texts")
         except BadRequestError:
             logger.error(f"Bad request when generating embeddings: model={self.name}, text_count={len(texts)}")
