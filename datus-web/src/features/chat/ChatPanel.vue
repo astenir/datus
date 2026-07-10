@@ -40,6 +40,7 @@ import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import type { ArtifactViewTab } from "@/features/workspace/types"
 import type { SelectOption } from "@/types"
 import ActiveInteractionDock from "@/features/chat/ActiveInteractionDock.vue"
+import ChatActivityStatus from "@/features/chat/ChatActivityStatus.vue"
 import ChatContextPicker from "@/features/chat/ChatContextPicker.vue"
 
 const props = defineProps<{
@@ -257,6 +258,11 @@ async function openArtifact(kind: string, slug: string) {
           :database-name="workspace.database.value"
           @submit-interaction="submitInteraction"
           @open-artifact="openArtifact"
+        />
+        <ChatActivityStatus
+          v-if="workspace.isStreaming.value"
+          :activity="workspace.streamActivity.value"
+          @stop="workspace.stopSession"
         />
       </ConversationContent>
       <ConversationScrollButton />

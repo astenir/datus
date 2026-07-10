@@ -16,7 +16,14 @@ import {
   normalizeBaseUrl,
 } from "@/lib/chat";
 import { request } from "@/lib/request";
-import type { ChatMessage, ChatSessionOption, ParsedMessage } from "@/types";
+import {
+  chatStreamActivityAfterEvent,
+  connectedChatStreamActivity,
+  continuingChatStreamActivity,
+  idleChatStreamActivity,
+  startedChatStreamActivity,
+} from "@/lib/chat-activity";
+import type { ChatMessage, ChatSessionOption, ParsedMessage, SseEvent } from "@/types";
 import { useConnection } from "./useConnection";
 import { useChatSettings } from "./useChatSettings";
 
@@ -26,6 +33,7 @@ const messages = shallowRef<ChatMessage[]>([]);
 const sessions = shallowRef<ChatSessionOption[]>([]);
 const selectedSession = shallowRef<string | null>(null);
 const isStreaming = shallowRef(false);
+const streamActivity = shallowRef(idleChatStreamActivity());
 const isLoadingSessions = shallowRef(false);
 const submittedInteractionKeys = shallowRef<ReadonlySet<string>>(new Set());
 const abortRef = { current: null as AbortController | null };
@@ -54,6 +62,13 @@ function applyIncomingMessages(incomingMessages: ParsedMessage[]) {
     nextMessages = mergeMessage(nextMessages, incoming);
   }
   messages.value = nextMessages;
+}
+
+function applyStreamEvent(event: SseEvent): ParsedMessage | null {
+  captureSessionId(event);
+  const incoming = messageFromEvent(event);
+  streamActivity.value = chatStreamActivityAfterEvent(streamActivity.value, event, incoming);
+  return incoming;
 }
 
 /** Try to extract session_id from an SSE event, checking all known locations. */
@@ -105,6 +120,7 @@ function selectSession(sessionId: string | null) {
     abortRef.current = null;
   }
   isStreaming.value = false;
+  streamActivity.value = idleChatStreamActivity();
   submittedInteractionKeys.value = new Set();
 
   // Cache current messages for the outgoing session
@@ -162,6 +178,7 @@ async function sendMessage(opts: {
   const controller = new AbortController();
   abortRef.current = controller;
   isStreaming.value = true;
+  streamActivity.value = startedChatStreamActivity();
 
   try {
     const url = `${normalizeBaseUrl(base)}/api/v1/chat/stream`;
@@ -171,6 +188,7 @@ async function sendMessage(opts: {
       body: JSON.stringify(body),
       signal: controller.signal,
     });
+    streamActivity.value = connectedChatStreamActivity(streamActivity.value);
 
     const reader = response.body?.getReader();
     if (!reader) throw new Error("No response body");
@@ -188,10 +206,7 @@ async function sendMessage(opts: {
 
       const incomingMessages: ParsedMessage[] = [];
       for (const event of parsed.events) {
-        // Capture session ID from ALL events, before type filtering
-        captureSessionId(event);
-
-        const incoming = messageFromEvent(event);
+        const incoming = applyStreamEvent(event);
         if (!incoming) continue;
         incomingMessages.push(incoming);
       }
@@ -202,8 +217,7 @@ async function sendMessage(opts: {
       const parsed = parseSseBuffer(buffer, { flush: true });
       const incomingMessages: ParsedMessage[] = [];
       for (const event of parsed.events) {
-        captureSessionId(event);
-        const incoming = messageFromEvent(event);
+        const incoming = applyStreamEvent(event);
         if (incoming) incomingMessages.push(incoming);
       }
       applyIncomingMessages(incomingMessages);
@@ -221,6 +235,7 @@ async function sendMessage(opts: {
     }
   } finally {
     isStreaming.value = false;
+    streamActivity.value = idleChatStreamActivity();
     abortRef.current = null;
     // Update cache with latest messages
     if (selectedSession.value) {
@@ -232,6 +247,9 @@ async function sendMessage(opts: {
 
 async function stopSession() {
   const base = effectiveBase();
+  if (isStreaming.value) {
+    streamActivity.value = { ...streamActivity.value, phase: "stopping" };
+  }
   if (abortRef.current) {
     abortRef.current.abort();
     abortRef.current = null;
@@ -244,6 +262,7 @@ async function stopSession() {
     }
   }
   isStreaming.value = false;
+  streamActivity.value = idleChatStreamActivity();
   submittedInteractionKeys.value = new Set();
 }
 
@@ -290,6 +309,7 @@ async function resumeSession(sessionId?: string) {
   const controller = new AbortController();
   abortRef.current = controller;
   isStreaming.value = true;
+  streamActivity.value = startedChatStreamActivity();
   try {
     const url = `${normalizeBaseUrl(base)}/api/v1/chat/resume`;
     const response = await request(url, {
@@ -298,13 +318,13 @@ async function resumeSession(sessionId?: string) {
       body: JSON.stringify({ session_id: targetSession }),
       signal: controller.signal,
     });
+    streamActivity.value = connectedChatStreamActivity(streamActivity.value);
     const pendingMessages: ParsedMessage[] = [];
     const flushPendingMessages = () => {
       applyIncomingMessages(pendingMessages.splice(0));
     };
     const tail = await consumeSseStream(response, (event) => {
-      captureSessionId(event);
-      const incoming = messageFromEvent(event);
+      const incoming = applyStreamEvent(event);
       if (incoming) pendingMessages.push(incoming);
       flushPendingMessages();
     });
@@ -312,8 +332,7 @@ async function resumeSession(sessionId?: string) {
       const parsed = parseSseBuffer(tail, { flush: true });
       const incomingMessages: ParsedMessage[] = [];
       for (const event of parsed.events) {
-        captureSessionId(event);
-        const incoming = messageFromEvent(event);
+        const incoming = applyStreamEvent(event);
         if (incoming) incomingMessages.push(incoming);
       }
       applyIncomingMessages(incomingMessages);
@@ -324,6 +343,7 @@ async function resumeSession(sessionId?: string) {
     }
   } finally {
     isStreaming.value = false;
+    streamActivity.value = idleChatStreamActivity();
     abortRef.current = null;
     if (selectedSession.value) {
       cacheSet(selectedSession.value, messages.value);
@@ -375,6 +395,7 @@ async function sendInteraction(interactionKey: string, answers: string | string[
   try {
     const result = await chatApi.userInteraction(base, buildUserInteractionInput(sessionId, interactionKey, answers));
     if (!result) throw new Error("后端未接受本次交互提交");
+    streamActivity.value = continuingChatStreamActivity(streamActivity.value);
   } catch (error) {
     const next = new Set(submittedInteractionKeys.value);
     next.delete(interactionKey);
@@ -388,6 +409,7 @@ function clearMessages() {
   messages.value = [];
   selectedSession.value = null;
   submittedInteractionKeys.value = new Set();
+  streamActivity.value = idleChatStreamActivity();
   messageCache.clear();
 }
 
@@ -397,6 +419,7 @@ function dispose() {
     abortRef.current = null;
   }
   isStreaming.value = false;
+  streamActivity.value = idleChatStreamActivity();
   submittedInteractionKeys.value = new Set();
 }
 
@@ -406,6 +429,7 @@ export function useChatState() {
     sessions: readonly(sessions),
     selectedSession: readonly(selectedSession),
     isStreaming: readonly(isStreaming),
+    streamActivity: readonly(streamActivity),
     isLoadingSessions: readonly(isLoadingSessions),
     activeInteractionKey: readonly(activeInteractionKey),
     loadSessions,

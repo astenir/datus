@@ -11,6 +11,24 @@ export type ChatMessage = {
   parentActionId?: string;
 };
 
+export type ChatStreamPhase =
+  | "idle"
+  | "submitting"
+  | "connected"
+  | "responding"
+  | "running_tool"
+  | "awaiting_user"
+  | "stopping";
+
+export type ChatStreamActivity = {
+  phase: ChatStreamPhase;
+  startedAt: number | null;
+  connectedAt: number | null;
+  lastEventAt: number | null;
+  lastContentAt: number | null;
+  activeOperation?: string;
+};
+
 export type MessageOperation = "createMessage" | "appendMessage" | "updateMessage";
 
 export type ToolChildMessage = Omit<ChatMessage, "blocks"> & {
