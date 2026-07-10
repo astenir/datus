@@ -294,13 +294,13 @@ onMounted(() => {
               <AlertDescription>{{ manager.error.value }}</AlertDescription>
             </Alert>
 
-            <ScrollArea class="min-h-0 flex-1 rounded-lg border">
-              <Table>
+            <ScrollArea class="min-h-0 flex-1 rounded-lg border [&_[data-slot=table-container]]:overflow-x-hidden">
+              <Table class="table-fixed">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Agent</TableHead>
-                    <TableHead>状态</TableHead>
-                    <TableHead class="w-12 text-right">操作</TableHead>
+                    <TableHead class="w-28">状态</TableHead>
+                    <TableHead class="w-16 text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -310,20 +310,22 @@ onMounted(() => {
                     class="cursor-pointer"
                     @click="selectAgent(agent)"
                   >
-                    <TableCell>
+                    <TableCell class="min-w-0 overflow-hidden whitespace-normal">
                       <div class="flex min-w-0 flex-col gap-1">
                         <div class="flex min-w-0 items-center gap-2 font-medium">
                           <span class="truncate">{{ agent.name }}</span>
                         </div>
-                        <div class="flex min-w-0 flex-wrap items-center gap-1.5">
-                          <Badge variant="secondary">{{ agent.node_class || "gen_sql" }}</Badge>
-                          <Badge
-                            v-if="agent.source === 'builtin'"
-                            variant="outline"
-                          >
-                            系统内置
-                          </Badge>
-                          <span class="min-w-0 truncate text-xs text-muted-foreground">{{ systemPromptSummary(agent) }}</span>
+                        <div class="flex min-w-0 flex-col gap-1.5">
+                          <div class="flex min-w-0 flex-wrap items-center gap-1.5">
+                            <Badge variant="secondary">{{ agent.node_class || "gen_sql" }}</Badge>
+                            <Badge
+                              v-if="agent.source === 'builtin'"
+                              variant="outline"
+                            >
+                              系统内置
+                            </Badge>
+                          </div>
+                          <span class="block min-w-0 truncate text-xs text-muted-foreground">{{ systemPromptSummary(agent) }}</span>
                         </div>
                       </div>
                     </TableCell>
