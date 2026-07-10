@@ -117,8 +117,10 @@ describe("useCatalog", () => {
     catalog.setSchema("public");
 
     catalog.selectCatalogDatasource("demo");
-    expect(catalog.catalogEntries.value).toEqual([{ name: "fund", schema_name: "public", tables: [] }]);
-    expect(catalog.database.value).toBe("fund");
+    expect(catalog.catalogEntries.value).toEqual([]);
+    expect(catalog.databaseOptions.value).toEqual([]);
+    expect(catalog.database.value).toBe("");
+    expect(catalog.schema.value).toBe("");
 
     await catalog.loadCatalog(undefined, "demo");
     expect(catalog.database.value).toBe("");

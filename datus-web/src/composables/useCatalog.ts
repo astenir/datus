@@ -56,11 +56,19 @@ function saveActiveSnapshot() {
 
 function restoreSnapshot(datasourceId?: string) {
   const snapshot = catalogSnapshots.value[snapshotKey(datasourceId)];
-  if (!snapshot) return;
+  if (!snapshot) return false;
   catalogEntries.value = [...snapshot.entries];
   databaseOptions.value = [...snapshot.databaseOptions];
   database.value = snapshot.database;
   schema.value = snapshot.schema;
+  return true;
+}
+
+function clearActiveCatalog() {
+  catalogEntries.value = [];
+  databaseOptions.value = [];
+  database.value = "";
+  schema.value = "";
 }
 
 function selectCatalogDatasource(datasourceId?: string) {
@@ -68,7 +76,9 @@ function selectCatalogDatasource(datasourceId?: string) {
   if (activeDatasource.value === datasource) return;
   saveActiveSnapshot();
   activeDatasource.value = datasource;
-  restoreSnapshot(datasource);
+  if (!restoreSnapshot(datasource)) {
+    clearActiveCatalog();
+  }
 }
 
 function hasCatalogSnapshot(datasourceId?: string) {
