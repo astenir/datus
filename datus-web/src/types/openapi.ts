@@ -2326,6 +2326,8 @@ export interface components {
 
             name: string;
 
+            display_name?: string | null;
+
             type?: string | null;
 
             is_default: boolean;

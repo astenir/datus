@@ -5,6 +5,7 @@ import { useConnection } from "@/composables/useConnection";
 import { usePermission } from "@/composables/usePermission";
 import { adminArtifactApi, adminDatasourceApi, agentApi, mcpApi } from "@/lib/api";
 import { ApiResultError } from "@/lib/chat";
+import { adminDatasourceLabel } from "@/lib/datasource-display";
 import type {
   AgentDetail,
   AgentInfo,
@@ -217,9 +218,10 @@ function normalizeAgentList(result: AgentInfo[] | null): AgentInfo[] {
 }
 
 function datasourceOption(datasource: AdminDatasource): AgentSelectOption {
+  const label = adminDatasourceLabel(datasource);
   return {
     value: datasource.name,
-    label: datasource.is_default ? `${datasource.name}（默认）` : datasource.name,
+    label: datasource.is_default ? `${label}（默认）` : label,
     description: datasource.type ?? undefined,
   };
 }
@@ -344,7 +346,9 @@ export function useAgentManager() {
   const selectedMcpNames = computed(() => new Set(parseListText(form.value.mcpText) ?? []));
   const datasourceOptions = computed(() =>
     withSelectedFallbackOptions(
-      datasources.value.map(datasourceOption).sort(optionSort),
+      [...datasources.value]
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .map(datasourceOption),
       form.value.datasourceId ? [form.value.datasourceId] : [],
     )
   );

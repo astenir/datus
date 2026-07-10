@@ -15,6 +15,7 @@ DATASOURCE_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 DATASOURCE_TYPE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 HOST_RE = re.compile(r"^[A-Za-z0-9_.:-]+$")
 NAME_RE = re.compile(r"^[A-Za-z0-9_.:@/ -]+$")
+CONTROL_CHARACTER_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 MAX_DISPLAY_NAME_LENGTH = 120
 MAX_FIELD_LENGTH = 255
@@ -88,6 +89,19 @@ def normalize_optional_text(value: str | None, *, label: str) -> str | None:
     return text
 
 
+def normalize_display_name(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if len(text) > MAX_DISPLAY_NAME_LENGTH:
+        raise DatusException(ErrorCode.COMMON_FIELD_INVALID, message="Display name is too long.")
+    if CONTROL_CHARACTER_RE.search(text):
+        raise DatusException(ErrorCode.COMMON_FIELD_INVALID, message="Display name contains unsupported characters.")
+    return text
+
+
 def normalize_password(value: str) -> str:
     password = value.strip()
     if not password:
@@ -143,6 +157,7 @@ def datasource_record_to_db_config(record: dict[str, Any]) -> DbConfig:
             "database": str(record["database"]),
             "schema": str(record.get("schema") or ""),
             "catalog": str(record.get("catalog") or ""),
+            "display_name": str(record.get("display_name") or ""),
             "extra": {"owner": "user"},
         },
     )

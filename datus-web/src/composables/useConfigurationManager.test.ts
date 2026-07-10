@@ -47,6 +47,7 @@ const agentConfig = {
   datasources: {
     fund: {
       type: "postgres",
+      display_name: "分析库",
       host: "db.internal",
       password: "********",
       account: "",

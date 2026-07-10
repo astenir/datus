@@ -111,6 +111,27 @@ class TestResolveEnv:
         assert cfg.extra["iceberg"]["regions"] == ["us-east-1"]
         assert cfg.extra["iceberg"]["tuple_value"] == ("us-east-1",)
 
+    def test_file_db_preserves_full_config_fields(self, tmp_path):
+        sqlite_path = tmp_path / "california_schools.sqlite"
+        sqlite_path.touch()
+
+        cfg = _parse_single_file_db(
+            {
+                "type": "sqlite",
+                "display_name": "加州学校",
+                "path_pattern": "",
+                "uri": f"sqlite:///{sqlite_path}",
+                "database": "california_schools",
+                "enumerate_databases": False,
+                "extra": None,
+            },
+            "sqlite",
+        )
+
+        assert cfg.display_name == "加州学校"
+        assert cfg.database == "california_schools"
+        assert cfg.extra is None
+
 
 # ---------------------------------------------------------------------------
 # file_stem_from_uri
@@ -145,9 +166,15 @@ class TestFileStemFromUri:
 
 class TestDbConfigFilterKwargs:
     def test_valid_fields_mapped(self):
-        kwargs = {"type": "sqlite", "uri": "sqlite:///test.db", "database": "test"}
+        kwargs = {
+            "type": "sqlite",
+            "uri": "sqlite:///test.db",
+            "database": "test",
+            "display_name": "本地分析库",
+        }
         cfg = DbConfig.filter_kwargs(DbConfig, kwargs)
         assert cfg.type == "sqlite"
+        assert cfg.display_name == "本地分析库"
         assert "test.db" in cfg.uri
 
     def test_unknown_fields_go_to_extra(self):
@@ -198,6 +225,25 @@ class TestDbConfigFilterKwargs:
         cfg = DbConfig.filter_kwargs(DbConfig, kwargs)
         assert cfg.extra["new_custom"] == "new_val"
         assert cfg.extra["another_key"] == "another_val"
+
+    def test_structured_extra_remains_a_mapping(self, monkeypatch):
+        monkeypatch.setenv("DB_SSLMODE", "prefer")
+        cfg = DbConfig.filter_kwargs(
+            DbConfig,
+            {
+                "type": "postgresql",
+                "extra": {
+                    "sslmode": "${DB_SSLMODE}",
+                    "timeout_seconds": 30,
+                },
+            },
+        )
+
+        assert cfg.extra == {"sslmode": "prefer", "timeout_seconds": 30}
+
+    def test_extra_rejects_string_values(self):
+        with pytest.raises(DatusException, match="Datasource extra must be a mapping"):
+            DbConfig.filter_kwargs(DbConfig, {"type": "postgresql", "extra": "sslmode=prefer"})
 
     def test_none_values_ignored_for_extra(self):
         kwargs = {"type": "sqlite", "uri": "x.db", "some_none_field": None}
@@ -695,6 +741,49 @@ class TestAgentConfigServiceSelectors:
             agentic_nodes=agentic_nodes or {},
             skip_init_dirs=True,
         )
+
+    def test_empty_file_path_pattern_falls_back_to_uri(self, tmp_path):
+        sqlite_path = tmp_path / "california_schools.sqlite"
+        sqlite_path.touch()
+
+        cfg = self._make(
+            tmp_path,
+            services={
+                "datasources": {
+                    "california_schools": {
+                        "type": "sqlite",
+                        "path_pattern": "",
+                        "uri": f"sqlite:///{sqlite_path}",
+                        "display_name": "加州学校",
+                    }
+                }
+            },
+        )
+
+        datasource = cfg.services.datasources["california_schools"]
+        assert datasource.uri == f"sqlite:///{sqlite_path}"
+        assert datasource.database == "california_schools"
+
+    def test_non_empty_file_path_pattern_takes_precedence_over_uri(self, tmp_path):
+        glob_path = tmp_path / "*.sqlite"
+        (tmp_path / "school_a.sqlite").touch()
+
+        cfg = self._make(
+            tmp_path,
+            services={
+                "datasources": {
+                    "schools": {
+                        "type": "sqlite",
+                        "path_pattern": str(glob_path),
+                        "uri": "sqlite:///ignored.sqlite",
+                    }
+                }
+            },
+        )
+
+        datasource = cfg.services.datasources["schools"]
+        assert datasource.path_pattern == str(glob_path)
+        assert datasource.uri == ""
 
     def test_resolve_semantic_adapter_returns_explicit_configured_adapter(self, tmp_path):
         cfg = self._make(

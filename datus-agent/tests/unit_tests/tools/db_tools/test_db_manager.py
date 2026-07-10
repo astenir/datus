@@ -413,6 +413,22 @@ class TestDBManager:
         assert result.memory_limit == "2GB"
         assert result.iceberg == cfg.extra["iceberg"]
 
+    def test_adapter_config_excludes_datasource_display_name(self):
+        mgr = DBManager({})
+        cfg = _cfg(
+            type="postgresql",
+            display_name="基金数据库",
+            host="127.0.0.1",
+            database="ccks_fund",
+            extra={"sslmode": "prefer", "timeout_seconds": 30},
+        )
+
+        result = mgr._db_config_to_connection_config(cfg)
+
+        assert "display_name" not in result
+        assert result["sslmode"] == "prefer"
+        assert result["timeout_seconds"] == 30
+
     def test_sqlite_config_includes_read_only_extra_option(self):
         mgr = DBManager({})
         cfg = _cfg(type="sqlite", uri="sqlite:///test.db", extra={"read_only": "true"})

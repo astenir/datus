@@ -137,7 +137,7 @@ function modelProbeFromTarget(target: string): ModelProbeInput {
 }
 
 function shouldIncludeProbeField(key: string, value: unknown): boolean {
-  if (key === "extra") return false;
+  if (key === "display_name" || key === "extra") return false;
   if (value == null) return false;
   if (typeof value !== "string") return true;
   return value.trim() !== "" || key === "password";

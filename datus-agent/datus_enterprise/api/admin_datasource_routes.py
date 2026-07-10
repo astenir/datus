@@ -41,6 +41,7 @@ class AdminDatasourceSummary(BaseModel):
     """Sanitized datasource summary for admin selection UIs."""
 
     name: str
+    display_name: str | None = None
     type: str | None = None
     is_default: bool = False
 
@@ -82,6 +83,7 @@ async def list_admin_datasources_endpoint(
     items = [
         AdminDatasourceSummary(
             name=name,
+            display_name=_datasource_display_name(config),
             type=_datasource_type(config),
             is_default=name == default_datasource,
         )
@@ -619,6 +621,15 @@ def _datasource_type(config) -> str | None:
     else:
         value = getattr(config, "type", None)
     return str(value) if value is not None else None
+
+
+def _datasource_display_name(config) -> str | None:
+    if isinstance(config, dict):
+        value = config.get("display_name")
+    else:
+        value = getattr(config, "display_name", None)
+    text = str(value).strip() if value is not None else ""
+    return text or None
 
 
 async def _validate_existing_grant_subject(

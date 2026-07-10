@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog"
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
+import { adminDatasourceLabel } from "@/lib/datasource-display"
 import {
   Select,
   SelectContent,
@@ -81,7 +82,7 @@ const grantSubjectOptions = computed(() => {
 const grantDatasourceOptions = computed(() => {
   const options = props.overview.data.value.datasources.map((datasource) => ({
     value: datasource.name,
-    label: datasource.name,
+    label: adminDatasourceLabel(datasource),
   }))
   const currentDatasourceKey = props.overview.grantForm.value.datasource_key.trim()
   if (currentDatasourceKey && !options.some((option) => option.value === currentDatasourceKey)) {

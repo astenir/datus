@@ -37,6 +37,7 @@ import { useConfigurationManager } from "@/composables/useConfigurationManager"
 import { usePermission } from "@/composables/usePermission"
 import { useSystemStatus } from "@/composables/useSystemStatus"
 import type { NormalizedProbeResult } from "@/types"
+import { datasourceDisplayName, datasourceLabel } from "@/lib/datasource-display"
 
 const props = withDefaults(defineProps<{
   canEdit?: boolean
@@ -49,7 +50,10 @@ const permission = usePermission()
 const systemStatus = useSystemStatus()
 
 const canViewSystemStatus = computed(() => permission.hasPermission("module.system.status"))
-const currentDatasource = computed(() => manager.config.value?.current_datasource?.trim() || "未选择")
+const currentDatasource = computed(() => {
+  const name = manager.config.value?.current_datasource?.trim()
+  return name ? datasourceLabel(name, manager.config.value?.datasources?.[name]) : "未选择"
+})
 const configHome = computed(() => manager.config.value?.home?.trim() || "-")
 const modelsSource = computed(() => manager.modelsData.value?.source || "-")
 const modelsFetchedAt = computed(() => formatOptionalDate(manager.modelsData.value?.fetched_at))
@@ -363,7 +367,15 @@ onMounted(() => {
                         v-for="[name, datasource] in manager.configuredDatasourceEntries.value"
                         :key="name"
                       >
-                        <TableCell class="font-medium">{{ name }}</TableCell>
+                        <TableCell>
+                          <div class="font-medium">{{ datasourceDisplayName(datasource) || name }}</div>
+                          <div
+                            v-if="datasourceDisplayName(datasource)"
+                            class="text-xs text-muted-foreground"
+                          >
+                            {{ name }}
+                          </div>
+                        </TableCell>
                         <TableCell>{{ fieldText(datasource, "type") }}</TableCell>
                         <TableCell>{{ formatDatasourceHost(datasource) }}</TableCell>
                       </TableRow>
@@ -427,11 +439,11 @@ onMounted(() => {
                       <SelectContent>
                         <SelectGroup>
                           <SelectItem
-                            v-for="[name] in manager.configuredDatasourceEntries.value"
+                            v-for="[name, datasource] in manager.configuredDatasourceEntries.value"
                             :key="name"
                             :value="name"
                           >
-                            {{ name }}
+                            {{ datasourceLabel(name, datasource) }}
                           </SelectItem>
                         </SelectGroup>
                       </SelectContent>

@@ -55,6 +55,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { selectedOptionLabel } from "@/lib/datasource-display"
 import {
   Sidebar,
   SidebarContent,
@@ -140,13 +141,15 @@ const historySessionActionClass = "rounded-md opacity-0 group-focus-within/menu-
 const userLabel = computed(() => props.auth.user?.realname || props.auth.user?.username || FALLBACK_USER_LABEL)
 const userFallback = computed(() => userLabel.value.slice(0, 1).toUpperCase())
 const currentDatasourceName = computed(() => props.workspace.currentDatasource.value.trim())
-const currentDatasourceLabel = computed(() => currentDatasourceName.value || "当前数据源未选择")
+const datasourceOptions = computed(() => props.workspace.visibleDatasourceOptions.value)
+const currentDatasourceLabel = computed(() =>
+  selectedOptionLabel(currentDatasourceName.value, datasourceOptions.value) || "当前数据源未选择"
+)
 const userMeta = computed(() => props.auth.user?.department || props.auth.user?.title || currentDatasourceLabel.value)
 const userRoleLabel = computed(() => props.viewAccess.canViewPermissions ? "管理员" : "成员")
 const userStatusLabel = computed(() => props.auth.user?.userStatus || "已登录")
 const datasourceTestOk = shallowRef<boolean | null>(null)
 const datasourceTestMessage = shallowRef("")
-const datasourceOptions = computed(() => props.workspace.visibleDatasourceOptions.value)
 const currentDatasourceStatus = computed(() => props.workspace.currentDatasourceStatus.value)
 const hasDatasourceOptions = computed(() => datasourceOptions.value.length > 0)
 const canTestDatasource = computed(() => Boolean(currentDatasourceName.value) && !props.workspace.isTestingDatasource.value)

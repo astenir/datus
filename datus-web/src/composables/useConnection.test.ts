@@ -38,6 +38,7 @@ describe("useConnection", () => {
       datasources: {
         fund: {
           type: "postgres",
+          display_name: "基金分析库",
           host: "db.internal",
           account: "",
           extra: { sslmode: "require", timeout_seconds: 10 },
@@ -66,7 +67,7 @@ describe("useConnection", () => {
     const result = await connection.testDatasource();
 
     expect(connection.datasourceOptions.value).toEqual([
-      { value: "fund", label: "fund" },
+      { value: "fund", label: "基金分析库 (fund)" },
       { value: "demo", label: "demo" },
     ]);
     expect(result).toEqual({ ok: true, message: "SELECT 1 执行成功" });

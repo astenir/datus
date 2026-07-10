@@ -32,7 +32,7 @@ def _svc(datasource=None):
         services=SimpleNamespace(
             default_datasource="db_a",
             datasources={
-                "db_a": SimpleNamespace(type="sqlite", password="secret-a"),
+                "db_a": SimpleNamespace(type="sqlite", display_name="分析库", password="secret-a"),
                 "db_b": {"type": "duckdb", "password": "secret-b"},
             },
         ),
@@ -109,8 +109,8 @@ def test_list_admin_datasources_returns_sanitized_summaries_and_audits(monkeypat
     body = response.json()
     assert body["success"] is True
     assert body["data"] == [
-        {"name": "db_a", "type": "sqlite", "is_default": False},
-        {"name": "db_b", "type": "duckdb", "is_default": True},
+        {"name": "db_a", "display_name": "分析库", "type": "sqlite", "is_default": False},
+        {"name": "db_b", "display_name": None, "type": "duckdb", "is_default": True},
     ]
     assert "secret" not in response.text
     event = audit_sink.events[-1]

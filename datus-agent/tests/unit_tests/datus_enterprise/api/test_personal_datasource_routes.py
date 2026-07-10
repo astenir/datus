@@ -100,7 +100,7 @@ def test_personal_datasources_crud_redacts_password(monkeypatch):
                 "password": "alice-db-secret",
                 "database": "finance",
                 "schema_name": "public",
-                "display_name": "Finance dev",
+                "display_name": "个人分析库",
             },
         )
         datasource_id = create_response.json()["data"]["id"]
@@ -111,6 +111,7 @@ def test_personal_datasources_crud_redacts_password(monkeypatch):
     assert providers_response.json()["data"]["allowed_types"] == ["mysql", "postgresql"]
     assert create_response.status_code == 200
     assert create_response.json()["data"]["datasource_key"] == personal_datasource_key(datasource_id)
+    assert create_response.json()["data"]["display_name"] == "个人分析库"
     assert create_response.json()["data"]["password_hint"] == "***cret"
     assert "alice-db-secret" not in create_response.text
     assert "alice-db-secret" not in list_response.text

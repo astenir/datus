@@ -216,6 +216,7 @@ class CompactConfig:
 
 @dataclass
 class DbConfig:
+    display_name: str = field(default="", init=True)
     path_pattern: str = field(default="", init=True)
     type: str = field(default="", init=True)
     uri: str = field(default="", init=True)
@@ -254,6 +255,17 @@ class DbConfig:
                 continue
             if k == "enumerate_databases":
                 params[k] = _coerce_bool(v, False)
+                continue
+            if k == "extra":
+                if v in (None, ""):
+                    params[k] = None
+                    continue
+                if not isinstance(v, Mapping):
+                    raise DatusException(
+                        ErrorCode.COMMON_FIELD_INVALID,
+                        message="Datasource extra must be a mapping.",
+                    )
+                params[k] = _resolve_nested_value(dict(v))
                 continue
             if not v:
                 params[k] = v
@@ -764,27 +776,12 @@ DEFAULT_REFLECTION_NODES = {
 
 def _parse_single_file_db(db_config: Dict[str, Any], dialect: str) -> DbConfig:
     uri = resolve_env(str(db_config["uri"]))
-    known_fields = {"uri", "name", "type", "schema", "default"}
-    extra = {
-        key: _resolve_nested_value(value)
-        for key, value in db_config.items()
-        if key not in known_fields and value is not None and value != ""
-    }
-    if "name" in db_config:
-        login_name = db_config["name"]
-        db_name = file_stem_from_uri(uri)
-    else:
-        login_name = file_stem_from_uri(uri)
-        db_name = login_name
     if not uri.startswith(dialect):
         uri = f"{dialect}:///{os.path.expanduser(uri)}"
-    return DbConfig(
-        type=dialect,
-        uri=uri,
-        database=db_name,
-        schema=db_config.get("schema", ""),
-        extra=extra or None,
-    )
+    normalized = dict(db_config)
+    normalized["type"] = dialect
+    normalized["uri"] = uri
+    return DbConfig.filter_kwargs(DbConfig, normalized)
 
 
 @dataclass
@@ -1253,12 +1250,13 @@ class AgentConfig:
             is_default = db_config_dict.get("default", False)
 
             if db_type in (DBType.SQLITE, DBType.DUCKDB):
-                if "path_pattern" in db_config_dict:
-                    path_pattern = resolve_env(str(db_config_dict["path_pattern"]))
+                path_pattern = resolve_env(str(db_config_dict.get("path_pattern") or "")).strip()
+                uri = resolve_env(str(db_config_dict.get("uri") or "")).strip()
+                if path_pattern:
                     self._parse_glob_pattern(
                         db_name, path_pattern, db_type, is_default, db_config_dict.get("database", "")
                     )
-                elif "uri" in db_config_dict:
+                elif uri:
                     db_config = _parse_single_file_db(db_config_dict, db_type)
                     db_config.default = is_default
                     self.services.datasources[db_name] = db_config

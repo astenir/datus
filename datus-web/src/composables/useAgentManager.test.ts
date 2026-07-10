@@ -115,7 +115,7 @@ describe("useAgentManager", () => {
     listDatasources.mockResolvedValue({
       data: [
         { name: "warehouse", type: "postgres", is_default: false },
-        { name: "fund_pg", type: "postgres", is_default: true },
+        { name: "fund_pg", display_name: "基金分析库", type: "postgres", is_default: true },
       ],
     });
     listArtifacts.mockResolvedValue({
@@ -351,6 +351,7 @@ describe("useAgentManager", () => {
     expect(listArtifacts).toHaveBeenCalled();
     expect(manager.datasourceOptions.value.map(option => option.value)).toEqual(["fund_pg", "warehouse"]);
     expect(manager.datasourceOptions.value[0]?.label).toContain("默认");
+    expect(manager.datasourceOptions.value[0]?.label).toContain("基金分析库 (fund_pg)");
     expect(manager.artifactOptions.value.map(option => option.value)).toEqual(["risk_dashboard", "weekly_report"]);
   });
 

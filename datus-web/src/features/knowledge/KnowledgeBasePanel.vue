@@ -40,6 +40,7 @@ import CatalogTree from "@/features/workspace/CatalogTree.vue"
 import SubjectTree from "@/features/workspace/SubjectTree.vue"
 import { subjectApi } from "@/lib/api"
 import { catalogSchemaRows, catalogTableRows } from "@/lib/catalog-tree"
+import { selectedOptionLabel } from "@/lib/datasource-display"
 import type { MetricDimensionsData, MetricInfo, ReferenceSQLInfo, SubjectNode } from "@/types"
 import type { SubjectTreeNode } from "@/lib/subject-tree"
 
@@ -72,6 +73,9 @@ const selectedTable = computed(() => props.selectedTable?.trim() ?? "")
 const tableIndexCount = computed(() => semantic.tableDetail.value?.indexes.length ?? 0)
 const schemaRows = computed(() => catalogSchemaRows(props.workspace.catalogEntries.value))
 const tableRows = computed(() => catalogTableRows(props.workspace.catalogEntries.value))
+const currentDatasourceLabel = computed(() =>
+  selectedOptionLabel(props.workspace.currentDatasource.value, props.workspace.visibleDatasourceOptions.value) || "未选择"
+)
 const canUseSubjectTree = computed(() => props.canViewSubjectTree !== false)
 const selectedTableRow = computed(() =>
   tableRows.value.find((row) => row.fullName === selectedTable.value) ?? null,
@@ -220,7 +224,7 @@ onMounted(() => {
             <DatabaseIcon class="shrink-0 text-muted-foreground" />
             <span class="text-xs text-muted-foreground">数据源</span>
             <span class="max-w-48 truncate font-medium">
-              {{ workspace.currentDatasource.value || "未选择" }}
+              {{ currentDatasourceLabel }}
             </span>
           </div>
           <Badge variant="secondary">模式 {{ schemaRows.length }}</Badge>

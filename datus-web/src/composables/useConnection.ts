@@ -2,6 +2,7 @@ import { computed, readonly, ref, shallowRef } from "vue";
 import { configApi } from "@/lib/api";
 import { normalizeBaseUrl } from "@/lib/chat";
 import { getInjectedApiOrigin } from "@/lib/injected-config";
+import { datasourceLabel } from "@/lib/datasource-display";
 import { setApiBaseResolver } from "@/lib/request";
 import { handleError } from "@/lib/utils";
 import type { ConnectionState, ConfigSummary, NormalizedProbeResult, ProbeResult, SelectOption } from "@/types";
@@ -17,7 +18,10 @@ const isTestingDatasource = shallowRef(false);
 
 const datasourceOptions = computed<SelectOption[]>(() => {
   const datasources = config.value?.datasources ?? {};
-  const options = Object.keys(datasources).map((name) => ({ value: name, label: name }));
+  const options = Object.entries(datasources).map(([name, datasource]) => ({
+    value: name,
+    label: datasourceLabel(name, datasource),
+  }));
   const current = config.value?.current_datasource?.trim();
 
   if (current && !options.some((option) => option.value === current)) {
@@ -94,7 +98,7 @@ function datasourceProbe(name?: string): { type: string; [key: string]: unknown 
 
   const probe: { type: string; [key: string]: unknown } = { type };
   for (const [key, value] of Object.entries(datasource)) {
-    if (key === "type" || key === "extra" || !shouldIncludeDatasourceField(key, value)) continue;
+    if (key === "type" || key === "display_name" || key === "extra" || !shouldIncludeDatasourceField(key, value)) continue;
     probe[key] = value;
   }
 

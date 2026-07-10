@@ -23,6 +23,7 @@ from datus_enterprise.personal_datasources import (
     datasource_record_to_db_config,
     normalize_datasource_id,
     normalize_datasource_type,
+    normalize_display_name,
     normalize_host,
     normalize_optional_text,
     normalize_password,
@@ -301,7 +302,7 @@ def _validated_datasource_input(body: UpsertPersonalDatasourceRequest, agent_con
             "database": normalize_required_text(body.database, label="Database"),
             "schema": normalize_optional_text(body.schema_name, label="Schema"),
             "catalog": normalize_optional_text(body.catalog_name, label="Catalog"),
-            "display_name": normalize_optional_text(body.display_name, label="Display name"),
+            "display_name": normalize_display_name(body.display_name),
             "enabled": body.enabled,
         }
     except DatusException as exc:

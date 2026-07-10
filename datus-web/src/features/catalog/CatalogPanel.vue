@@ -22,6 +22,7 @@ import { useConnection } from "@/composables/useConnection"
 import CatalogTree from "@/features/workspace/CatalogTree.vue"
 import { tableApi } from "@/lib/api"
 import { catalogSchemaRows, catalogTableRows } from "@/lib/catalog-tree"
+import { selectedOptionLabel } from "@/lib/datasource-display"
 import type { TableDetail } from "@/types"
 
 const props = defineProps<{
@@ -40,6 +41,9 @@ const tableDetail = ref<TableDetail | null>(null)
 const selectedTableName = computed(() => props.selectedTable?.trim() ?? "")
 const schemaRows = computed(() => catalogSchemaRows(props.workspace.catalogEntries.value))
 const tableRows = computed(() => catalogTableRows(props.workspace.catalogEntries.value))
+const currentDatasourceLabel = computed(() =>
+  selectedOptionLabel(props.workspace.currentDatasource.value, props.workspace.visibleDatasourceOptions.value) || "未选择"
+)
 const selectedTableRow = computed(() =>
   tableRows.value.find((row) => row.fullName === selectedTableName.value) ?? null,
 )
@@ -120,7 +124,7 @@ watch(
         </CardHeader>
         <CardContent class="flex items-end justify-between gap-3">
           <span class="min-w-0 truncate text-lg font-semibold">
-            {{ workspace.currentDatasource.value || "未选择" }}
+            {{ currentDatasourceLabel }}
           </span>
           <DatabaseIcon class="text-muted-foreground" />
         </CardContent>
