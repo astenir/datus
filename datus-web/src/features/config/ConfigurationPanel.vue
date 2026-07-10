@@ -9,6 +9,14 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
 import { Field, FieldLabel } from "@/components/ui/field"
 import {
   Select,
@@ -19,14 +27,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useConfigurationManager } from "@/composables/useConfigurationManager"
 import { usePermission } from "@/composables/usePermission"
@@ -62,14 +62,7 @@ const modelsSource = computed(() => manager.modelsData.value?.source || "-")
 const modelsFetchedAt = computed(() => formatOptionalDate(manager.modelsData.value?.fetched_at))
 const platformStatus = computed(() => systemStatus.status.value?.platform_status || "unknown")
 const systemProjectId = computed(() => systemStatus.status.value?.project_id || "-")
-const systemDatasource = computed(() => systemStatus.status.value?.current_datasource || "-")
 const enterpriseEnabledLabel = computed(() => systemStatus.status.value?.enterprise_enabled ? "已启用" : "未启用")
-const configurationDescription = computed(() => {
-  if (props.canEdit) return "模型、数据源和连接探测配置，保存操作会写回后端运行配置。"
-  return canViewSystemStatus.value
-    ? "模型、数据源和系统状态配置。当前角色仅可查看。"
-    : "模型和数据源配置。当前角色仅可查看。"
-})
 const providerModelGroups = computed(() => {
   const groups = new Map<string, typeof manager.availableModels.value>()
   for (const model of manager.availableModels.value) {
@@ -80,13 +73,6 @@ const providerModelGroups = computed(() => {
   }
   return [...groups.entries()]
 })
-
-function configField(source: Record<string, unknown>, key: string, fallback = "-") {
-  const value = source[key]
-  if (typeof value === "string" && value.trim()) return value
-  if (typeof value === "number" || typeof value === "boolean") return String(value)
-  return fallback
-}
 
 function formatOptionalDate(value: string | undefined) {
   if (!value) return "-"
@@ -137,22 +123,73 @@ onMounted(() => {
 <template>
   <section class="flex min-h-0 flex-1 overflow-hidden p-4">
     <div class="flex min-h-0 flex-1 flex-col gap-4">
-      <div class="flex shrink-0 flex-wrap items-center gap-3">
-        <div class="min-w-0 flex-1">
-          <h1 class="text-lg font-semibold">配置中心</h1>
-          <p class="text-sm text-muted-foreground">
-            {{ configurationDescription }}
-          </p>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          :disabled="manager.loading.value"
-          @click="manager.loadConfiguration"
-        >
-          <RefreshCwIcon data-icon="inline-start" />
-          刷新
-        </Button>
+      <div class="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-2 rounded-md border px-3 py-2 text-sm">
+        <div class="flex min-w-0 items-center gap-2">
+            <span class="text-xs text-muted-foreground">当前数据源</span>
+            <span class="max-w-56 truncate font-medium">{{ currentDatasource }}</span>
+          </div>
+          <template v-if="canViewSystemStatus">
+            <div class="flex items-center gap-2">
+              <span class="text-xs text-muted-foreground">平台模式</span>
+              <Badge :variant="platformBadgeVariant(platformStatus)">{{ platformStatus }}</Badge>
+            </div>
+            <div class="flex items-center gap-2">
+              <ShieldCheckIcon class="size-4 text-muted-foreground" />
+              <span class="text-xs text-muted-foreground">企业扩展</span>
+              <span class="font-medium">{{ enterpriseEnabledLabel }}</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <ActivityIcon class="size-4 text-muted-foreground" />
+              <span class="text-xs text-muted-foreground">运行任务</span>
+              <span class="font-medium">{{ systemStatus.taskSummary.value }}</span>
+              <span class="text-xs text-muted-foreground">active / known</span>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              :disabled="systemStatus.loading.value"
+              @click="systemStatus.loadStatus"
+            >
+              <RefreshCwIcon data-icon="inline-start" />
+              刷新状态
+            </Button>
+          </template>
+          <Dialog>
+            <DialogTrigger as-child>
+              <Button variant="outline" size="sm" class="ml-auto">配置详情</Button>
+            </DialogTrigger>
+            <DialogContent class="sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>配置详情</DialogTitle>
+                <DialogDescription>当前项目和运行配置的低频信息。</DialogDescription>
+              </DialogHeader>
+              <dl class="grid gap-3 text-sm">
+                <div v-if="canViewSystemStatus" class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
+                  <dt class="text-muted-foreground">项目</dt>
+                  <dd class="min-w-0 truncate font-medium">{{ systemProjectId }}</dd>
+                </div>
+                <div class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
+                  <dt class="text-muted-foreground">Agent Home</dt>
+                  <dd class="min-w-0 break-all font-medium">{{ configHome }}</dd>
+                </div>
+                <div class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
+                  <dt class="text-muted-foreground">模型来源</dt>
+                  <dd class="min-w-0 truncate font-medium">{{ modelsSource }}</dd>
+                </div>
+                <div class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
+                  <dt class="text-muted-foreground">目录时间</dt>
+                  <dd class="min-w-0 truncate font-medium">{{ modelsFetchedAt }}</dd>
+                </div>
+                <div
+                  v-if="canViewSystemStatus && systemStatus.error.value"
+                  class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3"
+                >
+                  <dt class="text-muted-foreground">状态读取</dt>
+                  <dd class="min-w-0 font-medium text-destructive">{{ systemStatus.error.value }}</dd>
+                </div>
+              </dl>
+            </DialogContent>
+        </Dialog>
       </div>
 
       <Tabs
@@ -162,12 +199,11 @@ onMounted(() => {
         <TabsList class="flex h-auto shrink-0 !flex-row flex-wrap justify-start">
           <TabsTrigger value="models">模型</TabsTrigger>
           <TabsTrigger value="datasources">数据源</TabsTrigger>
-          <TabsTrigger value="summary">摘要</TabsTrigger>
         </TabsList>
 
         <TabsContent
           value="models"
-          class="m-0 min-h-0 flex-1 overflow-auto xl:overflow-visible"
+          class="-m-1 min-h-0 flex-1 overflow-auto p-1 xl:overflow-visible"
         >
           <div class="flex min-h-full flex-col gap-4 xl:h-full xl:min-h-0">
             <Card class="shrink-0">
@@ -295,7 +331,7 @@ onMounted(() => {
 
         <TabsContent
           value="datasources"
-          class="m-0 min-h-0 flex-1 overflow-hidden p-1"
+          class="-m-1 min-h-0 flex-1 overflow-hidden p-1"
         >
           <div class="h-full min-h-0 w-full">
             <Card class="flex h-full min-h-0 w-full flex-col">
@@ -341,146 +377,6 @@ onMounted(() => {
           </div>
         </TabsContent>
 
-        <TabsContent
-          value="summary"
-          class="m-0 min-h-0 flex-1 overflow-auto lg:overflow-visible"
-        >
-          <div class="grid min-h-full gap-4 lg:h-full lg:min-h-0 lg:grid-cols-2 lg:grid-rows-2">
-            <Card
-              v-if="canViewSystemStatus"
-              class="flex min-h-0 flex-col lg:row-span-2"
-            >
-              <CardHeader class="flex shrink-0 flex-row items-start justify-between gap-3">
-                <div class="min-w-0">
-                  <CardTitle class="text-lg">平台状态</CardTitle>
-                  <CardDescription class="text-sm">
-                    当前企业运行模式、项目和任务占用情况。
-                  </CardDescription>
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  :disabled="systemStatus.loading.value"
-                  @click="systemStatus.loadStatus"
-                >
-                  <RefreshCwIcon data-icon="inline-start" />
-                  刷新
-                </Button>
-              </CardHeader>
-              <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
-                <div class="grid gap-3 sm:grid-cols-3">
-                  <div class="rounded-md border p-3">
-                    <div class="flex items-center justify-between gap-3">
-                      <span class="text-xs text-muted-foreground">平台模式</span>
-                      <Badge :variant="platformBadgeVariant(platformStatus)">
-                        {{ platformStatus }}
-                      </Badge>
-                    </div>
-                    <p class="mt-3 text-sm text-muted-foreground">
-                      写操作由后端平台状态门控。
-                    </p>
-                  </div>
-                  <div class="rounded-md border p-3">
-                    <div class="flex items-center justify-between gap-3">
-                      <span class="text-xs text-muted-foreground">企业扩展</span>
-                      <ShieldCheckIcon class="shrink-0 text-muted-foreground" />
-                    </div>
-                    <p class="mt-3 text-lg font-semibold">{{ enterpriseEnabledLabel }}</p>
-                  </div>
-                  <div class="rounded-md border p-3">
-                    <div class="flex items-center justify-between gap-3">
-                      <span class="text-xs text-muted-foreground">运行任务</span>
-                      <ActivityIcon class="shrink-0 text-muted-foreground" />
-                    </div>
-                    <p class="mt-3 text-lg font-semibold">{{ systemStatus.taskSummary.value }}</p>
-                    <p class="text-xs text-muted-foreground">active / known</p>
-                  </div>
-                </div>
-
-                <dl class="grid gap-3 text-sm">
-                  <div class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
-                    <dt class="text-muted-foreground">项目</dt>
-                    <dd class="min-w-0 truncate font-medium">{{ systemProjectId }}</dd>
-                  </div>
-                  <div class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
-                    <dt class="text-muted-foreground">状态数据源</dt>
-                    <dd class="min-w-0 truncate font-medium">{{ systemDatasource }}</dd>
-                  </div>
-                  <div
-                    v-if="systemStatus.error.value"
-                    class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3"
-                  >
-                    <dt class="text-muted-foreground">读取状态</dt>
-                    <dd class="min-w-0 truncate font-medium text-destructive">{{ systemStatus.error.value }}</dd>
-                  </div>
-                </dl>
-              </CardContent>
-            </Card>
-
-            <Card class="flex min-h-0 flex-col">
-              <CardHeader class="shrink-0">
-                <CardTitle class="text-lg">运行摘要</CardTitle>
-              </CardHeader>
-              <CardContent class="min-h-0 flex-1 overflow-auto">
-                <dl class="grid gap-3 text-sm">
-                  <div class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
-                    <dt class="text-muted-foreground">Agent Home</dt>
-                    <dd class="min-w-0 truncate font-medium">{{ configHome }}</dd>
-                  </div>
-                  <div class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
-                    <dt class="text-muted-foreground">当前数据源</dt>
-                    <dd class="min-w-0 truncate font-medium">{{ currentDatasource }}</dd>
-                  </div>
-                  <div class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
-                    <dt class="text-muted-foreground">模型来源</dt>
-                    <dd class="min-w-0 truncate font-medium">{{ modelsSource }}</dd>
-                  </div>
-                  <div class="grid grid-cols-[7rem_minmax(0,1fr)] gap-3">
-                    <dt class="text-muted-foreground">目录时间</dt>
-                    <dd class="min-w-0 truncate font-medium">{{ modelsFetchedAt }}</dd>
-                  </div>
-                </dl>
-              </CardContent>
-            </Card>
-
-            <Card class="flex min-h-0 flex-col">
-              <CardHeader class="shrink-0">
-                <CardTitle class="text-lg">已配置模型</CardTitle>
-              </CardHeader>
-              <CardContent class="min-h-0 flex-1">
-                <div class="h-full min-h-64 overflow-auto rounded-md border lg:min-h-0">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>名称</TableHead>
-                        <TableHead>Provider</TableHead>
-                        <TableHead>模型</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      <TableRow
-                        v-for="[name, model] in manager.configuredModelEntries.value"
-                        :key="name"
-                      >
-                        <TableCell class="font-medium">{{ name }}</TableCell>
-                        <TableCell>{{ configField(model, "type", configField(model, "provider")) }}</TableCell>
-                        <TableCell>{{ configField(model, "model", configField(model, "id")) }}</TableCell>
-                      </TableRow>
-                      <TableRow v-if="manager.configuredModelEntries.value.length === 0">
-                        <TableCell
-                          colspan="3"
-                          class="h-20 text-center text-sm text-muted-foreground"
-                        >
-                          暂无模型配置
-                        </TableCell>
-                      </TableRow>
-                    </TableBody>
-                  </Table>
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-        </TabsContent>
       </Tabs>
     </div>
   </section>

@@ -218,8 +218,8 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="flex min-h-0 flex-1 overflow-hidden p-3">
-    <div class="flex min-h-0 flex-1 flex-col gap-3">
+  <section class="flex min-h-0 flex-1 overflow-hidden p-4">
+    <div class="flex min-h-0 flex-1 flex-col gap-4">
       <div class="flex shrink-0 flex-wrap items-center gap-3">
         <div class="min-w-0 flex-1">
           <h1 class="text-lg font-semibold">Agent 管理</h1>
@@ -261,7 +261,7 @@ onMounted(() => {
         </AlertDescription>
       </Alert>
 
-      <div class="grid min-h-0 flex-1 auto-cols-[calc(100vw-1.5rem)] grid-flow-col gap-3 overflow-x-auto xl:auto-cols-auto xl:grid-flow-row xl:grid-cols-[minmax(28rem,1fr)_minmax(22rem,0.6fr)] xl:overflow-visible">
+      <div class="-m-1 grid min-h-0 flex-1 auto-cols-[calc(100vw-2rem)] grid-flow-col gap-4 overflow-x-auto p-1 xl:auto-cols-auto xl:grid-flow-row xl:grid-cols-[minmax(28rem,1fr)_minmax(22rem,0.6fr)] xl:overflow-visible">
         <Card
           size="sm"
           class="min-h-0 min-w-0"
