@@ -20,36 +20,31 @@ jobs:
     outputs:
       relevant: ${{ steps.filter.outputs.result }}
     steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Test change detector
+        run: node --test .github/scripts/detect-frontend-changes.test.cjs
+
       - name: Detect renderer changes
         id: filter
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            if (context.eventName !== "pull_request") {
-              return true;
-            }
+            const { detectRendererChanges } = require("./.github/scripts/detect-frontend-changes.cjs");
+            const files = context.eventName === "pull_request"
+              ? await github.paginate(
+                  github.rest.pulls.listFiles,
+                  {
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: context.issue.number,
+                    per_page: 100,
+                  },
+                )
+              : [];
 
-            const files = await github.paginate(
-              github.rest.pulls.listFiles,
-              {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: context.issue.number,
-                per_page: 100,
-              },
-            );
-            const exactPaths = new Set([
-              ".github/workflows/agent-artifact-renderer.yml",
-              "datus-agent/tests/integration/test_artifact_renderer_package.py",
-              "datus-agent/tests/unit_tests/agent/node/test_dashboard_html_renderer.py",
-              "datus-agent/pyproject.toml",
-              "datus-agent/uv.lock",
-            ]);
-
-            return files.some(({ filename }) =>
-              exactPaths.has(filename) ||
-              filename.startsWith("datus-agent/datus/agent/node/visual_artifact/"),
-            );
+            return detectRendererChanges(context.eventName, files);
 
   renderer-package:
     name: Renderer package
