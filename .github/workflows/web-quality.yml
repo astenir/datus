@@ -20,30 +20,31 @@ jobs:
     outputs:
       relevant: ${{ steps.filter.outputs.result }}
     steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Test change detector
+        run: node --test .github/scripts/detect-frontend-changes.test.cjs
+
       - name: Detect web changes
         id: filter
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            if (context.eventName !== "pull_request") {
-              return true;
-            }
+            const { detectWebChanges } = require("./.github/scripts/detect-frontend-changes.cjs");
+            const files = context.eventName === "pull_request"
+              ? await github.paginate(
+                  github.rest.pulls.listFiles,
+                  {
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: context.issue.number,
+                    per_page: 100,
+                  },
+                )
+              : [];
 
-            const files = await github.paginate(
-              github.rest.pulls.listFiles,
-              {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: context.issue.number,
-                per_page: 100,
-              },
-            );
-
-            return files.some(({ filename }) =>
-              filename === ".github/workflows/web-quality.yml" ||
-              filename.startsWith("datus-web/") ||
-              filename.startsWith("datus-agent/datus/agent/node/visual_artifact/"),
-            );
+            return detectWebChanges(context.eventName, files);
 
   web-quality:
     name: Tests and build
