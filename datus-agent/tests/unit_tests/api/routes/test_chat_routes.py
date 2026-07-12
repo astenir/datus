@@ -87,9 +87,7 @@ def _request_with_service(svc):
 
 class TestChatPermissionModeHardening:
     def test_elevated_permission_accepts_exact_wildcard_and_admin(self):
-        assert _can_use_elevated_permission_mode(
-            _mock_ctx(permissions={ELEVATED_CHAT_PERMISSION_MODE_PERMISSION})
-        )
+        assert _can_use_elevated_permission_mode(_mock_ctx(permissions={ELEVATED_CHAT_PERMISSION_MODE_PERMISSION}))
         assert _can_use_elevated_permission_mode(_mock_ctx(permissions={"module.chat.*"}))
         assert _can_use_elevated_permission_mode(_mock_ctx(permissions={"*"}))
 

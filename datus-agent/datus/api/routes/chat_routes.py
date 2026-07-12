@@ -173,10 +173,7 @@ def _harden_chat_permission_mode(
     if requested_mode in _ELEVATED_PERMISSION_MODES:
         raise HTTPException(
             status_code=403,
-            detail=(
-                f"Permission mode '{requested_mode}' requires "
-                f"{ELEVATED_CHAT_PERMISSION_MODE_PERMISSION}."
-            ),
+            detail=(f"Permission mode '{requested_mode}' requires {ELEVATED_CHAT_PERMISSION_MODE_PERMISSION}."),
         )
 
     request.permission_mode = None

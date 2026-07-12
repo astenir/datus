@@ -880,7 +880,8 @@ def _permissions_not_grantable(ctx: AppContext, permissions: list[str]) -> list[
     if actor_permissions is None:
         return []
     return [
-        permission for permission in permissions
+        permission
+        for permission in permissions
         if not any(_permission_covers(permission, granted) for granted in actor_permissions)
     ]
 

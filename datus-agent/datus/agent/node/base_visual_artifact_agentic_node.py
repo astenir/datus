@@ -737,9 +737,7 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
                         "summary": "Auto validate locked artifact",
                     },
                     status=(
-                        ActionStatus.SUCCESS
-                        if getattr(validate_result, "success", 0) == 1
-                        else ActionStatus.FAILED
+                        ActionStatus.SUCCESS if getattr(validate_result, "success", 0) == 1 else ActionStatus.FAILED
                     ),
                 )
                 ctx.action_history_manager.add_action(validate_action)

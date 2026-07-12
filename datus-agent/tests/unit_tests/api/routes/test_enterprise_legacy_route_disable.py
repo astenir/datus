@@ -92,7 +92,9 @@ def test_legacy_routes_are_disabled_in_enterprise_mode(
     ctx = AppContext(user_id="u1", project_id="proj", permissions={"module.admin.*"})
 
     with _client(monkeypatch, router, route_name, ctx) as client:
-        response = getattr(client, method)(path, json=json_body) if json_body is not None else getattr(client, method)(path)
+        response = (
+            getattr(client, method)(path, json=json_body) if json_body is not None else getattr(client, method)(path)
+        )
 
     assert response.status_code == 403
     assert response.json()["detail"] == "ENTERPRISE_ROUTE_DISABLED"

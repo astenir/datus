@@ -375,9 +375,7 @@ class TestReadOnlyPathsWithoutEmbedding:
         result = store._search_all()
 
         assert result.to_pylist() == [{"name": "orders", "definition": "CREATE TABLE orders(id int)"}]
-        assert table.search_all_calls == [
-            {"where": None, "select_fields": ["name", "definition"], "limit": 1}
-        ]
+        assert table.search_all_calls == [{"where": None, "select_fields": ["name", "definition"], "limit": 1}]
         assert store._shared.initialized is False
 
     def test_query_with_filter_zero_limit_without_embedding(self):

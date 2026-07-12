@@ -205,7 +205,9 @@ async def _run_load(args: argparse.Namespace) -> list[CallResult]:
                     results.append(result)
                     if args.verbose:
                         status = result.status_code if result.status_code is not None else "ERR"
-                        print(f"{len(results):>4}/{args.requests} {result.name:<7} {status} {result.latency_ms:8.1f} ms")
+                        print(
+                            f"{len(results):>4}/{args.requests} {result.name:<7} {status} {result.latency_ms:8.1f} ms"
+                        )
                 queue.task_done()
 
         worker_count = min(args.concurrency, args.requests)
@@ -302,17 +304,27 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--requests", type=int, default=20, help="Total number of requests.")
     parser.add_argument("--concurrency", type=int, default=5, help="Number of concurrent workers.")
     parser.add_argument("--timeout", type=float, default=60.0, help="Per-request timeout in seconds.")
-    parser.add_argument("--bearer-token", default="", help="Bearer token. Defaults to DATUS_API_TOKEN or VITE_DEV_ACCESS_TOKEN.")
-    parser.add_argument("--header", action="append", help="Extra request header. Repeat or pass comma-separated values.")
+    parser.add_argument(
+        "--bearer-token", default="", help="Bearer token. Defaults to DATUS_API_TOKEN or VITE_DEV_ACCESS_TOKEN."
+    )
+    parser.add_argument(
+        "--header", action="append", help="Extra request header. Repeat or pass comma-separated values."
+    )
     parser.add_argument("--datasource", default="", help="Datasource id for catalog, SQL context, or chat context.")
     parser.add_argument("--database", default="", help="Database name for SQL requests.")
     parser.add_argument("--sql", default="SELECT 1", help="SQL text for the sql scenario.")
     parser.add_argument("--result-format", default="json", choices=["json", "csv", "arrow"], help="SQL result format.")
     parser.add_argument("--message", default="请用一句话回复 ok", help="Message for the chat scenario.")
-    parser.add_argument("--session-id", default="", help="Reuse one chat session id instead of creating one per request.")
-    parser.add_argument("--stream-response", action="store_true", help="Ask chat to stream model deltas when supported.")
+    parser.add_argument(
+        "--session-id", default="", help="Reuse one chat session id instead of creating one per request."
+    )
+    parser.add_argument(
+        "--stream-response", action="store_true", help="Ask chat to stream model deltas when supported."
+    )
     parser.add_argument("--max-turns", type=int, default=6, help="max_turns value for chat requests.")
-    parser.add_argument("--max-error-rate", type=float, default=0.0, help="Allowed failure ratio before exiting non-zero.")
+    parser.add_argument(
+        "--max-error-rate", type=float, default=0.0, help="Allowed failure ratio before exiting non-zero."
+    )
     parser.add_argument("--json-output", action="store_true", help="Print JSON summary instead of text.")
     parser.add_argument("--verbose", action="store_true", help="Print one line per completed request.")
     return parser
@@ -338,7 +350,11 @@ def main(argv: list[str] | None = None) -> int:
     elapsed_s = time.perf_counter() - started
     summary = _summarize(results, elapsed_s)
     if args.json_output:
-        print(json.dumps({"summary": summary, "results": [asdict(result) for result in results]}, ensure_ascii=False, indent=2))
+        print(
+            json.dumps(
+                {"summary": summary, "results": [asdict(result) for result in results]}, ensure_ascii=False, indent=2
+            )
+        )
     else:
         _print_summary(summary)
     return 0 if summary["error_rate"] <= args.max_error_rate else 1

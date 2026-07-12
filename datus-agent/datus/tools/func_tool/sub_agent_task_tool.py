@@ -61,6 +61,7 @@ _SUBAGENT_MODULE_PERMISSIONS = {
 def _matches_permission(action: str, permissions: list[str]) -> bool:
     return any(permission == "*" or fnmatchcase(action, permission) for permission in permissions)
 
+
 # Mapping from subagent type string to NodeType constants
 NODE_CLASS_MAP = {
     "gen_sql": NodeType.TYPE_GEN_SQL,
