@@ -229,7 +229,11 @@
             // Live-query endpoint baked at compile time. ``datus --web``
             // serves it from ``/api/v1/dashboard/query``; the SaaS path
             // overrides this with its own absolute URL.
-            queryEndpoint: '__DATUS_QUERY_ENDPOINT__'
+            queryEndpoint: '__DATUS_QUERY_ENDPOINT__',
+            // Embedded hosts may install a credential-free message transport
+            // before this initializer runs. Standalone HTML leaves it
+            // undefined and continues to use the HTTP endpoint above.
+            queryTransport: window.__DATUS_ARTIFACT_QUERY_TRANSPORT__
           });
           // Successful mount: React replaces #root's children, so the
           // loading state vanishes naturally. Nothing to do here.

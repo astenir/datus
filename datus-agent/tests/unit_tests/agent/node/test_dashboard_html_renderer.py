@@ -106,11 +106,37 @@ def test_render_dashboard_html_bakes_default_query_endpoint(tmp_path: Path):
     assert DEFAULT_QUERY_ENDPOINT in body
     # initDashboard call is wired (template is in single quotes around the placeholder).
     assert "DatusArtifact.initDashboard" in body
+    assert "queryTransport: window.__DATUS_ARTIFACT_QUERY_TRANSPORT__" in body
     # Auth + project propagation was dropped — the iframe no longer
     # forwards anything beyond ``queryEndpoint``. Keep an explicit guard
     # so a future regression that re-introduces those props gets caught.
     assert "authToken" not in body
     assert "projectId" not in body
+
+
+def test_vendored_dashboard_renderer_supports_optional_message_transport():
+    """The bundled renderer owns the nested-frame transport implementation.
+
+    The HTML template merely selects it through an optional global. Keeping
+    these assertions beside the template tests prevents a vendor refresh from
+    silently restoring the old frontend ``srcdoc`` rewrite dependency.
+    """
+    bundle_path = (
+        Path(__file__).parents[4]
+        / "datus"
+        / "agent"
+        / "node"
+        / "visual_artifact"
+        / "vendor"
+        / "web_artifact_render_dist"
+        / "index.umd.js"
+    )
+    bundle = bundle_path.read_text(encoding="utf-8")
+
+    assert 'e.provider.mode===\"post-message\"' in bundle
+    assert "DatusPostMessageQueryProvider" in bundle
+    assert "queryTransport" in bundle
+    assert "datus-artifact/query-result" in bundle
 
 
 def test_render_dashboard_html_threads_custom_endpoint_through(tmp_path: Path):
