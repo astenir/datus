@@ -491,7 +491,12 @@ _add_many(
 )
 _add_many(
     "POST",
-    ["/api/v1/config/models/test", "/api/v1/config/datasources/test"],
+    [
+        "/api/v1/config/models/test",
+        "/api/v1/config/models/test-saved",
+        "/api/v1/config/datasources/test",
+        "/api/v1/config/datasources/test-saved",
+    ],
     _policy(
         MODULE_RBAC,
         PLATFORM_STATUS_GATE,
