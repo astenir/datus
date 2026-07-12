@@ -22,6 +22,16 @@ const reportCreateEditSession = vi.fn();
 const toastError = vi.fn();
 const toastSuccess = vi.fn();
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, resolve, reject };
+}
+
 vi.mock("@/lib/api", () => ({
   dashboardApi: {
     list: dashboardList,
@@ -380,6 +390,27 @@ describe("useArtifacts", () => {
     expect(artifacts.activePreviewSlug.value).toBe("fund-report");
     expect(artifacts.previewLoadingKey.value).toBeNull();
     expect(artifacts.previewError.value).toBeNull();
+  });
+
+  it("ignores a stale preview failure after a newer preview succeeds", async () => {
+    const stalePreview = deferred<string>();
+    reportHtml.mockReturnValueOnce(stalePreview.promise);
+    dashboardHtml.mockResolvedValueOnce("<!doctype html><html><body>current</body></html>");
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:current-preview"),
+      revokeObjectURL: vi.fn(),
+    });
+    const { useArtifacts } = await import("./useArtifacts");
+    const artifacts = useArtifacts();
+
+    const staleLoad = artifacts.openHtmlPreview("report", "old-report");
+    await artifacts.openHtmlPreview("dashboard", "current-dashboard");
+    stalePreview.reject(new Error("old preview failed"));
+    await staleLoad;
+
+    expect(artifacts.activePreviewUrl.value).toBe("blob:current-preview");
+    expect(artifacts.previewError.value).toBeNull();
+    expect(toastError).not.toHaveBeenCalledWith("打开 HTML 预览失败");
   });
 
   it("injects bearer auth into dashboard preview live-query requests", async () => {

@@ -30,8 +30,6 @@ export default defineConfig(({ mode }) => {
             if (!id.includes('node_modules')) return undefined
 
             const normalizedId = id.split(path.sep).join('/')
-            if (normalizedId.includes('/node_modules/markdown-it/')
-              || normalizedId.includes('/node_modules/vue-stream-markdown/')) return 'vendor-markdown'
             if (normalizedId.includes('/node_modules/@lucide/vue/')) return 'vendor-icons'
             if (normalizedId.includes('/node_modules/reka-ui/')) return 'vendor-ui'
             if (normalizedId.includes('/node_modules/@vueuse/')) return 'vendor-vueuse'

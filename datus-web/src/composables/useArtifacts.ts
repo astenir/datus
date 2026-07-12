@@ -499,12 +499,11 @@ export function useArtifacts() {
       activePreviewUrl.value = url;
       return url;
     } catch (err) {
+      if (previewRequestId.value !== requestId) return null;
       console.error("打开产物 HTML 预览失败:", err);
       previewError.value = "打开 HTML 预览失败";
       toast.error("打开 HTML 预览失败");
-      if (previewRequestId.value === requestId) {
-        activePreviewUrl.value = null;
-      }
+      activePreviewUrl.value = null;
       return null;
     } finally {
       if (previewRequestId.value === requestId && previewLoadingKey.value === key) {

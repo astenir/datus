@@ -39,6 +39,7 @@ const submittedInteractionKeys = shallowRef<ReadonlySet<string>>(new Set());
 const abortRef = { current: null as AbortController | null };
 const messageCache = new Map<string, ChatMessage[]>();
 const CACHE_MAX = 20;
+let historyRequestId = 0;
 const activeInteractionKey = computed(() =>
   activeUserInteractionKey(messages.value, {
     isStreaming: isStreaming.value,
@@ -101,19 +102,25 @@ async function loadSessions(subagentId?: string) {
   }
 }
 
-async function loadSessionHistory(sessionId: string) {
+async function loadSessionHistory(sessionId: string, requestId = ++historyRequestId) {
   const base = effectiveBase();
   try {
     const payload = await requestJson<unknown>(base, `/api/v1/chat/history?session_id=${encodeURIComponent(sessionId)}`);
     const data = extractResultData<{ messages?: unknown[] }>(payload);
-    messages.value = normalizeHistoryMessages(data?.messages ?? []);
+    const historyMessages = normalizeHistoryMessages(data?.messages ?? []);
+    if (requestId !== historyRequestId || selectedSession.value !== sessionId) return;
+    cacheSet(sessionId, historyMessages);
+    messages.value = historyMessages;
   } catch (error) {
+    if (requestId !== historyRequestId || selectedSession.value !== sessionId) return;
     console.error("Failed to load session history:", error);
     messages.value = [];
   }
 }
 
 function selectSession(sessionId: string | null) {
+  const requestId = ++historyRequestId;
+  const interruptedStream = abortRef.current !== null;
   // Abort the active stream before switching.
   if (abortRef.current) {
     abortRef.current.abort();
@@ -135,10 +142,13 @@ function selectSession(sessionId: string | null) {
     if (cached) {
       messages.value = cached;
     } else {
-      loadSessionHistory(sessionId);
+      void loadSessionHistory(sessionId, requestId);
     }
   } else {
     messages.value = [];
+  }
+  if (interruptedStream) {
+    void loadSessions();
   }
 }
 
@@ -188,6 +198,7 @@ async function sendMessage(opts: {
       body: JSON.stringify(body),
       signal: controller.signal,
     });
+    if (abortRef.current !== controller) return;
     streamActivity.value = connectedChatStreamActivity(streamActivity.value);
 
     const reader = response.body?.getReader();
@@ -199,6 +210,7 @@ async function sendMessage(opts: {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      if (abortRef.current !== controller) return;
 
       buffer += decoder.decode(value, { stream: true });
       const parsed = parseSseBuffer(buffer);
@@ -213,7 +225,7 @@ async function sendMessage(opts: {
       applyIncomingMessages(incomingMessages);
     }
 
-    if (buffer) {
+    if (buffer && abortRef.current === controller) {
       const parsed = parseSseBuffer(buffer, { flush: true });
       const incomingMessages: ParsedMessage[] = [];
       for (const event of parsed.events) {
@@ -223,7 +235,7 @@ async function sendMessage(opts: {
       applyIncomingMessages(incomingMessages);
     }
   } catch (error) {
-    if ((error as Error).name !== "AbortError") {
+    if ((error as Error).name !== "AbortError" && abortRef.current === controller) {
       messages.value = [
         ...messages.value,
         {
@@ -234,14 +246,15 @@ async function sendMessage(opts: {
       ];
     }
   } finally {
-    isStreaming.value = false;
-    streamActivity.value = idleChatStreamActivity();
-    abortRef.current = null;
-    // Update cache with latest messages
-    if (selectedSession.value) {
-      cacheSet(selectedSession.value, messages.value);
+    if (abortRef.current === controller) {
+      isStreaming.value = false;
+      streamActivity.value = idleChatStreamActivity();
+      abortRef.current = null;
+      if (selectedSession.value) {
+        cacheSet(selectedSession.value, messages.value);
+      }
+      void loadSessions();
     }
-    loadSessions();
   }
 }
 
@@ -264,6 +277,7 @@ async function stopSession() {
   isStreaming.value = false;
   streamActivity.value = idleChatStreamActivity();
   submittedInteractionKeys.value = new Set();
+  void loadSessions();
 }
 
 async function deleteSession(sessionId: string) {
@@ -318,17 +332,19 @@ async function resumeSession(sessionId?: string) {
       body: JSON.stringify({ session_id: targetSession }),
       signal: controller.signal,
     });
+    if (abortRef.current !== controller) return;
     streamActivity.value = connectedChatStreamActivity(streamActivity.value);
     const pendingMessages: ParsedMessage[] = [];
     const flushPendingMessages = () => {
       applyIncomingMessages(pendingMessages.splice(0));
     };
     const tail = await consumeSseStream(response, (event) => {
+      if (abortRef.current !== controller) return;
       const incoming = applyStreamEvent(event);
       if (incoming) pendingMessages.push(incoming);
       flushPendingMessages();
     });
-    if (tail) {
+    if (tail && abortRef.current === controller) {
       const parsed = parseSseBuffer(tail, { flush: true });
       const incomingMessages: ParsedMessage[] = [];
       for (const event of parsed.events) {
@@ -338,17 +354,19 @@ async function resumeSession(sessionId?: string) {
       applyIncomingMessages(incomingMessages);
     }
   } catch (error) {
-    if ((error as Error).name !== "AbortError") {
+    if ((error as Error).name !== "AbortError" && abortRef.current === controller) {
       console.error("Failed to resume session:", error);
     }
   } finally {
-    isStreaming.value = false;
-    streamActivity.value = idleChatStreamActivity();
-    abortRef.current = null;
-    if (selectedSession.value) {
-      cacheSet(selectedSession.value, messages.value);
+    if (abortRef.current === controller) {
+      isStreaming.value = false;
+      streamActivity.value = idleChatStreamActivity();
+      abortRef.current = null;
+      if (selectedSession.value) {
+        cacheSet(selectedSession.value, messages.value);
+      }
+      void loadSessions();
     }
-    loadSessions();
   }
 }
 
@@ -406,6 +424,7 @@ async function sendInteraction(interactionKey: string, answers: string | string[
 }
 
 function clearMessages() {
+  historyRequestId += 1;
   messages.value = [];
   selectedSession.value = null;
   submittedInteractionKeys.value = new Set();
@@ -414,6 +433,7 @@ function clearMessages() {
 }
 
 function dispose() {
+  historyRequestId += 1;
   if (abortRef.current) {
     abortRef.current.abort();
     abortRef.current = null;
