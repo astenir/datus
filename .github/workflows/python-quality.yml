@@ -185,14 +185,20 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Test gate verifier
+        run: node --test .github/scripts/verify-quality-gate.test.cjs
+
       - name: Verify required jobs
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
+          QUALITY_JOBS: AGENT,DB_ADAPTERS,STORAGE_ADAPTERS
+          AGENT_RELEVANT: ${{ needs.changes.outputs.agent }}
           AGENT_RESULT: ${{ needs.agent-quality.result }}
+          DB_ADAPTERS_RELEVANT: ${{ needs.changes.outputs.db_adapters }}
           DB_ADAPTERS_RESULT: ${{ needs.db-adapters-quality.result }}
+          STORAGE_ADAPTERS_RELEVANT: ${{ needs.changes.outputs.storage_adapters }}
           STORAGE_ADAPTERS_RESULT: ${{ needs.storage-adapters-quality.result }}
-        run: |
-          test "$CHANGES_RESULT" = "success"
-          test "$AGENT_RESULT" = "success" || test "$AGENT_RESULT" = "skipped"
-          test "$DB_ADAPTERS_RESULT" = "success" || test "$DB_ADAPTERS_RESULT" = "skipped"
-          test "$STORAGE_ADAPTERS_RESULT" = "success" || test "$STORAGE_ADAPTERS_RESULT" = "skipped"
+        run: node .github/scripts/verify-quality-gate.cjs

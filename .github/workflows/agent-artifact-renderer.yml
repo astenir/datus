@@ -99,10 +99,16 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Test gate verifier
+        run: node --test .github/scripts/verify-quality-gate.test.cjs
+
       - name: Verify required jobs
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}
+          QUALITY_JOBS: RENDERER
+          RENDERER_RELEVANT: ${{ needs.changes.outputs.relevant }}
           RENDERER_RESULT: ${{ needs.renderer-package.result }}
-        run: |
-          test "$CHANGES_RESULT" = "success"
-          test "$RENDERER_RESULT" = "success" || test "$RENDERER_RESULT" = "skipped"
+        run: node .github/scripts/verify-quality-gate.cjs

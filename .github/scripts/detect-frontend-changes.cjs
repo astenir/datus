@@ -1,6 +1,8 @@
 const DETECTOR_PATHS = [
   ".github/scripts/detect-frontend-changes.cjs",
   ".github/scripts/detect-frontend-changes.test.cjs",
+  ".github/scripts/verify-quality-gate.cjs",
+  ".github/scripts/verify-quality-gate.test.cjs",
 ];
 
 const RENDERER_EXACT_PATHS = new Set([

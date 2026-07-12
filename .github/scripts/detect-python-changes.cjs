@@ -8,6 +8,8 @@ const SHARED_PATHS = new Set([
   ".github/workflows/python-quality.yml",
   ".github/scripts/detect-python-changes.cjs",
   ".github/scripts/detect-python-changes.test.cjs",
+  ".github/scripts/verify-quality-gate.cjs",
+  ".github/scripts/verify-quality-gate.test.cjs",
 ]);
 
 function detectPythonChanges(eventName, files = []) {
