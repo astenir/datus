@@ -79,6 +79,9 @@ jobs:
       - name: Install dependencies
         run: npm ci --legacy-peer-deps
 
+      - name: Run ESLint
+        run: npm run lint
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 

@@ -29,12 +29,12 @@
 
 | 检查 | 当前能力 | 主要边界 |
 | --- | --- | --- |
-| `npm run lint` | 对项目自有 Vue/TypeScript 代码运行类型感知的 ESLint flat config | 当前处于本地试运行阶段，尚未加入 Web Quality workflow |
+| `npm run lint` | 对项目自有 Vue/TypeScript 代码运行类型感知的 ESLint flat config | 已加入 Web Quality 实体 job，在单元测试和浏览器依赖安装前执行 |
 | `npm run build` | 先运行 `vue-tsc -b`，再构建生产资源 | 能发现类型、未使用局部变量/参数和构建集成问题；不能完整检查 Promise 使用、Vue 模板语义和生命周期策略 |
 | `npm test` | 运行 Vitest 单元测试 | 覆盖业务工具、composable、API 适配和部分路由/安全契约；不是通用静态规则 |
 | `npm run test:browser` | 编译并运行 Playwright 浏览器测试 | 覆盖真实浏览器中的 Renderer 集成；不扫描全部业务组件 |
 | `npm run lint:typography` | 扫描 `src/features/` 和 `src/App.vue` 的字号 utility | 是窄范围设计规范检查，不替代 Vue/TypeScript lint |
-| Web Quality workflow | 对相关前端变更依次运行以上测试、字号检查和构建 | 当前没有执行 ESLint |
+| Web Quality workflow | 对相关前端变更运行 ESLint、测试、字号检查和构建 | 继续由路径 detector 控制实体 job，并通过稳定的 `Web quality gate` 汇总结果 |
 
 应用 TypeScript 配置已经启用：
 
@@ -186,14 +186,14 @@ vite.config.ts
 
 ## 门禁结论与迁移计划
 
-目前仍不在本阶段直接修改 required Web quality gate。最小配置和首轮结果已经在本地稳定通过；下一阶段可以把 `npm run lint` 加入现有 Web Quality 实体 job，再通过 PR 验证变更检测、跳过语义和稳定 context，保持 required context 名称不变。
+`npm run lint` 已加入现有 Web Quality 的 `Tests and build` 实体 job，并在单元测试和 Chromium 安装前执行。workflow 仍由原有路径 detector 决定是否运行实体 job，required context 名称继续保持为 `Web quality gate`；纯文档变更仍走 `false/skipped` 的严格 gate 组合，不承担前端依赖安装成本。
 
 建议按以下阶段推进：
 
 1. 修复安全存储访问和路由上下文竞态，并补充确定性测试。该阶段已完成。
 2. 引入只覆盖项目自有代码的最小 ESLint flat config，在本地试运行；不执行批量 `--fix`。该阶段已完成。
 3. 对首轮结果逐项分类，修复真实问题，对生成层和合理模式使用目录级配置或最小规则选项。该阶段已完成。
-4. 当首批规则在干净分支稳定通过后，把 `npm run lint` 加入现有 Web Quality 实体 job；保持 required context 名称 `Web quality gate` 不变。
+4. 当首批规则在干净分支稳定通过后，把 `npm run lint` 加入现有 Web Quality 实体 job；保持 required context 名称 `Web quality gate` 不变。该阶段已完成。
 5. 后续再评估 `no-unsafe-*`、无障碍和更严格 Vue 规则，每批单独迁移并验证，不把格式化债务与行为修复混在同一 PR。
 
-当前路径已经修复基线确认的运行时风险，并建立本地静态规则基线；下一阶段由 Web Quality workflow 执行同一 `npm run lint`，让静态规则开始承担“防止回归”的职责，同时保持生成组件和上游 Renderer 的维护边界。
+当前路径已经修复基线确认的运行时风险，并由 Web Quality workflow 执行同一 `npm run lint`，让静态规则开始承担“防止回归”的职责，同时保持生成组件和上游 Renderer 的维护边界。后续规则增强应继续按第 5 阶段拆分为独立迁移，不在 CI 接入变更中扩展规则集。
