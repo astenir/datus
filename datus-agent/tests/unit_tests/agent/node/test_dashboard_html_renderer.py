@@ -133,7 +133,7 @@ def test_vendored_dashboard_renderer_supports_optional_message_transport():
     )
     bundle = bundle_path.read_text(encoding="utf-8")
 
-    assert 'e.provider.mode===\"post-message\"' in bundle
+    assert 'e.provider.mode==="post-message"' in bundle
     assert "DatusPostMessageQueryProvider" in bundle
     assert "queryTransport" in bundle
     assert "datus-artifact/query-result" in bundle

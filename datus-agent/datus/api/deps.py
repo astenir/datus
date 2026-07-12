@@ -592,7 +592,12 @@ def _is_dev_admin_context(ctx: AppContext) -> bool:
 
 
 def _matches_admin_context(roles: list[str], permissions: set[str]) -> bool:
-    return "enterprise_admin" in roles or "*" in permissions or "module.admin.*" in permissions or "module.*" in permissions
+    return (
+        "enterprise_admin" in roles
+        or "*" in permissions
+        or "module.admin.*" in permissions
+        or "module.*" in permissions
+    )
 
 
 async def _audit_enterprise_context_deny(

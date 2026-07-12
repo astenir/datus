@@ -505,7 +505,9 @@ class OceanBaseMySQLVectorDb(VectorDatabase):
         _validate_identifier(table_name)
         vector_column = vector_column or "vector"
         source_column = source_column or "description"
-        vector_dim = embedding_function.ndims() if embedding_function else _vector_dim_from_schema(schema, vector_column) or 384
+        vector_dim = (
+            embedding_function.ndims() if embedding_function else _vector_dim_from_schema(schema, vector_column) or 384
+        )
         unique_columns = unique_columns or []
         column_names: List[str] = []
         if schema is not None:
@@ -562,7 +564,11 @@ class OceanBaseMySQLVectorDb(VectorDatabase):
     ) -> OceanBaseMySQLVectorTable:
         vector_column = vector_column or "vector"
         source_column = source_column or "description"
-        vector_dim = embedding_function.ndims() if embedding_function else self._infer_vector_dim(table_name, vector_column) or 384
+        vector_dim = (
+            embedding_function.ndims()
+            if embedding_function
+            else self._infer_vector_dim(table_name, vector_column) or 384
+        )
         cache_key = (table_name, id(embedding_function), vector_dim, vector_column, source_column)
         if cache_key in self._table_cache:
             return self._table_cache[cache_key]

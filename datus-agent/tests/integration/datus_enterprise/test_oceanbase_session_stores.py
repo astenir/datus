@@ -95,9 +95,9 @@ async def test_oceanbase_enterprise_metadata_and_session_round_trip():
             scope={"allow_sql": True, "tables": ["public.accounts"]},
         )
         assert grant["scope"] == {"allow_sql": True, "tables": ["public.accounts"]}
-        assert await grant_store.get_grant(
-            subject_type="user", subject_id=user_id, datasource_key=datasource_key
-        ) == grant
+        assert (
+            await grant_store.get_grant(subject_type="user", subject_id=user_id, datasource_key=datasource_key) == grant
+        )
 
         agent = await agent_store.put_agent(
             agent_id=f"{prefix}_agent",
@@ -212,7 +212,9 @@ async def test_oceanbase_enterprise_metadata_and_session_round_trip():
             session_id=session_id,
             payload={"schema_version": 1, "prompt": "system", "node_name": "chat"},
         )
-        snapshot = await body_store.load_system_prompt_snapshot(project_id=project_id, scope=scope, session_id=session_id)
+        snapshot = await body_store.load_system_prompt_snapshot(
+            project_id=project_id, scope=scope, session_id=session_id
+        )
         assert snapshot["prompt"] == "system"
 
         await body_store.copy_session(
@@ -225,11 +227,14 @@ async def test_oceanbase_enterprise_metadata_and_session_round_trip():
             session_id,
             copied_session_id,
         ]
-        assert await body_store.load_system_prompt_snapshot(
-            project_id=project_id,
-            scope=scope,
-            session_id=copied_session_id,
-        ) == snapshot
+        assert (
+            await body_store.load_system_prompt_snapshot(
+                project_id=project_id,
+                scope=scope,
+                session_id=copied_session_id,
+            )
+            == snapshot
+        )
     finally:
         await grant_store.delete_grant(subject_type="user", subject_id=user_id, datasource_key=datasource_key)
         await agent_store.delete_agent(f"{prefix}_agent")

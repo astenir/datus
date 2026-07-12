@@ -1226,9 +1226,7 @@ class InMemoryUserDatasourceStore:
 
     async def list_datasources(self, user_id: str) -> list[dict[str, Any]]:
         records = [
-            _copy_user_datasource_record(record)
-            for (owner, _), record in self._datasources.items()
-            if owner == user_id
+            _copy_user_datasource_record(record) for (owner, _), record in self._datasources.items() if owner == user_id
         ]
         return sorted(records, key=lambda record: str(record["created_at"]))
 

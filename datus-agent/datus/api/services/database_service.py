@@ -301,8 +301,7 @@ class DatasourceService:
                     # invalidates this entry, not sibling schemas.
                     try:
                         tables = self._get_table_like_names(
-                            connector,
-                            catalog_name=catalog_name, database_name=db_name, schema_name=schema
+                            connector, catalog_name=catalog_name, database_name=db_name, schema_name=schema
                         )
                     except Exception as e:
                         logger.warning(
@@ -344,8 +343,7 @@ class DatasourceService:
                 # No schema support — get queryable table-like objects directly. Isolate per-db failures.
                 try:
                     tables = self._get_table_like_names(
-                        connector,
-                        catalog_name=catalog_name, database_name=db_name, schema_name=request.schema_name
+                        connector, catalog_name=catalog_name, database_name=db_name, schema_name=request.schema_name
                     )
                 except Exception as e:
                     logger.warning("Failed to get tables for db=%s: %s", db_name, e)

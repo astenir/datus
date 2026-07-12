@@ -665,7 +665,7 @@ class DashboardArtifactTools:
                     ),
                     kind="dashboard",
                     created_at=utc_now_iso(),
-            )
+                )
             result = self._activate(dashboard_slug, mode="edit", create_dirs=True, manifest=manifest)
             if result.success == 1 and isinstance(result.result, dict):
                 missing_items = []
