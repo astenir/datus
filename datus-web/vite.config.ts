@@ -1,7 +1,8 @@
 import path from 'node:path'
 import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
-import { defineConfig, loadEnv } from 'vite'
+import { loadEnv } from 'vite'
+import { configDefaults, defineConfig } from 'vitest/config'
 
 const absoluteUrlPattern = /^[a-zA-Z][a-zA-Z\d+\-.]*:/
 
@@ -23,6 +24,9 @@ export default defineConfig(({ mode }) => {
   return {
     base: appBase,
     plugins: [vue(), tailwindcss()],
+    test: {
+      exclude: [...configDefaults.exclude, 'tests/browser/**'],
+    },
     build: {
       rollupOptions: {
         output: {

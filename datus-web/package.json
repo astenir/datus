@@ -9,6 +9,7 @@
     "build": "vue-tsc -b && vite build",
     "build:intranet": "vue-tsc -b && vite build --mode intranet",
     "test": "vitest run",
+    "test:browser": "tsc -p tsconfig.browser.json && node scripts/run-browser-tests.mjs",
     "preview": "vite preview --host 0.0.0.0",
     "lint:typography": "node scripts/lint-typography.mjs",
     "api:pull": "node scripts/sync-openapi.mjs",
