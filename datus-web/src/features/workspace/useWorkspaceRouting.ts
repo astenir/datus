@@ -1,4 +1,4 @@
-import { computed, onMounted, shallowRef, watch, type ComputedRef, type Ref } from "vue"
+import { computed, onBeforeUnmount, onMounted, shallowRef, watch, type ComputedRef, type Ref } from "vue"
 import { useRoute, useRouter } from "vue-router"
 
 import { consumePostLoginRedirect, type AuthState } from "@/composables/useAuth"
@@ -28,6 +28,7 @@ import type {
 } from "@/features/workspace/route-state"
 import type { AdminViewTab, ArtifactViewTab, WorkspaceView } from "@/features/workspace/types"
 import { isWorkspaceView, workspaceRouteNames } from "@/features/workspace/types"
+import { createWorkspaceRouteContextApplier } from "@/features/workspace/workspace-route-context"
 
 interface UseWorkspaceRoutingOptions {
   workspace: ChatWorkspace
@@ -40,6 +41,8 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
   const route = useRoute()
   const router = useRouter()
   const routeContextHydrated = shallowRef(false)
+  const routeContextApplier = createWorkspaceRouteContextApplier(options.workspace)
+  let activeRouteContextApply: Promise<void> | null = null
 
   const activeView = computed<WorkspaceView>(() => route.meta.workspaceView ?? "chat")
   const chatSessionId = computed(() => routeStringParam(route.params.sessionId))
@@ -337,24 +340,20 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
   }
 
   async function applyRouteWorkspaceContext() {
-    const nextDatasource = routeWorkspaceContext.value.datasource ?? ""
-    const nextDatabase = routeWorkspaceContext.value.database ?? ""
-    const nextSchema = routeWorkspaceContext.value.schema ?? ""
-
-    if (nextDatasource && options.workspace.currentDatasource.value !== nextDatasource) {
-      const switched = await options.workspace.handleDatasourceSwitch(nextDatasource)
-      if (!switched && options.workspace.currentDatasource.value !== nextDatasource) {
-        return
+    const applyPromise = routeContextApplier.apply(routeWorkspaceContext.value)
+    activeRouteContextApply = applyPromise
+    try {
+      await applyPromise
+    } finally {
+      if (activeRouteContextApply === applyPromise) {
+        activeRouteContextApply = null
       }
     }
+  }
 
-    if (options.workspace.database.value !== nextDatabase) {
-      options.workspace.setDatabase(nextDatabase)
-    }
-
-    if (options.workspace.schema.value !== nextSchema) {
-      options.workspace.setSchema(nextSchema)
-    }
+  function invalidateRouteWorkspaceContext() {
+    routeContextApplier.invalidate()
+    activeRouteContextApply = null
   }
 
   function syncRouteWorkspaceContext() {
@@ -372,6 +371,10 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
 
     await router.replace(chatRouteForSession())
   }
+
+  onBeforeUnmount(() => {
+    invalidateRouteWorkspaceContext()
+  })
 
   onMounted(async () => {
     if (options.authState.value.loading) {
@@ -441,6 +444,7 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
       routeWorkspaceContext.value.schema,
     ] as const,
     ([hydrated, authenticated]) => {
+      invalidateRouteWorkspaceContext()
       if (!hydrated || !authenticated) return
       void applyRouteWorkspaceContext()
     },
@@ -459,6 +463,8 @@ export function useWorkspaceRouting(options: UseWorkspaceRoutingOptions) {
     ] as const,
     ([hydrated, authenticated, datasource, database, schema, routeDatasource, routeDatabase, routeSchema]) => {
       if (!hydrated || !authenticated) return
+      // Do not write intermediate workspace state back over the route that is currently being applied.
+      if (activeRouteContextApply) return
       if ((routeDatasource ?? "") === datasource && (routeDatabase ?? "") === database && (routeSchema ?? "") === schema) {
         return
       }
