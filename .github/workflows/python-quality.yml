@@ -22,42 +22,33 @@ jobs:
       db_adapters: ${{ steps.filter.outputs.db_adapters }}
       storage_adapters: ${{ steps.filter.outputs.storage_adapters }}
     steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Test change detector
+        run: node --test .github/scripts/detect-python-changes.test.cjs
+
       - name: Detect affected projects
         id: filter
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            if (context.eventName !== "pull_request") {
-              core.setOutput("agent", "true");
-              core.setOutput("db_adapters", "true");
-              core.setOutput("storage_adapters", "true");
-              return;
+            const { detectPythonChanges } = require("./.github/scripts/detect-python-changes.cjs");
+            const files = context.eventName === "pull_request"
+              ? await github.paginate(
+                  github.rest.pulls.listFiles,
+                  {
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: context.issue.number,
+                    per_page: 100,
+                  },
+                )
+              : [];
+
+            for (const [project, changed] of Object.entries(detectPythonChanges(context.eventName, files))) {
+              core.setOutput(project, String(changed));
             }
-
-            const files = await github.paginate(
-              github.rest.pulls.listFiles,
-              {
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: context.issue.number,
-                per_page: 100,
-              },
-            );
-            const filenames = files.map(({ filename }) => filename);
-            const workflowChanged = filenames.includes(".github/workflows/python-quality.yml");
-
-            core.setOutput(
-              "agent",
-              String(workflowChanged || filenames.some(filename => filename.startsWith("datus-agent/"))),
-            );
-            core.setOutput(
-              "db_adapters",
-              String(workflowChanged || filenames.some(filename => filename.startsWith("datus-db-adapters/"))),
-            );
-            core.setOutput(
-              "storage_adapters",
-              String(workflowChanged || filenames.some(filename => filename.startsWith("datus-storage-adapters/"))),
-            );
 
   agent-quality:
     name: Agent quality
