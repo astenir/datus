@@ -27,6 +27,8 @@ test("shared detector files run both jobs", () => {
   for (const filename of [
     ".github/scripts/detect-frontend-changes.cjs",
     ".github/scripts/detect-frontend-changes.test.cjs",
+    ".github/scripts/verify-quality-gate.cjs",
+    ".github/scripts/verify-quality-gate.test.cjs",
   ]) {
     const files = [{ filename, status: "modified" }];
     assert.equal(detectRendererChanges("pull_request", files), true);
