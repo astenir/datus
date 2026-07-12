@@ -95,6 +95,19 @@ jobs:
       - name: Validate harness coverage map
         run: uv run python ci/harness/validate_coverage_map.py --strict
 
+      - name: Run portable unit tests
+        env:
+          DATUS_TEST_LAYER: unit
+        run: >-
+          uv run pytest -q
+          tests/unit_tests/ci
+          tests/unit_tests/api/auth
+          tests/unit_tests/api/enterprise/test_defaults.py
+          tests/unit_tests/api/enterprise/test_route_security_matrix.py
+          tests/unit_tests/configuration
+          --tb=short
+          --disable-warnings
+
   db-adapters-quality:
     name: DB adapters quality
     needs: changes
@@ -128,6 +141,9 @@ jobs:
       - name: Run Ruff
         run: uv run ruff check .
 
+      - name: Run unit tests
+        run: ci/run-unit-tests.sh
+
   storage-adapters-quality:
     name: Storage adapters quality
     needs: changes
@@ -146,6 +162,21 @@ jobs:
 
       - name: Run Ruff
         run: uvx --from ruff==0.15.6 ruff check .
+
+      - name: Run portable unit tests
+        run: >-
+          uv run --no-project
+          --with pytest
+          --with-editable ./datus-storage-base
+          --with-editable ./datus-storage-oceanbase-mysql
+          pytest -q
+          datus-storage-oceanbase-mysql/tests/test_oceanbase_mysql_rdb_backend.py::TestBackendConfig
+          datus-storage-oceanbase-mysql/tests/test_oceanbase_mysql_rdb_backend.py::TestLogicalDdl
+          datus-storage-oceanbase-mysql/tests/test_oceanbase_mysql_vector_backend.py::test_schema_converter_uses_vector_and_indexable_unique_text
+          datus-storage-oceanbase-mysql/tests/test_oceanbase_mysql_vector_backend.py::test_parse_vector_dim_from_column_type
+          datus-storage-oceanbase-mysql/tests/test_oceanbase_mysql_vector_backend.py::test_vector_dim_from_schema_uses_fixed_size_vector_field
+          datus-storage-oceanbase-mysql/tests/test_oceanbase_mysql_vector_backend.py::test_initialize_requires_connection_config
+          --tb=short
 
   gate:
     name: Python quality gate
