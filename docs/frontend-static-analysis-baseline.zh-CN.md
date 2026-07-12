@@ -48,7 +48,7 @@
 本次基线验证结果：
 
 - Vue TypeScript project build 通过。
-- 54 个 Vitest 文件、452 项单元测试通过。
+- 55 个 Vitest 文件、455 项单元测试通过。
 - 4 项 Chromium Renderer 浏览器测试通过。
 - Typography 扫描通过；两处 `text-base` 是现有规则要求人工确认的例外，不是失败。
 - 生产构建通过。
@@ -59,7 +59,7 @@
 
 | 范围 | Vue 文件 | TypeScript 文件 | 其中测试文件 | 合计行数 |
 | --- | ---: | ---: | ---: | ---: |
-| `features`、`composables`、`lib`、`router` | 52 | 128 | 54 | 42,374 |
+| `features`、`composables`、`lib`、`router` | 52 | 130 | 55 | 42,528 |
 | `components/ui`、`components/ai-elements` | 561 | 116 | - | 19,004 |
 
 生成组件有 677 个文件，数量明显高于项目核心代码。任何新静态规则都必须先限定所有权范围，否则规则结果会主要反映生成模板风格，而不是 Datus 业务代码风险。
@@ -103,13 +103,13 @@
 
 对应测试覆盖存储 API 不存在、属性访问抛错、读写操作抛错、损坏 JSON、错误字段类型，以及主题、聊天设置和 API 地址在持久化失败时继续工作的行为。
 
-### 中风险：异步路由上下文可能发生旧结果覆盖新状态
+### 已处理：异步路由上下文可能发生旧结果覆盖新状态
 
 相关位置：`datus-web/src/features/workspace/useWorkspaceRouting.ts`。
 
-`applyRouteWorkspaceContext()` 会先读取 datasource/database/schema 快照，再等待数据源切换，最后写入 database 和 schema。路由查询参数在等待期间再次变化时，多个调用可以并发执行；较早调用可能在较晚调用之后恢复并写回旧快照。现有 route-state 单元测试验证了查询参数解析和替换，但没有覆盖这种异步竞态。
+基线审计发现，`applyRouteWorkspaceContext()` 会先读取 datasource/database/schema 快照，再等待数据源切换，最后写入 database 和 schema。路由查询参数在等待期间再次变化时，多个调用可以并发执行；较早调用可能在较晚调用之后恢复并写回旧快照。
 
-建议引入单调递增的请求代号或 watcher cleanup/invalidation，只允许最新一次上下文应用写入状态，并增加“第一次切换延迟、第二次切换先完成”的确定性测试。
+该项已通过 `datus-web/src/features/workspace/workspace-route-context.ts` 收口。每次应用都会取得单调递增的请求代号，只有最新请求可以在异步切换后写入 database 和 schema；路由/认证状态变化和组件卸载也会使未完成请求失效。确定性测试覆盖“第一次切换延迟、第二次切换先完成”的顺序，并确认旧调用不能覆盖最新上下文。
 
 ### 低风险：外部 JSON 边界仍有直接类型断言
 
@@ -175,11 +175,11 @@ vite.config.ts
 
 ## 门禁结论与迁移计划
 
-目前不建议立即把 ESLint 加入 required Web quality gate。原因不是现有代码错误很多，而是规则依赖和配置尚不存在，且已确认的两个主要风险需要测试与实现修复，不能由 lint 自动解决。
+目前仍不建议直接把 ESLint 加入 required Web quality gate。基线确认的两个主要运行时风险已经完成实现修复和测试；下一步可以引入最小配置，但应先审阅首轮结果并让规则在项目自有范围稳定通过，再升级为 required gate。
 
 建议按以下阶段推进：
 
-1. 修复安全存储访问和路由上下文竞态，并补充确定性测试。安全存储部分已完成，路由上下文竞态仍待处理。
+1. 修复安全存储访问和路由上下文竞态，并补充确定性测试。该阶段已完成。
 2. 引入只覆盖项目自有代码的最小 ESLint flat config，在本地和 CI 中试运行；不执行批量 `--fix`。
 3. 对首轮结果逐项分类，修复真实问题，对生成层、测试 fixture 和合理模式使用目录级配置或最小例外。
 4. 当首批规则在干净分支稳定通过后，把 `npm run lint` 加入现有 Web Quality 实体 job；保持 required context 名称 `Web quality gate` 不变。
