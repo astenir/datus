@@ -328,7 +328,7 @@ describe("api client", () => {
 
     const result = await dashboardApi.query("http://localhost:8000/", "fund_overview", "total_nav", {
       trade_date: "2026-06-01",
-    });
+    }, 3);
 
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/dashboard/query");
     expect(JSON.parse(String((vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit).body))).toEqual({
@@ -337,6 +337,7 @@ describe("api client", () => {
       params: {
         trade_date: "2026-06-01",
       },
+      published_version: 3,
     });
     expect(result?.row_count).toBe(1);
   });

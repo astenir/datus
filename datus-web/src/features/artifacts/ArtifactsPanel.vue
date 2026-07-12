@@ -14,6 +14,7 @@ import ArtifactCollectionGrid from "@/features/artifacts/ArtifactCollectionGrid.
 import ArtifactDetailPanel from "@/features/artifacts/ArtifactDetailPanel.vue"
 import ArtifactShareDialog from "@/features/artifacts/ArtifactShareDialog.vue"
 import ArtifactViewerFrame from "@/features/artifacts/ArtifactViewerFrame.vue"
+import type { ArtifactPreviewQueryRequest } from "@/lib/artifact-preview-bridge"
 import type { ArtifactEditSession, ArtifactShareUpdate } from "@/types"
 import type { ArtifactViewTab } from "@/features/workspace/types"
 
@@ -96,6 +97,15 @@ function editingSlugFor(tab: ArtifactViewTab): string | null {
 function runDashboardQuery(querySlug: string, params: Record<string, unknown>) {
   if (props.tab !== "dashboard" || !selectedDetailSlug.value) return
   void artifacts.runDashboardQuery(selectedDetailSlug.value, querySlug, params)
+}
+
+function runViewerDashboardQuery(request: ArtifactPreviewQueryRequest) {
+  return artifacts.runDashboardPreviewQuery(
+    request.dashboardSlug,
+    request.querySlug,
+    request.params,
+    request.publishedVersion,
+  )
 }
 
 function openPreview(tab: ArtifactViewTab, slug: string | null | undefined) {
@@ -194,6 +204,8 @@ watch(
       :loading="viewerPreviewOpening"
       :error="artifacts.previewError.value"
       :show-chrome="false"
+      :dashboard-slug="props.tab === 'dashboard' ? selectedViewerSlug : null"
+      :query="props.tab === 'dashboard' ? runViewerDashboardQuery : undefined"
       @reload="artifacts.openHtmlPreview(props.tab, selectedViewerSlug)"
     />
 

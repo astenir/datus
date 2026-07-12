@@ -1,7 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { setCurrentAccessToken } from "@/lib/request";
-
 const dashboardList = vi.fn();
 const dashboardDetail = vi.fn();
 const dashboardHtmlUrl = vi.fn();
@@ -75,7 +73,6 @@ describe("useArtifacts", () => {
   beforeEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
-    setCurrentAccessToken(null);
     dashboardList.mockResolvedValue([
       {
         slug: "fund-overview",
@@ -413,100 +410,6 @@ describe("useArtifacts", () => {
     expect(toastError).not.toHaveBeenCalledWith("打开 HTML 预览失败");
   });
 
-  it("injects bearer auth into dashboard preview live-query requests", async () => {
-    dashboardHtml.mockResolvedValue(
-      [
-        "<!doctype html><html><head><title>Dashboard</title></head><body>",
-        "<script>window.DatusArtifact.initDashboard({",
-        "queryEndpoint: 'http://api.test/api/v1/dashboard/query'",
-        "});</script></body></html>",
-      ].join(""),
-    );
-    setCurrentAccessToken("dev-alice-token");
-    let previewBlob: Blob | null = null;
-    vi.stubGlobal("URL", {
-      createObjectURL: vi.fn((blob: Blob) => {
-        previewBlob = blob;
-        return "blob:dashboard-preview";
-      }),
-      revokeObjectURL: vi.fn(),
-    });
-    const { useArtifacts } = await import("./useArtifacts");
-    const artifacts = useArtifacts();
-
-    await artifacts.openHtmlPreview("dashboard", "fund-overview");
-
-    expect(dashboardHtml).toHaveBeenCalledWith("http://api.test", "fund-overview");
-    expect(artifacts.activePreviewUrl.value).toBe("blob:dashboard-preview");
-    expect(previewBlob).not.toBeNull();
-    const html = await previewBlob!.text();
-    expect(html).toContain("Bearer \" + token");
-    expect(html).toContain("dev-alice-token");
-    expect(html).toContain("http://api.test/api/v1/dashboard/query");
-  });
-
-  it("leaves dashboard preview HTML unchanged when no live query endpoint is present", async () => {
-    const { withDashboardPreviewAuth } = await import("./useArtifacts");
-    const html = "<!doctype html><html><head></head><body>dashboard</body></html>";
-
-    expect(withDashboardPreviewAuth(html, "dev-alice-token")).toBe(html);
-    expect(withDashboardPreviewAuth(html, null)).toBe(html);
-  });
-
-  it("anchors preview runtime API rewrites to the opener origin for blob pages", async () => {
-    vi.stubGlobal("window", {
-      location: { origin: "https://datus.example.com" },
-    });
-    const { withArtifactPreviewRuntime } = await import("./useArtifacts");
-    const html = withArtifactPreviewRuntime(
-      "<!doctype html><html><head></head><body>dashboard</body></html>",
-      "/datus-api",
-      "dev-alice-token",
-    );
-
-    expect(html).toContain('var appOrigin = "https://datus.example.com"');
-    expect(html).toContain('var apiBase = "/datus-api"');
-    expect(html).toContain("parseTargetUrl(rawUrl)");
-    expect(html).toContain("return withUrlInput(input, target.href)");
-  });
-
-  it("normalizes dashboard preview query endpoints to absolute URLs for blob pages", async () => {
-    vi.stubGlobal("window", {
-      location: { origin: "https://datus.example.com" },
-    });
-    const { withArtifactPreviewRuntime } = await import("./useArtifacts");
-    const html = withArtifactPreviewRuntime(
-      [
-        "<!doctype html><html><head><title>Dashboard</title></head><body>",
-        "<script>window.DatusArtifact.initDashboard({",
-        "queryEndpoint: '/datus-api/api/v1/dashboard/query'",
-        "});</script></body></html>",
-      ].join(""),
-      "/datus-api",
-      "dev-alice-token",
-    );
-
-    expect(html).toContain("queryEndpoint: 'https://datus.example.com/datus-api/api/v1/dashboard/query'");
-  });
-
-  it("passes bearer auth as dashboard query headers for the sandboxed iframe runtime", async () => {
-    vi.stubGlobal("window", {
-      location: { origin: "https://datus.example.com" },
-    });
-    const { withArtifactPreviewRuntime } = await import("./useArtifacts");
-    const html = withArtifactPreviewRuntime(
-      [
-        "<!doctype html><html><head><title>Dashboard</title></head><body>",
-        "<script>window.DatusArtifact.initDashboard({",
-        "queryEndpoint: '/datus-api/api/v1/dashboard/query'",
-        "});</script></body></html>",
-      ].join(""),
-      "/datus-api",
-      "dev-alice-token",
-    );
-
-    expect(html).toContain('queryHeaders: {"Authorization":"Bearer dev-alice-token"}');
-  });
 
   it("runs dashboard queries with route-selected slug and template params", async () => {
     const { useArtifacts } = await import("./useArtifacts");
@@ -523,6 +426,29 @@ describe("useArtifacts", () => {
     expect(artifacts.queryResult.value?.sql).toBe("select 10 as total");
     expect(artifacts.activeQuerySlug.value).toBe("total_nav");
     expect(artifacts.queryError.value).toBeNull();
+  });
+
+  it("runs preview dashboard queries without sharing detail-query state", async () => {
+    const { useArtifacts } = await import("./useArtifacts");
+    const artifacts = useArtifacts();
+
+    const result = await artifacts.runDashboardPreviewQuery(
+      "fund-overview",
+      "total_nav",
+      { trade_date: "2026-06-01" },
+      3,
+    );
+
+    expect(dashboardQuery).toHaveBeenCalledWith(
+      "http://api.test",
+      "fund-overview",
+      "total_nav",
+      { trade_date: "2026-06-01" },
+      3,
+    );
+    expect(result?.row_count).toBe(1);
+    expect(artifacts.queryResult.value).toBeNull();
+    expect(artifacts.activeQuerySlug.value).toBeNull();
   });
 
   it("resets dashboard query state when detail target changes", async () => {

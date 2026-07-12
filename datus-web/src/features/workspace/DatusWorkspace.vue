@@ -268,7 +268,10 @@ function handleLogout() {
           value="chat"
           class="m-0 flex min-h-0 flex-1"
         >
-          <ChatPanel :workspace="workspace" />
+          <ChatPanel
+            :workspace="workspace"
+            @open-artifact="openArtifactDetail"
+          />
         </TabsContent>
         <TabsContent
           value="knowledge"

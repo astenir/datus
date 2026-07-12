@@ -66,8 +66,14 @@ export const dashboardApi = {
     dashboardSlug: string,
     querySlug: string,
     params: Record<string, unknown> = {},
+    publishedVersion?: number,
   ): Promise<SqlQueryResultEnvelope | null> {
-    return apiResult(baseUrl, "/api/v1/dashboard/query", jsonBody({ dashboard_slug: dashboardSlug, query_slug: querySlug, params }));
+    return apiResult(baseUrl, "/api/v1/dashboard/query", jsonBody({
+      dashboard_slug: dashboardSlug,
+      query_slug: querySlug,
+      params,
+      ...(publishedVersion === undefined ? {} : { published_version: publishedVersion }),
+    }));
   },
 };
 

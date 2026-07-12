@@ -3,7 +3,7 @@ import { toast } from "vue-sonner";
 
 import { useConnection } from "@/composables/useConnection";
 import { artifactShareApi, dashboardApi, reportApi } from "@/lib/api";
-import { getCurrentAccessToken } from "@/lib/request";
+import { withArtifactPreviewRuntime } from "@/lib/artifact-preview-bridge";
 import type {
   ArtifactManifest,
   ArtifactShare,
@@ -18,6 +18,7 @@ import type {
 import type { ArtifactViewTab } from "@/features/workspace/types";
 
 export type ArtifactDetail = DashboardDetail | ReportDetail;
+export { withArtifactPreviewRuntime } from "@/lib/artifact-preview-bridge";
 export type ArtifactSharePrincipalOption = {
   value: string;
   label: string;
@@ -80,250 +81,6 @@ export function createArtifactPreviewUrl(html: string): string {
   return URL.createObjectURL(new Blob([html], { type: "text/html;charset=utf-8" }));
 }
 
-function safeScriptString(value: string): string {
-  return JSON.stringify(value).replace(/</g, "\\u003c");
-}
-
-function normalizedPreviewApiBase(baseUrl: string): string {
-  return baseUrl.trim().replace(/\/+$/, "");
-}
-
-function decodeJsSingleQuotedString(value: string): string {
-  return value
-    .replace(/<\\\//g, "</")
-    .replace(/\\n/g, "\n")
-    .replace(/\\r/g, "\r")
-    .replace(/\\'/g, "'")
-    .replace(/\\\\/g, "\\");
-}
-
-function encodeJsSingleQuotedString(value: string): string {
-  return value
-    .replace(/\\/g, "\\\\")
-    .replace(/\n/g, "\\n")
-    .replace(/\r/g, "\\r")
-    .replace(/'/g, "\\'")
-    .replace(/<\//g, "<\\/");
-}
-
-function dashboardQueryEndpointFromHtml(html: string): string | null {
-  const match = html.match(/queryEndpoint:\s*'((?:\\.|[^'\\])*)'/);
-  return match?.[1] ? decodeJsSingleQuotedString(match[1]) : null;
-}
-
-function withAbsoluteDashboardQueryEndpoint(html: string, appOrigin: string): string {
-  if (!appOrigin) return html;
-
-  const match = html.match(/queryEndpoint:\s*'((?:\\.|[^'\\])*)'/);
-  if (!match?.[1] || match.index === undefined) return html;
-
-  const endpoint = decodeJsSingleQuotedString(match[1]);
-  let absoluteEndpoint: string;
-  try {
-    absoluteEndpoint = new URL(endpoint, appOrigin).href;
-  } catch {
-    return html;
-  }
-
-  if (absoluteEndpoint === endpoint) return html;
-
-  const nextConfig = match[0].replace(match[1], encodeJsSingleQuotedString(absoluteEndpoint));
-  return `${html.slice(0, match.index)}${nextConfig}${html.slice(match.index + match[0].length)}`;
-}
-
-function withDashboardQueryHeaders(html: string, accessToken: string): string {
-  const token = accessToken.trim();
-  if (!token || html.includes("queryHeaders:")) return html;
-
-  const match = html.match(/queryEndpoint:\s*'((?:\\.|[^'\\])*)'\s*,?/);
-  if (!match?.[0] || match.index === undefined) return html;
-
-  const headers = `{"Authorization":${safeScriptString(`Bearer ${token}`)}}`;
-  const separator = /,\s*$/.test(match[0]) ? "" : ",";
-  const nextConfig = `${match[0]}${separator}\n            queryHeaders: ${headers}`;
-  return `${html.slice(0, match.index)}${nextConfig}${html.slice(match.index + match[0].length)}`;
-}
-
-function injectPreviewHeadScript(html: string, script: string): string {
-  const marker = "</head>";
-  const index = html.toLowerCase().indexOf(marker);
-  if (index === -1) return `${script}\n${html}`;
-
-  return `${html.slice(0, index)}${script}\n${html.slice(index)}`;
-}
-
-export function withArtifactPreviewRuntime(html: string, baseUrl: string, accessToken: string | null): string {
-  const apiBase = normalizedPreviewApiBase(baseUrl);
-  const appOrigin = typeof window !== "undefined" && window.location?.origin && window.location.origin !== "null"
-    ? window.location.origin
-    : "";
-  const token = accessToken?.trim() ?? "";
-  if (!apiBase && !token) return html;
-
-  const script = `<script>
-(function () {
-  var apiBase = ${safeScriptString(apiBase)};
-  var appOrigin = ${safeScriptString(appOrigin)};
-  var token = ${safeScriptString(token)};
-  if (window.__datusPreviewRuntimeInstalled || !window.fetch) return;
-  window.__datusPreviewRuntimeInstalled = true;
-  var originalFetch = window.fetch.bind(window);
-
-  function requestUrl(input) {
-    if (typeof input === "string" || input instanceof URL) return String(input);
-    if (input && typeof input.url === "string") return input.url;
-    return "";
-  }
-
-  function isDatusApiPath(pathname) {
-    return pathname === "/api" || pathname.indexOf("/api/") === 0 || pathname === "/health";
-  }
-
-  function originBase() {
-    if (appOrigin) return appOrigin;
-    return window.location.origin && window.location.origin !== "null" ? window.location.origin : "";
-  }
-
-  function apiBaseUrl() {
-    try {
-      return apiBase ? new URL(apiBase, originBase() || window.location.href) : null;
-    } catch (error) {
-      return null;
-    }
-  }
-
-  function parseTargetUrl(rawUrl) {
-    return new URL(rawUrl, originBase() || window.location.href);
-  }
-
-  function configuredPathMatches(pathname) {
-    var base = apiBaseUrl();
-    if (!base) return isDatusApiPath(pathname);
-
-    var basePath = base.pathname.replace(/\\/+$/, "");
-    var apiPrefix = basePath ? basePath + "/api/" : "/api/";
-    return isDatusApiPath(pathname)
-      || pathname === basePath + "/api"
-      || pathname.indexOf(apiPrefix) === 0
-      || pathname === basePath + "/health";
-  }
-
-  function withUrlInput(input, href) {
-    if (input instanceof Request) return new Request(href, input);
-    return href;
-  }
-
-  function rewriteDatusApiInput(input) {
-    var rawUrl = requestUrl(input);
-    var base = apiBaseUrl();
-    if (!rawUrl) return input;
-
-    try {
-      var target = parseTargetUrl(rawUrl);
-      var pageOrigin = originBase();
-      if (pageOrigin && target.origin !== pageOrigin && (!base || target.origin !== base.origin)) return input;
-
-      if (base && pageOrigin && target.origin === pageOrigin && isDatusApiPath(target.pathname)) {
-        var basePath = base.pathname.replace(/\\/+$/, "");
-        var rewritten = new URL(target.href);
-        rewritten.protocol = base.protocol;
-        rewritten.host = base.host;
-        rewritten.pathname = basePath + target.pathname;
-        return withUrlInput(input, rewritten.href);
-      }
-
-      if (configuredPathMatches(target.pathname)) return withUrlInput(input, target.href);
-      return input;
-    } catch (error) {
-      return input;
-    }
-  }
-
-  function isConfiguredDatusApiTarget(input) {
-    try {
-      var target = parseTargetUrl(requestUrl(input));
-      var base = apiBaseUrl();
-      if (!base) return configuredPathMatches(target.pathname) && target.origin === originBase();
-
-      return target.origin === base.origin && configuredPathMatches(target.pathname);
-    } catch (error) {
-      return false;
-    }
-  }
-
-  window.fetch = function (input, init) {
-    var nextInput = rewriteDatusApiInput(input);
-    if (!token || !isConfiguredDatusApiTarget(nextInput)) {
-      return originalFetch(nextInput, init);
-    }
-
-    var nextInit = init ? Object.assign({}, init) : {};
-    var requestHeaders = input instanceof Request ? input.headers : undefined;
-    var headers = new Headers(nextInit.headers || requestHeaders);
-    if (!headers.has("Authorization")) {
-      headers.set("Authorization", "Bearer " + token);
-    }
-    nextInit.headers = headers;
-    return originalFetch(nextInput, nextInit);
-  };
-})();
-</script>`;
-
-  const htmlWithRuntimeConfig = withDashboardQueryHeaders(
-    withAbsoluteDashboardQueryEndpoint(html, appOrigin),
-    token,
-  );
-  return injectPreviewHeadScript(htmlWithRuntimeConfig, script);
-}
-
-export function withDashboardPreviewAuth(html: string, accessToken: string | null): string {
-  const token = accessToken?.trim();
-  const queryEndpoint = dashboardQueryEndpointFromHtml(html);
-  if (!token || !queryEndpoint) return html;
-
-  const script = `<script>
-(function () {
-  var token = ${safeScriptString(token)};
-  var allowedEndpoint = ${safeScriptString(queryEndpoint)};
-  if (!token || !allowedEndpoint || !window.fetch || window.__datusPreviewAuthInstalled) return;
-  window.__datusPreviewAuthInstalled = true;
-  var originalFetch = window.fetch.bind(window);
-
-  function requestUrl(input) {
-    if (typeof input === "string" || input instanceof URL) return String(input);
-    if (input && typeof input.url === "string") return input.url;
-    return "";
-  }
-
-  function matchesQueryEndpoint(input) {
-    try {
-      var target = new URL(requestUrl(input), window.location.href);
-      var allowed = new URL(allowedEndpoint, window.location.href);
-      return target.origin === allowed.origin && target.pathname === allowed.pathname;
-    } catch (error) {
-      return false;
-    }
-  }
-
-  window.fetch = function (input, init) {
-    if (!matchesQueryEndpoint(input)) {
-      return originalFetch(input, init);
-    }
-
-    var nextInit = init ? Object.assign({}, init) : {};
-    var requestHeaders = input instanceof Request ? input.headers : undefined;
-    var headers = new Headers(nextInit.headers || requestHeaders);
-    if (!headers.has("Authorization")) {
-      headers.set("Authorization", "Bearer " + token);
-    }
-    nextInit.headers = headers;
-    return originalFetch(input, nextInit);
-  };
-})();
-</script>`;
-
-  return injectPreviewHeadScript(html, script);
-}
 
 function userOption(user: ArtifactShareUserSummary): ArtifactSharePrincipalOption {
   const userId = user.user_id;
@@ -486,7 +243,7 @@ export function useArtifacts() {
 
     try {
       const rawHtml = await artifactHtml(connection.effectiveBase(), tab, slug);
-      const html = withArtifactPreviewRuntime(rawHtml, connection.effectiveBase(), getCurrentAccessToken());
+      const html = withArtifactPreviewRuntime(rawHtml);
       const url = createArtifactPreviewUrl(html);
 
       if (previewRequestId.value !== requestId) {
@@ -767,6 +524,21 @@ export function useArtifacts() {
     }
   }
 
+  function runDashboardPreviewQuery(
+    dashboardSlug: string,
+    querySlug: string,
+    params: Record<string, unknown>,
+    publishedVersion?: number,
+  ) {
+    return dashboardApi.query(
+      connection.effectiveBase(),
+      dashboardSlug,
+      querySlug,
+      params,
+      publishedVersion,
+    );
+  }
+
   function htmlUrl(tab: ArtifactViewTab, slug: string): string {
     return artifactHtmlUrl(connection.effectiveBase(), tab, slug);
   }
@@ -812,6 +584,7 @@ export function useArtifacts() {
     loadArtifacts,
     loadDetail,
     runDashboardQuery,
+    runDashboardPreviewQuery,
     htmlUrl,
     openHtmlPreview,
     clearPreview,
