@@ -82,6 +82,8 @@ detector 必须同时检查两个字段。只检查 `filename` 会漏掉“从�
 .github/workflows/python-quality.yml
 .github/scripts/detect-python-changes.cjs
 .github/scripts/detect-python-changes.test.cjs
+.github/scripts/check-workflow-policy.cjs
+.github/scripts/check-workflow-policy.test.cjs
 .github/scripts/verify-quality-gate.cjs
 .github/scripts/verify-quality-gate.test.cjs
 ```
@@ -123,6 +125,8 @@ Visual artifact 代码同时影响 Agent 内嵌 renderer 和浏览器行为，�
 ```text
 .github/scripts/detect-frontend-changes.cjs
 .github/scripts/detect-frontend-changes.test.cjs
+.github/scripts/check-workflow-policy.cjs
+.github/scripts/check-workflow-policy.test.cjs
 .github/scripts/verify-quality-gate.cjs
 .github/scripts/verify-quality-gate.test.cjs
 ```
@@ -191,8 +195,10 @@ retry-exempt-status-codes: 400,401,403,404,422
 
 ## 安全与供应链约束
 
-- Actions 必须固定到完整 commit SHA，并保留版本注释。
-- 默认权限保持只读：`contents: read` 和 detector 所需的 `pull-requests: read`。
+- `.github/scripts/check-workflow-policy.cjs` 自动扫描 `.github/workflows/*.yml` 和 `*.yaml`。
+- 远程 Actions 必须固定到 40 位小写 commit SHA，并保留版本注释；仓库内 `uses: ./...` 可以使用相对路径。
+- 每个 workflow 必须登记显式权限白名单；当前三个 workflow 只允许 `contents: read` 和 `pull-requests: read`。
+- 禁止 job 级 `permissions` 覆盖。新增 workflow 或权限必须先更新并评审显式白名单。
 - 不向 PR workflow 注入部署 secrets、真实数据库凭据或远程 LLM key。
 - 不提交本地缓存、下载的 actionlint 二进制、构建产物或浏览器文件。
 - 修改上游依赖或 renderer vendor 内容时，仍需遵守对应子项目的 `AGENTS.md`。
@@ -203,6 +209,12 @@ retry-exempt-status-codes: 400,401,403,404,422
 
 ```bash
 node --test .github/scripts/*.test.cjs
+```
+
+直接检查 Action 固定与权限策略：
+
+```bash
+node .github/scripts/check-workflow-policy.cjs
 ```
 
 检查所有 CommonJS 文件语法：
@@ -276,7 +288,7 @@ gh workflow run web-quality.yml --ref main
 - [ ] `previous_filename` 没有被丢弃。
 - [ ] detector output、实体 job `if`、gate 环境变量名称一致。
 - [ ] required gate 名称未变化，或已计划同步迁移 Ruleset。
-- [ ] 新 Action 固定完整 SHA。
+- [ ] 新 Action 固定完整 40 位小写 SHA，workflow 权限已登记显式白名单。
 - [ ] 实体测试没有自动重试。
 - [ ] 本地 Node 合约测试、actionlint 和 `git diff --check` 通过。
 - [ ] PR 上核对相关和无关 job 的实际状态。

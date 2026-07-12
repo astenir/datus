@@ -45,6 +45,8 @@ test("runs every project when shared Python CI files change", () => {
     ".github/workflows/python-quality.yml",
     ".github/scripts/detect-python-changes.cjs",
     ".github/scripts/detect-python-changes.test.cjs",
+    ".github/scripts/check-workflow-policy.cjs",
+    ".github/scripts/check-workflow-policy.test.cjs",
     ".github/scripts/verify-quality-gate.cjs",
     ".github/scripts/verify-quality-gate.test.cjs",
   ]) {
