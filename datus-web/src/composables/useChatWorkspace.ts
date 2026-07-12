@@ -246,7 +246,7 @@ export function useChatWorkspace() {
   }
 
   function handleSend(message: string) {
-    sendMessage({
+    void sendMessage({
       message,
       selectedAgent: selectedAgent.value,
       model: selectedModel.value,
@@ -257,7 +257,7 @@ export function useChatWorkspace() {
   }
 
   function handleInsert(message: string) {
-    insertMessage(message);
+    void insertMessage(message);
   }
 
   function artifactKindLabel(session: ArtifactEditSession) {
@@ -280,7 +280,7 @@ export function useChatWorkspace() {
 
   function handleRefreshConnection() {
     if (!canReadAgentConfig.value) return;
-    checkConnection();
+    void checkConnection();
   }
 
   function handleDatasourceSwitched() {
@@ -423,7 +423,7 @@ export function useChatWorkspace() {
 
   watch(database, (db) => {
     if (db && canQueryDatasourceCatalog(currentDatasource.value)) {
-      loadCatalog(db, currentDatasource.value);
+      void loadCatalog(db, currentDatasource.value);
     }
   });
 

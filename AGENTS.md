@@ -25,6 +25,7 @@ Keep the repository root minimal. Do not add application code, generated artifac
 - `cd datus-storage-adapters && uv run ruff check .`
 - `cd datus-storage-adapters && uv run pytest`
 - `cd datus-web && npm install`
+- `cd datus-web && npm run lint`
 - `cd datus-web && npm test`
 - `cd datus-web && npm run build`
 
