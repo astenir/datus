@@ -2,10 +2,6 @@ name: Web Quality
 
 on:
   pull_request:
-    paths:
-      - ".github/workflows/web-quality.yml"
-      - "datus-web/**"
-      - "datus-agent/datus/agent/node/visual_artifact/**"
   merge_group:
   workflow_dispatch:
 
@@ -15,10 +11,44 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
+  changes:
+    name: Detect relevant changes
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.filter.outputs.result }}
+    steps:
+      - name: Detect web changes
+        id: filter
+        uses: actions/github-script@v7
+        with:
+          script: |
+            if (context.eventName !== "pull_request") {
+              return true;
+            }
+
+            const files = await github.paginate(
+              github.rest.pulls.listFiles,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                per_page: 100,
+              },
+            );
+
+            return files.some(({ filename }) =>
+              filename === ".github/workflows/web-quality.yml" ||
+              filename.startsWith("datus-web/") ||
+              filename.startsWith("datus-agent/datus/agent/node/visual_artifact/"),
+            );
+
   web-quality:
     name: Tests and build
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     defaults:
@@ -53,3 +83,19 @@ jobs:
 
       - name: Build production assets
         run: npm run build
+
+  gate:
+    name: Web quality gate
+    needs:
+      - changes
+      - web-quality
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required jobs
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          WEB_RESULT: ${{ needs.web-quality.result }}
+        run: |
+          test "$CHANGES_RESULT" = "success"
+          test "$WEB_RESULT" = "success" || test "$WEB_RESULT" = "skipped"

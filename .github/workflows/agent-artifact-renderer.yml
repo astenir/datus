@@ -2,13 +2,6 @@ name: Agent Artifact Renderer
 
 on:
   pull_request:
-    paths:
-      - ".github/workflows/agent-artifact-renderer.yml"
-      - "datus-agent/datus/agent/node/visual_artifact/**"
-      - "datus-agent/tests/integration/test_artifact_renderer_package.py"
-      - "datus-agent/tests/unit_tests/agent/node/test_dashboard_html_renderer.py"
-      - "datus-agent/pyproject.toml"
-      - "datus-agent/uv.lock"
   merge_group:
   workflow_dispatch:
 
@@ -18,10 +11,50 @@ concurrency:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
+  changes:
+    name: Detect relevant changes
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.filter.outputs.result }}
+    steps:
+      - name: Detect renderer changes
+        id: filter
+        uses: actions/github-script@v7
+        with:
+          script: |
+            if (context.eventName !== "pull_request") {
+              return true;
+            }
+
+            const files = await github.paginate(
+              github.rest.pulls.listFiles,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                per_page: 100,
+              },
+            );
+            const exactPaths = new Set([
+              ".github/workflows/agent-artifact-renderer.yml",
+              "datus-agent/tests/integration/test_artifact_renderer_package.py",
+              "datus-agent/tests/unit_tests/agent/node/test_dashboard_html_renderer.py",
+              "datus-agent/pyproject.toml",
+              "datus-agent/uv.lock",
+            ]);
+
+            return files.some(({ filename }) =>
+              exactPaths.has(filename) ||
+              filename.startsWith("datus-agent/datus/agent/node/visual_artifact/"),
+            );
+
   renderer-package:
     name: Renderer package
+    needs: changes
+    if: needs.changes.outputs.relevant == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -62,3 +95,19 @@ jobs:
           uv run pytest
           tests/integration/test_artifact_renderer_package.py
           tests/unit_tests/agent/node/test_dashboard_html_renderer.py
+
+  gate:
+    name: Agent renderer gate
+    needs:
+      - changes
+      - renderer-package
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify required jobs
+        env:
+          CHANGES_RESULT: ${{ needs.changes.result }}
+          RENDERER_RESULT: ${{ needs.renderer-package.result }}
+        run: |
+          test "$CHANGES_RESULT" = "success"
+          test "$RENDERER_RESULT" = "success" || test "$RENDERER_RESULT" = "skipped"
