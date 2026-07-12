@@ -4,16 +4,25 @@ import { fileURLToPath } from "node:url";
 const host = "127.0.0.1";
 const port = "4187";
 const baseUrl = `http://${host}:${port}`;
+const startupTimeoutMs = 90_000;
 const viteCli = fileURLToPath(new URL("../node_modules/vite/bin/vite.js", import.meta.url));
 const playwrightCli = fileURLToPath(new URL("../node_modules/playwright/cli.js", import.meta.url));
 
 function waitForVite(server) {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Timed out while starting the browser test server")), 30_000);
     let output = "";
+    let probeTimer;
+    let settled = false;
+    const timeout = setTimeout(
+      () => finish(reject, new Error(`Timed out while starting the browser test server\n${output}`)),
+      startupTimeoutMs,
+    );
 
     function finish(callback, value) {
+      if (settled) return;
+      settled = true;
       clearTimeout(timeout);
+      clearTimeout(probeTimer);
       server.stdout.off("data", handleOutput);
       server.stderr.off("data", handleOutput);
       server.off("exit", handleExit);
@@ -22,16 +31,29 @@ function waitForVite(server) {
 
     function handleOutput(chunk) {
       output += chunk.toString();
-      if (output.includes("Local:")) finish(resolve);
     }
 
     function handleExit(code) {
       finish(reject, new Error(`Browser test server exited before startup with code ${code ?? "unknown"}\n${output}`));
     }
 
+    async function probe() {
+      try {
+        const response = await fetch(baseUrl, { signal: AbortSignal.timeout(2_000) });
+        if (response.ok) {
+          finish(resolve);
+          return;
+        }
+      } catch {
+        // The server is still starting.
+      }
+      if (!settled) probeTimer = setTimeout(probe, 250);
+    }
+
     server.stdout.on("data", handleOutput);
     server.stderr.on("data", handleOutput);
     server.on("exit", handleExit);
+    void probe();
   });
 }
 
