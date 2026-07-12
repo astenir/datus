@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, useTemplateRef } from "vue"
+import { computed, onMounted, onUnmounted, useTemplateRef, watch } from "vue"
 import { RefreshCwIcon } from "@lucide/vue"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -31,6 +31,7 @@ const emit = defineEmits<{
 
 const frameTitle = computed(() => `${props.title}预览`)
 const frameRef = useTemplateRef<HTMLIFrameElement>("previewFrame")
+let previewController = new AbortController()
 
 function handleWindowMessage(event: MessageEvent<unknown>) {
   const dashboardSlug = props.dashboardSlug?.trim()
@@ -42,11 +43,24 @@ function handleWindowMessage(event: MessageEvent<unknown>) {
     frameRef.value?.contentWindow ?? null,
     dashboardSlug,
     query,
+    previewController.signal,
   )
 }
 
+watch(
+  () => [props.url, props.dashboardSlug, props.query] as const,
+  () => {
+    previewController.abort()
+    previewController = new AbortController()
+  },
+  { flush: "sync" },
+)
+
 onMounted(() => window.addEventListener("message", handleWindowMessage))
-onUnmounted(() => window.removeEventListener("message", handleWindowMessage))
+onUnmounted(() => {
+  previewController.abort()
+  window.removeEventListener("message", handleWindowMessage)
+})
 </script>
 
 <template>

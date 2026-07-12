@@ -99,12 +99,13 @@ function runDashboardQuery(querySlug: string, params: Record<string, unknown>) {
   void artifacts.runDashboardQuery(selectedDetailSlug.value, querySlug, params)
 }
 
-function runViewerDashboardQuery(request: ArtifactPreviewQueryRequest) {
+function runViewerDashboardQuery(request: ArtifactPreviewQueryRequest, signal: AbortSignal) {
   return artifacts.runDashboardPreviewQuery(
     request.dashboardSlug,
     request.querySlug,
     request.params,
     request.publishedVersion,
+    signal,
   )
 }
 

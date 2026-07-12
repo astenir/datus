@@ -11,6 +11,8 @@ describe("artifact preview security boundary", () => {
     expect(viewerSource).toContain('referrerpolicy="no-referrer"');
     expect(viewerSource).toContain('window.addEventListener("message", handleWindowMessage)');
     expect(viewerSource).toContain('window.removeEventListener("message", handleWindowMessage)');
+    expect(viewerSource).toContain("previewController.abort()");
+    expect(viewerSource).toContain("[props.url, props.dashboardSlug, props.query]");
   });
 
   it("routes chat artifact clicks through the workspace instead of a blob window", () => {

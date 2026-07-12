@@ -529,13 +529,14 @@ export function useArtifacts() {
     querySlug: string,
     params: Record<string, unknown>,
     publishedVersion?: number,
+    signal?: AbortSignal,
   ) {
     return dashboardApi.query(
       connection.effectiveBase(),
       dashboardSlug,
       querySlug,
       params,
-      publishedVersion,
+      { publishedVersion, signal },
     );
   }
 

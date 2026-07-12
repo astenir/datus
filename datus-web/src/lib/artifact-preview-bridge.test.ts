@@ -52,11 +52,13 @@ describe("artifact preview bridge", () => {
     const originalFetch = vi.fn().mockResolvedValue(originalResponse);
     const parent = { postMessage: vi.fn() };
     const messageListeners: Array<(event: { source: unknown; data: unknown }) => void> = [];
+    const pagehideListeners: Array<(event: { source: unknown; data: unknown }) => void> = [];
     const previewWindow = {
       parent,
       fetch: originalFetch,
       addEventListener: vi.fn((type: string, listener: (event: { source: unknown; data: unknown }) => void) => {
         if (type === "message") messageListeners.push(listener);
+        if (type === "pagehide") pagehideListeners.push(listener);
       }),
     };
     class TestElement {
@@ -86,12 +88,16 @@ describe("artifact preview bridge", () => {
       addedNodes: TestElement[];
     }>) => void;
     const observer: { callback?: ObserverCallback } = {};
+    const disconnectObserver = vi.fn();
     class TestMutationObserver {
       constructor(callback: ObserverCallback) {
         observer.callback = callback;
       }
 
       observe() {}
+      disconnect() {
+        disconnectObserver();
+      }
     }
     const documentMock = {
       documentElement: new TestElement(),
@@ -183,6 +189,20 @@ describe("artifact preview bridge", () => {
       status: 200,
       payload: { success: true, data: { row_count: 2 } },
     }, "*");
+
+    const abandonedQuery = previewWindow.fetch("/api/v1/dashboard/query", {
+      method: "POST",
+      body: JSON.stringify({
+        dashboard_slug: "fund-overview",
+        query_slug: "total-nav",
+        params: {},
+      }),
+    });
+    await Promise.resolve();
+    pagehideListeners.forEach(listener => listener({ source: null, data: null }));
+
+    await expect(abandonedQuery).rejects.toMatchObject({ name: "AbortError" });
+    expect(disconnectObserver).toHaveBeenCalledOnce();
   });
 
   it("parses a valid request for the selected dashboard", () => {
@@ -220,12 +240,14 @@ describe("artifact preview bridge", () => {
   it("ignores messages that did not come from the active preview iframe", async () => {
     const activeSource = { postMessage: vi.fn() };
     const query = vi.fn();
+    const signal = new AbortController().signal;
 
     const handled = await handleArtifactPreviewMessage(
       { source: { postMessage: vi.fn() }, data: queryMessage() },
       activeSource,
       "fund-overview",
       query,
+      signal,
     );
 
     expect(handled).toBe(false);
@@ -237,12 +259,14 @@ describe("artifact preview bridge", () => {
     const activeSource = { postMessage: vi.fn() };
     const result = { columns: ["total"], data: [{ total: 10 }], row_count: 1 };
     const query = vi.fn().mockResolvedValue(result);
+    const signal = new AbortController().signal;
 
     const handled = await handleArtifactPreviewMessage(
       { source: activeSource, data: queryMessage() },
       activeSource,
       "fund-overview",
       query,
+      signal,
     );
 
     expect(handled).toBe(true);
@@ -251,7 +275,7 @@ describe("artifact preview bridge", () => {
       dashboardSlug: "fund-overview",
       querySlug: "total-nav",
       params: { trade_date: "2026-06-01" },
-    });
+    }, signal);
     expect(activeSource.postMessage).toHaveBeenCalledWith({
       type: ARTIFACT_QUERY_RESULT,
       requestId: "request-1",
@@ -262,12 +286,14 @@ describe("artifact preview bridge", () => {
 
   it("posts a concise failure envelope when the authenticated query fails", async () => {
     const activeSource = { postMessage: vi.fn() };
+    const signal = new AbortController().signal;
 
     await handleArtifactPreviewMessage(
       { source: activeSource, data: queryMessage() },
       activeSource,
       "fund-overview",
       vi.fn().mockRejectedValue(new Error("backend details")),
+      signal,
     );
 
     expect(activeSource.postMessage).toHaveBeenCalledWith({
@@ -276,5 +302,44 @@ describe("artifact preview bridge", () => {
       status: 502,
       payload: { success: false, errorMessage: "运行仪表盘查询失败" },
     }, "*");
+  });
+
+  it("does not post a stale result after the preview lifecycle is aborted", async () => {
+    const activeSource = { postMessage: vi.fn() };
+    const controller = new AbortController();
+    const deferred: {
+      resolve?: (value: {
+        executed_at: string;
+        datasource: string;
+        row_count: number;
+        columns: [];
+      }) => void;
+    } = {};
+    const query = vi.fn(() => new Promise<{
+      executed_at: string;
+      datasource: string;
+      row_count: number;
+      columns: [];
+    }>((resolve) => {
+      deferred.resolve = resolve;
+    }));
+
+    const handling = handleArtifactPreviewMessage(
+      { source: activeSource, data: queryMessage() },
+      activeSource,
+      "fund-overview",
+      query,
+      controller.signal,
+    );
+    controller.abort();
+    deferred.resolve?.({
+      executed_at: "2026-07-12T00:00:00Z",
+      datasource: "fund",
+      row_count: 1,
+      columns: [],
+    });
+
+    await expect(handling).resolves.toBe(true);
+    expect(activeSource.postMessage).not.toHaveBeenCalled();
   });
 });

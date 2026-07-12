@@ -17,6 +17,7 @@ type BrowserBridge = {
     expectedSource: Window | null,
     expectedDashboardSlug: string,
     query: (request: BrowserQueryRequest) => Promise<Record<string, unknown> | null>,
+    signal: AbortSignal,
   ): Promise<boolean>;
 };
 
@@ -110,6 +111,7 @@ async function launchPreview(page: Page, scenario: PreviewScenario = {}) {
           if (options.failQuery) throw new Error("query failed");
           return { row_count: 7, columns: ["total"], data: [{ total: 7 }] };
         },
+        new AbortController().signal,
       );
     });
 

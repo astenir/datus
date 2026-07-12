@@ -15,6 +15,7 @@ export type ArtifactPreviewQueryRequest = {
 
 export type ArtifactPreviewQueryHandler = (
   request: ArtifactPreviewQueryRequest,
+  signal: AbortSignal,
 ) => Promise<SqlQueryResultEnvelope | null>;
 
 type ArtifactPreviewQueryResult = {
@@ -84,14 +85,17 @@ export async function handleArtifactPreviewMessage(
   expectedSource: ArtifactPreviewMessageTarget | null,
   expectedDashboardSlug: string,
   query: ArtifactPreviewQueryHandler,
+  signal: AbortSignal,
 ): Promise<boolean> {
   if (!expectedSource || event.source !== expectedSource) return false;
 
   const request = parseArtifactPreviewQueryRequest(event.data, expectedDashboardSlug);
   if (!request) return false;
+  if (signal.aborted) return true;
 
   try {
-    const result = await query(request);
+    const result = await query(request, signal);
+    if (signal.aborted) return true;
     if (!result) throw new Error("Dashboard query returned no data");
 
     expectedSource.postMessage({
@@ -101,6 +105,7 @@ export async function handleArtifactPreviewMessage(
       payload: { success: true, data: result },
     }, "*");
   } catch (error) {
+    if (signal.aborted) return true;
     console.error("Artifact preview query failed:", error);
     expectedSource.postMessage({
       type: ARTIFACT_QUERY_RESULT,
@@ -163,6 +168,15 @@ function previewQueryFetchBridgeSource(): string {
     return Date.now().toString(36) + "-" + requestSequence.toString(36);
   }
 
+  function disposeBridge(event) {
+    if (event.persisted) return;
+    pending.forEach(function (entry) {
+      clearTimeout(entry.timeout);
+      entry.reject(new DOMException("Artifact preview was closed", "AbortError"));
+    });
+    pending.clear();
+  }
+
   window.addEventListener("message", function (event) {
     var message = event.data;
     if (event.source !== window.parent || !message || message.type !== resultType) return;
@@ -188,10 +202,11 @@ function previewQueryFetchBridgeSource(): string {
         pending.delete(requestId);
         reject(new Error("Dashboard query timed out"));
       }, timeoutMs);
-      pending.set(requestId, { resolve: resolve, timeout: timeout });
+      pending.set(requestId, { resolve: resolve, reject: reject, timeout: timeout });
       window.parent.postMessage({ type: requestType, requestId: requestId, body: body }, "*");
     });
   };
+  window.addEventListener("pagehide", disposeBridge, { once: true });
 })();`;
 }
 
@@ -277,6 +292,14 @@ ${childBridgeSource}
     attributeFilter: ["srcdoc"]
   });
   document.querySelectorAll("iframe[srcdoc]").forEach(injectChildBridge);
+  window.addEventListener("pagehide", function (event) {
+    if (event.persisted) return;
+    observer.disconnect();
+    relays.forEach(function (relay) {
+      clearTimeout(relay.timeout);
+    });
+    relays.clear();
+  }, { once: true });
 })();
 </script>`;
 

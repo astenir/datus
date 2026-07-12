@@ -431,12 +431,14 @@ describe("useArtifacts", () => {
   it("runs preview dashboard queries without sharing detail-query state", async () => {
     const { useArtifacts } = await import("./useArtifacts");
     const artifacts = useArtifacts();
+    const controller = new AbortController();
 
     const result = await artifacts.runDashboardPreviewQuery(
       "fund-overview",
       "total_nav",
       { trade_date: "2026-06-01" },
       3,
+      controller.signal,
     );
 
     expect(dashboardQuery).toHaveBeenCalledWith(
@@ -444,7 +446,7 @@ describe("useArtifacts", () => {
       "fund-overview",
       "total_nav",
       { trade_date: "2026-06-01" },
-      3,
+      { publishedVersion: 3, signal: controller.signal },
     );
     expect(result?.row_count).toBe(1);
     expect(artifacts.queryResult.value).toBeNull();
