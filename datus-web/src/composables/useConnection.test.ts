@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-function installLocalStorage(value: string | null = null) {
+function installLocalStorage(value: string | null = null, writeError = false) {
   const storage = {
     getItem: vi.fn(() => value),
-    setItem: vi.fn(),
+    setItem: vi.fn(() => {
+      if (writeError) throw new Error("write blocked");
+    }),
   };
   Object.defineProperty(globalThis, "localStorage", {
     configurable: true,
@@ -29,6 +31,21 @@ describe("useConnection", () => {
     const { effectiveBase } = useConnection();
 
     expect(effectiveBase()).toBe("https://embed.example.test/api");
+  });
+
+  it("updates the runtime API base when persistence fails", async () => {
+    const storage = installLocalStorage("", true);
+    vi.doMock("@/lib/injected-config", () => ({
+      getInjectedApiOrigin: () => "",
+    }));
+
+    const { useConnection } = await import("./useConnection");
+    const connection = useConnection();
+
+    expect(() => connection.setApiBase("https://api.example.test/")).not.toThrow();
+    expect(connection.apiBase.value).toBe("https://api.example.test");
+    expect(connection.effectiveBase()).toBe("https://api.example.test");
+    expect(storage.setItem).toHaveBeenCalledWith("datus-api-base", "https://api.example.test");
   });
 
   it("builds datasource options and tests the current datasource", async () => {

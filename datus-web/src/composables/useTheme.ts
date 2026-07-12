@@ -1,4 +1,5 @@
 import { readonly, shallowRef, watch } from "vue";
+import { readLocalStorage, writeLocalStorage } from "@/lib/local-storage";
 
 type Theme = "light" | "dark";
 
@@ -15,16 +16,18 @@ function resolveTheme(stored: string | null, fallback: Theme): Theme {
 }
 
 function applyTheme(next: Theme) {
-  const root = document.documentElement;
-  root.classList.toggle("dark", next === "dark");
-  root.style.colorScheme = next;
-  localStorage.setItem(STORAGE_KEY, next);
+  if (typeof document !== "undefined") {
+    const root = document.documentElement;
+    root.classList.toggle("dark", next === "dark");
+    root.style.colorScheme = next;
+  }
+  writeLocalStorage(STORAGE_KEY, next);
 }
 
 const theme = shallowRef<Theme>(
   typeof window === "undefined"
     ? "light"
-    : resolveTheme(localStorage.getItem(STORAGE_KEY), systemTheme())
+    : resolveTheme(readLocalStorage(STORAGE_KEY), systemTheme())
 );
 
 applyTheme(theme.value);

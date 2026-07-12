@@ -1,4 +1,5 @@
 import { readonly, shallowRef, watch } from "vue";
+import { readLocalStorage, writeLocalStorage } from "@/lib/local-storage";
 
 const STORAGE_KEY = "datus-chat-settings";
 
@@ -8,21 +9,36 @@ type StoredSettings = {
   planMode: boolean;
 };
 
+const DEFAULT_SETTINGS: StoredSettings = {
+  language: "zh",
+  permissionMode: "normal",
+  planMode: false,
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeSettings(value: unknown): StoredSettings {
+  if (!isRecord(value)) return { ...DEFAULT_SETTINGS };
+
+  return {
+    language: typeof value.language === "string" ? value.language : DEFAULT_SETTINGS.language,
+    permissionMode: typeof value.permissionMode === "string" ? value.permissionMode : DEFAULT_SETTINGS.permissionMode,
+    planMode: typeof value.planMode === "boolean" ? value.planMode : DEFAULT_SETTINGS.planMode,
+  };
+}
+
 function loadSettings(): StoredSettings {
+  const raw = readLocalStorage(STORAGE_KEY);
+  if (!raw) return { ...DEFAULT_SETTINGS };
+
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      return {
-        language: parsed.language ?? "zh",
-        permissionMode: parsed.permissionMode ?? "normal",
-        planMode: parsed.planMode ?? false,
-      };
-    }
+    const parsed: unknown = JSON.parse(raw);
+    return normalizeSettings(parsed);
   } catch {
-    /* ignore */
+    return { ...DEFAULT_SETTINGS };
   }
-  return { language: "zh", permissionMode: "normal", planMode: false };
 }
 
 const saved = loadSettings();
@@ -32,7 +48,7 @@ const permissionMode = shallowRef(saved.permissionMode);
 const planMode = shallowRef(saved.planMode);
 
 watch([language, permissionMode, planMode], ([lang, perm, plan]) => {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ language: lang, permissionMode: perm, planMode: plan }));
+  writeLocalStorage(STORAGE_KEY, JSON.stringify({ language: lang, permissionMode: perm, planMode: plan }));
 });
 
 function setLanguage(value: string) {
