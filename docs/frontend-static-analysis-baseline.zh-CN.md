@@ -25,10 +25,11 @@
 
 ## 当前工具链与覆盖
 
-`datus-web` 目前没有直接声明 ESLint 依赖，也没有 `lint` 脚本。现有质量检查包括：
+`datus-web` 已直接声明 ESLint、TypeScript ESLint、eslint-plugin-vue 及其 parser 等开发依赖，并提供本地 `lint` 脚本。现有质量检查包括：
 
 | 检查 | 当前能力 | 主要边界 |
 | --- | --- | --- |
+| `npm run lint` | 对项目自有 Vue/TypeScript 代码运行类型感知的 ESLint flat config | 当前处于本地试运行阶段，尚未加入 Web Quality workflow |
 | `npm run build` | 先运行 `vue-tsc -b`，再构建生产资源 | 能发现类型、未使用局部变量/参数和构建集成问题；不能完整检查 Promise 使用、Vue 模板语义和生命周期策略 |
 | `npm test` | 运行 Vitest 单元测试 | 覆盖业务工具、composable、API 适配和部分路由/安全契约；不是通用静态规则 |
 | `npm run test:browser` | 编译并运行 Playwright 浏览器测试 | 覆盖真实浏览器中的 Renderer 集成；不扫描全部业务组件 |
@@ -48,6 +49,7 @@
 本次基线验证结果：
 
 - Vue TypeScript project build 通过。
+- ESLint 项目自有代码检查通过。
 - 55 个 Vitest 文件、455 项单元测试通过。
 - 4 项 Chromium Renderer 浏览器测试通过。
 - Typography 扫描通过；两处 `text-base` 是现有规则要求人工确认的例外，不是失败。
@@ -128,36 +130,37 @@ TypeScript 的 `strict` 模式不会验证运行时 JSON。当前关键业务解
 | 类型不匹配、未使用局部变量/参数、错误导入 | TypeScript 已覆盖 | 保持现有严格配置 |
 | 业务 UI 字号 | Typography 脚本已覆盖 | 保持专项脚本，不在 ESLint 中复制 |
 | Renderer 浏览器集成 | Playwright 已覆盖 | 保持浏览器测试，不修改上游包换取 lint 通过 |
-| Vue 模板合法性、props 变更、`v-for` key | 目前主要依赖审阅和编译 | 由 `eslint-plugin-vue` 稳定覆盖 |
-| 未显式处理的 Promise | TypeScript 不完整覆盖 | 使用类型感知的 `no-floating-promises`，允许显式 `void` |
-| TypeScript 抑制注释和显式 `any` | 当前靠规范和文本扫描 | 用 ESLint 防止回归 |
-| 浏览器存储异常、异步竞态、运行时 JSON 校验 | 通用 lint 只能提示局部模式 | 需要小范围实现修复和确定性测试 |
+| Vue 模板合法性、props 变更、`v-for` key | ESLint 已覆盖项目自有代码 | 保持生成 primitive 排除边界 |
+| 未显式处理的 Promise | ESLint 使用类型感知的 `no-floating-promises` | 允许显式 `void` 表达有意忽略，但调用方仍应确认内部错误收口 |
+| TypeScript 抑制注释和显式 `any` | ESLint 已作为 error | 保留文本扫描作为轻量审计补充 |
+| 浏览器存储异常、异步竞态、运行时 JSON 校验 | 通用 lint 只能提示局部模式 | 存储和竞态已通过测试修复；运行时 JSON 继续按边界风险逐步收紧 |
 
-## 建议的最小 ESLint 规则
+## 最小 ESLint 试运行配置
 
-首批配置应使用 ESLint flat config，并把扫描目标限定在项目自有代码。建议直接依赖 ESLint、TypeScript ESLint 和 `eslint-plugin-vue`，不要依赖锁文件中由其他包偶然带入的 parser。
+首批配置已经使用 ESLint flat config，并把扫描目标限定在项目自有代码。ESLint、TypeScript ESLint、`eslint-plugin-vue` 和 parser 都是直接开发依赖，不依赖锁文件中偶然出现的传递安装。
 
-首批 error 规则建议包括：
+首批 error 规则包括：
 
 - ESLint 推荐的基础正确性规则。
 - `eslint-plugin-vue` 的 essential 规则。
-- `vue/no-mutating-props`。
+- `vue/no-mutating-props`，启用 `shallowOnly`：禁止重写 prop，同时允许显式传入的 composable controller 修改内部 ref/form 状态。
 - `vue/no-use-v-if-with-v-for`。
 - `vue/require-v-for-key`。
 - `vue/no-v-html`。
 - `@typescript-eslint/no-explicit-any`。
 - `@typescript-eslint/ban-ts-comment`。
 - 类型感知的 `@typescript-eslint/no-floating-promises`，配置为允许显式 `void`。
+- `@typescript-eslint/no-unused-vars`，统一允许 `_` 前缀表示有意忽略的参数或解构变量。
 - `no-debugger`。
 - `no-console`，仅允许 `warn` 和 `error`。
 
-以下规则不建议在第一批直接设为 error：
+以下规则没有在第一批直接设为 error：
 
 - `@typescript-eslint/no-non-null-assertion`：当前存在少量可证明的局部不变量，应先重构或记录例外。
 - `@typescript-eslint/no-unsafe-*`：能够暴露 JSON 边界问题，但容易在 API 和测试代码中形成较大迁移面，应先以 warning 试运行并逐类收敛。
 - 格式化、import 排序和风格偏好规则：不属于本阶段风险目标，批量启用会掩盖行为性问题并扩大 diff。
 
-建议 lint 目标至少包括：
+当前 lint 目标包括：
 
 ```text
 src/features/**/*.{ts,vue}
@@ -171,18 +174,26 @@ src/main.ts
 vite.config.ts
 ```
 
-初期应排除 `src/components/ui/**`、`src/components/ai-elements/**` 和 `src/types/openapi.ts`。测试文件可以保留在范围内，但允许针对 mock 和 fixture 设置最小、明确的 overrides。
+配置明确排除 `src/components/ui/**`、`src/components/ai-elements/**` 和 `src/types/openapi.ts`，测试文件保留在范围内。
+
+首轮试运行得到 43 个命中，未使用 `--fix`，逐项审阅后的处理如下：
+
+- 4 个异步调用补充显式 `void`。被调用函数已经在内部收口错误，因此只明确 fire-and-forget 意图，不改变运行行为。
+- 2 个 `_` 前缀的有意忽略变量通过统一 `no-unused-vars` 约定处理。
+- 37 个 composable controller 嵌套状态写入通过 `vue/no-mutating-props` 的 `shallowOnly` 模式处理；仍禁止直接重写 prop。
+
+处理后 `npm run lint` 在项目自有范围零错误、零 warning。对三个排除目标做显式验证时，ESLint 均报告由 ignore pattern 排除。
 
 ## 门禁结论与迁移计划
 
-目前仍不建议直接把 ESLint 加入 required Web quality gate。基线确认的两个主要运行时风险已经完成实现修复和测试；下一步可以引入最小配置，但应先审阅首轮结果并让规则在项目自有范围稳定通过，再升级为 required gate。
+目前仍不在本阶段直接修改 required Web quality gate。最小配置和首轮结果已经在本地稳定通过；下一阶段可以把 `npm run lint` 加入现有 Web Quality 实体 job，再通过 PR 验证变更检测、跳过语义和稳定 context，保持 required context 名称不变。
 
 建议按以下阶段推进：
 
 1. 修复安全存储访问和路由上下文竞态，并补充确定性测试。该阶段已完成。
-2. 引入只覆盖项目自有代码的最小 ESLint flat config，在本地和 CI 中试运行；不执行批量 `--fix`。
-3. 对首轮结果逐项分类，修复真实问题，对生成层、测试 fixture 和合理模式使用目录级配置或最小例外。
+2. 引入只覆盖项目自有代码的最小 ESLint flat config，在本地试运行；不执行批量 `--fix`。该阶段已完成。
+3. 对首轮结果逐项分类，修复真实问题，对生成层和合理模式使用目录级配置或最小规则选项。该阶段已完成。
 4. 当首批规则在干净分支稳定通过后，把 `npm run lint` 加入现有 Web Quality 实体 job；保持 required context 名称 `Web quality gate` 不变。
 5. 后续再评估 `no-unsafe-*`、无障碍和更严格 Vue 规则，每批单独迁移并验证，不把格式化债务与行为修复混在同一 PR。
 
-这一路径可以先解决已知运行时风险，再让静态规则承担“防止回归”的职责，同时保持生成组件和上游 Renderer 的维护边界。
+当前路径已经修复基线确认的运行时风险，并建立本地静态规则基线；下一阶段由 Web Quality workflow 执行同一 `npm run lint`，让静态规则开始承担“防止回归”的职责，同时保持生成组件和上游 Renderer 的维护边界。

@@ -327,6 +327,7 @@ Before finishing non-trivial changes, run:
 
 ```bash
 git diff --check
+npm run lint
 npm test
 npm run build
 ```

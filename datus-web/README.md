@@ -149,6 +149,7 @@ npm run build:intranet
 ## 常用命令
 
 ```bash
+npm run lint
 npm test
 npm run build
 npm run build:intranet
@@ -158,6 +159,7 @@ npm run lint:typography
 
 命令说明：
 
+- `npm run lint`: 对项目自有 Vue/TypeScript 代码运行 ESLint
 - `npm test`: 运行 Vitest 测试
 - `npm run build`: 运行 `vue-tsc` 类型检查并构建生产包
 - `npm run build:intranet`: 使用 `.env.intranet.local` 构建内网测试包
@@ -262,6 +264,7 @@ build(typography): 新增字号检查脚本
 
 ```bash
 git diff --check
+npm run lint
 npm test
 npm run build
 ```
