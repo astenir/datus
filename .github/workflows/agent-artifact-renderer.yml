@@ -1,0 +1,64 @@
+name: Agent Artifact Renderer
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/agent-artifact-renderer.yml"
+      - "datus-agent/datus/agent/node/visual_artifact/**"
+      - "datus-agent/tests/integration/test_artifact_renderer_package.py"
+      - "datus-agent/tests/unit_tests/agent/node/test_dashboard_html_renderer.py"
+      - "datus-agent/pyproject.toml"
+      - "datus-agent/uv.lock"
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: agent-artifact-renderer-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  renderer-package:
+    name: Renderer package
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: datus-agent
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: datus-agent/uv.lock
+
+      - name: Install dependencies
+        run: uv sync --locked --dev
+
+      - name: Verify renderer provenance
+        run: node datus/agent/node/visual_artifact/vendor/web_artifact_render_dist/patch-post-message-transport.mjs --check
+
+      - name: Check packaging test style
+        run: uv run ruff check tests/integration/test_artifact_renderer_package.py
+
+      - name: Test renderer package
+        run: >-
+          uv run pytest
+          tests/integration/test_artifact_renderer_package.py
+          tests/unit_tests/agent/node/test_dashboard_html_renderer.py
