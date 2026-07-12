@@ -48,7 +48,7 @@
 本次基线验证结果：
 
 - Vue TypeScript project build 通过。
-- 51 个 Vitest 文件、442 项单元测试通过。
+- 54 个 Vitest 文件、452 项单元测试通过。
 - 4 项 Chromium Renderer 浏览器测试通过。
 - Typography 扫描通过；两处 `text-base` 是现有规则要求人工确认的例外，不是失败。
 - 生产构建通过。
@@ -59,7 +59,7 @@
 
 | 范围 | Vue 文件 | TypeScript 文件 | 其中测试文件 | 合计行数 |
 | --- | ---: | ---: | ---: | ---: |
-| `features`、`composables`、`lib`、`router` | 52 | 124 | 51 | 42,123 |
+| `features`、`composables`、`lib`、`router` | 52 | 128 | 54 | 42,374 |
 | `components/ui`、`components/ai-elements` | 561 | 116 | - | 19,004 |
 
 生成组件有 677 个文件，数量明显高于项目核心代码。任何新静态规则都必须先限定所有权范围，否则规则结果会主要反映生成模板风格，而不是 Datus 业务代码风险。
@@ -87,9 +87,9 @@
 - `src/lib/role-permissions.ts` 中 Map 和树节点的非空断言紧跟在初始化分支之后，属于局部可证明不变量。后续可以消除断言，但当前没有证据表明它们会产生运行时缺陷。
 - 外部依赖产生的构建 warning 不属于项目自有静态分析债务，不应通过修改 `node_modules` 或上游 Renderer 源码处理。
 
-## 已确认的风险
+## 基线发现与处置状态
 
-### 中风险：浏览器存储异常可能破坏启动或交互
+### 已处理：浏览器存储异常可能破坏启动或交互
 
 相关位置：
 
@@ -97,11 +97,11 @@
 - `datus-web/src/composables/useChatSettings.ts`
 - `datus-web/src/composables/useConnection.ts`
 
-`localStorage` 在禁用持久化、受限 iframe、隐私策略或存储配额异常时可能抛出异常。当前主题模块在模块初始化期间直接读取并写入 `localStorage`；该异常可能阻止应用启动。聊天设置和 API 地址的部分写入也没有失败降级。
+基线审计发现，`localStorage` 在禁用持久化、受限 iframe、隐私策略或存储配额异常时可能抛出异常。主题模块曾在模块初始化期间直接读取并写入 `localStorage`；该异常可能阻止应用启动。聊天设置和 API 地址的部分写入也曾缺少失败降级。
 
-此外，`useChatSettings.ts` 将 `JSON.parse` 的结果直接作为设置对象使用，没有验证字段类型。损坏、手工修改或旧版本遗留的数据可能把非字符串/非布尔值带入响应式状态。
+该项已通过 `datus-web/src/lib/local-storage.ts` 收口：读取失败回退默认值，写入失败只放弃持久化，不影响当前响应式状态。`useChatSettings.ts` 也会把反序列化结果先作为 `unknown`，再逐项验证字符串和布尔字段。
 
-建议先提供小型安全存储 helper：读取失败回退默认值、写入失败只放弃持久化，并对反序列化结果做字段级校验。修复应补充存储读取异常、写入异常和错误数据形状测试。
+对应测试覆盖存储 API 不存在、属性访问抛错、读写操作抛错、损坏 JSON、错误字段类型，以及主题、聊天设置和 API 地址在持久化失败时继续工作的行为。
 
 ### 中风险：异步路由上下文可能发生旧结果覆盖新状态
 
@@ -179,7 +179,7 @@ vite.config.ts
 
 建议按以下阶段推进：
 
-1. 修复安全存储访问和路由上下文竞态，并补充确定性测试。
+1. 修复安全存储访问和路由上下文竞态，并补充确定性测试。安全存储部分已完成，路由上下文竞态仍待处理。
 2. 引入只覆盖项目自有代码的最小 ESLint flat config，在本地和 CI 中试运行；不执行批量 `--fix`。
 3. 对首轮结果逐项分类，修复真实问题，对生成层、测试 fixture 和合理模式使用目录级配置或最小例外。
 4. 当首批规则在干净分支稳定通过后，把 `npm run lint` 加入现有 Web Quality 实体 job；保持 required context 名称 `Web quality gate` 不变。

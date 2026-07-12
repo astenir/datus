@@ -2,6 +2,7 @@ import { computed, readonly, ref, shallowRef } from "vue";
 import { configApi } from "@/lib/api";
 import { normalizeBaseUrl } from "@/lib/chat";
 import { getInjectedApiOrigin } from "@/lib/injected-config";
+import { readLocalStorage, writeLocalStorage } from "@/lib/local-storage";
 import { datasourceLabel } from "@/lib/datasource-display";
 import { setApiBaseResolver } from "@/lib/request";
 import { handleError } from "@/lib/utils";
@@ -32,15 +33,11 @@ const datasourceOptions = computed<SelectOption[]>(() => {
 });
 
 function loadApiBase(): string {
-  try {
-    return localStorage.getItem(STORAGE_KEY) ?? DEFAULT_BASE;
-  } catch {
-    return DEFAULT_BASE;
-  }
+  return readLocalStorage(STORAGE_KEY) ?? DEFAULT_BASE;
 }
 
 function saveApiBase(value: string) {
-  localStorage.setItem(STORAGE_KEY, value);
+  writeLocalStorage(STORAGE_KEY, value);
 }
 
 function effectiveBase(): string {
