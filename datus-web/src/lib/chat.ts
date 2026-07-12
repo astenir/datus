@@ -495,7 +495,14 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 
 export async function requestJson<T>(baseUrl: string, path: string, init?: RequestInit): Promise<T> {
   const controller = new AbortController();
+  const callerSignal = init?.signal;
+  const abortFromCaller = () => controller.abort(callerSignal?.reason);
   const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  if (callerSignal?.aborted) {
+    abortFromCaller();
+  } else {
+    callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
+  }
 
   try {
     const hasBody = init?.body != null;
@@ -511,6 +518,7 @@ export async function requestJson<T>(baseUrl: string, path: string, init?: Reque
     return response.json() as Promise<T>;
   } finally {
     clearTimeout(timeoutId);
+    callerSignal?.removeEventListener("abort", abortFromCaller);
   }
 }
 

@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
 describe("useCatalog", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -131,5 +139,52 @@ describe("useCatalog", () => {
     expect(catalog.catalogEntries.value).toEqual([{ name: "fund", schema_name: "public", tables: [] }]);
     expect(catalog.database.value).toBe("fund");
     expect(catalog.schema.value).toBe("public");
+  });
+
+  it("keeps late catalog responses with their owning datasource", async () => {
+    const fundResult = deferred<{ databases: Array<{ name: string; schema_name: string; tables: never[] }> }>();
+    const demoResult = deferred<{ databases: Array<{ name: string; schema_name: string; tables: never[] }> }>();
+    const list = vi.fn()
+      .mockReturnValueOnce(fundResult.promise)
+      .mockReturnValueOnce(demoResult.promise);
+
+    vi.doMock("@/lib/api", () => ({
+      catalogApi: {
+        list,
+        status: vi.fn(),
+        prewarm: vi.fn(),
+      },
+    }));
+    vi.doMock("@/composables/useConnection", () => ({
+      useConnection: () => ({
+        effectiveBase: () => "",
+      }),
+    }));
+    vi.doMock("@/lib/utils", () => ({
+      handleError: vi.fn(),
+    }));
+
+    const { useCatalog } = await import("./useCatalog");
+    const catalog = useCatalog();
+
+    const fundLoad = catalog.loadCatalog(undefined, "fund");
+    const demoLoad = catalog.loadCatalog(undefined, "demo");
+
+    demoResult.resolve({
+      databases: [{ name: "demo", schema_name: "main", tables: [] }],
+    });
+    await demoLoad;
+    expect(catalog.catalogEntries.value[0]?.name).toBe("demo");
+
+    fundResult.resolve({
+      databases: [{ name: "fund", schema_name: "public", tables: [] }],
+    });
+    await fundLoad;
+
+    expect(catalog.catalogEntries.value[0]?.name).toBe("demo");
+    catalog.selectCatalogDatasource("fund");
+    expect(catalog.catalogEntries.value[0]?.name).toBe("fund");
+    catalog.selectCatalogDatasource("demo");
+    expect(catalog.catalogEntries.value[0]?.name).toBe("demo");
   });
 });

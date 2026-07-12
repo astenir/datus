@@ -23,6 +23,9 @@ const activeDatasource = shallowRef("");
 const catalogSnapshots = shallowRef<Record<string, CatalogSnapshot>>({});
 const datasourceStatuses = ref<Record<string, DatasourceStatusItem>>({});
 const prewarmingDatasources = shallowRef<Set<string>>(new Set());
+const latestCatalogRequestByDatasource = new Map<string, number>();
+const pendingCatalogRequests = new Map<number, string>();
+let catalogRequestSequence = 0;
 
 function datasourceKey(datasourceId?: string) {
   return datasourceId?.trim() ?? "";
@@ -41,17 +44,26 @@ function databaseOptionsFromEntries(entries: readonly CatalogRecord[]) {
   );
 }
 
-function saveActiveSnapshot() {
-  const key = snapshotKey(activeDatasource.value);
+function saveSnapshot(datasourceId: string | undefined, snapshot: CatalogSnapshot) {
+  const key = snapshotKey(datasourceId);
   catalogSnapshots.value = {
     ...catalogSnapshots.value,
-    [key]: {
-      entries: [...catalogEntries.value],
-      databaseOptions: [...databaseOptions.value],
-      database: database.value,
-      schema: schema.value,
-    },
+    [key]: snapshot,
   };
+}
+
+function saveActiveSnapshot() {
+  saveSnapshot(activeDatasource.value, {
+    entries: [...catalogEntries.value],
+    databaseOptions: [...databaseOptions.value],
+    database: database.value,
+    schema: schema.value,
+  });
+}
+
+function syncCatalogLoading() {
+  isLoadingCatalog.value = Array.from(pendingCatalogRequests.values())
+    .some((datasource) => datasource === activeDatasource.value);
 }
 
 function restoreSnapshot(datasourceId?: string) {
@@ -79,6 +91,7 @@ function selectCatalogDatasource(datasourceId?: string) {
   if (!restoreSnapshot(datasource)) {
     clearActiveCatalog();
   }
+  syncCatalogLoading();
 }
 
 function hasCatalogSnapshot(datasourceId?: string) {
@@ -93,29 +106,53 @@ async function loadCatalog(databaseName?: string, datasourceId?: string): Promis
   }
 
   const base = effectiveBase();
-  isLoadingCatalog.value = true;
+  const requestId = ++catalogRequestSequence;
+  latestCatalogRequestByDatasource.set(datasource, requestId);
+  pendingCatalogRequests.set(requestId, datasource);
+  syncCatalogLoading();
   try {
     const result = await catalogApi.list(base, {
       ...(datasource ? { datasource_id: datasource } : {}),
       ...(databaseName ? { database_name: databaseName } : {}),
     });
-    if (result) {
-      catalogEntries.value = result.databases ?? [];
+    if (result && latestCatalogRequestByDatasource.get(datasource) === requestId) {
+      const entries = result.databases ?? [];
+      const existingSnapshot = datasource === activeDatasource.value
+        ? {
+            entries: [...catalogEntries.value],
+            databaseOptions: [...databaseOptions.value],
+            database: database.value,
+            schema: schema.value,
+          }
+        : catalogSnapshots.value[snapshotKey(datasource)];
+      let nextDatabase = existingSnapshot?.database ?? "";
+      let nextSchema = existingSnapshot?.schema ?? "";
+      const nextDatabaseOptions = databaseName
+        ? [...(existingSnapshot?.databaseOptions ?? [])]
+        : databaseOptionsFromEntries(entries);
       if (!databaseName) {
-        databaseOptions.value = databaseOptionsFromEntries(catalogEntries.value);
-        if (database.value && !databaseOptions.value.some((option) => option.value === database.value)) {
-          database.value = "";
-          schema.value = "";
+        if (nextDatabase && !nextDatabaseOptions.some((option) => option.value === nextDatabase)) {
+          nextDatabase = "";
+          nextSchema = "";
         }
       }
-      saveActiveSnapshot();
+      saveSnapshot(datasource, {
+        entries: [...entries],
+        databaseOptions: nextDatabaseOptions,
+        database: nextDatabase,
+        schema: nextSchema,
+      });
+      if (datasource === activeDatasource.value) {
+        restoreSnapshot(datasource);
+      }
     }
     return true;
   } catch (error) {
     handleError("加载数据源目录失败", error);
     return false;
   } finally {
-    isLoadingCatalog.value = false;
+    pendingCatalogRequests.delete(requestId);
+    syncCatalogLoading();
   }
 }
 

@@ -1,7 +1,8 @@
 import path from 'node:path'
 import tailwindcss from '@tailwindcss/vite'
 import vue from '@vitejs/plugin-vue'
-import { defineConfig, loadEnv } from 'vite'
+import { loadEnv } from 'vite'
+import { configDefaults, defineConfig } from 'vitest/config'
 
 const absoluteUrlPattern = /^[a-zA-Z][a-zA-Z\d+\-.]*:/
 
@@ -23,6 +24,9 @@ export default defineConfig(({ mode }) => {
   return {
     base: appBase,
     plugins: [vue(), tailwindcss()],
+    test: {
+      exclude: [...configDefaults.exclude, 'tests/browser/**'],
+    },
     build: {
       rollupOptions: {
         output: {
@@ -30,8 +34,6 @@ export default defineConfig(({ mode }) => {
             if (!id.includes('node_modules')) return undefined
 
             const normalizedId = id.split(path.sep).join('/')
-            if (normalizedId.includes('/node_modules/markdown-it/')
-              || normalizedId.includes('/node_modules/vue-stream-markdown/')) return 'vendor-markdown'
             if (normalizedId.includes('/node_modules/@lucide/vue/')) return 'vendor-icons'
             if (normalizedId.includes('/node_modules/reka-ui/')) return 'vendor-ui'
             if (normalizedId.includes('/node_modules/@vueuse/')) return 'vendor-vueuse'

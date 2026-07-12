@@ -218,8 +218,8 @@ onMounted(() => {
 </script>
 
 <template>
-  <section class="flex min-h-0 flex-1 overflow-hidden p-3">
-    <div class="flex min-h-0 flex-1 flex-col gap-3">
+  <section class="flex min-h-0 flex-1 overflow-hidden p-4">
+    <div class="flex min-h-0 flex-1 flex-col gap-4">
       <div class="flex shrink-0 flex-wrap items-center gap-3">
         <div class="min-w-0 flex-1">
           <h1 class="text-lg font-semibold">Agent 管理</h1>
@@ -261,7 +261,7 @@ onMounted(() => {
         </AlertDescription>
       </Alert>
 
-      <div class="grid min-h-0 flex-1 auto-cols-[calc(100vw-1.5rem)] grid-flow-col gap-3 overflow-x-auto xl:auto-cols-auto xl:grid-flow-row xl:grid-cols-[minmax(28rem,1fr)_minmax(22rem,0.6fr)] xl:overflow-visible">
+      <div class="-m-1 grid min-h-0 flex-1 auto-cols-[calc(100vw-2rem)] grid-flow-col gap-4 overflow-x-auto p-1 xl:auto-cols-auto xl:grid-flow-row xl:grid-cols-[minmax(28rem,1fr)_minmax(22rem,0.6fr)] xl:overflow-visible">
         <Card
           size="sm"
           class="min-h-0 min-w-0"
@@ -294,13 +294,13 @@ onMounted(() => {
               <AlertDescription>{{ manager.error.value }}</AlertDescription>
             </Alert>
 
-            <ScrollArea class="min-h-0 flex-1 rounded-lg border">
-              <Table>
+            <ScrollArea class="min-h-0 flex-1 rounded-lg border [&_[data-slot=table-container]]:overflow-x-hidden">
+              <Table class="table-fixed">
                 <TableHeader>
                   <TableRow>
                     <TableHead>Agent</TableHead>
-                    <TableHead>状态</TableHead>
-                    <TableHead class="w-12 text-right">操作</TableHead>
+                    <TableHead class="w-28">状态</TableHead>
+                    <TableHead class="w-16 text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -310,20 +310,22 @@ onMounted(() => {
                     class="cursor-pointer"
                     @click="selectAgent(agent)"
                   >
-                    <TableCell>
+                    <TableCell class="min-w-0 overflow-hidden whitespace-normal">
                       <div class="flex min-w-0 flex-col gap-1">
                         <div class="flex min-w-0 items-center gap-2 font-medium">
                           <span class="truncate">{{ agent.name }}</span>
                         </div>
-                        <div class="flex min-w-0 flex-wrap items-center gap-1.5">
-                          <Badge variant="secondary">{{ agent.node_class || "gen_sql" }}</Badge>
-                          <Badge
-                            v-if="agent.source === 'builtin'"
-                            variant="outline"
-                          >
-                            系统内置
-                          </Badge>
-                          <span class="min-w-0 truncate text-xs text-muted-foreground">{{ systemPromptSummary(agent) }}</span>
+                        <div class="flex min-w-0 flex-col gap-1.5">
+                          <div class="flex min-w-0 flex-wrap items-center gap-1.5">
+                            <Badge variant="secondary">{{ agent.node_class || "gen_sql" }}</Badge>
+                            <Badge
+                              v-if="agent.source === 'builtin'"
+                              variant="outline"
+                            >
+                              系统内置
+                            </Badge>
+                          </div>
+                          <span class="block min-w-0 truncate text-xs text-muted-foreground">{{ systemPromptSummary(agent) }}</span>
                         </div>
                       </div>
                     </TableCell>

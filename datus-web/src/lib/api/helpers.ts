@@ -4,8 +4,12 @@ export function apiResult<T>(baseUrl: string, path: string, init?: RequestInit):
   return requestJson<unknown>(baseUrl, path, init).then(extractResultData<T>);
 }
 
-export function jsonBody(data: unknown): RequestInit {
-  return { method: "POST", body: JSON.stringify(data) };
+export function jsonBody(data: unknown, signal?: AbortSignal): RequestInit {
+  return {
+    method: "POST",
+    body: JSON.stringify(data),
+    ...(signal ? { signal } : {}),
+  };
 }
 
 export function putBody(data: unknown): RequestInit {

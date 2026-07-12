@@ -33,9 +33,6 @@ import {
 import { Suggestion, Suggestions } from "@/components/ai-elements/suggestion"
 import { activeStreamingMessageId, activeUserInteractionRequest, mergeToolExecutionMessages } from "@/lib/chat"
 import { parsePermissionRequest } from "@/lib/interaction-display"
-import { useConnection } from "@/composables/useConnection"
-import { artifactHtml, createArtifactPreviewUrl, withArtifactPreviewRuntime } from "@/composables/useArtifacts"
-import { getCurrentAccessToken } from "@/lib/request"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import type { ArtifactViewTab } from "@/features/workspace/types"
 import type { SelectOption } from "@/types"
@@ -45,6 +42,9 @@ import ChatContextPicker from "@/features/chat/ChatContextPicker.vue"
 
 const props = defineProps<{
   workspace: ChatWorkspace
+}>()
+const emit = defineEmits<{
+  openArtifact: [tab: ArtifactViewTab, slug: string]
 }>()
 
 const ChatMessageItem = defineAsyncComponent(() => import("@/features/chat/ChatMessageItem.vue"))
@@ -100,7 +100,6 @@ const modelSelectorContentClass = [
   "[&_[data-slot=command-group-heading]]:px-2.5 [&_[data-slot=command-group-heading]]:py-1.5",
 ].join(" ")
 const pendingInteractionKey = shallowRef<string | null>(null)
-const { effectiveBase } = useConnection()
 
 const promptSuggestions = [
   "帮我分析基金持仓的关键变化",
@@ -189,27 +188,9 @@ async function submitInteraction(interactionKey: string, answers: string[][]) {
   }
 }
 
-async function openArtifact(kind: string, slug: string) {
+function openArtifact(kind: string, slug: string) {
   const tab: ArtifactViewTab = kind === "report" ? "report" : "dashboard"
-  const previewWindow = window.open("about:blank", "_blank")
-  if (previewWindow) {
-    previewWindow.opener = null
-  }
-
-  try {
-    const rawHtml = await artifactHtml(effectiveBase(), tab, slug)
-    const html = withArtifactPreviewRuntime(rawHtml, effectiveBase(), getCurrentAccessToken())
-    const url = createArtifactPreviewUrl(html)
-    if (previewWindow) {
-      previewWindow.location.href = url
-      return
-    }
-    window.open(url, "_blank", "noopener,noreferrer")
-  } catch (error) {
-    console.error("Failed to open artifact preview:", error)
-    previewWindow?.close()
-    toast.error("打开产物预览失败")
-  }
+  emit("openArtifact", tab, slug)
 }
 </script>
 

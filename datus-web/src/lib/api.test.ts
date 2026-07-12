@@ -328,7 +328,7 @@ describe("api client", () => {
 
     const result = await dashboardApi.query("http://localhost:8000/", "fund_overview", "total_nav", {
       trade_date: "2026-06-01",
-    });
+    }, { publishedVersion: 3 });
 
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/dashboard/query");
     expect(JSON.parse(String((vi.mocked(fetch).mock.calls[0]?.[1] as RequestInit).body))).toEqual({
@@ -337,8 +337,37 @@ describe("api client", () => {
       params: {
         trade_date: "2026-06-01",
       },
+      published_version: 3,
     });
     expect(result?.row_count).toBe(1);
+  });
+
+  it("cancels dashboard queries when the preview signal is aborted", async () => {
+    const controller = new AbortController();
+    const pending: {
+      reject?: (reason: unknown) => void;
+      signal?: AbortSignal | null;
+    } = {};
+    vi.spyOn(globalThis, "fetch").mockImplementation((_input, init) => {
+      pending.signal = init?.signal;
+      return new Promise((_resolve, reject) => {
+        pending.reject = reject;
+      });
+    });
+
+    const query = dashboardApi.query(
+      "http://localhost:8000/",
+      "fund_overview",
+      "total_nav",
+      {},
+      { signal: controller.signal },
+    );
+    await Promise.resolve();
+    controller.abort();
+
+    expect(pending.signal?.aborted).toBe(true);
+    pending.reject?.(new DOMException("Aborted", "AbortError"));
+    await expect(query).rejects.toMatchObject({ name: "AbortError" });
   });
 
   it("switches datasource through the project default datasource endpoint", async () => {

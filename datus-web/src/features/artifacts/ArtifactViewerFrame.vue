@@ -1,11 +1,15 @@
 <script setup lang="ts">
-import { computed } from "vue"
+import { computed, onMounted, onUnmounted, useTemplateRef, watch } from "vue"
 import { RefreshCwIcon } from "@lucide/vue"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
+import {
+  handleArtifactPreviewMessage,
+  type ArtifactPreviewQueryHandler,
+} from "@/lib/artifact-preview-bridge"
 
 const props = withDefaults(defineProps<{
   title: string
@@ -13,8 +17,12 @@ const props = withDefaults(defineProps<{
   loading: boolean
   error: string | null
   showChrome?: boolean
+  dashboardSlug?: string | null
+  query?: ArtifactPreviewQueryHandler
 }>(), {
   showChrome: true,
+  dashboardSlug: null,
+  query: undefined,
 })
 
 const emit = defineEmits<{
@@ -22,6 +30,37 @@ const emit = defineEmits<{
 }>()
 
 const frameTitle = computed(() => `${props.title}预览`)
+const frameRef = useTemplateRef<HTMLIFrameElement>("previewFrame")
+let previewController = new AbortController()
+
+function handleWindowMessage(event: MessageEvent<unknown>) {
+  const dashboardSlug = props.dashboardSlug?.trim()
+  const query = props.query
+  if (!dashboardSlug || !query) return
+
+  void handleArtifactPreviewMessage(
+    event,
+    frameRef.value?.contentWindow ?? null,
+    dashboardSlug,
+    query,
+    previewController.signal,
+  )
+}
+
+watch(
+  () => [props.url, props.dashboardSlug, props.query] as const,
+  () => {
+    previewController.abort()
+    previewController = new AbortController()
+  },
+  { flush: "sync" },
+)
+
+onMounted(() => window.addEventListener("message", handleWindowMessage))
+onUnmounted(() => {
+  previewController.abort()
+  window.removeEventListener("message", handleWindowMessage)
+})
 </script>
 
 <template>
@@ -76,9 +115,11 @@ const frameTitle = computed(() => `${props.title}预览`)
 
     <iframe
       v-else
+      ref="previewFrame"
       :src="props.url"
       :title="frameTitle"
-      referrerpolicy="same-origin"
+      sandbox="allow-scripts allow-downloads"
+      referrerpolicy="no-referrer"
       class="min-h-[440px] flex-1 bg-background"
     />
   </section>
