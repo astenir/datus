@@ -38,6 +38,14 @@ Vue code should use Vue 3 Composition API with `<script setup lang="ts">`. Keep 
 
 Use pytest for Python packages and Vitest/Playwright where configured for the frontend. Prefer focused tests for the package being changed, then run broader checks when touching shared contracts or workspace-level behavior.
 
+## CI Maintenance
+
+Read `docs/ci-quality-gates.zh-CN.md` before changing root GitHub Actions workflows, path detectors, gate verification, or required status contexts. Keep `Agent renderer gate`, `Web quality gate`, and `Python quality gate` stable unless the GitHub Ruleset is migrated deliberately.
+
+- `node --test .github/scripts/*.test.cjs`
+- `actionlint .github/workflows/*.yml`
+- `git diff --check`
+
 ## Commits
 
 Commit messages should follow Conventional Commits.
