@@ -17,6 +17,7 @@ jobs:
   changes:
     name: Detect relevant changes
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       relevant: ${{ steps.filter.outputs.result }}
     steps:
@@ -30,6 +31,8 @@ jobs:
         id: filter
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
+          retries: 3
+          retry-exempt-status-codes: 400,401,403,404,422
           script: |
             const { detectWebChanges } = require("./.github/scripts/detect-frontend-changes.cjs");
             const files = context.eventName === "pull_request"
@@ -92,6 +95,7 @@ jobs:
       - web-quality
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Checkout code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
