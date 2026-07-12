@@ -27,6 +27,12 @@ jobs:
       - name: Test change detector
         run: node --test .github/scripts/detect-frontend-changes.test.cjs
 
+      - name: Test workflow policy
+        run: node --test .github/scripts/check-workflow-policy.test.cjs
+
+      - name: Check workflow policy
+        run: node .github/scripts/check-workflow-policy.cjs
+
       - name: Detect web changes
         id: filter
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0

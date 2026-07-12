@@ -25,6 +25,8 @@ test("skips both jobs for unrelated pull-request files", () => {
 
 test("shared detector files run both jobs", () => {
   for (const filename of [
+    ".github/scripts/check-workflow-policy.cjs",
+    ".github/scripts/check-workflow-policy.test.cjs",
     ".github/scripts/detect-frontend-changes.cjs",
     ".github/scripts/detect-frontend-changes.test.cjs",
     ".github/scripts/verify-quality-gate.cjs",
