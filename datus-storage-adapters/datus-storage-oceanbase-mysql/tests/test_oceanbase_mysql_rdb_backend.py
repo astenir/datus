@@ -12,6 +12,7 @@ from datus_storage_oceanbase_mysql.rdb.backend import (
     OceanBaseMySQLRdbBackend,
     OceanBaseMySQLRdbDatabase,
     OceanBaseMySQLRdbTable,
+    _ConnectionPool,
 )
 
 
@@ -27,6 +28,21 @@ class Item:
 class KeyedItem:
     key_col: Optional[str] = None
     value: Optional[str] = None
+
+
+class _FakeConnection:
+    def __init__(self, ping_error=None):
+        self.open = True
+        self.ping_error = ping_error
+        self.ping_calls = []
+
+    def ping(self, reconnect=False):
+        self.ping_calls.append(reconnect)
+        if self.ping_error:
+            raise self.ping_error
+
+    def close(self):
+        self.open = False
 
 
 def _table_def() -> TableDefinition:
@@ -82,6 +98,105 @@ class TestBackendConfig:
         backend._pool = DummyPool()
         db = backend.connect("project", "subject_tree")
         assert db.database_name == "project__subject_tree"
+
+
+class TestConnectionPool:
+    @staticmethod
+    def _config(**overrides):
+        return {
+            "host": "127.0.0.1",
+            "port": 2881,
+            "user": "root@test",
+            "password": "",
+            "database": "datus_storage",
+            "pool_max_size": 1,
+            "pool_wait_timeout": 0.01,
+            **overrides,
+        }
+
+    def test_reused_connection_is_pinged(self, monkeypatch):
+        conn = _FakeConnection()
+        monkeypatch.setattr(pymysql, "connect", lambda **kwargs: conn)
+        pool = _ConnectionPool(self._config())
+
+        with pool.connection() as acquired:
+            assert acquired is conn
+        with pool.connection() as acquired:
+            assert acquired is conn
+
+        assert conn.ping_calls == [True]
+
+    def test_failed_ping_discards_connection_and_releases_capacity(self, monkeypatch):
+        stale = _FakeConnection(ping_error=OSError("connection closed"))
+        replacement = _FakeConnection()
+        connections = iter([stale, replacement])
+        monkeypatch.setattr(pymysql, "connect", lambda **kwargs: next(connections))
+        pool = _ConnectionPool(self._config())
+
+        with pool.connection():
+            pass
+        with pool.connection() as acquired:
+            assert acquired is replacement
+
+        assert not stale.open
+        assert pool._created == 1
+
+    def test_context_error_discards_connection_and_releases_capacity(self, monkeypatch):
+        connections = [_FakeConnection(), _FakeConnection()]
+        monkeypatch.setattr(pymysql, "connect", lambda **kwargs: connections.pop(0))
+        pool = _ConnectionPool(self._config())
+
+        with pytest.raises(RuntimeError, match="query failed"):
+            with pool.connection():
+                raise RuntimeError("query failed")
+
+        assert pool._created == 0
+        with pool.connection() as acquired:
+            assert acquired.open
+
+    def test_connection_creation_failure_releases_capacity(self, monkeypatch):
+        attempts = iter([OSError("connect failed"), _FakeConnection()])
+
+        def connect(**kwargs):
+            result = next(attempts)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        monkeypatch.setattr(pymysql, "connect", connect)
+        pool = _ConnectionPool(self._config())
+
+        with pytest.raises(OSError, match="connect failed"):
+            with pool.connection():
+                pass
+
+        assert pool._created == 0
+        with pool.connection() as acquired:
+            assert acquired.open
+
+    def test_pool_wait_is_bounded(self, monkeypatch):
+        monkeypatch.setattr(pymysql, "connect", lambda **kwargs: _FakeConnection())
+        pool = _ConnectionPool(self._config())
+
+        with pool.connection():
+            with pytest.raises(TimeoutError, match="Timed out waiting for OceanBase MySQL connection"):
+                with pool.connection():
+                    pass
+
+    def test_close_releases_available_connection_capacity(self, monkeypatch):
+        conn = _FakeConnection()
+        monkeypatch.setattr(pymysql, "connect", lambda **kwargs: conn)
+        pool = _ConnectionPool(self._config())
+
+        with pool.connection():
+            pass
+        pool.close()
+
+        assert not conn.open
+        assert pool._created == 0
+        with pytest.raises(RuntimeError, match="connection pool is closed"):
+            with pool.connection():
+                pass
 
 
 class TestLogicalDdl:

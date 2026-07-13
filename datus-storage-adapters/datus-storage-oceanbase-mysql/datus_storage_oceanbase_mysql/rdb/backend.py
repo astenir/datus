@@ -134,6 +134,11 @@ class _ConnectionPool:
     def __init__(self, config: Dict[str, Any]) -> None:
         self._config = config
         self._max_size = int(config.get("pool_max_size", 10))
+        self._wait_timeout = float(config.get("pool_wait_timeout", 30))
+        if self._max_size < 1:
+            raise ValueError("pool_max_size must be at least 1")
+        if self._wait_timeout < 0:
+            raise ValueError("pool_wait_timeout must not be negative")
         self._available: queue.LifoQueue[Connection] = queue.LifoQueue(maxsize=self._max_size)
         self._created = 0
         self._closed = False
@@ -154,31 +159,77 @@ class _ConnectionPool:
             cursorclass=DictCursor,
         )
 
+    def _reserve_shared_slot(self) -> bool:
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("OceanBase MySQL connection pool is closed")
+            if self._created >= self._max_size:
+                return False
+            self._created += 1
+            return True
+
+    def _release_shared_slot(self) -> None:
+        with self._lock:
+            self._created -= 1
+
+    def _discard_shared_connection(self, conn: Connection) -> None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        finally:
+            self._release_shared_slot()
+
+    def _acquire_shared_connection(self) -> Connection:
+        try:
+            conn = self._available.get_nowait()
+        except queue.Empty:
+            if self._reserve_shared_slot():
+                try:
+                    return self._create_connection()
+                except Exception:
+                    self._release_shared_slot()
+                    raise
+            try:
+                conn = self._available.get(timeout=self._wait_timeout)
+            except queue.Empty:
+                raise TimeoutError(
+                    f"Timed out waiting for OceanBase MySQL connection after {self._wait_timeout:g} seconds"
+                ) from None
+
+        try:
+            conn.ping(reconnect=True)
+        except Exception:
+            self._discard_shared_connection(conn)
+            return self._acquire_shared_connection()
+        return conn
+
     @contextmanager
     def connection(self, database: Optional[str] = None) -> Iterator[Connection]:
         if self._closed:
             raise RuntimeError("OceanBase MySQL connection pool is closed")
-        conn: Optional[Connection] = None
         use_shared = database is None
-        if use_shared:
-            try:
-                conn = self._available.get_nowait()
-            except queue.Empty:
-                with self._lock:
-                    if self._created < self._max_size:
-                        conn = self._create_connection()
-                        self._created += 1
-                if conn is None:
-                    conn = self._available.get()
-        else:
-            conn = self._create_connection(database=database)
+        conn = self._acquire_shared_connection() if use_shared else self._create_connection(database=database)
         try:
-            if not conn.open:
-                conn = self._create_connection(database=database)
             yield conn
-        finally:
-            if use_shared and not self._closed and conn.open:
-                self._available.put(conn)
+        except BaseException:
+            if use_shared:
+                self._discard_shared_connection(conn)
+            else:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            raise
+        else:
+            if use_shared:
+                if self._closed or not conn.open:
+                    self._discard_shared_connection(conn)
+                else:
+                    try:
+                        self._available.put_nowait(conn)
+                    except queue.Full:
+                        self._discard_shared_connection(conn)
             else:
                 try:
                     conn.close()
@@ -186,16 +237,14 @@ class _ConnectionPool:
                     pass
 
     def close(self) -> None:
-        self._closed = True
+        with self._lock:
+            self._closed = True
         while True:
             try:
                 conn = self._available.get_nowait()
             except queue.Empty:
                 break
-            try:
-                conn.close()
-            except Exception:
-                pass
+            self._discard_shared_connection(conn)
 
 
 class OceanBaseMySQLRdbTable(RdbTable):
