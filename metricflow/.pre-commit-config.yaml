@@ -1,0 +1,34 @@
+repos:
+  - repo: https://github.com/psf/black
+    rev: 24.4.2
+    hooks:
+      - id: black
+        verbose: true
+  - repo: https://github.com/PyCQA/flake8
+    rev: 7.1.0
+    hooks:
+      - id: flake8
+        args: [--config=.flake8]
+        verbose: true
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.10.0
+    hooks:
+      - id: mypy
+        name: mypy_metricflow
+        args: [--ignore-missing-imports, --show-error-codes]
+        additional_dependencies:
+          [
+            sqlalchemy,
+            types-flask,
+            types-requests,
+            types-PyYAML,
+            types-jinja2,
+            types-attrs,
+            types-tabulate,
+            pytest,
+            python-dateutil,
+            types-python-dateutil,
+            dbt-core,
+            pydantic,
+          ]

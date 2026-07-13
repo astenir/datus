@@ -1,0 +1,276 @@
+from typing import Any, List, Optional, Set
+from urllib.parse import quote_plus
+
+import dateutil.parser
+import pandas as pd
+from sqlalchemy.engine import URL, make_url
+
+from metricflow.configuration.constants import (
+    CONFIG_DWH_ACCOUNT,
+    CONFIG_DWH_DB,
+    CONFIG_DWH_DIALECT,
+    CONFIG_DWH_HOST,
+    CONFIG_DWH_PORT,
+    CONFIG_DWH_PRIVATE_KEY,
+    CONFIG_DWH_PRIVATE_KEY_FILE,
+    CONFIG_DWH_PRIVATE_KEY_FILE_PWD,
+    CONFIG_DWH_ROLE,
+    CONFIG_DWH_SCHEMA,
+    CONFIG_DWH_SSLMODE,
+    CONFIG_DWH_USER,
+    CONFIG_DWH_PASSWORD,
+    CONFIG_DWH_WAREHOUSE,
+)
+from metricflow.configuration.yaml_handler import YamlFileHandler
+from metricflow.protocols.async_sql_client import AsyncSqlClient
+from metricflow.protocols.sql_client import SqlClient, SqlIsolationLevel
+from metricflow.protocols.sql_request import SqlJsonTag
+from metricflow.sql.sql_bind_parameters import SqlBindParameters
+from metricflow.sql_clients.base_sql_client_implementation import SqlClientException
+from metricflow.sql_clients.clickhouse import ClickHouseSqlClient
+from metricflow.sql_clients.common_client import SqlDialect, not_empty
+from metricflow.sql_clients.duckdb import DuckDbSqlClient
+from metricflow.sql_clients.greenplum import GreenplumSqlClient
+from metricflow.sql_clients.mysql import MySQLSqlClient
+from metricflow.sql_clients.oceanbase_oracle import OceanBaseOracleSqlClient
+from metricflow.sql_clients.postgres import PostgresSqlClient
+from metricflow.sql_clients.sqlite import SqliteSqlClient
+from metricflow.sql_clients.snowflake import SnowflakeSqlClient
+from metricflow.sql_clients.starrocks import StarRocksSqlClient
+from metricflow.sql_clients.trino import TrinoSqlClient
+
+
+def make_df(  # type: ignore [misc]
+    sql_client: SqlClient, columns: List[str], data: Any, time_columns: Optional[Set[str]] = None
+) -> pd.DataFrame:
+    """Helper to make a dataframe, converting the time columns to appropriate types."""
+    time_columns = time_columns or set()
+    # Should only be used in testing, so sql_client should be set.
+    assert sql_client
+
+    if sql_client.sql_engine_attributes.timestamp_type_supported:
+        new_rows = []
+        for row in data:
+            new_row = []
+            # Change the type of the column if it's in time_columns
+            for i, column in enumerate(columns):
+                if column in time_columns and row[i] is not None:
+                    # ts_suffix = " 00:00:00" if ":" not in row[i] else ""
+                    # ts_input = row[i] + ts_suffix
+                    new_row.append(dateutil.parser.parse(row[i]))
+
+                else:
+                    new_row.append(row[i])
+            new_rows.append(new_row)
+        data = new_rows
+
+    return pd.DataFrame(
+        columns=columns,
+        data=data,
+    )
+
+
+def make_sql_client(url: str, password: str) -> AsyncSqlClient:
+    """Build SQL client based on env configs. Used only in tests."""
+    dialect_protocol = make_url(url.split(";")[0]).drivername.split("+")
+    dialect = SqlDialect(dialect_protocol[0])
+    if len(dialect_protocol) > 2:
+        raise ValueError(f"Invalid # of +'s in {url}")
+
+    if dialect == SqlDialect.DUCKDB:
+        return DuckDbSqlClient.from_connection_details(url, password)
+    elif dialect == SqlDialect.MYSQL:
+        return MySQLSqlClient.from_connection_details(url, password)
+    elif dialect == SqlDialect.POSTGRESQL:
+        return PostgresSqlClient.from_connection_details(url, password)
+    elif dialect == SqlDialect.GREENPLUM:
+        return GreenplumSqlClient.from_connection_details(url, password)
+    elif dialect == SqlDialect.CLICKHOUSE:
+        return ClickHouseSqlClient.from_connection_details(url, password)
+    elif dialect == SqlDialect.STARROCKS:
+        return StarRocksSqlClient.from_connection_details(url, password)
+    elif dialect == SqlDialect.TRINO:
+        return TrinoSqlClient.from_connection_details(url, password)
+    elif dialect == SqlDialect.SQLITE:
+        return SqliteSqlClient.from_connection_details(url, password)
+    elif dialect == SqlDialect.SNOWFLAKE:
+        return SnowflakeSqlClient.from_connection_details(url, password)
+    else:
+        raise ValueError(
+            "Only DuckDB, MySQL, PostgreSQL, Greenplum, ClickHouse, StarRocks, Trino, SQLite, and Snowflake "
+            f"dialects are supported in this build. Got: `{dialect}` in URL {url}"
+        )
+
+
+def _sslmode_query_suffix(handler: YamlFileHandler) -> str:
+    sslmode = handler.get_value(CONFIG_DWH_SSLMODE)
+    sslmode = str(sslmode).strip() if sslmode else ""
+    if not sslmode:
+        return ""
+    return f"?sslmode={quote_plus(sslmode)}"
+
+
+def _snowflake_url_from_config(handler: YamlFileHandler) -> str:
+    """Build a Snowflake SQLAlchemy URL from MetricFlow config values."""
+    config_url = handler.url
+    account = handler.get_value(CONFIG_DWH_ACCOUNT) or handler.get_value(CONFIG_DWH_HOST)
+    query = {
+        "warehouse": not_empty(handler.get_value(CONFIG_DWH_WAREHOUSE), "warehouse", config_url),
+    }
+    role = handler.get_value(CONFIG_DWH_ROLE)
+    if role:
+        query["role"] = role
+    url = URL.create(
+        drivername=SqlDialect.SNOWFLAKE.value,
+        username=not_empty(handler.get_value(CONFIG_DWH_USER), "username", config_url),
+        host=not_empty(account, "account", config_url),
+        database=not_empty(handler.get_value(CONFIG_DWH_DB), "database", config_url),
+        query=query,
+    )
+    return url.render_as_string(hide_password=False)
+
+
+def make_sql_client_from_config(handler: YamlFileHandler) -> AsyncSqlClient:
+    """Construct a SqlClient given a yaml file config."""
+
+    url = handler.url
+    dialect = not_empty(handler.get_value(CONFIG_DWH_DIALECT), CONFIG_DWH_DIALECT, url).lower()
+    if dialect == SqlDialect.DUCKDB.value:
+        database = not_empty(handler.get_value(CONFIG_DWH_DB), CONFIG_DWH_DB, url)
+        return DuckDbSqlClient(file_path=database)
+    elif dialect == SqlDialect.MYSQL.value:
+        # For MySQL, we need to construct a connection URL from config components
+        host = not_empty(handler.get_value(CONFIG_DWH_HOST), "host", url)
+        port = not_empty(handler.get_value(CONFIG_DWH_PORT), "port", url)
+        username = not_empty(handler.get_value(CONFIG_DWH_USER), "username", url)
+        password = not_empty(handler.get_value(CONFIG_DWH_PASSWORD), "password", url)
+        database = not_empty(handler.get_value(CONFIG_DWH_DB), "database", url)
+
+        # Construct MySQL URL
+        mysql_url = f"mysql://{username}@{host}:{port}/{database}"
+        return MySQLSqlClient.from_connection_details(mysql_url, password)
+    elif dialect == SqlDialect.POSTGRESQL.value:
+        host = not_empty(handler.get_value(CONFIG_DWH_HOST), "host", url)
+        port = not_empty(handler.get_value(CONFIG_DWH_PORT), "port", url)
+        username = not_empty(handler.get_value(CONFIG_DWH_USER), "username", url)
+        password = not_empty(handler.get_value(CONFIG_DWH_PASSWORD), "password", url)
+        database = not_empty(handler.get_value(CONFIG_DWH_DB), "database", url)
+
+        postgres_url = f"postgresql://{username}@{host}:{port}/{database}{_sslmode_query_suffix(handler)}"
+        return PostgresSqlClient.from_connection_details(postgres_url, password)
+    elif dialect == SqlDialect.GREENPLUM.value:
+        host = not_empty(handler.get_value(CONFIG_DWH_HOST), "host", url)
+        port = not_empty(handler.get_value(CONFIG_DWH_PORT), "port", url)
+        username = not_empty(handler.get_value(CONFIG_DWH_USER), "username", url)
+        password = not_empty(handler.get_value(CONFIG_DWH_PASSWORD), "password", url)
+        database = not_empty(handler.get_value(CONFIG_DWH_DB), "database", url)
+
+        greenplum_url = f"greenplum://{username}@{host}:{port}/{database}{_sslmode_query_suffix(handler)}"
+        return GreenplumSqlClient.from_connection_details(greenplum_url, password)
+    elif dialect == SqlDialect.CLICKHOUSE.value:
+        host = not_empty(handler.get_value(CONFIG_DWH_HOST), "host", url)
+        port = not_empty(handler.get_value(CONFIG_DWH_PORT), "port", url)
+        username = not_empty(handler.get_value(CONFIG_DWH_USER), "username", url)
+        password = handler.get_value(CONFIG_DWH_PASSWORD) or ""
+        database = handler.get_value(CONFIG_DWH_DB) or ""
+
+        if database:
+            clickhouse_url = f"clickhouse://{username}@{host}:{port}/{database}"
+        else:
+            clickhouse_url = f"clickhouse://{username}@{host}:{port}"
+        return ClickHouseSqlClient.from_connection_details(clickhouse_url, password)
+    elif dialect == SqlDialect.STARROCKS.value:
+        host = not_empty(handler.get_value(CONFIG_DWH_HOST), "host", url)
+        port = not_empty(handler.get_value(CONFIG_DWH_PORT), "port", url)
+        username = not_empty(handler.get_value(CONFIG_DWH_USER), "username", url)
+        password = handler.get_value(CONFIG_DWH_PASSWORD) or ""
+        database = handler.get_value(CONFIG_DWH_DB) or ""
+
+        if database:
+            starrocks_url = f"starrocks://{username}@{host}:{port}/{database}"
+        else:
+            starrocks_url = f"starrocks://{username}@{host}:{port}"
+        return StarRocksSqlClient.from_connection_details(starrocks_url, password)
+    elif dialect == SqlDialect.TRINO.value:
+        host = not_empty(handler.get_value(CONFIG_DWH_HOST), "host", url)
+        port = not_empty(handler.get_value(CONFIG_DWH_PORT), "port", url)
+        username = not_empty(handler.get_value(CONFIG_DWH_USER), "username", url)
+        password = handler.get_value(CONFIG_DWH_PASSWORD) or ""
+        database = handler.get_value(CONFIG_DWH_DB) or ""
+        schema = handler.get_value(CONFIG_DWH_SCHEMA) or ""
+
+        if database:
+            trino_database = f"{database}/{schema}" if schema else database
+            trino_url = f"trino://{username}@{host}:{port}/{trino_database}"
+        else:
+            trino_url = f"trino://{username}@{host}:{port}"
+        return TrinoSqlClient.from_connection_details(trino_url, password)
+    elif dialect == SqlDialect.SQLITE.value:
+        database = not_empty(handler.get_value(CONFIG_DWH_DB), CONFIG_DWH_DB, url)
+        return SqliteSqlClient(file_path=database)
+    elif dialect == SqlDialect.SNOWFLAKE.value:
+        password = handler.get_value(CONFIG_DWH_PASSWORD) or None
+        private_key = handler.get_value(CONFIG_DWH_PRIVATE_KEY) or None
+        private_key_file = handler.get_value(CONFIG_DWH_PRIVATE_KEY_FILE) or None
+        private_key_file_pwd = handler.get_value(CONFIG_DWH_PRIVATE_KEY_FILE_PWD) or None
+        snowflake_url = _snowflake_url_from_config(handler)
+        return SnowflakeSqlClient.from_connection_details(
+            snowflake_url,
+            password,
+            private_key=private_key,
+            private_key_file=private_key_file,
+            private_key_file_pwd=private_key_file_pwd,
+        )
+    elif dialect == SqlDialect.OCEANBASE_ORACLE.value:
+        return OceanBaseOracleSqlClient.from_config(handler)
+    else:
+        raise ValueError(
+            "Only DuckDB, MySQL, PostgreSQL, Greenplum, ClickHouse, StarRocks, Trino, SQLite, Snowflake, "
+            "and OceanBase Oracle "
+            f"dialects are supported in this build. Got dialect '{dialect}' in {url}"
+        )
+
+
+def sync_execute(  # noqa: D
+    async_sql_client: AsyncSqlClient,
+    statement: str,
+    bind_parameters: SqlBindParameters = SqlBindParameters(),
+    extra_sql_tags: SqlJsonTag = SqlJsonTag(),
+    isolation_level: Optional[SqlIsolationLevel] = None,
+) -> None:
+    request_id = async_sql_client.async_execute(
+        statement=statement,
+        bind_parameters=bind_parameters,
+        extra_tags=extra_sql_tags,
+        isolation_level=isolation_level,
+    )
+
+    result = async_sql_client.async_request_result(request_id)
+    if result.exception:
+        raise SqlClientException(
+            f"Got an exception when trying to execute a statement: {result.exception}"
+        ) from result.exception
+    return
+
+
+def sync_query(  # noqa: D
+    async_sql_client: AsyncSqlClient,
+    statement: str,
+    bind_parameters: SqlBindParameters = SqlBindParameters(),
+    extra_sql_tags: SqlJsonTag = SqlJsonTag(),
+    isolation_level: Optional[SqlIsolationLevel] = None,
+) -> pd.DataFrame:
+    request_id = async_sql_client.async_query(
+        statement=statement,
+        bind_parameters=bind_parameters,
+        extra_tags=extra_sql_tags,
+        isolation_level=isolation_level,
+    )
+
+    result = async_sql_client.async_request_result(request_id)
+    if result.exception:
+        raise SqlClientException(
+            f"Got an exception when trying to execute a statement: {result.exception}"
+        ) from result.exception
+    assert result.df is not None, "A dataframe should have been returned if there was no error"
+    return result.df

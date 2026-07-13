@@ -1,0 +1,264 @@
+import os
+import pathlib
+import re
+from typing import Any, Dict, Optional
+
+import yaml
+
+from metricflow.configuration.constants import (
+    CONFIG_DWH_DB,
+    CONFIG_DWH_DIALECT,
+    CONFIG_DWH_HOST,
+    CONFIG_DWH_PASSWORD,
+    CONFIG_DWH_PORT,
+    CONFIG_DWH_PRIVATE_KEY,
+    CONFIG_DWH_PRIVATE_KEY_FILE,
+    CONFIG_DWH_PRIVATE_KEY_FILE_PWD,
+    CONFIG_DWH_SCHEMA,
+    CONFIG_DWH_USER,
+    CONFIG_DWH_WAREHOUSE,
+    CONFIG_DWH_ACCOUNT,
+    CONFIG_DWH_ROLE,
+    CONFIG_DWH_PROJECT_ID,
+    CONFIG_MODEL_PATH,
+    CONFIG_EMAIL,
+    CONFIG_DWH_SSLMODE,
+)
+from metricflow.configuration.yaml_handler import YamlFileHandler
+
+
+class DatusConfigHandler(YamlFileHandler):
+    """Config handler that reads from Datus agent.yml configuration."""
+
+    def __init__(self, datasource: str, config_path: Optional[str] = None, project_root: Optional[str] = None) -> None:
+        """Initialize DatusConfigHandler with datasource and optional config path."""
+        self.datasource = datasource
+        self.config_path = config_path
+        self.project_root = project_root
+        self.datus_config = self._load_datus_config()
+        self.db_config = self._get_datasource_db_config()
+
+        # Call parent with a dummy path since we don't use it
+        super().__init__(yaml_file_path=self._get_dummy_config_path())
+
+    def _get_dummy_config_path(self) -> str:
+        """Return a dummy config path for parent class."""
+        config_dir = pathlib.Path.home() / ".metricflow"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        return str(config_dir / "datus_config_dummy.yml")
+
+    def _load_datus_config(self) -> Dict[str, Any]:
+        """Load Datus agent configuration file.
+
+        Priority:
+        1. Explicit config_path parameter (if provided)
+        2. ./conf/agent.yml (current directory)
+        3. ~/.datus/conf/agent.yml (home directory)
+        """
+        resolved_config_path = None
+
+        # 1. Check explicit config path
+        if self.config_path:
+            explicit_path = pathlib.Path(self.config_path).expanduser()
+            if explicit_path.exists():
+                resolved_config_path = explicit_path
+            else:
+                raise FileNotFoundError(f"Agent configuration file not found: {explicit_path}")
+        else:
+            # 2. Check current directory
+            local_config = pathlib.Path("conf/agent.yml")
+            if local_config.exists():
+                resolved_config_path = local_config
+            # 3. Check user home directory
+            else:
+                home_config = pathlib.Path.home() / ".datus" / "conf" / "agent.yml"
+                if home_config.exists():
+                    resolved_config_path = home_config
+                else:
+                    raise FileNotFoundError(
+                        "Datus config not found. Expected at ./conf/agent.yml or ~/.datus/conf/agent.yml"
+                    )
+
+        with open(resolved_config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
+
+        return config
+
+    def _get_datasource_db_config(self) -> Dict[str, Any]:
+        """Get database configuration for the specified datasource."""
+        datasources = self.datus_config.get("agent", {}).get("services", {}).get("datasources", {})
+
+        if self.datasource not in datasources:
+            available = ", ".join(datasources.keys())
+            raise ValueError(
+                f"Datasource '{self.datasource}' not found in Datus config. " f"Available datasources: {available}"
+            )
+
+        return datasources[self.datasource]
+
+    def _resolve_env_vars(self, value: Any) -> str:
+        """Resolve ${VAR} or $VAR style environment variables in config values."""
+        if value is None:
+            return ""
+
+        value_str = str(value)
+
+        if "$" not in value_str:
+            return value_str
+
+        # Replace ${VAR} style
+        value_str = re.sub(r"\$\{([^}]+)\}", lambda m: os.environ.get(m.group(1), m.group(0)), value_str)
+
+        # Replace $VAR style
+        value_str = re.sub(r"\$([A-Za-z_][A-Za-z0-9_]*)", lambda m: os.environ.get(m.group(1), m.group(0)), value_str)
+
+        return value_str
+
+    def _get_model_path_from_datus_config(self) -> str:
+        """Get semantic models path for the datasource.
+
+        Returns:
+            Path: {project_root}/subject/semantic_models/{datasource}
+
+        The project_root is determined by (in priority order):
+        1. Explicit project_root parameter
+        2. Current working directory
+        """
+        if self.project_root:
+            root = pathlib.Path(self.project_root).expanduser().resolve()
+        else:
+            root = pathlib.Path.cwd()
+
+        model_path = root / "subject" / "semantic_models" / self.datasource
+
+        return str(model_path)
+
+    def get_value(self, key: str) -> Optional[str]:
+        """Get configuration value by mapping Datus config to MetricFlow keys."""
+        db_type = self.db_config.get("type", "").lower()
+
+        # Handle model path specially
+        if key == CONFIG_MODEL_PATH:
+            return self._get_model_path_from_datus_config()
+
+        # Handle email (optional)
+        if key == CONFIG_EMAIL:
+            return ""
+
+        # Map database dialect
+        if key == CONFIG_DWH_DIALECT:
+            # Map Datus DB types to MetricFlow dialects
+            dialect_mapping = {
+                "postgres": "postgresql",
+                "postgresql": "postgresql",
+                "greenplum": "greenplum",
+                "mysql": "mysql",
+                "starrocks": "starrocks",
+                "clickhouse": "clickhouse",
+                "trino": "trino",
+                "duckdb": "duckdb",
+                "sqlite": "sqlite",
+                "snowflake": "snowflake",
+                "bigquery": "bigquery",
+            }
+            return dialect_mapping.get(db_type, db_type)
+
+        # Common mappings for most SQL databases
+        if key == CONFIG_DWH_HOST:
+            return self._resolve_env_vars(self.db_config.get("host", ""))
+
+        if key == CONFIG_DWH_PORT:
+            port = self.db_config.get("port")
+            return self._resolve_env_vars(port) if port else ""
+
+        if key == CONFIG_DWH_USER:
+            return self._resolve_env_vars(self.db_config.get("username", ""))
+
+        if key == CONFIG_DWH_PASSWORD:
+            return self._resolve_env_vars(self.db_config.get("password", ""))
+
+        if key == CONFIG_DWH_SSLMODE:
+            return self._resolve_env_vars(self.db_config.get("sslmode", ""))
+
+        if key == CONFIG_DWH_DB:
+            database = self.db_config.get("database") or self.db_config.get("database_name", "")
+            catalog = self.db_config.get("catalog") or self.db_config.get("catalog_name", "")
+            # Special handling for file-based databases
+            if db_type in ("sqlite", "duckdb"):
+                uri = self._resolve_env_vars(self.db_config.get("uri", ""))
+                # Remove protocol prefix if present
+                if uri.startswith(f"{db_type}:///"):
+                    uri = uri[len(f"{db_type}:///") :]
+                return os.path.expanduser(uri)
+            elif db_type == "trino":
+                return self._resolve_env_vars(catalog or database)
+            else:
+                return self._resolve_env_vars(database)
+
+        if key == CONFIG_DWH_SCHEMA:
+            # Support both "schema" and "schema_name" field names for compatibility
+            schema = (
+                self.db_config.get("schema") or self.db_config.get("db_schema") or self.db_config.get("schema_name")
+            )
+            database = self.db_config.get("database") or self.db_config.get("database_name", "")
+            catalog = self.db_config.get("catalog") or self.db_config.get("catalog_name", "")
+            if schema:
+                return self._resolve_env_vars(schema)
+            # Default schemas for different DB types
+            if db_type == "duckdb":
+                return "main"
+            elif db_type == "sqlite":
+                return "default"
+            elif db_type in ("mysql", "starrocks", "clickhouse"):
+                return self._resolve_env_vars(database)
+            elif db_type == "trino":
+                if catalog and database:
+                    return self._resolve_env_vars(database)
+                return "default"
+            elif db_type in ("postgres", "postgresql", "greenplum"):
+                return "public"
+            else:
+                return self._resolve_env_vars(self.db_config.get("schema") or self.db_config.get("schema_name") or "")
+
+        # Snowflake-specific
+        if key == CONFIG_DWH_WAREHOUSE:
+            return self._resolve_env_vars(self.db_config.get("warehouse", ""))
+
+        if key == CONFIG_DWH_ACCOUNT:
+            return self._resolve_env_vars(self.db_config.get("account", ""))
+
+        if key == CONFIG_DWH_ROLE:
+            return self._resolve_env_vars(self.db_config.get("role", ""))
+
+        if key == CONFIG_DWH_PRIVATE_KEY:
+            return self._resolve_env_vars(self.db_config.get("private_key", ""))
+
+        if key == CONFIG_DWH_PRIVATE_KEY_FILE:
+            return self._resolve_env_vars(self.db_config.get("private_key_file", ""))
+
+        if key == CONFIG_DWH_PRIVATE_KEY_FILE_PWD:
+            return self._resolve_env_vars(self.db_config.get("private_key_file_pwd", ""))
+
+        # BigQuery-specific
+        if key == CONFIG_DWH_PROJECT_ID:
+            return self._resolve_env_vars(self.db_config.get("project_id", ""))
+
+        # Unknown key
+        return None
+
+    @property
+    def dir_path(self) -> str:
+        """Return config directory path."""
+        return str(pathlib.Path.home() / ".metricflow")
+
+    @property
+    def file_path(self) -> str:
+        """Return dummy config file path."""
+        return self._get_dummy_config_path()
+
+    @property
+    def log_file_path(self) -> str:
+        """Return log file path."""
+        log_dir = pathlib.Path.home() / ".metricflow" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        return str(log_dir / "metricflow.log")

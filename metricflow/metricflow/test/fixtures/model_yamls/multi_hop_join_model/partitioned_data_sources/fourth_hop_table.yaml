@@ -1,0 +1,21 @@
+---
+data_source:
+  name: fourth_hop_table
+  description: fourth_hop_table
+  owners:
+    - support@transformdata.io
+
+  sql_table: $fourth_hop_table
+
+  dimensions:
+    - name: fourth_hop_value
+      type: categorical
+
+  identifiers:
+    - name: fourth_hop_id
+      type: primary
+    - name: fifth_hop_id
+      type: foreign
+
+  mutability:
+    type: immutable
