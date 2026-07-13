@@ -2,6 +2,8 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+import pytest
+
 from datus_oceanbase_oracle import connector as connector_module
 from datus_oceanbase_oracle.connector import (
     OceanBaseOracleConnector,
@@ -423,6 +425,108 @@ class TestFullName:
         connector = make_connector_without_pool(schema_name="")
         connector._default_schema = ""
         assert connector.full_name(table_name="MY_TABLE") == '"MY_TABLE"'
+
+
+class TestMetricQueryPrimitives:
+    def test_query_dataframe_passes_positional_parameters(self):
+        connector = make_connector_without_pool()
+        calls = []
+
+        class FakeCursor:
+            description = [("TOTAL",)]
+
+            def execute(self, sql, parameters):
+                calls.append((sql, parameters))
+
+            def fetchall(self):
+                return [(42,)]
+
+            def close(self):
+                calls.append(("close", None))
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+            def close(self):
+                calls.append(("connection_close", None))
+
+        connector._get_raw_connection = lambda: FakeConnection()
+
+        result = connector.query_dataframe("SELECT ? AS total FROM DUAL", (42,))
+
+        assert result.to_dict(orient="records") == [{"TOTAL": 42}]
+        assert calls == [
+            ("SELECT ? AS total FROM DUAL", (42,)),
+            ("close", None),
+            ("connection_close", None),
+        ]
+
+    def test_execute_statement_commits_and_passes_parameters(self):
+        connector = make_connector_without_pool()
+        calls = []
+
+        class FakeCursor:
+            def execute(self, sql, parameters):
+                calls.append((sql, parameters))
+
+            def close(self):
+                calls.append(("close", None))
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+            def commit(self):
+                calls.append(("commit", None))
+
+            def close(self):
+                calls.append(("connection_close", None))
+
+        connector._get_raw_connection = lambda: FakeConnection()
+
+        connector.execute_statement("UPDATE APP.ORDERS SET AMOUNT = ?", (42,))
+
+        assert calls == [
+            ("UPDATE APP.ORDERS SET AMOUNT = ?", (42,)),
+            ("commit", None),
+            ("close", None),
+            ("connection_close", None),
+        ]
+
+    def test_execute_statement_rolls_back_and_closes_on_error(self):
+        connector = make_connector_without_pool()
+        calls = []
+
+        class FakeCursor:
+            def execute(self, sql, parameters):
+                calls.append((sql, parameters))
+                raise RuntimeError("write failed")
+
+            def close(self):
+                calls.append(("close", None))
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+            def rollback(self):
+                calls.append(("rollback", None))
+
+            def close(self):
+                calls.append(("connection_close", None))
+
+        connector._get_raw_connection = lambda: FakeConnection()
+
+        with pytest.raises(RuntimeError, match="write failed"):
+            connector.execute_statement("UPDATE APP.ORDERS SET AMOUNT = ?", (42,))
+
+        assert calls == [
+            ("UPDATE APP.ORDERS SET AMOUNT = ?", (42,)),
+            ("close", None),
+            ("rollback", None),
+            ("connection_close", None),
+        ]
 
 
 class TestIdentifier:

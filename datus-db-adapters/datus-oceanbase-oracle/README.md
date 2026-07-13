@@ -225,11 +225,23 @@ try:
     result = connector.execute_query("SELECT 1 FROM DUAL", result_format="list")
     print(result.sql_return)
 
+    # 面向 MetricFlow 等集成的参数化 DataFrame 查询接口。
+    frame = connector.query_dataframe(
+        "SELECT ? AS VALUE FROM DUAL",
+        (42,),
+    )
+    print(frame.to_dict(orient="records"))
+
     tables = connector.get_tables(schema_name="NPIMS")
     print(tables)
 finally:
     connector.close()
 ```
+
+`query_dataframe(sql, parameters)` 和 `execute_statement(sql, parameters)` 使用 JDBC 的
+位置参数（`?`），不会把参数值拼接进 SQL。前者返回 `pandas.DataFrame`；后者用于需要
+显式事务提交的集成或测试准备，执行失败时会回滚。MetricFlow 的 OceanBase Oracle
+运行配置本身是只读的，不会通过 `execute_statement` 写入业务库。
 
 ## 权限建议
 

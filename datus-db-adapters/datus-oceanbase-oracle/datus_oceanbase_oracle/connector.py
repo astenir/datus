@@ -3,7 +3,7 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import re
-from typing import Any, Dict, List, Literal, Optional, Set, Union, override
+from typing import Any, Dict, List, Literal, Optional, Sequence, Set, Union, override
 from urllib.parse import urlencode
 
 import jaydebeapi
@@ -235,22 +235,55 @@ class OceanBaseOracleConnector(BaseSqlConnector, MigrationTargetMixin):
             return f"{schema_name}.{table_name}"
         return table_name
 
-    def _execute_sql(self, sql: str) -> pd.DataFrame:
+    def _execute_sql(self, sql: str, parameters: Optional[Sequence[Any]] = None) -> pd.DataFrame:
         conn = self._get_raw_connection()
         try:
-            return self._read_dataframe(conn, sql)
+            return self._read_dataframe(conn, sql, parameters)
         finally:
             conn.close()
 
     @staticmethod
-    def _read_dataframe(conn: Any, sql: str) -> pd.DataFrame:
+    def _read_dataframe(
+        conn: Any,
+        sql: str,
+        parameters: Optional[Sequence[Any]] = None,
+    ) -> pd.DataFrame:
         cursor = conn.cursor()
         try:
-            cursor.execute(sql)
+            if parameters is None:
+                cursor.execute(sql)
+            else:
+                cursor.execute(sql, tuple(parameters))
             columns = [column[0] for column in (cursor.description or [])]
             return pd.DataFrame.from_records(cursor.fetchall(), columns=columns)
         finally:
             cursor.close()
+
+    def query_dataframe(self, sql: str, parameters: Optional[Sequence[Any]] = None) -> pd.DataFrame:
+        """Execute a parameterized read query for integrations that need a DataFrame."""
+        return self._execute_sql(sql, parameters)
+
+    def execute_statement(self, sql: str, parameters: Optional[Sequence[Any]] = None) -> None:
+        """Execute and commit a parameterized non-query statement."""
+        conn = self._get_raw_connection()
+        try:
+            cursor = conn.cursor()
+            try:
+                if parameters is None:
+                    cursor.execute(sql)
+                else:
+                    cursor.execute(sql, tuple(parameters))
+                conn.commit()
+            finally:
+                cursor.close()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
 
     def _execute_dml(self, sql: str) -> int:
         conn = self._get_raw_connection()
