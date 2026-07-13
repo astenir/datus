@@ -81,7 +81,12 @@ import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 import type { WorkspaceAccessFlags } from "@/features/workspace/access"
 import type { ArtifactViewTab, WorkspaceView } from "@/features/workspace/types"
 import { datasourceStatusDescription, datasourceStatusLabel, datasourceStatusToneClass } from "@/lib/datasource-status"
-import { APP_WORKSPACE_TITLE, FALLBACK_USERNAME_LABEL, FALLBACK_USER_LABEL } from "@/lib/constants"
+import {
+  APP_WORKSPACE_SUBTITLE,
+  APP_WORKSPACE_TITLE,
+  FALLBACK_USERNAME_LABEL,
+  FALLBACK_USER_LABEL,
+} from "@/lib/constants"
 import { cn } from "@/lib/utils"
 import { toast } from "vue-sonner"
 
@@ -158,20 +163,6 @@ const datasourceTestActionLabel = computed(() => {
   if (datasourceTestOk.value === true) return "重新测试数据源连接"
   if (datasourceTestOk.value === false) return "重新测试数据源连接"
   return "测试当前数据源连接"
-})
-const primaryCapabilityLabel = computed(() => {
-  if (props.canExecuteSql) return "SQL 执行可用"
-  if (props.viewAccess.canViewArtifacts) return "产物可用"
-  if (props.viewAccess.canViewKnowledge) return "知识库可用"
-  if (props.viewAccess.canViewMcp) return "MCP 可用"
-  if (props.viewAccess.canViewAgents) return "Agent 管理可用"
-  if (props.viewAccess.canViewConfiguration) return "配置可用"
-  if (props.viewAccess.canViewPermissions) return "权限管理可用"
-  return "已登录"
-})
-const workspaceStatusLabel = computed(() => {
-  if (!currentDatasourceName.value) return primaryCapabilityLabel.value
-  return currentDatasourceLabel.value
 })
 const datasourceConnectionStatusLabel = computed(() => {
   if (props.workspace.isTestingDatasource.value) return "正在测试连接"
@@ -422,7 +413,7 @@ async function deleteSession(sessionId: string) {
               {{ connectionLabel }}
             </Badge>
           </div>
-          <div class="truncate text-xs text-muted-foreground">{{ workspaceStatusLabel }}</div>
+          <div class="truncate text-xs text-muted-foreground">{{ APP_WORKSPACE_SUBTITLE }}</div>
         </div>
       </div>
     </SidebarHeader>

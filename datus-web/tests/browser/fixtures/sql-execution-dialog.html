@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SQL execution dialog fixture</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module">
+      import { createApp, h, nextTick, ref } from "vue"
+      import "/src/style.css"
+      import SqlExecutionDialog from "/src/features/chat/SqlExecutionDialog.vue"
+
+      const open = ref(false)
+      createApp({
+        setup() {
+          return () => h(SqlExecutionDialog, {
+            open: open.value,
+            "onUpdate:open": value => { open.value = value },
+            initialSql: "SELECT fund_code, fund_name, net_value, trade_date\nFROM fund_nav_history\nWHERE trade_date >= CURRENT_DATE - INTERVAL '30 days'\nORDER BY trade_date DESC\nLIMIT 100;",
+            datasourceName: "ccks_fund",
+            databaseName: "ccks_fund_pg",
+            datasourceOptions: [
+              { value: "ccks_fund", label: "基金分析库 (ccks_fund)" },
+              { value: "warehouse", label: "数据仓库 (warehouse)" },
+            ],
+          })
+        },
+      }).mount("#app")
+      nextTick(() => { open.value = true })
+    </script>
+  </body>
+</html>

@@ -1,26 +1,18 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, shallowRef, watch } from "vue"
-import { AlertCircleIcon, DatabaseIcon, Loader2Icon, PlayIcon, SquareIcon } from "@lucide/vue"
+import { DatabaseIcon, Loader2Icon, PlayIcon, SquareIcon } from "@lucide/vue"
 import {
   Dialog,
+  DialogClose,
   DialogFooter,
   DialogHeader,
   DialogScrollContent,
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table"
+import { Field, FieldContent, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
 import {
   Select,
   SelectContent,
@@ -31,6 +23,7 @@ import {
 } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
 import { useSqlExecution } from "@/composables/useSqlExecution"
+import SqlExecutionResult from "@/features/chat/SqlExecutionResult.vue"
 import type { SelectOption } from "@/types"
 
 const props = defineProps<{
@@ -46,8 +39,6 @@ const sqlDraft = shallowRef(props.initialSql)
 const selectedDatasource = shallowRef("")
 
 const canExecute = computed(() => Boolean(sqlDraft.value.trim()) && !execution.running.value)
-const showResultTable = computed(() => execution.columns.value.length > 0)
-const showRawResult = computed(() => Boolean(execution.rawResult.value) && !showResultTable.value)
 const datasourceOptions = computed(() => props.datasourceOptions ?? [])
 const normalizedDatasourceName = computed(() => props.datasourceName?.trim() ?? "")
 const hasDatasourceOptions = computed(() => datasourceOptions.value.length > 0)
@@ -76,6 +67,9 @@ const executionTimeLabel = computed(() => {
   const seconds = execution.result.value?.execution_time
   return typeof seconds === "number" ? `${seconds.toFixed(2)}s` : ""
 })
+const showExecutionResult = computed(() =>
+  execution.running.value || Boolean(execution.error.value) || Boolean(execution.result.value),
+)
 
 watch(
   () => props.initialSql,
@@ -139,161 +133,94 @@ function optionLabel(value: string, options: readonly SelectOption[]) {
         </DialogDescription>
       </DialogHeader>
 
-      <div class="flex min-h-0 min-w-0 flex-col gap-4 overflow-y-auto px-2 pb-2">
-        <FieldGroup>
+      <div class="flex min-h-0 min-w-0 flex-col gap-5 overflow-y-auto px-2 pb-2">
+        <FieldGroup class="gap-4">
           <Field>
-            <FieldLabel for="read-query-datasource">执行数据源</FieldLabel>
-            <Select
-              v-if="hasDatasourceOptions"
-              v-model="selectedDatasource"
-              :disabled="execution.running.value"
-            >
-              <SelectTrigger
-                id="read-query-datasource"
-                class="h-11 w-full border-primary/40 bg-primary/5"
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <FieldLabel for="read-query-sql" class="pt-2">SQL</FieldLabel>
+              <Field
+                orientation="horizontal"
+                class="flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:items-start"
               >
-                <SelectValue placeholder="选择数据源" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem
-                    v-for="option in datasourceOptions"
-                    :key="option.value"
-                    :value="option.value"
+                <FieldLabel
+                  for="read-query-datasource"
+                  class="shrink-0 text-xs text-muted-foreground sm:pt-2"
+                >
+                  执行数据源
+                </FieldLabel>
+                <FieldContent class="min-w-0 w-full sm:w-72 sm:flex-none">
+                  <Select
+                    v-if="hasDatasourceOptions"
+                    v-model="selectedDatasource"
+                    :disabled="execution.running.value"
                   >
-                    {{ option.label }}
-                  </SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <div
-              v-else
-              id="read-query-datasource"
-              class="flex h-11 min-w-0 items-center gap-2 rounded-md border border-primary/40 bg-primary/5 px-3 text-sm font-medium text-foreground"
-            >
-              <DatabaseIcon data-icon="inline-start" />
-              <span class="truncate">{{ executionDatasourceLabel }}</span>
+                    <SelectTrigger
+                      id="read-query-datasource"
+                      class="w-full"
+                    >
+                      <SelectValue placeholder="选择数据源" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem
+                          v-for="option in datasourceOptions"
+                          :key="option.value"
+                          :value="option.value"
+                        >
+                          {{ option.label }}
+                        </SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                  <Badge
+                    v-else
+                    id="read-query-datasource"
+                    variant="secondary"
+                    class="max-w-full justify-start"
+                    :title="executionDatasourceLabel"
+                  >
+                    <DatabaseIcon data-icon="inline-start" />
+                    <span class="truncate">{{ executionDatasourceLabel }}</span>
+                  </Badge>
+                  <FieldDescription v-if="executionDatabaseName" class="text-xs">
+                    数据库：{{ executionDatabaseName }}
+                  </FieldDescription>
+                </FieldContent>
+              </Field>
             </div>
-          </Field>
-
-          <Field>
-            <FieldLabel for="read-query-sql">SQL</FieldLabel>
-            <div class="px-1 pb-1">
-              <Textarea
-                id="read-query-sql"
-                v-model="sqlDraft"
-                class="min-h-44 overflow-auto px-4 font-mono text-xs leading-6"
-                spellcheck="false"
-              />
-            </div>
-            <FieldDescription v-if="executionDatabaseName">
-              Database: {{ executionDatabaseName }}
-            </FieldDescription>
+            <Textarea
+              id="read-query-sql"
+              v-model="sqlDraft"
+              class="min-h-52 max-h-[40vh] overflow-auto px-4 font-mono text-xs leading-6"
+              spellcheck="false"
+            />
           </Field>
         </FieldGroup>
 
-        <div class="flex flex-wrap items-center gap-2">
-          <Badge
-            v-if="execution.result.value || execution.running.value || execution.error.value"
-            variant="default"
-          >
-            <DatabaseIcon data-icon="inline-start" />
-            {{ executionDatasourceLabel }}
-          </Badge>
-          <Badge
-            v-if="executionDatabaseName"
-            variant="outline"
-          >
-            <DatabaseIcon data-icon="inline-start" />
-            {{ executionDatabaseName }}
-          </Badge>
-          <Badge
-            v-if="execution.running.value"
-            variant="secondary"
-          >
-            执行中
-          </Badge>
-          <Badge
-            v-if="execution.result.value"
-            variant="secondary"
-          >
-            {{ rowCountLabel }}
-          </Badge>
-          <Badge
-            v-if="executionTimeLabel"
-            variant="outline"
-          >
-            {{ executionTimeLabel }}
-          </Badge>
-        </div>
-
-        <Alert
-          v-if="execution.error.value"
-          variant="destructive"
-        >
-          <AlertCircleIcon />
-          <AlertTitle>执行失败</AlertTitle>
-          <AlertDescription class="flex flex-col gap-1">
-            <span>{{ execution.error.value }}</span>
-            <span class="text-xs opacity-90">执行上下文：{{ executionContextLabel }}</span>
-          </AlertDescription>
-        </Alert>
-
-        <div
-          v-if="showResultTable"
-          class="min-w-0 shrink-0 overflow-hidden rounded-md border bg-background"
-        >
-          <Table class="min-w-max">
-            <TableHeader>
-              <TableRow>
-                <TableHead
-                  v-for="column in execution.columns.value"
-                  :key="column"
-                  class="h-9 text-xs"
-                >
-                  {{ column }}
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              <TableRow
-                v-for="(row, rowIndex) in execution.displayRows.value"
-                :key="`${rowIndex}-${row.join('|')}`"
-              >
-                <TableCell
-                  v-for="(cell, cellIndex) in row"
-                  :key="`${rowIndex}-${execution.columns.value[cellIndex] ?? cellIndex}`"
-                  class="max-w-sm whitespace-normal break-words py-2 align-top text-xs leading-6"
-                >
-                  {{ cell }}
-                </TableCell>
-              </TableRow>
-              <TableRow v-if="execution.displayRows.value.length === 0">
-                <TableCell
-                  :colspan="Math.max(execution.columns.value.length, 1)"
-                  class="h-20 text-center text-xs text-muted-foreground"
-                >
-                  执行完成，无数据
-                </TableCell>
-              </TableRow>
-            </TableBody>
-          </Table>
-        </div>
-
-        <pre
-          v-else-if="showRawResult"
-          class="max-h-96 max-w-full overflow-auto rounded-md bg-muted p-3 font-mono text-xs leading-6 text-muted-foreground"
-        >{{ execution.rawResult.value }}</pre>
-
-        <p
-          v-else-if="execution.result.value"
-          class="rounded-md border bg-background p-3 text-sm text-muted-foreground"
-        >
-          执行完成，后端没有返回可展示的结果。
-        </p>
+        <SqlExecutionResult
+          v-if="showExecutionResult"
+          :running="execution.running.value"
+          :error="execution.error.value"
+          :context-label="executionContextLabel"
+          :columns="execution.columns.value"
+          :rows="execution.displayRows.value"
+          :raw-result="execution.rawResult.value"
+          :has-result="Boolean(execution.result.value)"
+          :row-count-label="rowCountLabel"
+          :execution-time-label="executionTimeLabel"
+        />
       </div>
 
       <DialogFooter class="w-full min-w-0 gap-2">
+        <DialogClose as-child>
+          <Button
+            type="button"
+            variant="outline"
+            class="w-full sm:w-auto"
+          >
+            取消
+          </Button>
+        </DialogClose>
         <Button
           v-if="execution.running.value"
           type="button"
@@ -310,16 +237,14 @@ function optionLabel(value: string, options: readonly SelectOption[]) {
           :disabled="!canExecute"
           @click="execute"
         >
-          <Loader2Icon
-            v-if="execution.running.value"
-            data-icon="inline-start"
-            class="animate-spin"
-          />
-          <PlayIcon
-            v-else
-            data-icon="inline-start"
-          />
-          执行
+          <template v-if="execution.running.value">
+            <Loader2Icon data-icon="inline-start" class="animate-spin" />
+            执行中
+          </template>
+          <template v-else>
+            <PlayIcon data-icon="inline-start" />
+            执行
+          </template>
         </Button>
       </DialogFooter>
     </DialogScrollContent>
