@@ -32,6 +32,7 @@ export function useSemanticWorkbench(options: SemanticWorkbenchOptions = {}) {
   const tableDetail = ref<TableDetail | null>(null);
   const semanticYaml = shallowRef("");
   const validation = ref<SemanticModelValidation | null>(null);
+  let tableLoadRequestId = 0;
 
   const semanticInvalidMessages = computed(() => validation.value?.invalid_message ?? []);
   const canLoadTable = computed(() => tableName.value.trim().length > 0);
@@ -46,19 +47,26 @@ export function useSemanticWorkbench(options: SemanticWorkbenchOptions = {}) {
     tableName.value = target;
     loadingTable.value = true;
     validation.value = null;
+    const requestId = ++tableLoadRequestId;
     const datasourceId = options.currentDatasource?.()?.trim() || undefined;
     try {
       const [detail, semantic] = await Promise.all([
         tableApi.detail(connection.effectiveBase(), target, datasourceId),
         tableApi.getSemanticModel(connection.effectiveBase(), target, datasourceId),
       ]);
-      tableDetail.value = detail?.table ?? null;
-      semanticYaml.value = semantic?.yaml ?? "";
+      if (requestId === tableLoadRequestId) {
+        tableDetail.value = detail?.table ?? null;
+        semanticYaml.value = semantic?.yaml ?? "";
+      }
     } catch (error) {
-      console.error("加载语义模型失败:", error);
-      toast.error("加载语义模型失败");
+      if (requestId === tableLoadRequestId) {
+        console.error("加载语义模型失败:", error);
+        toast.error("加载语义模型失败");
+      }
     } finally {
-      loadingTable.value = false;
+      if (requestId === tableLoadRequestId) {
+        loadingTable.value = false;
+      }
     }
   }
 
