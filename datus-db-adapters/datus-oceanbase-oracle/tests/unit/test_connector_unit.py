@@ -271,6 +271,144 @@ class TestMetadataQueries:
         assert "SYSTEM" not in schemas
         assert "APP" in schemas
 
+    def test_get_schema_uses_all_tab_columns_without_view_fallback(self, monkeypatch):
+        connector = make_connector_without_pool()
+        sql_calls = []
+
+        def fake_execute_sql(sql):
+            sql_calls.append(sql)
+            return connector_module.pd.DataFrame(
+                [
+                    {
+                        "COLUMN_ID": 1,
+                        "COLUMN_NAME": "ID",
+                        "DATA_TYPE": "NUMBER",
+                        "DATA_LENGTH": 22,
+                        "DATA_PRECISION": 10,
+                        "DATA_SCALE": 0,
+                        "NULLABLE": "N",
+                        "DATA_DEFAULT": None,
+                        "IS_PK": 1,
+                        "COMMENTS": "identifier",
+                    }
+                ]
+            )
+
+        monkeypatch.setattr(connector, "_execute_sql", fake_execute_sql)
+        monkeypatch.setattr(
+            connector,
+            "_get_raw_connection",
+            lambda: (_ for _ in ()).throw(AssertionError("view fallback should not run")),
+        )
+
+        assert connector.get_schema(schema_name="APP", table_name="ORDERS") == [
+            {
+                "cid": 1,
+                "name": "ID",
+                "type": "NUMBER(10,0)",
+                "nullable": False,
+                "default_value": None,
+                "pk": True,
+                "comment": "identifier",
+            }
+        ]
+        assert len(sql_calls) == 1
+        assert "FROM ALL_TAB_COLUMNS" in sql_calls[0]
+
+    def test_get_schema_falls_back_to_zero_row_query_for_confirmed_view(self, monkeypatch):
+        connector = make_connector_without_pool()
+        sql_calls = []
+        connection_calls = []
+
+        def fake_execute_sql(sql):
+            sql_calls.append(sql)
+            if "FROM ALL_TAB_COLUMNS" in sql:
+                return connector_module.pd.DataFrame()
+            if "FROM ALL_VIEWS" in sql:
+                return connector_module.pd.DataFrame([{"VIEW_NAME": "ORDER_VIEW"}])
+            raise AssertionError(f"unexpected metadata query: {sql}")
+
+        class FakeCursor:
+            description = [
+                ("ID", connector_module.jaydebeapi.DECIMAL, 20, 20, 10, 0, 0),
+                ("DISPLAY_NAME", connector_module.jaydebeapi.STRING, 128, 128, 0, 0, 1),
+                ("CREATED_AT", connector_module.jaydebeapi.DATETIME, 26, 26, 0, 6, 2),
+            ]
+
+            def execute(self, sql):
+                connection_calls.append(("execute", sql))
+
+            def close(self):
+                connection_calls.append(("cursor_close", None))
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+            def close(self):
+                connection_calls.append(("connection_close", None))
+
+        monkeypatch.setattr(connector, "_execute_sql", fake_execute_sql)
+        monkeypatch.setattr(connector, "_get_raw_connection", lambda: FakeConnection())
+
+        assert connector.get_schema(schema_name="APP", table_name="ORDER_VIEW") == [
+            {
+                "cid": 1,
+                "name": "ID",
+                "type": "NUMBER(10,0)",
+                "nullable": False,
+                "default_value": None,
+                "pk": False,
+                "comment": None,
+            },
+            {
+                "cid": 2,
+                "name": "DISPLAY_NAME",
+                "type": "VARCHAR2(128)",
+                "nullable": True,
+                "default_value": None,
+                "pk": False,
+                "comment": None,
+            },
+            {
+                "cid": 3,
+                "name": "CREATED_AT",
+                "type": "TIMESTAMP",
+                "nullable": True,
+                "default_value": None,
+                "pk": False,
+                "comment": None,
+            },
+        ]
+        assert "FROM ALL_VIEWS" in sql_calls[1]
+        assert "OWNER = 'APP'" in sql_calls[1]
+        assert "VIEW_NAME = 'ORDER_VIEW'" in sql_calls[1]
+        assert connection_calls == [
+            ("execute", 'SELECT * FROM "APP"."ORDER_VIEW" WHERE 1 = 0'),
+            ("cursor_close", None),
+            ("connection_close", None),
+        ]
+
+    def test_get_schema_does_not_probe_missing_object(self, monkeypatch):
+        connector = make_connector_without_pool()
+        sql_calls = []
+
+        def fake_execute_sql(sql):
+            sql_calls.append(sql)
+            return connector_module.pd.DataFrame()
+
+        monkeypatch.setattr(connector, "_execute_sql", fake_execute_sql)
+        monkeypatch.setattr(
+            connector,
+            "_get_raw_connection",
+            lambda: (_ for _ in ()).throw(AssertionError("missing objects must not be probed")),
+        )
+
+        assert connector.get_schema(schema_name="APP", table_name="MISSING") == []
+        assert len(sql_calls) == 2
+        assert "FROM ALL_TAB_COLUMNS" in sql_calls[0]
+        assert "FROM ALL_VIEWS" in sql_calls[1]
+
 
 class TestFullName:
     def test_full_name_quotes_embedded_double_quotes(self):

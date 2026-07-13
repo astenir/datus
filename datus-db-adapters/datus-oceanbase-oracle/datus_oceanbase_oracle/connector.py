@@ -477,8 +477,10 @@ class OceanBaseOracleConnector(BaseSqlConnector, MigrationTargetMixin):
     ) -> List[Dict[str, Any]]:
         if not table_name:
             return []
-        owner = _sql_string((schema_name or self.schema_name).upper())
-        table = _sql_string(table_name.upper())
+        owner_name = (schema_name or self.schema_name).upper()
+        table_name = table_name.upper()
+        owner = _sql_string(owner_name)
+        table = _sql_string(table_name)
         sql = f"""
             SELECT
                 c.COLUMN_ID,
@@ -515,6 +517,9 @@ class OceanBaseOracleConnector(BaseSqlConnector, MigrationTargetMixin):
             ORDER BY c.COLUMN_ID
         """
         df = self._execute_sql(sql)
+        if df.empty:
+            return self._get_view_schema(owner_name, table_name)
+
         result = []
         for i in range(len(df)):
             row = df.iloc[i]
@@ -531,6 +536,89 @@ class OceanBaseOracleConnector(BaseSqlConnector, MigrationTargetMixin):
                 }
             )
         return result
+
+    def _get_view_schema(self, owner_name: str, view_name: str) -> List[Dict[str, Any]]:
+        owner = _sql_string(owner_name)
+        view = _sql_string(view_name)
+        view_df = self._execute_sql(
+            f"""
+                SELECT VIEW_NAME
+                FROM ALL_VIEWS
+                WHERE OWNER = '{owner}'
+                  AND VIEW_NAME = '{view}'
+            """
+        )
+        if view_df.empty or "VIEW_NAME" not in view_df.columns:
+            return []
+
+        conn = self._get_raw_connection()
+        try:
+            cursor = conn.cursor()
+            try:
+                full_name = f"{_quote_identifier(owner_name)}.{_quote_identifier(view_name)}"
+                cursor.execute(f"SELECT * FROM {full_name} WHERE 1 = 0")
+                return [
+                    self._column_from_description(description, index)
+                    for index, description in enumerate(cursor.description or [], start=1)
+                ]
+            finally:
+                cursor.close()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _column_from_description(description: Any, index: int) -> Dict[str, Any]:
+        type_code = description[1] if len(description) > 1 else None
+        internal_size = description[3] if len(description) > 3 else None
+        precision = description[4] if len(description) > 4 else None
+        scale = description[5] if len(description) > 5 else None
+        null_ok = description[6] if len(description) > 6 else None
+        return {
+            "cid": index,
+            "name": description[0],
+            "type": OceanBaseOracleConnector._format_description_type(
+                type_code,
+                internal_size=internal_size,
+                precision=precision,
+                scale=scale,
+            ),
+            "nullable": null_ok != 0,
+            "default_value": None,
+            "pk": False,
+            "comment": None,
+        }
+
+    @staticmethod
+    def _format_description_type(
+        type_code: Any,
+        *,
+        internal_size: Any = None,
+        precision: Any = None,
+        scale: Any = None,
+    ) -> str:
+        if type_code in (jaydebeapi.DECIMAL, jaydebeapi.NUMBER):
+            if precision:
+                return f"NUMBER({int(precision)},{int(scale or 0)})"
+            return "NUMBER"
+        if type_code is jaydebeapi.STRING:
+            return f"VARCHAR2({int(internal_size)})" if internal_size else "VARCHAR2"
+        if type_code is jaydebeapi.TEXT:
+            return "CLOB"
+        if type_code is jaydebeapi.BINARY:
+            return f"RAW({int(internal_size)})" if internal_size else "RAW"
+        if type_code is jaydebeapi.FLOAT:
+            return "FLOAT"
+        if type_code is jaydebeapi.DATE:
+            return "DATE"
+        if type_code is jaydebeapi.TIME:
+            return "TIME"
+        if type_code is jaydebeapi.DATETIME:
+            return "TIMESTAMP"
+        if type_code is jaydebeapi.ROWID:
+            return "ROWID"
+        if isinstance(type_code, str) and type_code:
+            return type_code.upper()
+        return "UNKNOWN"
 
     def _format_column_type(self, row: Any) -> str:
         data_type = str(row["DATA_TYPE"]).upper() if row.get("DATA_TYPE") else "UNKNOWN"
