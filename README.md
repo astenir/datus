@@ -32,6 +32,24 @@ See our latest updates in the [Metricflow Changelog](https://github.com/transfor
 
 MetricFlow is a semantic layer that makes it easy to organize metric definitions. It takes those definitions and generates legible and reusable SQL. This makes it easy to get consistent metrics output broken down by attributes (dimensions) of interest.
 
+## Datus SQL engine support
+
+The Datus build currently registers DuckDB, MySQL, PostgreSQL, Greenplum,
+ClickHouse, StarRocks, Trino, SQLite, Snowflake, and OceanBase Oracle dialects.
+Each dialect has a dedicated client and capability profile; accepting an
+arbitrary SQLAlchemy dialect name is not sufficient because MetricFlow also
+needs engine-specific rendering, type, time, pagination, and execution
+behavior.
+
+OceanBase Oracle is an initial read-only profile. It supports semantic
+validation, dry runs, metric reads, common aggregations and grouping, Oracle
+day/week/month/quarter/year truncation, and Oracle row limiting. It requires
+the `datus-oceanbase-oracle` package, Java, and a user-provided OceanBase
+Connector/J jar. MetricFlow schema/table writes, query cancellation, and
+percentile capabilities are not supported by this profile. Run the real-tenant
+nightly suite documented in Datus Agent before treating a release as
+production-ready.
+
 The name comes from the approach taken to generate metrics. A query is compiled into a query plan (represented below) called a dataflow that constructs metrics. The plan is then optimized and rendered to engine-specific SQL.
 
 <p align="center">

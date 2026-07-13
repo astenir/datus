@@ -25,6 +25,7 @@ class SqlEngine(Enum):
     CLICKHOUSE = "ClickHouse"
     STARROCKS = "StarRocks"
     TRINO = "Trino"
+    OCEANBASE_ORACLE = "OceanBase Oracle"
 
     # Not yet supported.
     MYSQL = "MySQL"

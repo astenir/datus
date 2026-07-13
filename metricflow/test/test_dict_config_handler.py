@@ -16,6 +16,12 @@ from metricflow.configuration.constants import (
     CONFIG_DWH_SSLMODE,
     CONFIG_DWH_USER,
     CONFIG_DWH_WAREHOUSE,
+    CONFIG_DWH_CONNECT_TIMEOUT_SECONDS,
+    CONFIG_DWH_CONNECTION_MODE,
+    CONFIG_DWH_DRIVER_CLASS,
+    CONFIG_DWH_JAR_PATH,
+    CONFIG_DWH_QUERY_TIMEOUT_SECONDS,
+    CONFIG_DWH_USE_SSL,
     CONFIG_MODEL_PATH,
 )
 from metricflow.configuration.datus_config_handler import DatusConfigHandler
@@ -290,6 +296,33 @@ class TestBuildConfigDictFromDatusDatasource:
 
         assert result[CONFIG_DWH_DB] == "college_exam"
         assert result[CONFIG_DWH_SCHEMA] == "semantic_schema"
+
+    def test_preserves_oceanbase_oracle_jdbc_config(self):
+        result = build_config_dict_from_datus_datasource(
+            {
+                "type": "oceanbase-oracle",
+                "host": "ob.example.com",
+                "port": 2883,
+                "username": "app@tenant#cluster",
+                "password": "secret",
+                "database": "tenant",
+                "schema": "APP",
+                "jar_path": "/opt/oceanbase-client.jar",
+                "driver_class": "com.oceanbase.jdbc.Driver",
+                "connection_mode": "odp",
+                "use_ssl": True,
+                "connect_timeout_seconds": 15,
+                "query_timeout_seconds": 45,
+            }
+        )
+
+        assert result[CONFIG_DWH_DIALECT] == "oceanbase-oracle"
+        assert result[CONFIG_DWH_JAR_PATH] == "/opt/oceanbase-client.jar"
+        assert result[CONFIG_DWH_DRIVER_CLASS] == "com.oceanbase.jdbc.Driver"
+        assert result[CONFIG_DWH_CONNECTION_MODE] == "odp"
+        assert result[CONFIG_DWH_USE_SSL] == "True"
+        assert result[CONFIG_DWH_CONNECT_TIMEOUT_SECONDS] == "15"
+        assert result[CONFIG_DWH_QUERY_TIMEOUT_SECONDS] == "45"
 
 
 class TestDictConfigHandler:

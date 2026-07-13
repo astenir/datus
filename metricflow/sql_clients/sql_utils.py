@@ -32,6 +32,7 @@ from metricflow.sql_clients.common_client import SqlDialect, not_empty
 from metricflow.sql_clients.duckdb import DuckDbSqlClient
 from metricflow.sql_clients.greenplum import GreenplumSqlClient
 from metricflow.sql_clients.mysql import MySQLSqlClient
+from metricflow.sql_clients.oceanbase_oracle import OceanBaseOracleSqlClient
 from metricflow.sql_clients.postgres import PostgresSqlClient
 from metricflow.sql_clients.sqlite import SqliteSqlClient
 from metricflow.sql_clients.snowflake import SnowflakeSqlClient
@@ -220,9 +221,12 @@ def make_sql_client_from_config(handler: YamlFileHandler) -> AsyncSqlClient:
             private_key_file=private_key_file,
             private_key_file_pwd=private_key_file_pwd,
         )
+    elif dialect == SqlDialect.OCEANBASE_ORACLE.value:
+        return OceanBaseOracleSqlClient.from_config(handler)
     else:
         raise ValueError(
-            "Only DuckDB, MySQL, PostgreSQL, Greenplum, ClickHouse, StarRocks, Trino, SQLite, and Snowflake "
+            "Only DuckDB, MySQL, PostgreSQL, Greenplum, ClickHouse, StarRocks, Trino, SQLite, Snowflake, "
+            "and OceanBase Oracle "
             f"dialects are supported in this build. Got dialect '{dialect}' in {url}"
         )
 

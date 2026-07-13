@@ -4,19 +4,25 @@ from typing import Any, Dict, Mapping, Optional
 
 from metricflow.configuration.constants import (
     CONFIG_DWH_ACCOUNT,
+    CONFIG_DWH_CONNECT_TIMEOUT_SECONDS,
+    CONFIG_DWH_CONNECTION_MODE,
     CONFIG_DWH_DB,
     CONFIG_DWH_DIALECT,
     CONFIG_DWH_HOST,
+    CONFIG_DWH_DRIVER_CLASS,
+    CONFIG_DWH_JAR_PATH,
     CONFIG_DWH_PASSWORD,
     CONFIG_DWH_PORT,
     CONFIG_DWH_PRIVATE_KEY,
     CONFIG_DWH_PRIVATE_KEY_FILE,
     CONFIG_DWH_PRIVATE_KEY_FILE_PWD,
     CONFIG_DWH_PROJECT_ID,
+    CONFIG_DWH_QUERY_TIMEOUT_SECONDS,
     CONFIG_DWH_ROLE,
     CONFIG_DWH_SCHEMA,
     CONFIG_DWH_SSLMODE,
     CONFIG_DWH_USER,
+    CONFIG_DWH_USE_SSL,
     CONFIG_DWH_WAREHOUSE,
     CONFIG_EMAIL,
     CONFIG_MODEL_PATH,
@@ -36,6 +42,7 @@ DIALECT_MAPPING = {
     "sqlite": "sqlite",
     "snowflake": "snowflake",
     "bigquery": "bigquery",
+    "oceanbase-oracle": "oceanbase-oracle",
 }
 
 # Default schema values per DB type
@@ -70,6 +77,12 @@ def build_config_dict_from_db_params(
     private_key_file: str = "",
     private_key_file_pwd: str = "",
     catalog: str = "",
+    jar_path: str = "",
+    driver_class: str = "",
+    connection_mode: str = "",
+    use_ssl: str = "",
+    connect_timeout_seconds: str = "",
+    query_timeout_seconds: str = "",
 ) -> Dict[str, str]:
     """Build a MetricFlow config dict from database connection parameters.
 
@@ -125,6 +138,14 @@ def build_config_dict_from_db_params(
     result[CONFIG_DWH_PRIVATE_KEY_FILE] = private_key_file
     result[CONFIG_DWH_PRIVATE_KEY_FILE_PWD] = private_key_file_pwd
 
+    # OceanBase Oracle JDBC-specific
+    result[CONFIG_DWH_JAR_PATH] = jar_path
+    result[CONFIG_DWH_DRIVER_CLASS] = driver_class
+    result[CONFIG_DWH_CONNECTION_MODE] = connection_mode
+    result[CONFIG_DWH_USE_SSL] = use_ssl
+    result[CONFIG_DWH_CONNECT_TIMEOUT_SECONDS] = connect_timeout_seconds
+    result[CONFIG_DWH_QUERY_TIMEOUT_SECONDS] = query_timeout_seconds
+
     # BigQuery-specific
     result[CONFIG_DWH_PROJECT_ID] = project_id
 
@@ -177,6 +198,12 @@ def build_config_dict_from_datus_datasource(db_config: Mapping[str, Any], model_
         private_key_file=_string_config_value(db_config.get("private_key_file")),
         private_key_file_pwd=_string_config_value(db_config.get("private_key_file_pwd")),
         catalog=_string_config_value(catalog),
+        jar_path=_string_config_value(db_config.get("jar_path")),
+        driver_class=_string_config_value(db_config.get("driver_class")),
+        connection_mode=_string_config_value(db_config.get("connection_mode")),
+        use_ssl=_string_config_value(db_config.get("use_ssl")),
+        connect_timeout_seconds=_string_config_value(db_config.get("connect_timeout_seconds")),
+        query_timeout_seconds=_string_config_value(db_config.get("query_timeout_seconds")),
     )
 
 

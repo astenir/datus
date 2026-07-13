@@ -19,6 +19,7 @@ class SqlDialect(ExtendedEnum):
     CLICKHOUSE = "clickhouse"
     STARROCKS = "starrocks"
     TRINO = "trino"
+    OCEANBASE_ORACLE = "oceanbase-oracle"
 
 
 T = TypeVar("T")
