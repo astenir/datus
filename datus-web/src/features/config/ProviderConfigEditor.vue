@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, shallowRef } from "vue"
+import { computed, ref, shallowRef, toRaw } from "vue"
 import { KeyRoundIcon, PencilIcon, PlugZapIcon, Trash2Icon } from "@lucide/vue"
 import { toast } from "vue-sonner"
 import { Badge } from "@/components/ui/badge"
@@ -111,7 +111,7 @@ function submit() {
     return
   }
 
-  const next = structuredClone(props.providers)
+  const next = structuredClone(toRaw(props.providers))
   next[provider] = {
     api_key: form.value.apiKey.trim(),
     base_url: form.value.baseUrl.trim(),
@@ -122,7 +122,7 @@ function submit() {
 }
 
 function remove(name: string) {
-  const next = structuredClone(props.providers)
+  const next = structuredClone(toRaw(props.providers))
   delete next[name]
   emit("update", next)
 }

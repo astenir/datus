@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, shallowRef } from "vue"
+import { computed, ref, shallowRef, toRaw } from "vue"
 import { PencilIcon, PlugZapIcon, Trash2Icon } from "@lucide/vue"
 import { toast } from "vue-sonner"
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion"
@@ -105,7 +105,7 @@ function submit() {
   const advanced = parseAdvancedFields()
   if (!advanced) return
 
-  const next = structuredClone(props.models)
+  const next = structuredClone(toRaw(props.models))
   if (editingKey.value && editingKey.value !== key) delete next[editingKey.value]
   next[key] = {
     ...advanced,
@@ -119,7 +119,7 @@ function submit() {
 }
 
 function remove(key: string) {
-  const next = structuredClone(props.models)
+  const next = structuredClone(toRaw(props.models))
   delete next[key]
   emit("update", next)
 }

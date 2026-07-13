@@ -91,18 +91,38 @@ function platformBadgeVariant(status: string) {
   return "secondary"
 }
 
-function selectTargetModel(value: unknown) {
+async function selectTargetModel(value: unknown) {
   if (typeof value === "string") {
     manager.forms.value.target = value
+    await manager.saveTargetModel()
   }
 }
 
-function applyModelsJson() {
-  if (manager.applyModelsJson()) modelsJsonOpen.value = false
+async function applyModelsJson() {
+  if (!manager.applyModelsJson()) return
+  modelsJsonOpen.value = false
+  await manager.saveModels()
 }
 
-function applyDatasourcesJson() {
-  if (manager.applyDatasourcesJson()) datasourcesJsonOpen.value = false
+async function applyProviderConfigs(providers: Parameters<typeof manager.replaceProviderConfigs>[0]) {
+  manager.replaceProviderConfigs(providers)
+  await manager.saveProviders()
+}
+
+async function applyModelConfigs(models: Parameters<typeof manager.replaceModelConfigs>[0]) {
+  manager.replaceModelConfigs(models)
+  await manager.saveModels()
+}
+
+async function applyDatasourcesJson() {
+  if (!manager.applyDatasourcesJson()) return
+  datasourcesJsonOpen.value = false
+  await manager.saveDatasources()
+}
+
+async function applyDatasourceConfigs(datasources: Parameters<typeof manager.replaceDatasourceConfigs>[0]) {
+  manager.replaceDatasourceConfigs(datasources)
+  await manager.saveDatasources()
 }
 
 async function initializeConfigPanel() {
@@ -210,14 +230,14 @@ onMounted(() => {
               <CardContent class="flex flex-col gap-2 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:px-4">
                 <div class="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
                   <CardTitle class="text-sm">默认模型</CardTitle>
-                  <CardDescription class="text-xs">个人配置优先。</CardDescription>
+                    <CardDescription class="text-xs">选择后立即保存，个人配置优先。</CardDescription>
                 </div>
                 <div class="flex min-w-0 flex-1 items-center gap-2 sm:justify-end">
                   <Field class="min-w-0 flex-1 sm:max-w-80 lg:max-w-96">
                     <FieldLabel for="config-target" class="sr-only">默认模型</FieldLabel>
                   <Select
                     :model-value="manager.forms.value.target"
-                    :disabled="!props.canEdit || (providerModelGroups.length === 0 && manager.configuredModelEntries.value.length === 0)"
+                    :disabled="!props.canEdit || manager.savingModels.value || (providerModelGroups.length === 0 && manager.configuredModelEntries.value.length === 0)"
                     @update:model-value="selectTargetModel"
                   >
                     <SelectTrigger id="config-target" class="w-full">
@@ -243,9 +263,6 @@ onMounted(() => {
                     </SelectContent>
                     </Select>
                   </Field>
-                  <Button size="sm" :disabled="!props.canEdit || manager.savingModels.value" @click="manager.saveTargetModel">
-                    保存
-                  </Button>
                 </div>
               </CardContent>
             </Card>
@@ -255,9 +272,9 @@ onMounted(() => {
                 <CardHeader class="flex shrink-0 flex-row items-start justify-between gap-3">
                   <div class="min-w-0">
                     <CardTitle class="text-lg">Provider 凭据</CardTitle>
-                    <CardDescription class="text-sm">管理项目共享的 API Key 和服务地址。</CardDescription>
+                    <CardDescription class="text-sm">添加、编辑或删除后立即保存项目共享凭据。</CardDescription>
                   </div>
-                  <Button size="sm" :disabled="!props.canEdit" @click="providerEditor?.openCreate()">
+                  <Button size="sm" :disabled="!props.canEdit || manager.savingProviders.value" @click="providerEditor?.openCreate()">
                     <PlusIcon data-icon="inline-start" />
                     添加
                   </Button>
@@ -271,16 +288,11 @@ onMounted(() => {
                     :models="manager.availableModels.value"
                     :probe-results="manager.savedModelProbeResults.value"
                     :testing-keys="manager.testingSavedModels.value"
-                    :can-edit="props.canEdit"
+                    :can-edit="props.canEdit && !manager.savingProviders.value"
                     :show-heading="false"
-                    @update="manager.replaceProviderConfigs"
+                    @update="applyProviderConfigs"
                     @test="manager.testProviderConfig"
                   />
-                  <div class="mt-auto flex shrink-0 justify-end border-t pt-4">
-                    <Button size="sm" :disabled="!props.canEdit || manager.savingProviders.value" @click="manager.saveProviders">
-                      保存
-                    </Button>
-                  </div>
                 </CardContent>
               </Card>
 
@@ -288,12 +300,25 @@ onMounted(() => {
                 <CardHeader class="flex shrink-0 flex-row items-start justify-between gap-3">
                   <div class="min-w-0">
                     <CardTitle class="text-lg">自定义模型</CardTitle>
-                    <CardDescription class="text-sm">用于独立凭据、Base URL 或特殊模型参数。</CardDescription>
+                    <CardDescription class="text-sm">添加、编辑或删除后立即保存独立模型配置。</CardDescription>
                   </div>
-                  <Button size="sm" :disabled="!props.canEdit" @click="modelEditor?.openCreate()">
-                    <PlusIcon data-icon="inline-start" />
-                    添加
-                  </Button>
+                  <div class="flex shrink-0 items-center gap-2">
+                    <AdvancedJsonDialog
+                      v-model:open="modelsJsonOpen"
+                      v-model:text="manager.forms.value.modelsText"
+                      title="高级模型 JSON"
+                      description="直接编辑完整模型映射，适合处理结构化表单未覆盖的配置。"
+                      field-label="完整模型 JSON"
+                      field-description="应用后会立即替换并保存完整模型列表。"
+                      textarea-id="config-models-json"
+                      :can-edit="props.canEdit && !manager.savingModels.value"
+                      @apply="applyModelsJson"
+                    />
+                    <Button size="sm" :disabled="!props.canEdit || manager.savingModels.value" @click="modelEditor?.openCreate()">
+                      <PlusIcon data-icon="inline-start" />
+                      添加
+                    </Button>
+                  </div>
                 </CardHeader>
                 <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
                   <ModelConfigEditor
@@ -303,26 +328,10 @@ onMounted(() => {
                     :probe-results="manager.savedModelProbeResults.value"
                     :testing-keys="manager.testingSavedModels.value"
                     :embedding-models="manager.embeddingModelNames.value"
-                    :can-edit="props.canEdit"
-                    @update="manager.replaceModelConfigs"
+                    :can-edit="props.canEdit && !manager.savingModels.value"
+                    @update="applyModelConfigs"
                     @test="manager.testCustomModel"
                   />
-                  <div class="mt-auto flex shrink-0 items-center justify-between gap-3 border-t pt-4">
-                    <AdvancedJsonDialog
-                      v-model:open="modelsJsonOpen"
-                      v-model:text="manager.forms.value.modelsText"
-                      title="高级模型 JSON"
-                      description="直接编辑完整模型映射，适合处理结构化表单未覆盖的配置。"
-                      field-label="完整模型 JSON"
-                      field-description="应用后会替换当前尚未保存的模型列表。"
-                      textarea-id="config-models-json"
-                      :can-edit="props.canEdit"
-                      @apply="applyModelsJson"
-                    />
-                    <Button size="sm" :disabled="!props.canEdit || manager.savingModels.value" @click="manager.saveModels">
-                      保存
-                    </Button>
-                  </div>
                 </CardContent>
               </Card>
             </div>
@@ -338,12 +347,25 @@ onMounted(() => {
               <CardHeader class="flex shrink-0 flex-row items-start justify-between gap-3">
                 <div class="min-w-0">
                   <CardTitle class="text-lg">数据源配置</CardTitle>
-                  <CardDescription class="text-sm">编辑数据源配置；保存后会刷新连接状态。</CardDescription>
+                  <CardDescription class="text-sm">添加、编辑或删除后会立即保存并刷新连接状态。</CardDescription>
                 </div>
-                <Button size="sm" :disabled="!props.canEdit" @click="datasourceEditor?.openCreate()">
-                  <PlusIcon data-icon="inline-start" />
-                  添加
-                </Button>
+                <div class="flex shrink-0 items-center gap-2">
+                  <AdvancedJsonDialog
+                    v-model:open="datasourcesJsonOpen"
+                    v-model:text="manager.forms.value.datasourcesText"
+                    title="高级数据源 JSON"
+                    description="直接编辑完整数据源映射，适合批量修改或处理特殊连接字段。"
+                    field-label="完整数据源 JSON"
+                    field-description="应用后会立即替换并保存完整数据源列表。"
+                    textarea-id="config-datasources-json"
+                    :can-edit="props.canEdit && !manager.savingDatasources.value"
+                    @apply="applyDatasourcesJson"
+                  />
+                  <Button size="sm" :disabled="!props.canEdit || manager.savingDatasources.value" @click="datasourceEditor?.openCreate()">
+                    <PlusIcon data-icon="inline-start" />
+                    添加
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent class="flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
                 <DatasourceConfigEditor
@@ -352,26 +374,11 @@ onMounted(() => {
                   :saved-datasources="Object.keys(manager.config.value?.datasources ?? {})"
                   :probe-results="manager.savedDatasourceProbeResults.value"
                   :testing-names="manager.testingSavedDatasources.value"
-                  :can-edit="props.canEdit"
-                  @update="manager.replaceDatasourceConfigs"
+                  :can-edit="props.canEdit && !manager.savingDatasources.value"
+                  @apply="applyDatasourceConfigs"
+                  @update="applyDatasourceConfigs"
                   @test="manager.testSavedDatasource"
                 />
-                <div class="mt-auto flex shrink-0 items-center justify-between gap-3 border-t pt-4">
-                  <AdvancedJsonDialog
-                    v-model:open="datasourcesJsonOpen"
-                    v-model:text="manager.forms.value.datasourcesText"
-                    title="高级数据源 JSON"
-                    description="直接编辑完整数据源映射，适合批量修改或处理特殊连接字段。"
-                    field-label="完整数据源 JSON"
-                    field-description="应用后会替换当前尚未保存的数据源列表。"
-                    textarea-id="config-datasources-json"
-                    :can-edit="props.canEdit"
-                    @apply="applyDatasourcesJson"
-                  />
-                  <Button size="sm" :disabled="!props.canEdit || manager.savingDatasources.value" @click="manager.saveDatasources">
-                    保存
-                  </Button>
-                </div>
               </CardContent>
             </Card>
           </div>
