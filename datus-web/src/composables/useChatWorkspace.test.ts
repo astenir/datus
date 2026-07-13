@@ -607,7 +607,7 @@ describe("useChatWorkspace", () => {
     expect(selectCatalogDatasource).toHaveBeenCalledWith("fund");
   });
 
-  it("filters datasource switching through current permissions", async () => {
+  it("falls back to an authorized datasource for admins without full data grants", async () => {
     vi.doMock("vue", async () => {
       const actual = await vi.importActual<typeof import("vue")>("vue");
       return {
@@ -618,16 +618,18 @@ describe("useChatWorkspace", () => {
 
     const { ref, shallowRef, readonly } = await import("vue");
     const config = ref({
-      current_datasource: "fund",
+      current_datasource: "blocked",
       datasources: {
         fund: { type: "postgres" },
         demo: { type: "sqlite" },
+        sql_only: { type: "postgres" },
         blocked: { type: "postgres" },
       },
     });
     const datasourceOptions = ref([
       { value: "fund", label: "fund" },
       { value: "demo", label: "demo" },
+      { value: "sql_only", label: "sql_only" },
       { value: "blocked", label: "blocked" },
     ]);
     const switchDatasource = vi.fn();
@@ -679,7 +681,15 @@ describe("useChatWorkspace", () => {
     }));
     vi.doMock("@/composables/usePermission", () => ({
       usePermission: () => ({
-        isAdmin: () => false,
+        permissions: readonly(ref({
+          datasource_grants: {
+            fund: { effect: "allow", allow_catalog: true },
+            demo: { effect: "allow", allow_catalog: true },
+            sql_only: { effect: "allow", allow_catalog: false },
+          },
+          is_admin: true,
+        })),
+        isAdmin: () => true,
         hasPermission: () => false,
         hasViewPermission: () => false,
         hasFeaturePermission: (feature: string) => feature === "datasource_catalog",
@@ -738,11 +748,19 @@ describe("useChatWorkspace", () => {
     const { useChatWorkspace } = await import("./useChatWorkspace");
     const workspace = useChatWorkspace();
 
+    await workspace.initialize();
+
     expect(workspace.currentDatasource.value).toBe("fund");
     expect(workspace.visibleDatasourceOptions.value).toEqual([
       { value: "fund", label: "fund" },
       { value: "demo", label: "demo" },
+      { value: "sql_only", label: "sql_only" },
     ]);
+    expect(selectCatalogDatasource).toHaveBeenCalledWith("fund");
+    expect(loadDatasourceStatuses).toHaveBeenCalledWith("fund");
+    expect(prewarmDatasource).toHaveBeenCalledWith("fund");
+    expect(loadDatasourceStatuses).not.toHaveBeenCalledWith("blocked");
+    expect(prewarmDatasource).not.toHaveBeenCalledWith("blocked");
 
     await expect(workspace.handleDatasourceSwitch("blocked")).resolves.toBe(false);
     expect(switchDatasource).not.toHaveBeenCalled();
@@ -756,6 +774,15 @@ describe("useChatWorkspace", () => {
     expect(prewarmDatasource).toHaveBeenCalledWith("demo");
     expect(loadCatalog).toHaveBeenCalledWith(undefined, "demo");
     expect(workspace.currentDatasource.value).toBe("demo");
+
+    loadCatalog.mockClear();
+    loadDatasourceStatuses.mockClear();
+    prewarmDatasource.mockClear();
+    await expect(workspace.handleDatasourceSwitch("sql_only")).resolves.toBe(true);
+    expect(workspace.currentDatasource.value).toBe("sql_only");
+    expect(loadCatalog).not.toHaveBeenCalled();
+    expect(loadDatasourceStatuses).not.toHaveBeenCalled();
+    expect(prewarmDatasource).not.toHaveBeenCalled();
 
     loadCatalog.mockClear();
     loadDatasourceStatuses.mockClear();

@@ -145,10 +145,6 @@ export function useChatWorkspace() {
       selectedModel.value = "";
     }
   });
-  const defaultDatasource = computed(() =>
-    config.value?.current_datasource?.trim() ?? availableDatasourceOptions.value[0]?.value ?? ""
-  );
-  const currentDatasource = computed(() => selectedDatasource.value || defaultDatasource.value);
   const viewAccess = computed(() => workspaceAccessFromPermission(permission));
   const canUseElevatedPermissionMode = computed(() =>
     permission.isAdmin() || permission.hasPermission?.("module.chat.permission_mode") === true
@@ -157,6 +153,20 @@ export function useChatWorkspace() {
   const visibleDatasourceOptions = computed(() =>
     availableDatasourceOptions.value.filter((option) => permission.hasDatasourcePermission(option.value))
   );
+  const defaultDatasource = computed(() => {
+    const configuredDatasource = config.value?.current_datasource?.trim() ?? "";
+    if (visibleDatasourceOptions.value.some((option) => option.value === configuredDatasource)) {
+      return configuredDatasource;
+    }
+    return visibleDatasourceOptions.value[0]?.value ?? "";
+  });
+  const currentDatasource = computed(() => {
+    const selected = selectedDatasource.value.trim();
+    if (visibleDatasourceOptions.value.some((option) => option.value === selected)) {
+      return selected;
+    }
+    return defaultDatasource.value;
+  });
   const catalogDatasourceOptions = computed(() =>
     visibleDatasourceOptions.value.filter((option) => canBrowseDatasourceCatalog(option.value))
   );
@@ -217,12 +227,8 @@ export function useChatWorkspace() {
       return hasCatalogBrowseGrant.value;
     }
     return canUseDatasource(datasourceName) && (
-      viewAccess.value.canViewKnowledge
-      || canUseDatasourceCatalogSupport.value
-      || (viewAccess.value.canViewChat && (
-        canBrowseDatasourceCatalog(datasourceName)
-        || hasWildcardCatalogGrant()
-      ))
+      canBrowseDatasourceCatalog(datasourceName)
+      || hasWildcardCatalogGrant()
     );
   }
 
@@ -338,13 +344,11 @@ export function useChatWorkspace() {
   }
 
   function hasWildcardCatalogGrant() {
-    if (permission.isAdmin()) return true;
     const grants = permission.permissions?.value?.datasource_grants ?? {};
     return datasourceGrantAllowsCatalog(grants[WILDCARD_DATASOURCE_GRANT]);
   }
 
   function canBrowseDatasourceCatalog(name: string) {
-    if (permission.isAdmin()) return true;
     const datasourceName = name.trim();
     if (!datasourceName) return false;
     const grants = permission.permissions?.value?.datasource_grants ?? {};
