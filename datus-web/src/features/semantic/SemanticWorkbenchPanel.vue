@@ -31,7 +31,9 @@ const emit = defineEmits<{
   updateTable: [table: string]
 }>()
 
-const workbench = useSemanticWorkbench()
+const workbench = useSemanticWorkbench({
+  currentDatasource: () => props.workspace.currentDatasource.value,
+})
 
 const tableColumnCount = computed(() => workbench.tableDetail.value?.columns.length ?? 0)
 const tableIndexCount = computed(() => workbench.tableDetail.value?.indexes.length ?? 0)

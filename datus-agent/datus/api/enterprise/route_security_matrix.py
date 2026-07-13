@@ -191,7 +191,7 @@ _TABLE_METADATA_READ_POLICY = _policy(
     SYSTEM_READONLY,
     module_permission="module.datasource_catalog",
     data_boundaries={DATASOURCE_PROJECTION, DATASOURCE_GRANT, TABLE_SCOPE},
-    note="Detailed table and semantic-model reads stay behind the catalog/knowledge module.",
+    note="Detailed table and semantic-model reads use request-level datasource projection before table-scope checks.",
 )
 _SUBJECT_TREE_READ_POLICY = _policy(
     MODULE_RBAC,

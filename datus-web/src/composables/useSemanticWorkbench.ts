@@ -18,7 +18,11 @@ function firstTableNameFromCatalogEntry(entry: Record<string, unknown>): string 
   return "";
 }
 
-export function useSemanticWorkbench() {
+interface SemanticWorkbenchOptions {
+  currentDatasource?: () => string | null | undefined;
+}
+
+export function useSemanticWorkbench(options: SemanticWorkbenchOptions = {}) {
   const connection = useConnection();
 
   const loadingTable = shallowRef(false);
@@ -42,10 +46,11 @@ export function useSemanticWorkbench() {
     tableName.value = target;
     loadingTable.value = true;
     validation.value = null;
+    const datasourceId = options.currentDatasource?.()?.trim() || undefined;
     try {
       const [detail, semantic] = await Promise.all([
-        tableApi.detail(connection.effectiveBase(), target),
-        tableApi.getSemanticModel(connection.effectiveBase(), target),
+        tableApi.detail(connection.effectiveBase(), target, datasourceId),
+        tableApi.getSemanticModel(connection.effectiveBase(), target, datasourceId),
       ]);
       tableDetail.value = detail?.table ?? null;
       semanticYaml.value = semantic?.yaml ?? "";
@@ -65,8 +70,14 @@ export function useSemanticWorkbench() {
     }
 
     validating.value = true;
+    const datasourceId = options.currentDatasource?.()?.trim() || undefined;
     try {
-      validation.value = await tableApi.validateSemanticModel(connection.effectiveBase(), target, semanticYaml.value);
+      validation.value = await tableApi.validateSemanticModel(
+        connection.effectiveBase(),
+        target,
+        semanticYaml.value,
+        datasourceId,
+      );
       toast.success(validation.value?.valid ? "语义模型校验通过" : "语义模型校验未通过");
     } catch (error) {
       console.error("校验语义模型失败:", error);
@@ -84,8 +95,9 @@ export function useSemanticWorkbench() {
     }
 
     savingSemantic.value = true;
+    const datasourceId = options.currentDatasource?.()?.trim() || undefined;
     try {
-      await tableApi.saveSemanticModel(connection.effectiveBase(), target, semanticYaml.value);
+      await tableApi.saveSemanticModel(connection.effectiveBase(), target, semanticYaml.value, datasourceId);
       toast.success("语义模型已保存");
       await loadTableDetails(target);
     } catch (error) {

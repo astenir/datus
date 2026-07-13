@@ -9,6 +9,7 @@ from datus.api.enterprise.route_security_matrix import (
     AUDIT,
     DATA_BOUNDARY_CATEGORIES,
     DATASOURCE_GRANT,
+    DATASOURCE_PROJECTION,
     KNOWN_SECURITY_CATEGORIES,
     LEGACY_DISABLED,
     LOCAL_COMPATIBLE,
@@ -18,6 +19,7 @@ from datus.api.enterprise.route_security_matrix import (
     PLATFORM_STATUS_GATE,
     ROUTE_SECURITY_MATRIX,
     SYSTEM_READONLY,
+    TABLE_SCOPE,
     route_key,
 )
 from datus.api.service import create_app
@@ -104,6 +106,17 @@ def test_datasource_sql_dashboard_table_and_semantic_routes_declare_execution_bo
         assert policy.categories & DATA_BOUNDARY_CATEGORIES or policy.data_boundaries, (
             f"{method} {path} lacks datasource/artifact/SQL/table execution boundary classification"
         )
+
+
+def test_table_and_semantic_routes_declare_request_datasource_and_table_scope_boundaries():
+    for key in {
+        route_key("GET", "/api/v1/table/detail"),
+        route_key("GET", "/api/v1/semantic_model"),
+        route_key("POST", "/api/v1/semantic_model"),
+        route_key("POST", "/api/v1/semantic_model/validate"),
+    }:
+        policy = ROUTE_SECURITY_MATRIX[key]
+        assert {DATASOURCE_PROJECTION, DATASOURCE_GRANT, TABLE_SCOPE} <= policy.data_boundaries
 
 
 def test_legacy_disabled_routes_are_audited_and_not_mixed_with_live_enterprise_policy():

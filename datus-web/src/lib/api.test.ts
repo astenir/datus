@@ -23,6 +23,7 @@ import {
   sqlApi,
   subjectApi,
   systemApi,
+  tableApi,
   toolApi,
   visualizationApi,
 } from "./api";
@@ -52,6 +53,35 @@ describe("api client", () => {
     );
 
     await expect(configApi.getAgent("")).rejects.toThrow("Config is invalid");
+  });
+
+  it("forwards datasource context for table and semantic-model requests", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(mockJsonResponse({ success: true, data: {} }))
+    );
+
+    await tableApi.detail("/datus-api", "DEV_TENANT01.NPIMS.T_LAW_FIRM_INFO", "oceanbase_data");
+    await tableApi.getSemanticModel("/datus-api", "DEV_TENANT01.NPIMS.T_LAW_FIRM_INFO", "oceanbase_data");
+    await tableApi.validateSemanticModel("/datus-api", "NPIMS.T_LAW_FIRM_INFO", "semantic_model: []", "oceanbase_data");
+    await tableApi.saveSemanticModel("/datus-api", "NPIMS.T_LAW_FIRM_INFO", "semantic_model: []", "oceanbase_data");
+
+    const calls = vi.mocked(fetch).mock.calls;
+    expect(calls[0]?.[0]).toBe(
+      "/datus-api/api/v1/table/detail?datasource_id=oceanbase_data&table=DEV_TENANT01.NPIMS.T_LAW_FIRM_INFO",
+    );
+    expect(calls[1]?.[0]).toBe(
+      "/datus-api/api/v1/semantic_model?datasource_id=oceanbase_data&table=DEV_TENANT01.NPIMS.T_LAW_FIRM_INFO",
+    );
+    expect(JSON.parse(String((calls[2]?.[1] as RequestInit).body))).toEqual({
+      table: "NPIMS.T_LAW_FIRM_INFO",
+      yaml: "semantic_model: []",
+      datasource_id: "oceanbase_data",
+    });
+    expect(JSON.parse(String((calls[3]?.[1] as RequestInit).body))).toEqual({
+      table: "NPIMS.T_LAW_FIRM_INFO",
+      yaml: "semantic_model: []",
+      datasource_id: "oceanbase_data",
+    });
   });
 
   it("normalizes base URLs for streaming helper requests", async () => {

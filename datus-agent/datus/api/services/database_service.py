@@ -42,16 +42,21 @@ _TABLE_LIKE_VIEW_METHODS = ("get_views", "get_materialized_views")
 class DatasourceService:
     """Service for handling datasource management operations."""
 
-    def __init__(self, agent_config: Optional[AgentConfig] = None):
+    def __init__(
+        self,
+        agent_config: Optional[AgentConfig] = None,
+        db_manager: Optional[DBManager] = None,
+    ):
         """
         Initialize the database service.
 
         Args:
             agent_config: Datus agent configuration
+            db_manager: Optional shared connector manager for request-scoped services
         """
         self.agent_config = agent_config
 
-        self.db_manager = DBManager(agent_config.datasource_configs)
+        self.db_manager = db_manager or DBManager(agent_config.datasource_configs)
         self.current_datasource = agent_config.current_datasource
         self.semantic_rag = SemanticModelRAG(self.agent_config) if self.current_datasource else None
 

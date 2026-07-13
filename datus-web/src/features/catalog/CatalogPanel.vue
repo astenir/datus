@@ -65,7 +65,11 @@ async function loadTableDetail(table: string) {
 
   loadingDetail.value = true
   try {
-    const detail = await tableApi.detail(connection.effectiveBase(), target)
+    const detail = await tableApi.detail(
+      connection.effectiveBase(),
+      target,
+      props.workspace.currentDatasource.value,
+    )
     tableDetail.value = detail?.table ?? null
     if (!tableDetail.value) {
       toast.error("未获取到表结构详情")
