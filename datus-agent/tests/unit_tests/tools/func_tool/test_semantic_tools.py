@@ -1842,6 +1842,70 @@ class TestRuntimeDbContext:
         assert first_config.db_config["host"] == "mysql"
         assert first_config.db_config["database"] == "college_exam"
 
+    def test_metricflow_adapter_initializes_for_oceanbase_oracle(self, tmp_path, monkeypatch):
+        import datus_oceanbase_oracle
+
+        from datus.configuration.agent_config import AgentConfig, NodeConfig
+        from datus.tools.func_tool.semantic_tools import SemanticTools
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        connector = Mock()
+        connector_factory = Mock(return_value=connector)
+        monkeypatch.setattr(datus_oceanbase_oracle, "OceanBaseOracleConnector", connector_factory)
+        config = AgentConfig(
+            nodes={"test": NodeConfig(model="test-model", input=None)},
+            home=str(tmp_path / "h"),
+            target="mock",
+            models={
+                "mock": {
+                    "type": "openai",
+                    "api_key": "k",
+                    "model": "m",
+                    "base_url": "http://localhost:0",
+                }
+            },
+            services={
+                "datasources": {
+                    "ob_oracle": {
+                        "type": "oceanbase-oracle",
+                        "host": "ob.example.com",
+                        "port": "2883",
+                        "username": "app@tenant#cluster",
+                        "password": "secret",
+                        "database": "tenant",
+                        "schema": "APP",
+                        "jar_path": "/opt/oceanbase-client.jar",
+                        "default": True,
+                    },
+                },
+                "semantic_layer": {"metricflow": {"datasource": "ob_oracle"}},
+            },
+            skip_init_dirs=True,
+        )
+
+        with (
+            patch("datus.tools.func_tool.semantic_tools.SemanticModelRAG"),
+            patch("datus.tools.func_tool.semantic_tools.MetricRAG"),
+        ):
+            tool = SemanticTools(
+                agent_config=config,
+                adapter_type="metricflow",
+                runtime_db_context_provider=lambda: {
+                    "datasource": "ob_oracle",
+                    "database": "tenant",
+                    "schema": "APP",
+                },
+            )
+            adapter = tool.adapter
+
+        assert adapter is not None
+        assert tool._adapter_load_error is None
+        assert adapter.client.sql_client.sql_engine_attributes.sql_engine_type.value == "OceanBase Oracle"
+        connector_factory.assert_called_once()
+        connector_config = connector_factory.call_args.args[0]
+        assert connector_config["jar_path"] == "/opt/oceanbase-client.jar"
+        assert connector_config["schema"] == "APP"
+
 
 class TestListMetrics:
     def test_no_adapter_returns_error(self, semantic_tools_ext):

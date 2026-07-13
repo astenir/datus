@@ -37,16 +37,27 @@ MetricFlow 是一层语义层，用于以代码方式组织与管理“业务指
 ### 数据仓库
 当前支持：
 
-- **DuckDB** — 嵌入式分析数据库（适合本地与 Demo）
-- **SQLite** — 轻量级嵌入式数据库
-- **PostgreSQL** — 开源关系型数据库
-- **StarRocks** — 高性能分析型数据库
+- **DuckDB**、**SQLite** — 适合本地开发和 Demo 的嵌入式数据库
+- **MySQL**、**PostgreSQL**、**Greenplum** — 关系型与分析型数据库
+- **ClickHouse**、**StarRocks**、**Trino** — 分析引擎
+- **Snowflake** — 云数据仓库
+- **OceanBase Oracle** — 只读预览能力；依赖 `datus-oceanbase-oracle`、Java、
+  OceanBase Connector/J，并且正式投产前必须在真实 Oracle 模式租户上完成验收
+
+MetricFlow 不会只根据“是否存在 Python driver 或 SQLAlchemy dialect”来判断数据库是否
+可用。每种 engine 都要显式注册 client、SQL renderer、数据类型、时间函数、行数限制、
+参数绑定和能力开关。因此，未注册的数据源方言会在 adapter 初始化阶段直接失败，避免到
+查询阶段才生成错误 SQL。
+
+OceanBase Oracle 的首个 profile 支持语义校验、dry-run、只读指标查询、常见聚合与分组，
+以及日/周/月/季度/年的时间截断；暂不支持由 MetricFlow 创建或删除 schema/table、查询取消
+和 percentile 能力。
 
 ## datus-metricflow 的增强
 在 0.140.0 的基础上，我们提供了：
 
 - **Python 3.12 支持**
-- **新增数据库适配**：SQLite、PostgreSQL、StarRocks
+- **新增数据库适配**：提供 Datus 专用 SQL client 和 renderer，包括 OceanBase Oracle 只读预览 profile
 - **与 Datus 集成**：统一配置、无缝协作
 - **独立安装包**：可作为依赖单独使用
 

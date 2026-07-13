@@ -123,6 +123,23 @@ ADAPTERS_METRICFLOW_PG=1 uv run pytest tests/integration/adapters/test_semantic_
 MetricFlow tables are created in the `mf_nightly` schema within the existing
 `test` database and dropped on teardown.
 
+### OceanBase Oracle
+
+This suite requires an existing Oracle-mode tenant and a local OceanBase
+Connector/J jar. It does not use the public OceanBase CE Docker fixture.
+
+```bash
+ADAPTERS_METRICFLOW_OCEANBASE_ORACLE=1 \
+OCEANBASE_ORACLE_HOST=ob.example.com \
+OCEANBASE_ORACLE_PORT=2883 \
+OCEANBASE_ORACLE_USERNAME='app@tenant#cluster' \
+OCEANBASE_ORACLE_PASSWORD='...' \
+OCEANBASE_ORACLE_DATABASE=tenant \
+OCEANBASE_ORACLE_SCHEMA=APP \
+OCEANBASE_ORACLE_JAR_PATH=/opt/oceanbase-client.jar \
+uv run pytest tests/integration/adapters/test_semantic_metricflow_oceanbase_oracle.py -v
+```
+
 ### MetricFlow env vars
 
 | Suite | Opt-in flag | Connection env | Notes |
@@ -130,3 +147,4 @@ MetricFlow tables are created in the `mf_nightly` schema within the existing
 | DuckDB | `ADAPTERS_METRICFLOW_DUCKDB=1` | none | DB file auto-generated in tmp dir |
 | MySQL | `ADAPTERS_METRICFLOW_MYSQL=1` | same as `ADAPTERS_MYSQL` vars | tables in `test` DB |
 | PostgreSQL | `ADAPTERS_METRICFLOW_PG=1` | same as `ADAPTERS_PG` vars | tables in `mf_nightly` schema |
+| OceanBase Oracle | `ADAPTERS_METRICFLOW_OCEANBASE_ORACLE=1` | `OCEANBASE_ORACLE_HOST/PORT/USERNAME/PASSWORD/DATABASE/SCHEMA/JAR_PATH` | requires a real Oracle-mode tenant |

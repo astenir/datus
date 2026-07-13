@@ -38,17 +38,31 @@ Simply put, MetricFlow allows you to:
 
 datus-metricflow currently supports:
 
-- **DuckDB** - Embedded analytical database (great for demos and local development)
-- **SQLite** - Lightweight embedded database
-- **PostgreSQL** - Open-source relational database
-- **StarRocks** - High-performance analytical database
+- **DuckDB**, **SQLite** - embedded databases for local development and demos
+- **MySQL**, **PostgreSQL**, **Greenplum** - relational and analytical databases
+- **ClickHouse**, **StarRocks**, **Trino** - analytical engines
+- **Snowflake** - cloud data warehouse
+- **OceanBase Oracle** - preview read-only profile; requires
+  `datus-oceanbase-oracle`, Java, an OceanBase Connector/J jar, and final
+  verification against a real Oracle-mode tenant
+
+Database support is not selected only by whether a Python driver or SQLAlchemy
+dialect exists. MetricFlow registers a client, SQL renderer, data types, time
+functions, row limiting, bind parameters, and a capability profile for each
+engine. An unregistered datasource dialect is therefore rejected during
+adapter initialization instead of producing incorrect SQL later.
+
+The initial OceanBase Oracle profile supports semantic validation, dry runs,
+read-only metric queries, common aggregations and grouping, and
+day/week/month/quarter/year time truncation. MetricFlow-managed schema/table
+writes, query cancellation, and percentile capabilities are not supported.
 
 ## Enhancements in datus-metricflow
 
 Building on MetricFlow 0.140.0, we have made the following improvements:
 
 - **Python 3.12 Support**: Upgraded to support the latest Python version
-- **Additional Database Support**: Added SQLite, PostgreSQL and StarRocks adapters
+- **Additional Database Support**: Added Datus-specific SQL clients and renderers, including the preview OceanBase Oracle read-only profile
 - **Datus Integration**: Seamlessly integrated with the Datus project for unified configuration
 - **Standalone Package**: Can be installed as a dependency and used independently
 

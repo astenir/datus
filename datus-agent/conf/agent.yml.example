@@ -179,6 +179,18 @@ agent:
         username: ${STARROCKS_USER}
         password: ${STARROCKS_PASSWORD}
         database: ${STARROCKS_DATABASE}
+      # oceanbase_oracle:
+      #   type: oceanbase-oracle
+      #   host: ${OCEANBASE_ORACLE_HOST}
+      #   port: ${OCEANBASE_ORACLE_PORT}
+      #   username: ${OCEANBASE_ORACLE_USERNAME}  # quote real values containing '#'
+      #   password: ${OCEANBASE_ORACLE_PASSWORD}
+      #   database: ${OCEANBASE_ORACLE_DATABASE}  # Oracle-mode tenant
+      #   schema: ${OCEANBASE_ORACLE_SCHEMA}      # Oracle owner/schema
+      #   jar_path: ${OCEANBASE_ORACLE_JAR_PATH}  # path inside the runtime/container
+      #   connection_mode: odp
+      #   connect_timeout_seconds: 30
+      #   query_timeout_seconds: 60
     # Default selection across BI / Scheduler / Semantic follows one rule:
     # explicit call-site arg → ``./.datus/config.yml`` project pin → YAML
     # ``default: true`` flag → single-entry shortcut → raise on ambiguity.
