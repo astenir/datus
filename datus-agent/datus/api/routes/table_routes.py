@@ -20,6 +20,7 @@ from datus.api.models.table_models import (
     SemanticModelInput,
     ValidateSemanticModelData,
 )
+from datus.api.services.database_service import DatasourceService
 from datus.utils.loggings import get_logger
 from datus.utils.sql_utils import parse_table_name_parts
 from datus_enterprise.audit import AuditEvent, audit_decision
@@ -53,14 +54,21 @@ async def _resolve_request_service(request: Request) -> ServiceDep:
 async def get_table_detail(
     svc: ServiceDep,
     ctx: CatalogModuleCtx,
+    datasource_id: str | None = Query(None, description="Datasource selected for this request"),
     table: str = Query(
         ...,
         description="Full table name e.g. 'production_db.public.frpm' or 'db.schema.table'",
     ),
 ) -> Result[GetTableDetailData]:
     """Get table detail."""
-    await _authorize_table_read(ctx, svc, table=table, operation="table.detail")
-    return await asyncio.to_thread(svc.datasource.get_table_schema, table)
+    datasource = await _request_datasource_service(
+        ctx,
+        svc,
+        datasource_id=datasource_id,
+        table=table,
+        operation="table.detail",
+    )
+    return await asyncio.to_thread(datasource.get_table_schema, table)
 
 
 # ========== SemanticModel Endpoints ==========
@@ -76,6 +84,7 @@ async def get_table_detail(
 async def get_semantic_model(
     svc: ServiceDep,
     ctx: CatalogModuleCtx,
+    datasource_id: str | None = Query(None, description="Datasource selected for this request"),
     table: str = Query(
         ...,
         description="Full table name e.g. 'production_db.public.frpm' or 'db.schema.table'",
@@ -85,9 +94,15 @@ async def get_semantic_model(
     db_schema: str | None = Query(None, description="Current schema context"),
 ) -> Result[GetSemanticModelData]:
     """Get SemanticModel YAML."""
-    await _authorize_table_read(ctx, svc, table=table, operation="semantic_model.read")
+    datasource = await _request_datasource_service(
+        ctx,
+        svc,
+        datasource_id=datasource_id,
+        table=table,
+        operation="semantic_model.read",
+    )
     return await asyncio.to_thread(
-        svc.datasource.get_semantic_model,
+        datasource.get_semantic_model,
         table,
         catalog=catalog,
         database=database,
@@ -112,8 +127,14 @@ async def save_semantic_model(
 ) -> Result[dict]:
     """Save SemanticModel YAML."""
     svc = await _resolve_request_service(http_request)
-    await _authorize_table_read(ctx, svc, table=request.table, operation="semantic_model.save")
-    return await svc.datasource.save_semantic_model(request)
+    datasource = await _request_datasource_service(
+        ctx,
+        svc,
+        datasource_id=request.datasource_id,
+        table=request.table,
+        operation="semantic_model.save",
+    )
+    return await datasource.save_semantic_model(request)
 
 
 @router.post(
@@ -130,34 +151,42 @@ async def validate_semantic_model(
 ) -> Result[ValidateSemanticModelData]:
     """Validate SemanticModel YAML."""
     svc = await _resolve_request_service(http_request)
-    await _authorize_table_read(ctx, svc, table=request.table, operation="semantic_model.validate")
-    return await svc.datasource.validate_semantic_model(request)
+    datasource = await _request_datasource_service(
+        ctx,
+        svc,
+        datasource_id=request.datasource_id,
+        table=request.table,
+        operation="semantic_model.validate",
+    )
+    return await datasource.validate_semantic_model(request)
 
 
-async def _authorize_table_read(ctx: AppContext, svc: ServiceDep, *, table: str, operation: str) -> None:
-    projection = await project_request_config(ctx, svc.agent_config, operation=f"catalog.{operation}")
+async def _request_datasource_service(
+    ctx: AppContext,
+    svc: ServiceDep,
+    *,
+    datasource_id: str | None,
+    table: str,
+    operation: str,
+) -> DatasourceService:
+    projection = await project_request_config(
+        ctx,
+        svc.agent_config,
+        operation=f"catalog.{operation}",
+        requested_datasource=datasource_id,
+    )
     selected_datasource = str(projection.principal.get("datasource") or projection.config.current_datasource or "")
     service_datasource = str(
         getattr(getattr(svc, "datasource", None), "current_datasource", None)
         or getattr(svc.agent_config, "current_datasource", "")
         or ""
     )
-    if selected_datasource and service_datasource and selected_datasource != service_datasource:
-        await _audit_table_denial(
-            ctx,
-            operation=operation,
-            table=table,
-            datasource=selected_datasource,
-            reason="DATASOURCE_FORBIDDEN",
-            metadata={"service_datasource": service_datasource},
-        )
-        raise HTTPException(status_code=403, detail="DATASOURCE_FORBIDDEN")
 
     denial = _table_scope_denial(
         table,
         datasource=selected_datasource or service_datasource,
         datasource_grants=projection.datasource_grants,
-        dialect=_table_parser_dialect(svc, selected_datasource or service_datasource),
+        dialect=_table_parser_dialect(projection.config, selected_datasource or service_datasource),
     )
     if denial:
         await _audit_table_denial(
@@ -168,6 +197,17 @@ async def _authorize_table_read(ctx: AppContext, svc: ServiceDep, *, table: str,
             reason=denial,
         )
         raise HTTPException(status_code=403, detail=denial)
+
+    if selected_datasource and selected_datasource == service_datasource:
+        return svc.datasource
+
+    base_datasources = getattr(getattr(svc.agent_config, "services", None), "datasources", {}) or {}
+    shared_db_manager = (
+        getattr(getattr(svc, "datasource", None), "db_manager", None)
+        if selected_datasource in base_datasources
+        else None
+    )
+    return DatasourceService(projection.config, db_manager=shared_db_manager)
 
 
 def _table_scope_denial(
@@ -229,17 +269,12 @@ def _scope_patterns(grant: dict[str, Any], scope_key: str) -> list[str] | None:
     return patterns or None
 
 
-def _table_parser_dialect(svc: ServiceDep, datasource: str) -> str | None:
-    connector = getattr(getattr(svc, "datasource", None), "current_db_connector", None)
-    get_type = getattr(connector, "get_type", None)
-    if callable(get_type):
-        db_type = get_type()
-        if isinstance(db_type, str) and db_type.strip():
-            return db_type
-
-    datasources = getattr(getattr(getattr(svc, "agent_config", None), "services", None), "datasources", {}) or {}
+def _table_parser_dialect(agent_config: Any, datasource: str) -> str | None:
+    datasources = getattr(getattr(agent_config, "services", None), "datasources", {}) or {}
     datasource_config = datasources.get(datasource)
     config_type = getattr(datasource_config, "type", None)
+    if hasattr(config_type, "value"):
+        config_type = config_type.value
     if isinstance(config_type, str) and config_type.strip():
         return config_type
     return None

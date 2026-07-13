@@ -390,7 +390,7 @@ class PostgreSQLConnector(SQLAlchemyConnector, MigrationTargetMixin):
 
         Args:
             catalog_name: Catalog name (unused)
-            database_name: Database name (unused)
+            database_name: Database name to query
             schema_name: Schema name
             table_name: Table name
 
@@ -451,9 +451,9 @@ class PostgreSQLConnector(SQLAlchemyConnector, MigrationTargetMixin):
                 ORDER BY c.table_schema, c.table_name, c.ordinal_position
             """
 
-        query_result = self._execute_pandas(_build_sql(False))
+        query_result = self._execute_pandas(_build_sql(False), database_name=database_name)
         if len(query_result) == 0:
-            query_result = self._execute_pandas(_build_sql(True))
+            query_result = self._execute_pandas(_build_sql(True), database_name=database_name)
             self._raise_if_ambiguous_table(query_result, schema_name, table_name)
 
         result = []

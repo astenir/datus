@@ -66,19 +66,32 @@ export const subjectApi = {
 };
 
 export const tableApi = {
-  detail(baseUrl: string, table: string): Promise<{ table: TableDetail } | null> {
-    return apiResult(baseUrl, `/api/v1/table/detail?table=${encodeURIComponent(table)}`);
+  detail(baseUrl: string, table: string, datasourceId?: string | null): Promise<{ table: TableDetail } | null> {
+    return apiResult(baseUrl, `/api/v1/table/detail?${tableRequestQuery(table, datasourceId)}`);
   },
 
-  getSemanticModel(baseUrl: string, table: string): Promise<{ yaml: string } | null> {
-    return apiResult(baseUrl, `/api/v1/semantic_model?table=${encodeURIComponent(table)}`);
+  getSemanticModel(baseUrl: string, table: string, datasourceId?: string | null): Promise<{ yaml: string } | null> {
+    return apiResult(baseUrl, `/api/v1/semantic_model?${tableRequestQuery(table, datasourceId)}`);
   },
 
-  saveSemanticModel(baseUrl: string, table: string, yaml: string): Promise<unknown> {
-    return apiResult(baseUrl, "/api/v1/semantic_model", jsonBody({ table, yaml }));
+  saveSemanticModel(baseUrl: string, table: string, yaml: string, datasourceId?: string | null): Promise<unknown> {
+    return apiResult(baseUrl, "/api/v1/semantic_model", jsonBody(semanticModelPayload(table, yaml, datasourceId)));
   },
 
-  validateSemanticModel(baseUrl: string, table: string, yaml: string): Promise<SemanticModelValidation | null> {
-    return apiResult(baseUrl, "/api/v1/semantic_model/validate", jsonBody({ table, yaml }));
+  validateSemanticModel(baseUrl: string, table: string, yaml: string, datasourceId?: string | null): Promise<SemanticModelValidation | null> {
+    return apiResult(baseUrl, "/api/v1/semantic_model/validate", jsonBody(semanticModelPayload(table, yaml, datasourceId)));
   },
 };
+
+function tableRequestQuery(table: string, datasourceId?: string | null): string {
+  const params = new URLSearchParams();
+  const selectedDatasource = datasourceId?.trim();
+  if (selectedDatasource) params.set("datasource_id", selectedDatasource);
+  params.set("table", table);
+  return params.toString();
+}
+
+function semanticModelPayload(table: string, yaml: string, datasourceId?: string | null) {
+  const selectedDatasource = datasourceId?.trim();
+  return selectedDatasource ? { table, yaml, datasource_id: selectedDatasource } : { table, yaml };
+}

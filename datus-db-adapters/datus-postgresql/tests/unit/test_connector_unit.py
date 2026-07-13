@@ -621,6 +621,25 @@ def test_get_schema_falls_back_to_lower_when_strict_empty():
     assert result[0]["name"] == "id"
 
 
+def test_get_schema_executes_strict_and_fallback_queries_in_requested_database():
+    """Cross-database schema lookup executes both query variants against the requested database."""
+    connector = _make_pg_connector_for_metadata(database_name="ccks_fund")
+    empty = _df([], _SCHEMA_COLS)
+    fallback = _df(
+        [("public", "tasks", "id", "integer", "NO", None, True, None)],
+        _SCHEMA_COLS,
+    )
+    connector._execute_pandas = MagicMock(side_effect=[empty, fallback])
+
+    result = connector.get_schema(database_name="datus_storage", schema_name="PUBLIC", table_name="TASKS")
+
+    assert [call.kwargs for call in connector._execute_pandas.call_args_list] == [
+        {"database_name": "datus_storage"},
+        {"database_name": "datus_storage"},
+    ]
+    assert result[0]["name"] == "id"
+
+
 def test_get_schema_lower_fallback_ambiguous_raises():
     """If lower() fallback resolves to two distinct (schema,table) pairs, raise."""
     connector = _make_pg_connector_for_metadata()

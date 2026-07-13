@@ -36,6 +36,14 @@ class TestDatasourceServiceInit:
         svc = DatasourceService(agent_config=real_agent_config)
         assert isinstance(svc.db_manager, DBManager)
 
+    def test_init_reuses_request_scoped_db_manager(self, real_agent_config):
+        """Request-scoped services may share the connector cache without shared selection state."""
+        db_manager = DBManager(real_agent_config.datasource_configs)
+
+        svc = DatasourceService(agent_config=real_agent_config, db_manager=db_manager)
+
+        assert svc.db_manager is db_manager
+
     def test_init_without_datasource_defers_semantic_rag(self, real_agent_config):
         """Init does not open datasource-scoped semantic storage before datasource selection."""
         real_agent_config.current_datasource = ""

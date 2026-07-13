@@ -115,10 +115,26 @@ claim is uncertain, verify it in code before preserving it.
 
 ## Commit & Pull Request Guidelines
 
-Commit messages in this downstream monorepo should use Chinese after the bracketed category, for example `[Doc] 补充适配器维护说明`.
+Commit messages follow the root monorepo Conventional Commits convention:
 
-PR titles must start with one of `[BugFix]`, `[Enhancement]`, `[Feature]`, `[Refactor]`, `[UT]`, `[Doc]`, `[Tool]`,
-or `[Others]`; title-check CI rejects other prefixes. Example: `[Enhancement] MySQL: Add TPC-H integration tests`.
+```text
+<type>(<scope>): <中文描述>
+```
+
+Use a lowercase type such as `feat`, `fix`, `docs`, `test`, `refactor`, `build`, `ci`, or `chore`. Prefer
+`db-adapters` as the shared workspace scope, or a short adapter scope such as `postgresql`, `mysql`, or `trino` when it
+makes the affected package clearer. Keep the Chinese description concise and action-oriented.
+
+Examples:
+
+- `fix(db-adapters): 修复 PostgreSQL 跨库表结构查询`
+- `feat(mysql): 增加元数据分页查询`
+- `test(postgresql): 补充连接失败回归测试`
+- `docs(db-adapters): 补充适配器维护说明`
+
+PR titles use a separate upstream CI convention and must start with one of `[BugFix]`, `[Enhancement]`, `[Feature]`,
+`[Refactor]`, `[UT]`, `[Doc]`, `[Tool]`, or `[Others]`; title-check CI rejects other prefixes. Example:
+`[Enhancement] MySQL: Add TPC-H integration tests`.
 
 PRs should include a clear summary, affected adapter(s), linked issue when applicable, and test evidence. If using a fork, create PRs with:
 

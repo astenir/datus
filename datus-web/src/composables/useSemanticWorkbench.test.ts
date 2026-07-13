@@ -47,13 +47,13 @@ describe("useSemanticWorkbench", () => {
 
   it("loads table detail and semantic YAML", async () => {
     const { useSemanticWorkbench } = await import("./useSemanticWorkbench");
-    const workbench = useSemanticWorkbench();
+    const workbench = useSemanticWorkbench({ currentDatasource: () => "oceanbase_data" });
     workbench.tableName.value = " fund_nav ";
 
     await workbench.loadTableDetails();
 
-    expect(tableDetail).toHaveBeenCalledWith("http://api.test", "fund_nav");
-    expect(getSemanticModel).toHaveBeenCalledWith("http://api.test", "fund_nav");
+    expect(tableDetail).toHaveBeenCalledWith("http://api.test", "fund_nav", "oceanbase_data");
+    expect(getSemanticModel).toHaveBeenCalledWith("http://api.test", "fund_nav", "oceanbase_data");
     expect(workbench.tableName.value).toBe("fund_nav");
     expect(workbench.tableDetail.value?.name).toBe("fund_nav");
     expect(workbench.semanticYaml.value).toBe("table: fund_nav");
@@ -73,7 +73,8 @@ describe("useSemanticWorkbench", () => {
 
   it("validates and saves table semantic YAML", async () => {
     const { useSemanticWorkbench } = await import("./useSemanticWorkbench");
-    const workbench = useSemanticWorkbench();
+    let datasource = "oceanbase_data";
+    const workbench = useSemanticWorkbench({ currentDatasource: () => datasource });
     workbench.tableName.value = "fund_nav";
 
     await workbench.loadTableDetails();
@@ -81,8 +82,27 @@ describe("useSemanticWorkbench", () => {
     await workbench.validateSemanticModel();
     await workbench.saveSemanticModel();
 
-    expect(validateSemanticModel).toHaveBeenCalledWith("http://api.test", "fund_nav", "table: fund_nav\ncolumns: []");
-    expect(saveSemanticModel).toHaveBeenCalledWith("http://api.test", "fund_nav", "table: fund_nav\ncolumns: []");
+    expect(validateSemanticModel).toHaveBeenCalledWith(
+      "http://api.test",
+      "fund_nav",
+      "table: fund_nav\ncolumns: []",
+      "oceanbase_data",
+    );
+    datasource = "oracle_data";
+    workbench.semanticYaml.value = "table: fund_nav\ncolumns: []";
+    await workbench.validateSemanticModel();
+    expect(validateSemanticModel).toHaveBeenLastCalledWith(
+      "http://api.test",
+      "fund_nav",
+      "table: fund_nav\ncolumns: []",
+      "oracle_data",
+    );
+    expect(saveSemanticModel).toHaveBeenCalledWith(
+      "http://api.test",
+      "fund_nav",
+      "table: fund_nav\ncolumns: []",
+      "oceanbase_data",
+    );
     expect(tableDetail).toHaveBeenCalledTimes(2);
     expect(toastSuccess).toHaveBeenCalledWith("语义模型已保存");
   });
@@ -110,7 +130,7 @@ describe("useSemanticWorkbench", () => {
     });
 
     expect(tableName).toBe("fund_nav");
-    expect(tableDetail).toHaveBeenCalledWith("http://api.test", "fund_nav");
+    expect(tableDetail).toHaveBeenCalledWith("http://api.test", "fund_nav", undefined);
   });
 
   it("reports catalog entries without usable tables", async () => {

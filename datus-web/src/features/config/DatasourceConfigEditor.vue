@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, shallowRef } from "vue"
+import { computed, ref, shallowRef, toRaw } from "vue"
 import { PencilIcon, PlugZapIcon, Trash2Icon } from "@lucide/vue"
 import { Badge } from "@/components/ui/badge"
 import { toast } from "vue-sonner"
@@ -31,6 +31,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
+  apply: [datasources: DatasourceConfigMap]
   update: [datasources: DatasourceConfigMap]
   test: [name: string]
 }>()
@@ -175,18 +176,18 @@ function submit() {
     if (value.trim()) fields[keyName] = value.trim()
   }
 
-  const next = structuredClone(props.datasources)
+  const next = structuredClone(toRaw(props.datasources))
   if (editingKey.value && editingKey.value !== key) delete next[editingKey.value]
   if (form.value.isDefault) {
     for (const config of Object.values(next)) config.default = false
   }
   next[key] = fields
-  emit("update", next)
+  emit("apply", next)
   dialogOpen.value = false
 }
 
 function remove(key: string) {
-  const next = structuredClone(props.datasources)
+  const next = structuredClone(toRaw(props.datasources))
   delete next[key]
   emit("update", next)
 }

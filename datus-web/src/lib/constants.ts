@@ -1,6 +1,7 @@
 import type { ConnectionState } from "@/types";
 
-export const APP_WORKSPACE_TITLE = "智能问数助手";
+export const APP_WORKSPACE_TITLE = "数据智能分析平台";
+export const APP_WORKSPACE_SUBTITLE = "DVision";
 export const FALLBACK_USER_LABEL = "未登录用户";
 export const FALLBACK_USERNAME_LABEL = "未配置账号";
 

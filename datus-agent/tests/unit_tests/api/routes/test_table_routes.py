@@ -155,6 +155,137 @@ def test_table_detail_rejects_table_outside_datasource_grant(monkeypatch):
     assert event.metadata["datasource"] == "finance"
 
 
+@pytest.mark.parametrize(
+    ("path", "service_method"),
+    [
+        ("/api/v1/table/detail", "get_table_schema"),
+        ("/api/v1/semantic_model", "get_semantic_model"),
+    ],
+)
+def test_table_reads_use_explicit_request_datasource_without_mutating_shared_service(
+    monkeypatch,
+    path,
+    service_method,
+):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = _svc()
+    svc.agent_config.services.datasources = {
+        "consult_data": SimpleNamespace(type="postgresql"),
+        "oceanbase_data": SimpleNamespace(type="oceanbase-oracle"),
+    }
+    svc.agent_config.current_datasource = "consult_data"
+    svc.datasource.current_datasource = "consult_data"
+    shared_db_manager = object()
+    svc.datasource.db_manager = shared_db_manager
+
+    projected_datasource = MagicMock()
+    projected_datasource.get_table_schema.return_value = svc.datasource.get_table_schema.return_value
+    projected_datasource.get_semantic_model.return_value = svc.datasource.get_semantic_model.return_value
+    constructed = []
+
+    def create_datasource_service(agent_config, db_manager=None):
+        constructed.append((agent_config, db_manager))
+        return projected_datasource
+
+    monkeypatch.setattr(table_routes, "DatasourceService", create_datasource_service)
+    ctx = _ctx(
+        permissions={"module.datasource_catalog"},
+        grants={
+            "consult_data": {
+                "effect": "allow",
+                "allow_catalog": True,
+                "schemas": ["bgadb_backup.edms_mdl"],
+            },
+            "oceanbase_data": {
+                "effect": "allow",
+                "allow_catalog": True,
+                "databases": ["DEV_TENANT01"],
+            },
+        },
+    )
+
+    with _client(ctx, svc) as client:
+        response = client.get(
+            path,
+            params={
+                "datasource_id": "oceanbase_data",
+                "table": "DEV_TENANT01.NPIMS.T_LAW_FIRM_INFO",
+            },
+        )
+
+    assert response.status_code == 200
+    assert len(constructed) == 1
+    projected_config, projected_db_manager = constructed[0]
+    assert projected_config.current_datasource == "oceanbase_data"
+    assert projected_db_manager is shared_db_manager
+    getattr(projected_datasource, service_method).assert_called_once()
+    getattr(svc.datasource, service_method).assert_not_called()
+    assert svc.agent_config.current_datasource == "consult_data"
+    assert svc.datasource.current_datasource == "consult_data"
+
+
+def test_semantic_model_writes_use_explicit_request_datasource(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    svc = _svc()
+    svc.agent_config.services.datasources = {
+        "consult_data": SimpleNamespace(type="postgresql"),
+        "oceanbase_data": SimpleNamespace(type="oceanbase-oracle"),
+    }
+    svc.agent_config.current_datasource = "consult_data"
+    svc.datasource.current_datasource = "consult_data"
+    svc.datasource.db_manager = object()
+
+    projected_datasource = MagicMock()
+    projected_datasource.save_semantic_model = AsyncMock(return_value=Result(success=True, data={}))
+    projected_datasource.validate_semantic_model = AsyncMock(
+        return_value=Result(success=True, data={"valid": True, "invalid_message": None})
+    )
+    projected_configs = []
+
+    def create_datasource_service(agent_config, db_manager=None):
+        projected_configs.append(agent_config)
+        return projected_datasource
+
+    monkeypatch.setattr(table_routes, "DatasourceService", create_datasource_service)
+    ctx = _ctx(
+        permissions={"module.config.edit"},
+        grants={
+            "consult_data": {
+                "effect": "allow",
+                "allow_catalog": True,
+                "schemas": ["bgadb_backup.edms_mdl"],
+            },
+            "oceanbase_data": {
+                "effect": "allow",
+                "allow_catalog": True,
+                "databases": ["DEV_TENANT01"],
+            },
+        },
+    )
+    payload = {
+        "datasource_id": "oceanbase_data",
+        "table": "DEV_TENANT01.NPIMS.T_LAW_FIRM_INFO",
+        "yaml": "semantic_model: []",
+    }
+
+    with _client(ctx, svc) as client:
+        validate_response = client.post("/api/v1/semantic_model/validate", json=payload)
+        save_response = client.post("/api/v1/semantic_model", json=payload)
+
+    assert validate_response.status_code == 200
+    assert save_response.status_code == 200
+    assert [config.current_datasource for config in projected_configs] == [
+        "oceanbase_data",
+        "oceanbase_data",
+    ]
+    validate_request = projected_datasource.validate_semantic_model.await_args.args[0]
+    save_request = projected_datasource.save_semantic_model.await_args.args[0]
+    assert validate_request.datasource_id == "oceanbase_data"
+    assert save_request.datasource_id == "oceanbase_data"
+    assert svc.agent_config.current_datasource == "consult_data"
+    assert svc.datasource.current_datasource == "consult_data"
+
+
 def test_table_detail_denial_survives_audit_failure(monkeypatch):
     monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions(audit_sink=FailingAuditSink()))
     svc = _svc()

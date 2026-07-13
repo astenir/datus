@@ -57,7 +57,9 @@ const emit = defineEmits<{
 }>()
 
 const connection = useConnection()
-const semantic = useSemanticWorkbench()
+const semantic = useSemanticWorkbench({
+  currentDatasource: () => props.workspace.currentDatasource.value,
+})
 
 const treeMode = shallowRef<KnowledgeTreeMode>("catalog")
 const buildDialogOpen = shallowRef(false)
