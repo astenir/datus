@@ -1,0 +1,2 @@
+[tool.uv.workspace]
+members = ["datus-semantic-core", "datus-semantic-metricflow", "datus-semantic-osi"]

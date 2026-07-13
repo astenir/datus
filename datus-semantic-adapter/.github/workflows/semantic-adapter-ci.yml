@@ -1,0 +1,65 @@
+name: Semantic Adapter CI
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: semantic-adapter-ci-${{ github.event.pull_request.number || github.event.merge_group.head_sha || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  unit-tests:
+    runs-on: self-hosted
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Run unit tests
+        run: |
+          ci/run-unit-tests.sh
+          uv run --no-project --isolated \
+            --with packaging \
+            --with pytest \
+            python -m pytest ci/tests --verbose
+
+  package-build:
+    needs:
+      - unit-tests
+    runs-on: self-hosted
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Build and smoke-check packages
+        run: ci/run-build.sh
