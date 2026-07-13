@@ -230,6 +230,34 @@ class TestMetricFlowAdapter:
             }
         ]
 
+    def test_build_metricflow_config_dict_preserves_oceanbase_oracle_jdbc_fields(self):
+        result = MetricFlowAdapter._build_metricflow_config_dict(
+            {
+                "type": "oceanbase-oracle",
+                "host": "ob.example.com",
+                "port": "2883",
+                "username": "app@tenant#cluster",
+                "password": "secret",
+                "database": "tenant",
+                "schema": "APP",
+                "jar_path": "/opt/oceanbase-client.jar",
+                "driver_class": "com.oceanbase.jdbc.Driver",
+                "connection_mode": "odp",
+                "use_ssl": "false",
+                "connect_timeout_seconds": "15",
+                "query_timeout_seconds": "45",
+            },
+            "/tmp/models",
+        )
+
+        assert result["dwh_dialect"] == "oceanbase-oracle"
+        assert result["dwh_jar_path"] == "/opt/oceanbase-client.jar"
+        assert result["dwh_driver_class"] == "com.oceanbase.jdbc.Driver"
+        assert result["dwh_connection_mode"] == "odp"
+        assert result["dwh_use_ssl"] == "false"
+        assert result["dwh_connect_timeout_seconds"] == "15"
+        assert result["dwh_query_timeout_seconds"] == "45"
+
     def test_build_metricflow_config_dict_legacy_normalizes_db_config(self):
         captured_kwargs = {}
 
