@@ -82,6 +82,13 @@ dependencies = [
     "datus-scheduler-core>=0.1.1",
 ]
 
+[project.optional-dependencies]
+metricflow-oceanbase-oracle = [
+    "datus-metricflow>=0.2.7",
+    "datus-semantic-metricflow>=0.2.8",
+    "datus-oceanbase-oracle>=0.1.0",
+]
+
 [project.urls]
 Homepage = "https://datus.ai/"
 Documentation = "https://docs.datus.ai"
@@ -204,7 +211,14 @@ ci = [
     "datus-storage-postgresql>=0.1.5",
     "datus-metricflow>=0.2.7",
     "datus-semantic-metricflow>=0.2.8",
+    "datus-oceanbase-oracle>=0.1.0",
 ]
+
+[tool.uv.sources]
+datus-metricflow = { path = "../metricflow", editable = true }
+datus-oceanbase-oracle = { path = "../datus-db-adapters/datus-oceanbase-oracle", editable = true }
+datus-semantic-core = { path = "../datus-semantic-adapter/datus-semantic-core", editable = true }
+datus-semantic-metricflow = { path = "../datus-semantic-adapter/datus-semantic-metricflow", editable = true }
 
 [tool.coverage.run]
 source = ["datus"]

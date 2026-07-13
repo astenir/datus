@@ -1,7 +1,8 @@
 # MetricFlow OceanBase Oracle 发布与验收
 
 本文定义 OceanBase Oracle MetricFlow engine 的仓库边界、首版能力和发布顺序。该实现
-横跨多个独立包，不应把上游源码 vendor 到 `datus-agent`。
+横跨多个独立包，这些包以顶层项目纳入 Datus monorepo，但不应复制或 vendor 到
+`datus-agent`。
 
 ## 仓库边界
 
@@ -16,9 +17,9 @@
 4. `datus-agent` 负责选择运行时 datasource、加载 semantic adapter，并且只在语义校验
    成功后发布模型。
 
-开发时把这些仓库放在同级目录，通过 editable install 串起来。不要把
-`datus-semantic-adapter` 或 MetricFlow 克隆到 Datus 项目内部，也不要复制其源码到
-`datus-agent`。
+monorepo 以顶层 `metricflow/` 和 `datus-semantic-adapter/` 项目保存源码及其上游历史，
+并通过 Datus Agent 的本地 `tool.uv.sources` 映射安装。不要再创建嵌套源码仓库，也不要
+把这些代码复制到 `datus-agent`。
 
 ## 首版能力边界
 
@@ -32,19 +33,16 @@ percentile 能力和通用写入型 MetricFlow workload。对应方法必须明�
 
 ## 源码开发安装
 
-使用同一个虚拟环境，并按依赖顺序 editable install。下面路径需按实际 checkout 布局
-调整：
+使用 Datus Agent 的虚拟环境。`metricflow-oceanbase-oracle` extra 会把完整依赖链映射到
+monorepo 内的 editable source：
 
 ```bash
-python -m pip install -e /path/to/datus/datus-db-adapters/datus-db-core
-python -m pip install -e /path/to/datus/datus-db-adapters/datus-oceanbase-oracle
-python -m pip install -e /path/to/metricflow
-python -m pip install -e /path/to/datus-semantic-adapter/datus-semantic-core
-python -m pip install -e /path/to/datus-semantic-adapter/datus-semantic-metricflow
+cd datus-agent
+uv sync --dev --extra metricflow-oceanbase-oracle
 ```
 
-不要把本地路径写进发布元数据，也不要提交 editable install 产物或在同级仓库中意外生成
-的锁文件。
+不要把机器绝对路径写进发布元数据，也不要提交 editable install 产物。受版本控制的
+`uv.lock` 使用相对 monorepo source，保证开发环境可以复现。
 
 ## 包发布顺序
 

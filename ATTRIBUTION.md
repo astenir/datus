@@ -9,6 +9,8 @@ coordination.
 | `datus-agent/` | Downstream of Datus Agent | <https://github.com/Datus-ai/Datus-agent> | Apache-2.0 |
 | `datus-db-adapters/` | Downstream of Datus database adapters | <https://github.com/Datus-ai/datus-db-adapters> | Apache-2.0 |
 | `datus-storage-adapters/` | Downstream of Datus storage adapters | <https://github.com/Datus-ai/datus-storage-adapters> | Apache-2.0 |
+| `datus-semantic-adapter/` | Downstream of Datus semantic adapters | <https://github.com/Datus-ai/datus-semantic-adapter> | Apache-2.0 |
+| `metricflow/` | Downstream of the Datus MetricFlow fork | <https://github.com/Datus-ai/metricflow> | AGPL-3.0-or-later |
 | `datus-web/` | Project-local frontend | This repository | MIT |
 
 The Apache-2.0 components retain their upstream copyright notices and license

@@ -1,8 +1,9 @@
 # Releasing MetricFlow for OceanBase Oracle
 
 This guide defines the repository and release boundary for the OceanBase
-Oracle MetricFlow engine. The implementation spans separate packages and must
-not be vendored into `datus-agent`.
+Oracle MetricFlow engine. The implementation spans separate packages that are
+checked into the Datus monorepo as top-level projects; they must not be copied
+or vendored into `datus-agent`.
 
 ## Repository boundary
 
@@ -17,9 +18,10 @@ The ownership chain is:
 4. `datus-agent` selects the runtime datasource, loads the semantic adapter,
    and gates publishing on successful semantic validation.
 
-Keep these as sibling source checkouts during development and install them as
-editable packages. Do not clone `datus-semantic-adapter` or MetricFlow inside
-the Datus project, and do not copy their source into `datus-agent`.
+The monorepo owns `metricflow/` and `datus-semantic-adapter/` as top-level
+projects with preserved upstream history. Install them through Datus Agent's
+local `tool.uv.sources` mapping. Do not create nested clones or copy their
+source into `datus-agent`.
 
 ## Initial support boundary
 
@@ -35,19 +37,17 @@ than silently claiming support.
 
 ## Source-development setup
 
-Use one virtual environment and install the package chain in editable mode.
-Adjust paths for the checkout layout:
+Use the Datus Agent environment. Its `metricflow-oceanbase-oracle` extra maps
+the full package chain to monorepo-local editable sources:
 
 ```bash
-python -m pip install -e /path/to/datus/datus-db-adapters/datus-db-core
-python -m pip install -e /path/to/datus/datus-db-adapters/datus-oceanbase-oracle
-python -m pip install -e /path/to/metricflow
-python -m pip install -e /path/to/datus-semantic-adapter/datus-semantic-core
-python -m pip install -e /path/to/datus-semantic-adapter/datus-semantic-metricflow
+cd datus-agent
+uv sync --dev --extra metricflow-oceanbase-oracle
 ```
 
-Do not add local paths to release metadata or commit editable-install artifacts
-or generated lock files from a sibling repository.
+Do not add machine-local absolute paths to release metadata or commit
+editable-install artifacts. The checked-in `uv.lock` records relative
+monorepo sources for reproducible development.
 
 ## Package release order
 

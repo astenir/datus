@@ -31,6 +31,8 @@
 | [`datus-web`](./datus-web) | 面向聊天、数据源、权限和管理流程的 Web 工作区 | Vue 3, Vite, TypeScript |
 | [`datus-db-adapters`](./datus-db-adapters) | PostgreSQL、MySQL、ClickHouse、Oracle 等数据库适配器 | Python, uv |
 | [`datus-storage-adapters`](./datus-storage-adapters) | 关系型和向量存储后端适配器 | Python, uv |
+| [`datus-semantic-adapter`](./datus-semantic-adapter) | MetricFlow 等语义层的统一发现、校验和查询适配器 | Python, uv |
+| [`metricflow`](./metricflow) | 指标模型编译、查询计划和数据库方言 SQL 渲染 | Python, Poetry |
 
 根目录只保留跨项目协调文件。具体开发、测试和启动方式以各子项目自己的 `README.md` / `AGENTS.md` 为准。
 
@@ -43,6 +45,8 @@ This monorepo contains components under different open-source licenses:
 | [`datus-agent`](./datus-agent) | Apache-2.0 |
 | [`datus-db-adapters`](./datus-db-adapters) | Apache-2.0 |
 | [`datus-storage-adapters`](./datus-storage-adapters) | Apache-2.0 |
+| [`datus-semantic-adapter`](./datus-semantic-adapter) | Apache-2.0 |
+| [`metricflow`](./metricflow) | AGPL-3.0-or-later |
 | [`datus-web`](./datus-web) | MIT |
 
 See [LICENSE.md](./LICENSE.md) and [ATTRIBUTION.md](./ATTRIBUTION.md) for the
@@ -86,6 +90,9 @@ cd datus-agent
 uv sync --dev
 uv run datus-api --help
 
+# 安装 monorepo 内 MetricFlow + OceanBase Oracle 语义链路
+uv sync --dev --extra metricflow-oceanbase-oracle
+
 cd ../datus-web
 npm install
 npm run dev
@@ -118,6 +125,21 @@ cd datus-storage-adapters
 uv sync --dev
 uv run ruff check .
 uv run pytest
+```
+
+### 语义适配器与 MetricFlow
+
+```bash
+cd datus-agent
+uv sync --dev --extra metricflow-oceanbase-oracle
+
+cd ../datus-semantic-adapter
+uv sync --locked --all-packages --all-extras
+.venv/bin/python -m pytest --asyncio-mode=auto
+
+cd ../metricflow
+../datus-agent/.venv/bin/python -m pytest -p no:rerunfailures \
+  metricflow/test/sql metricflow/test/sql_clients
 ```
 
 ### 前端

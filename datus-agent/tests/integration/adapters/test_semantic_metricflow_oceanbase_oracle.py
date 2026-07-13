@@ -121,9 +121,7 @@ def seeded_db():
         f'CREATE TABLE "{_SCHEMA}"."{_DATA_TABLE}" '
         '("ID" NUMBER(10) PRIMARY KEY, "AMOUNT" NUMBER(10,2), "CREATED_AT" DATE)'
     )
-    connector.execute_statement(
-        f'CREATE TABLE "{_SCHEMA}"."{_TIME_SPINE_TABLE}" ("DS" DATE NOT NULL)'
-    )
+    connector.execute_statement(f'CREATE TABLE "{_SCHEMA}"."{_TIME_SPINE_TABLE}" ("DS" DATE NOT NULL)')
     for row_id, amount, created_at in [
         (1, 10.0, "2020-01-01"),
         (2, 20.0, "2020-01-02"),
@@ -138,8 +136,7 @@ def seeded_db():
         )
     for day in range(1, 11):
         connector.execute_statement(
-            f'INSERT INTO "{_SCHEMA}"."{_TIME_SPINE_TABLE}" ("DS") '
-            "VALUES (TO_DATE(?, 'YYYY-MM-DD'))",
+            f'INSERT INTO "{_SCHEMA}"."{_TIME_SPINE_TABLE}" ("DS") VALUES (TO_DATE(?, \'YYYY-MM-DD\'))',
             (f"2020-01-{day:02d}",),
         )
 

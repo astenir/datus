@@ -9,6 +9,8 @@ This root guide only covers cross-project coordination for the Datus monorepo. E
 - `datus-agent/`: Python agent package, API, CLI, configuration, docs, benchmarks, and tests.
 - `datus-db-adapters/`: Python `uv` workspace for database adapter packages such as `datus-postgresql/`, `datus-mysql/`, and `datus-db-core/`.
 - `datus-storage-adapters/`: Python `uv` workspace for storage adapter packages.
+- `datus-semantic-adapter/`: Python `uv` workspace for semantic adapter packages such as `datus-semantic-core/` and `datus-semantic-metricflow/`.
+- `metricflow/`: Datus MetricFlow fork and SQL engine implementations.
 - `datus-web/`: Vue 3 + Vite frontend. Source lives under `datus-web/src/`.
 
 Keep the repository root minimal. Do not add application code, generated artifacts, dependency directories, virtual environments, or per-service operational scripts at the root unless they are explicitly shared by multiple sub-projects.
@@ -24,6 +26,9 @@ Keep the repository root minimal. Do not add application code, generated artifac
 - `cd datus-storage-adapters && uv sync --dev`
 - `cd datus-storage-adapters && uv run ruff check .`
 - `cd datus-storage-adapters && uv run pytest`
+- `cd datus-semantic-adapter && uv sync --locked --all-packages --all-extras`
+- `cd datus-semantic-adapter && .venv/bin/python -m pytest --asyncio-mode=auto`
+- `cd metricflow && ../datus-agent/.venv/bin/python -m pytest -p no:rerunfailures metricflow/test/sql metricflow/test/sql_clients`
 - `cd datus-web && npm install`
 - `cd datus-web && npm run lint`
 - `cd datus-web && npm test`

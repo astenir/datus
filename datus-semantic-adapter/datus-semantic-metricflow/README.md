@@ -62,9 +62,15 @@ asyncio.run(main())
 ### OceanBase Oracle development profile
 
 OceanBase Oracle support requires the matching `datus-metricflow` engine and
-the `datus-oceanbase-oracle` database adapter. Until both packages have a
-compatible published release, install all three repositories from source; do
-not add an unresolved package version to an application lock file.
+the `datus-oceanbase-oracle` database adapter. In the Datus monorepo, install
+the complete local source chain from `datus-agent` with:
+
+```bash
+uv sync --dev --extra metricflow-oceanbase-oracle
+```
+
+Release builds still publish the packages in dependency order; do not add an
+unresolved public package version to an application lock file.
 
 ```python
 config = MetricFlowConfig(

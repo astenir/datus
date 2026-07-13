@@ -2,6 +2,8 @@ const PROJECT_PATHS = {
   agent: "datus-agent/",
   db_adapters: "datus-db-adapters/",
   storage_adapters: "datus-storage-adapters/",
+  semantic_adapter: "datus-semantic-adapter/",
+  metricflow: "metricflow/",
 };
 
 const SHARED_PATHS = new Set([
@@ -24,12 +26,22 @@ function detectPythonChanges(eventName, files = []) {
   );
   const sharedPathChanged = paths.some((path) => SHARED_PATHS.has(path));
 
-  return Object.fromEntries(
+  const changedProjects = Object.fromEntries(
     Object.entries(PROJECT_PATHS).map(([project, prefix]) => [
       project,
       sharedPathChanged || paths.some((path) => path.startsWith(prefix)),
     ]),
   );
+
+  if (changedProjects.metricflow) {
+    changedProjects.semantic_adapter = true;
+    changedProjects.agent = true;
+  }
+  if (changedProjects.semantic_adapter) {
+    changedProjects.agent = true;
+  }
+
+  return changedProjects;
 }
 
 module.exports = { detectPythonChanges };
