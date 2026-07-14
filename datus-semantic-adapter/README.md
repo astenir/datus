@@ -1,30 +1,32 @@
-# Datus Semantic Adapter
+# Datus Semantic Adapters
 
-Semantic layer adapters for the Datus platform.
+语义层 adapter workspace，为 Datus 提供统一的指标发现、配置校验和查询接口。
 
-This repository contains adapters that integrate various semantic layer backends with Datus, providing a unified interface for metric discovery, querying, and validation.
+## 当前包
 
-## Available Adapters
+| 包 | 作用 | 文档 |
+| --- | --- | --- |
+| `datus-semantic-core` | 公共接口和基础模型 | 包内源码与测试 |
+| `datus-semantic-metricflow` | Datus 到 MetricFlow 的配置、校验和查询适配 | [README](./datus-semantic-metricflow/README.md) |
+| `datus-semantic-osi` | OSI 语义模型适配 | 包内源码与测试 |
 
-| Adapter | Package | Description |
-|---------|---------|-------------|
-| MetricFlow | `datus-semantic-metricflow` | MetricFlow semantic layer integration |
+该清单与根 `pyproject.toml` 的 `tool.uv.workspace.members` 保持一致。MetricFlow 源码在 monorepo 的 [`metricflow`](../metricflow/) 目录中，并通过 `tool.uv.sources` 以 editable path 接入。
 
-## Architecture
+## 开发
 
-All adapters implement the `BaseSemanticAdapter` interface from `datus-agent`, providing:
+```bash
+uv sync --locked --all-packages --all-extras
+.venv/bin/python -m pytest --asyncio-mode=auto
+```
 
-- Metric listing and discovery
-- Dimension querying
-- Metric query execution
-- Configuration validation
+运行 workspace 级测试前使用锁文件同步全部包。修改 MetricFlow 集成时，还应在 `metricflow/` 中运行受影响的 SQL engine/client 测试。
 
-## Installation
+## 安装
 
-Each adapter is published as a separate package:
+终端用户安装具体实现包，例如：
 
 ```bash
 pip install datus-semantic-metricflow
 ```
 
-See individual adapter READMEs for detailed usage instructions.
+配置格式和后端限制以实现包 README 为准；公共接口变更必须同步所有实现与跨仓库兼容测试。

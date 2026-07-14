@@ -52,12 +52,14 @@ This monorepo contains components under different open-source licenses:
 See [LICENSE.md](./LICENSE.md) and [ATTRIBUTION.md](./ATTRIBUTION.md) for the
 full license and upstream attribution notes.
 
+## 文档入口
+
+- [文档导航](./docs/README.md)：按开发、企业能力、CI 和专项部署分类。
+- [Agent 本地企业后端联调](./datus-agent/LOCAL_ENTERPRISE_BACKEND_TESTING.zh.md)：认证、RBAC、metadata seed 和 API smoke。
+- [Web 开发与部署](./datus-web/README.md)：本地代理、Bearer token、子路径构建和质量检查。
+- [MetricFlow OceanBase Oracle 内网部署与验收](./docs/metricflow-oceanbase-oracle-intranet-deployment.zh-CN.md)：专项源码部署和真实租户验收。
+
 ## Quick Start
-
-开发部署、前后端联调、企业模式、mock userinfo、Bearer token、API smoke 和常见故障处理见：
-
-- [Datus 开发部署手册](./DEVELOPMENT_DEPLOYMENT_GUIDE.zh.md)
-- [MetricFlow OceanBase Oracle 内网部署与验收](./docs/metricflow-oceanbase-oracle-intranet-deployment.zh-CN.md)
 
 也可以用 Docker Compose 启动一套本地企业联调环境：
 
@@ -75,7 +77,7 @@ docker compose up --build
 
 Compose 默认使用 `dev-alice-token`、mock userinfo、PostgreSQL metadata store 和示例 `ccks_fund` datasource，只适合本地体验和测试。`.env` 只保留常用运行参数：
 
-- 大模型：`.env` 只用 `DATUS_TARGET_PROVIDER`、`DATUS_TARGET_MODEL` 或 `DATUS_TARGET` 选择默认模型；多个 provider、API key、私有 base_url、自定义模型条目放在 `deploy/docker/agent/models.yml`。
+- 大模型：先复制 `deploy/docker/agent/models.example.yml` 为 `deploy/docker/agent/models.yml`；`.env` 只用 `DATUS_TARGET_PROVIDER`、`DATUS_TARGET_MODEL` 或 `DATUS_TARGET` 选择默认模型，多个 provider、API key、私有 base_url 和自定义模型条目放在该 YAML 文件。
 - 外接数据源：复制 `deploy/docker/agent/datasources.example.yml` 为 `deploy/docker/agent/datasources.yml`，在一个 YAML 文件里维护 datasource 清单；`.env` 中只用 `DATUS_DATASOURCE` 选择默认 datasource。
 - 企业身份和权限：设置 `DATUS_ENTERPRISE_USERINFO_URL` 接真实 userinfo，设置 `DATUS_ENTERPRISE_PG_DSN` 接外部企业 metadata/RBAC PostgreSQL，并用 `DATUS_SEED_*` 控制本地 seed 的用户、角色、权限和 datasource grant。
 
@@ -158,3 +160,4 @@ npm run build
 - 不提交真实密钥、token、数据库密码或本地私有配置。
 - 不提交生成产物、虚拟环境、依赖目录、测试缓存或构建缓存。
 - 子项目内已有规则优先级高于根目录说明。
+- 新文档先挂到 [`docs/README.md`](./docs/README.md)，同一流程只保留一个事实来源，其他位置使用链接。
