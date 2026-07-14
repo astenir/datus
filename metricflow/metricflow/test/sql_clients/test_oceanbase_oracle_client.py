@@ -39,6 +39,16 @@ def test_query_converts_named_parameters_and_normalizes_column_labels() -> None:
     )
 
 
+def test_query_normalizes_missing_values_to_none() -> None:
+    connector = MagicMock()
+    connector.query_dataframe.return_value = pd.DataFrame([{"TOTAL": float("nan")}, {"TOTAL": 42}])
+    client = OceanBaseOracleSqlClient(connector)
+
+    result = client.query("SELECT total FROM orders")
+
+    assert result.to_dict(orient="records") == [{"total": None}, {"total": 42.0}]
+
+
 def test_parameter_conversion_ignores_literals_and_comments() -> None:
     statement, parameters = OceanBaseOracleSqlClient._to_jdbc_parameters(
         "SELECT ':not_a_param' AS value FROM DUAL -- :also_not\nWHERE id = :id",
