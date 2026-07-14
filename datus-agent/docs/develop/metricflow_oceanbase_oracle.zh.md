@@ -4,6 +4,9 @@
 横跨多个独立包，这些包以顶层项目纳入 Datus monorepo，但不应复制或 vendor 到
 `datus-agent`。
 
+面向可访问私有 PyPI 的企业内网安装、配置、systemd 启动和真实租户验收步骤，见
+[MetricFlow OceanBase Oracle 内网部署与验收](../../../docs/metricflow-oceanbase-oracle-intranet-deployment.zh-CN.md)。
+
 ## 仓库边界
 
 代码归属链路如下：

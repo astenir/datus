@@ -57,6 +57,7 @@ full license and upstream attribution notes.
 开发部署、前后端联调、企业模式、mock userinfo、Bearer token、API smoke 和常见故障处理见：
 
 - [Datus 开发部署手册](./DEVELOPMENT_DEPLOYMENT_GUIDE.zh.md)
+- [MetricFlow OceanBase Oracle 内网部署与验收](./docs/metricflow-oceanbase-oracle-intranet-deployment.zh-CN.md)
 
 也可以用 Docker Compose 启动一套本地企业联调环境：
 
