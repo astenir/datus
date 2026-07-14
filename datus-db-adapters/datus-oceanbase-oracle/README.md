@@ -199,6 +199,7 @@ password: "password_with_#_character"
 | `pool_mincached` | 否 | `2` | 连接池最小空闲连接数。 |
 | `pool_maxcached` | 否 | `5` | 连接池最大空闲连接数。 |
 | `pool_blocking` | 否 | `true` | 连接池耗尽时是否阻塞等待。 |
+| `pool_ping_timeout_seconds` | 否 | `5` | 从连接池借出连接时执行 JDBC 有效性检查的超时秒数。 |
 | `extra_jdbc_params` | 否 | `{}` | 额外 JDBC URL 参数。 |
 
 ## Python 用法

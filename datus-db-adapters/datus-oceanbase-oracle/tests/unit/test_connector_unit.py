@@ -54,9 +54,10 @@ class TestConnectionPool:
             username="app@tenant#cluster",
             password="secret",
             jar_path="/opt/oceanbase-client.jar",
+            ping_timeout_seconds=5,
         )
 
-        assert connection is sentinel_connection
+        assert connection._connection is sentinel_connection
         assert calls == [
             (
                 (
@@ -99,11 +100,79 @@ class TestConnectionPool:
         assert captured["kwargs"]["username"] == "app@tenant#cluster"
         assert captured["kwargs"]["password"] == "secret"
         assert captured["kwargs"]["jar_path"] == "/opt/oceanbase-client.jar"
+        assert captured["kwargs"]["ping"] == 1
+        assert captured["kwargs"]["ping_timeout_seconds"] == 5
         assert "driver" not in captured["kwargs"]
         assert "url" not in captured["kwargs"]
         assert "driver_args" not in captured["kwargs"]
         assert "jars" not in captured["kwargs"]
         assert "libs" not in captured["kwargs"]
+
+    def test_stale_cached_connection_is_replaced(self, monkeypatch):
+        created = []
+
+        class FakeCursor:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def execute(self, _sql):
+                if not self.connection.valid or self.connection._closed:
+                    raise connector_module.jaydebeapi.DatabaseError("Connection is closed")
+
+            def fetchall(self):
+                return [(1,)]
+
+            def close(self):
+                pass
+
+        class FakeConnection:
+            Error = connector_module.jaydebeapi.Error
+            OperationalError = connector_module.jaydebeapi.OperationalError
+            InterfaceError = connector_module.jaydebeapi.InterfaceError
+            InternalError = connector_module.jaydebeapi.InternalError
+
+            def __init__(self):
+                self.jconn = self
+                self.valid = True
+                self._closed = False
+                created.append(self)
+
+            def isClosed(self):
+                return self._closed
+
+            def isValid(self, _timeout_seconds):
+                return self.valid and not self._closed
+
+            def cursor(self):
+                return FakeCursor(self)
+
+            def rollback(self):
+                pass
+
+            def close(self):
+                self._closed = True
+
+        monkeypatch.setattr(connector_module.jaydebeapi, "connect", lambda *_args, **_kwargs: FakeConnection())
+
+        connector = OceanBaseOracleConnector(
+            {
+                "username": "app@tenant#cluster",
+                "password": "secret",
+                "schema": "app",
+                "jar_path": "/opt/oceanbase-client.jar",
+                "pool_mincached": 0,
+                "pool_maxcached": 1,
+            }
+        )
+
+        assert connector.test_connection() is True
+        assert len(created) == 1
+
+        created[0].valid = False
+
+        assert connector.test_connection() is True
+        assert len(created) == 2
+        assert created[0]._closed is True
 
 
 class TestQueryExecution:

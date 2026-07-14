@@ -21,6 +21,34 @@ logger = get_logger(__name__)
 _TENANT_RE = re.compile(r"@([^#]+)")
 
 
+class _PingableJayDeBeApiConnection:
+    """JayDeBeApi connection proxy with the health check DBUtils expects."""
+
+    Error = jaydebeapi.Error
+    DatabaseError = jaydebeapi.DatabaseError
+    OperationalError = jaydebeapi.OperationalError
+    InterfaceError = jaydebeapi.InterfaceError
+    InternalError = jaydebeapi.InternalError
+
+    def __init__(self, connection: Any, ping_timeout_seconds: int):
+        self._connection = connection
+        self._ping_timeout_seconds = ping_timeout_seconds
+
+    def ping(self, _reconnect: bool = False) -> bool:
+        try:
+            if self._connection._closed:
+                return False
+            jdbc_connection = self._connection.jconn
+            if jdbc_connection.isClosed():
+                return False
+            return bool(jdbc_connection.isValid(self._ping_timeout_seconds))
+        except Exception:
+            return False
+
+    def __getattr__(self, name: str):
+        return getattr(self._connection, name)
+
+
 class _JayDeBeApiCreator:
     """DB-API shaped creator that adapts DBUtils kwargs to JayDeBeApi."""
 
@@ -34,8 +62,17 @@ class _JayDeBeApiCreator:
     InternalError = jaydebeapi.InternalError
 
     @staticmethod
-    def connect(*, driver_class: str, jdbc_url: str, username: str, password: str, jar_path: str):
-        return jaydebeapi.connect(driver_class, jdbc_url, [username, password], jar_path, None)
+    def connect(
+        *,
+        driver_class: str,
+        jdbc_url: str,
+        username: str,
+        password: str,
+        jar_path: str,
+        ping_timeout_seconds: int,
+    ):
+        connection = jaydebeapi.connect(driver_class, jdbc_url, [username, password], jar_path, None)
+        return _PingableJayDeBeApiConnection(connection, ping_timeout_seconds)
 
 
 def _parse_base_username(username: str) -> str:
@@ -101,11 +138,13 @@ class OceanBaseOracleConnector(BaseSqlConnector, MigrationTargetMixin):
             mincached=config.pool_mincached,
             maxcached=config.pool_maxcached,
             blocking=config.pool_blocking,
+            ping=1,
             driver_class=self._driver_class,
             jdbc_url=self._jdbc_url,
             username=self._username,
             password=self._password,
             jar_path=self._jar_path,
+            ping_timeout_seconds=config.pool_ping_timeout_seconds,
         )
 
     def connect(self):
