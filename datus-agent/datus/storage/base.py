@@ -155,6 +155,7 @@ class BaseEmbeddingStore(StorageBase):
             return self.table
         if not self.db.table_exists(self.table_name):
             return None
+        self._set_backend_table_schema(self._schema)
         self.table = self.db.open_table(self.table_name)
         self._ensure_persisted_scope_columns()
         return self.table
@@ -323,6 +324,7 @@ class BaseEmbeddingStore(StorageBase):
         self._delete_rows(datasource_condition(datasource_id))
 
     def _ensure_table(self, schema: Optional[pa.Schema] = None):
+        self._set_backend_table_schema(schema)
         if self.db.table_exists(self.table_name):
             self.table = self.db.open_table(
                 self.table_name,
@@ -347,6 +349,13 @@ class BaseEmbeddingStore(StorageBase):
                     message_args={"operation": "create_table", "table_name": self.table_name, "error_message": str(e)},
                 ) from e
         self._ensure_persisted_scope_columns()
+
+    def _set_backend_table_schema(self, schema: Optional[pa.Schema]) -> None:
+        if schema is None:
+            return
+        set_table_schema = getattr(self.db, "set_table_schema", None)
+        if callable(set_table_schema):
+            set_table_schema(self.table_name, schema)
 
     def create_vector_index(
         self,

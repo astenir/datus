@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Dict, List, Optional, Union
 
@@ -59,6 +60,12 @@ def _vector_dim_from_schema(schema: Optional[pa.Schema], vector_column: str) -> 
     return None
 
 
+def _schema_cache_key(schema: Optional[pa.Schema]) -> tuple[tuple[str, str], ...]:
+    if schema is None:
+        return ()
+    return tuple((field.name, str(field.type)) for field in schema)
+
+
 class OceanBaseMySQLVectorTable(VectorTable):
     def __init__(
         self,
@@ -70,6 +77,7 @@ class OceanBaseMySQLVectorTable(VectorTable):
         source_column: str = "description",
         vector_dim: int = 384,
         column_names: Optional[List[str]] = None,
+        schema: Optional[pa.Schema] = None,
         isolation: IsolationType = IsolationType.PHYSICAL,
         logical_namespace: Optional[str] = None,
     ) -> None:
@@ -82,6 +90,7 @@ class OceanBaseMySQLVectorTable(VectorTable):
         self._source_column = source_column
         self._vector_dim = vector_dim
         self._column_names = column_names or []
+        self._schema = schema
         self._isolation = isolation
         self._logical_namespace = logical_namespace
         self._ensured_conflict_indexes: set[tuple[str, ...]] = set()
@@ -140,7 +149,7 @@ class OceanBaseMySQLVectorTable(VectorTable):
         for col, val in values.items():
             _validate_identifier(col)
             set_parts.append(f"{_quote_ident(col)} = %s")
-            params.append(_vector_literal(val) if col == self._vector_column else val)
+            params.append(self._serialize_value(col, val))
         where_clause = f" WHERE {combined}" if combined else ""
         with self._pool.connection(database=self._database_name) as conn:
             with conn.cursor() as cursor:
@@ -355,16 +364,40 @@ class OceanBaseMySQLVectorTable(VectorTable):
             conn.commit()
 
     def _row_values(self, row: pd.Series, columns: List[str]) -> tuple[Any, ...]:
-        values = []
-        for column in columns:
-            value = row[column]
-            if column == self._vector_column:
-                values.append(_vector_literal(value))
-            elif pd.isna(value):
-                values.append(None)
-            else:
-                values.append(value)
-        return tuple(values)
+        return tuple(self._serialize_value(column, row[column]) for column in columns)
+
+    def _serialize_value(self, column: str, value: Any) -> Any:
+        """Convert a DataFrame cell to a value accepted by PyMySQL.
+
+        OceanBase has no native Arrow list-of-string mapping in this adapter;
+        those fields are stored as JSON text in LONGTEXT columns.  In
+        particular, calling ``pd.isna`` on a list/ndarray returns an array and
+        then raises when Python evaluates it as a boolean.
+        """
+
+        if column == self._vector_column:
+            return _vector_literal(value)
+        if value is None:
+            return None
+        if not pd.api.types.is_scalar(value) and (isinstance(value, (list, tuple)) or hasattr(value, "tolist")):
+            raw_value = value.tolist() if hasattr(value, "tolist") else list(value)
+            return json.dumps(raw_value, ensure_ascii=False)
+        if pd.api.types.is_scalar(value) and pd.isna(value):
+            return None
+        return value
+
+    @staticmethod
+    def _decode_json_list(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        if not text.startswith("[") or not text.endswith("]"):
+            return value
+        try:
+            decoded = json.loads(text)
+        except (TypeError, ValueError):
+            return value
+        return decoded if isinstance(decoded, list) else value
 
     def _ensure_conflict_index(self, conflict_cols: List[str]) -> None:
         key = tuple(conflict_cols)
@@ -410,18 +443,20 @@ class OceanBaseMySQLVectorTable(VectorTable):
         columns = self._default_columns
         return ", ".join(_quote_ident(column) for column in columns) if columns else "*"
 
+    def _column_type(self, column: str) -> Optional[pa.DataType]:
+        if self._schema is None or column not in self._schema.names:
+            return None
+        return self._schema.field(column).type
+
+    def _empty_column_type(self, column: str) -> pa.DataType:
+        if column == self._vector_column:
+            return pa.list_(pa.float32(), list_size=self._vector_dim)
+        return self._column_type(column) or pa.string()
+
     def _rows_to_arrow(self, rows: List[Dict[str, Any]], select_fields: Optional[List[str]] = None) -> pa.Table:
         columns = select_fields or self._default_columns
         if not rows:
-            arrays = {
-                column: pa.array(
-                    [],
-                    type=pa.list_(pa.float32(), list_size=self._vector_dim)
-                    if column == self._vector_column
-                    else pa.string(),
-                )
-                for column in columns
-            }
+            arrays = {column: pa.array([], type=self._empty_column_type(column)) for column in columns}
             return pa.table(arrays)
         arrays = {}
         for column in columns:
@@ -430,6 +465,13 @@ class OceanBaseMySQLVectorTable(VectorTable):
                 arrays[column] = pa.array(
                     [_parse_vector(value, self._vector_dim) for value in values],
                     type=pa.list_(pa.float32(), list_size=self._vector_dim),
+                )
+            elif (column_type := self._column_type(column)) is not None and (
+                pa.types.is_list(column_type) or pa.types.is_large_list(column_type)
+            ):
+                arrays[column] = pa.array(
+                    [self._decode_json_list(value) for value in values],
+                    type=column_type,
                 )
             else:
                 arrays[column] = pa.array(values)
@@ -454,7 +496,8 @@ class OceanBaseMySQLVectorDb(VectorDatabase):
             self._logical_namespace = namespace
         else:
             self._database_name = _validate_identifier(namespace) if namespace else configured_database
-            self._logical_namespace = None
+        self._logical_namespace = None
+        self._table_schemas: Dict[str, pa.Schema] = {}
         self._ensure_database()
 
     @property
@@ -464,6 +507,10 @@ class OceanBaseMySQLVectorDb(VectorDatabase):
     @property
     def namespace(self) -> str:
         return self._namespace
+
+    def set_table_schema(self, table_name: str, schema: pa.Schema) -> None:
+        _validate_identifier(table_name)
+        self._table_schemas[table_name] = schema
 
     def _ensure_database(self) -> None:
         with self._pool.connection(database=None) as conn:
@@ -515,6 +562,7 @@ class OceanBaseMySQLVectorDb(VectorDatabase):
                 raise TypeError(f"Unsupported schema type: {type(schema)}")
             if self._isolation == IsolationType.LOGICAL and LOGICAL_NAMESPACE_COLUMN not in schema.names:
                 schema = schema.append(pa.field(LOGICAL_NAMESPACE_COLUMN, pa.string()))
+            self._table_schemas[table_name] = schema
             indexed_columns = set(unique_columns)
             if self._isolation == IsolationType.LOGICAL:
                 indexed_columns.add(LOGICAL_NAMESPACE_COLUMN)
@@ -551,8 +599,24 @@ class OceanBaseMySQLVectorDb(VectorDatabase):
             raise ValueError(f"Schema is required to create table '{table_name}'")
         elif not self.table_exists(table_name):
             raise ValueError(f"Table '{table_name}' does not exist and no schema was provided to create it.")
-        table = self._make_table(table_name, embedding_function, vector_column, source_column, vector_dim, column_names)
-        self._table_cache[(table_name, id(embedding_function), vector_dim, vector_column, source_column)] = table
+        table = self._make_table(
+            table_name,
+            embedding_function,
+            vector_column,
+            source_column,
+            vector_dim,
+            column_names,
+            schema,
+        )
+        cache_key = (
+            table_name,
+            id(embedding_function),
+            vector_dim,
+            vector_column,
+            source_column,
+            _schema_cache_key(schema),
+        )
+        self._table_cache[cache_key] = table
         return table
 
     def open_table(
@@ -564,12 +628,26 @@ class OceanBaseMySQLVectorDb(VectorDatabase):
     ) -> OceanBaseMySQLVectorTable:
         vector_column = vector_column or "vector"
         source_column = source_column or "description"
+        schema = self._table_schemas.get(table_name)
         vector_dim = (
             embedding_function.ndims()
             if embedding_function
             else self._infer_vector_dim(table_name, vector_column) or 384
         )
-        cache_key = (table_name, id(embedding_function), vector_dim, vector_column, source_column)
+        if (
+            schema is not None
+            and self._isolation == IsolationType.LOGICAL
+            and LOGICAL_NAMESPACE_COLUMN not in schema.names
+        ):
+            schema = schema.append(pa.field(LOGICAL_NAMESPACE_COLUMN, pa.string()))
+        cache_key = (
+            table_name,
+            id(embedding_function),
+            vector_dim,
+            vector_column,
+            source_column,
+            _schema_cache_key(schema),
+        )
         if cache_key in self._table_cache:
             return self._table_cache[cache_key]
         column_names = self._fetch_column_names(table_name)
@@ -577,7 +655,15 @@ class OceanBaseMySQLVectorDb(VectorDatabase):
             raise ValueError(
                 f"Table '{table_name}' not found in database '{self._database_name}'. Use create_table() first."
             )
-        table = self._make_table(table_name, embedding_function, vector_column, source_column, vector_dim, column_names)
+        table = self._make_table(
+            table_name,
+            embedding_function,
+            vector_column,
+            source_column,
+            vector_dim,
+            column_names,
+            schema,
+        )
         self._table_cache[cache_key] = table
         return table
 
@@ -610,6 +696,7 @@ class OceanBaseMySQLVectorDb(VectorDatabase):
         source_column: str,
         vector_dim: int,
         column_names: List[str],
+        schema: Optional[pa.Schema],
     ) -> OceanBaseMySQLVectorTable:
         return OceanBaseMySQLVectorTable(
             pool=self._pool,
@@ -620,6 +707,7 @@ class OceanBaseMySQLVectorDb(VectorDatabase):
             source_column=source_column,
             vector_dim=vector_dim,
             column_names=column_names,
+            schema=schema,
             isolation=self._isolation,
             logical_namespace=self._logical_namespace,
         )

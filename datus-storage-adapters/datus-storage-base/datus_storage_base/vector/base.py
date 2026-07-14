@@ -217,6 +217,9 @@ class VectorDatabase(ABC):
         """Refresh table handle (for retry). Default: re-open."""
         return self.open_table(table_name, embedding_function, vector_column, source_column)
 
+    def set_table_schema(self, table_name: str, schema: pa.Schema) -> None:
+        """Optionally retain a logical schema for backend-specific codecs."""
+
     def close(self) -> None:
         """Release resources held by this database connection."""
 
