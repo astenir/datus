@@ -55,6 +55,7 @@ class _ReadOnlyVectorDb:
         self.exists = exists
         self.table = table
         self.open_table_calls = []
+        self.set_table_schema_calls = []
 
     def table_exists(self, table_name):
         return self.exists
@@ -62,6 +63,9 @@ class _ReadOnlyVectorDb:
     def open_table(self, table_name, **kwargs):
         self.open_table_calls.append((table_name, kwargs))
         return self.table
+
+    def set_table_schema(self, table_name, schema):
+        self.set_table_schema_calls.append((table_name, schema))
 
 
 # ---------------------------------------------------------------------------
@@ -361,6 +365,7 @@ class TestReadOnlyPathsWithoutEmbedding:
 
         assert result.to_pylist() == [{"name": "orders"}]
         assert db.open_table_calls == [("test_table", {})]
+        assert db.set_table_schema_calls == [("test_table", store._schema)]
         assert store._shared.initialized is False
 
     def test_existing_table_read_path_does_not_fetch_vector_by_default(self):

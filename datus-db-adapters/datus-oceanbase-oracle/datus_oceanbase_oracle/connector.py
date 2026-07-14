@@ -3,7 +3,7 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import re
-from typing import Any, Dict, List, Literal, Optional, Set, Union, override
+from typing import Any, Dict, List, Literal, Optional, Sequence, Set, Union, override
 from urllib.parse import urlencode
 
 import jaydebeapi
@@ -21,6 +21,34 @@ logger = get_logger(__name__)
 _TENANT_RE = re.compile(r"@([^#]+)")
 
 
+class _PingableJayDeBeApiConnection:
+    """JayDeBeApi connection proxy with the health check DBUtils expects."""
+
+    Error = jaydebeapi.Error
+    DatabaseError = jaydebeapi.DatabaseError
+    OperationalError = jaydebeapi.OperationalError
+    InterfaceError = jaydebeapi.InterfaceError
+    InternalError = jaydebeapi.InternalError
+
+    def __init__(self, connection: Any, ping_timeout_seconds: int):
+        self._connection = connection
+        self._ping_timeout_seconds = ping_timeout_seconds
+
+    def ping(self, _reconnect: bool = False) -> bool:
+        try:
+            if self._connection._closed:
+                return False
+            jdbc_connection = self._connection.jconn
+            if jdbc_connection.isClosed():
+                return False
+            return bool(jdbc_connection.isValid(self._ping_timeout_seconds))
+        except Exception:
+            return False
+
+    def __getattr__(self, name: str):
+        return getattr(self._connection, name)
+
+
 class _JayDeBeApiCreator:
     """DB-API shaped creator that adapts DBUtils kwargs to JayDeBeApi."""
 
@@ -34,8 +62,17 @@ class _JayDeBeApiCreator:
     InternalError = jaydebeapi.InternalError
 
     @staticmethod
-    def connect(*, driver_class: str, jdbc_url: str, username: str, password: str, jar_path: str):
-        return jaydebeapi.connect(driver_class, jdbc_url, [username, password], jar_path, None)
+    def connect(
+        *,
+        driver_class: str,
+        jdbc_url: str,
+        username: str,
+        password: str,
+        jar_path: str,
+        ping_timeout_seconds: int,
+    ):
+        connection = jaydebeapi.connect(driver_class, jdbc_url, [username, password], jar_path, None)
+        return _PingableJayDeBeApiConnection(connection, ping_timeout_seconds)
 
 
 def _parse_base_username(username: str) -> str:
@@ -101,11 +138,13 @@ class OceanBaseOracleConnector(BaseSqlConnector, MigrationTargetMixin):
             mincached=config.pool_mincached,
             maxcached=config.pool_maxcached,
             blocking=config.pool_blocking,
+            ping=1,
             driver_class=self._driver_class,
             jdbc_url=self._jdbc_url,
             username=self._username,
             password=self._password,
             jar_path=self._jar_path,
+            ping_timeout_seconds=config.pool_ping_timeout_seconds,
         )
 
     def connect(self):
@@ -235,22 +274,55 @@ class OceanBaseOracleConnector(BaseSqlConnector, MigrationTargetMixin):
             return f"{schema_name}.{table_name}"
         return table_name
 
-    def _execute_sql(self, sql: str) -> pd.DataFrame:
+    def _execute_sql(self, sql: str, parameters: Optional[Sequence[Any]] = None) -> pd.DataFrame:
         conn = self._get_raw_connection()
         try:
-            return self._read_dataframe(conn, sql)
+            return self._read_dataframe(conn, sql, parameters)
         finally:
             conn.close()
 
     @staticmethod
-    def _read_dataframe(conn: Any, sql: str) -> pd.DataFrame:
+    def _read_dataframe(
+        conn: Any,
+        sql: str,
+        parameters: Optional[Sequence[Any]] = None,
+    ) -> pd.DataFrame:
         cursor = conn.cursor()
         try:
-            cursor.execute(sql)
+            if parameters is None:
+                cursor.execute(sql)
+            else:
+                cursor.execute(sql, tuple(parameters))
             columns = [column[0] for column in (cursor.description or [])]
             return pd.DataFrame.from_records(cursor.fetchall(), columns=columns)
         finally:
             cursor.close()
+
+    def query_dataframe(self, sql: str, parameters: Optional[Sequence[Any]] = None) -> pd.DataFrame:
+        """Execute a parameterized read query for integrations that need a DataFrame."""
+        return self._execute_sql(sql, parameters)
+
+    def execute_statement(self, sql: str, parameters: Optional[Sequence[Any]] = None) -> None:
+        """Execute and commit a parameterized non-query statement."""
+        conn = self._get_raw_connection()
+        try:
+            cursor = conn.cursor()
+            try:
+                if parameters is None:
+                    cursor.execute(sql)
+                else:
+                    cursor.execute(sql, tuple(parameters))
+                conn.commit()
+            finally:
+                cursor.close()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            conn.close()
 
     def _execute_dml(self, sql: str) -> int:
         conn = self._get_raw_connection()
@@ -477,8 +549,10 @@ class OceanBaseOracleConnector(BaseSqlConnector, MigrationTargetMixin):
     ) -> List[Dict[str, Any]]:
         if not table_name:
             return []
-        owner = _sql_string((schema_name or self.schema_name).upper())
-        table = _sql_string(table_name.upper())
+        owner_name = (schema_name or self.schema_name).upper()
+        table_name = table_name.upper()
+        owner = _sql_string(owner_name)
+        table = _sql_string(table_name)
         sql = f"""
             SELECT
                 c.COLUMN_ID,
@@ -515,6 +589,9 @@ class OceanBaseOracleConnector(BaseSqlConnector, MigrationTargetMixin):
             ORDER BY c.COLUMN_ID
         """
         df = self._execute_sql(sql)
+        if df.empty:
+            return self._get_view_schema(owner_name, table_name)
+
         result = []
         for i in range(len(df)):
             row = df.iloc[i]
@@ -531,6 +608,89 @@ class OceanBaseOracleConnector(BaseSqlConnector, MigrationTargetMixin):
                 }
             )
         return result
+
+    def _get_view_schema(self, owner_name: str, view_name: str) -> List[Dict[str, Any]]:
+        owner = _sql_string(owner_name)
+        view = _sql_string(view_name)
+        view_df = self._execute_sql(
+            f"""
+                SELECT VIEW_NAME
+                FROM ALL_VIEWS
+                WHERE OWNER = '{owner}'
+                  AND VIEW_NAME = '{view}'
+            """
+        )
+        if view_df.empty or "VIEW_NAME" not in view_df.columns:
+            return []
+
+        conn = self._get_raw_connection()
+        try:
+            cursor = conn.cursor()
+            try:
+                full_name = f"{_quote_identifier(owner_name)}.{_quote_identifier(view_name)}"
+                cursor.execute(f"SELECT * FROM {full_name} WHERE 1 = 0")
+                return [
+                    self._column_from_description(description, index)
+                    for index, description in enumerate(cursor.description or [], start=1)
+                ]
+            finally:
+                cursor.close()
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _column_from_description(description: Any, index: int) -> Dict[str, Any]:
+        type_code = description[1] if len(description) > 1 else None
+        internal_size = description[3] if len(description) > 3 else None
+        precision = description[4] if len(description) > 4 else None
+        scale = description[5] if len(description) > 5 else None
+        null_ok = description[6] if len(description) > 6 else None
+        return {
+            "cid": index,
+            "name": description[0],
+            "type": OceanBaseOracleConnector._format_description_type(
+                type_code,
+                internal_size=internal_size,
+                precision=precision,
+                scale=scale,
+            ),
+            "nullable": null_ok != 0,
+            "default_value": None,
+            "pk": False,
+            "comment": None,
+        }
+
+    @staticmethod
+    def _format_description_type(
+        type_code: Any,
+        *,
+        internal_size: Any = None,
+        precision: Any = None,
+        scale: Any = None,
+    ) -> str:
+        if type_code in (jaydebeapi.DECIMAL, jaydebeapi.NUMBER):
+            if precision:
+                return f"NUMBER({int(precision)},{int(scale or 0)})"
+            return "NUMBER"
+        if type_code is jaydebeapi.STRING:
+            return f"VARCHAR2({int(internal_size)})" if internal_size else "VARCHAR2"
+        if type_code is jaydebeapi.TEXT:
+            return "CLOB"
+        if type_code is jaydebeapi.BINARY:
+            return f"RAW({int(internal_size)})" if internal_size else "RAW"
+        if type_code is jaydebeapi.FLOAT:
+            return "FLOAT"
+        if type_code is jaydebeapi.DATE:
+            return "DATE"
+        if type_code is jaydebeapi.TIME:
+            return "TIME"
+        if type_code is jaydebeapi.DATETIME:
+            return "TIMESTAMP"
+        if type_code is jaydebeapi.ROWID:
+            return "ROWID"
+        if isinstance(type_code, str) and type_code:
+            return type_code.upper()
+        return "UNKNOWN"
 
     def _format_column_type(self, row: Any) -> str:
         data_type = str(row["DATA_TYPE"]).upper() if row.get("DATA_TYPE") else "UNKNOWN"

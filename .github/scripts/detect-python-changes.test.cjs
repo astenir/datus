@@ -3,8 +3,20 @@ const test = require("node:test");
 
 const { detectPythonChanges } = require("./detect-python-changes.cjs");
 
-const ALL = { agent: true, db_adapters: true, storage_adapters: true };
-const NONE = { agent: false, db_adapters: false, storage_adapters: false };
+const ALL = {
+  agent: true,
+  db_adapters: true,
+  storage_adapters: true,
+  semantic_adapter: true,
+  metricflow: true,
+};
+const NONE = {
+  agent: false,
+  db_adapters: false,
+  storage_adapters: false,
+  semantic_adapter: false,
+  metricflow: false,
+};
 
 test("runs every project for non-pull-request events", () => {
   assert.deepEqual(detectPythonChanges("workflow_dispatch"), ALL);
@@ -30,6 +42,14 @@ test("selects each project from its monorepo path prefix", () => {
   assert.deepEqual(
     detectPythonChanges("pull_request", [{ filename: "datus-storage-adapters/pyproject.toml" }]),
     { ...NONE, storage_adapters: true },
+  );
+  assert.deepEqual(
+    detectPythonChanges("pull_request", [{ filename: "datus-semantic-adapter/pyproject.toml" }]),
+    { ...NONE, agent: true, semantic_adapter: true },
+  );
+  assert.deepEqual(
+    detectPythonChanges("pull_request", [{ filename: "metricflow/metricflow/sql_clients/oracle.py" }]),
+    { ...NONE, agent: true, semantic_adapter: true, metricflow: true },
   );
 });
 
@@ -96,6 +116,25 @@ test("selects both projects when a file moves between them", () => {
         status: "renamed",
       },
     ]),
-    { agent: false, db_adapters: true, storage_adapters: true },
+    {
+      agent: false,
+      db_adapters: true,
+      storage_adapters: true,
+      semantic_adapter: false,
+      metricflow: false,
+    },
+  );
+});
+
+test("checks the previous path when MetricFlow moves out of its project", () => {
+  assert.deepEqual(
+    detectPythonChanges("pull_request", [
+      {
+        filename: "docs/metricflow-notes.md",
+        previous_filename: "metricflow/metricflow/sql_clients/oracle.py",
+        status: "renamed",
+      },
+    ]),
+    { ...NONE, agent: true, semantic_adapter: true, metricflow: true },
   );
 });

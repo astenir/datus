@@ -45,6 +45,39 @@ agent:
 2. 当前项目的 semantic model 目录
 3. 当前生效的 `agent.home`
 
+### OceanBase Oracle 只读预览配置
+
+OceanBase Oracle 使用当前选中的 datasource，不需要把连接信息重复写到
+`semantic_layer.metricflow`。示例：
+
+```yaml
+agent:
+  services:
+    datasources:
+      oceanbase_oracle:
+        type: oceanbase-oracle
+        host: ${OCEANBASE_ORACLE_HOST}
+        port: 2883
+        username: ${OCEANBASE_ORACLE_USERNAME}
+        password: ${OCEANBASE_ORACLE_PASSWORD}
+        database: ${OCEANBASE_ORACLE_DATABASE}  # Oracle 模式 tenant
+        schema: ${OCEANBASE_ORACLE_SCHEMA}      # Oracle owner/schema
+        jar_path: ${OCEANBASE_ORACLE_JAR_PATH}  # 运行环境/容器内路径
+        connection_mode: odp
+        connect_timeout_seconds: 30
+        query_timeout_seconds: 60
+        default: true
+
+    semantic_layer:
+      metricflow:
+        default: true
+```
+
+运行环境还需要 Java、OceanBase Connector/J 和 `datus-oceanbase-oracle` 包。首个
+OceanBase Oracle engine profile 只开放语义校验、dry-run 和指标读取；不支持由
+MetricFlow 写入/删除 schema 或 table、取消查询和 percentile。正式发布和投产前，
+必须运行真实 Oracle 模式租户 nightly，不应只依据 mock/单元测试声明生产可用。
+
 ## 语义模型目录
 
 默认情况下，Datus 会把 MetricFlow 指向当前项目的语义模型目录：

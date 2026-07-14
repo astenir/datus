@@ -173,9 +173,9 @@ services:
 
 New database adapters should be created as separate adapter packages (e.g., `datus-newdb`). This keeps the core package lightweight while allowing users to install only the database adapters they need.
 
-See the [Datus-adapters](https://github.com/Datus-ai/Datus-adapters) repository for existing adapter implementations and contribution guidelines.
+See the [Datus database adapters](https://github.com/Datus-ai/datus-db-adapters) repository for existing adapter implementations and contribution guidelines.
 
-1. **Create a new adapter package** following the structure in the Datus-adapters repository:
+1. **Create a new adapter package** following the structure in the Datus database adapters repository:
 
 ```
 datus-newdb/

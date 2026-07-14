@@ -7,6 +7,16 @@ const saveSemanticModel = vi.fn();
 const toastError = vi.fn();
 const toastSuccess = vi.fn();
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
 vi.mock("@/lib/api", () => ({
   tableApi: {
     detail: tableDetail,
@@ -57,6 +67,57 @@ describe("useSemanticWorkbench", () => {
     expect(workbench.tableName.value).toBe("fund_nav");
     expect(workbench.tableDetail.value?.name).toBe("fund_nav");
     expect(workbench.semanticYaml.value).toBe("table: fund_nav");
+  });
+
+  it("ignores an older successful load after a newer table finishes", async () => {
+    const firstDetail = deferred<{ table: { name: string } }>();
+    const firstSemantic = deferred<{ yaml: string }>();
+    tableDetail
+      .mockImplementationOnce(() => firstDetail.promise)
+      .mockResolvedValueOnce({ table: { name: "CURRENT_VIEW" } });
+    getSemanticModel
+      .mockImplementationOnce(() => firstSemantic.promise)
+      .mockResolvedValueOnce({ yaml: "table: CURRENT_VIEW" });
+
+    const { useSemanticWorkbench } = await import("./useSemanticWorkbench");
+    const workbench = useSemanticWorkbench();
+    const firstLoad = workbench.loadTableDetails("STALE_VIEW");
+    const currentLoad = workbench.loadTableDetails("CURRENT_VIEW");
+
+    await currentLoad;
+    firstDetail.resolve({ table: { name: "STALE_VIEW" } });
+    firstSemantic.resolve({ yaml: "table: STALE_VIEW" });
+    await firstLoad;
+
+    expect(workbench.tableName.value).toBe("CURRENT_VIEW");
+    expect(workbench.tableDetail.value?.name).toBe("CURRENT_VIEW");
+    expect(workbench.semanticYaml.value).toBe("table: CURRENT_VIEW");
+    expect(workbench.loadingTable.value).toBe(false);
+  });
+
+  it("does not report an error from an older table load", async () => {
+    const firstDetail = deferred<{ table: { name: string } }>();
+    tableDetail
+      .mockImplementationOnce(() => firstDetail.promise)
+      .mockResolvedValueOnce({ table: { name: "CURRENT_VIEW" } });
+    getSemanticModel
+      .mockResolvedValueOnce({ yaml: "table: STALE_VIEW" })
+      .mockResolvedValueOnce({ yaml: "table: CURRENT_VIEW" });
+
+    const { useSemanticWorkbench } = await import("./useSemanticWorkbench");
+    const workbench = useSemanticWorkbench();
+    const firstLoad = workbench.loadTableDetails("STALE_VIEW");
+    const currentLoad = workbench.loadTableDetails("CURRENT_VIEW");
+
+    await currentLoad;
+    firstDetail.reject(new Error("stale request failed"));
+    await firstLoad;
+
+    expect(workbench.tableName.value).toBe("CURRENT_VIEW");
+    expect(workbench.tableDetail.value?.name).toBe("CURRENT_VIEW");
+    expect(workbench.semanticYaml.value).toBe("table: CURRENT_VIEW");
+    expect(toastError).not.toHaveBeenCalled();
+    expect(workbench.loadingTable.value).toBe(false);
   });
 
   it("rejects empty table names before loading", async () => {

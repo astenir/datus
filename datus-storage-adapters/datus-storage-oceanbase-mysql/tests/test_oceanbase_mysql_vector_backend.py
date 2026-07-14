@@ -7,10 +7,12 @@ import pyarrow as pa
 import pymysql
 import pytest
 
+from datus_storage_base.backend_config import IsolationType
 from datus_storage_base.conditions import eq
 from datus_storage_base.vector.base import EmbeddingFunction
 from datus_storage_oceanbase_mysql.vector.backend import (
     OceanBaseMySQLVectorBackend,
+    OceanBaseMySQLVectorDb,
     OceanBaseMySQLVectorTable,
     _parse_vector_dim_from_column_type,
     _vector_dim_from_schema,
@@ -83,6 +85,7 @@ def _schema():
             pa.field("id", pa.string()),
             pa.field("description", pa.string()),
             pa.field("category", pa.string()),
+            pa.field("tags", pa.list_(pa.string())),
             pa.field("vector", pa.list_(pa.float32(), list_size=4)),
         ]
     )
@@ -93,6 +96,7 @@ def test_schema_converter_uses_vector_and_indexable_unique_text():
     assert "`vector` VECTOR(4)" in sql
     assert "`id` VARCHAR(1024)" in sql
     assert "`description` LONGTEXT" in sql
+    assert "`tags` LONGTEXT" in sql
     assert "ORGANIZATION HEAP" in sql
 
 
@@ -114,6 +118,97 @@ def test_vector_dim_from_schema_uses_fixed_size_vector_field():
     assert _vector_dim_from_schema(_schema(), "missing") is None
 
 
+def test_row_values_serializes_non_vector_lists_without_ambiguous_truth_value():
+    metric_schema = pa.schema(
+        [
+            pa.field("id", pa.string()),
+            pa.field("base_measures", pa.list_(pa.string())),
+            pa.field("dimensions", pa.list_(pa.string())),
+            pa.field("entities", pa.list_(pa.string())),
+            pa.field("vector", pa.list_(pa.float32(), list_size=4)),
+        ]
+    )
+    table = OceanBaseMySQLVectorTable(
+        pool=None,
+        database_name="db1",
+        table_name="metrics",
+        vector_column="vector",
+        vector_dim=4,
+        column_names=list(metric_schema.names),
+        schema=metric_schema,
+    )
+    row = pd.Series(
+        {
+            "id": "metric:revenue_rate",
+            "base_measures": ["revenue", "orders"],
+            "dimensions": ["day", "region"],
+            "entities": pd.NA,
+            "vector": [0.1, 0.2, 0.3, 0.4],
+        }
+    )
+
+    values = table._row_values(row, list(metric_schema.names))
+
+    assert values == (
+        "metric:revenue_rate",
+        '["revenue", "orders"]',
+        '["day", "region"]',
+        None,
+        "[0.1,0.2,0.3,0.4]",
+    )
+
+
+def test_rows_to_arrow_restores_json_list_fields_from_schema():
+    table = OceanBaseMySQLVectorTable(
+        pool=None,
+        database_name="db1",
+        table_name="vec_items",
+        vector_column="vector",
+        vector_dim=4,
+        column_names=list(_schema().names),
+        schema=_schema(),
+    )
+
+    result = table._rows_to_arrow(
+        [
+            {
+                "id": "a",
+                "description": '["literal", "text"]',
+                "tags": '["daily", "region"]',
+                "vector": "[0.1,0.2,0.3,0.4]",
+            }
+        ],
+        select_fields=["id", "description", "tags", "vector"],
+    )
+
+    assert result.column("description").to_pylist() == ['["literal", "text"]']
+    assert result.column("tags").to_pylist() == [["daily", "region"]]
+    assert result.schema.field("tags").type == pa.list_(pa.string())
+    assert result.column("vector")[0].as_py() == pytest.approx([0.1, 0.2, 0.3, 0.4])
+
+
+def test_open_table_uses_registered_logical_schema():
+    db = OceanBaseMySQLVectorDb.__new__(OceanBaseMySQLVectorDb)
+    db._pool = None
+    db._database_name = "db1"
+    db._isolation = IsolationType.PHYSICAL
+    db._logical_namespace = None
+    db._table_cache = {}
+    db._table_schemas = {}
+    db._fetch_column_names = lambda table_name: list(_schema().names)
+
+    db.set_table_schema("vec_items", _schema())
+    table = db.open_table(
+        "vec_items",
+        embedding_function=MockEmbeddingFunction(),
+        vector_column="vector",
+        source_column="description",
+    )
+
+    assert table._schema == _schema()
+    assert table.column_names == list(_schema().names)
+
+
 def test_initialize_requires_connection_config():
     backend = OceanBaseMySQLVectorBackend()
     with pytest.raises(ValueError, match="Missing required OceanBase MySQL config keys"):
@@ -133,11 +228,22 @@ def test_real_oceanbase_vector_crud_search_and_indexes(backend):
     assert isinstance(table, OceanBaseMySQLVectorTable)
     assert db.table_exists("vec_items")
 
-    table.add(pd.DataFrame({"id": ["a", "b"], "description": ["alpha row", "beta row"], "category": ["x", "y"]}))
+    table.add(
+        pd.DataFrame(
+            {
+                "id": ["a", "b"],
+                "description": ["alpha row", "beta row"],
+                "category": ["x", "y"],
+                "tags": [["daily", "region"], ["archive"]],
+            }
+        )
+    )
     assert table.count_rows() == 2
 
-    all_rows = table.search_all(select_fields=["id", "category"], limit=10)
+    all_rows = table.search_all(select_fields=["id", "category", "tags"], limit=10)
     assert set(all_rows.column("id").to_pylist()) == {"a", "b"}
+    tags_by_id = dict(zip(all_rows.column("id").to_pylist(), all_rows.column("tags").to_pylist()))
+    assert tags_by_id == {"a": ["daily", "region"], "b": ["archive"]}
 
     table.merge_insert(
         pd.DataFrame({"id": ["a", "c"], "description": ["alpha changed", "gamma row"], "category": ["z", "z"]}), "id"

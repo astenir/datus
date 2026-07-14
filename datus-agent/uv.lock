@@ -159,6 +159,32 @@ wheels = [
 ]
 
 [[package]]
+name = "asn1crypto"
+version = "1.5.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/cf/d547feed25b5244fcb9392e288ff9fdc3280b10260362fc45d37a798a6ee/asn1crypto-1.5.1.tar.gz", hash = "sha256:13ae38502be632115abf8a24cbe5f4da52e3b5231990aff31123c805306ccb9c", size = 121080, upload-time = "2022-03-15T14:46:52.889Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c9/7f/09065fd9e27da0eda08b4d6897f1c13535066174cc023af248fc2a8d5e5a/asn1crypto-1.5.1-py2.py3-none-any.whl", hash = "sha256:db4e40728b728508912cbb3d44f19ce188f218e9eba635821bb4b68564f8fd67", size = 105045, upload-time = "2022-03-15T14:46:51.055Z" },
+]
+
+[[package]]
+name = "asynch"
+version = "0.3.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "ciso8601" },
+    { name = "leb128" },
+    { name = "lz4" },
+    { name = "pytz" },
+    { name = "tzlocal" },
+    { name = "zstd" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0b/ce/f11ee2cafa6010d295db3ddee089f14cfc5fa9b8a19d0a21356c18a49267/asynch-0.3.1.tar.gz", hash = "sha256:d8bb3c1793a74a2e9d44cc7e8406ead3cf3818c11ecd6d8405b702b23148c584", size = 59825, upload-time = "2025-11-11T15:20:22.975Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ca/b0/9547aeadb577cb0c590162661b31110f7c3c02c1b23653a1b33222c7ff70/asynch-0.3.1-py3-none-any.whl", hash = "sha256:32b30a4409b70514077f7bf8ef713a248158fe5e63504c2769a4c7f772828412", size = 76502, upload-time = "2025-11-11T15:20:21.46Z" },
+]
+
+[[package]]
 name = "asyncpg"
 version = "0.31.0"
 source = { registry = "https://pypi.org/simple" }
@@ -196,32 +222,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/ba/7a/15e37d45e7f7c94facc1e9148c0e455e8f33c08f0b8a0b1deb2c5171771b/asyncpg-0.31.0-cp314-cp314t-musllinux_1_2_x86_64.whl", hash = "sha256:8df714dba348efcc162d2adf02d213e5fab1bd9f557e1305633e851a61814a7a", size = 3429426, upload-time = "2025-11-24T23:26:41.032Z" },
     { url = "https://files.pythonhosted.org/packages/13/d5/71437c5f6ae5f307828710efbe62163974e71237d5d46ebd2869ea052d10/asyncpg-0.31.0-cp314-cp314t-win32.whl", hash = "sha256:1b41f1afb1033f2b44f3234993b15096ddc9cd71b21a42dbd87fc6a57b43d65d", size = 614495, upload-time = "2025-11-24T23:26:42.659Z" },
     { url = "https://files.pythonhosted.org/packages/3c/d7/8fb3044eaef08a310acfe23dae9a8e2e07d305edc29a53497e52bc76eca7/asyncpg-0.31.0-cp314-cp314t-win_amd64.whl", hash = "sha256:bd4107bb7cdd0e9e65fae66a62afd3a249663b844fa34d479f6d5b3bef9c04c3", size = 706062, upload-time = "2025-11-24T23:26:44.086Z" },
-]
-
-[[package]]
-name = "asn1crypto"
-version = "1.5.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/de/cf/d547feed25b5244fcb9392e288ff9fdc3280b10260362fc45d37a798a6ee/asn1crypto-1.5.1.tar.gz", hash = "sha256:13ae38502be632115abf8a24cbe5f4da52e3b5231990aff31123c805306ccb9c", size = 121080, upload-time = "2022-03-15T14:46:52.889Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c9/7f/09065fd9e27da0eda08b4d6897f1c13535066174cc023af248fc2a8d5e5a/asn1crypto-1.5.1-py2.py3-none-any.whl", hash = "sha256:db4e40728b728508912cbb3d44f19ce188f218e9eba635821bb4b68564f8fd67", size = 105045, upload-time = "2022-03-15T14:46:51.055Z" },
-]
-
-[[package]]
-name = "asynch"
-version = "0.3.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "ciso8601" },
-    { name = "leb128" },
-    { name = "lz4" },
-    { name = "pytz" },
-    { name = "tzlocal" },
-    { name = "zstd" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/0b/ce/f11ee2cafa6010d295db3ddee089f14cfc5fa9b8a19d0a21356c18a49267/asynch-0.3.1.tar.gz", hash = "sha256:d8bb3c1793a74a2e9d44cc7e8406ead3cf3818c11ecd6d8405b702b23148c584", size = 59825, upload-time = "2025-11-11T15:20:22.975Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ca/b0/9547aeadb577cb0c590162661b31110f7c3c02c1b23653a1b33222c7ff70/asynch-0.3.1-py3-none-any.whl", hash = "sha256:32b30a4409b70514077f7bf8ef713a248158fe5e63504c2769a4c7f772828412", size = 76502, upload-time = "2025-11-11T15:20:21.46Z" },
 ]
 
 [[package]]
@@ -778,9 +778,30 @@ dependencies = [
     { name = "xlsxwriter" },
 ]
 
+[package.optional-dependencies]
+enterprise-intranet = [
+    { name = "datus-metricflow" },
+    { name = "datus-mysql" },
+    { name = "datus-oceanbase-oracle" },
+    { name = "datus-oracle" },
+    { name = "datus-postgresql" },
+    { name = "datus-semantic-metricflow" },
+    { name = "datus-storage-oceanbase-mysql" },
+    { name = "datus-storage-postgresql" },
+]
+metricflow-oceanbase-oracle = [
+    { name = "datus-metricflow" },
+    { name = "datus-oceanbase-oracle" },
+    { name = "datus-semantic-metricflow" },
+]
+storage-oceanbase-mysql = [
+    { name = "datus-storage-oceanbase-mysql" },
+]
+
 [package.dev-dependencies]
 ci = [
     { name = "datus-metricflow" },
+    { name = "datus-oceanbase-oracle" },
     { name = "datus-semantic-metricflow" },
     { name = "datus-storage-postgresql" },
 ]
@@ -816,10 +837,22 @@ requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.12.0" },
     { name = "charset-normalizer", specifier = ">=3.4.2" },
     { name = "datus-bi-core", specifier = ">=0.1.2" },
-    { name = "datus-db-core", specifier = ">=0.1.4" },
+    { name = "datus-db-core", editable = "../datus-db-adapters/datus-db-core" },
+    { name = "datus-metricflow", marker = "extra == 'enterprise-intranet'", editable = "../metricflow" },
+    { name = "datus-metricflow", marker = "extra == 'metricflow-oceanbase-oracle'", editable = "../metricflow" },
+    { name = "datus-mysql", marker = "extra == 'enterprise-intranet'", editable = "../datus-db-adapters/datus-mysql" },
+    { name = "datus-oceanbase-oracle", marker = "extra == 'enterprise-intranet'", editable = "../datus-db-adapters/datus-oceanbase-oracle" },
+    { name = "datus-oceanbase-oracle", marker = "extra == 'metricflow-oceanbase-oracle'", editable = "../datus-db-adapters/datus-oceanbase-oracle" },
+    { name = "datus-oracle", marker = "extra == 'enterprise-intranet'", editable = "../datus-db-adapters/datus-oracle" },
+    { name = "datus-postgresql", marker = "extra == 'enterprise-intranet'", editable = "../datus-db-adapters/datus-postgresql" },
     { name = "datus-scheduler-core", specifier = ">=0.1.1" },
-    { name = "datus-semantic-core", specifier = ">=0.2.0" },
-    { name = "datus-storage-base", specifier = ">=0.1.5,<0.2.0" },
+    { name = "datus-semantic-core", editable = "../datus-semantic-adapter/datus-semantic-core" },
+    { name = "datus-semantic-metricflow", marker = "extra == 'enterprise-intranet'", editable = "../datus-semantic-adapter/datus-semantic-metricflow" },
+    { name = "datus-semantic-metricflow", marker = "extra == 'metricflow-oceanbase-oracle'", editable = "../datus-semantic-adapter/datus-semantic-metricflow" },
+    { name = "datus-storage-base", editable = "../datus-storage-adapters/datus-storage-base" },
+    { name = "datus-storage-oceanbase-mysql", marker = "extra == 'enterprise-intranet'", editable = "../datus-storage-adapters/datus-storage-oceanbase-mysql" },
+    { name = "datus-storage-oceanbase-mysql", marker = "extra == 'storage-oceanbase-mysql'", editable = "../datus-storage-adapters/datus-storage-oceanbase-mysql" },
+    { name = "datus-storage-postgresql", marker = "extra == 'enterprise-intranet'", editable = "../datus-storage-adapters/datus-storage-postgresql" },
     { name = "defusedxml", specifier = ">=0.7.1" },
     { name = "duckdb", specifier = ">=1.5.2,<2.0.0" },
     { name = "duckdb-engine", specifier = ">=0.17.0" },
@@ -860,12 +893,14 @@ requires-dist = [
     { name = "wcmatch", specifier = ">=10.0" },
     { name = "xlsxwriter", specifier = ">=3.2.2" },
 ]
+provides-extras = ["metricflow-oceanbase-oracle", "storage-oceanbase-mysql", "enterprise-intranet"]
 
 [package.metadata.requires-dev]
 ci = [
-    { name = "datus-metricflow", specifier = ">=0.2.7" },
-    { name = "datus-semantic-metricflow", specifier = ">=0.2.8" },
-    { name = "datus-storage-postgresql", specifier = ">=0.1.5" },
+    { name = "datus-metricflow", editable = "../metricflow" },
+    { name = "datus-oceanbase-oracle", editable = "../datus-db-adapters/datus-oceanbase-oracle" },
+    { name = "datus-semantic-metricflow", editable = "../datus-semantic-adapter/datus-semantic-metricflow" },
+    { name = "datus-storage-postgresql", editable = "../datus-storage-adapters/datus-storage-postgresql" },
 ]
 dev = [
     { name = "build", specifier = ">=1.2.0" },
@@ -906,20 +941,22 @@ wheels = [
 [[package]]
 name = "datus-db-core"
 version = "0.1.4"
-source = { registry = "https://pypi.org/simple" }
+source = { editable = "../datus-db-adapters/datus-db-core" }
 dependencies = [
     { name = "pydantic" },
     { name = "sqlglot" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8e/47/edbf32ce34e180c98bb6b18bf7f6a1f022f9baaabe0dcaa5a7783a1641de/datus_db_core-0.1.4.tar.gz", hash = "sha256:02d2629592511639adf9ac85118895f3692b439cdd22ecd691902b11b34b80ac", size = 32089, upload-time = "2026-05-19T15:18:36.054Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fa/0e/a1c3436417bb7528b372d6d033f30b4590220b8b38c39582dcaef21a7323/datus_db_core-0.1.4-py3-none-any.whl", hash = "sha256:2c6a9872c82e2c02d74f27df4249ea92748cb2dbc0a96515d2854ce5adfec8fc", size = 25327, upload-time = "2026-05-19T15:18:28.481Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "sqlglot", specifier = ">=20.0.0" },
 ]
 
 [[package]]
 name = "datus-metricflow"
 version = "0.2.7"
-source = { registry = "https://pypi.org/simple" }
+source = { editable = "../metricflow" }
 dependencies = [
     { name = "click" },
     { name = "clickhouse-sqlalchemy" },
@@ -957,15 +994,140 @@ dependencies = [
     { name = "uvicorn" },
     { name = "yamllint" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9c/e5/a118f99da9bf02e8dde862f7e531985c1469f84d35632245feed2702ff2c/datus_metricflow-0.2.7.tar.gz", hash = "sha256:79326bc901b1a4e2ce9a92347536c302eb0ea80891bffccd67077f3eb2490787", size = 868346, upload-time = "2026-06-26T08:29:07.87Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f3/d0/0f3154fa4c687ce20b2db08ce9b5c356b7aff5556e5830f812fb4247e308/datus_metricflow-0.2.7-py3-none-any.whl", hash = "sha256:a85727556c2f1fb667b9e2059de095f1422ecc0eac4f05c8ced25d29acf80a95", size = 1802489, upload-time = "2026-06-26T08:29:06.174Z" },
-]
 
 [package.optional-dependencies]
 snowflake = [
     { name = "snowflake-connector-python" },
     { name = "snowflake-sqlalchemy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "click", specifier = ">=7.1.2" },
+    { name = "clickhouse-sqlalchemy", specifier = ">=0.3.2,<0.4.0" },
+    { name = "croniter", specifier = ">=1.3.4,<2.0.0" },
+    { name = "databricks-sql-connector", marker = "extra == 'databricks' or extra == 'warehouses'", specifier = ">=3.0.0,<4.0.0" },
+    { name = "dbt-bigquery", marker = "extra == 'dbt-bigquery'", specifier = ">=1.7.0,<2.0.0" },
+    { name = "dbt-postgres", marker = "extra == 'dbt-postgres'", specifier = ">=1.7.0,<2.0.0" },
+    { name = "dbt-snowflake", marker = "extra == 'dbt-snowflake'", specifier = ">=1.7.0,<2.0.0" },
+    { name = "duckdb", specifier = ">=1.3.0,<2.0.0" },
+    { name = "duckdb-engine", specifier = ">=0.17.0,<0.18.0" },
+    { name = "fastapi", specifier = ">=0.115.0,<0.116.0" },
+    { name = "gitpython", specifier = ">=3.1.27,<4.0.0" },
+    { name = "google-auth", marker = "extra == 'bigquery' or extra == 'warehouses'", specifier = ">=2.35.0,<3.0.0" },
+    { name = "google-cloud-bigquery", marker = "extra == 'bigquery' or extra == 'warehouses'", specifier = ">=3.25.0,<4.0.0" },
+    { name = "graphviz", specifier = ">=0.20.0,<0.21.0" },
+    { name = "halo", specifier = ">=0.0.31,<0.0.32" },
+    { name = "jinja2", specifier = ">=2.11.3" },
+    { name = "jsonschema", specifier = ">=4.0.0,<5.0.0" },
+    { name = "markupsafe", specifier = ">=2.1.0,<3.0.0" },
+    { name = "mcp", specifier = ">=1.0.0,<2.0.0" },
+    { name = "mo-sql-parsing", specifier = ">=9.328.23003,<10.0.0" },
+    { name = "more-itertools", specifier = ">=10.0.0,<11.0.0" },
+    { name = "numpy", specifier = ">=1.24.0,<2.0.0" },
+    { name = "pandas", specifier = ">=1.5.0,<3.0.0" },
+    { name = "psycopg2-binary", specifier = ">=2.9.3,<3.0.0" },
+    { name = "pycron", specifier = ">=3.0.0,<4.0.0" },
+    { name = "pydantic", specifier = ">=2.0.0,<3.0.0" },
+    { name = "pymysql", specifier = ">=1.1.1,<2.0.0" },
+    { name = "python-dateutil", specifier = ">=2.8.2,<3.0.0" },
+    { name = "pyyaml", specifier = ">=6.0,<7.0" },
+    { name = "rapidfuzz", specifier = ">=3.0.0,<4.0.0" },
+    { name = "requests", specifier = ">=2.27.1,<3.0.0" },
+    { name = "ruamel-yaml", specifier = ">=0.17.21,<0.18.0" },
+    { name = "rudder-sdk-python", specifier = ">=1.0.3,<2.0.0" },
+    { name = "snowflake-connector-python", marker = "extra == 'snowflake' or extra == 'warehouses'", specifier = ">=2.7.8,!=4.5.0" },
+    { name = "snowflake-sqlalchemy", marker = "extra == 'snowflake' or extra == 'warehouses'", specifier = ">=1.7.0,<2.0.0" },
+    { name = "sqlalchemy", specifier = ">=2.0.0,<3.0.0" },
+    { name = "sqlalchemy-bigquery", marker = "extra == 'bigquery' or extra == 'warehouses'", specifier = ">=1.9.0,<2.0.0" },
+    { name = "sse-starlette", specifier = ">=1.6.0,<2.0.0" },
+    { name = "tabulate", specifier = ">=0.9.0,<0.10.0" },
+    { name = "trino", specifier = ">=0.337.0,<0.338.0" },
+    { name = "typing-extensions", specifier = ">=4.0.0" },
+    { name = "update-checker", specifier = ">=0.18.0,<0.19.0" },
+    { name = "uvicorn", specifier = ">=0.30.0,<0.31.0" },
+    { name = "yamllint", specifier = ">=1.26.3,<2.0.0" },
+]
+provides-extras = ["bigquery", "databricks", "dbt-bigquery", "dbt-postgres", "dbt-snowflake", "snowflake", "warehouses"]
+
+[[package]]
+name = "datus-mysql"
+version = "0.1.7"
+source = { editable = "../datus-db-adapters/datus-mysql" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "datus-db-core" },
+    { name = "datus-sqlalchemy" },
+    { name = "pydantic" },
+    { name = "pymysql" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cryptography", specifier = ">=41.0.0" },
+    { name = "datus-db-core", editable = "../datus-db-adapters/datus-db-core" },
+    { name = "datus-sqlalchemy", editable = "../datus-db-adapters/datus-sqlalchemy" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pymysql", specifier = ">=1.1.1" },
+]
+
+[[package]]
+name = "datus-oceanbase-oracle"
+version = "0.1.0"
+source = { editable = "../datus-db-adapters/datus-oceanbase-oracle" }
+dependencies = [
+    { name = "datus-db-core" },
+    { name = "dbutils" },
+    { name = "jaydebeapi" },
+    { name = "pandas" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "datus-db-core", editable = "../datus-db-adapters/datus-db-core" },
+    { name = "dbutils", specifier = ">=3.0.0" },
+    { name = "jaydebeapi", specifier = ">=1.2.3" },
+    { name = "pandas", specifier = ">=2.0.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+]
+
+[[package]]
+name = "datus-oracle"
+version = "0.1.0"
+source = { editable = "../datus-db-adapters/datus-oracle" }
+dependencies = [
+    { name = "datus-db-core" },
+    { name = "datus-sqlalchemy" },
+    { name = "oracledb" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "datus-db-core", editable = "../datus-db-adapters/datus-db-core" },
+    { name = "datus-sqlalchemy", editable = "../datus-db-adapters/datus-sqlalchemy" },
+    { name = "oracledb", specifier = ">=2.0.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+]
+
+[[package]]
+name = "datus-postgresql"
+version = "0.1.6"
+source = { editable = "../datus-db-adapters/datus-postgresql" }
+dependencies = [
+    { name = "datus-db-core" },
+    { name = "datus-sqlalchemy" },
+    { name = "psycopg2-binary" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "datus-db-core", editable = "../datus-db-adapters/datus-db-core" },
+    { name = "datus-sqlalchemy", editable = "../datus-db-adapters/datus-sqlalchemy" },
+    { name = "psycopg2-binary", specifier = ">=2.9.11" },
+    { name = "pydantic", specifier = ">=2.0.0" },
 ]
 
 [[package]]
@@ -982,57 +1144,127 @@ wheels = [
 
 [[package]]
 name = "datus-semantic-core"
-version = "0.2.0"
-source = { registry = "https://pypi.org/simple" }
+version = "0.2.1"
+source = { editable = "../datus-semantic-adapter/datus-semantic-core" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/36/d8/782ee846a122e497fea520748721c6d2386f257ec3f7bc8105c634039144/datus_semantic_core-0.2.0.tar.gz", hash = "sha256:2e29c6df77489c4a7444ef8afa9fb0d5a37fe1512dbaaa2d81b610c2f1b65cc7", size = 12569, upload-time = "2026-04-23T08:43:57.544Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/89/85/81cd088fc4e1c86cfff3b7764e9d47a94fef48ee519c70252e680ac0966b/datus_semantic_core-0.2.0-py3-none-any.whl", hash = "sha256:4679d031629b73788e86882e56cef2e4d6f3bd00c970930d1aac2798152d995f", size = 10394, upload-time = "2026-04-23T08:43:56.269Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
 ]
+provides-extras = ["dev"]
 
 [[package]]
 name = "datus-semantic-metricflow"
 version = "0.2.8"
-source = { registry = "https://pypi.org/simple" }
+source = { editable = "../datus-semantic-adapter/datus-semantic-metricflow" }
 dependencies = [
     { name = "datus-metricflow", extra = ["snowflake"] },
     { name = "datus-semantic-core" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/01/93/be8346ec6241b8ebe0dfffb9713161056dbea43625635a89820ef1fabb32/datus_semantic_metricflow-0.2.8.tar.gz", hash = "sha256:f3467bc6e5f2a50993651f5dbb5c9e0df756e9156352dd19e29a6200e8747a0a", size = 16907, upload-time = "2026-06-03T16:52:32.767Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/37/4d/089899b523e4f4518ac866daceac321690b553922999fe61d9b72194c8e8/datus_semantic_metricflow-0.2.8-py3-none-any.whl", hash = "sha256:a4aa647916e9b9a96f2841ceef5d2e88a0c05bef638dbf853bc36317c37bfd8a", size = 18584, upload-time = "2026-06-03T16:52:31.754Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
+    { name = "datus-metricflow", extras = ["snowflake"], editable = "../metricflow" },
+    { name = "datus-semantic-core", editable = "../datus-semantic-adapter/datus-semantic-core" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
+]
+provides-extras = ["dev"]
+
+[[package]]
+name = "datus-sqlalchemy"
+version = "0.1.6"
+source = { editable = "../datus-db-adapters/datus-sqlalchemy" }
+dependencies = [
+    { name = "datus-db-core" },
+    { name = "pandas" },
+    { name = "pyarrow" },
+    { name = "sqlalchemy" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "datus-db-core", editable = "../datus-db-adapters/datus-db-core" },
+    { name = "pandas", specifier = ">=2.1.4" },
+    { name = "pyarrow", specifier = ">=14.0.0,<19.0.0" },
+    { name = "sqlalchemy", specifier = ">=2.0.23" },
 ]
 
 [[package]]
 name = "datus-storage-base"
 version = "0.1.5"
-source = { registry = "https://pypi.org/simple" }
+source = { editable = "../datus-storage-adapters/datus-storage-base" }
 dependencies = [
     { name = "numpy" },
     { name = "pandas" },
     { name = "pyarrow" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e1/2f/832f2b68c44d77b757a33e422554f04f6ad7db6983c538f210a560d062e1/datus_storage_base-0.1.5.tar.gz", hash = "sha256:ab70b8db8823590b2272b5c86178b833532e0b915014a9645ae8bc8aac7814a3", size = 12057, upload-time = "2026-06-11T10:38:24.428Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/61/bd/20561a1a302cc3e1aa96e4d1eee9313873676e1a59272a889bc8b7ffa4d1/datus_storage_base-0.1.5-py3-none-any.whl", hash = "sha256:3865635243dde9b46761bce8ecca21ed25efe4cf7bdd9ab64f52eb4576984a3c", size = 15648, upload-time = "2026-06-11T10:38:22.071Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "pandas", specifier = ">=2.1" },
+    { name = "pyarrow", specifier = ">=14.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
 ]
+provides-extras = ["dev"]
+
+[[package]]
+name = "datus-storage-oceanbase-mysql"
+version = "0.1.5"
+source = { editable = "../datus-storage-adapters/datus-storage-oceanbase-mysql" }
+dependencies = [
+    { name = "datus-storage-base" },
+    { name = "pymysql" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "datus-storage-base", editable = "../datus-storage-adapters/datus-storage-base" },
+    { name = "pymysql", specifier = ">=1.1.1" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+]
+provides-extras = ["dev"]
 
 [[package]]
 name = "datus-storage-postgresql"
 version = "0.1.5"
-source = { registry = "https://pypi.org/simple" }
+source = { editable = "../datus-storage-adapters/datus-storage-postgresql" }
 dependencies = [
     { name = "datus-storage-base" },
     { name = "pgvector" },
     { name = "psycopg", extra = ["binary"] },
     { name = "psycopg-pool" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e8/3d/53a01fbda6a644dde29b5ff546fca142c43ba161fbbf5e0a96c5f9d1d6fd/datus_storage_postgresql-0.1.5.tar.gz", hash = "sha256:285a78f6070b5c4e5fff790ac9aeec282d0b20586149a3fb008d87977101e699", size = 35458, upload-time = "2026-06-11T10:38:51.11Z" }
+
+[package.metadata]
+requires-dist = [
+    { name = "datus-storage-base", editable = "../datus-storage-adapters/datus-storage-base" },
+    { name = "pgvector", specifier = ">=0.3.0" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
+    { name = "psycopg-pool", specifier = ">=3.1" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "testcontainers", extras = ["postgres"], marker = "extra == 'dev'", specifier = ">=4.0" },
+]
+provides-extras = ["dev"]
+
+[[package]]
+name = "dbutils"
+version = "3.1.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/55/33/b739e991d8234b3fb0602d501b4aacda88ad1fd5d061b5b9d6022fa35ed6/dbutils-3.1.2.tar.gz", hash = "sha256:160b5788154f1adeddc61080daff1530b4df2ba0d45af1c3bfbac76db24186b3", size = 95869, upload-time = "2025-09-07T17:01:31.713Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/84/16/c972ea441b8e6af7292f32de80cae015fd923370d9e8c9f64ea797f1bfce/datus_storage_postgresql-0.1.5-py3-none-any.whl", hash = "sha256:d481df27b8485c8ccdbe05456c8e4ae938e990188c2a35ced8c0a3f34967e314", size = 26026, upload-time = "2026-06-11T10:38:49.298Z" },
+    { url = "https://files.pythonhosted.org/packages/98/a7/4fe7da3082241028e62c390bf9357d60522dd03d9329e3a560045fe14dfd/dbutils-3.1.2-py3-none-any.whl", hash = "sha256:0cb388a89eeecf04089aef113a7007c3fac9199e9580c8549829f954870c403a", size = 32936, upload-time = "2025-09-07T17:01:30.466Z" },
 ]
 
 [[package]]
@@ -1673,6 +1905,18 @@ wheels = [
 ]
 
 [[package]]
+name = "jaydebeapi"
+version = "1.2.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "jpype1", marker = "platform_python_implementation != 'Jython'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5c/8c/f27750106bf1fba33f92d83fb866af164179f7046495bc5a61fae26d9475/JayDeBeApi-1.2.3.tar.gz", hash = "sha256:f25e9307fbb5960cb035394c26e37731b64cc465b197c4344cee85ec450ab92f", size = 32929, upload-time = "2020-06-12T07:03:27.204Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ff/1f/6a627c9bd7dea13235b65fce0fff987507269d41f957c578031796f70319/JayDeBeApi-1.2.3-py3-none-any.whl", hash = "sha256:d6256bdad1e14414225fbc839f7d56922ea3abc06153f3a57490fee909fecd64", size = 26328, upload-time = "2020-06-12T07:03:25.434Z" },
+]
+
+[[package]]
 name = "jeepney"
 version = "0.9.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1768,6 +2012,41 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d3/59/322338183ecda247fb5d1763a6cbe46eff7222eaeebafd9fa65d4bf5cb11/jmespath-1.1.0.tar.gz", hash = "sha256:472c87d80f36026ae83c6ddd0f1d05d4e510134ed462851fd5f754c8c3cbb88d", size = 27377, upload-time = "2026-01-22T16:35:26.279Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/14/2f/967ba146e6d58cf6a652da73885f52fc68001525b4197effc174321d70b4/jmespath-1.1.0-py3-none-any.whl", hash = "sha256:a5663118de4908c91729bea0acadca56526eb2698e83de10cd116ae0f4e97c64", size = 20419, upload-time = "2026-01-22T16:35:24.919Z" },
+]
+
+[[package]]
+name = "jpype1"
+version = "1.7.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/48/a2/5d27e81d24eef64668bf702bfe0e091cc48388b4666f36e025243eb9d827/jpype1-1.7.1.tar.gz", hash = "sha256:3cd88838dc3d2d546f7eaeadaaff864e590010c15f2b6a44b6f37e60796a14b2", size = 783791, upload-time = "2026-05-06T23:55:10.664Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/79/32/8b2279b12364f260111c7843bf9ede7dc442d5521d6d2ca728b3d522d445/jpype1-1.7.1-1-cp312-cp312-macosx_11_0_universal2.whl", hash = "sha256:b3ddd9f9099202212a34679dfb95dda590bcfbd23289559d104e24abec9120d1", size = 569654, upload-time = "2026-05-19T20:19:36.41Z" },
+    { url = "https://files.pythonhosted.org/packages/b5/67/5caa0de30bcb1c8786cc988144a68908e0624de20cfed470a67b1dd1f60c/jpype1-1.7.1-1-cp313-cp313-macosx_11_0_universal2.whl", hash = "sha256:6d491a81281407f8a68552eb3c0e635e576e066c069268dc29a1ea27bb4778ae", size = 569800, upload-time = "2026-05-19T20:19:38.877Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/1d/9ee10b1aad9f01ea6ac6159981120eb5ace01962f9cfaa7de6b911de3eb8/jpype1-1.7.1-1-cp314-cp314-macosx_11_0_universal2.whl", hash = "sha256:ace0ba1a67561358fa5b57b8e93ed8bcf16f0a8d5cba79c875089c56827adf8e", size = 569753, upload-time = "2026-05-19T20:19:41.514Z" },
+    { url = "https://files.pythonhosted.org/packages/87/76/6a3aef14a4f21e0254a20f3ae446566274cf84e6079bad00ec784dab4dfa/jpype1-1.7.1-cp312-cp312-macosx_14_0_x86_64.whl", hash = "sha256:7328a61ae4945bd2963c15b7d7ead1d8dfc71ea784dec43dedbea4437d645843", size = 374560, upload-time = "2026-05-06T23:54:14.007Z" },
+    { url = "https://files.pythonhosted.org/packages/72/ad/e2db5dae7cd821385096f607deb79bcdd25331c07a58608318d4dade2e48/jpype1-1.7.1-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:158aee356b2c0bf489939d85f6fb31e54a800bd2d95a89b83e5bd7c07fdb048e", size = 407331, upload-time = "2026-05-06T23:54:15.87Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/97/f54c66ed8a9ce33fdc87991712260169c1f9ec514110e266b3a56b73ef13/jpype1-1.7.1-cp312-cp312-manylinux_2_24_i686.manylinux_2_28_i686.whl", hash = "sha256:1cde7f185ef36c2840daf9293423d609eace5b79c632e2267023d6c75ef52988", size = 453957, upload-time = "2026-05-06T23:54:18.684Z" },
+    { url = "https://files.pythonhosted.org/packages/03/ed/bc55cc34dd54864a5a717c3f76ff2771961154325aef683d8e4b85b7c51a/jpype1-1.7.1-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:4de86ec7f9f381c7aea8cbbecaa189c020e5fb700620bd96f4762f954757656b", size = 438525, upload-time = "2026-05-06T23:54:21.395Z" },
+    { url = "https://files.pythonhosted.org/packages/ca/80/c0098bedd014bc9a1a8a349e40a1fc1408c79af28f6c32bdbb1a2b839c7b/jpype1-1.7.1-cp312-cp312-win_amd64.whl", hash = "sha256:d7dad528c73d02987358485dc37fab36edb9ad8bce53533e65f54cff1b68a4bc", size = 356985, upload-time = "2026-05-06T23:54:23.663Z" },
+    { url = "https://files.pythonhosted.org/packages/22/1c/d3e60c3fefb0ed22afc27e7ed6032565f9c5cbf1452ff03129b8f7354195/jpype1-1.7.1-cp313-cp313-macosx_14_0_x86_64.whl", hash = "sha256:2c54e9c7b7df819631db2cc8e64eaded7884d7dfaa67c035c70de512a8987b34", size = 374581, upload-time = "2026-05-06T23:54:25.801Z" },
+    { url = "https://files.pythonhosted.org/packages/6f/10/47d8327d96f6aa9049ea84189508ed446e81b233d8978d49b737b4a0df51/jpype1-1.7.1-cp313-cp313-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:988d2db564b61ffcc4fa9533fb65e98037d869b866e02c145e49125554cad6cc", size = 407509, upload-time = "2026-05-06T23:54:27.94Z" },
+    { url = "https://files.pythonhosted.org/packages/47/bd/995f4ac18eb3016c3819af5ce0c1a89e94f1cbefc560db688118b32eab3d/jpype1-1.7.1-cp313-cp313-manylinux_2_24_i686.manylinux_2_28_i686.whl", hash = "sha256:1c387dc58f28aefce50955eb7f24403f05b8a2942ef22c7f08d731d1fc753a50", size = 454093, upload-time = "2026-05-06T23:54:30.702Z" },
+    { url = "https://files.pythonhosted.org/packages/86/34/1a45d77fc164daef989b650254144c323462ba00895cedfcb794a7a5dbab/jpype1-1.7.1-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:907a4dcc89cca1655fe3fad389e9f60d5c681ddf070927a9013a6d0f64ccf118", size = 438527, upload-time = "2026-05-06T23:54:33.033Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/10/1f47deb971c20519233577474d397255bbdc4717aa7f0192b0b505d7b47b/jpype1-1.7.1-cp313-cp313-win_amd64.whl", hash = "sha256:969e160c15ab83b21c657837797ddae3701482d3db54f57ae81c75b558942533", size = 357069, upload-time = "2026-05-06T23:54:42.379Z" },
+    { url = "https://files.pythonhosted.org/packages/83/79/760198389ce7e3a6048fd54e1ab5e31139298e2d253cbb9181b1a2cbe48f/jpype1-1.7.1-cp313-cp313t-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:0486725034916270f1c28e27bd74ef793f96d41b822956e3edf5666f99058665", size = 409596, upload-time = "2026-05-06T23:54:35.07Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/4e/175b0d0c8e29f7ba6e00f0588e2df06773796bd3c58fa5910cee3aefe40b/jpype1-1.7.1-cp313-cp313t-manylinux_2_24_i686.manylinux_2_28_i686.whl", hash = "sha256:39b57767ed33bba453e4c81f2dfcb39be8b3ad25eaeedd96391e171bde3c765f", size = 455365, upload-time = "2026-05-06T23:54:37.672Z" },
+    { url = "https://files.pythonhosted.org/packages/29/a9/0576c3d54bfa0bd6b9392f4624bd39bc9cc924a5362ba95d16e3ad77778a/jpype1-1.7.1-cp313-cp313t-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:7605e33971f8f16634e4786ce0a4b2d1691aebd09ca21fdc7a700e9a0f3dd6a7", size = 439563, upload-time = "2026-05-06T23:54:40.188Z" },
+    { url = "https://files.pythonhosted.org/packages/91/4e/3bc23e8f50e7bbec2e0f7479346ca17fbc4811df2c710ae6be573ad9317d/jpype1-1.7.1-cp314-cp314-macosx_14_0_x86_64.whl", hash = "sha256:b5e87d88523354d3e46769e4d3244318571d6d35a170febf4f82e3ce408d54b1", size = 374428, upload-time = "2026-05-06T23:54:44.457Z" },
+    { url = "https://files.pythonhosted.org/packages/59/1f/0cf0b34e73dd8622ae6fd0e2393edbc5ba5365d76349486ba02292c3cc98/jpype1-1.7.1-cp314-cp314-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:6d32ace75bfc63ccac22258e1d2de33210cfb20d2520db0b413f2b9b1318dd96", size = 407388, upload-time = "2026-05-06T23:54:46.634Z" },
+    { url = "https://files.pythonhosted.org/packages/2d/70/6c800d4e3a00200c5c8f52f32db4400623e0d9c1c5136834acb9230478ce/jpype1-1.7.1-cp314-cp314-manylinux_2_24_i686.manylinux_2_28_i686.whl", hash = "sha256:295934261cede86a6d47b3ad6fd4c259aefe07d4f292a23ea6b33a75f40b3153", size = 454007, upload-time = "2026-05-06T23:54:49.442Z" },
+    { url = "https://files.pythonhosted.org/packages/b2/7f/858a229a9525bc717594dc394cc1d0677c786513285da54d0c0ba90d9342/jpype1-1.7.1-cp314-cp314-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:29977b16a6f88a617fb274994108d816b59680fdab10edb03fd57b1da4ff3e61", size = 438408, upload-time = "2026-05-06T23:54:52.404Z" },
+    { url = "https://files.pythonhosted.org/packages/09/d0/adba12d654a84c8e2af8c401acf3fe6b85d98f2ee1f6c29afecae826e871/jpype1-1.7.1-cp314-cp314-win_amd64.whl", hash = "sha256:bff1d3561afb5fdd38f8a69d03669450662c242ec245804240c1ce82c2fc5398", size = 364457, upload-time = "2026-05-06T23:55:01.661Z" },
+    { url = "https://files.pythonhosted.org/packages/c2/06/e9b4c867381b0c2573e5080464586b4956de9e3b0c1f40c551f17d1052c9/jpype1-1.7.1-cp314-cp314t-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:906381e076b2dbbbbef830a7d1be7bdde4f35e59c3c058e40f1e4a36024bcde5", size = 409453, upload-time = "2026-05-06T23:54:54.866Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/43/c3cb7b6c82d9f901c1316d25016d18bfad0381eb55cfc960b7f999a42ef3/jpype1-1.7.1-cp314-cp314t-manylinux_2_24_i686.manylinux_2_28_i686.whl", hash = "sha256:7bef4ac17e0b0dbb96ee6afbd8878a5fa85353e3eb3eba4fe86e1df3dd62eb1b", size = 455217, upload-time = "2026-05-06T23:54:57.552Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/87/f5b46e288dc3a0c7c6fb02e00f68a621035fa03cac3b6b489effd4170b13/jpype1-1.7.1-cp314-cp314t-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b230c9475525b29114e6396b864c154f02f7cb041f2ac6bde006ed569e579aea", size = 439454, upload-time = "2026-05-06T23:54:59.609Z" },
 ]
 
 [[package]]
@@ -2742,6 +3021,42 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/20/f8/be4625838aae098c2f9fbdc062a1b3128ebb9e799b891b654ee8cad94897/opentelemetry_semantic_conventions-0.63b0.tar.gz", hash = "sha256:cfea295264654fa324fcef24aa56fb1836fdc0da27db128645dc6aa76115cc6c", size = 148333, upload-time = "2026-05-19T09:46:44.01Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/8f/6f/8d0ce225b8fdbb72c97cf4130107d861eafcb3d8e5c3f5891e8556177316/opentelemetry_semantic_conventions-0.63b0-py3-none-any.whl", hash = "sha256:1f3962732b04f43e4fef28173c9a3615b8847b4b2d6386fdc085361b29875ab9", size = 203712, upload-time = "2026-05-19T09:46:27.569Z" },
+]
+
+[[package]]
+name = "oracledb"
+version = "4.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f3/01/203599755aaff4f79683c2d61d2e6dc9d30f6228485d9e0280cc358cede3/oracledb-4.0.1.tar.gz", hash = "sha256:34bbea44423ed8b24093aa859ca7ee9b6e76ea490f9acdc5f6ff01aa1083e343", size = 879077, upload-time = "2026-05-19T18:14:34.881Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/53/1a/237ddaa33fe9576e1bb1ee9008eba2269fe49dee974a581465589eac658e/oracledb-4.0.1-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:c05a01d6ad610a88c2aa1a43b1dc0a8485f5fbd4374d2b36908859d4205de192", size = 4345951, upload-time = "2026-05-19T18:15:07.482Z" },
+    { url = "https://files.pythonhosted.org/packages/d8/bd/2ee10e0bd4d7a44db68a3f10d8941a5ea762bdb9dcff9b37739b2554e011/oracledb-4.0.1-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:cf61e42b9ef723dbdd0b23032b695e872009ed7341003df59d9a97cd960df977", size = 2290431, upload-time = "2026-05-19T18:15:09.041Z" },
+    { url = "https://files.pythonhosted.org/packages/80/54/98fac98c9c1e2461512dcad81d2bd491fb7fe779d5044614867b2e827a78/oracledb-4.0.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:c2d394453f669858bec942ff0da18b6ebade296ece823d582ad2b464ed5c6c90", size = 2493620, upload-time = "2026-05-19T18:15:10.635Z" },
+    { url = "https://files.pythonhosted.org/packages/58/71/ebeade4753fd20b6d9cc7568c3853bec44425f24982def220835544008ca/oracledb-4.0.1-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:d7cd278d59780e22e0a7451d208460756d779dc62b55bdbd95652f9640fbf8c3", size = 2329161, upload-time = "2026-05-19T18:15:12.158Z" },
+    { url = "https://files.pythonhosted.org/packages/21/1d/4ec3ef256633126b669b99bf14e1c2af264ecb25c28f80f5365ea279c39a/oracledb-4.0.1-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:b73820521eccd290506af94e1ffb9a8a5941b4018e3861df9b040652a7cef123", size = 2513518, upload-time = "2026-05-19T18:15:14.863Z" },
+    { url = "https://files.pythonhosted.org/packages/7c/7a/4506477b52bb2db61a114202beab19bf24859f9fdc0979b8031042582477/oracledb-4.0.1-cp312-cp312-win32.whl", hash = "sha256:8fcad6d9628923281bf21e48a391ac2f87ec6950dc63381d8fea470e3128aef0", size = 1498632, upload-time = "2026-05-19T18:15:16.361Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/66/3d2246e5473b85c61d4b206ea9fcf50619db6b60a1425e34a3a1c1f64c44/oracledb-4.0.1-cp312-cp312-win_amd64.whl", hash = "sha256:523b3356cde9d588ba250cefafdfc34869233d65c179f805ea6e4d3d6b209a7f", size = 1846730, upload-time = "2026-05-19T18:15:18.532Z" },
+    { url = "https://files.pythonhosted.org/packages/dd/95/70420ebc1f051cff48cffb48f720540446d3fc497f7d9ba6f2e63337cb3f/oracledb-4.0.1-cp312-cp312-win_arm64.whl", hash = "sha256:10204432f0eea8707a79c75bdccb84071e43fd19c658cb3b34d1746b12c6e7fe", size = 1518529, upload-time = "2026-05-19T18:15:19.916Z" },
+    { url = "https://files.pythonhosted.org/packages/e3/52/c95031186ddec3788ee72708df406a6b7bafa308bd04722b7d5857942366/oracledb-4.0.1-cp313-cp313-macosx_10_13_universal2.whl", hash = "sha256:443b2f03461e873ccd73dff3d8541fcf974c05e13e296a6687ffbb0c4a72c0a1", size = 4331008, upload-time = "2026-05-19T18:15:21.762Z" },
+    { url = "https://files.pythonhosted.org/packages/ae/c3/7aaf12fe0f8b8323bce4647762722268da6b3b04ab1ff2349e4b43d30515/oracledb-4.0.1-cp313-cp313-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:ae894ca2705929eb0ac228329336fd03388ad6e3b54002be6f5d4400a8feaf52", size = 2284457, upload-time = "2026-05-19T18:15:23.727Z" },
+    { url = "https://files.pythonhosted.org/packages/db/1e/48af5b2c559ee2fbee2ad13372858f34f2260cd9727b8ccad6cbe26e09b8/oracledb-4.0.1-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:4b42725337f80d433a3bd2928c08667e5b89da9ce05cf9ae3a4189c4fc4805ea", size = 2506136, upload-time = "2026-05-19T18:15:26.057Z" },
+    { url = "https://files.pythonhosted.org/packages/1f/79/50cb8f7a3bc7ef9edc61db5fbf0ee2af9a4f487f4967eb54cc9f330ea908/oracledb-4.0.1-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:8e13ff1e6f28fdb863180d23fa94cb42c619c29d2981e24992431e51b97caa54", size = 2332705, upload-time = "2026-05-19T18:15:27.632Z" },
+    { url = "https://files.pythonhosted.org/packages/48/7d/6eea9e9ffece7d270a7d3caf364b5033fa8c73a0f377c10750eca8760a6e/oracledb-4.0.1-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:e36581bb10e719d928dad12018c2d42606db2c34f49d6665b06f701f049255f0", size = 2528849, upload-time = "2026-05-19T18:15:29.437Z" },
+    { url = "https://files.pythonhosted.org/packages/97/5c/553afdf90a144e25c5ee9825fbbc0c88d52bcf2b1dd7c5b509cad1022a60/oracledb-4.0.1-cp313-cp313-win32.whl", hash = "sha256:86ac65cbc8d29626b1d9d203f9151566c26a78e55bdfc030c06169ae8017f458", size = 1503094, upload-time = "2026-05-19T18:15:30.838Z" },
+    { url = "https://files.pythonhosted.org/packages/b9/73/9305fa2755b234352e29dd5ed6063d017a661ccb08c06da5e14db90b143d/oracledb-4.0.1-cp313-cp313-win_amd64.whl", hash = "sha256:a029dcee759bca56a8c95e952040c3d3f57e5ec05965355293b21930a66967fb", size = 1846068, upload-time = "2026-05-19T18:15:32.475Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/d8/6995a755dbdeee1eab1a6cb77283e3ab6634631512c47e2c3a64efcb515f/oracledb-4.0.1-cp313-cp313-win_arm64.whl", hash = "sha256:20a10f903c8da59e9689a98bd68012f78fa19bed950ad9f19cd8f5b8b97e73a0", size = 1518345, upload-time = "2026-05-19T18:15:34.156Z" },
+    { url = "https://files.pythonhosted.org/packages/e6/c1/e31ea17105b037b8b637a0e2936fc3cab65f87098c79df50fdf443a0ca6e/oracledb-4.0.1-cp314-cp314-macosx_10_15_universal2.whl", hash = "sha256:cb7727f93ff962ab826bc3d0bca4b0e5bf45ecb7c525551c70c9e094f0f27027", size = 4374586, upload-time = "2026-05-19T18:15:36.73Z" },
+    { url = "https://files.pythonhosted.org/packages/14/87/541fec6a6e37b74cd113007927e9caced188cf262f6015e88732651b7cc9/oracledb-4.0.1-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:032ca4f558b05f03fa1bef1b04e59ec350ae0b22e6d85c47f4ac62ae98315823", size = 2324417, upload-time = "2026-05-19T18:15:38.795Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/ba/14b9112c3f81c2b26cdd16748a5317263db1227e363bd29491d3291ad6e8/oracledb-4.0.1-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:7156ef112a901967b3ee89b6c582bafc5a3082c47ca566de1a79e9ac3b48da32", size = 2528659, upload-time = "2026-05-19T18:15:40.38Z" },
+    { url = "https://files.pythonhosted.org/packages/44/5a/cddfbdf30d23edd6484aa022f5e329eaecced2ead27cc2c01a05065d3e2d/oracledb-4.0.1-cp314-cp314-musllinux_1_2_aarch64.whl", hash = "sha256:8159c5bd8f25b0ca0ce30f21e7a732a2bdfb4adb81b9c8ea1ca75339d8ec8398", size = 2374071, upload-time = "2026-05-19T18:15:42.069Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/c9/1561ab033f35bbccaca4f07360b6c446eb2726ab03754fbb5506e2d3fe89/oracledb-4.0.1-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:e4926e699a42c526137724960fa4303ecb0b542186b11d3705ac84414a896508", size = 2552725, upload-time = "2026-05-19T18:15:43.541Z" },
+    { url = "https://files.pythonhosted.org/packages/bd/22/a5dacf6d5d976850bf7c62b8c1ef7f1a56a56421962f081bc421ab8eb952/oracledb-4.0.1-cp314-cp314-win32.whl", hash = "sha256:b05bfadbfe462c39cc97258a973972f5bbbc9f8e2e9a4c2e0efcb1ec86b91088", size = 1525688, upload-time = "2026-05-19T18:15:44.944Z" },
+    { url = "https://files.pythonhosted.org/packages/36/eb/1f959914455bda7e02531c5c07a5c6a2354ce164b29281f441777747a1b2/oracledb-4.0.1-cp314-cp314-win_amd64.whl", hash = "sha256:0ece951553c106a0896c8e1690bcdf69d472761fa65fec9b8152cbce13ab8b81", size = 1890335, upload-time = "2026-05-19T18:15:46.7Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/b1/1289009c7407953fd19960dca73be921a4f6c88b097a6db59e0a2138bfc4/oracledb-4.0.1-cp314-cp314-win_arm64.whl", hash = "sha256:0d3c6ed987df64b914ece0722692419fe494d07f15bb4d7715adeada4f914c3a", size = 1572519, upload-time = "2026-05-19T18:15:48.234Z" },
 ]
 
 [[package]]
@@ -4018,8 +4333,8 @@ name = "secretstorage"
 version = "3.4.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "cryptography" },
-    { name = "jeepney" },
+    { name = "cryptography", marker = "platform_machine != 'arm64' or sys_platform != 'darwin'" },
+    { name = "jeepney", marker = "platform_machine != 'arm64' or sys_platform != 'darwin'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/31/9f/11ef35cf1027c1339552ea7bfe6aaa74a8516d8b5caf6e7d338daf54fd80/secretstorage-3.4.0.tar.gz", hash = "sha256:c46e216d6815aff8a8a18706a2fbfd8d53fcbb0dce99301881687a1b0289ef7c", size = 19748, upload-time = "2025-09-09T16:42:13.859Z" }
 wheels = [

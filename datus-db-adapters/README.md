@@ -1,237 +1,64 @@
 # Datus Database Adapters
 
-Independent database adapter packages for Datus Agent.
+`datus-db-adapters` 是 Python 3.12 `uv` workspace。每个数据库 adapter 独立发布和安装；根 `pyproject.toml` 只用于源码开发，不是终端用户需要安装的聚合包。
 
-## Overview
+## Workspace 结构
 
-This repository contains database adapter implementations for Datus Agent, using a plugin architecture where each database is an independent package that can be installed on demand.
+- `datus-db-core`：adapter 公共接口和注册能力。
+- `datus-sqlalchemy`：关系型 adapter 共用的 SQLAlchemy 连接层。
+- `datus-<database>`：数据库实现、包级配置说明和测试。
+- `ci/`：required checks 与 workspace 级质量检查。
 
-## Architecture
+## 当前包
 
-```
-datus-agent (Core package - SQLite/DuckDB only)
-    ↓
-Plugin Adapters (Independent packages, install as needed)
-├── datus-sqlalchemy (SQLAlchemy base layer)
-│   ├── datus-mysql
-│   ├── datus-starrocks
-│   ├── datus-postgresql
-│   ├── datus-oracle
-│
-└── Native SDK Adapters
-    ├── datus-snowflake
-    ├── datus-clickzetta
-```
+下表与根 `pyproject.toml` 的 `tool.uv.workspace.members` 保持一致。
 
-## Implemented Adapters
+| 包 | 实现方式 | 文档 |
+| --- | --- | --- |
+| `datus-db-core` | 公共接口 | [README](./datus-db-core/README.md) |
+| `datus-sqlalchemy` | SQLAlchemy 公共层 | [README](./datus-sqlalchemy/README.md) |
+| `datus-mysql` | SQLAlchemy / MySQL | [README](./datus-mysql/README.md) |
+| `datus-postgresql` | SQLAlchemy / PostgreSQL | [README](./datus-postgresql/README.md) |
+| `datus-starrocks` | MySQL 协议 | [README](./datus-starrocks/README.md) |
+| `datus-snowflake` | Snowflake SDK | [README](./datus-snowflake/README.md) |
+| `datus-clickzetta` | ClickZetta SDK | [README](./datus-clickzetta/README.md) |
+| `datus-clickhouse` | ClickHouse | [README](./datus-clickhouse/README.md) |
+| `datus-hive` | Hive | [README](./datus-hive/README.md) |
+| `datus-redshift` | PostgreSQL 协议 / Redshift | [README](./datus-redshift/README.md) |
+| `datus-spark` | Spark SQL | [README](./datus-spark/README.md) |
+| `datus-trino` | Trino | [README](./datus-trino/README.md) |
+| `datus-greenplum` | PostgreSQL 协议 / Greenplum | [README](./datus-greenplum/README.md) |
+| `datus-oracle` | python-oracledb / SQLAlchemy | [README](./datus-oracle/README.md) |
+| `datus-oceanbase-oracle` | JDBC / OceanBase Oracle 模式 | [README](./datus-oceanbase-oracle/README.md) |
 
-### 1. datus-sqlalchemy
-SQLAlchemy base connector providing shared functionality for SQLAlchemy-based adapters.
+## 安装
 
-**Installation**:
-```bash
-pip install datus-sqlalchemy
-```
-
-**Features**:
-- SQLAlchemy engine and connection management
-- Unified error handling
-- Multiple result format support
-- Connection pool management
-- Metadata retrieval
-
----
-
-### 2. datus-mysql
-MySQL database adapter.
-
-**Installation**:
-```bash
-pip install datus-mysql
-```
-
-**Features**:
-- Full MySQL support
-- INFORMATION_SCHEMA metadata queries
-- SHOW CREATE statement support
-- Complete CRUD operations
-
----
-
-### 3. datus-starrocks
-StarRocks database adapter (MySQL protocol compatible).
-
-**Installation**:
-```bash
-pip install datus-starrocks
-```
-
-**Features**:
-- Inherits all MySQL functionality
-- Multi-Catalog support
-- Materialized view support
-- StarRocks-specific optimizations
-
----
-
-### 4. datus-snowflake
-Snowflake database adapter (native SDK).
-
-**Installation**:
-```bash
-pip install datus-snowflake
-```
-
-**Features**:
-- Native Snowflake SDK
-- Multi-database and schema support
-- Tables, views, and materialized views
-- Efficient SHOW commands
-- Arrow format support
-
----
-
-### 5. datus-clickzetta
-ClickZetta Lakehouse database adapter (native SDK).
-
-**Installation**:
-```bash
-pip install datus-clickzetta
-```
-
-**Features**:
-- Native ClickZetta ZettaPark SDK
-- Full SQL support (DDL, DML, DQL)
-- Workspace and schema management
-- Volume/Stage file operations
-- Metadata discovery
-- Connection pooling and session management
-
----
-
-### 6. datus-oracle
-Oracle database adapter.
-
-**Installation**:
-```bash
-pip install datus-oracle
-```
-
-**Features**:
-- SQLAlchemy and python-oracledb support
-- Service name and SID connection modes
-- Schema/user metadata discovery
-- Tables, views, and materialized views
-- DBMS_METADATA DDL retrieval
-- Oracle FETCH FIRST sample rows
-
----
-
-## Development Guide
-
-### Development Environment Setup
-
-This repository uses workspace configuration to manage multiple adapter packages:
+终端用户只安装需要的包，例如：
 
 ```bash
-# Clone repository
-git clone https://github.com/your-org/datus-db-adapters.git
-cd datus-db-adapters
-
-# Install all adapters (development mode)
-uv sync
-
-# Or use pip
-pip install -e datus-sqlalchemy
-pip install -e datus-mysql
-pip install -e datus-starrocks
-pip install -e datus-snowflake
+pip install datus-postgresql
+pip install datus-oceanbase-oracle
 ```
 
-**Note**: The root `pyproject.toml` is only for development environment management. End users should install individual packages.
+具体配置键、可选依赖与数据库限制以包级 README 为准。
 
-### Creating a New Adapter
+## 开发
 
-1. **Choose Base Layer**:
-   - If database is SQL standard compatible, inherit from `datus-sqlalchemy`
-   - If native SDK is needed, inherit directly from `BaseSqlConnector`
-
-2. **Create Package Structure**:
 ```bash
-datus-<database>/
-├── datus_<database>/
-│   ├── __init__.py
-│   ├── config.py
-│   └── connector.py
-├── tests/
-├── pyproject.toml
-└── README.md
+uv sync --dev
+uv run ruff check .
+uv run pytest --import-mode=importlib datus-postgresql/tests/unit
 ```
 
-3. **Implement Connector**:
-```python
-from datus.tools.db_tools.base import BaseSqlConnector
+集成测试通常依赖对应数据库容器或预置环境。先阅读 adapter 的 `tests/integration/README.md`；缺少服务或凭据时测试应明确跳过，不应在 import 阶段失败。
 
-class MyDatabaseConnector(BaseSqlConnector):
-    def __init__(self, ...):
-        super().__init__(dialect="mydatabase")
-        # Initialize connection
+新增或修改 adapter 时至少检查：
 
-    # Implement required abstract methods
-    def execute_query(self, sql: str) -> ExecuteSQLResult:
-        ...
-```
+- 配置校验和连接初始化；
+- database/catalog/schema/table/view 元数据语义；
+- identifier quoting、分页、sample rows 和 SQL 方言；
+- 执行结果格式与错误包装；
+- 包 entry point、workspace member 和 `known-first-party`；
+- 包级 README 与单元/集成测试。
 
-4. **Configure Entry Point**:
-```toml
-[project.entry-points."datus.adapters"]
-mydatabase = "datus_mydatabase:register"
-```
-
-5. **Registration Function**:
-```python
-# __init__.py
-from datus.tools.db_tools import connector_registry
-from .connector import MyDatabaseConnector
-
-def register():
-    connector_registry.register("mydatabase", MyDatabaseConnector)
-
-register()
-```
-
-## Using with Datus Agent
-
-Adapters are automatically discovered via entry points:
-
-```yaml
-# config.yaml
-namespace:
-  mydatabase:
-    type: mysql  # or snowflake, starrocks, etc.
-    host: localhost
-    port: 3306
-    username: root
-    password: password
-    database: mydb
-```
-
-Datus Agent will automatically load the corresponding adapter.
-
----
-
-
-## Contributing
-
-Contributions of new database adapters are welcome!
-
-1. Fork this repository
-2. Create a new adapter package
-3. Add tests and documentation
-4. Submit a Pull Request
-
----
-
-## License
-
-Apache License 2.0
+贡献流程与提交要求见 [CONTRIBUTING.md](./CONTRIBUTING.md)，面向自动化开发者的完整规则见 [AGENTS.md](./AGENTS.md)。

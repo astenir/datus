@@ -199,6 +199,7 @@ password: "password_with_#_character"
 | `pool_mincached` | 否 | `2` | 连接池最小空闲连接数。 |
 | `pool_maxcached` | 否 | `5` | 连接池最大空闲连接数。 |
 | `pool_blocking` | 否 | `true` | 连接池耗尽时是否阻塞等待。 |
+| `pool_ping_timeout_seconds` | 否 | `5` | 从连接池借出连接时执行 JDBC 有效性检查的超时秒数。 |
 | `extra_jdbc_params` | 否 | `{}` | 额外 JDBC URL 参数。 |
 
 ## Python 用法
@@ -225,11 +226,23 @@ try:
     result = connector.execute_query("SELECT 1 FROM DUAL", result_format="list")
     print(result.sql_return)
 
+    # 面向 MetricFlow 等集成的参数化 DataFrame 查询接口。
+    frame = connector.query_dataframe(
+        "SELECT ? AS VALUE FROM DUAL",
+        (42,),
+    )
+    print(frame.to_dict(orient="records"))
+
     tables = connector.get_tables(schema_name="NPIMS")
     print(tables)
 finally:
     connector.close()
 ```
+
+`query_dataframe(sql, parameters)` 和 `execute_statement(sql, parameters)` 使用 JDBC 的
+位置参数（`?`），不会把参数值拼接进 SQL。前者返回 `pandas.DataFrame`；后者用于需要
+显式事务提交的集成或测试准备，执行失败时会回滚。MetricFlow 的 OceanBase Oracle
+运行配置本身是只读的，不会通过 `execute_statement` 写入业务库。
 
 ## 权限建议
 

@@ -128,6 +128,7 @@ class TestPoolConfig:
         assert config.pool_mincached == 2
         assert config.pool_maxcached == 5
         assert config.pool_blocking is True
+        assert config.pool_ping_timeout_seconds == 5
 
     def test_custom_pool_settings(self):
         config = OceanBaseOracleConfig(
@@ -136,18 +137,28 @@ class TestPoolConfig:
             pool_mincached=5,
             pool_maxcached=10,
             pool_blocking=False,
+            pool_ping_timeout_seconds=3,
             jar_path="/opt/oceanbase-client.jar",
         )
         assert config.pool_maxconnections == 20
         assert config.pool_mincached == 5
         assert config.pool_maxcached == 10
         assert config.pool_blocking is False
+        assert config.pool_ping_timeout_seconds == 3
 
     def test_pool_maxconnections_must_be_at_least_1(self):
         with pytest.raises(ValidationError):
             OceanBaseOracleConfig(
                 username="app@oracle_tenant#obcluster",
                 pool_maxconnections=0,
+                jar_path="/opt/oceanbase-client.jar",
+            )
+
+    def test_pool_ping_timeout_must_be_positive(self):
+        with pytest.raises(ValidationError):
+            OceanBaseOracleConfig(
+                username="app@oracle_tenant#obcluster",
+                pool_ping_timeout_seconds=0,
                 jar_path="/opt/oceanbase-client.jar",
             )
 

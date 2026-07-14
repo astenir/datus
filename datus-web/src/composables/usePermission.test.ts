@@ -32,7 +32,7 @@ describe("usePermission", () => {
         },
         datasource_grants: {
           fund: { effect: "allow" },
-          blocked: null,
+          blocked: { effect: "deny" },
         },
       },
     }));
@@ -52,7 +52,7 @@ describe("usePermission", () => {
       permissions: ["feature:sql", "module.admin.*", "mcp.server.list"],
       datasource_grants: {
         fund: { effect: "allow" },
-        blocked: null,
+        blocked: { effect: "deny" },
       },
       is_admin: false,
     });
@@ -68,14 +68,16 @@ describe("usePermission", () => {
     expect(permission.hasDatasourcePermission("blocked")).toBe(false);
   });
 
-  it("treats backend admin status as global datasource access", async () => {
+  it("keeps backend admin status separate from datasource access", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(mockJsonResponse({
       success: true,
       data: {
         user_id: "operator",
         is_admin: true,
         features: {},
-        datasource_grants: {},
+        datasource_grants: {
+          fund: { effect: "allow" },
+        },
       },
     }));
 
@@ -83,7 +85,8 @@ describe("usePermission", () => {
     await permission.fetchPermissions();
 
     expect(permission.isAdmin()).toBe(true);
-    expect(permission.hasDatasourcePermission("sample-datasource")).toBe(true);
+    expect(permission.hasDatasourcePermission("fund")).toBe(true);
+    expect(permission.hasDatasourcePermission("sample-datasource")).toBe(false);
   });
 
   it("treats wildcard datasource grants as access to concrete datasource names", async () => {

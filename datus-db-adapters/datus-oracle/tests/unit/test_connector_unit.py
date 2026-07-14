@@ -40,6 +40,55 @@ def test_connector_initialization_invalid_type():
         OracleConnector("invalid")
 
 
+def test_connector_thick_mode_uses_configured_oracle_client_lib_dir(tmp_path):
+    config = OracleConfig(username="app", thick_mode=True, oracle_client_lib_dir=str(tmp_path))
+
+    with (
+        patch("oracledb.init_oracle_client") as mock_init_oracle_client,
+        patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None),
+    ):
+        OracleConnector(config)
+
+    mock_init_oracle_client.assert_called_once_with(lib_dir=str(tmp_path))
+
+
+def test_connector_thick_mode_uses_system_library_search_path():
+    config = OracleConfig(username="app", thick_mode=True)
+
+    with (
+        patch("oracledb.init_oracle_client") as mock_init_oracle_client,
+        patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None),
+    ):
+        OracleConnector(config)
+
+    mock_init_oracle_client.assert_called_once_with()
+
+
+def test_connector_thin_mode_does_not_initialize_oracle_client():
+    config = OracleConfig(username="app")
+
+    with (
+        patch("oracledb.init_oracle_client") as mock_init_oracle_client,
+        patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None),
+    ):
+        OracleConnector(config)
+
+    mock_init_oracle_client.assert_not_called()
+
+
+def test_connector_thick_mode_reports_oracle_client_initialization_context(tmp_path):
+    config = OracleConfig(username="app", thick_mode=True, oracle_client_lib_dir=str(tmp_path))
+
+    with (
+        patch("oracledb.init_oracle_client", side_effect=RuntimeError("DPI-1047")),
+        patch("datus_sqlalchemy.SQLAlchemyConnector.__init__", return_value=None),
+        pytest.raises(RuntimeError, match="Oracle Client initialization is process-wide") as exc_info,
+    ):
+        OracleConnector(config)
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+
+
 def test_connection_string_uses_service_name_query():
     config = OracleConfig(host="db.example.com", port=1522, username="app", password="p@ss", service_name="SALES")
 

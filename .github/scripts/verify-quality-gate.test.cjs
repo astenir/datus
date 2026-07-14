@@ -95,15 +95,19 @@ test("validates multiple jobs from workflow-style environment variables", () => 
   assert.deepEqual(
     verifyQualityGateEnvironment({
       CHANGES_RESULT: "success",
-      QUALITY_JOBS: "AGENT, DB_ADAPTERS, STORAGE_ADAPTERS",
+      QUALITY_JOBS: "AGENT, DB_ADAPTERS, STORAGE_ADAPTERS, SEMANTIC_ADAPTER, METRICFLOW",
       AGENT_RELEVANT: "true",
       AGENT_RESULT: "success",
       DB_ADAPTERS_RELEVANT: "false",
       DB_ADAPTERS_RESULT: "skipped",
       STORAGE_ADAPTERS_RELEVANT: "true",
       STORAGE_ADAPTERS_RESULT: "success",
+      SEMANTIC_ADAPTER_RELEVANT: "true",
+      SEMANTIC_ADAPTER_RESULT: "success",
+      METRICFLOW_RELEVANT: "false",
+      METRICFLOW_RESULT: "skipped",
     }),
-    ["AGENT", "DB_ADAPTERS", "STORAGE_ADAPTERS"],
+    ["AGENT", "DB_ADAPTERS", "STORAGE_ADAPTERS", "SEMANTIC_ADAPTER", "METRICFLOW"],
   );
 });
 

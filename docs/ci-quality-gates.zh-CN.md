@@ -9,6 +9,8 @@
 - `datus-agent/`
 - `datus-db-adapters/`
 - `datus-storage-adapters/`
+- `datus-semantic-adapter/`
+- `metricflow/`
 - `datus-web/`
 - Agent 内嵌的 visual artifact renderer
 
@@ -34,7 +36,7 @@ Python quality gate
 
 | Workflow | Detector | 实体 job | Required gate |
 | --- | --- | --- | --- |
-| `.github/workflows/python-quality.yml` | `Detect Python changes` | Agent、DB adapters、Storage adapters | `Python quality gate` |
+| `.github/workflows/python-quality.yml` | `Detect Python changes` | Agent、DB adapters、Storage adapters、Semantic adapter、MetricFlow | `Python quality gate` |
 | `.github/workflows/agent-artifact-renderer.yml` | `Detect relevant changes` | `Renderer package` | `Agent renderer gate` |
 | `.github/workflows/web-quality.yml` | `Detect relevant changes` | `Tests and build` | `Web quality gate` |
 
@@ -75,8 +77,14 @@ detector 必须同时检查两个字段。只检查 `filename` 会漏掉“从�
 | `agent` | `datus-agent/` |
 | `db_adapters` | `datus-db-adapters/` |
 | `storage_adapters` | `datus-storage-adapters/` |
+| `semantic_adapter` | `datus-semantic-adapter/` |
+| `metricflow` | `metricflow/` |
 
-以下共享文件变化时，三个 Python 输出都必须为 `true`：
+Python detector 同时表达依赖传播：`metricflow/` 改动还会触发 Semantic adapter 和
+Agent；`datus-semantic-adapter/` 改动还会触发 Agent。这样本地 path dependency 的下游
+初始化回归不会被跳过。
+
+以下共享文件变化时，五个 Python 输出都必须为 `true`：
 
 ```text
 .github/workflows/python-quality.yml
@@ -131,7 +139,7 @@ Visual artifact 代码同时影响 Agent 内嵌 renderer 和浏览器行为，�
 .github/scripts/verify-quality-gate.test.cjs
 ```
 
-校验器文件同时登记在 Python detector 中，因此修改严格 gate 规则时，五个实体 job 都会运行。
+校验器文件同时登记在 Python detector 中，因此修改严格 gate 规则时，七个实体 job 都会运行。
 
 ## 严格 Gate 契约
 
@@ -162,7 +170,8 @@ WEB_RELEVANT=<detector output>
 WEB_RESULT=<job result>
 ```
 
-Python gate 同时声明 `AGENT`、`DB_ADAPTERS` 和 `STORAGE_ADAPTERS`。
+Python gate 同时声明 `AGENT`、`DB_ADAPTERS`、`STORAGE_ADAPTERS`、
+`SEMANTIC_ADAPTER` 和 `METRICFLOW`。
 
 ## Timeout 与重试
 
@@ -175,6 +184,8 @@ Python gate 同时声明 `AGENT`、`DB_ADAPTERS` 和 `STORAGE_ADAPTERS`。
 | Agent quality | 20 分钟 |
 | DB adapters quality | 15 分钟 |
 | Storage adapters quality | 15 分钟 |
+| Semantic adapter quality | 15 分钟 |
+| MetricFlow quality | 15 分钟 |
 | Renderer package | 20 分钟 |
 | Web Tests and build | 25 分钟 |
 

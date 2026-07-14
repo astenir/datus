@@ -50,6 +50,11 @@ class OceanBaseOracleConfig(BaseModel):
     pool_mincached: int = Field(default=2, ge=0, description="Minimum number of idle connections kept in the pool")
     pool_maxcached: int = Field(default=5, ge=0, description="Maximum number of idle connections kept in the pool")
     pool_blocking: bool = Field(default=True, description="Block when pool is exhausted instead of raising error")
+    pool_ping_timeout_seconds: int = Field(
+        default=5,
+        gt=0,
+        description="JDBC connection validation timeout in seconds when borrowing from the pool",
+    )
     extra_jdbc_params: Dict[str, str] = Field(
         default_factory=dict,
         description="Additional JDBC URL parameters, e.g. {'useUnicode': 'true', 'characterEncoding': 'utf-8'}",

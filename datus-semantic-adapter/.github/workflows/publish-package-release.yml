@@ -1,0 +1,298 @@
+name: Publish Package Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Workspace package to publish"
+        required: true
+        type: choice
+        options:
+          - datus-semantic-core
+          - datus-semantic-metricflow
+          - datus-semantic-osi
+      version:
+        description: "Optional version; leave empty to increment the current patch version"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: publish-${{ inputs.package }}-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: Pypi Publish
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install release tooling
+        run: pip install packaging twine
+
+      - name: Resolve publication state
+        id: resolve
+        env:
+          PACKAGE: ${{ inputs.package }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          python3 ci/resolve_package_publish.py \
+            --package "${PACKAGE}" \
+            --requested-version "${REQUESTED_VERSION}"
+
+      - name: Check out existing release commit
+        if: steps.resolve.outputs.state != 'new'
+        env:
+          RELEASE_COMMIT: ${{ steps.resolve.outputs.release_commit }}
+        run: |
+          set -euo pipefail
+          git checkout --detach "${RELEASE_COMMIT}"
+          test "$(git rev-parse HEAD)" = "${RELEASE_COMMIT}"
+
+      - name: Prepare release metadata
+        if: steps.resolve.outputs.state == 'new'
+        env:
+          PACKAGE: ${{ steps.resolve.outputs.package }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 ci/prepare_package_release.py \
+            --package "${PACKAGE}" \
+            --version "${VERSION}" \
+            --update-dependent-bounds
+
+      - name: Validate package release
+        if: steps.resolve.outputs.state != 'complete'
+        env:
+          PACKAGE: ${{ steps.resolve.outputs.package }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 ci/check_package_release_readiness.py \
+            --package "${PACKAGE}" \
+            --expected-version "${VERSION}" \
+            --check-dependent-bounds \
+            --build
+          ci/run-unit-tests.sh "${PACKAGE}"
+          git diff --check
+
+      - name: Build release artifacts
+        if: steps.resolve.outputs.state != 'complete'
+        env:
+          PACKAGE: ${{ steps.resolve.outputs.package }}
+        run: |
+          set -euo pipefail
+          release_dir="dist/release/${PACKAGE}"
+          rm -rf dist/release
+          uv build --package "${PACKAGE}" --out-dir "${release_dir}"
+          python -m twine check "${release_dir}"/*
+
+      - name: Commit release metadata and create tag
+        if: steps.resolve.outputs.state == 'new'
+        env:
+          BRANCH: ${{ steps.resolve.outputs.branch }}
+          PACKAGE: ${{ steps.resolve.outputs.package }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --tags origin
+          git fetch origin \
+            "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" || true
+
+          if git rev-parse --verify --quiet "refs/tags/${TAG}" >/dev/null; then
+            echo "Release tag ${TAG} was created by another process" >&2
+            exit 1
+          fi
+
+          git checkout -B "${BRANCH}"
+          git add -- ./*/pyproject.toml
+          git commit -m "chore: release ${PACKAGE} ${VERSION}"
+          git tag -a "${TAG}" -m "Release ${PACKAGE} ${VERSION}"
+
+          push_args=(--atomic)
+          if git rev-parse --verify --quiet "refs/remotes/origin/${BRANCH}" >/dev/null; then
+            remote_commit="$(git rev-parse "refs/remotes/origin/${BRANCH}")"
+            push_args+=("--force-with-lease=refs/heads/${BRANCH}:${remote_commit}")
+          fi
+          git push "${push_args[@]}" origin \
+            "HEAD:refs/heads/${BRANCH}" \
+            "refs/tags/${TAG}"
+
+      - name: Publish to PyPI
+        if: steps.resolve.outputs.state != 'complete'
+        env:
+          PACKAGE: ${{ steps.resolve.outputs.package }}
+          PYPI_USERNAME: ${{ secrets.PYPI_USERNAME }}
+          PYPI_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          set -euo pipefail
+          password="${PYPI_PASSWORD:-${PYPI_API_TOKEN:-${PYPI_TOKEN:-}}}"
+          if [ -z "${password}" ]; then
+            echo "Missing PyPI password/token secret" >&2
+            exit 1
+          fi
+
+          if [ -n "${PYPI_USERNAME:-}" ]; then
+            username="${PYPI_USERNAME}"
+          elif [ -n "${PYPI_PASSWORD:-}" ]; then
+            username="transform_data"
+          else
+            username="__token__"
+          fi
+
+          release_dir="dist/release/${PACKAGE}"
+          python -m twine upload \
+            --non-interactive \
+            --username "${username}" \
+            --password "${password}" \
+            "${release_dir}"/*
+
+      - name: Verify PyPI release
+        if: steps.resolve.outputs.state != 'complete'
+        env:
+          PACKAGE: ${{ steps.resolve.outputs.package }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          python - <<'PY'
+          from __future__ import annotations
+
+          import json
+          import os
+          import time
+          import urllib.request
+
+          package = os.environ["PACKAGE"]
+          version = os.environ["VERSION"]
+          url = f"https://pypi.org/pypi/{package}/{version}/json"
+
+          for attempt in range(12):
+              try:
+                  with urllib.request.urlopen(url, timeout=20) as response:
+                      payload = json.loads(response.read().decode("utf-8"))
+                  published_version = str(payload.get("info", {}).get("version", ""))
+                  if published_version != version:
+                      raise ValueError(
+                          f"PyPI returned {package} {published_version}, expected {version}"
+                      )
+                  print(f"Verified {package} {version} on PyPI")
+                  break
+              except Exception as exc:
+                  if attempt == 11:
+                      raise
+                  print(f"PyPI verification attempt {attempt + 1} failed: {exc}")
+                  time.sleep(10)
+          PY
+
+      - name: Create or update post-publish release PR
+        env:
+          BRANCH: ${{ steps.resolve.outputs.branch }}
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          PACKAGE: ${{ steps.resolve.outputs.package }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          set -euo pipefail
+          git fetch origin main
+
+          if git diff --quiet "origin/main" HEAD -- ./*/pyproject.toml; then
+            echo "Release metadata is already present on main; no PR is needed."
+            exit 0
+          fi
+
+          git fetch origin \
+            "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}" || true
+
+          if git rev-parse --verify --quiet "refs/remotes/origin/${BRANCH}" >/dev/null; then
+            remote_commit="$(git rev-parse "refs/remotes/origin/${BRANCH}")"
+            if [ "${remote_commit}" != "$(git rev-parse HEAD)" ]; then
+              git push \
+                "--force-with-lease=refs/heads/${BRANCH}:${remote_commit}" \
+                origin "HEAD:refs/heads/${BRANCH}"
+            fi
+          else
+            git push origin "HEAD:refs/heads/${BRANCH}"
+          fi
+
+          title="[Tool] Record ${PACKAGE} ${VERSION} release"
+          body_file="$(mktemp)"
+          cat > "${body_file}" <<EOF
+          ## Why
+
+          Record the package metadata for the published ${PACKAGE} ${VERSION} release.
+
+          ## Solution
+
+          - update ${PACKAGE} package version to ${VERSION}
+          - update workspace package lower bounds that depend on ${PACKAGE}
+          - record release tag ${TAG}
+
+          ## Test Cases
+
+          - package release readiness checks and unit tests passed
+          - release artifacts passed Twine validation
+          - ${PACKAGE} ${VERSION} was verified on PyPI before this PR was created
+
+          EOF
+
+          pr_number="$(gh pr list \
+            --repo "${GITHUB_REPOSITORY}" \
+            --base main \
+            --head "${BRANCH}" \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')"
+          if [ -n "${pr_number}" ]; then
+            gh pr edit "${pr_number}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${title}" \
+              --body-file "${body_file}"
+          else
+            gh pr create \
+              --repo "${GITHUB_REPOSITORY}" \
+              --base main \
+              --head "${BRANCH}" \
+              --title "${title}" \
+              --body-file "${body_file}"
+          fi
+
+      - name: Summarize release
+        env:
+          BRANCH: ${{ steps.resolve.outputs.branch }}
+          PACKAGE: ${{ steps.resolve.outputs.package }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+          TAG: ${{ steps.resolve.outputs.tag }}
+          STATE: ${{ steps.resolve.outputs.state }}
+        run: |
+          {
+            echo "### Package release"
+            echo "- Package: \`${PACKAGE}\`"
+            echo "- Version: \`${VERSION}\`"
+            echo "- Tag: \`${TAG}\`"
+            echo "- Release branch: \`${BRANCH}\`"
+            echo "- Initial state: \`${STATE}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"

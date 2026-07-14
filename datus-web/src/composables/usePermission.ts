@@ -41,6 +41,15 @@ type MeSummaryPayload = {
   is_admin?: boolean;
 };
 
+function datasourceGrantAllowsAccess(grant: unknown): boolean {
+  if (grant === true) return true;
+  if (typeof grant !== "object" || grant === null || Array.isArray(grant)) return false;
+  const effect = "effect" in grant && typeof grant.effect === "string"
+    ? grant.effect.trim().toLowerCase()
+    : "allow";
+  return effect === "allow";
+}
+
 // 权限数据缓存
 const permissions = ref<UserPermissions | null>(null);
 const loading = ref(false);
@@ -56,7 +65,9 @@ function normalizeMeSummary(payload: MeSummaryPayload | null | undefined): UserP
     user_id: payload.user_id ?? "",
     features: featureEntries.filter(([, enabled]) => enabled).map(([feature]) => feature),
     views: viewEntries.filter(([, enabled]) => enabled).map(([view]) => view),
-    datasources: Object.keys(datasourceGrants).filter((datasource) => Boolean(datasourceGrants[datasource])),
+    datasources: Object.entries(datasourceGrants)
+      .filter(([, grant]) => datasourceGrantAllowsAccess(grant))
+      .map(([datasource]) => datasource),
     permissions: payload.permissions ?? [],
     datasource_grants: datasourceGrants,
     is_admin: payload.is_admin === true,
@@ -167,11 +178,6 @@ export function usePermission() {
    */
   function hasDatasourcePermission(datasourceName: string): boolean {
     if (!permissions.value) return false;
-
-    if (permissions.value.is_admin) {
-      return true;
-    }
-
     return permissions.value.datasources.includes(datasourceName) || permissions.value.datasources.includes("*");
   }
 

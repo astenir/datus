@@ -1,60 +1,33 @@
-# datus-storage-adapter
+# Datus Storage Adapters
 
-Pluggable storage backend adapters for [datus-agent](https://github.com/Datus-ai/Datus-agent). This monorepo provides database-specific implementations of `BaseRdbBackend` and `BaseVectorBackend`, discovered automatically via setuptools entry-points.
+面向 [datus-agent](../datus-agent/) 的可插拔内部存储 workspace，提供关系型 metadata/task backend 与向量 backend。实现通过 setuptools entry points 注册，运行时不应直接依赖具体 adapter 类。
 
-## Project Structure
+## 当前包
 
-```
-datus-storage-adapter/
-├── pyproject.toml                  # uv workspace root
-└── datus-storage-postgresql/       # PostgreSQL adapter package
-    ├── pyproject.toml
-    ├── datus_storage_postgresql/
-    │   ├── rdb/                    # Relational database backend
-    │   └── vector/                 # Vector database backend (pgvector)
-    └── tests/
-```
+| 包 | 能力 | 文档 |
+| --- | --- | --- |
+| `datus-storage-base` | backend 接口、registry 与共享模型 | [README](./datus-storage-base/README.md) |
+| `datus-storage-postgresql` | PostgreSQL RDB + pgvector | [README](./datus-storage-postgresql/README.md) |
+| `datus-storage-oceanbase-mysql` | OceanBase MySQL 模式 RDB + vector | [README](./datus-storage-oceanbase-mysql/README.md) |
 
-## Available Adapters
+该清单与根 `pyproject.toml` 的 workspace members 和 `tool.uv.sources` 保持一致。
 
-| Adapter | Type | Documentation |
-|---------|------|---------------|
-| [datus-storage-postgresql](datus-storage-postgresql/README.md) | `postgresql` | RDB + Vector backends for PostgreSQL |
-
-## Development
-
-### Setup
+## 开发
 
 ```bash
-uv sync --all-packages --all-extras
+uv sync --dev
+uv run ruff check .
+uv run pytest
 ```
 
-### Running Tests
+PostgreSQL 和 OceanBase 集成测试需要相应数据库服务。优先运行被修改包的测试，再运行 workspace 检查；不要把本地 DSN、密码或容器数据提交到仓库。
 
-Tests require Docker (testcontainers starts a `pgvector/pgvector:pg17` container):
+## 新增 adapter
 
-```bash
-# Install local datus-agent (PyPI version may lack latest interfaces)
-uv pip install -e ../Datus-agent
+1. 新建 `datus-storage-<name>/` 包并添加包级 README。
+2. 实现 `datus-storage-base` 中的 RDB 和/或 vector 接口。
+3. 在包 `pyproject.toml` 中注册对应 entry point。
+4. 同步根 `pyproject.toml` 的 workspace member、source 和依赖。
+5. 更新上表，并为 registry discovery、核心行为和数据库集成增加测试。
 
-# Run all tests
-.venv/bin/pytest datus-storage-postgresql/tests/ -v
-```
-
-## Adding a New Adapter
-
-1. Create a new package directory at the repository root (e.g. `datus-storage-mysql/`)
-2. Add its own `pyproject.toml` with dependencies and entry-points
-3. Implement `BaseRdbBackend` and/or `BaseVectorBackend` under `datus_storage_<adapter_name>/`
-4. Register the new member in the root `pyproject.toml`:
-
-```toml
-[tool.uv.workspace]
-members = [
-    "datus-storage-base",
-    "datus-storage-postgresql",
-    "datus-storage-mysql",
-]
-```
-
-5. Add a `README.md` inside the new package and link it from this file
+业务 datasource adapter 属于 [`datus-db-adapters`](../datus-db-adapters/)，不应放进本 workspace。
