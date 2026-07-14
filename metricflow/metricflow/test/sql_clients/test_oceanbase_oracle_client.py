@@ -22,7 +22,7 @@ def test_oceanbase_oracle_engine_registration() -> None:
     assert OceanBaseOracleEngineAttributes.full_outer_joins_supported is False
 
 
-def test_query_converts_named_parameters_to_jdbc_qmarks() -> None:
+def test_query_converts_named_parameters_and_normalizes_column_labels() -> None:
     connector = MagicMock()
     connector.query_dataframe.return_value = pd.DataFrame([{"TOTAL": 42}])
     client = OceanBaseOracleSqlClient(connector)
@@ -32,7 +32,7 @@ def test_query_converts_named_parameters_to_jdbc_qmarks() -> None:
         SqlBindParameters.create_from_dict({"amount": 42, "label": "ok"}),
     )
 
-    assert result.to_dict(orient="records") == [{"TOTAL": 42}]
+    assert result.to_dict(orient="records") == [{"total": 42}]
     connector.query_dataframe.assert_called_once_with(
         "SELECT ? AS total FROM DUAL WHERE ? = ?",
         (42, "ok", "ok"),

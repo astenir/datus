@@ -192,7 +192,8 @@ class OceanBaseOracleSqlClient(BaseSqlClientImplementation):
         extra_tags: SqlJsonTag = SqlJsonTag(),
     ) -> pd.DataFrame:
         statement, parameters = self._to_jdbc_parameters(stmt, bind_params)
-        return self._connector.query_dataframe(statement, parameters)
+        dataframe = self._connector.query_dataframe(statement, parameters)
+        return dataframe.rename(columns=lambda column: str(column).lower())
 
     def _engine_specific_execute_implementation(
         self,
