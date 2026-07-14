@@ -140,8 +140,11 @@ def _connector_config() -> dict:
     }
 
 
-def _db_config() -> dict:
-    return {"type": "oceanbase-oracle", **_connector_config()}
+def _metricflow_db_config() -> dict[str, str]:
+    return {
+        "type": "oceanbase-oracle",
+        **{key: str(value) for key, value in _connector_config().items()},
+    }
 
 
 def _read_baseline(connector) -> tuple[float, int]:
@@ -165,7 +168,7 @@ def mf_config(tmp_path_factory):
     (yaml_dir / "mf_orders.yaml").write_text(_SEMANTIC_YAML)
     return MetricFlowConfig(
         datasource="mf_oceanbase_oracle_nightly",
-        db_config=_db_config(),
+        db_config=_metricflow_db_config(),
         semantic_models_path=str(yaml_dir),
     )
 
@@ -190,11 +193,17 @@ def mf_adapter(mf_config):
     adapter.client.sql_client.close()
 
 
-async def test_readonly_connector_config_matches_native_adapter():
-    config = OceanBaseOracleConfig(**_connector_config())
+async def test_readonly_configs_match_consumers():
+    connector_config = OceanBaseOracleConfig(**_connector_config())
+    metricflow_config = MetricFlowConfig(
+        datasource="mf_oceanbase_oracle_nightly",
+        db_config=_metricflow_db_config(),
+    )
 
-    assert config.port == _PORT
-    assert config.schema_name == _SCHEMA
+    assert connector_config.port == _PORT
+    assert connector_config.schema_name == _SCHEMA
+    assert metricflow_config.db_config is not None
+    assert all(isinstance(value, str) for value in metricflow_config.db_config.values())
 
 
 async def test_validate_semantic_passes(mf_adapter):
