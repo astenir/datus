@@ -21,6 +21,7 @@ datus_oceanbase_oracle = import_required(
 
 MetricFlowAdapter = datus_semantic_metricflow.MetricFlowAdapter
 MetricFlowConfig = datus_semantic_metricflow.MetricFlowConfig
+OceanBaseOracleConfig = datus_oceanbase_oracle.OceanBaseOracleConfig
 OceanBaseOracleConnector = datus_oceanbase_oracle.OceanBaseOracleConnector
 
 pytestmark = [pytest.mark.integration, pytest.mark.nightly, pytest.mark.asyncio]
@@ -125,19 +126,22 @@ WHERE "{_TIME_COLUMN}" >= TO_DATE(?, 'YYYY-MM-DD')
 """
 
 
-def _db_config() -> dict:
+def _connector_config() -> dict:
     return {
-        "type": "oceanbase-oracle",
         "host": _HOST,
-        "port": str(_PORT),
+        "port": _PORT,
         "username": _USERNAME,
         "password": _PASSWORD,
         "database": _DATABASE,
         "schema": _SCHEMA,
         "jar_path": _JAR_PATH,
-        "connect_timeout_seconds": "30",
-        "query_timeout_seconds": "60",
+        "connect_timeout_seconds": 30,
+        "query_timeout_seconds": 60,
     }
+
+
+def _db_config() -> dict:
+    return {"type": "oceanbase-oracle", **_connector_config()}
 
 
 def _read_baseline(connector) -> tuple[float, int]:
@@ -168,7 +172,7 @@ def mf_config(tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def readonly_baseline():
-    connector = OceanBaseOracleConnector(_db_config())
+    connector = OceanBaseOracleConnector(_connector_config())
     before = _read_baseline(connector)
     try:
         yield before
@@ -184,6 +188,13 @@ def mf_adapter(mf_config):
     adapter = MetricFlowAdapter(mf_config)
     yield adapter
     adapter.client.sql_client.close()
+
+
+async def test_readonly_connector_config_matches_native_adapter():
+    config = OceanBaseOracleConfig(**_connector_config())
+
+    assert config.port == _PORT
+    assert config.schema_name == _SCHEMA
 
 
 async def test_validate_semantic_passes(mf_adapter):
