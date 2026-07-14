@@ -59,6 +59,7 @@ database:
 | `sid` | 否 | 无 | Oracle SID。与 `service_name` / `database` 互斥。 |
 | `schema` / `schema_name` | 否 | 用户名大写 | 默认 Oracle schema/owner。 |
 | `thick_mode` | 否 | `false` | 是否启用 `python-oracledb` Thick mode。 |
+| `oracle_client_lib_dir` / `lib_dir` | 否 | 无 | Thick mode 使用的 Oracle Client library 绝对目录。 |
 | `timeout_seconds` | 否 | `30` | 连接超时秒数。 |
 
 `database` 在该适配器中会被当作 Oracle `service_name`。如果需要连接老式 SID，可改用
@@ -91,18 +92,19 @@ Thick mode 会加载 Oracle Client libraries，由 Oracle Client 处理网络连
 - 已有部署规范要求使用 Oracle Instant Client。
 - 需要与原 `cx_Oracle` 厚客户端行为保持一致。
 
-当前适配器的实现是：
+当前适配器会在创建 SQLAlchemy engine 之前初始化 Thick mode：
 
 ```python
 if config.thick_mode:
-    import oracledb
-
-    oracledb.init_oracle_client()
+    if config.oracle_client_lib_dir:
+        oracledb.init_oracle_client(lib_dir=config.oracle_client_lib_dir)
+    else:
+        oracledb.init_oracle_client()
 ```
 
-也就是说，配置 `thick_mode: true` 后，适配器会调用
-`oracledb.init_oracle_client()`，但当前没有提供 `lib_dir` 配置项。因此 Oracle Client
-library 必须能被当前进程通过系统动态库搜索路径找到。
+`oracle_client_lib_dir` 接受 `lib_dir` 别名，必须与 `thick_mode: true` 一起使用，并且
+必须是运行 Datus 进程可见的绝对目录。不配置该字段时保持原有行为，由系统动态库搜索
+路径查找 Oracle Client。
 
 > 重要：`python-oracledb` 的模式是进程级的。必须在创建任何 Oracle 连接或连接池之前启
 > 用 Thick mode。一旦进程已经创建过连接，不能再在同一进程中从 Thin mode 切换到 Thick
@@ -142,14 +144,15 @@ database:
   database: FREEPDB1
   schema: APP
   thick_mode: true
+  oracle_client_lib_dir: /opt/oracle/instantclient_21_13
 ```
 
-如果部署在 Docker 中，必须把 Instant Client 安装或挂载到容器内，并在容器启动时设置
-`LD_LIBRARY_PATH`。例如：
+显式配置 `oracle_client_lib_dir` 后，通常不需要依赖 `LD_LIBRARY_PATH` 定位 Instant
+Client 主目录；Oracle Client 自身的系统依赖仍必须能被动态链接器找到。如果部署在
+Docker 中，必须把 Instant Client 安装或挂载到容器内。例如：
 
 ```bash
 docker run \
-  -e LD_LIBRARY_PATH=/opt/oracle/instantclient_21_13 \
   -v /host/oracle/instantclient_21_13:/opt/oracle/instantclient_21_13:ro \
   your-datus-image
 ```
@@ -177,21 +180,31 @@ $env:PATH = "C:\oracle\instantclient_21_13;$env:PATH"
 
 ```yaml
 thick_mode: true
+oracle_client_lib_dir: C:\oracle\instantclient_21_13
 ```
 
-### 当前不支持 `lib_dir` 配置
+### 显式配置 Oracle Client 目录
 
-`python-oracledb` 本身支持在代码中调用：
+推荐使用语义明确的字段：
 
-```python
-oracledb.init_oracle_client(lib_dir="/path/to/instantclient")
+```yaml
+thick_mode: true
+oracle_client_lib_dir: /opt/oracle/instantclient_21_13
 ```
 
-但当前 `datus-oracle` 的配置模型只有 `thick_mode: true/false`，没有 `oracle_client_lib_dir`
-或类似字段。因此目前不要在 YAML 中写 `lib_dir`，它会因为 `extra="forbid"` 被拒绝。
+也兼容 `python-oracledb` 的原生术语：
 
-如果部署环境必须通过 `lib_dir` 指定 Oracle Client 路径，需要先扩展
-`OracleConfig` 和 `OracleConnector` 的实现。
+```yaml
+thick_mode: true
+lib_dir: /opt/oracle/instantclient_21_13
+```
+
+只配置目录但没有启用 Thick mode 会被拒绝，避免无意间改变整个进程的 Oracle driver
+模式。相对路径、不存在的路径和非目录路径也会在创建 connector 前给出配置错误。
+
+`python-oracledb` 初始化是进程级的：同一 Datus API 进程中的多个 Oracle datasource
+必须使用同一套 Oracle Client library，不能分别配置不同的 `oracle_client_lib_dir`。适配器
+会串行执行初始化，并在驱动拒绝重复或冲突初始化时补充可操作的错误上下文。
 
 ## Python 用法
 
@@ -238,6 +251,7 @@ connector = OracleConnector(
         service_name="FREEPDB1",
         schema="APP",
         thick_mode=True,
+        oracle_client_lib_dir="/opt/oracle/instantclient_21_13",
     )
 )
 
@@ -270,6 +284,7 @@ finally:
 该错误通常表示 Thick mode 已启用，但进程找不到 Oracle Client library。检查：
 
 - 是否已经安装 Oracle Instant Client。
+- `oracle_client_lib_dir` 是否是运行进程可见的绝对目录；未配置时才依赖系统动态库搜索路径。
 - Datus 运行进程是否能看到对应动态库路径。
 - Linux 下 `LD_LIBRARY_PATH` 是否在进程启动前设置。
 - Windows 下 Instant Client 目录是否已加入 `PATH`。
@@ -338,8 +353,9 @@ Datus 配置中启用 `thick_mode: true`。
 
 ## 已知限制
 
-- 当前配置不支持传入 `oracledb.init_oracle_client(lib_dir=...)` 的 `lib_dir`。
 - Thick mode 需要运行环境自行安装并暴露 Oracle Client libraries。
+- Thick mode 是进程级能力；同一进程不能为不同 datasource 加载不同的 Oracle Client
+  目录，也不能在已经建立 Thin mode 连接后切换到 Thick mode。
 - 迁移目标能力目前继承自 SQLAlchemy 通用实现，不包含 Oracle 专属类型映射和 DDL 规则。
 - DDL 获取依赖 `DBMS_METADATA.GET_DDL`；权限不足时只会返回不可用提示，不会完整重建
   DDL。

@@ -88,6 +88,19 @@ metricflow-oceanbase-oracle = [
     "datus-semantic-metricflow>=0.2.8",
     "datus-oceanbase-oracle>=0.1.0",
 ]
+storage-oceanbase-mysql = [
+    "datus-storage-oceanbase-mysql>=0.1.5,<0.2.0",
+]
+enterprise-intranet = [
+    "datus-metricflow>=0.2.7",
+    "datus-semantic-metricflow>=0.2.8",
+    "datus-oceanbase-oracle>=0.1.0",
+    "datus-oracle>=0.1.0,<0.2.0",
+    "datus-mysql>=0.1.7,<0.2.0",
+    "datus-postgresql>=0.1.6,<0.2.0",
+    "datus-storage-oceanbase-mysql>=0.1.5,<0.2.0",
+    "datus-storage-postgresql>=0.1.5,<0.2.0",
+]
 
 [project.urls]
 Homepage = "https://datus.ai/"
@@ -215,10 +228,18 @@ ci = [
 ]
 
 [tool.uv.sources]
+datus-db-core = { path = "../datus-db-adapters/datus-db-core", editable = true }
 datus-metricflow = { path = "../metricflow", editable = true }
+datus-mysql = { path = "../datus-db-adapters/datus-mysql", editable = true }
 datus-oceanbase-oracle = { path = "../datus-db-adapters/datus-oceanbase-oracle", editable = true }
+datus-oracle = { path = "../datus-db-adapters/datus-oracle", editable = true }
+datus-postgresql = { path = "../datus-db-adapters/datus-postgresql", editable = true }
 datus-semantic-core = { path = "../datus-semantic-adapter/datus-semantic-core", editable = true }
 datus-semantic-metricflow = { path = "../datus-semantic-adapter/datus-semantic-metricflow", editable = true }
+datus-sqlalchemy = { path = "../datus-db-adapters/datus-sqlalchemy", editable = true }
+datus-storage-base = { path = "../datus-storage-adapters/datus-storage-base", editable = true }
+datus-storage-oceanbase-mysql = { path = "../datus-storage-adapters/datus-storage-oceanbase-mysql", editable = true }
+datus-storage-postgresql = { path = "../datus-storage-adapters/datus-storage-postgresql", editable = true }
 
 [tool.coverage.run]
 source = ["datus"]

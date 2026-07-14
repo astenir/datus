@@ -2,6 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+import threading
 from typing import Any, Dict, List, Optional, Set, Union, override
 
 from sqlalchemy import text
@@ -13,6 +14,23 @@ from .config import OracleConfig
 from .handlers import build_oracle_uri
 
 logger = get_logger(__name__)
+_ORACLE_CLIENT_INIT_LOCK = threading.Lock()
+
+
+def _initialize_oracle_client(lib_dir: Optional[str]) -> None:
+    import oracledb
+
+    init_kwargs = {"lib_dir": lib_dir} if lib_dir else {}
+    location = repr(lib_dir) if lib_dir else "the system library search path"
+    with _ORACLE_CLIENT_INIT_LOCK:
+        try:
+            oracledb.init_oracle_client(**init_kwargs)
+        except Exception as exc:
+            raise RuntimeError(
+                "Failed to initialize python-oracledb Thick mode using Oracle Client libraries from "
+                f"{location}. Oracle Client initialization is process-wide; initialize it before any Oracle "
+                "connection and use the same library directory for every Oracle datasource."
+            ) from exc
 
 
 class OracleConnector(SQLAlchemyConnector, MigrationTargetMixin):
@@ -33,9 +51,7 @@ class OracleConnector(SQLAlchemyConnector, MigrationTargetMixin):
         schema = config.schema_name or config.username.upper()
 
         if config.thick_mode:
-            import oracledb
-
-            oracledb.init_oracle_client()
+            _initialize_oracle_client(config.oracle_client_lib_dir)
 
         super().__init__(
             build_oracle_uri(config),

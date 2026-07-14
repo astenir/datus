@@ -23,10 +23,18 @@ datus/
 ├── datus-agent/
 ├── datus-db-adapters/
 │   ├── datus-db-core/
-│   └── datus-oceanbase-oracle/
+│   ├── datus-mysql/
+│   ├── datus-oceanbase-oracle/
+│   ├── datus-oracle/
+│   ├── datus-postgresql/
+│   └── datus-sqlalchemy/
 ├── datus-semantic-adapter/
 │   ├── datus-semantic-core/
 │   └── datus-semantic-metricflow/
+├── datus-storage-adapters/
+│   ├── datus-storage-base/
+│   ├── datus-storage-oceanbase-mysql/
+│   └── datus-storage-postgresql/
 └── metricflow/
 ```
 
@@ -46,6 +54,38 @@ datus-semantic-metricflow>=0.2.8
 datus-oceanbase-oracle>=0.1.0
 ```
 
+正式配置如果使用 `storage.rdb.type: oceanbase-mysql` 或
+`storage.vector.type: oceanbase-mysql`，还必须启用独立的
+`storage-oceanbase-mysql` extra。它声明：
+
+```text
+datus-storage-oceanbase-mysql>=0.1.5,<0.2.0
+```
+
+业务数据源的 OceanBase Oracle 模式与 Datus 内部存储的 OceanBase MySQL 模式是两个
+独立插件，不能因为前者已经安装就假设后者也已注册。
+
+两者的权限也必须分开：Oracle 业务 datasource 可以只读；内部 OceanBase MySQL 存储
+需要为 TaskStore、会话 metadata 和向量数据创建表并执行增删改。生产环境应使用独立的
+MySQL 模式 tenant/database 和专用可写账号，不要复用只读 Oracle 业务账号。
+
+为避免正式节点上线后再临时补装 PostgreSQL/MySQL 包，推荐使用统一的
+`enterprise-intranet` extra。它一次锁定当前内网运行基线：
+
+```text
+datus-metricflow>=0.2.7
+datus-semantic-metricflow>=0.2.8
+datus-oceanbase-oracle>=0.1.0
+datus-oracle>=0.1.0,<0.2.0
+datus-mysql>=0.1.7,<0.2.0
+datus-postgresql>=0.1.6,<0.2.0
+datus-storage-oceanbase-mysql>=0.1.5,<0.2.0
+datus-storage-postgresql>=0.1.5,<0.2.0
+```
+
+原有细粒度 extras 继续保留，供开发或精简部署使用；正式内网 release 统一启用
+`enterprise-intranet`，不在运行节点临时 `pip install`。
+
 完整 Datus 包链路为：
 
 | 包 | 来源 | 作用 |
@@ -55,7 +95,14 @@ datus-oceanbase-oracle>=0.1.0
 | `datus-semantic-core` | `datus-semantic-adapter/datus-semantic-core/` | semantic adapter 接口 |
 | `datus-semantic-metricflow` | `datus-semantic-adapter/datus-semantic-metricflow/` | Datus 到 MetricFlow 的配置和查询适配 |
 | `datus-db-core` | `datus-db-adapters/datus-db-core/` | 数据库 adapter 公共接口 |
+| `datus-sqlalchemy` | `datus-db-adapters/datus-sqlalchemy/` | MySQL/PostgreSQL 等 adapter 的 SQLAlchemy 公共层 |
+| `datus-mysql` | `datus-db-adapters/datus-mysql/` | MySQL 业务 datasource adapter |
 | `datus-oceanbase-oracle` | `datus-db-adapters/datus-oceanbase-oracle/` | JDBC、连接池、元数据和参数化查询 |
+| `datus-oracle` | `datus-db-adapters/datus-oracle/` | 标准 Oracle Database 业务 datasource adapter（python-oracledb） |
+| `datus-postgresql` | `datus-db-adapters/datus-postgresql/` | PostgreSQL 业务 datasource adapter |
+| `datus-storage-base` | `datus-storage-adapters/datus-storage-base/` | 内部 RDB/vector backend 接口、registry 和 entry point 发现 |
+| `datus-storage-oceanbase-mysql` | `datus-storage-adapters/datus-storage-oceanbase-mysql/` | Datus 内部 RDB/vector 的 OceanBase MySQL 后端与 entry point |
+| `datus-storage-postgresql` | `datus-storage-adapters/datus-storage-postgresql/` | Datus 内部 PostgreSQL RDB 和 pgvector backend |
 
 这些包在当前部署模式下由 monorepo 本地源码构建，不要求先发布到私有 PyPI。
 
@@ -68,6 +115,7 @@ datus-oceanbase-oracle>=0.1.0
 DBUtils
 JayDeBeApi
 JPype1
+oracledb
 pandas
 pydantic
 poetry-core
@@ -76,9 +124,9 @@ setuptools
 wheel
 ```
 
-其中 `JPype1` 可能使用平台相关 wheel；私有镜像必须具备与目标 OS、CPU 架构和
-Python 3.12 匹配的制品。`poetry-core` 用于构建 `datus-metricflow`，`hatchling`、
-`setuptools` 和 `wheel` 用于构建其余本地项目。
+其中 `JPype1` 和 `oracledb` 可能使用平台相关 wheel；私有镜像必须具备与目标 OS、CPU
+架构和 Python 3.12 匹配的制品。`poetry-core` 用于构建 `datus-metricflow`，
+`hatchling`、`setuptools` 和 `wheel` 用于构建其余本地项目。
 
 ### 2.3 非 Python 依赖
 
@@ -90,11 +138,12 @@ Python 3.12 匹配的制品。`poetry-core` 用于构建 `datus-metricflow`，`h
 | uv | 使用企业批准的 uv 可执行文件或私有 PyPI 制品 |
 | Java | 与所选 OceanBase Connector/J 兼容的 JRE 或 JDK |
 | Connector/J | 单独提供的 OceanBase JDBC jar，不包含在 Python wheel 中 |
+| Oracle Client | 仅标准 Oracle datasource 启用 Thick mode 时需要；Thin mode 不需要 |
 | 网络 | 能访问私有 PyPI、OceanBase/ODP 地址和端口 |
 | 数据库 | 真实 OceanBase Oracle 模式测试租户 |
 
-如果 Datus 在容器中运行，Java 和 Connector/J 必须在容器内可见；配置中的 `jar_path`
-也必须使用容器内路径。
+如果 Datus 在容器中运行，Java、Connector/J 以及 Thick mode 使用的 Oracle Client
+都必须在容器内可见；`jar_path` 和 `oracle_client_lib_dir` 必须使用容器内路径。
 
 ## 3. 目录和账号建议
 
@@ -106,6 +155,7 @@ Python 3.12 匹配的制品。`poetry-core` 用于构建 `datus-metricflow`，`h
 /etc/datus/agent.yml                # 非密钥运行配置
 /etc/datus/oceanbase-oracle.env     # 数据库和私有服务密钥
 /opt/datus/jars/oceanbase-client.jar
+/opt/oracle/instantclient_21_13      # 可选：标准 Oracle Thick mode
 /var/lib/datus                      # Datus HOME 和运行数据
 /var/log/datus                      # 服务日志（如未交给 journald）
 ```
@@ -263,6 +313,16 @@ UV_SYSTEM_CERTS=true \
 uv lock --check
 ```
 
+只运行 MetricFlow nightly 可以使用上面的细粒度 extra；如果验收还会按正式配置启动
+API，统一使用完整内网 profile：
+
+```bash
+UV_DEFAULT_INDEX='https://pypi.example.internal/simple' \
+UV_SYSTEM_CERTS=true \
+uv sync --locked --dev \
+  --extra enterprise-intranet
+```
+
 ### 6.2 仅运行环境
 
 真实租户验收通过后，如果运行节点不需要 pytest，可以排除开发依赖：
@@ -270,10 +330,25 @@ uv lock --check
 ```bash
 UV_DEFAULT_INDEX='https://pypi.example.internal/simple' \
 UV_SYSTEM_CERTS=true \
-uv sync --locked --no-dev --extra metricflow-oceanbase-oracle
+uv sync --locked --no-dev \
+  --extra enterprise-intranet
 ```
 
-不要在同一个 release 虚拟环境里混用 `pip install`、全局 site-packages 和 `uv sync`。
+`enterprise-intranet` 会预装当前运行基线中的标准 Oracle、OceanBase Oracle、MySQL、
+PostgreSQL 业务 adapter，以及 OceanBase MySQL/PostgreSQL 内部存储 backend。标准
+Oracle adapter 默认使用 `python-oracledb` Thin mode，不依赖 OceanBase Connector/J；
+只有显式启用 Thick mode 时才需要另外部署 Oracle Client，并可在标准 Oracle datasource
+中配置：
+
+```yaml
+thick_mode: true
+oracle_client_lib_dir: /opt/oracle/instantclient_21_13
+```
+
+该目录必须是运行账号可见的只读绝对目录；同一 API 进程中的标准 Oracle datasource
+必须使用同一套 Oracle Client。启用某个数据库仍需配置网络、凭据、权限和服务端扩展，
+但不需要再修改节点 Python 环境。不要在同一个 release 虚拟环境里混用 `pip install`、
+全局 site-packages 和 `uv sync`；后续精确同步可能移除没有进入项目依赖图的临时安装包。
 
 ## 7. 安装 Java 和 Connector/J
 
@@ -405,19 +480,27 @@ nc -vz ob.example.internal 2883
 cd /opt/datus/releases/metricflow-oceanbase-oracle-<release-id>/datus-agent
 
 .venv/bin/python -c "
+from importlib import metadata
 import metricflow
 import datus_oceanbase_oracle
 import datus_semantic_core
 import datus_semantic_metricflow
+from datus.storage.rdb import RdbRegistry
+from datus.storage.vector import VectorRegistry
 print('metricflow:', metricflow.__file__)
 print('oceanbase:', datus_oceanbase_oracle.__file__)
 print('semantic-core:', datus_semantic_core.__file__)
 print('semantic-metricflow:', datus_semantic_metricflow.__file__)
+print('database adapters:', sorted(ep.name for ep in metadata.entry_points(group='datus.adapters')))
+print('rdb backends:', RdbRegistry.registered_types())
+print('vector backends:', VectorRegistry.registered_types())
 "
 ```
 
 输出应指向当前 release 的 monorepo 目录。若指向全局 site-packages、`/tmp` 或另一份旧
-checkout，应先修复 Python 环境归属，再排查业务配置。
+checkout，应先修复 Python 环境归属，再排查业务配置。完整内网 profile 的 database
+adapter 输出必须包含 `mysql`、`oceanbase-oracle`、`oracle`、`postgresql`；RDB/vector
+backend 输出必须同时包含 `oceanbase-mysql` 和 `postgresql`。
 
 ### 9.3 无真实数据库的初始化回归
 
@@ -633,7 +716,33 @@ Python 或另一份 checkout，而不是当前 release 的 `.venv`。
 不要通过临时访问公网绕过。先让制品管理员补齐原 `uv.lock` 所需版本以及
 `poetry-core`、`hatchling`、`setuptools`、`wheel` 等构建依赖，再重新生成内网锁文件。
 
-### 12.7 连接成功但 semantic validation 失败
+### 12.7 `RDB backend 'oceanbase-mysql' not found`
+
+这表示正式配置选择了 OceanBase MySQL 内部存储，但当前虚拟环境没有发现
+`datus.storage.rdb` entry point。不要改成手工 import，也不要把业务数据源改成 MySQL。
+使用当前 release 的依赖图重新同步：
+
+```bash
+cd /opt/datus/current/datus-agent
+
+UV_DEFAULT_INDEX='https://pypi.example.internal/simple' \
+UV_SYSTEM_CERTS=true \
+uv sync --locked --no-dev \
+  --extra enterprise-intranet
+
+.venv/bin/python -c "
+from datus.storage.rdb import RdbRegistry
+from datus.storage.vector import VectorRegistry
+print(RdbRegistry.registered_types())
+print(VectorRegistry.registered_types())
+"
+```
+
+两个列表都应包含 `oceanbase-mysql` 和 `postgresql`。如果只显示默认 backend，继续检查
+执行的 Python 是否确实为 `/opt/datus/current/datus-agent/.venv/bin/python`，以及当前
+release 是否完整包含 `datus-storage-adapters/` 中的 source mapping 目录。
+
+### 12.8 连接成功但 semantic validation 失败
 
 依次检查：
 

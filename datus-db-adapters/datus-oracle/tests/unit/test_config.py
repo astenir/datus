@@ -19,6 +19,7 @@ def test_config_defaults_to_service_name_and_username_schema():
     assert config.sid is None
     assert config.database == "FREEPDB1"
     assert config.schema_name == "APP_USER"
+    assert config.oracle_client_lib_dir is None
     assert config.timeout_seconds == 30
 
 
@@ -54,3 +55,26 @@ def test_config_forbids_extra_fields():
         OracleConfig(username="app", extra_field="nope")
 
     assert any(error["type"] == "extra_forbidden" for error in exc_info.value.errors())
+
+
+def test_config_accepts_oracle_client_lib_dir_alias(tmp_path):
+    config = OracleConfig(username="app", thick_mode=True, lib_dir=str(tmp_path))
+
+    assert config.oracle_client_lib_dir == str(tmp_path)
+
+
+def test_config_rejects_oracle_client_lib_dir_without_thick_mode(tmp_path):
+    with pytest.raises(ValidationError, match="oracle_client_lib_dir requires thick_mode=true"):
+        OracleConfig(username="app", oracle_client_lib_dir=str(tmp_path))
+
+
+def test_config_rejects_relative_oracle_client_lib_dir():
+    with pytest.raises(ValidationError, match="oracle_client_lib_dir must be an absolute path"):
+        OracleConfig(username="app", thick_mode=True, oracle_client_lib_dir="instantclient")
+
+
+def test_config_rejects_missing_oracle_client_lib_dir(tmp_path):
+    missing = tmp_path / "missing"
+
+    with pytest.raises(ValidationError, match="oracle_client_lib_dir is not a directory"):
+        OracleConfig(username="app", thick_mode=True, oracle_client_lib_dir=str(missing))

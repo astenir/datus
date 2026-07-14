@@ -2,6 +2,7 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+from pathlib import Path
 from typing import Optional
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
@@ -32,6 +33,11 @@ class OracleConfig(BaseModel):
         description="Default Oracle schema/owner",
     )
     thick_mode: bool = Field(default=False, description="Use python-oracledb thick mode")
+    oracle_client_lib_dir: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("oracle_client_lib_dir", "lib_dir"),
+        description="Absolute path to Oracle Client libraries used by python-oracledb thick mode",
+    )
     timeout_seconds: int = Field(default=30, description="Connection timeout in seconds")
 
     @model_validator(mode="before")
@@ -56,6 +62,15 @@ class OracleConfig(BaseModel):
             self.schema_name = self.username.upper()
         else:
             self.schema_name = self.schema_name.upper()
+        if self.oracle_client_lib_dir is not None:
+            if not self.thick_mode:
+                raise ValueError("oracle_client_lib_dir requires thick_mode=true")
+            lib_dir = Path(self.oracle_client_lib_dir)
+            if not lib_dir.is_absolute():
+                raise ValueError("oracle_client_lib_dir must be an absolute path")
+            if not lib_dir.is_dir():
+                raise ValueError(f"oracle_client_lib_dir is not a directory: {lib_dir}")
+            self.oracle_client_lib_dir = str(lib_dir)
         return self
 
     @property
