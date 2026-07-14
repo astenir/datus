@@ -9,12 +9,14 @@ from metricflow.sql.render.oceanbase_oracle import (
 )
 from metricflow.sql.sql_exprs import (
     SqlAggregateFunctionExpression,
+    SqlCastToTimestampExpression,
     SqlColumnReference,
     SqlColumnReferenceExpression,
     SqlDateTruncExpression,
     SqlFunction,
     SqlRatioComputationExpression,
     SqlStringExpression,
+    SqlStringLiteralExpression,
     SqlTimeDeltaExpression,
 )
 from metricflow.sql.sql_plan import SqlQueryPlan, SqlSelectColumn, SqlSelectStatementNode, SqlTableFromClauseNode
@@ -24,6 +26,26 @@ from metricflow.time.time_granularity import TimeGranularity
 @pytest.fixture
 def renderer() -> OceanBaseOracleSqlExpressionRenderer:
     return OceanBaseOracleSqlExpressionRenderer()
+
+
+def test_cast_to_timestamp_uses_explicit_oracle_format(
+    renderer: OceanBaseOracleSqlExpressionRenderer,
+) -> None:
+    result = renderer.render_sql_expr(
+        SqlCastToTimestampExpression(arg=SqlStringLiteralExpression(literal_value="2025-01-01"))
+    )
+
+    assert result.sql == "TO_TIMESTAMP('2025-01-01', 'YYYY-MM-DD')"
+
+
+def test_cast_to_timestamp_preserves_non_literal_cast(
+    renderer: OceanBaseOracleSqlExpressionRenderer,
+) -> None:
+    result = renderer.render_sql_expr(
+        SqlCastToTimestampExpression(arg=SqlColumnReferenceExpression(SqlColumnReference("a", "ds")))
+    )
+
+    assert result.sql == "CAST(a.ds AS TIMESTAMP)"
 
 
 @pytest.mark.parametrize(

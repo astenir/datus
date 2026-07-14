@@ -9,10 +9,14 @@ from metricflow.sql.render.sql_plan_renderer import (
     DefaultSqlQueryPlanRenderer,
     SqlPlanRenderResult,
 )
-from metricflow.sql.sql_exprs import SqlDateTruncExpression, SqlTimeDeltaExpression
+from metricflow.sql.sql_exprs import (
+    SqlCastToTimestampExpression,
+    SqlDateTruncExpression,
+    SqlStringLiteralExpression,
+    SqlTimeDeltaExpression,
+)
 from metricflow.sql.sql_plan import SqlSelectStatementNode
 from metricflow.time.time_granularity import TimeGranularity
-
 
 _TRUNC_FORMAT = {
     TimeGranularity.DAY: "DD",
@@ -29,6 +33,16 @@ class OceanBaseOracleSqlExpressionRenderer(DefaultSqlExpressionRenderer):
     @property
     def double_data_type(self) -> str:
         return "BINARY_DOUBLE"
+
+    def visit_cast_to_timestamp_expr(self, node: SqlCastToTimestampExpression) -> SqlExpressionRenderResult:
+        if not isinstance(node.arg, SqlStringLiteralExpression):
+            return super().visit_cast_to_timestamp_expr(node)
+
+        argument = self.render_sql_expr(node.arg)
+        return SqlExpressionRenderResult(
+            sql=f"TO_TIMESTAMP({argument.sql}, 'YYYY-MM-DD')",
+            execution_parameters=argument.execution_parameters,
+        )
 
     @staticmethod
     def _date_trunc_sql(argument: str, granularity: TimeGranularity) -> str:
