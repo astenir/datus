@@ -84,22 +84,43 @@ OCEANBASE_ORACLE_PASSWORD='...' \
 OCEANBASE_ORACLE_DATABASE=tenant \
 OCEANBASE_ORACLE_SCHEMA=APP \
 OCEANBASE_ORACLE_JAR_PATH=/opt/datus/jars/oceanbase-client.jar \
+OCEANBASE_ORACLE_METRICFLOW_RELATION=DATUS_MF_ORDERS_RO \
+OCEANBASE_ORACLE_METRICFLOW_TIME_START=2025-01-01 \
+OCEANBASE_ORACLE_METRICFLOW_TIME_END=2025-01-31 \
 uv run pytest \
   tests/integration/adapters/test_semantic_metricflow_oceanbase_oracle.py -v
 ```
+
+The real-tenant suite uses an existing table or view and issues only `SELECT`
+statements. The default relation contract is `ID`, `AMOUNT`, and `CREATED_AT`;
+override those names with `OCEANBASE_ORACLE_METRICFLOW_ID_COLUMN`,
+`OCEANBASE_ORACLE_METRICFLOW_AMOUNT_COLUMN`, and
+`OCEANBASE_ORACLE_METRICFLOW_TIME_COLUMN` when needed. Select a closed historical
+window that will not change during the suite. A parameterized baseline query is
+compared with MetricFlow, then re-run at teardown to detect data drift.
+
+The runtime account needs login and object-level read access only. It does not
+need `CREATE TABLE`, `DROP TABLE`, `INSERT`, `UPDATE`, or `DELETE` privileges.
+
+This acceptance suite covers non-cumulative measures, ratio metrics, time
+filters, and time grouping, so it does not depend on `mf_time_spine`. Models
+that use cumulative or offset metrics need a pre-provisioned, readable
+`MF_TIME_SPINE`; the read-only client fails instead of creating a missing one.
 
 Before marking the profile production-ready, the run must prove:
 
 - connection and schema context initialization;
 - semantic validation;
 - a zero-row dry run;
+- parity between the read-only baseline SQL and MetricFlow results;
 - live `SUM` and `COUNT` metric reads;
 - time filtering and all declared truncation granularities;
 - grouping and row limiting;
 - ratio casting, full outer join capability, and the random function if those
   capabilities remain declared;
 - bind parameters with strings, dates, repeated names, and comments;
-- expected failures for write, cancellation, and percentile surfaces.
+- unit/client coverage that write, cancellation, and percentile surfaces fail
+  as expected; the real read-only tenant suite must not issue mutation SQL.
 
 Archive the exact OceanBase version, Connector/J version, connection mode,
 test command, and result with the release evidence. Unit and mocked tests are

@@ -1,7 +1,8 @@
-"""MetricFlow semantic adapter nightly tests for an OceanBase Oracle tenant."""
+"""Read-only MetricFlow nightly tests for an OceanBase Oracle tenant."""
 
-import logging
+import datetime
 import os
+import re
 
 import pytest
 
@@ -22,38 +23,74 @@ MetricFlowAdapter = datus_semantic_metricflow.MetricFlowAdapter
 MetricFlowConfig = datus_semantic_metricflow.MetricFlowConfig
 OceanBaseOracleConnector = datus_oceanbase_oracle.OceanBaseOracleConnector
 
-logger = logging.getLogger(__name__)
 pytestmark = [pytest.mark.integration, pytest.mark.nightly, pytest.mark.asyncio]
+
+_ORACLE_IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9_$#]*")
+
+
+def _required_env(name: str) -> str:
+    value = os.getenv(name, "").strip()
+    if not value:
+        raise RuntimeError(f"{name} is required for the read-only OceanBase Oracle MetricFlow suite")
+    return value
+
+
+def _identifier_env(name: str, default: str | None = None) -> str:
+    value = (os.getenv(name, default or "") or "").strip()
+    if not value:
+        raise RuntimeError(f"{name} is required for the read-only OceanBase Oracle MetricFlow suite")
+    if not _ORACLE_IDENTIFIER.fullmatch(value):
+        raise RuntimeError(f"{name} must be a standard unquoted Oracle identifier, got {value!r}")
+    return value.upper()
+
+
+def _date_env(name: str) -> str:
+    value = _required_env(name)
+    try:
+        return datetime.date.fromisoformat(value).isoformat()
+    except ValueError as exc:
+        raise RuntimeError(f"{name} must use YYYY-MM-DD format, got {value!r}") from exc
+
 
 _HOST = os.environ["OCEANBASE_ORACLE_HOST"]
 _PORT = int(os.getenv("OCEANBASE_ORACLE_PORT", "2883"))
 _USERNAME = os.environ["OCEANBASE_ORACLE_USERNAME"]
 _PASSWORD = os.getenv("OCEANBASE_ORACLE_PASSWORD", "")
 _DATABASE = os.getenv("OCEANBASE_ORACLE_DATABASE", "")
-_SCHEMA = os.environ["OCEANBASE_ORACLE_SCHEMA"].upper()
+_SCHEMA = _identifier_env("OCEANBASE_ORACLE_SCHEMA")
 _JAR_PATH = os.environ["OCEANBASE_ORACLE_JAR_PATH"]
 
-_DATA_TABLE = "MF_ORDERS"
-_TIME_SPINE_TABLE = "MF_TIME_SPINE"
+_RELATION = _identifier_env("OCEANBASE_ORACLE_METRICFLOW_RELATION")
+_ID_COLUMN = _identifier_env("OCEANBASE_ORACLE_METRICFLOW_ID_COLUMN", "ID")
+_AMOUNT_COLUMN = _identifier_env("OCEANBASE_ORACLE_METRICFLOW_AMOUNT_COLUMN", "AMOUNT")
+_TIME_COLUMN = _identifier_env("OCEANBASE_ORACLE_METRICFLOW_TIME_COLUMN", "CREATED_AT")
+_TIME_START = _date_env("OCEANBASE_ORACLE_METRICFLOW_TIME_START")
+_TIME_END = _date_env("OCEANBASE_ORACLE_METRICFLOW_TIME_END")
+
+if _TIME_START > _TIME_END:
+    raise RuntimeError("OCEANBASE_ORACLE_METRICFLOW_TIME_START must not be after TIME_END")
+
+_QUALIFIED_RELATION = f'"{_SCHEMA}"."{_RELATION}"'
 
 _SEMANTIC_YAML = f"""\
 data_source:
   name: mf_orders
-  sql_table: {_SCHEMA}.{_DATA_TABLE}
+  sql_table: {_SCHEMA}.{_RELATION}
   identifiers:
     - name: order_id
       type: primary
-      expr: id
+      expr: {_ID_COLUMN}
   measures:
     - name: total_amount
       agg: sum
-      expr: amount
+      expr: {_AMOUNT_COLUMN}
     - name: order_count
       agg: count
-      expr: id
+      expr: {_ID_COLUMN}
   dimensions:
     - name: created_at
       type: time
+      expr: {_TIME_COLUMN}
       type_params:
         is_primary: true
         time_granularity: day
@@ -78,6 +115,15 @@ metric:
     denominator: order_count
 """
 
+_BASELINE_SQL = f"""\
+SELECT
+    SUM("{_AMOUNT_COLUMN}") AS "TOTAL_AMOUNT",
+    COUNT("{_ID_COLUMN}") AS "ORDER_COUNT"
+FROM {_QUALIFIED_RELATION}
+WHERE "{_TIME_COLUMN}" >= TO_DATE(?, 'YYYY-MM-DD')
+  AND "{_TIME_COLUMN}" <= TO_DATE(?, 'YYYY-MM-DD')
+"""
+
 
 def _db_config() -> dict:
     return {
@@ -94,11 +140,19 @@ def _db_config() -> dict:
     }
 
 
-def _drop_table(connector, table_name: str) -> None:
-    try:
-        connector.execute_statement(f'DROP TABLE "{_SCHEMA}"."{table_name}" PURGE')
-    except Exception:
-        logger.debug("Ignoring missing OceanBase Oracle test table %s", table_name, exc_info=True)
+def _read_baseline(connector) -> tuple[float, int]:
+    result = connector.query_dataframe(_BASELINE_SQL, (_TIME_START, _TIME_END))
+    if len(result.index) != 1:
+        raise AssertionError(f"Expected one baseline row from {_QUALIFIED_RELATION}, got {len(result.index)}")
+
+    total_amount = result.iloc[0]["TOTAL_AMOUNT"]
+    order_count = int(result.iloc[0]["ORDER_COUNT"])
+    if order_count <= 0 or total_amount is None:
+        raise AssertionError(
+            f"Read-only acceptance relation {_QUALIFIED_RELATION} has no usable rows between "
+            f"{_TIME_START} and {_TIME_END}"
+        )
+    return float(total_amount), order_count
 
 
 @pytest.fixture(scope="module")
@@ -113,42 +167,20 @@ def mf_config(tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
-def seeded_db():
+def readonly_baseline():
     connector = OceanBaseOracleConnector(_db_config())
-    _drop_table(connector, _TIME_SPINE_TABLE)
-    _drop_table(connector, _DATA_TABLE)
-    connector.execute_statement(
-        f'CREATE TABLE "{_SCHEMA}"."{_DATA_TABLE}" '
-        '("ID" NUMBER(10) PRIMARY KEY, "AMOUNT" NUMBER(10,2), "CREATED_AT" DATE)'
-    )
-    connector.execute_statement(f'CREATE TABLE "{_SCHEMA}"."{_TIME_SPINE_TABLE}" ("DS" DATE NOT NULL)')
-    for row_id, amount, created_at in [
-        (1, 10.0, "2020-01-01"),
-        (2, 20.0, "2020-01-02"),
-        (3, 30.0, "2020-01-03"),
-        (4, 40.0, "2020-01-04"),
-        (5, 50.0, "2020-01-05"),
-    ]:
-        connector.execute_statement(
-            f'INSERT INTO "{_SCHEMA}"."{_DATA_TABLE}" ("ID", "AMOUNT", "CREATED_AT") '
-            "VALUES (?, ?, TO_DATE(?, 'YYYY-MM-DD'))",
-            (row_id, amount, created_at),
-        )
-    for day in range(1, 11):
-        connector.execute_statement(
-            f'INSERT INTO "{_SCHEMA}"."{_TIME_SPINE_TABLE}" ("DS") VALUES (TO_DATE(?, \'YYYY-MM-DD\'))',
-            (f"2020-01-{day:02d}",),
-        )
-
-    yield
-
-    _drop_table(connector, _TIME_SPINE_TABLE)
-    _drop_table(connector, _DATA_TABLE)
-    connector.close()
+    before = _read_baseline(connector)
+    try:
+        yield before
+        after = _read_baseline(connector)
+        assert after[0] == pytest.approx(before[0]), "Acceptance data changed while the nightly was running"
+        assert after[1] == before[1], "Acceptance row count changed while the nightly was running"
+    finally:
+        connector.close()
 
 
 @pytest.fixture(scope="module")
-def mf_adapter(mf_config, seeded_db):
+def mf_adapter(mf_config):
     adapter = MetricFlowAdapter(mf_config)
     yield adapter
     adapter.client.sql_client.close()
@@ -161,44 +193,53 @@ async def test_validate_semantic_passes(mf_adapter):
 
 
 async def test_query_metrics_dry_run_returns_oracle_sql(mf_adapter):
-    result = await mf_adapter.query_metrics(["total_amount"], limit=2, dry_run=True)
+    result = await mf_adapter.query_metrics(
+        ["total_amount"],
+        time_start=_TIME_START,
+        time_end=_TIME_END,
+        limit=2,
+        dry_run=True,
+    )
     sql = result.metadata.get("sql", "")
     assert sql
     assert "LIMIT" not in sql.upper()
     assert "FETCH FIRST 2 ROWS ONLY" in sql.upper()
 
 
-async def test_query_metrics_live(mf_adapter):
-    result = await mf_adapter.query_metrics(["total_amount", "order_count"])
-    assert len(result.data) == 1
-    assert float(result.data[0]["total_amount"]) == pytest.approx(150.0)
-    assert int(result.data[0]["order_count"]) == 5
-
-
-async def test_query_ratio_metric_live(mf_adapter):
-    result = await mf_adapter.query_metrics(["average_order_amount"])
-    assert len(result.data) == 1
-    assert float(result.data[0]["average_order_amount"]) == pytest.approx(30.0)
-
-
-async def test_query_metrics_with_time_filter(mf_adapter):
+async def test_query_metrics_live_matches_read_only_baseline(mf_adapter, readonly_baseline):
+    expected_total, expected_count = readonly_baseline
     result = await mf_adapter.query_metrics(
-        ["total_amount"],
-        time_start="2020-01-01",
-        time_end="2020-01-03",
+        ["total_amount", "order_count"],
+        time_start=_TIME_START,
+        time_end=_TIME_END,
     )
-    total = sum(float(row["total_amount"]) for row in result.data if row.get("total_amount") is not None)
-    assert total == pytest.approx(60.0)
+    assert len(result.data) == 1
+    assert float(result.data[0]["total_amount"]) == pytest.approx(expected_total)
+    assert int(result.data[0]["order_count"]) == expected_count
+
+
+async def test_query_ratio_metric_live(mf_adapter, readonly_baseline):
+    expected_total, expected_count = readonly_baseline
+    result = await mf_adapter.query_metrics(
+        ["average_order_amount"],
+        time_start=_TIME_START,
+        time_end=_TIME_END,
+    )
+    assert len(result.data) == 1
+    assert float(result.data[0]["average_order_amount"]) == pytest.approx(expected_total / expected_count)
 
 
 @pytest.mark.parametrize("granularity", ["day", "week", "month", "quarter", "year"])
-async def test_query_metrics_with_declared_time_granularities(mf_adapter, granularity):
+async def test_query_metrics_with_declared_time_granularities(mf_adapter, readonly_baseline, granularity):
+    expected_total, _ = readonly_baseline
     result = await mf_adapter.query_metrics(
         ["total_amount"],
         dimensions=["created_at"],
+        time_start=_TIME_START,
+        time_end=_TIME_END,
         time_granularity=granularity,
         order_by=["metric_time"],
     )
     assert result.data
     total = sum(float(row["total_amount"]) for row in result.data if row.get("total_amount") is not None)
-    assert total == pytest.approx(150.0)
+    assert total == pytest.approx(expected_total)

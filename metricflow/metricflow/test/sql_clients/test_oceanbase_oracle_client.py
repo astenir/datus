@@ -2,11 +2,12 @@
 
 from unittest.mock import MagicMock
 
+import datus_oceanbase_oracle
 import pandas as pd
 import pytest
-import datus_oceanbase_oracle
 
 from metricflow.configuration.dict_config_handler import DictConfigHandler, build_config_dict_from_datus_datasource
+from metricflow.dataflow.sql_table import SqlTable
 from metricflow.protocols.sql_client import SqlEngine
 from metricflow.sql.sql_bind_parameters import SqlBindParameters
 from metricflow.sql_clients.common_client import SqlDialect
@@ -72,6 +73,23 @@ def test_execute_is_rejected_by_read_only_profile() -> None:
         )
 
     connector.execute_statement.assert_not_called()
+
+
+def test_schema_and_table_mutations_are_rejected_by_read_only_profile() -> None:
+    connector = MagicMock()
+    client = OceanBaseOracleSqlClient(connector)
+    table = SqlTable(schema_name="APP", table_name="ORDERS")
+
+    with pytest.raises(NotImplementedError, match="read-only"):
+        client.create_table_from_dataframe(table, pd.DataFrame([{"ID": 1}]))
+    with pytest.raises(NotImplementedError, match="read-only"):
+        client.create_schema("APP")
+    with pytest.raises(NotImplementedError, match="read-only"):
+        client.drop_schema("APP")
+    with pytest.raises(NotImplementedError, match="read-only"):
+        client.drop_table(table)
+
+    assert connector.method_calls == []
 
 
 def test_close_delegates_to_connector() -> None:

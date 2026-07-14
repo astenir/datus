@@ -339,7 +339,13 @@ OCEANBASE_ORACLE_PASSWORD="replace-with-secret"
 OCEANBASE_ORACLE_DATABASE="tenant"
 OCEANBASE_ORACLE_SCHEMA="APP"
 OCEANBASE_ORACLE_JAR_PATH="/opt/datus/jars/oceanbase-client.jar"
+OCEANBASE_ORACLE_METRICFLOW_RELATION="DATUS_MF_ORDERS_RO"
+OCEANBASE_ORACLE_METRICFLOW_TIME_START="2025-01-01"
+OCEANBASE_ORACLE_METRICFLOW_TIME_END="2025-01-31"
 ```
+
+最后三个 `OCEANBASE_ORACLE_METRICFLOW_*` 变量只用于真实租户只读验收；正常 API 问数
+使用 semantic model 自己配置的 `sql_table` 和维度列，不依赖这些测试变量。
 
 设置权限：
 
@@ -455,32 +461,43 @@ ADAPTERS_METRICFLOW_OCEANBASE_ORACLE=1 \
   -v
 ```
 
-测试会在配置的 schema 中创建并清理：
+该测试只读取已有表或视图，不创建、修改或删除数据库对象。目标关系默认需要以下列：
 
 ```text
-MF_ORDERS
-MF_TIME_SPINE
+ID
+AMOUNT
+CREATED_AT
 ```
 
-测试账号需要在专用测试 schema 中拥有至少以下权限：
+如果实际列名不同，通过以下环境变量覆盖：
 
 ```text
-CREATE TABLE
-DROP TABLE
-INSERT
-SELECT
+OCEANBASE_ORACLE_METRICFLOW_ID_COLUMN
+OCEANBASE_ORACLE_METRICFLOW_AMOUNT_COLUMN
+OCEANBASE_ORACLE_METRICFLOW_TIME_COLUMN
 ```
 
-不要在生产业务 schema 中运行这套测试。它验证：
+schema、关系和列名必须是标准的非引号 Oracle 标识符。验收时间范围必须是不会再变化的
+闭合历史周期，且至少包含一行有效数据。测试先执行参数化只读基准 SQL 计算
+`SUM(AMOUNT)` 和 `COUNT(ID)`，再与 MetricFlow 结果比较；模块结束时重新执行基准 SQL，
+若数据发生变化会明确失败。
+
+测试账号只需要登录和目标表/视图的对象级 `SELECT` 权限，不需要 `CREATE TABLE`、
+`DROP TABLE`、`INSERT`、`UPDATE` 或 `DELETE`。它验证：
 
 - semantic validation；
 - 零行 dry-run；
+- 参数化只读基准 SQL 与 MetricFlow 结果一致；
 - Oracle 行数限制 SQL；
 - `SUM`、`COUNT` 和 ratio metric；
 - 时间过滤；
 - 日、周、月、季度、年分组；
 - JDBC 参数绑定；
 - 真实指标结果读取。
+
+这套验收使用非累计指标，不依赖 `MF_TIME_SPINE`。如果实际 semantic model 使用
+cumulative 或 offset metric，需要由数据所有者预置 `MF_TIME_SPINE` 并向 Datus 账号
+授予 `SELECT`；只读 client 在对象不存在时会明确失败，不会尝试自动建表。
 
 ### 9.5 配置加载和 API smoke
 
@@ -644,6 +661,9 @@ OceanBase Connector/J 版本和 SHA-256:
 Java 版本:
 连接模式和端口:
 测试 tenant/schema:
+只读验收 relation:
+只读验收时间窗口:
+运行账号对象授权:
 初始化回归结果:
 真实租户 nightly 结果:
 API health 结果:

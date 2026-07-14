@@ -77,21 +77,39 @@ OCEANBASE_ORACLE_PASSWORD='...' \
 OCEANBASE_ORACLE_DATABASE=tenant \
 OCEANBASE_ORACLE_SCHEMA=APP \
 OCEANBASE_ORACLE_JAR_PATH=/opt/datus/jars/oceanbase-client.jar \
+OCEANBASE_ORACLE_METRICFLOW_RELATION=DATUS_MF_ORDERS_RO \
+OCEANBASE_ORACLE_METRICFLOW_TIME_START=2025-01-01 \
+OCEANBASE_ORACLE_METRICFLOW_TIME_END=2025-01-31 \
 uv run pytest \
   tests/integration/adapters/test_semantic_metricflow_oceanbase_oracle.py -v
 ```
+
+真实租户测试使用已有表或视图，只执行 `SELECT`。默认要求关系中存在 `ID`、`AMOUNT`、
+`CREATED_AT` 三列；可分别通过 `OCEANBASE_ORACLE_METRICFLOW_ID_COLUMN`、
+`OCEANBASE_ORACLE_METRICFLOW_AMOUNT_COLUMN` 和
+`OCEANBASE_ORACLE_METRICFLOW_TIME_COLUMN` 覆盖。时间范围必须选择不会再变化的闭合历史
+周期，测试会用参数化基准 SQL 计算期望值，并在结束时再次确认数据没有漂移。
+
+运行账号只需登录和读取目标对象，不需要 `CREATE TABLE`、`DROP TABLE`、`INSERT`、
+`UPDATE` 或 `DELETE` 权限。
+
+本验收覆盖非累计指标、ratio、时间过滤和时间分组，不依赖 `mf_time_spine`。如果业务模型
+使用 cumulative 或 offset metric，需要由数据所有者预置可读的 `MF_TIME_SPINE`；只读
+client 在该对象不存在时会明确失败，不会自行创建。
 
 标记 production-ready 前，真实环境至少要验证：
 
 - 连接和当前 schema 初始化；
 - semantic validation；
 - 零行 dry-run；
+- 只读基准 SQL 与 MetricFlow 结果一致；
 - `SUM`、`COUNT` 真实指标查询；
 - 时间过滤以及所有已声明时间粒度；
 - 分组和行数限制；
 - 如果仍声明对应能力，则验证 ratio cast、full outer join 和随机函数；
 - 字符串、日期、重复命名参数、注释场景的参数绑定；
-- 写入、取消和 percentile 接口按预期明确失败。
+- 单元/客户端测试证明写入、取消和 percentile 接口按预期明确失败；真实只读租户验收不
+  主动发送变更语句。
 
 发布证据需要记录准确的 OceanBase 版本、Connector/J 版本、连接模式、测试命令和结果。
 单元测试与 mock 测试是必要条件，但不能替代真实租户验收。
