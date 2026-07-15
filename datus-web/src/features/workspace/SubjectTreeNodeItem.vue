@@ -12,7 +12,7 @@ defineProps<{
 
 <template>
   <FileTreeFolder
-    v-if="node.children.length > 0"
+    v-if="node.type === 'directory'"
     :path="node.path"
     :name="node.name"
   >
