@@ -2368,7 +2368,7 @@ models:
                     "database": {
                         "registry_name": "openai",
                         "model_name": "embedding-model",
-                        "dim_size": 1024,
+                        "dim_size": "1024",
                         "target_model": "${DATUS_TEST_EMBEDDING_KEY}",
                     }
                 },
@@ -2376,6 +2376,7 @@ models:
             )
 
             assert cfg.storage_configs["database"].openai_config.api_key == "embedding-key"
+            assert cfg.storage_configs["database"].dim_size == 1024
         finally:
             EMBEDDING_MODELS.clear()
             EMBEDDING_MODELS.update(original_models)

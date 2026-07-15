@@ -80,6 +80,14 @@ detector 必须同时检查两个字段。只检查 `filename` 会漏掉“从�
 | `semantic_adapter` | `datus-semantic-adapter/` |
 | `metricflow` | `metricflow/` |
 
+根级 Agent Compose 部署配置也会触发 `agent`：
+
+```text
+.env.compose.example
+docker-compose.yml
+deploy/docker/agent/
+```
+
 Python detector 同时表达依赖传播：`metricflow/` 改动还会触发 Semantic adapter 和
 Agent；`datus-semantic-adapter/` 改动还会触发 Agent。这样本地 path dependency 的下游
 初始化回归不会被跳过。

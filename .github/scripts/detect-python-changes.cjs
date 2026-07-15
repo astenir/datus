@@ -16,6 +16,12 @@ const SHARED_PATHS = new Set([
   ".github/scripts/verify-quality-gate.test.cjs",
 ]);
 
+const AGENT_DEPLOYMENT_PATHS = new Set([
+  ".env.compose.example",
+  "docker-compose.yml",
+]);
+const AGENT_DEPLOYMENT_PREFIXES = ["deploy/docker/agent/"];
+
 function detectPythonChanges(eventName, files = []) {
   if (eventName !== "pull_request") {
     return Object.fromEntries(Object.keys(PROJECT_PATHS).map((project) => [project, true]));
@@ -32,6 +38,16 @@ function detectPythonChanges(eventName, files = []) {
       sharedPathChanged || paths.some((path) => path.startsWith(prefix)),
     ]),
   );
+
+  if (
+    paths.some(
+      (path) =>
+        AGENT_DEPLOYMENT_PATHS.has(path) ||
+        AGENT_DEPLOYMENT_PREFIXES.some((prefix) => path.startsWith(prefix)),
+    )
+  ) {
+    changedProjects.agent = true;
+  }
 
   if (changedProjects.metricflow) {
     changedProjects.semantic_adapter = true;

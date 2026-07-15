@@ -70,7 +70,7 @@ class EmbeddingModel:
     ):
         self.registry_name = registry_name
         self.model_name = model_name
-        self._dim_size = dim_size
+        self._dim_size = int(dim_size)
         self.device = EMBEDDING_DEVICE_TYPE
         self._model = None
         self.batch_size = batch_size
