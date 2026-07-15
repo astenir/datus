@@ -3,6 +3,7 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import dataclasses
+import threading
 from typing import Callable, Dict, Optional, Tuple, Union
 
 from datus_db_core import BaseSqlConnector, ConnectionConfig, DatusDbException, connector_registry
@@ -195,6 +196,7 @@ class DBManager:
         # {datasource: {database: connector}} — a datasource may serve multiple databases.
         self._conn_dict: Dict[str, Dict[str, BaseSqlConnector]] = {}
         self._db_configs: Dict[str, DbConfig] = db_configs
+        self._conn_init_lock = threading.Lock()
 
     def get_conn(self, datasource: str, database: str = "") -> BaseSqlConnector:
         """Connector for ``(datasource, database)``.
@@ -276,19 +278,26 @@ class DBManager:
 
     def _init_connection(self, datasource: str, database: str) -> BaseSqlConnector:
         db_name, db_config = self._resolve_db_config(datasource, database)
-        # Self-heal: a caller may have nulled this datasource's entry to mark its
-        # connectors closed (e.g. an external pool on eviction). setdefault keeps
-        # an existing None, so rebuild a fresh group rather than calling .get on it.
         group = self._conn_dict.get(datasource)
-        if not isinstance(group, dict):
-            group = {}
-            self._conn_dict[datasource] = group
-        cached = group.get(db_name)
-        if cached is not None:
-            return cached
-        conn = self._build_conn(db_config)
-        group[db_name] = conn
-        return conn
+        if isinstance(group, dict):
+            cached = group.get(db_name)
+            if cached is not None:
+                return cached
+
+        with self._conn_init_lock:
+            # Self-heal: a caller may have nulled this datasource's entry to mark its
+            # connectors closed (e.g. an external pool on eviction). setdefault keeps
+            # an existing None, so rebuild a fresh group rather than calling .get on it.
+            group = self._conn_dict.get(datasource)
+            if not isinstance(group, dict):
+                group = {}
+                self._conn_dict[datasource] = group
+            cached = group.get(db_name)
+            if cached is not None:
+                return cached
+            conn = self._build_conn(db_config)
+            group[db_name] = conn
+            return conn
 
     def _build_conn(self, db_config: DbConfig) -> BaseSqlConnector:
         """Build a connector from a (fully-resolved) DbConfig via the registry."""
@@ -379,18 +388,19 @@ class DBManager:
 
     def close(self):
         """Close all database connections."""
-        for datasource, group in list(self._conn_dict.items()):
-            if not isinstance(group, dict):
-                continue
-            for db_name, conn in list(group.items()):
-                if conn is None:
+        with self._conn_init_lock:
+            for datasource, group in list(self._conn_dict.items()):
+                if not isinstance(group, dict):
                     continue
-                try:
-                    conn.close()
-                except Exception as e:
-                    logger.warning(f"Error closing connection {datasource}.{db_name}: {str(e)}")
-                finally:
-                    group.pop(db_name, None)
+                for db_name, conn in list(group.items()):
+                    if conn is None:
+                        continue
+                    try:
+                        conn.close()
+                    except Exception as e:
+                        logger.warning(f"Error closing connection {datasource}.{db_name}: {str(e)}")
+                    finally:
+                        group.pop(db_name, None)
 
     def __enter__(self):
         """Context manager entry point."""

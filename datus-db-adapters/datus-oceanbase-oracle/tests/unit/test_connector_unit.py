@@ -2,6 +2,10 @@
 # Licensed under the Apache License, Version 2.0.
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier, Event, Lock
+
+import jpype
 import pytest
 
 from datus_oceanbase_oracle import connector as connector_module
@@ -70,6 +74,51 @@ class TestConnectionPool:
                 {},
             )
         ]
+
+    def test_jaydebeapi_creator_serializes_initial_jvm_start(self, monkeypatch):
+        workers_ready = Barrier(2)
+        startup_entered = Event()
+        release_startup = Event()
+        duplicate_start = Event()
+        state_lock = Lock()
+        state = {"jvm_started": False, "startup_attempts": 0}
+
+        monkeypatch.setattr(jpype, "isJVMStarted", lambda: state["jvm_started"])
+
+        def fake_connect(*_args, **_kwargs):
+            with state_lock:
+                if not state["jvm_started"]:
+                    state["startup_attempts"] += 1
+                    if state["startup_attempts"] > 1:
+                        duplicate_start.set()
+                    startup_entered.set()
+            release_startup.wait(timeout=1)
+            state["jvm_started"] = True
+            return object()
+
+        monkeypatch.setattr(connector_module.jaydebeapi, "connect", fake_connect)
+
+        def connect():
+            workers_ready.wait(timeout=1)
+            return _JayDeBeApiCreator.connect(
+                driver_class="com.oceanbase.jdbc.Driver",
+                jdbc_url="jdbc:oceanbase://db.example.com:2883/APP?useSSL=false",
+                username="app@tenant#cluster",
+                password="secret",
+                jar_path="/opt/oceanbase-client.jar",
+                ping_timeout_seconds=5,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [executor.submit(connect) for _ in range(2)]
+            assert startup_entered.wait(timeout=1)
+            duplicate_start.wait(timeout=0.1)
+            release_startup.set()
+            connections = [future.result(timeout=1) for future in futures]
+
+        assert duplicate_start.is_set() is False
+        assert state["startup_attempts"] == 1
+        assert len(connections) == 2
 
     def test_connector_uses_pool_creator_adapter(self, monkeypatch):
         captured = {}

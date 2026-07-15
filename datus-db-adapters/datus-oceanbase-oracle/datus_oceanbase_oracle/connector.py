@@ -3,10 +3,12 @@
 # See http://www.apache.org/licenses/LICENSE-2.0 for details.
 
 import re
+import threading
 from typing import Any, Dict, List, Literal, Optional, Sequence, Set, Union, override
 from urllib.parse import urlencode
 
 import jaydebeapi
+import jpype
 import pandas as pd
 from dbutils.pooled_db import PooledDB
 
@@ -19,6 +21,7 @@ from .config import OceanBaseOracleConfig
 logger = get_logger(__name__)
 
 _TENANT_RE = re.compile(r"@([^#]+)")
+_JVM_START_LOCK = threading.Lock()
 
 
 class _PingableJayDeBeApiConnection:
@@ -71,6 +74,13 @@ class _JayDeBeApiCreator:
         jar_path: str,
         ping_timeout_seconds: int,
     ):
+        # JayDeBeApi checks and starts JPype's process-global JVM without a lock.
+        # Keep the cold-start check and first connection atomic; after startup,
+        # physical JDBC connections are still created concurrently.
+        with _JVM_START_LOCK:
+            if not jpype.isJVMStarted():
+                connection = jaydebeapi.connect(driver_class, jdbc_url, [username, password], jar_path, None)
+                return _PingableJayDeBeApiConnection(connection, ping_timeout_seconds)
         connection = jaydebeapi.connect(driver_class, jdbc_url, [username, password], jar_path, None)
         return _PingableJayDeBeApiConnection(connection, ping_timeout_seconds)
 
