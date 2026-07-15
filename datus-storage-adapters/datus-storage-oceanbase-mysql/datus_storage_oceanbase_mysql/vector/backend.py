@@ -66,6 +66,14 @@ def _schema_cache_key(schema: Optional[pa.Schema]) -> tuple[tuple[str, str], ...
     return tuple((field.name, str(field.type)) for field in schema)
 
 
+def _compile_where(where: WhereExpr) -> Optional[str]:
+    """Compile a condition with a MySQL-safe backslash LIKE escape literal."""
+    compiled = where if isinstance(where, str) else build_where(where)
+    if compiled is None:
+        return None
+    return compiled.replace(" ESCAPE '\\'", " ESCAPE '\\\\'")
+
+
 class OceanBaseMySQLVectorTable(VectorTable):
     def __init__(
         self,
@@ -130,7 +138,7 @@ class OceanBaseMySQLVectorTable(VectorTable):
         self._upsert_dataframe(df, on_column)
 
     def delete(self, where: WhereExpr) -> None:
-        compiled = where if isinstance(where, str) else build_where(where)
+        compiled = _compile_where(where)
         combined = self._namespace_where_fragment(compiled)
         if not combined:
             return
@@ -142,7 +150,7 @@ class OceanBaseMySQLVectorTable(VectorTable):
     def update(self, where: WhereExpr, values: Dict[str, Any]) -> None:
         if self._isolation == IsolationType.LOGICAL and LOGICAL_NAMESPACE_COLUMN in values:
             raise ValueError(f"{LOGICAL_NAMESPACE_COLUMN} is managed internally and cannot be updated")
-        compiled = where if isinstance(where, str) else build_where(where)
+        compiled = _compile_where(where)
         combined = self._namespace_where_fragment(compiled)
         set_parts = []
         params = []
@@ -184,7 +192,7 @@ class OceanBaseMySQLVectorTable(VectorTable):
         where: WhereExpr = None,
         select_fields: Optional[List[str]] = None,
     ) -> pa.Table:
-        compiled = where if isinstance(where, str) else build_where(where)
+        compiled = _compile_where(where)
         combined = self._namespace_where_fragment(compiled)
         query_embedding = self._compute_query_embedding(query_text)
         columns = self._validate_select_fields(select_fields) if select_fields else self._select_columns()
@@ -217,7 +225,7 @@ class OceanBaseMySQLVectorTable(VectorTable):
         select_fields: Optional[List[str]] = None,
         limit: Optional[int] = None,
     ) -> pa.Table:
-        compiled = where if isinstance(where, str) else build_where(where)
+        compiled = _compile_where(where)
         combined = self._namespace_where_fragment(compiled)
         columns = self._validate_select_fields(select_fields) if select_fields else self._select_columns()
         where_clause = f"WHERE {combined}" if combined else ""
@@ -229,7 +237,7 @@ class OceanBaseMySQLVectorTable(VectorTable):
         return self._rows_to_arrow(rows, select_fields)
 
     def count_rows(self, where: WhereExpr = None) -> int:
-        compiled = where if isinstance(where, str) else build_where(where)
+        compiled = _compile_where(where)
         combined = self._namespace_where_fragment(compiled)
         where_clause = f"WHERE {combined}" if combined else ""
         with self._pool.connection(database=self._database_name) as conn:

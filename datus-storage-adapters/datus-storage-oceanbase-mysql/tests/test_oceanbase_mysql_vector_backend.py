@@ -9,12 +9,13 @@ import pymysql
 import pytest
 
 from datus_storage_base.backend_config import IsolationType
-from datus_storage_base.conditions import eq
+from datus_storage_base.conditions import eq, like
 from datus_storage_base.vector.base import EmbeddingFunction
 from datus_storage_oceanbase_mysql.vector.backend import (
     OceanBaseMySQLVectorBackend,
     OceanBaseMySQLVectorDb,
     OceanBaseMySQLVectorTable,
+    _compile_where,
     _parse_vector_dim_from_column_type,
     _vector_dim_from_schema,
 )
@@ -107,6 +108,10 @@ def test_schema_converter_uses_vector_and_indexable_unique_text():
     assert "`description` LONGTEXT" in sql
     assert "`tags` LONGTEXT" in sql
     assert "ORGANIZATION HEAP" in sql
+
+
+def test_compile_where_uses_mysql_safe_like_escape_literal():
+    assert _compile_where(like("name", "active_product_count")) == (r"name LIKE 'active\_product\_count' ESCAPE '\\'")
 
 
 @pytest.mark.parametrize(
@@ -245,9 +250,7 @@ def test_logical_database_keeps_namespace_for_table_scoping():
     assert db._database_name == "db1"
     assert db._logical_namespace == "project_a"
     assert scoped["_datus_namespace"].tolist() == ["project_a"]
-    assert table._namespace_where_fragment("`id` = 'a'") == (
-        "`_datus_namespace` = 'project_a' AND (`id` = 'a')"
-    )
+    assert table._namespace_where_fragment("`id` = 'a'") == ("`_datus_namespace` = 'project_a' AND (`id` = 'a')")
 
 
 def test_create_table_automatically_creates_hnsw_index():
@@ -341,12 +344,13 @@ def test_real_oceanbase_vector_crud_search_and_indexes(backend):
             {
                 "id": ["a", "b"],
                 "description": ["alpha row", "beta row"],
-                "category": ["x", "y"],
+                "category": ["x_value", "y_value"],
                 "tags": [["daily", "region"], ["archive"]],
             }
         )
     )
     assert table.count_rows() == 2
+    assert table.count_rows(like("category", "x_value")) == 1
 
     all_rows = table.search_all(select_fields=["id", "category", "tags"], limit=10)
     assert set(all_rows.column("id").to_pylist()) == {"a", "b"}

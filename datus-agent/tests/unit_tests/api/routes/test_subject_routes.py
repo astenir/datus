@@ -14,7 +14,7 @@ from datus.api.auth.context import AppContext
 from datus.api.enterprise.defaults import InMemorySessionOwnerStore, LocalAuthorizationProvider, NoopAuditSink
 from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.models.base_models import Result
-from datus.api.models.explorer_models import CreateDirectoryInput, SubjectListData
+from datus.api.models.explorer_models import CreateDirectoryInput, SubjectListData, SubjectPathInput
 from datus.api.routes import subject_routes
 from datus_enterprise.config_projection import DatasourceGrantConfigProjector
 
@@ -111,6 +111,40 @@ async def test_subject_tree_mutation_uses_projected_config(monkeypatch):
     assert set(captured_configs[0].services.datasources) == {"finance"}
     assert captured_requests[0].subject_path == ["finance"]
     assert svc.agent_config.current_datasource == "hr"
+
+
+@pytest.mark.asyncio
+async def test_metric_dimensions_passes_complete_request_to_projected_service(monkeypatch):
+    monkeypatch.setattr(deps, "_enterprise_extensions", _enterprise_extensions())
+    captured_requests = []
+
+    class FakeExplorerService:
+        def __init__(self, agent_config):
+            pass
+
+        async def get_metric_dimensions(self, request):
+            captured_requests.append(request)
+            return Result(success=True)
+
+    monkeypatch.setattr(subject_routes, "ExplorerService", FakeExplorerService)
+    svc = _svc(current_datasource="hr")
+    ctx = AppContext(
+        user_id="u1",
+        project_id="proj",
+        permissions={"module.datasource_catalog"},
+        datasource_grants={"finance": {"effect": "allow", "allow_catalog": True}},
+    )
+    request = SubjectPathInput(
+        subject_path=["fund", "product", "operation", "active_product_count"],
+        catalog="fund_catalog",
+        database="fund_database",
+        db_schema="fund_schema",
+    )
+
+    result = await subject_routes.get_metric_dimensions(request, svc, ctx, datasource_id="finance")
+
+    assert result.success is True
+    assert captured_requests == [request]
 
 
 @pytest.mark.asyncio
