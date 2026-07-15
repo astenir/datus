@@ -11,9 +11,17 @@ import type {
   TableDetail,
 } from "@/types";
 
+function subjectTreePath(path: string, datasourceId?: string | null): string {
+  const selectedDatasource = datasourceId?.trim();
+  if (!selectedDatasource) return path;
+
+  const params = new URLSearchParams({ datasource_id: selectedDatasource });
+  return `${path}?${params.toString()}`;
+}
+
 export const subjectApi = {
-  list(baseUrl: string): Promise<{ subjects: SubjectNode[] } | null> {
-    return apiResult(baseUrl, "/api/v1/subject-tree");
+  list(baseUrl: string, datasourceId?: string | null): Promise<{ subjects: SubjectNode[] } | null> {
+    return apiResult(baseUrl, subjectTreePath("/api/v1/subject-tree", datasourceId));
   },
 
   create(baseUrl: string, subjectPath: string[]): Promise<unknown> {
@@ -28,12 +36,24 @@ export const subjectApi = {
     return apiResult(baseUrl, "/api/v1/subject-tree/delete", deleteJsonBody({ type, subject_path: subjectPath }));
   },
 
-  getMetric(baseUrl: string, subjectPath: string[]): Promise<MetricInfo | null> {
-    return apiResult(baseUrl, "/api/v1/subject-tree/metric", jsonBody({ subject_path: subjectPath }));
+  getMetric(baseUrl: string, subjectPath: string[], datasourceId?: string | null): Promise<MetricInfo | null> {
+    return apiResult(
+      baseUrl,
+      subjectTreePath("/api/v1/subject-tree/metric", datasourceId),
+      jsonBody({ subject_path: subjectPath }),
+    );
   },
 
-  getMetricDimensions(baseUrl: string, subjectPath: string[]): Promise<MetricDimensionsData | null> {
-    return apiResult(baseUrl, "/api/v1/subject-tree/metric/dimensions", jsonBody({ subject_path: subjectPath }));
+  getMetricDimensions(
+    baseUrl: string,
+    subjectPath: string[],
+    datasourceId?: string | null,
+  ): Promise<MetricDimensionsData | null> {
+    return apiResult(
+      baseUrl,
+      subjectTreePath("/api/v1/subject-tree/metric/dimensions", datasourceId),
+      jsonBody({ subject_path: subjectPath }),
+    );
   },
 
   previewMetric(baseUrl: string, input: MetricPreviewInput): Promise<MetricPreviewData | null> {
@@ -48,8 +68,16 @@ export const subjectApi = {
     return apiResult(baseUrl, "/api/v1/subject-tree/metric/edit", jsonBody({ subject_path: subjectPath, yaml }));
   },
 
-  getReferenceSql(baseUrl: string, subjectPath: string[]): Promise<ReferenceSQLInfo | null> {
-    return apiResult(baseUrl, "/api/v1/subject-tree/reference_sql", jsonBody({ subject_path: subjectPath }));
+  getReferenceSql(
+    baseUrl: string,
+    subjectPath: string[],
+    datasourceId?: string | null,
+  ): Promise<ReferenceSQLInfo | null> {
+    return apiResult(
+      baseUrl,
+      subjectTreePath("/api/v1/subject-tree/reference_sql", datasourceId),
+      jsonBody({ subject_path: subjectPath }),
+    );
   },
 
   createReferenceSql(baseUrl: string, data: ReferenceSQLInfo & { subject_path: string[] }): Promise<unknown> {

@@ -607,6 +607,24 @@ describe("api client", () => {
     expect("editKnowledge" in subjectApi).toBe(false);
   });
 
+  it("forwards datasource context for subject-tree reads", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(mockJsonResponse({ success: true, data: { subjects: [] } }))
+    );
+
+    await subjectApi.list("/datus-api", " oceanbase_data ");
+    await subjectApi.getMetric("/datus-api", ["业务", "规模"], "oceanbase_data");
+    await subjectApi.getMetricDimensions("/datus-api", ["业务", "规模"], "oceanbase_data");
+    await subjectApi.getReferenceSql("/datus-api", ["业务", "净值SQL"], "oceanbase_data");
+
+    expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toEqual([
+      "/datus-api/api/v1/subject-tree?datasource_id=oceanbase_data",
+      "/datus-api/api/v1/subject-tree/metric?datasource_id=oceanbase_data",
+      "/datus-api/api/v1/subject-tree/metric/dimensions?datasource_id=oceanbase_data",
+      "/datus-api/api/v1/subject-tree/reference_sql?datasource_id=oceanbase_data",
+    ]);
+  });
+
   it("uses current enterprise subject-tree metric and semantic model routes", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation(() =>
       Promise.resolve(mockJsonResponse({ success: true, data: {} }))

@@ -70,8 +70,11 @@ const metricInfo = ref<MetricInfo | null>(null)
 const metricDimensions = ref<MetricDimensionsData | null>(null)
 const referenceSql = ref<ReferenceSQLInfo | null>(null)
 const loadingSubjectDetail = shallowRef(false)
+let subjectListRequestId = 0
+let subjectDetailRequestId = 0
 
 const selectedTable = computed(() => props.selectedTable?.trim() ?? "")
+const currentDatasource = computed(() => props.workspace.currentDatasource.value.trim())
 const tableIndexCount = computed(() => semantic.tableDetail.value?.indexes.length ?? 0)
 const schemaRows = computed(() => catalogSchemaRows(props.workspace.catalogEntries.value))
 const tableRows = computed(() => catalogTableRows(props.workspace.catalogEntries.value))
@@ -146,23 +149,30 @@ function requestTableLoad(value: string) {
 async function loadSubjects() {
   if (!canUseSubjectTree.value) return
 
+  const requestId = ++subjectListRequestId
   loadingSubjects.value = true
   try {
-    const result = await subjectApi.list(connection.effectiveBase())
+    const result = await subjectApi.list(connection.effectiveBase(), currentDatasource.value)
+    if (requestId !== subjectListRequestId) return
     subjects.value = result?.subjects ?? []
   } catch (error) {
+    if (requestId !== subjectListRequestId) return
     console.error("加载主题树失败:", error)
     toast.error("加载主题树失败")
   } finally {
-    loadingSubjects.value = false
+    if (requestId === subjectListRequestId) {
+      loadingSubjects.value = false
+    }
   }
 }
 
 async function selectSubject(node: SubjectTreeNode) {
+  const requestId = ++subjectDetailRequestId
   selectedSubject.value = node
   metricInfo.value = null
   metricDimensions.value = null
   referenceSql.value = null
+  loadingSubjectDetail.value = false
 
   if (node.type === "directory") return
 
@@ -170,36 +180,65 @@ async function selectSubject(node: SubjectTreeNode) {
   try {
     if (node.type === "metric") {
       const [metric, dimensions] = await Promise.all([
-        subjectApi.getMetric(connection.effectiveBase(), node.subjectPath),
-        subjectApi.getMetricDimensions(connection.effectiveBase(), node.subjectPath),
+        subjectApi.getMetric(connection.effectiveBase(), node.subjectPath, currentDatasource.value),
+        subjectApi.getMetricDimensions(connection.effectiveBase(), node.subjectPath, currentDatasource.value),
       ])
+      if (requestId !== subjectDetailRequestId) return
       metricInfo.value = metric
       metricDimensions.value = dimensions
       return
     }
 
     if (node.type === "reference_sql") {
-      referenceSql.value = await subjectApi.getReferenceSql(connection.effectiveBase(), node.subjectPath)
+      const result = await subjectApi.getReferenceSql(
+        connection.effectiveBase(),
+        node.subjectPath,
+        currentDatasource.value,
+      )
+      if (requestId !== subjectDetailRequestId) return
+      referenceSql.value = result
     }
   } catch (error) {
+    if (requestId !== subjectDetailRequestId) return
     console.error("加载主题详情失败:", error)
     toast.error("加载主题详情失败")
   } finally {
-    loadingSubjectDetail.value = false
+    if (requestId === subjectDetailRequestId) {
+      loadingSubjectDetail.value = false
+    }
   }
+}
+
+function clearSubjectSelection() {
+  subjectDetailRequestId += 1
+  selectedSubject.value = null
+  metricInfo.value = null
+  metricDimensions.value = null
+  referenceSql.value = null
+  loadingSubjectDetail.value = false
 }
 
 watch(
   canUseSubjectTree,
   (canView) => {
     if (canView || treeMode.value !== "subject") return
+    subjectListRequestId += 1
+    loadingSubjects.value = false
     treeMode.value = "catalog"
-    selectedSubject.value = null
-    metricInfo.value = null
-    metricDimensions.value = null
-    referenceSql.value = null
+    subjects.value = []
+    clearSubjectSelection()
   },
 )
+
+watch(currentDatasource, () => {
+  subjectListRequestId += 1
+  loadingSubjects.value = false
+  subjects.value = []
+  clearSubjectSelection()
+  if (canUseSubjectTree.value) {
+    void loadSubjects()
+  }
+})
 
 watch(
   selectedTable,
