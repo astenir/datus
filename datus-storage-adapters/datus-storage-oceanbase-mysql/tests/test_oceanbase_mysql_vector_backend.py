@@ -1,6 +1,7 @@
 """Tests for the OceanBase MySQL mode vector backend."""
 
 import os
+from unittest.mock import MagicMock
 
 import pandas as pd
 import pyarrow as pa
@@ -77,6 +78,14 @@ def _drop_database(config, database):
         conn.commit()
     finally:
         conn.close()
+
+
+def _index_names(table):
+    with table._pool.connection(database=table._database_name) as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(f"SHOW INDEX FROM {table.table_name}")
+            rows = cursor.fetchall()
+    return {row.get("Key_name") or row.get("KEY_NAME") for row in rows}
 
 
 def _schema():
@@ -187,9 +196,11 @@ def test_rows_to_arrow_restores_json_list_fields_from_schema():
     assert result.column("vector")[0].as_py() == pytest.approx([0.1, 0.2, 0.3, 0.4])
 
 
-def test_open_table_uses_registered_logical_schema():
+def test_open_table_uses_registered_schema_and_ensures_hnsw_index():
     db = OceanBaseMySQLVectorDb.__new__(OceanBaseMySQLVectorDb)
-    db._pool = None
+    db._pool = MagicMock()
+    cursor = db._pool.connection.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+    cursor.fetchone.return_value = {"cnt": 0}
     db._database_name = "db1"
     db._isolation = IsolationType.PHYSICAL
     db._logical_namespace = None
@@ -207,6 +218,102 @@ def test_open_table_uses_registered_logical_schema():
 
     assert table._schema == _schema()
     assert table.column_names == list(_schema().names)
+    executed_sql = [call.args[0] for call in cursor.execute.call_args_list]
+    assert any("CREATE VECTOR INDEX `idx_vec_items_vector_hnsw`" in sql for sql in executed_sql)
+
+
+def test_logical_database_keeps_namespace_for_table_scoping():
+    pool = MagicMock()
+    db = OceanBaseMySQLVectorDb(
+        pool=pool,
+        configured_database="db1",
+        namespace="project_a",
+        isolation=IsolationType.LOGICAL,
+    )
+
+    table = db._make_table(
+        "vec_items",
+        MockEmbeddingFunction(),
+        "vector",
+        "description",
+        4,
+        list(_schema().names),
+        _schema(),
+    )
+    scoped = table._inject_namespace_df(pd.DataFrame({"id": ["a"]}))
+
+    assert db._database_name == "db1"
+    assert db._logical_namespace == "project_a"
+    assert scoped["_datus_namespace"].tolist() == ["project_a"]
+    assert table._namespace_where_fragment("`id` = 'a'") == (
+        "`_datus_namespace` = 'project_a' AND (`id` = 'a')"
+    )
+
+
+def test_create_table_automatically_creates_hnsw_index():
+    pool = MagicMock()
+    cursor = pool.connection.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+    cursor.fetchone.return_value = {"cnt": 0}
+    db = OceanBaseMySQLVectorDb(
+        pool=pool,
+        configured_database="db1",
+        namespace="project_a",
+        isolation=IsolationType.PHYSICAL,
+    )
+
+    db.create_table(
+        "vec_items",
+        schema=_schema(),
+        embedding_function=MockEmbeddingFunction(),
+        vector_column="vector",
+        source_column="description",
+    )
+
+    executed_sql = [call.args[0] for call in cursor.execute.call_args_list]
+    assert any(
+        "CREATE VECTOR INDEX `idx_vec_items_vector_hnsw` "
+        "ON `project_a`.`vec_items`(`vector`) WITH (distance=cosine, type=hnsw, lib=vsag)" in sql
+        for sql in executed_sql
+    )
+
+
+def test_create_vector_index_skips_existing_named_index():
+    pool = MagicMock()
+    cursor = pool.connection.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+    cursor.fetchone.return_value = {"cnt": 1}
+    table = OceanBaseMySQLVectorTable(
+        pool=pool,
+        database_name="db1",
+        table_name="vec_items",
+        vector_column="vector",
+        vector_dim=4,
+    )
+
+    table.create_vector_index("vector")
+
+    executed_sql = [call.args[0] for call in cursor.execute.call_args_list]
+    assert not any(sql.startswith("CREATE VECTOR INDEX") for sql in executed_sql)
+
+
+def test_create_vector_index_accepts_concurrent_existing_vector_index():
+    pool = MagicMock()
+    cursor = pool.connection.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+    cursor.fetchone.return_value = {"cnt": 0}
+    cursor.execute.side_effect = [
+        None,
+        pymysql.err.NotSupportedError(1235, "create vector index on column has vector index is not supported"),
+    ]
+    table = OceanBaseMySQLVectorTable(
+        pool=pool,
+        database_name="db1",
+        table_name="vec_items",
+        vector_column="vector",
+        vector_dim=4,
+    )
+
+    table.create_vector_index("vector")
+
+    pool.connection.return_value.__enter__.return_value.commit.assert_called_once_with()
 
 
 def test_initialize_requires_connection_config():
@@ -227,6 +334,7 @@ def test_real_oceanbase_vector_crud_search_and_indexes(backend):
     )
     assert isinstance(table, OceanBaseMySQLVectorTable)
     assert db.table_exists("vec_items")
+    assert "idx_vec_items_vector_hnsw" in _index_names(table)
 
     table.add(
         pd.DataFrame(
@@ -255,7 +363,6 @@ def test_real_oceanbase_vector_crud_search_and_indexes(backend):
     assert result.column("id")[0].as_py() == "a"
     assert result.column("vector")[0].as_py() == pytest.approx([0.1, 0.2, 0.3, 0.4])
 
-    table.create_vector_index("vector")
     table.create_scalar_index("category")
     table.delete(eq("id", "b"))
     assert table.count_rows() == 2
@@ -292,12 +399,15 @@ def test_real_oceanbase_vector_logical_isolation(ob_config):
 
         table_a.merge_insert(pd.DataFrame({"id": ["shared"], "description": ["alpha row"], "category": ["a"]}), "id")
         table_b.merge_insert(pd.DataFrame({"id": ["shared"], "description": ["beta row"], "category": ["b"]}), "id")
+        table_a.merge_insert(
+            pd.DataFrame({"id": ["shared"], "description": ["alpha updated"], "category": ["a2"]}), "id"
+        )
 
         assert table_a.count_rows() == 1
         assert table_b.count_rows() == 1
         assert (
             table_a.search_all(where=eq("id", "shared"), select_fields=["category"]).column("category")[0].as_py()
-            == "a"
+            == "a2"
         )
         assert (
             table_b.search_all(where=eq("id", "shared"), select_fields=["category"]).column("category")[0].as_py()

@@ -245,13 +245,23 @@ class OceanBaseMySQLVectorTable(VectorTable):
         distance = {"cosine": "cosine", "l2": "l2", "ip": "inner_product"}.get(metric, "cosine")
         with self._pool.connection(database=self._database_name) as conn:
             with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT COUNT(*) AS cnt FROM information_schema.STATISTICS "
+                    "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND INDEX_NAME = %s",
+                    (self._database_name, self._table_name, index_name),
+                )
+                row = cursor.fetchone()
+                if row and row["cnt"]:
+                    return
                 try:
                     cursor.execute(
                         f"CREATE VECTOR INDEX {_quote_ident(index_name)} ON {self._qualified_name}({_quote_ident(column)}) "
                         f"WITH (distance={distance}, type=hnsw, lib=vsag)"
                     )
                 except Exception as e:
-                    if getattr(e, "args", None) and e.args[0] == 1061:
+                    error_code = e.args[0] if getattr(e, "args", None) else None
+                    error_message = str(e).lower()
+                    if error_code == 1061 or (error_code == 1235 and "has vector index" in error_message):
                         pass
                     else:
                         raise
@@ -496,7 +506,7 @@ class OceanBaseMySQLVectorDb(VectorDatabase):
             self._logical_namespace = namespace
         else:
             self._database_name = _validate_identifier(namespace) if namespace else configured_database
-        self._logical_namespace = None
+            self._logical_namespace = None
         self._table_schemas: Dict[str, pa.Schema] = {}
         self._ensure_database()
 
@@ -616,6 +626,8 @@ class OceanBaseMySQLVectorDb(VectorDatabase):
             source_column,
             _schema_cache_key(schema),
         )
+        if vector_column in column_names:
+            table.create_vector_index(vector_column)
         self._table_cache[cache_key] = table
         return table
 
@@ -664,6 +676,8 @@ class OceanBaseMySQLVectorDb(VectorDatabase):
             column_names,
             schema,
         )
+        if embedding_function is not None and vector_column in column_names:
+            table.create_vector_index(vector_column)
         self._table_cache[cache_key] = table
         return table
 
