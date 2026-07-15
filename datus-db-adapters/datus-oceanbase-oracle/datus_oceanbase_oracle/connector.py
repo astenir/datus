@@ -103,6 +103,14 @@ def _sql_string(value: str) -> str:
     return value.replace("'", "''")
 
 
+def _jdbc_value_to_python(value: Any) -> Any:
+    """Convert JDBC values that JayDeBeApi leaves as Java objects."""
+    if value is None or not hasattr(value, "length") or not hasattr(value, "getSubString"):
+        return value
+    length = int(value.length())
+    return "" if length == 0 else str(value.getSubString(1, length))
+
+
 class OceanBaseOracleConnector(BaseSqlConnector, MigrationTargetMixin):
     """OceanBase Oracle mode database connector via JDBC."""
 
@@ -304,7 +312,8 @@ class OceanBaseOracleConnector(BaseSqlConnector, MigrationTargetMixin):
             else:
                 cursor.execute(sql, tuple(parameters))
             columns = [column[0] for column in (cursor.description or [])]
-            return pd.DataFrame.from_records(cursor.fetchall(), columns=columns)
+            rows = [tuple(_jdbc_value_to_python(value) for value in row) for row in cursor.fetchall()]
+            return pd.DataFrame.from_records(rows, columns=columns)
         finally:
             cursor.close()
 
