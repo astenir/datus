@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse
 from datus.api import deps as api_deps
 from datus.api.enterprise.models import AccessDecision
 from datus.api.models.base_models import Result
-from datus.api.models.chat_models import ToolResult, ToolResultInput
+from datus.api.models.chat_models import ResumeChatInput, ToolResult, ToolResultInput
 from datus.api.models.cli_models import (
     ChatHistoryData,
     ChatSessionData,
@@ -36,11 +36,13 @@ from datus.api.routes.chat_routes import (
     delete_session,
     get_chat_history,
     list_sessions,
+    resume_chat,
     stream_chat,
     stream_chat_feedback,
     submit_tool_result,
     submit_user_interaction,
 )
+from datus.api.services.chat_task_manager import EventBufferExpiredError
 from datus.tools.permission.permission_config import PermissionConfig, PermissionLevel
 from datus.tools.permission.profiles import build_effective_config
 from datus.tools.proxy.tool_result_channel import ToolResultChannel
@@ -348,6 +350,33 @@ class TestStreamChat404Gate:
         assert isinstance(response, StreamingResponse)
         assert response.status_code == 200
         assert response.media_type == "text/event-stream"
+
+
+class TestResumeChatBufferExpiry:
+    @pytest.mark.asyncio
+    async def test_expired_cursor_yields_typed_sse_error(self):
+        async def expired_events(*_args, **_kwargs):
+            raise EventBufferExpiredError("Requested event cursor 1 expired; earliest available cursor is 3.")
+            yield  # pragma: no cover - keeps this function an async generator
+
+        svc = MagicMock()
+        svc.task_manager.get_task.return_value = object()
+        svc.task_manager.consume_events = expired_events
+        request = ResumeChatInput(session_id="s1", from_event_id=1)
+
+        with patch(
+            "datus.api.routes.chat_routes.authorize_session_access",
+            new=AsyncMock(return_value=SimpleNamespace(error=None)),
+        ):
+            response = await resume_chat(request, _mock_ctx(user_id="alice"), _request_with_service(svc))
+
+        chunks = [chunk async for chunk in response.body_iterator]
+        body = "".join(chunk.decode() if isinstance(chunk, bytes) else chunk for chunk in chunks)
+        payload = json.loads(next(line[6:] for line in body.splitlines() if line.startswith("data: ")))
+
+        assert response.media_type == "text/event-stream"
+        assert payload["error_type"] == "CHAT_EVENT_BUFFER_EXPIRED"
+        assert payload["session_id"] == "s1"
 
 
 class TestStreamChatSessionOwner:

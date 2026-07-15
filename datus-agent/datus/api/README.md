@@ -42,6 +42,32 @@ The frontend-facing API contract is exposed by FastAPI:
 - OpenAPI schema: `http://127.0.0.1:8000/openapi.json`
 - Health check: `http://127.0.0.1:8000/health`
 
+`GET /health` is a liveness endpoint. It deliberately does not open database
+connections or call an LLM; use the explicit datasource/model connectivity
+endpoints for dependency diagnostics.
+
+Long-running chat work is bounded per API worker, project, and authenticated
+user. Defaults can be overridden in `agent.api.chat`:
+
+```yaml
+agent:
+  api:
+    chat:
+      max_active_global: 32
+      max_active_per_project: 16
+      max_active_per_user: 4
+      max_buffer_events: 5000
+      max_buffer_bytes: 16777216
+      completed_task_ttl_seconds: 300
+      cleanup_interval_seconds: 60
+```
+
+Capacity rejections are emitted as an SSE `error` event with
+`error_type=CHAT_CAPACITY_EXCEEDED`. If a resume cursor is older than the
+bounded in-memory event window, the stream emits
+`error_type=CHAT_EVENT_BUFFER_EXPIRED` and the client should load persisted
+history instead.
+
 Most JSON endpoints live under `/api/v1` and return the `Result[T]` envelope:
 
 ```json

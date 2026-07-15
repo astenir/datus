@@ -60,6 +60,7 @@ from datus.api.models.cli_models import (
 from datus.api.models.dashboard_models import DashboardEditSession
 from datus.api.models.report_models import ReportEditSession
 from datus.api.services.background_drain import track_background_task
+from datus.api.services.chat_task_manager import EventBufferExpiredError
 from datus.tools.permission.permission_config import PermissionLevel, PermissionRule
 from datus.tools.permission.profiles import build_effective_config
 from datus.tools.sql_policy import SqlPolicyConfig
@@ -926,8 +927,16 @@ async def resume_chat(
         )
 
     async def generate_sse():
-        async for event in task_manager.consume_events(task, start_from=request.from_event_id):
-            yield f"id: {event.id}\nevent: {event.event}\ndata: {event.data.model_dump_json()}\n\n"
+        try:
+            async for event in task_manager.consume_events(task, start_from=request.from_event_id):
+                yield f"id: {event.id}\nevent: {event.event}\ndata: {event.data.model_dump_json()}\n\n"
+        except EventBufferExpiredError as exc:
+            error = SSEErrorData(
+                error=str(exc),
+                error_type="CHAT_EVENT_BUFFER_EXPIRED",
+                session_id=request.session_id,
+            )
+            yield f"event: error\ndata: {error.model_dump_json()}\n\n"
 
     return StreamingResponse(generate_sse(), media_type="text/event-stream", headers=_sse_headers())
 

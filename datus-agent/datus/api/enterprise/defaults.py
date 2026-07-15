@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
+import functools
 import json
 import os
 import sqlite3
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from fnmatch import fnmatchcase
 from typing import Any
@@ -15,6 +18,35 @@ from datus.api.enterprise.models import AccessDecision, AuditEvent, ProjectionIn
 from datus.utils.exceptions import DatusException, ErrorCode
 from datus_enterprise.model_credentials import CredentialSecretCodec
 from datus_enterprise.personal_datasources import password_hint
+
+_SQLITE_WORKER_ACTIVE: ContextVar[bool] = ContextVar("enterprise_sqlite_worker_active", default=False)
+
+
+def _offload_sqlite_async_methods(cls):
+    """Run a SQLite store's async protocol methods outside the API event loop."""
+
+    for name, method in list(cls.__dict__.items()):
+        if asyncio.iscoroutinefunction(method):
+            setattr(cls, name, _sqlite_thread_wrapper(method))
+    return cls
+
+
+def _sqlite_thread_wrapper(method):
+    @functools.wraps(method)
+    async def wrapped(*args, **kwargs):
+        if _SQLITE_WORKER_ACTIVE.get():
+            return await method(*args, **kwargs)
+
+        def run_in_worker():
+            token = _SQLITE_WORKER_ACTIVE.set(True)
+            try:
+                return asyncio.run(method(*args, **kwargs))
+            finally:
+                _SQLITE_WORKER_ACTIVE.reset(token)
+
+        return await asyncio.to_thread(run_in_worker)
+
+    return wrapped
 
 
 class LocalAuthorizationProvider:
@@ -118,6 +150,7 @@ class InMemoryEnterpriseUserStore:
         return _copy_user_record(record)
 
 
+@_offload_sqlite_async_methods
 class SqliteEnterpriseUserStore:
     """SQLite-backed enterprise user metadata store for single-node deployments."""
 
@@ -367,6 +400,7 @@ class InMemoryEnterpriseRoleStore:
         return self._roles.pop(role_id, None) is not None
 
 
+@_offload_sqlite_async_methods
 class SqliteEnterpriseRoleStore:
     """SQLite-backed enterprise role metadata store for single-node deployments."""
 
@@ -982,6 +1016,7 @@ class InMemoryUserModelCredentialStore:
         self._credentials[(user_id, credential_id)] = updated
 
 
+@_offload_sqlite_async_methods
 class SqliteUserModelCredentialStore:
     """SQLite-backed user model credential store for single-node deployments.
 
@@ -1300,6 +1335,7 @@ class InMemoryUserDatasourceStore:
         self._datasources[(user_id, datasource_id)] = updated
 
 
+@_offload_sqlite_async_methods
 class SqliteUserDatasourceStore:
     """SQLite-backed user private datasource store for single-node deployments.
 
@@ -1502,6 +1538,7 @@ class SqliteUserDatasourceStore:
             conn.commit()
 
 
+@_offload_sqlite_async_methods
 class SqliteEnterpriseDatasourceGrantStore:
     """SQLite-backed datasource grant metadata store for single-node deployments."""
 
@@ -1680,6 +1717,7 @@ class InMemorySessionOwnerStore:
         return sorted(records, key=lambda record: (str(record["user_id"]), str(record["session_id"])))
 
 
+@_offload_sqlite_async_methods
 class SqliteSessionOwnerStore:
     """SQLite-backed ``session_owners`` metadata index.
 
@@ -1805,6 +1843,7 @@ class NoopAuditSink:
         return None
 
 
+@_offload_sqlite_async_methods
 class SqliteAuditSink:
     """SQLite-backed audit sink for single-node enterprise MVP deployments."""
 

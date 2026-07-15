@@ -1,10 +1,11 @@
 """Tests for datus.api.services.chat_service — chat session management."""
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from datus.api.services.chat_admission import ChatCapacityError
 from datus.api.services.chat_service import ChatService
 from datus.api.services.chat_task_manager import ChatTaskManager
 from datus.models.session_manager import SessionManager
@@ -523,6 +524,23 @@ class TestChatServiceStreamChat:
                 break
         assert len(events) >= 1
         assert events[0].event == "session"
+
+    async def test_stream_chat_capacity_rejection_yields_typed_error(self, real_agent_config):
+        """Admission failures are stable SSE errors instead of broken streams."""
+        from datus.api.models.cli_models import StreamChatInput
+
+        task_manager = MagicMock()
+        task_manager.start_chat = AsyncMock(side_effect=ChatCapacityError(scope="worker", limit=1))
+        svc = ChatService(agent_config=real_agent_config, task_manager=task_manager, project_id="test-proj")
+
+        request = StreamChatInput(message="hello", session_id="capacity-rejected")
+        events = [event async for event in svc.stream_chat(request, user_id="alice")]
+
+        assert len(events) == 1
+        assert events[0].event == "error"
+        assert events[0].data.error_type == "CHAT_CAPACITY_EXCEEDED"
+        assert events[0].data.session_id == "capacity-rejected"
+        task_manager.consume_events.assert_not_called()
 
     async def test_stream_chat_duplicate_session_yields_error(self, real_agent_config, mock_llm_create):
         """stream_chat for duplicate session_id yields error event."""

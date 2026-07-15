@@ -17,6 +17,14 @@ agent:
   models_file: ${DATUS_MODELS_FILE:-/run/datus/agent/models.yml}
 
   api:
+    chat:
+      max_active_global: ${DATUS_CHAT_MAX_ACTIVE_GLOBAL:-32}
+      max_active_per_project: ${DATUS_CHAT_MAX_ACTIVE_PER_PROJECT:-16}
+      max_active_per_user: ${DATUS_CHAT_MAX_ACTIVE_PER_USER:-4}
+      max_buffer_events: ${DATUS_CHAT_MAX_BUFFER_EVENTS:-5000}
+      max_buffer_bytes: ${DATUS_CHAT_MAX_BUFFER_BYTES:-16777216}
+      completed_task_ttl_seconds: ${DATUS_CHAT_COMPLETED_TTL_SECONDS:-300}
+      cleanup_interval_seconds: ${DATUS_CHAT_CLEANUP_INTERVAL_SECONDS:-60}
     auth_provider:
       class: datus_enterprise.auth_provider:UserInfoBearerAuthProvider
       kwargs:

@@ -10,6 +10,7 @@ the client can reconnect and resume from where it left off.
 import asyncio
 import copy
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, List, Literal, Optional
 
@@ -45,12 +46,51 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from datus.api.enterprise.protocols import ArtifactAclStore, SessionBodyStore, SessionOwnerStore
+    from datus.api.services.chat_admission import ChatAdmissionController
 
 HEARTBEAT_INTERVAL = 10  # seconds
 REPORT_EDIT_SESSION_PREFIX = "report_edit__"
 DASHBOARD_EDIT_SESSION_PREFIX = "dashboard_edit__"
 ARTIFACT_EDIT_SESSION_TTL_SECONDS = 6 * 60 * 60
 ArtifactEditSession = ReportEditSession | DashboardEditSession
+
+
+@dataclass(frozen=True)
+class ChatBufferLimits:
+    """Per-task in-memory SSE retention limits."""
+
+    max_events: int = 5000
+    max_bytes: int = 16 * 1024 * 1024
+    completed_ttl_seconds: int = 300
+    cleanup_interval_seconds: int = 60
+
+    @classmethod
+    def from_api_config(cls, api_config: dict[str, Any] | None) -> "ChatBufferLimits":
+        raw = (api_config or {}).get("chat") or {}
+        if not isinstance(raw, dict):
+            raw = {}
+        return cls(
+            max_events=_positive_int(raw.get("max_buffer_events"), cls.max_events),
+            max_bytes=_positive_int(raw.get("max_buffer_bytes"), cls.max_bytes),
+            completed_ttl_seconds=_positive_int(raw.get("completed_task_ttl_seconds"), cls.completed_ttl_seconds),
+            cleanup_interval_seconds=_positive_int(raw.get("cleanup_interval_seconds"), cls.cleanup_interval_seconds),
+        )
+
+
+class EventBufferExpiredError(RuntimeError):
+    """Raised when a resume cursor predates the bounded in-memory buffer."""
+
+
+class EventBufferOverflowError(RuntimeError):
+    """Raised when one SSE event exceeds the complete task buffer budget."""
+
+
+def _positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
 
 
 def is_thinking_only_content(content_items) -> bool:
@@ -274,14 +314,16 @@ class ChatTask:
         self.owner_user_id = owner_user_id
         self.node: Optional[AgenticNode] = None
         self.events: list[SSEEvent] = []
+        self.event_sizes: list[int] = []
+        self.event_bytes: int = 0
+        self.base_offset: int = 0
         self.status: str = "running"  # running | completed | error | cancelled
         self.condition = asyncio.Condition()
         self.created_at = datetime.now()
+        self.completed_at: Optional[datetime] = None
         self.error: Optional[str] = None
         self.consumer_offset: int = 0
-
-
-COMPLETED_TASK_TTL = 300  # seconds to keep completed tasks for resume
+        self.admission_token = None
 
 
 class ChatTaskManager:
@@ -300,6 +342,8 @@ class ChatTaskManager:
         session_body_store: Optional["SessionBodyStore"] = None,
         artifact_acl_store: Optional["ArtifactAclStore"] = None,
         enterprise_enabled: bool = False,
+        chat_admission: Optional["ChatAdmissionController"] = None,
+        buffer_limits: Optional[ChatBufferLimits] = None,
     ) -> None:
         self._tasks: Dict[str, ChatTask] = {}
         self._completed_tasks: Dict[str, ChatTask] = {}
@@ -312,6 +356,9 @@ class ChatTaskManager:
         self._session_body_store = session_body_store
         self._artifact_acl_store = artifact_acl_store
         self._enterprise_enabled = enterprise_enabled
+        self._chat_admission = chat_admission
+        self._buffer_limits = buffer_limits or ChatBufferLimits()
+        self._cleanup_handle: Optional[asyncio.TimerHandle] = None
         self._supports_artifact_edit_sessions = True
         self._supports_report_edit_sessions = True
         self._artifact_edit_sessions: Dict[str, ArtifactEditSession] = {}
@@ -464,14 +511,25 @@ class ChatTaskManager:
         if session_id in self._tasks:
             raise ValueError(f"A task is already running for session {session_id}")
 
+        admission_token = None
+        if self._chat_admission is not None:
+            admission_token = await self._chat_admission.acquire(project_id=self._project_id, user_id=user_id)
+        if session_id in self._tasks:
+            if self._chat_admission is not None:
+                await self._chat_admission.release(admission_token)
+            raise ValueError(f"A task is already running for session {session_id}")
+
         # Placeholder — asyncio_task set immediately after
         task = ChatTask(session_id=session_id, asyncio_task=None, owner_user_id=user_id)  # type: ignore[arg-type]
+        task.admission_token = admission_token
         self._tasks[session_id] = task
         try:
             if user_id and self._session_owner_store is not None:
                 await self._session_owner_store.set_owner(self._project_id, session_id, user_id)
         except Exception:
             self._tasks.pop(session_id, None)
+            if self._chat_admission is not None:
+                await self._chat_admission.release(admission_token)
             raise
 
         asyncio_task = asyncio.create_task(
@@ -572,11 +630,17 @@ class ChatTaskManager:
         while True:
             ping_event = None
             async with task.condition:
-                while cursor >= len(task.events) and task.status == "running":
+                if cursor < task.base_offset:
+                    raise EventBufferExpiredError(
+                        f"Requested event cursor {cursor} expired; earliest available cursor is {task.base_offset}."
+                    )
+                local_cursor = cursor - task.base_offset
+                while local_cursor >= len(task.events) and task.status == "running":
                     try:
                         await asyncio.wait_for(task.condition.wait(), timeout=HEARTBEAT_INTERVAL)
                     except asyncio.TimeoutError:
-                        if cursor >= len(task.events) and task.status == "running":
+                        local_cursor = cursor - task.base_offset
+                        if local_cursor >= len(task.events) and task.status == "running":
                             ping_event = SSEEvent(
                                 id=-1,
                                 event="ping",
@@ -584,7 +648,12 @@ class ChatTaskManager:
                                 timestamp=now_utc_iso(),
                             )
                             break  # exit inner loop so ping can be yielded
-                new_events = task.events[cursor:]
+                    if cursor < task.base_offset:
+                        raise EventBufferExpiredError(
+                            f"Requested event cursor {cursor} expired; earliest available cursor is {task.base_offset}."
+                        )
+                    local_cursor = cursor - task.base_offset
+                new_events = task.events[local_cursor:]
                 is_done = task.status != "running"
 
             # Yield outside the lock to avoid blocking producers
@@ -597,7 +666,7 @@ class ChatTaskManager:
             cursor += len(new_events)
             task.consumer_offset = cursor
 
-            if is_done and cursor >= len(task.events):
+            if is_done and cursor >= task.base_offset + len(task.events):
                 break
 
     async def wait_all_tasks(self) -> None:
@@ -616,6 +685,9 @@ class ChatTaskManager:
             await asyncio.gather(*pending, return_exceptions=True)
         self._tasks.clear()
         self._completed_tasks.clear()
+        if self._cleanup_handle is not None:
+            self._cleanup_handle.cancel()
+            self._cleanup_handle = None
 
     # ------------------------------------------------------------------
     # Background loop (full agentic loop implementation)
@@ -908,20 +980,82 @@ class ChatTaskManager:
                 reset_trace_context(trace_token)
             async with task.condition:
                 task.condition.notify_all()
+            task.completed_at = datetime.now()
             self._release_task_slot(session_id, task)
+            if self._chat_admission is not None:
+                await self._chat_admission.release(task.admission_token)
 
     async def _push_event(self, task: ChatTask, event: SSEEvent) -> None:
         """Append an event to the task buffer and notify consumers."""
-        logger.debug(f"Pushing event: {event}")
+        event_size = len(event.model_dump_json().encode("utf-8"))
+        logger.debug("Pushing event id=%s type=%s bytes=%s", event.id, event.event, event_size)
+        if event.event != "error" and event_size > self._buffer_limits.max_bytes:
+            raise EventBufferOverflowError(
+                f"Chat event exceeded the {self._buffer_limits.max_bytes}-byte buffer limit."
+            )
         async with task.condition:
             task.events.append(event)
+            task.event_sizes.append(event_size)
+            task.event_bytes += event_size
+            self._trim_event_buffer(task)
             task.condition.notify_all()
 
+    def _trim_event_buffer(self, task: ChatTask) -> None:
+        """Trim old events in batches while keeping absolute resume cursors stable."""
+
+        limits = self._buffer_limits
+        if len(task.events) <= limits.max_events and task.event_bytes <= limits.max_bytes:
+            return
+
+        target_events = max(1, int(limits.max_events * 0.8))
+        target_bytes = max(1, int(limits.max_bytes * 0.8))
+        remove_count = 0
+        removed_bytes = 0
+        remaining_bytes = task.event_bytes
+        while remove_count < len(task.events) - 1 and (
+            len(task.events) - remove_count > target_events or remaining_bytes > target_bytes
+        ):
+            size = task.event_sizes[remove_count]
+            removed_bytes += size
+            remaining_bytes -= size
+            remove_count += 1
+
+        if remove_count == 0:
+            return
+        del task.events[:remove_count]
+        del task.event_sizes[:remove_count]
+        task.event_bytes = max(0, task.event_bytes - removed_bytes)
+        task.base_offset += remove_count
+        logger.warning(
+            "Trimmed %s buffered chat events for session=%s; earliest_cursor=%s retained_bytes=%s",
+            remove_count,
+            task.session_id,
+            task.base_offset,
+            task.event_bytes,
+        )
+
+    def _schedule_completed_cleanup(self) -> None:
+        if self._cleanup_handle is not None and not self._cleanup_handle.cancelled():
+            return
+        loop = asyncio.get_running_loop()
+        self._cleanup_handle = loop.call_later(
+            self._buffer_limits.cleanup_interval_seconds,
+            self._run_scheduled_cleanup,
+        )
+
+    def _run_scheduled_cleanup(self) -> None:
+        self._cleanup_handle = None
+        self._purge_expired_completed()
+        if self._completed_tasks:
+            self._schedule_completed_cleanup()
+
     def _purge_expired_completed(self) -> None:
-        """Remove completed tasks older than COMPLETED_TASK_TTL."""
+        """Remove completed tasks after their configured resume TTL."""
         now = datetime.now()
         expired = [
-            sid for sid, t in self._completed_tasks.items() if (now - t.created_at).total_seconds() > COMPLETED_TASK_TTL
+            sid
+            for sid, t in self._completed_tasks.items()
+            if (now - (t.completed_at or t.created_at)).total_seconds() > self._buffer_limits.completed_ttl_seconds
         ]
         for sid in expired:
             self._completed_tasks.pop(sid, None)
@@ -942,8 +1076,10 @@ class ChatTaskManager:
 
         if owns_active_slot:
             # Keep completed task for resume within TTL.
+            task.node = None
             self._completed_tasks[session_id] = task
             self._purge_expired_completed()
+            self._schedule_completed_cleanup()
 
     def _task_snapshot(self, task: ChatTask) -> dict[str, Any]:
         return {
@@ -953,6 +1089,8 @@ class ChatTaskManager:
             "is_running": task.status == "running",
             "created_at": task.created_at.isoformat(),
             "event_count": len(task.events),
+            "event_bytes": task.event_bytes,
+            "earliest_event_cursor": task.base_offset,
             "consumer_offset": task.consumer_offset,
             "error": task.error,
         }

@@ -16,6 +16,7 @@ logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from datus.api.enterprise.protocols import ArtifactAclStore, SessionBodyStore, SessionOwnerStore
+    from datus.api.services.chat_admission import ChatAdmissionController
 
 
 class DatusService:
@@ -37,6 +38,7 @@ class DatusService:
         session_body_store: "SessionBodyStore | None" = None,
         artifact_acl_store: "ArtifactAclStore | None" = None,
         enterprise_enabled: bool = False,
+        chat_admission: "ChatAdmissionController | None" = None,
     ):
         self._agent_config = agent_config
         self._project_id = project_id
@@ -46,7 +48,7 @@ class DatusService:
         self._artifact_acl_store = artifact_acl_store
 
         # ChatTaskManager — project-scoped (not process-level singleton)
-        from datus.api.services.chat_task_manager import ChatTaskManager
+        from datus.api.services.chat_task_manager import ChatBufferLimits, ChatTaskManager
 
         self._task_manager = ChatTaskManager(
             default_source=default_source,
@@ -57,6 +59,8 @@ class DatusService:
             session_body_store=session_body_store,
             artifact_acl_store=artifact_acl_store,
             enterprise_enabled=enterprise_enabled,
+            chat_admission=chat_admission,
+            buffer_limits=ChatBufferLimits.from_api_config(getattr(agent_config, "api_config", None)),
         )
 
         # Lazy service slots

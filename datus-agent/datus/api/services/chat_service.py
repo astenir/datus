@@ -26,6 +26,7 @@ from datus.api.models.cli_models import (
     StreamChatInput,
 )
 from datus.api.services.action_sse_converter import action_to_history_sse_event
+from datus.api.services.chat_admission import ChatCapacityError
 from datus.api.services.chat_task_manager import (
     _is_visible_assistant_response,
     _remember_assistant_message,
@@ -89,6 +90,14 @@ class ChatService:
                 user_id=user_id,
                 principal=principal,
             )
+        except ChatCapacityError as e:
+            yield SSEEvent(
+                id=1,
+                event="error",
+                data=SSEErrorData(error=str(e), error_type="CHAT_CAPACITY_EXCEEDED", session_id=request.session_id),
+                timestamp=now_utc_iso(),
+            )
+            return
         except (ValueError, DatusException) as e:
             error_code = e.code.name if isinstance(e, DatusException) else ErrorCode.COMMON_VALIDATION_FAILED.name
             yield SSEEvent(

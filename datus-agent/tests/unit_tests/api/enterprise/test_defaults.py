@@ -1,5 +1,6 @@
 import asyncio
 import sqlite3
+import time
 
 import pytest
 
@@ -20,6 +21,26 @@ from datus.api.enterprise.defaults import (
 )
 from datus.api.enterprise.models import AuditEvent, ResourceRef
 from datus.utils.exceptions import DatusException
+
+
+@pytest.mark.asyncio
+async def test_sqlite_store_does_not_block_event_loop(tmp_path, monkeypatch):
+    store = SqliteEnterpriseUserStore(str(tmp_path / "enterprise.db"))
+    original_connect = store._connect
+
+    def slow_connect():
+        time.sleep(0.1)
+        return original_connect()
+
+    monkeypatch.setattr(store, "_connect", slow_connect)
+    read_task = asyncio.create_task(store.get_user("alice"))
+    ticks = 0
+    while not read_task.done():
+        ticks += 1
+        await asyncio.sleep(0.01)
+
+    assert await read_task is None
+    assert ticks >= 5
 
 
 @pytest.mark.asyncio

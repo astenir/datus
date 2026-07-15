@@ -19,6 +19,7 @@ def _reset_deps():
     """Reset module-level singletons between tests."""
     deps._auth_provider = None
     deps._service_cache = None
+    deps._chat_admission = None
     deps._enterprise_extensions = None
     deps._datasource = "default"
     deps._default_source = None
@@ -26,10 +27,47 @@ def _reset_deps():
     yield
     deps._auth_provider = None
     deps._service_cache = None
+    deps._chat_admission = None
     deps._enterprise_extensions = None
     deps._datasource = "default"
     deps._default_source = None
     deps._default_interactive = True
+
+
+@pytest.mark.asyncio
+async def test_enterprise_role_and_grant_reads_run_concurrently():
+    active = 0
+    max_active = 0
+
+    async def tracked(value):
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return value
+
+    async def get_role(_role_id):
+        return await tracked({"permissions": ["module.chat"]})
+
+    async def list_grants(**_kwargs):
+        return await tracked([])
+
+    role_store = SimpleNamespace(
+        list_user_roles=AsyncMock(return_value=["r1", "r2", "r3"]),
+        get_role=AsyncMock(side_effect=get_role),
+    )
+    grant_store = SimpleNamespace(
+        list_grants=AsyncMock(side_effect=list_grants),
+    )
+    extensions = SimpleNamespace(role_store=role_store, datasource_grant_store=grant_store)
+    ctx = AppContext(user_id="alice")
+
+    await deps._refresh_enterprise_context(ctx, extensions)
+
+    assert max_active >= 3
+    assert role_store.get_role.await_count == 3
+    assert grant_store.list_grants.await_count == 4
 
 
 class TestInitDeps:

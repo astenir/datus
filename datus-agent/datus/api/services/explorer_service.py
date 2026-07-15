@@ -266,7 +266,7 @@ class ExplorerService:
                 return Result[SubjectListData](success=True, data=SubjectListData(subjects=[]))
 
             # Get tree structure from subject tree store
-            tree_structure = self.subject_tree_store.get_tree_structure()
+            tree_structure = await asyncio.to_thread(self.subject_tree_store.get_tree_structure)
 
             # Build SubjectNode list from tree structure
             def build_subject_nodes(tree_dict: dict, parent_path: list = None) -> list:
@@ -336,7 +336,7 @@ class ExplorerService:
                 return nodes
 
             # Build subject nodes from tree root
-            subject_nodes = build_subject_nodes(tree_structure)
+            subject_nodes = await asyncio.to_thread(build_subject_nodes, tree_structure)
 
             return Result[SubjectListData](success=True, data=SubjectListData(subjects=subject_nodes))
 
