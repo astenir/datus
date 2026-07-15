@@ -4,6 +4,8 @@
 
 """Tests for datus/storage/schema_metadata/store.py — SchemaStorage and _build_where_clause."""
 
+from unittest.mock import MagicMock
+
 import pytest
 from datus_db_core import ConnectorRegistry
 from datus_storage_base.conditions import And, Condition, build_where
@@ -12,6 +14,11 @@ from datus.storage.embedding_models import get_db_embedding_model
 from datus.storage.schema_metadata import SchemaStorage
 from datus.storage.schema_metadata.store import _build_where_clause
 from datus.tools.db_tools import connector_registry
+
+
+class _EmbeddingModelStub:
+    batch_size = 64
+    dim_size = 4
 
 
 @pytest.fixture(autouse=True)
@@ -35,6 +42,21 @@ class TestExtractTableName:
 
     def _make_store(self, tmp_path) -> SchemaStorage:
         return SchemaStorage(get_db_embedding_model())
+
+    def test_schema_metadata_uses_identifier_storage_key(self):
+        store = SchemaStorage(_EmbeddingModelStub(), db=MagicMock())
+
+        assert store._unique_columns == ["storage_key"]
+        assert store._schema.field("storage_key").nullable is False
+        assert store._storage_key_source_column == "identifier"
+
+        rows = store._apply_default_values(
+            [{"identifier": "catalog.database.orders", "datasource_id": "sales"}]
+        )
+        assert rows[0]["storage_key"] == "sales:catalog.database.orders"
+        assert store._scope_column_migration_exprs()["storage_key"] == (
+            "coalesce(nullif(datasource_id, ''), 'legacy') || ':' || identifier"
+        )
 
     def test_extract_simple_create_table(self, tmp_path):
         """Standard CREATE TABLE should extract the table name."""

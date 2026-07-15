@@ -133,6 +133,15 @@ class VectorTable(ABC):
         rows. Backends that cannot evolve schemas may leave this as a no-op.
         """
 
+    def ensure_unique_columns(self, columns: List[str]) -> None:
+        """Ensure declared business-key columns are physically unique.
+
+        Relational vector backends may use this hook to repair pre-existing
+        tables that were created before unique-key metadata was persisted.
+        Backends without physical uniqueness constraints may leave it as a
+        no-op.
+        """
+
     # -- Maintenance operations (no-op defaults) --
 
     def compact_files(self) -> None:

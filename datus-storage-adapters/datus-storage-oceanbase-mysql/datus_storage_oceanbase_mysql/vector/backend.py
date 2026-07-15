@@ -18,7 +18,7 @@ from datus_storage_oceanbase_mysql.rdb.backend import (
     _quote_qualified,
     _validate_identifier,
 )
-from datus_storage_oceanbase_mysql.vector.schema_converter import schema_to_create_table_sql
+from datus_storage_oceanbase_mysql.vector.schema_converter import _pa_type_to_ob, schema_to_create_table_sql
 
 _VECTOR_TYPE_RE = re.compile(r"\bvector\s*\(\s*(\d+)\s*\)", re.IGNORECASE)
 
@@ -175,14 +175,120 @@ class OceanBaseMySQLVectorTable(VectorTable):
             with conn.cursor() as cursor:
                 for name, expr in missing.items():
                     _validate_identifier(name)
+                    mysql_expr = self._mysql_migration_expression(expr)
                     cursor.execute(f"ALTER TABLE {self._qualified_name} ADD COLUMN {_quote_ident(name)} LONGTEXT")
                     cursor.execute(
-                        f"UPDATE {self._qualified_name} SET {_quote_ident(name)} = {expr} WHERE {_quote_ident(name)} IS NULL"
+                        f"UPDATE {self._qualified_name} SET {_quote_ident(name)} = {mysql_expr} "
+                        f"WHERE {_quote_ident(name)} IS NULL"
                     )
             conn.commit()
         for name in missing:
             if name not in self._column_names:
                 self._column_names.append(name)
+
+    @staticmethod
+    def _mysql_migration_expression(expression: str) -> str:
+        """Translate trusted SQL concatenation expressions to MySQL syntax."""
+
+        parts = [part.strip() for part in expression.split("||")]
+        if len(parts) == 1:
+            return expression
+        return f"CONCAT({', '.join(parts)})"
+
+    def ensure_unique_columns(self, columns: List[str]) -> None:
+        """Validate and repair physical unique keys on an existing table."""
+
+        if not columns:
+            return
+        existing = set(self._fetch_column_names())
+        for column in columns:
+            _validate_identifier(column)
+            if column not in existing:
+                raise ValueError(f"Unique key column '{column}' is missing from table '{self._table_name}'")
+            conflict_cols = [column]
+            if self._isolation == IsolationType.LOGICAL:
+                conflict_cols.append(LOGICAL_NAMESPACE_COLUMN)
+            if self._unique_key_conforms(conflict_cols):
+                self._ensured_conflict_indexes.add(tuple(conflict_cols))
+                continue
+            self._validate_unique_key_data(conflict_cols)
+            self._make_unique_columns_not_null(conflict_cols)
+            self._ensure_conflict_index(conflict_cols)
+
+    def _unique_key_conforms(self, columns: List[str]) -> bool:
+        if self._schema is None:
+            return False
+        definitions = self._fetch_column_definitions(columns)
+        for column in columns:
+            if column not in self._schema.names:
+                return False
+            definition = definitions.get(column, {})
+            current_type = str(definition.get("COLUMN_TYPE") or "").replace(" ", "").lower()
+            desired_type = _pa_type_to_ob(self._schema.field(column).type, indexed=True).replace(" ", "").lower()
+            if definition.get("IS_NULLABLE") != "NO" or current_type != desired_type:
+                return False
+        index_name = f"idx_{self._table_name}_{'_'.join(columns)}_uq"
+        return self._unique_index_exists(index_name, len(columns))
+
+    def _validate_unique_key_data(self, columns: List[str]) -> None:
+        cols_sql = ", ".join(_quote_ident(column) for column in columns)
+        null_predicate = " OR ".join(f"{_quote_ident(column)} IS NULL" for column in columns)
+        with self._pool.connection(database=self._database_name) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(f"SELECT COUNT(*) AS cnt FROM {self._qualified_name} WHERE {null_predicate}")
+                null_row = cursor.fetchone()
+                if null_row and int(null_row["cnt"]):
+                    raise ValueError(
+                        f"Cannot create unique key on {self._table_name}({', '.join(columns)}): "
+                        f"{int(null_row['cnt'])} row(s) contain NULL"
+                    )
+                cursor.execute(
+                    f"SELECT {cols_sql}, COUNT(*) AS cnt FROM {self._qualified_name} "
+                    f"GROUP BY {cols_sql} HAVING COUNT(*) > 1 LIMIT 1"
+                )
+                duplicate = cursor.fetchone()
+                if duplicate:
+                    values = ", ".join(f"{column}={duplicate.get(column)!r}" for column in columns)
+                    raise ValueError(
+                        f"Cannot create unique key on {self._table_name}({', '.join(columns)}): "
+                        f"duplicate row key ({values})"
+                    )
+
+    def _make_unique_columns_not_null(self, columns: List[str]) -> None:
+        if self._schema is None:
+            raise ValueError(f"Schema is required to repair unique keys on table '{self._table_name}'")
+        definitions = self._fetch_column_definitions(columns)
+        with self._pool.connection(database=self._database_name) as conn:
+            with conn.cursor() as cursor:
+                for column in columns:
+                    if column not in self._schema.names:
+                        raise ValueError(
+                            f"Unique key column '{column}' is missing from the registered schema for "
+                            f"table '{self._table_name}'"
+                        )
+                    column_type = _pa_type_to_ob(self._schema.field(column).type, indexed=True)
+                    definition = definitions.get(column, {})
+                    current_type = str(definition.get("COLUMN_TYPE") or "").replace(" ", "").lower()
+                    desired_type = column_type.replace(" ", "").lower()
+                    if definition.get("IS_NULLABLE") == "NO" and current_type == desired_type:
+                        continue
+                    cursor.execute(
+                        f"ALTER TABLE {self._qualified_name} MODIFY COLUMN "
+                        f"{_quote_ident(column)} {column_type} NOT NULL"
+                    )
+            conn.commit()
+
+    def _fetch_column_definitions(self, columns: List[str]) -> Dict[str, Dict[str, Any]]:
+        placeholders = ", ".join(["%s"] * len(columns))
+        with self._pool.connection(database=self._database_name) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE FROM information_schema.COLUMNS "
+                    f"WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND COLUMN_NAME IN ({placeholders})",
+                    (self._database_name, self._table_name, *columns),
+                )
+                rows = cursor.fetchall()
+        return {row["COLUMN_NAME"]: row for row in rows}
 
     def search_vector(
         self,
@@ -425,6 +531,9 @@ class OceanBaseMySQLVectorTable(VectorTable):
             _validate_identifier(column)
         index_name = f"idx_{self._table_name}_{'_'.join(conflict_cols)}_uq"
         cols_sql = ", ".join(_quote_ident(column) for column in conflict_cols)
+        if self._unique_index_exists(index_name, len(conflict_cols)):
+            self._ensured_conflict_indexes.add(key)
+            return
         with self._pool.connection(database=self._database_name) as conn:
             with conn.cursor() as cursor:
                 try:
@@ -432,14 +541,25 @@ class OceanBaseMySQLVectorTable(VectorTable):
                         f"CREATE UNIQUE INDEX {_quote_ident(index_name)} ON {self._qualified_name} ({cols_sql})"
                     )
                 except Exception as e:
-                    if getattr(e, "args", None) == (1061, "Duplicate key name") or (
-                        getattr(e, "args", None) and e.args[0] == 1061
+                    if getattr(e, "args", None) and e.args[0] == 1061 and self._unique_index_exists(
+                        index_name, len(conflict_cols)
                     ):
                         pass
                     else:
                         raise
             conn.commit()
         self._ensured_conflict_indexes.add(key)
+
+    def _unique_index_exists(self, index_name: str, expected_columns: int) -> bool:
+        with self._pool.connection(database=self._database_name) as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT COUNT(*) AS cnt FROM information_schema.STATISTICS "
+                    "WHERE TABLE_SCHEMA = %s AND TABLE_NAME = %s AND INDEX_NAME = %s AND NON_UNIQUE = 0",
+                    (self._database_name, self._table_name, index_name),
+                )
+                row = cursor.fetchone()
+        return bool(row and int(row["cnt"]) == expected_columns)
 
     def _fetch_column_names(self) -> List[str]:
         with self._pool.connection(database=self._database_name) as conn:

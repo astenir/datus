@@ -104,14 +104,110 @@ def _schema():
 def test_schema_converter_uses_vector_and_indexable_unique_text():
     sql = schema_to_create_table_sql("db1", "vec_items", _schema(), indexed_columns={"id"})
     assert "`vector` VECTOR(4)" in sql
-    assert "`id` VARCHAR(1024)" in sql
+    assert "`id` VARCHAR(1024) NOT NULL" in sql
     assert "`description` LONGTEXT" in sql
     assert "`tags` LONGTEXT" in sql
     assert "ORGANIZATION HEAP" in sql
 
 
+def test_ensure_unique_columns_repairs_nullable_existing_key():
+    pool = MagicMock()
+    cursor = pool.connection.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+    cursor.fetchone.side_effect = [{"cnt": 0}, None]
+    schema = _schema().append(pa.field("storage_key", pa.string(), nullable=False))
+    table = OceanBaseMySQLVectorTable(
+        pool=pool,
+        database_name="db1",
+        table_name="vec_items",
+        vector_column="vector",
+        vector_dim=4,
+        column_names=list(schema.names),
+        schema=schema,
+    )
+    table._fetch_column_names = lambda: list(schema.names)
+    table._fetch_column_definitions = lambda columns: {
+        "storage_key": {"COLUMN_TYPE": "longtext", "IS_NULLABLE": "YES"}
+    }
+    table._unique_index_exists = lambda index_name, expected_columns: False
+
+    table.ensure_unique_columns(["storage_key"])
+
+    executed_sql = [call.args[0] for call in cursor.execute.call_args_list]
+    assert any(
+        sql == "ALTER TABLE `db1`.`vec_items` MODIFY COLUMN `storage_key` VARCHAR(1024) NOT NULL"
+        for sql in executed_sql
+    )
+    assert any(
+        sql == "CREATE UNIQUE INDEX `idx_vec_items_storage_key_uq` ON `db1`.`vec_items` (`storage_key`)"
+        for sql in executed_sql
+    )
+
+
+def test_ensure_unique_columns_rejects_duplicate_existing_keys():
+    pool = MagicMock()
+    cursor = pool.connection.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+    cursor.fetchone.side_effect = [{"cnt": 0}, {"storage_key": "sales:table:orders", "cnt": 2}]
+    schema = _schema().append(pa.field("storage_key", pa.string(), nullable=False))
+    table = OceanBaseMySQLVectorTable(
+        pool=pool,
+        database_name="db1",
+        table_name="vec_items",
+        vector_column="vector",
+        vector_dim=4,
+        column_names=list(schema.names),
+        schema=schema,
+    )
+    table._fetch_column_names = lambda: list(schema.names)
+    table._fetch_column_definitions = lambda columns: {
+        "storage_key": {"COLUMN_TYPE": "longtext", "IS_NULLABLE": "YES"}
+    }
+    table._unique_index_exists = lambda index_name, expected_columns: False
+
+    with pytest.raises(ValueError, match="duplicate row key.*sales:table:orders"):
+        table.ensure_unique_columns(["storage_key"])
+
+    executed_sql = [call.args[0] for call in cursor.execute.call_args_list]
+    assert not any(sql.startswith("ALTER TABLE") for sql in executed_sql)
+    assert not any(sql.startswith("CREATE UNIQUE INDEX") for sql in executed_sql)
+
+
+def test_ensure_unique_columns_is_idempotent_for_conforming_key():
+    pool = MagicMock()
+    cursor = pool.connection.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+    cursor.fetchone.side_effect = [{"cnt": 0}, None]
+    schema = _schema().append(pa.field("storage_key", pa.string(), nullable=False))
+    table = OceanBaseMySQLVectorTable(
+        pool=pool,
+        database_name="db1",
+        table_name="vec_items",
+        vector_column="vector",
+        vector_dim=4,
+        column_names=list(schema.names),
+        schema=schema,
+    )
+    table._fetch_column_names = lambda: list(schema.names)
+    table._fetch_column_definitions = lambda columns: {
+        "storage_key": {"COLUMN_TYPE": "varchar(1024)", "IS_NULLABLE": "NO"}
+    }
+    table._unique_index_exists = lambda index_name, expected_columns: True
+
+    table.ensure_unique_columns(["storage_key"])
+
+    executed_sql = [call.args[0] for call in cursor.execute.call_args_list]
+    assert not any(sql.startswith("ALTER TABLE") for sql in executed_sql)
+    assert not any(sql.startswith("CREATE UNIQUE INDEX") for sql in executed_sql)
+
+
 def test_compile_where_uses_mysql_safe_like_escape_literal():
     assert _compile_where(like("name", "active_product_count")) == (r"name LIKE 'active\_product\_count' ESCAPE '\\'")
+
+
+def test_mysql_migration_expression_translates_sql_concatenation():
+    expression = "coalesce(nullif(datasource_id, ''), 'legacy') || ':' || identifier"
+
+    assert OceanBaseMySQLVectorTable._mysql_migration_expression(expression) == (
+        "CONCAT(coalesce(nullif(datasource_id, ''), 'legacy'), ':', identifier)"
+    )
 
 
 @pytest.mark.parametrize(

@@ -90,6 +90,7 @@ class BaseEmbeddingStore(StorageBase):
         default_values: Optional[Dict[str, Any]] = None,
         scope_indices: Optional[List[str]] = None,
         datasource_scoped: bool = False,
+        storage_key_source_column: str = "id",
     ):
         super().__init__(db=db)
         self.model = embedding_model
@@ -98,6 +99,7 @@ class BaseEmbeddingStore(StorageBase):
         self.vector_source_name = vector_source_name
         self.vector_column_name = vector_column_name
         self.on_duplicate_columns = on_duplicate_columns
+        self._storage_key_source_column = storage_key_source_column
         # Append extra fields to schema if provided
         if schema is not None and extra_fields:
             schema = pa.schema(list(schema) + extra_fields)
@@ -108,8 +110,8 @@ class BaseEmbeddingStore(StorageBase):
             extra_scope_fields = []
             if DATASOURCE_ID_COLUMN not in existing_names:
                 extra_scope_fields.append(pa.field(DATASOURCE_ID_COLUMN, pa.string()))
-            if "id" in existing_names and STORAGE_KEY_COLUMN not in existing_names:
-                extra_scope_fields.append(pa.field(STORAGE_KEY_COLUMN, pa.string()))
+            if storage_key_source_column in existing_names and STORAGE_KEY_COLUMN not in existing_names:
+                extra_scope_fields.append(pa.field(STORAGE_KEY_COLUMN, pa.string(), nullable=False))
             if extra_scope_fields:
                 schema = pa.schema(list(schema) + extra_scope_fields)
         self._schema = schema
@@ -158,6 +160,7 @@ class BaseEmbeddingStore(StorageBase):
         self._set_backend_table_schema(self._schema)
         self.table = self.db.open_table(self.table_name)
         self._ensure_persisted_scope_columns()
+        self._ensure_persisted_unique_columns()
         return self.table
 
     def _empty_result(self, select_fields: Optional[List[str]] = None) -> pa.Table:
@@ -186,8 +189,12 @@ class BaseEmbeddingStore(StorageBase):
                 row.setdefault(k, v)
             if DATASOURCE_ID_COLUMN in schema_names:
                 row.setdefault(DATASOURCE_ID_COLUMN, "")
-            if STORAGE_KEY_COLUMN in schema_names and row.get("id") not in (None, ""):
-                row.setdefault(STORAGE_KEY_COLUMN, build_storage_key(row.get(DATASOURCE_ID_COLUMN, ""), row["id"]))
+            source_column = self._storage_key_source_column
+            if STORAGE_KEY_COLUMN in schema_names and row.get(source_column) not in (None, ""):
+                row.setdefault(
+                    STORAGE_KEY_COLUMN,
+                    build_storage_key(row.get(DATASOURCE_ID_COLUMN, ""), row[source_column]),
+                )
         return data
 
     def _scope_column_migration_exprs(self) -> Dict[str, str]:
@@ -199,8 +206,16 @@ class BaseEmbeddingStore(StorageBase):
         exprs: Dict[str, str] = {}
         if DATASOURCE_ID_COLUMN in schema_names:
             exprs[DATASOURCE_ID_COLUMN] = "''"
-        if STORAGE_KEY_COLUMN in schema_names and "id" in schema_names:
-            exprs[STORAGE_KEY_COLUMN] = "'legacy:' || id"
+        source_column = self._storage_key_source_column
+        if STORAGE_KEY_COLUMN in schema_names and source_column in schema_names:
+            if not source_column.isidentifier():
+                raise ValueError(f"Invalid storage key source column: {source_column!r}")
+            if DATASOURCE_ID_COLUMN in schema_names:
+                exprs[STORAGE_KEY_COLUMN] = (
+                    f"coalesce(nullif({DATASOURCE_ID_COLUMN}, ''), 'legacy') || ':' || {source_column}"
+                )
+            else:
+                exprs[STORAGE_KEY_COLUMN] = f"'legacy:' || {source_column}"
         return exprs
 
     def _ensure_persisted_scope_columns(self) -> None:
@@ -221,6 +236,26 @@ class BaseEmbeddingStore(StorageBase):
                 ErrorCode.STORAGE_TABLE_OPERATION_FAILED,
                 message_args={
                     "operation": "ensure_scope_columns",
+                    "table_name": self.table_name,
+                    "error_message": str(exc),
+                },
+            ) from exc
+
+    def _ensure_persisted_unique_columns(self) -> None:
+        """Repair physical unique keys on pre-existing relational vector tables."""
+
+        if self.table is None or not self._unique_columns:
+            return
+        ensure_unique_columns = getattr(self.table, "ensure_unique_columns", None)
+        if ensure_unique_columns is None:
+            return
+        try:
+            ensure_unique_columns(self._unique_columns)
+        except Exception as exc:
+            raise DatusException(
+                ErrorCode.STORAGE_TABLE_OPERATION_FAILED,
+                message_args={
+                    "operation": "ensure_unique_columns",
                     "table_name": self.table_name,
                     "error_message": str(exc),
                 },
@@ -325,7 +360,8 @@ class BaseEmbeddingStore(StorageBase):
 
     def _ensure_table(self, schema: Optional[pa.Schema] = None):
         self._set_backend_table_schema(schema)
-        if self.db.table_exists(self.table_name):
+        table_exists = self.db.table_exists(self.table_name)
+        if table_exists:
             self.table = self.db.open_table(
                 self.table_name,
                 embedding_function=self.model.model,
@@ -349,6 +385,8 @@ class BaseEmbeddingStore(StorageBase):
                     message_args={"operation": "create_table", "table_name": self.table_name, "error_message": str(e)},
                 ) from e
         self._ensure_persisted_scope_columns()
+        if table_exists:
+            self._ensure_persisted_unique_columns()
 
     def _set_backend_table_schema(self, schema: Optional[pa.Schema]) -> None:
         if schema is None:

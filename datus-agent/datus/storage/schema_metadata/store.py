@@ -68,7 +68,9 @@ class BaseMetadataStorage(BaseEmbeddingStore):
                 ]
             ),
             vector_source_name=vector_source_name,
+            unique_columns=["storage_key"],
             datasource_scoped=True,
+            storage_key_source_column="identifier",
             **kwargs,
         )
 
