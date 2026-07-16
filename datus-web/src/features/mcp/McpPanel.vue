@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, shallowRef } from "vue"
-import { ActivityIcon, PencilIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "@lucide/vue"
+import { ActivityIcon, AlertTriangleIcon, PencilIcon, PlusIcon, RefreshCwIcon, Trash2Icon } from "@lucide/vue"
 import { toast } from "vue-sonner"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -27,8 +28,15 @@ import McpServerDialog from "@/features/mcp/McpServerDialog.vue"
 import { mcpApi } from "@/lib/api"
 import { useConnection } from "@/composables/useConnection"
 import { usePermission } from "@/composables/usePermission"
+import { ApiResultError } from "@/lib/chat"
 import { handleError } from "@/lib/utils"
 import type { McpConnectivityResult, McpServerInfo, McpToolInfo } from "@/types"
+
+interface McpAgentReference {
+  agent_id: string
+  name: string
+  status: string
+}
 
 const { effectiveBase } = useConnection()
 const permission = usePermission()
@@ -45,6 +53,7 @@ const serverDialogOpen = shallowRef(false)
 const serverDialogMode = shallowRef<"create" | "edit">("create")
 const editingServer = shallowRef<McpServerInfo | null>(null)
 const deleteTarget = shallowRef<McpServerInfo | null>(null)
+const deleteBlockedAgents = ref<McpAgentReference[]>([])
 
 const selected = computed(() => servers.value.find((server) => server.name === selectedServer.value))
 const selectedConnectivity = computed(() => selectedServer.value ? connectivityResults.value[selectedServer.value] : undefined)
@@ -62,9 +71,42 @@ const toolsEmptyLabel = computed(() => {
 const deleteDialogOpen = computed({
   get: () => deleteTarget.value !== null,
   set: (value: boolean) => {
-    if (!value) deleteTarget.value = null
+    if (!value) closeDeleteDialog()
   },
 })
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function agentReferencesFromError(error: unknown): McpAgentReference[] {
+  if (!(error instanceof ApiResultError) || error.errorCode !== "MCP_SERVER_IN_USE" || !isRecord(error.data)) {
+    return []
+  }
+  const agents = error.data.agents
+  if (!Array.isArray(agents)) return []
+
+  return agents.flatMap((agent) => {
+    if (!isRecord(agent)) return []
+    const agentId = typeof agent.agent_id === "string" ? agent.agent_id.trim() : ""
+    if (!agentId) return []
+    return [{
+      agent_id: agentId,
+      name: typeof agent.name === "string" && agent.name.trim() ? agent.name : agentId,
+      status: typeof agent.status === "string" ? agent.status : "",
+    }]
+  })
+}
+
+function openDeleteDialog(server: McpServerInfo) {
+  deleteBlockedAgents.value = []
+  deleteTarget.value = server
+}
+
+function closeDeleteDialog() {
+  deleteBlockedAgents.value = []
+  deleteTarget.value = null
+}
 
 async function loadServers(preferredServer = "") {
   if (!canListServers.value) {
@@ -192,9 +234,15 @@ async function confirmDelete() {
     delete nextConnectivity[target.name]
     connectivityResults.value = nextConnectivity
     toast.success(`已删除 MCP Server：${target.name}`)
-    deleteTarget.value = null
+    closeDeleteDialog()
     await loadServers()
   } catch (error) {
+    const references = agentReferencesFromError(error)
+    if (references.length > 0) {
+      deleteBlockedAgents.value = references
+      toast.error("该 MCP Server 仍被 Agent 引用，请先解除绑定")
+      return
+    }
     handleError("删除 MCP Server 失败", error)
   } finally {
     deleting.value = false
@@ -308,7 +356,7 @@ onMounted(() => {
                         variant="ghost"
                         size="icon-sm"
                         :aria-label="`删除 ${server.name}`"
-                        @click="deleteTarget = server"
+                        @click="openDeleteDialog(server)"
                       >
                         <Trash2Icon />
                       </Button>
@@ -404,23 +452,41 @@ onMounted(() => {
         <DialogHeader>
           <DialogTitle>删除 MCP Server</DialogTitle>
           <DialogDescription>
-            删除后后端 MCP 配置会同步移除，依赖该 Server 的 Agent 或工具选择将无法继续使用。
+            删除前会检查 Agent 引用；仍被引用时将阻止删除，请先在 Agent 管理中解除绑定。
           </DialogDescription>
         </DialogHeader>
         <div class="rounded-lg bg-muted px-3 py-2 text-sm font-medium">
           {{ deleteTarget?.name }}
         </div>
+        <Alert
+          v-if="deleteBlockedAgents.length > 0"
+          variant="destructive"
+        >
+          <AlertTriangleIcon />
+          <AlertTitle>仍有 Agent 引用，无法删除</AlertTitle>
+          <AlertDescription>
+            <p>请先在 Agent 管理中解除以下绑定：</p>
+            <ul class="mt-2 list-disc space-y-1 pl-5">
+              <li
+                v-for="agent in deleteBlockedAgents"
+                :key="agent.agent_id"
+              >
+                {{ agent.name }}（{{ agent.agent_id }}<template v-if="agent.status"> · {{ agent.status }}</template>）
+              </li>
+            </ul>
+          </AlertDescription>
+        </Alert>
         <DialogFooter>
           <Button
             variant="outline"
             :disabled="deleting"
-            @click="deleteTarget = null"
+            @click="closeDeleteDialog"
           >
             取消
           </Button>
           <Button
             variant="destructive"
-            :disabled="deleting"
+            :disabled="deleting || deleteBlockedAgents.length > 0"
             @click="confirmDelete"
           >
             <Spinner
@@ -431,7 +497,7 @@ onMounted(() => {
               v-else
               data-icon="inline-start"
             />
-            删除
+            {{ deleteBlockedAgents.length > 0 ? "请先解除引用" : "删除" }}
           </Button>
         </DialogFooter>
       </DialogContent>

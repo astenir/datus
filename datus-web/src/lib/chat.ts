@@ -526,6 +526,7 @@ export class ApiResultError extends Error {
   constructor(
     message: string,
     readonly errorCode?: string,
+    readonly data?: unknown,
   ) {
     super(message);
     this.name = "ApiResultError";
@@ -545,7 +546,11 @@ export function extractResultData<T>(payload: unknown): T | null {
   if (payload && typeof payload === "object" && "success" in payload) {
     const result = payload as { success?: boolean; data?: T; errorCode?: string; errorMessage?: string };
     if (!result.success) {
-      throw new ApiResultError(result.errorMessage || result.errorCode || "Backend request failed", result.errorCode);
+      throw new ApiResultError(
+        result.errorMessage || result.errorCode || "Backend request failed",
+        result.errorCode,
+        result.data,
+      );
     }
     return result.data ?? null;
   }

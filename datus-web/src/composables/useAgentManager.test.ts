@@ -341,6 +341,31 @@ describe("useAgentManager", () => {
     expect(manager.mcpServerOptions.value[0]?.tools).toEqual([]);
   });
 
+  it("surfaces and removes an Agent MCP binding whose Server no longer exists", async () => {
+    listMcpServers.mockResolvedValue({
+      servers: [{ name: "remote_api", type: "http", url: "https://api.example.test/mcp" }],
+    });
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.selectAgent("analyst");
+    await manager.loadMcpCatalog();
+
+    expect(manager.mcpServerOptions.value).toContainEqual({
+      name: "filesystem",
+      type: "missing",
+      target: "Server 已不存在，请解除绑定",
+      tools: [],
+      selected: true,
+      missing: true,
+    });
+
+    manager.toggleMcpServer("filesystem");
+
+    expect(manager.form.value.mcpText).toBe("");
+    expect(manager.mcpServerOptions.value.some(server => server.name === "filesystem")).toBe(false);
+  });
+
   it("loads datasource and artifact option catalogs for picker fields", async () => {
     const { useAgentManager } = await import("./useAgentManager");
     const manager = useAgentManager();

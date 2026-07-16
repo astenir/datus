@@ -43,6 +43,7 @@ export interface AgentMcpServerOption {
   target: string;
   tools: string[];
   selected: boolean;
+  missing: boolean;
 }
 
 export interface AgentSelectOption {
@@ -328,6 +329,7 @@ export function useAgentManager() {
   const deleting = shallowRef(false);
   const toolsLoading = shallowRef(false);
   const mcpCatalogLoading = shallowRef(false);
+  const mcpCatalogLoaded = shallowRef(false);
   const mcpCatalogError = shallowRef<string | null>(null);
   const resourceCatalogLoading = shallowRef(false);
   const resourceCatalogError = shallowRef<string | null>(null);
@@ -378,8 +380,10 @@ export function useAgentManager() {
     ]);
   });
   const skillOptions = computed(() => skillOptionsFromAgents(agents.value, selectedAgent.value, form.value));
-  const mcpServerOptions = computed<AgentMcpServerOption[]>(() =>
-    [...mcpServers.value]
+  const canListMcpServers = computed(() => permission.hasPermission("mcp.server.list"));
+  const canListMcpTools = computed(() => permission.hasPermission("mcp.server.tools"));
+  const mcpServerOptions = computed<AgentMcpServerOption[]>(() => {
+    const configuredOptions = [...mcpServers.value]
       .sort((left, right) => left.name.localeCompare(right.name))
       .map((server) => ({
         name: server.name,
@@ -387,14 +391,30 @@ export function useAgentManager() {
         target: mcpServerTarget(server),
         tools: mcpToolsByServer.value[server.name] ?? [],
         selected: selectedMcpNames.value.has(server.name),
-      }))
-  );
+        missing: false,
+      }));
+    if (!canListMcpServers.value || !mcpCatalogLoaded.value || mcpCatalogError.value) {
+      return configuredOptions;
+    }
+
+    const configuredNames = new Set(configuredOptions.map(server => server.name));
+    const missingOptions = [...selectedMcpNames.value]
+      .filter(serverName => !configuredNames.has(serverName))
+      .map(serverName => ({
+        name: serverName,
+        type: "missing",
+        target: "Server 已不存在，请解除绑定",
+        tools: [],
+        selected: true,
+        missing: true,
+      }));
+    return [...configuredOptions, ...missingOptions]
+      .sort((left, right) => left.name.localeCompare(right.name));
+  });
   const selectedMcpCount = computed(() => selectedMcpNames.value.size);
   const selectedMcpToolCount = computed(() =>
     [...selectedMcpNames.value].reduce((total, serverName) => total + (mcpToolsByServer.value[serverName]?.length ?? 0), 0)
   );
-  const canListMcpServers = computed(() => permission.hasPermission("mcp.server.list"));
-  const canListMcpTools = computed(() => permission.hasPermission("mcp.server.tools"));
   const canListAdminDatasources = computed(() => permission.hasPermission("module.admin.datasources"));
   const canListAdminArtifacts = computed(() => permission.hasPermission("module.admin.artifacts"));
   const canSubmitForm = computed(() => {
@@ -465,6 +485,7 @@ export function useAgentManager() {
     if (!canListMcpServers.value) {
       mcpServers.value = [];
       mcpToolsByServer.value = {};
+      mcpCatalogLoaded.value = false;
       mcpCatalogError.value = null;
       return;
     }
@@ -476,6 +497,7 @@ export function useAgentManager() {
       const result = await mcpApi.listServers(connection.effectiveBase());
       const servers = [...(result?.servers ?? [])].sort((left, right) => left.name.localeCompare(right.name));
       mcpServers.value = servers;
+      mcpCatalogLoaded.value = true;
 
       if (canListMcpTools.value) {
         const toolEntries = await Promise.all(
@@ -501,6 +523,7 @@ export function useAgentManager() {
       const message = err instanceof Error ? err.message : "读取 MCP Server 失败";
       mcpServers.value = [];
       mcpToolsByServer.value = {};
+      mcpCatalogLoaded.value = false;
       mcpCatalogError.value = message;
       console.error("读取 MCP Server 失败:", err);
       toast.error(message);

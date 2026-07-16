@@ -801,7 +801,7 @@ onMounted(() => {
                         v-for="server in mcpServerOptions"
                         :key="server.name"
                         type="button"
-                        :variant="server.selected ? 'secondary' : 'outline'"
+                        :variant="server.missing ? 'destructive' : server.selected ? 'secondary' : 'outline'"
                         class="h-auto min-h-16 justify-start px-3 py-2 text-left"
                         :aria-pressed="server.selected"
                         :disabled="selectedIsReadonly"
@@ -816,10 +816,10 @@ onMounted(() => {
                             />
                             <span class="truncate text-sm font-medium">{{ server.name }}</span>
                             <Badge
-                              variant="outline"
+                              :variant="server.missing ? 'destructive' : 'outline'"
                               class="shrink-0"
                             >
-                              {{ server.type }}
+                              {{ server.missing ? "已失效" : server.type }}
                             </Badge>
                           </span>
                           <span class="truncate text-xs text-muted-foreground">{{ server.target }}</span>
@@ -854,6 +854,9 @@ onMounted(() => {
                         {{ serverName }}
                       </Badge>
                     </div>
+                    <FieldDescription>
+                      标记为“已失效”的 Server 已不在 MCP 配置中；点击该项可从 Agent 中解除残留绑定。
+                    </FieldDescription>
                   </div>
                 </Field>
                 <Field>

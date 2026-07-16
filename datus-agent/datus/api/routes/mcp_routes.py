@@ -254,7 +254,8 @@ async def remove_server(
     server_name: str = REMOVE_SERVER_NAME_PATH,
 ) -> Result[Dict[str, Any]]:
     """Remove an MCP server."""
-    return svc.mcp.remove_server(server_name)
+    agent_store = api_deps.get_enterprise_extensions().agent_store
+    return await svc.mcp.remove_server_if_unreferenced(server_name, agent_store)
 
 
 @router.get(

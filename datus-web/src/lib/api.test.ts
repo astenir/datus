@@ -27,6 +27,7 @@ import {
   toolApi,
   visualizationApi,
 } from "./api";
+import { ApiResultError } from "./chat";
 import { setApiBaseResolver } from "./request";
 
 function mockJsonResponse(payload: unknown, init?: ResponseInit) {
@@ -53,6 +54,31 @@ describe("api client", () => {
     );
 
     await expect(configApi.getAgent("")).rejects.toThrow("Config is invalid");
+  });
+
+  it("preserves structured backend error data for conflict handling", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      mockJsonResponse({
+        success: false,
+        data: {
+          server_name: "filesystem",
+          agents: [{ agent_id: "analyst", name: "Analyst" }],
+        },
+        errorCode: "MCP_SERVER_IN_USE",
+        errorMessage: "MCP Server is still referenced.",
+      }),
+    );
+
+    const error = await mcpApi.removeServer("", "filesystem").catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ApiResultError);
+    expect(error).toMatchObject({
+      errorCode: "MCP_SERVER_IN_USE",
+      data: {
+        server_name: "filesystem",
+        agents: [{ agent_id: "analyst", name: "Analyst" }],
+      },
+    });
   });
 
   it("forwards datasource context for table and semantic-model requests", async () => {
