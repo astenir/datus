@@ -889,6 +889,8 @@ describe("api client", () => {
       default_model: "gpt-4.1",
     });
     await meApi.deleteModelCredential("cred-1");
+    await meApi.agentPreference();
+    await meApi.updateAgentPreference({ default_agent_id: "sales_sql" });
 
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("/api/v1/me");
     expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe("/api/v1/me/permissions");
@@ -908,6 +910,9 @@ describe("api client", () => {
     expect((vi.mocked(fetch).mock.calls[12]?.[1] as RequestInit).method).toBe("PUT");
     expect(vi.mocked(fetch).mock.calls[13]?.[0]).toBe("/api/v1/me/model-credentials/cred-1");
     expect((vi.mocked(fetch).mock.calls[13]?.[1] as RequestInit).method).toBe("DELETE");
+    expect(vi.mocked(fetch).mock.calls[14]?.[0]).toBe("/api/v1/me/agent-preferences");
+    expect(vi.mocked(fetch).mock.calls[15]?.[0]).toBe("/api/v1/me/agent-preferences");
+    expect((vi.mocked(fetch).mock.calls[15]?.[1] as RequestInit).method).toBe("PUT");
   });
 
   it("uses current enterprise personal datasource routes", async () => {

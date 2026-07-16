@@ -343,6 +343,36 @@ class PgEnterpriseUserStore(_PgStoreBase):
         )
         return _user_record(row) if row else None
 
+    async def get_chat_preference(self, user_id: str) -> dict[str, Any]:
+        row = await self._fetchrow(
+            """
+            SELECT user_id, default_agent_id, created_at, updated_at
+            FROM enterprise_user_chat_preferences
+            WHERE user_id = $1
+            """,
+            user_id,
+        )
+        return _chat_preference_record(row, user_id=user_id)
+
+    async def put_chat_preference(self, *, user_id: str, default_agent_id: str | None) -> dict[str, Any]:
+        row = await self._fetchrow(
+            """
+            INSERT INTO enterprise_user_chat_preferences (
+                user_id, default_agent_id, created_at, updated_at
+            )
+            VALUES ($1, $2, now(), now())
+            ON CONFLICT(user_id) DO UPDATE SET
+                default_agent_id = excluded.default_agent_id,
+                updated_at = now()
+            RETURNING user_id, default_agent_id, created_at, updated_at
+            """,
+            user_id,
+            default_agent_id,
+        )
+        if row is None:
+            raise DatusException(ErrorCode.COMMON_UNKNOWN, message="Failed to persist user chat preference.")
+        return _chat_preference_record(row, user_id=user_id)
+
 
 class PgEnterpriseRoleStore(_PgStoreBase):
     """PostgreSQL-backed enterprise role metadata and membership store."""
@@ -1968,6 +1998,22 @@ def _user_record(row: Any) -> dict[str, Any]:
     }
 
 
+def _chat_preference_record(row: Any | None, *, user_id: str) -> dict[str, Any]:
+    if row is None:
+        return {
+            "user_id": user_id,
+            "default_agent_id": None,
+            "created_at": None,
+            "updated_at": None,
+        }
+    return {
+        "user_id": str(row["user_id"]),
+        "default_agent_id": _optional_str(row["default_agent_id"]),
+        "created_at": _iso(row["created_at"]),
+        "updated_at": _iso(row["updated_at"]),
+    }
+
+
 def _role_record(row: Any) -> dict[str, Any]:
     return {
         "role_id": str(row["role_id"]),
@@ -2195,6 +2241,13 @@ ADD COLUMN IF NOT EXISTS last_seen_at timestamptz;
 
 CREATE INDEX IF NOT EXISTS idx_enterprise_users_enabled
 ON enterprise_users (enabled, user_id);
+
+CREATE TABLE IF NOT EXISTS enterprise_user_chat_preferences (
+    user_id text PRIMARY KEY,
+    default_agent_id text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
 
 CREATE TABLE IF NOT EXISTS enterprise_roles (
     role_id text PRIMARY KEY,

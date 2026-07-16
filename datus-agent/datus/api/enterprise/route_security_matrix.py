@@ -641,6 +641,27 @@ _add(
     _policy(SESSION_OWNER, SYSTEM_READONLY, note="Lists only the current user's sessions."),
 )
 _add("GET", "/api/v1/me/usage", _policy(QUOTA, SYSTEM_READONLY))
+_add(
+    "GET",
+    "/api/v1/me/agent-preferences",
+    _policy(
+        MODULE_RBAC,
+        SYSTEM_READONLY,
+        module_permission="module.chat",
+        note="Returns only a currently dispatchable default Agent for the authenticated user.",
+    ),
+)
+_add(
+    "PUT",
+    "/api/v1/me/agent-preferences",
+    _policy(
+        MODULE_RBAC,
+        PLATFORM_STATUS_GATE,
+        MUTATION_EXECUTION,
+        module_permission="module.chat",
+        note="Persists only a visible, published Agent as the authenticated user's default.",
+    ),
+)
 _add_many(
     "GET",
     [

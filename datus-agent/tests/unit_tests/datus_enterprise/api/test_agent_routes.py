@@ -226,6 +226,82 @@ def test_available_default_chat_agent_is_listed_and_readable(monkeypatch):
     assert "memory_tools.*" in tools_response.json()["data"]["default_tools"]
 
 
+def test_user_can_persist_and_read_visible_default_agent(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    extensions = _install_extensions(monkeypatch, agent_store)
+    agent_store._agents["sales_sql"] = {
+        "agent_id": "sales_sql",
+        "name": "Sales SQL",
+        "node_class": "gen_sql",
+        "status": "published",
+        "owner_user_id": "operator",
+        "acl": {"visibility": "enterprise"},
+    }
+    ctx = AppContext(user_id="alice", permissions={"module.chat", "module.sql_executor"})
+
+    with _client(ctx) as client:
+        update_response = client.put(
+            "/api/v1/me/agent-preferences",
+            json={"default_agent_id": "sales_sql"},
+        )
+        read_response = client.get("/api/v1/me/agent-preferences")
+
+    assert update_response.status_code == 200
+    assert update_response.json()["data"]["default_agent_id"] == "sales_sql"
+    assert read_response.json()["data"]["default_agent_id"] == "sales_sql"
+    assert extensions.user_store._chat_preferences["alice"]["default_agent_id"] == "sales_sql"
+
+
+def test_user_agent_preference_rejects_unavailable_agent_and_falls_back_when_disabled(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store)
+    agent_store._agents["private_sql"] = {
+        "agent_id": "private_sql",
+        "name": "Private SQL",
+        "node_class": "gen_sql",
+        "status": "published",
+        "owner_user_id": "bob",
+        "acl": {"visibility": "private"},
+    }
+    agent_store._agents["sales_sql"] = {
+        "agent_id": "sales_sql",
+        "name": "Sales SQL",
+        "node_class": "gen_sql",
+        "status": "published",
+        "owner_user_id": "operator",
+        "acl": {"visibility": "enterprise"},
+    }
+    ctx = AppContext(user_id="alice", permissions={"module.chat", "module.sql_executor"})
+
+    with _client(ctx) as client:
+        denied_response = client.put(
+            "/api/v1/me/agent-preferences",
+            json={"default_agent_id": "private_sql"},
+        )
+        saved_response = client.put(
+            "/api/v1/me/agent-preferences",
+            json={"default_agent_id": "sales_sql"},
+        )
+        agent_store._agents["sales_sql"]["status"] = "disabled"
+        fallback_response = client.get("/api/v1/me/agent-preferences")
+
+    assert denied_response.json()["success"] is False
+    assert denied_response.json()["errorCode"] == "RESOURCE_NOT_FOUND"
+    assert saved_response.json()["success"] is True
+    assert fallback_response.json()["data"]["default_agent_id"] is None
+
+
+def test_user_can_clear_default_agent_preference(monkeypatch):
+    _install_extensions(monkeypatch, InMemoryEnterpriseAgentStore())
+    ctx = AppContext(user_id="alice", permissions={"module.chat"})
+
+    with _client(ctx) as client:
+        response = client.put("/api/v1/me/agent-preferences", json={"default_agent_id": None})
+
+    assert response.status_code == 200
+    assert response.json()["data"]["default_agent_id"] is None
+
+
 def test_admin_agent_upsert_acl_and_available_list(monkeypatch):
     agent_store = InMemoryEnterpriseAgentStore()
     audit_sink = CollectingAuditSink()

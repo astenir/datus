@@ -190,6 +190,32 @@ class ObEnterpriseUserStore(_ObStoreBase):
         )
         return await self.get_user(user_id)
 
+    async def get_chat_preference(self, user_id: str) -> dict[str, Any]:
+        row = await self._fetchone(
+            """
+            SELECT user_id, default_agent_id, created_at, updated_at
+            FROM enterprise_user_chat_preferences
+            WHERE user_id = %s
+            """,
+            (user_id,),
+        )
+        return _chat_preference_record(row, user_id=user_id)
+
+    async def put_chat_preference(self, *, user_id: str, default_agent_id: str | None) -> dict[str, Any]:
+        await self._execute(
+            """
+            INSERT INTO enterprise_user_chat_preferences (
+                user_id, default_agent_id, created_at, updated_at
+            )
+            VALUES (%s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON DUPLICATE KEY UPDATE
+                default_agent_id = VALUES(default_agent_id),
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (user_id, default_agent_id),
+        )
+        return await self.get_chat_preference(user_id)
+
 
 class ObEnterpriseRoleStore(_ObStoreBase):
     """OceanBase MySQL-backed enterprise role metadata and membership store."""
@@ -1606,6 +1632,22 @@ def _user_record(row: Any) -> dict[str, Any]:
     }
 
 
+def _chat_preference_record(row: Any | None, *, user_id: str) -> dict[str, Any]:
+    if row is None:
+        return {
+            "user_id": user_id,
+            "default_agent_id": None,
+            "created_at": None,
+            "updated_at": None,
+        }
+    return {
+        "user_id": str(row["user_id"]),
+        "default_agent_id": _optional_str(row.get("default_agent_id")),
+        "created_at": _iso(row.get("created_at")),
+        "updated_at": _iso(row.get("updated_at")),
+    }
+
+
 def _role_record(row: Any) -> dict[str, Any]:
     return {
         "role_id": str(row["role_id"]),
@@ -1833,6 +1875,14 @@ CREATE TABLE IF NOT EXISTS enterprise_users (
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (user_id),
   INDEX idx_enterprise_users_enabled (enabled, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS enterprise_user_chat_preferences (
+  user_id VARCHAR(255) NOT NULL,
+  default_agent_id VARCHAR(255),
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id)
 );
 
 CREATE TABLE IF NOT EXISTS enterprise_roles (

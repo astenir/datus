@@ -78,6 +78,9 @@ export interface UpdateModelPreferenceInput {
   default_model?: string | null;
 }
 
+export type AgentPreferenceSummary = components["schemas"]["AgentPreferenceSummary"];
+export type UpdateAgentPreferenceInput = components["schemas"]["UpdateAgentPreferenceRequest"];
+
 export interface ModelProbeResult {
   ok: boolean;
   message?: string | null;

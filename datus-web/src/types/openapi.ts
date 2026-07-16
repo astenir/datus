@@ -869,6 +869,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/config/models/test-saved": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+
+        post: operations["probe_saved_model_connectivity_endpoint_api_v1_config_models_test_saved_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/config/datasources/test": {
         parameters: {
             query?: never;
@@ -880,6 +897,23 @@ export interface paths {
         put?: never;
 
         post: operations["probe_datasource_connectivity_endpoint_api_v1_config_datasources_test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/config/datasources/test-saved": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+
+        post: operations["probe_saved_datasource_connectivity_endpoint_api_v1_config_datasources_test_saved_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1299,6 +1333,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/dashboards/{slug}/edit-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+
+        post: operations["create_dashboard_edit_session_api_v1_dashboards__slug__edit_sessions_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dashboard/query": {
         parameters: {
             query?: never;
@@ -1327,6 +1378,23 @@ export interface paths {
         get: operations["get_report_detail_api_v1_report_detail_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/reports/{slug}/edit-sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+
+        post: operations["create_report_edit_session_api_v1_reports__slug__edit_sessions_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1401,6 +1469,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/views": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["get_my_views_api_v1_me_views_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/sessions": {
         parameters: {
             query?: never;
@@ -1429,6 +1514,166 @@ export interface paths {
         get: operations["get_my_usage_api_v1_me_usage_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/model-providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["list_model_provider_options_api_v1_me_model_providers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/model-credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["list_my_model_credentials_api_v1_me_model_credentials_get"];
+        put?: never;
+
+        post: operations["create_my_model_credential_api_v1_me_model_credentials_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/model-credentials/{credential_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["get_my_model_credential_api_v1_me_model_credentials__credential_id__get"];
+
+        put: operations["update_my_model_credential_api_v1_me_model_credentials__credential_id__put"];
+        post?: never;
+
+        delete: operations["delete_my_model_credential_api_v1_me_model_credentials__credential_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/model-credentials/{credential_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+
+        post: operations["test_my_model_credential_api_v1_me_model_credentials__credential_id__test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/model-preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["get_my_model_preference_api_v1_me_model_preferences_get"];
+
+        put: operations["update_my_model_preference_api_v1_me_model_preferences_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/datasource-providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["list_personal_datasource_options_api_v1_me_datasource_providers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/datasources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["list_my_personal_datasources_api_v1_me_datasources_get"];
+        put?: never;
+
+        post: operations["create_my_personal_datasource_api_v1_me_datasources_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/datasources/{datasource_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["get_my_personal_datasource_api_v1_me_datasources__datasource_id__get"];
+
+        put: operations["update_my_personal_datasource_api_v1_me_datasources__datasource_id__put"];
+        post?: never;
+
+        delete: operations["delete_my_personal_datasource_api_v1_me_datasources__datasource_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/datasources/{datasource_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+
+        post: operations["test_my_personal_datasource_api_v1_me_datasources__datasource_id__test_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1659,6 +1904,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/agent-preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["get_my_agent_preference_api_v1_me_agent_preferences_get"];
+
+        put: operations["update_my_agent_preference_api_v1_me_agent_preferences_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/{agent_id}/tools": {
         parameters: {
             query?: never;
@@ -1807,6 +2070,23 @@ export interface paths {
         };
 
         get: operations["list_admin_datasources_endpoint_api_v1_admin_datasources_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/datasources/{datasource_key}/catalog": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["list_admin_datasource_catalog_api_v1_admin_datasources__datasource_key__catalog_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2107,6 +2387,23 @@ export interface paths {
         put: operations["upsert_admin_quota_api_v1_admin_quotas_put"];
         post?: never;
         delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/quotas/{subject_type}/{subject_id}/{resource}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+
+        delete: operations["delete_admin_quota_api_v1_admin_quotas__subject_type___subject_id___resource__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -2565,6 +2862,14 @@ export interface components {
 
             target?: unknown | null;
 
+            providers?: {
+                [key: string]: unknown;
+            };
+
+            provider_options?: {
+                [key: string]: unknown;
+            }[];
+
             models?: {
                 [key: string]: unknown;
             };
@@ -2588,6 +2893,15 @@ export interface components {
             id: string;
 
             name: string;
+        };
+
+        AgentPreferenceSummary: {
+
+            default_agent_id?: string | null;
+
+            created_at?: string | null;
+
+            updated_at?: string | null;
         };
 
         AgentSummary: {
@@ -2635,6 +2949,27 @@ export interface components {
             path: string;
 
             content: string;
+        };
+
+        ArtifactListItem: {
+
+            slug: string;
+
+            name: string;
+
+            description: string;
+
+            kind: "report" | "dashboard";
+
+            created_at: string;
+
+            updated_at?: string | null;
+
+            datasources?: string[];
+
+            key_tables?: string[];
+
+            can_manage_share: boolean;
         };
 
         ArtifactManifest: {
@@ -3003,6 +3338,21 @@ export interface components {
             templates?: components["schemas"]["QueryTemplateMetaFile"][];
         };
 
+        DashboardEditSession: {
+
+            edit_session_id: string;
+
+            subagent_id: string;
+
+            artifact_type: string;
+
+            artifact_slug: string;
+
+            owner_user_id?: string | null;
+
+            created_at: string;
+        };
+
         DashboardQueryRequest: {
 
             dashboard_slug: string;
@@ -3292,6 +3642,8 @@ export interface components {
 
         ExecuteSQLInput: {
 
+            datasource?: string | null;
+
             database_name?: string | null;
 
             sql_query: string;
@@ -3310,6 +3662,8 @@ export interface components {
             session_id?: string | null;
 
             model?: string | null;
+
+            model_credential_id?: string | null;
 
             plan_mode: boolean;
 
@@ -3558,6 +3912,10 @@ export interface components {
                 [key: string]: boolean;
             };
 
+            views?: {
+                [key: string]: boolean;
+            };
+
             is_admin: boolean;
         };
 
@@ -3616,6 +3974,12 @@ export interface components {
 
             subject_path: string[];
 
+            catalog?: string | null;
+
+            database?: string | null;
+
+            db_schema?: string | null;
+
             dimensions?: string[] | null;
 
             time_start?: string | null;
@@ -3633,6 +3997,29 @@ export interface components {
 
         Mode: "sync" | "async";
 
+        ModelCredentialSummary: {
+
+            id: string;
+
+            provider: string;
+
+            model: string;
+
+            base_url?: string | null;
+
+            ref_hint: string;
+
+            display_name?: string | null;
+
+            enabled: boolean;
+
+            last_used_at?: string | null;
+
+            created_at?: string | null;
+
+            updated_at?: string | null;
+        };
+
         ModelInfo: {
 
             provider: string;
@@ -3643,6 +4030,8 @@ export interface components {
 
             name?: string | null;
 
+            capabilities?: string[];
+
             context_length?: number | null;
 
             max_tokens?: number | null;
@@ -3650,11 +4039,37 @@ export interface components {
             pricing?: components["schemas"]["ModelPricing"] | null;
         };
 
+        ModelPreferenceSummary: {
+
+            default_credential_id?: string | null;
+
+            default_model?: string | null;
+
+            created_at?: string | null;
+
+            updated_at?: string | null;
+        };
+
         ModelPricing: {
 
             prompt?: string | null;
 
             completion?: string | null;
+        };
+
+        ModelProviderOption: {
+
+            provider: string;
+
+            label: string;
+
+            default_model: string;
+
+            models?: string[];
+
+            custom: boolean;
+
+            requires_base_url: boolean;
         };
 
         ModelsData: {
@@ -3673,6 +4088,52 @@ export interface components {
         MutationResultData: {
 
             updated: boolean;
+        };
+
+        PersonalDatasourceProviderOptions: {
+
+            enabled: boolean;
+
+            allowed_types?: string[];
+
+            allowed_hosts?: string[];
+
+            default_ports?: {
+                [key: string]: string;
+            };
+        };
+
+        PersonalDatasourceSummary: {
+
+            id: string;
+
+            datasource_key: string;
+
+            type: string;
+
+            host: string;
+
+            port: string;
+
+            username: string;
+
+            password_hint: string;
+
+            database: string;
+
+            schema_name?: string | null;
+
+            catalog_name?: string | null;
+
+            display_name?: string | null;
+
+            enabled: boolean;
+
+            last_used_at?: string | null;
+
+            created_at?: string | null;
+
+            updated_at?: string | null;
         };
 
         ProbeDatasourceRequest: {
@@ -3700,6 +4161,20 @@ export interface components {
             ok: boolean;
 
             message?: string | null;
+        };
+
+        ProbeSavedDatasourceRequest: {
+
+            name: string;
+        };
+
+        ProbeSavedModelRequest: {
+
+            provider?: string | null;
+
+            model?: string | null;
+
+            custom?: string | null;
         };
 
         QueryColumnMeta: {
@@ -3776,6 +4251,21 @@ export interface components {
             created_at?: string | null;
 
             files: components["schemas"]["ArtifactFile"][];
+        };
+
+        ReportEditSession: {
+
+            edit_session_id: string;
+
+            subagent_id: string;
+
+            artifact_type: string;
+
+            artifact_slug: string;
+
+            owner_user_id?: string | null;
+
+            created_at: string;
         };
 
         Result_AdminDatasourceGrantSummary_: {
@@ -3910,6 +4400,17 @@ export interface components {
             errorMessage?: string | null;
         };
 
+        Result_AgentPreferenceSummary_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["AgentPreferenceSummary"] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
         Result_AgentToolsData_: {
 
             success: boolean;
@@ -4003,6 +4504,17 @@ export interface components {
             success: boolean;
 
             data?: components["schemas"]["DashboardDetail"] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
+        Result_DashboardEditSession_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["DashboardEditSession"] | null;
 
             errorCode?: string | null;
 
@@ -4176,11 +4688,11 @@ export interface components {
             errorMessage?: string | null;
         };
 
-        Result_List_ArtifactManifest__: {
+        Result_List_ArtifactListItem__: {
 
             success: boolean;
 
-            data?: components["schemas"]["ArtifactManifest"][] | null;
+            data?: components["schemas"]["ArtifactListItem"][] | null;
 
             errorCode?: string | null;
 
@@ -4253,6 +4765,28 @@ export interface components {
             errorMessage?: string | null;
         };
 
+        Result_ModelCredentialSummary_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["ModelCredentialSummary"] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
+        Result_ModelPreferenceSummary_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["ModelPreferenceSummary"] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
         Result_ModelsData_: {
 
             success: boolean;
@@ -4269,6 +4803,28 @@ export interface components {
             success: boolean;
 
             data?: components["schemas"]["MutationResultData"] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
+        Result_PersonalDatasourceProviderOptions_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["PersonalDatasourceProviderOptions"] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
+        Result_PersonalDatasourceSummary_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["PersonalDatasourceSummary"] | null;
 
             errorCode?: string | null;
 
@@ -4302,6 +4858,17 @@ export interface components {
             success: boolean;
 
             data?: components["schemas"]["ReportDetail"] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
+        Result_ReportEditSession_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["ReportEditSession"] | null;
 
             errorCode?: string | null;
 
@@ -4534,6 +5101,39 @@ export interface components {
             errorMessage?: string | null;
         };
 
+        Result_list_ModelCredentialSummary__: {
+
+            success: boolean;
+
+            data?: components["schemas"]["ModelCredentialSummary"][] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
+        Result_list_ModelProviderOption__: {
+
+            success: boolean;
+
+            data?: components["schemas"]["ModelProviderOption"][] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
+        Result_list_PersonalDatasourceSummary__: {
+
+            success: boolean;
+
+            data?: components["schemas"]["PersonalDatasourceSummary"][] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
         Result_list_dict_str__Any___: {
 
             success: boolean;
@@ -4607,9 +5207,17 @@ export interface components {
 
         SemanticModelInput: {
 
+            datasource_id?: string | null;
+
             table: string;
 
             yaml: string;
+
+            catalog?: string | null;
+
+            database?: string | null;
+
+            db_schema?: string | null;
         };
 
         SetAgentStatusRequest: {
@@ -4673,6 +5281,8 @@ export interface components {
             session_id?: string | null;
 
             model?: string | null;
+
+            model_credential_id?: string | null;
 
             plan_mode: boolean;
 
@@ -4738,6 +5348,12 @@ export interface components {
         SubjectPathInput: {
 
             subject_path: string[];
+
+            catalog?: string | null;
+
+            database?: string | null;
+
+            db_schema?: string | null;
         };
 
         SuccessStoryData: {
@@ -4805,6 +5421,15 @@ export interface components {
             columns_count?: number | null;
         };
 
+        TargetModelRequest: {
+
+            provider?: string | null;
+
+            model?: string | null;
+
+            custom?: string | null;
+        };
+
         TemplateParamDecl: {
 
             name: string;
@@ -4862,6 +5487,11 @@ export interface components {
             tool_result: components["schemas"]["ToolResult"];
         };
 
+        UpdateAgentPreferenceRequest: {
+
+            default_agent_id?: string | null;
+        };
+
         UpdateDatasourcesRequest: {
 
             datasources: {
@@ -4871,7 +5501,20 @@ export interface components {
             };
         };
 
+        UpdateModelPreferenceRequest: {
+
+            default_credential_id?: string | null;
+
+            default_model?: string | null;
+        };
+
         UpdateModelsRequest: {
+
+            providers?: {
+                [key: string]: {
+                    [key: string]: unknown;
+                };
+            } | null;
 
             models?: {
                 [key: string]: {
@@ -4879,7 +5522,7 @@ export interface components {
                 };
             } | null;
 
-            target?: string | null;
+            target?: string | components["schemas"]["TargetModelRequest"] | null;
         };
 
         UpdateServerInput: {
@@ -4974,6 +5617,44 @@ export interface components {
             acl?: components["schemas"]["AgentAcl"];
         };
 
+        UpsertModelCredentialRequest: {
+
+            provider: string;
+
+            model: string;
+
+            api_key: string;
+
+            base_url?: string | null;
+
+            display_name?: string | null;
+
+            enabled: boolean;
+        };
+
+        UpsertPersonalDatasourceRequest: {
+
+            type: string;
+
+            host: string;
+
+            port: string | number;
+
+            username: string;
+
+            password: string;
+
+            database: string;
+
+            schema_name?: string | null;
+
+            catalog_name?: string | null;
+
+            display_name?: string | null;
+
+            enabled: boolean;
+        };
+
         UpsertQuotaRequest: {
 
             subject_type: unknown;
@@ -5030,38 +5711,6 @@ export interface components {
             msg: string;
 
             type: string;
-        };
-
-        ArtifactListItem: {
-
-            slug: string;
-
-            name: string;
-
-            description: string;
-
-            kind: "report" | "dashboard";
-
-            created_at: string;
-
-            updated_at?: string | null;
-
-            datasources?: string[];
-
-            key_tables?: string[];
-
-            can_manage_share: boolean;
-        };
-
-        Result_List_ArtifactListItem__: {
-
-            success: boolean;
-
-            data?: components["schemas"]["ArtifactListItem"][] | null;
-
-            errorCode?: string | null;
-
-            errorMessage?: string | null;
         };
     };
     responses: never;
@@ -5675,6 +6324,8 @@ export interface operations {
         parameters: {
             query: {
 
+                datasource_id?: string | null;
+
                 table: string;
             };
             header?: never;
@@ -5707,7 +6358,15 @@ export interface operations {
         parameters: {
             query: {
 
+                datasource_id?: string | null;
+
                 table: string;
+
+                catalog?: string | null;
+
+                database?: string | null;
+
+                db_schema?: string | null;
             };
             header?: never;
             path?: never;
@@ -6800,6 +7459,39 @@ export interface operations {
             };
         };
     };
+    probe_saved_model_connectivity_endpoint_api_v1_config_models_test_saved_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProbeSavedModelRequest"];
+            };
+        };
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_ProbeResultData_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     probe_datasource_connectivity_endpoint_api_v1_config_datasources_test_post: {
         parameters: {
             query?: never;
@@ -6810,6 +7502,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ProbeDatasourceRequest"];
+            };
+        };
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_ProbeResultData_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    probe_saved_datasource_connectivity_endpoint_api_v1_config_datasources_test_saved_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProbeSavedDatasourceRequest"];
             };
         };
         responses: {
@@ -7742,6 +8467,37 @@ export interface operations {
             };
         };
     };
+    create_dashboard_edit_session_api_v1_dashboards__slug__edit_sessions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_DashboardEditSession_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     run_dashboard_query_api_v1_dashboard_query_post: {
         parameters: {
             query?: never;
@@ -7794,6 +8550,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Result_ReportDetail_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_report_edit_session_api_v1_reports__slug__edit_sessions_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_ReportEditSession_"];
                 };
             };
 
@@ -7887,6 +8674,26 @@ export interface operations {
             };
         };
     };
+    get_my_views_api_v1_me_views_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_dict_str__bool__"];
+                };
+            };
+        };
+    };
     get_my_sessions_api_v1_me_sessions_get: {
         parameters: {
             query?: never;
@@ -7923,6 +8730,461 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Result_list_dict_str__Any___"];
+                };
+            };
+        };
+    };
+    list_model_provider_options_api_v1_me_model_providers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_list_ModelProviderOption__"];
+                };
+            };
+        };
+    };
+    list_my_model_credentials_api_v1_me_model_credentials_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_list_ModelCredentialSummary__"];
+                };
+            };
+        };
+    };
+    create_my_model_credential_api_v1_me_model_credentials_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpsertModelCredentialRequest"];
+            };
+        };
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_ModelCredentialSummary_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_my_model_credential_api_v1_me_model_credentials__credential_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                credential_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_ModelCredentialSummary_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_my_model_credential_api_v1_me_model_credentials__credential_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                credential_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpsertModelCredentialRequest"];
+            };
+        };
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_ModelCredentialSummary_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_my_model_credential_api_v1_me_model_credentials__credential_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                credential_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_dict_str__bool__"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_my_model_credential_api_v1_me_model_credentials__credential_id__test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                credential_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_ProbeResultData_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_my_model_preference_api_v1_me_model_preferences_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_ModelPreferenceSummary_"];
+                };
+            };
+        };
+    };
+    update_my_model_preference_api_v1_me_model_preferences_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateModelPreferenceRequest"];
+            };
+        };
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_ModelPreferenceSummary_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_personal_datasource_options_api_v1_me_datasource_providers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_PersonalDatasourceProviderOptions_"];
+                };
+            };
+        };
+    };
+    list_my_personal_datasources_api_v1_me_datasources_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_list_PersonalDatasourceSummary__"];
+                };
+            };
+        };
+    };
+    create_my_personal_datasource_api_v1_me_datasources_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpsertPersonalDatasourceRequest"];
+            };
+        };
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_PersonalDatasourceSummary_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_my_personal_datasource_api_v1_me_datasources__datasource_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                datasource_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_PersonalDatasourceSummary_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_my_personal_datasource_api_v1_me_datasources__datasource_id__put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                datasource_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpsertPersonalDatasourceRequest"];
+            };
+        };
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_PersonalDatasourceSummary_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_my_personal_datasource_api_v1_me_datasources__datasource_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                datasource_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_dict_str__bool__"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_my_personal_datasource_api_v1_me_datasources__datasource_id__test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                datasource_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_ProbeResultData_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -8406,6 +9668,59 @@ export interface operations {
             };
         };
     };
+    get_my_agent_preference_api_v1_me_agent_preferences_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_AgentPreferenceSummary_"];
+                };
+            };
+        };
+    };
+    update_my_agent_preference_api_v1_me_agent_preferences_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAgentPreferenceRequest"];
+            };
+        };
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_AgentPreferenceSummary_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_available_agent_tools_api_v1_agents__agent_id__tools_get: {
         parameters: {
             query?: never;
@@ -8766,6 +10081,46 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Result_list_AdminDatasourceSummary__"];
+                };
+            };
+        };
+    };
+    list_admin_datasource_catalog_api_v1_admin_datasources__datasource_key__catalog_get: {
+        parameters: {
+            query?: {
+
+                catalog_name?: string | null;
+
+                database_name?: string | null;
+
+                schema_name?: string | null;
+
+                include_sys_schemas?: boolean;
+            };
+            header?: never;
+            path: {
+                datasource_key: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_DatabasesData_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -9581,6 +10936,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Result_AdminQuotaSummary_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_admin_quota_api_v1_admin_quotas__subject_type___subject_id___resource__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+
+                subject_type: string;
+
+                subject_id: string;
+
+                resource: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_dict_str__bool__"];
                 };
             };
 

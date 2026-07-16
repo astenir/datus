@@ -61,7 +61,6 @@ class EnterpriseUserStore(Protocol):
         """Enable or disable a user record."""
         ...
 
-
 @runtime_checkable
 class EnterpriseRoleStore(Protocol):
     """Persist and query enterprise role metadata and permission sets."""
@@ -104,6 +103,19 @@ class EnterpriseRoleStore(Protocol):
 
     async def delete_role(self, role_id: str) -> bool:
         """Delete one role record and its permission set."""
+        ...
+
+
+@runtime_checkable
+class UserChatPreferenceStore(Protocol):
+    """Optional per-user chat preference capability for enterprise user stores."""
+
+    async def get_chat_preference(self, user_id: str) -> dict[str, Any]:
+        """Return the user's chat preference record, or an empty preference."""
+        ...
+
+    async def put_chat_preference(self, *, user_id: str, default_agent_id: str | None) -> dict[str, Any]:
+        """Create or replace the user's default Agent preference."""
         ...
 
 

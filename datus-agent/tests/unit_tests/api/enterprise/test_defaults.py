@@ -133,6 +133,11 @@ async def test_in_memory_enterprise_user_store_supports_upsert_and_enabled_filte
     assert disabled["enabled"] is False
     assert await store.set_user_enabled("missing", False) is None
 
+    assert (await store.get_chat_preference("alice"))["default_agent_id"] is None
+    preference = await store.put_chat_preference(user_id="alice", default_agent_id="sales_sql")
+    assert preference["default_agent_id"] == "sales_sql"
+    assert (await store.get_chat_preference("alice"))["created_at"] == preference["created_at"]
+
 
 @pytest.mark.asyncio
 async def test_in_memory_enterprise_role_store_supports_permissions_and_delete():
@@ -395,6 +400,14 @@ async def test_sqlite_enterprise_user_store_persists_users(tmp_path):
     enabled = await reopened.set_user_enabled("alice", True)
     assert enabled["enabled"] is True
     assert await reopened.set_user_enabled("missing", False) is None
+
+    preference = await reopened.put_chat_preference(user_id="alice", default_agent_id="sales_sql")
+    assert preference["default_agent_id"] == "sales_sql"
+
+    reopened_again = SqliteEnterpriseUserStore(str(db_path))
+    assert (await reopened_again.get_chat_preference("alice"))["default_agent_id"] == "sales_sql"
+    cleared = await reopened_again.put_chat_preference(user_id="alice", default_agent_id=None)
+    assert cleared["default_agent_id"] is None
 
 
 @pytest.mark.asyncio

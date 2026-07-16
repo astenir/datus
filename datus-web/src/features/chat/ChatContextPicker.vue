@@ -11,6 +11,7 @@ import {
   Loader2Icon,
   RotateCcwIcon,
   ServerIcon,
+  StarIcon,
 } from "@lucide/vue"
 import { PromptInputButton } from "@/components/ai-elements/prompt-input"
 import {
@@ -25,6 +26,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
+import { Spinner } from "@/components/ui/spinner"
 import { datasourceStatusLabel, datasourceStatusToneClass } from "@/lib/datasource-status"
 import { cn } from "@/lib/utils"
 import type { DatasourceStatusItem, SelectOption } from "@/types"
@@ -36,6 +38,7 @@ const props = defineProps<{
   database: string
   schema: string
   selectedAgent: string
+  defaultAgentId: string
   datasourceOptions: readonly SelectOption[]
   datasourceStatuses: Readonly<Record<string, DatasourceStatusItem>>
   databaseOptions: readonly SelectOption[]
@@ -43,6 +46,7 @@ const props = defineProps<{
   agentOptions: readonly SelectOption[]
   loadingCatalog: boolean
   switchingDatasource: boolean
+  savingDefaultAgent: boolean
 }>()
 
 const emit = defineEmits<{
@@ -50,6 +54,7 @@ const emit = defineEmits<{
   updateDatabase: [value: string]
   updateSchema: [value: string]
   updateAgent: [value: string]
+  setDefaultAgent: [value: string]
   requestCatalog: []
   requestAgents: []
 }>()
@@ -62,6 +67,11 @@ const schemaLabel = computed(() => {
   return optionLabel(props.schema, props.schemaOptions) || "全部"
 })
 const agentLabel = computed(() => optionLabel(props.selectedAgent, props.agentOptions) || "默认 Agent")
+const selectedAgentIsDefault = computed(() => props.selectedAgent === props.defaultAgentId)
+const defaultAgentActionLabel = computed(() => {
+  if (selectedAgentIsDefault.value && props.selectedAgent) return "当前为我的默认 Agent"
+  return props.selectedAgent ? "设为我的默认 Agent" : "设为系统默认 Agent"
+})
 const schemaSelectDisabled = computed(() =>
   !props.database || props.loadingCatalog || (props.schemaOptions.length === 0 && !props.schema),
 )
@@ -147,7 +157,10 @@ function selectSchema(value: string) {
 
 function selectAgent(value: string) {
   emit("updateAgent", value)
-  panelView.value = "root"
+}
+
+function setDefaultAgent() {
+  emit("setDefaultAgent", props.selectedAgent)
 }
 
 function resetContext() {
@@ -508,7 +521,7 @@ function resetContext() {
               Agent
             </PopoverTitle>
             <PopoverDescription class="text-xs">
-              选择本轮对话使用的 Agent
+              选择本轮 Agent，或设置新会话默认值
             </PopoverDescription>
           </div>
         </div>
@@ -559,6 +572,28 @@ function resetContext() {
             </div>
           </div>
         </ScrollArea>
+
+        <Separator />
+
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          class="w-full"
+          :disabled="savingDefaultAgent || (selectedAgentIsDefault && Boolean(selectedAgent))"
+          @click="setDefaultAgent"
+        >
+          <Spinner
+            v-if="savingDefaultAgent"
+            data-icon="inline-start"
+          />
+          <StarIcon
+            v-else
+            data-icon="inline-start"
+            :class="cn(selectedAgentIsDefault && 'fill-current')"
+          />
+          {{ defaultAgentActionLabel }}
+        </Button>
       </template>
     </PopoverContent>
   </Popover>

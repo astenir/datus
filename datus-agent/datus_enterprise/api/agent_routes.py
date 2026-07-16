@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from datus.api import deps
@@ -108,6 +108,20 @@ class EnterpriseAgentDetail(EnterpriseAgentSummary):
     max_turns: int = 30
 
 
+class AgentPreferenceSummary(BaseModel):
+    """Current user's default Agent preference."""
+
+    default_agent_id: str | None = None
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class UpdateAgentPreferenceRequest(BaseModel):
+    """Current user's default Agent preference mutation."""
+
+    default_agent_id: str | None = Field(default=None, max_length=80)
+
+
 @router.get("/agents", response_model=Result[list[EnterpriseAgentSummary]], summary="List Available Agents")
 async def list_available_agents(ctx: AgentListCtx) -> Result[list[EnterpriseAgentSummary]]:
     """Return built-in and published enterprise agents available to the current user."""
@@ -123,6 +137,59 @@ async def list_available_agents(ctx: AgentListCtx) -> Result[list[EnterpriseAgen
         if can_use_agent(ctx, record) and can_use_node_class(ctx, str(record.get("node_class") or ""))
     )
     return Result(success=True, data=sorted(summaries, key=lambda item: (item.source, item.agent_id)))
+
+
+@router.get(
+    "/me/agent-preferences",
+    response_model=Result[AgentPreferenceSummary],
+    summary="Get Current User Agent Preference",
+)
+async def get_my_agent_preference(ctx: AgentListCtx) -> Result[AgentPreferenceSummary]:
+    """Return a usable default Agent for the current user, or the system default."""
+
+    user_id = _require_user_id(ctx)
+    try:
+        record = await deps.get_enterprise_extensions().user_store.get_chat_preference(user_id)
+    except Exception:
+        return _agent_error("AGENT_PREFERENCE_READ_FAILED", "Agent preference read failed.")
+
+    default_agent_id = _optional_str(record.get("default_agent_id"))
+    if default_agent_id == "chat":
+        default_agent_id = None
+    if default_agent_id and await _node_class_for_available_agent(default_agent_id, ctx) is None:
+        default_agent_id = None
+    return Result(success=True, data=_preference_summary(record, default_agent_id=default_agent_id))
+
+
+@router.put(
+    "/me/agent-preferences",
+    response_model=Result[AgentPreferenceSummary],
+    summary="Update Current User Agent Preference",
+    dependencies=[
+        Depends(require_platform_active(operation="me.agent_preferences.update", resource_type="agent_preference")),
+    ],
+)
+async def update_my_agent_preference(
+    body: UpdateAgentPreferenceRequest,
+    ctx: AgentListCtx,
+) -> Result[AgentPreferenceSummary]:
+    """Persist one visible, published Agent as the current user's default."""
+
+    user_id = _require_user_id(ctx)
+    default_agent_id = _optional_str(body.default_agent_id)
+    if default_agent_id == "chat":
+        default_agent_id = None
+    if default_agent_id and await _node_class_for_available_agent(default_agent_id, ctx) is None:
+        return _agent_error("RESOURCE_NOT_FOUND", "Agent not found.")
+
+    try:
+        record = await deps.get_enterprise_extensions().user_store.put_chat_preference(
+            user_id=user_id,
+            default_agent_id=default_agent_id,
+        )
+    except Exception:
+        return _agent_error("AGENT_PREFERENCE_UPDATE_FAILED", "Agent preference update failed.")
+    return Result(success=True, data=_preference_summary(record, default_agent_id=default_agent_id))
 
 
 @router.get(
@@ -489,6 +556,32 @@ def _detail_from_builtin(record: dict[str, Any]) -> EnterpriseAgentDetail:
         **summary,
         **builtin_agent_prompt_template(str(record["agent_id"])),
     )
+
+
+def _preference_summary(
+    record: dict[str, Any],
+    *,
+    default_agent_id: str | None,
+) -> AgentPreferenceSummary:
+    return AgentPreferenceSummary(
+        default_agent_id=default_agent_id,
+        created_at=_optional_str(record.get("created_at")),
+        updated_at=_optional_str(record.get("updated_at")),
+    )
+
+
+def _require_user_id(ctx: AppContext) -> str:
+    user_id = _optional_str(ctx.user_id)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="AUTH_REQUIRED")
+    return user_id
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _agent_error(code: str, message: str):

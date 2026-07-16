@@ -307,7 +307,7 @@ function openArtifactTab(tab: ArtifactViewTab) {
 }
 
 function createSession() {
-  props.workspace.clearMessages()
+  props.workspace.startNewSession()
   closeMobileSidebar()
   emit("openChat", null)
 }

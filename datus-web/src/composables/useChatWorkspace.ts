@@ -1,4 +1,5 @@
 import { computed, onBeforeUnmount, shallowRef, watch } from "vue";
+import { toast } from "vue-sonner";
 
 import { useCatalog } from "@/composables/useCatalog";
 import { useChatSettings } from "@/composables/useChatSettings";
@@ -8,8 +9,9 @@ import { useModels } from "@/composables/useModels";
 import { usePermission } from "@/composables/usePermission";
 import { useTheme } from "@/composables/useTheme";
 import { workspaceAccessFromPermission } from "@/features/workspace/access";
-import { agentApi } from "@/lib/api";
+import { agentApi, meApi } from "@/lib/api";
 import type { AgentInfo, ArtifactEditSession, NormalizedProbeResult, SelectOption } from "@/types";
+import type { AgentPreferenceSummary, ApiResponse } from "@/types/profile";
 
 const STATUS_REFRESH_DELAYS = [1500, 5000] as const;
 const REPORT_EDIT_SESSION_PREFIX = "report_edit__";
@@ -122,6 +124,8 @@ export function useChatWorkspace() {
       : []),
   ]);
   const selectedAgent = shallowRef("");
+  const defaultAgentId = shallowRef("");
+  const isSavingDefaultAgent = shallowRef(false);
   const selectedModel = shallowRef("");
   const selectedDatasource = shallowRef("");
   const isTestingCatalogDatasource = shallowRef(false);
@@ -284,6 +288,13 @@ export function useChatWorkspace() {
     startArtifactEditSession(session);
   }
 
+  function startNewSession() {
+    artifactEditSession.value = null;
+    selectedAgent.value = defaultAgentId.value;
+    clearMessages();
+    selectSession(null);
+  }
+
   function handleRefreshConnection() {
     if (!canReadAgentConfig.value) return;
     void checkConnection();
@@ -377,6 +388,12 @@ export function useChatWorkspace() {
       if (selectedAgent.value && !isArtifactEditAgent(selectedAgent.value) && !agentOptions.value.some((option) => option.value === selectedAgent.value)) {
         selectedAgent.value = "";
       }
+      if (defaultAgentId.value && !agentOptions.value.some((option) => option.value === defaultAgentId.value)) {
+        if (selectedAgent.value === defaultAgentId.value) {
+          selectedAgent.value = "";
+        }
+        defaultAgentId.value = "";
+      }
       return true;
     } catch (error) {
       console.error("Failed to load chat agent options:", error);
@@ -387,6 +404,57 @@ export function useChatWorkspace() {
       return false;
     } finally {
       isLoadingAgents.value = false;
+    }
+  }
+
+  function preferenceData(response: ApiResponse<AgentPreferenceSummary>): AgentPreferenceSummary {
+    if (!response.success) {
+      throw new Error(response.errorMessage || response.errorCode || "Agent 偏好请求失败");
+    }
+    return response.data ?? {};
+  }
+
+  async function loadAgentPreference(): Promise<boolean> {
+    try {
+      const preference = preferenceData(await meApi.agentPreference());
+      const preferredAgent = preference.default_agent_id?.trim() ?? "";
+      defaultAgentId.value = agentOptions.value.some((option) => option.value === preferredAgent)
+        ? preferredAgent
+        : "";
+      if (!selectedAgent.value) {
+        selectedAgent.value = defaultAgentId.value;
+      }
+      return true;
+    } catch (error) {
+      console.error("Failed to load default Agent preference:", error);
+      defaultAgentId.value = "";
+      return false;
+    }
+  }
+
+  async function setDefaultAgent(agentId: string): Promise<boolean> {
+    const normalizedAgentId = agentId.trim();
+    if (normalizedAgentId && !agentOptions.value.some((option) => option.value === normalizedAgentId)) {
+      toast.error("当前 Agent 不可用，无法设为默认");
+      return false;
+    }
+
+    isSavingDefaultAgent.value = true;
+    try {
+      const preference = preferenceData(await meApi.updateAgentPreference({
+        default_agent_id: normalizedAgentId || null,
+      }));
+      const savedAgentId = preference.default_agent_id?.trim() ?? "";
+      defaultAgentId.value = savedAgentId;
+      selectedAgent.value = savedAgentId;
+      toast.success(savedAgentId ? "已设为我的默认 Agent" : "已恢复系统默认 Agent");
+      return true;
+    } catch (error) {
+      console.error("Failed to update default Agent preference:", error);
+      toast.error(error instanceof Error ? error.message : "默认 Agent 设置失败");
+      return false;
+    } finally {
+      isSavingDefaultAgent.value = false;
     }
   }
 
@@ -402,7 +470,7 @@ export function useChatWorkspace() {
       selectCatalogDatasource(currentDatasource.value);
       const startupTasks: Promise<unknown>[] = [];
       if (viewAccess.value.canViewChat) {
-        startupTasks.push(loadSessions(), loadAgentOptions());
+        startupTasks.push(loadSessions(), loadAgentOptions().then(() => loadAgentPreference()));
       }
       if (canReadModelOptions.value) {
         startupTasks.push(loadModels());
@@ -457,6 +525,7 @@ export function useChatWorkspace() {
     streamActivity,
     isLoadingSessions,
     isLoadingAgents,
+    isSavingDefaultAgent,
     activeInteractionKey,
     selectSession,
     stopSession,
@@ -478,11 +547,13 @@ export function useChatWorkspace() {
     isPrewarmingCurrentDatasource,
     loadSessions,
     loadAgentOptions,
+    loadAgentPreference,
     loadCatalog: refreshCatalog,
     ensureCatalogLoaded,
     loadDatasourceStatuses,
     prewarmDatasource,
     selectedAgent,
+    defaultAgentId,
     selectedModel,
     database,
     schema,
@@ -490,10 +561,12 @@ export function useChatWorkspace() {
     handleInsert,
     startArtifactEditSession,
     startReportEditSession,
+    startNewSession,
     handleRefreshConnection,
     handleDatasourceSwitched,
     handleDatasourceTest,
     handleDatasourceSwitch,
+    setDefaultAgent,
     canUseDatasource,
     setLanguage,
     setPermissionMode,

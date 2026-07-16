@@ -294,7 +294,10 @@ function handleLogout() {
           value="agents"
           class="m-0 flex min-h-0 flex-1"
         >
-          <AgentManagerPanel v-if="viewAccess.canViewAgents" />
+          <AgentManagerPanel
+            v-if="viewAccess.canViewAgents"
+            :workspace="workspace"
+          />
         </TabsContent>
         <TabsContent
           value="configuration"

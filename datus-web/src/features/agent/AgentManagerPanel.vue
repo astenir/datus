@@ -10,6 +10,7 @@ import {
   PlusIcon,
   RefreshCwIcon,
   SaveIcon,
+  StarIcon,
   Trash2Icon,
   WrenchIcon,
   XIcon,
@@ -47,9 +48,19 @@ import {
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { useAgentManager } from "@/composables/useAgentManager"
 import AgentMultiOptionPicker from "@/features/agent/AgentMultiOptionPicker.vue"
-import { formatDate } from "@/lib/utils"
+import {
+  filterAgentsBySource,
+  type AgentSourceFilter,
+} from "@/features/agent/agent-source-filter"
+import { cn, formatDate } from "@/lib/utils"
+import type { ChatWorkspace } from "@/composables/useChatWorkspace"
+
+const props = defineProps<{
+  workspace: ChatWorkspace
+}>()
 
 const manager = useAgentManager()
 type AgentRow = (typeof manager.agents.value)[number]
@@ -57,8 +68,23 @@ type AgentRow = (typeof manager.agents.value)[number]
 const deleteTarget = shallowRef<AgentRow | null>(null)
 const formDialogOpen = shallowRef(false)
 const customSkillInput = shallowRef("")
+const agentSourceFilter = shallowRef<AgentSourceFilter>("all")
 
 const selectedIsReadonly = computed(() => manager.selectedIsBuiltin.value)
+const visibleAgents = computed(() =>
+  filterAgentsBySource(manager.agents.value, agentSourceFilter.value)
+)
+const builtinAgentCount = computed(() =>
+  manager.agents.value.filter((agent) => agent.source === "builtin").length
+)
+const customAgentCount = computed(() => manager.agents.value.length - builtinAgentCount.value)
+const emptyAgentListMessage = computed(() => {
+  if (agentSourceFilter.value === "custom") {
+    return "暂无自定义 Agent。点击新建创建第一个可复用 Agent。"
+  }
+  if (agentSourceFilter.value === "builtin") return "暂无系统内置 Agent。"
+  return "暂无 Agent。点击新建创建第一个可复用 Agent。"
+})
 const toolCatalogEntries = computed(() => manager.toolCatalogEntries())
 const useToolTypeEntries = computed(() => manager.useToolTypeEntries())
 const defaultUseTools = computed(() => manager.selectedUseTools.value?.default_tools ?? [])
@@ -121,6 +147,33 @@ const selectedDetailRows = computed(() => {
 function systemPromptSummary(agent: AgentRow) {
   const text = agent.description || ""
   return text.trim() || "-"
+}
+
+function updateAgentSourceFilter(value: unknown) {
+  if (value === "all" || value === "custom" || value === "builtin") {
+    agentSourceFilter.value = value
+  }
+}
+
+function isDefaultAgent(agent: AgentRow) {
+  return agent.agent_id === "chat"
+    ? !props.workspace.defaultAgentId.value
+    : props.workspace.defaultAgentId.value === agent.agent_id
+}
+
+function canSetDefaultAgent(agent: AgentRow) {
+  if (agent.agent_id === "chat") return true
+  return props.workspace.agentOptions.value.some((option) => option.value === agent.agent_id)
+}
+
+function defaultAgentActionLabel(agent: AgentRow) {
+  if (isDefaultAgent(agent)) return `${agent.name} 已是我的默认 Agent`
+  if (agent.agent_id === "chat") return "恢复系统默认 Agent"
+  return `将 ${agent.name} 设为我的默认 Agent`
+}
+
+async function setDefaultAgent(agent: AgentRow) {
+  await props.workspace.setDefaultAgent(agent.agent_id === "chat" ? "" : agent.agent_id)
 }
 
 function sourceLabel(source: string | null | undefined) {
@@ -268,9 +321,21 @@ onMounted(() => {
         >
           <CardHeader class="shrink-0">
             <div class="flex flex-wrap items-start gap-3">
-              <div class="min-w-0 flex-1">
+              <div class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1.5">
                 <CardTitle class="text-lg">Agent 列表</CardTitle>
-                <CardDescription class="text-sm">点击一行打开详情并编辑。</CardDescription>
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  size="sm"
+                  :model-value="agentSourceFilter"
+                  aria-label="按 Agent 来源过滤"
+                  @update:model-value="updateAgentSourceFilter"
+                >
+                  <ToggleGroupItem value="all">全部 {{ manager.agentCount.value }}</ToggleGroupItem>
+                  <ToggleGroupItem value="custom">自定义 {{ customAgentCount }}</ToggleGroupItem>
+                  <ToggleGroupItem value="builtin">系统内置 {{ builtinAgentCount }}</ToggleGroupItem>
+                </ToggleGroup>
+                <CardDescription class="w-full text-sm">点击一行打开详情并编辑。</CardDescription>
               </div>
               <Badge
                 v-if="manager.loading.value"
@@ -300,12 +365,12 @@ onMounted(() => {
                   <TableRow>
                     <TableHead>Agent</TableHead>
                     <TableHead class="w-28">状态</TableHead>
-                    <TableHead class="w-16 text-right">操作</TableHead>
+                    <TableHead class="w-24 text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   <TableRow
-                    v-for="agent in manager.agents.value"
+                    v-for="agent in visibleAgents"
                     :key="agent.agent_id"
                     class="cursor-pointer"
                     @click="selectAgent(agent)"
@@ -335,24 +400,40 @@ onMounted(() => {
                         <span class="text-xs text-muted-foreground">{{ formatDate(agent.created_at) || "-" }}</span>
                       </div>
                     </TableCell>
-                    <TableCell class="text-right">
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        :disabled="agent.source === 'builtin' || manager.deleting.value"
-                        aria-label="删除 Agent"
-                        @click.stop="deleteTarget = agent"
-                      >
-                        <Trash2Icon data-icon="inline-start" />
-                      </Button>
+                    <TableCell>
+                      <div class="flex justify-end gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          :disabled="props.workspace.isSavingDefaultAgent.value || (isDefaultAgent(agent) && agent.agent_id !== 'chat') || !canSetDefaultAgent(agent)"
+                          :aria-label="defaultAgentActionLabel(agent)"
+                          :aria-pressed="isDefaultAgent(agent)"
+                          :title="defaultAgentActionLabel(agent)"
+                          @click.stop="setDefaultAgent(agent)"
+                        >
+                          <StarIcon
+                            data-icon="inline-start"
+                            :class="cn(isDefaultAgent(agent) && 'fill-current')"
+                          />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          :disabled="agent.source === 'builtin' || manager.deleting.value"
+                          aria-label="删除 Agent"
+                          @click.stop="deleteTarget = agent"
+                        >
+                          <Trash2Icon data-icon="inline-start" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
-                  <TableRow v-if="manager.agents.value.length === 0">
+                  <TableRow v-if="visibleAgents.length === 0">
                     <TableCell
                       colspan="3"
                       class="h-24 text-center text-sm text-muted-foreground"
                     >
-                      暂无 Agent。点击新建创建第一个可复用 Agent。
+                      {{ emptyAgentListMessage }}
                     </TableCell>
                   </TableRow>
                 </TableBody>

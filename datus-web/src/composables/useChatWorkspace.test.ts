@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+function mockMeApi() {
+  return {
+    agentPreference: vi.fn(async () => ({ success: true, data: { default_agent_id: null } })),
+    updateAgentPreference: vi.fn(async (input: { default_agent_id?: string | null }) => ({
+      success: true,
+      data: { default_agent_id: input.default_agent_id ?? null },
+    })),
+  };
+}
+
 describe("useChatWorkspace", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -30,6 +40,15 @@ describe("useChatWorkspace", () => {
     const compactSession = vi.fn(async () => ({ session_id: "s1", success: true }));
     const selectSession = vi.fn();
     const sendMessage = vi.fn();
+    const clearMessages = vi.fn();
+    const agentPreference = vi.fn(async () => ({
+      success: true,
+      data: { default_agent_id: "research" },
+    }));
+    const updateAgentPreference = vi.fn(async (input: { default_agent_id?: string | null }) => ({
+      success: true,
+      data: { default_agent_id: input.default_agent_id ?? null },
+    }));
 
     vi.doMock("@/composables/useTheme", () => ({
       useTheme: () => ({}),
@@ -67,6 +86,10 @@ describe("useChatWorkspace", () => {
       agentApi: {
         availableList: loadAgentOptions,
       },
+      meApi: {
+        agentPreference,
+        updateAgentPreference,
+      },
     }));
     vi.doMock("@/composables/usePermission", () => ({
       usePermission: () => ({
@@ -94,7 +117,7 @@ describe("useChatWorkspace", () => {
         compactSession,
         resumeSession: vi.fn(),
         sendInteraction: vi.fn(),
-        clearMessages: vi.fn(),
+        clearMessages,
         dispose: vi.fn(),
       }),
     }));
@@ -143,6 +166,20 @@ describe("useChatWorkspace", () => {
     expect(loadDatasourceStatuses).not.toHaveBeenCalled();
     expect(prewarmDatasource).not.toHaveBeenCalled();
     expect(workspace.agentOptions.value).toEqual([{ value: "research", label: "Research" }]);
+    expect(agentPreference).toHaveBeenCalledTimes(1);
+    expect(workspace.defaultAgentId.value).toBe("research");
+    expect(workspace.selectedAgent.value).toBe("research");
+
+    workspace.selectedAgent.value = "";
+    workspace.startNewSession();
+    expect(workspace.selectedAgent.value).toBe("research");
+    expect(clearMessages).toHaveBeenCalledTimes(1);
+    expect(selectSession).toHaveBeenCalledWith(null);
+
+    await expect(workspace.setDefaultAgent("")).resolves.toBe(true);
+    expect(updateAgentPreference).toHaveBeenCalledWith({ default_agent_id: null });
+    expect(workspace.defaultAgentId.value).toBe("");
+    expect(workspace.selectedAgent.value).toBe("");
 
     await expect(workspace.compactSession("s1")).resolves.toEqual({ session_id: "s1", success: true });
     expect(compactSession).toHaveBeenCalledWith("s1");
@@ -237,6 +274,7 @@ describe("useChatWorkspace", () => {
       agentApi: {
         availableList: loadAgentOptions,
       },
+      meApi: mockMeApi(),
     }));
     vi.doMock("@/composables/usePermission", () => ({
       usePermission: () => ({
@@ -366,6 +404,7 @@ describe("useChatWorkspace", () => {
       agentApi: {
         availableList: loadAgentOptions,
       },
+      meApi: mockMeApi(),
     }));
     vi.doMock("@/composables/usePermission", () => ({
       usePermission: () => ({
@@ -514,6 +553,7 @@ describe("useChatWorkspace", () => {
       agentApi: {
         availableList: loadAgentOptions,
       },
+      meApi: mockMeApi(),
     }));
     vi.doMock("@/composables/usePermission", () => ({
       usePermission: () => ({
@@ -678,6 +718,7 @@ describe("useChatWorkspace", () => {
       agentApi: {
         availableList: loadAgentOptions,
       },
+      meApi: mockMeApi(),
     }));
     vi.doMock("@/composables/usePermission", () => ({
       usePermission: () => ({
@@ -838,6 +879,7 @@ describe("useChatWorkspace", () => {
       agentApi: {
         availableList: vi.fn(async () => []),
       },
+      meApi: mockMeApi(),
     }));
     vi.doMock("@/composables/usePermission", () => ({
       usePermission: () => ({

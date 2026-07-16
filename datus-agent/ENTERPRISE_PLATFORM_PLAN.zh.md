@@ -247,6 +247,8 @@ Artifact 访问必须按 artifact type + slug 校验 ACL：
 
 PG metadata 当前只做最小 `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS` bootstrap，不是生产 migration runner。新增字段或 schema 变更必须说明人工 DDL、迁移、回滚、滚动发布兼容和备份恢复策略。
 
+用户默认 Agent 使用独立的 `enterprise_user_chat_preferences` 表，由当前 `user_store` 的 SQLite、PostgreSQL 或 OceanBase 实现持久化。该表是增量且不带外键：滚动发布时旧版本会忽略它，新版本可先执行仓库 `_SCHEMA_SQL` 中对应的 `CREATE TABLE IF NOT EXISTS`；回滚应用不需要删除表，确认不再回滚且完成备份后才可人工清理。生产环境应先按目标数据库方言执行同构建表 DDL，再发布读取该偏好的应用版本。
+
 每个 PG metadata/body store 独立持有 asyncpg pool。连接预算按：
 
 ```text
