@@ -1226,6 +1226,61 @@ class TestQueryMetricsCompression:
             assert result.result["data"]["original_rows"] == 1
             assert result.result["data"]["original_columns"] == ["x"]
 
+    @pytest.mark.parametrize("dry_run", [False, True])
+    def test_query_metrics_resolves_relative_time_before_adapter_call(self, semantic_tools, mock_adapter, dry_run):
+        query_result = QueryResult(columns=["x"], data=[{"x": 1}], metadata={})
+        semantic_tools._reference_date_provider = lambda: "2026-07-16"
+
+        with patch("datus.tools.func_tool.semantic_tools._run_async", return_value=query_result):
+            result = semantic_tools.query_metrics(
+                metrics=["free_meal_count_ages_5_17_rate"],
+                time_start="-10y",
+                time_end="now",
+                dry_run=dry_run,
+            )
+
+        assert result.success == 1
+        mock_adapter.query_metrics.assert_called_once_with(
+            metrics=["free_meal_count_ages_5_17_rate"],
+            dimensions=[],
+            path=None,
+            time_start="2016-07-16",
+            time_end="2026-07-16",
+            time_granularity=None,
+            where=None,
+            limit=None,
+            order_by=None,
+            dry_run=dry_run,
+        )
+
+    @pytest.mark.parametrize(
+        "relative_time, reference_date, expected",
+        [
+            ("-10d", "2026-07-16", "2026-07-06"),
+            ("-2w", "2026-07-16", "2026-07-02"),
+            ("-3m", "2026-07-31", "2026-04-30"),
+            ("-1y", "2024-02-29", "2023-02-28"),
+        ],
+    )
+    def test_query_metrics_resolves_relative_time_with_calendar_boundaries(
+        self, semantic_tools, mock_adapter, relative_time, reference_date, expected
+    ):
+        query_result = QueryResult(columns=["x"], data=[{"x": 1}], metadata={})
+        semantic_tools._reference_date_provider = lambda: reference_date
+
+        with patch("datus.tools.func_tool.semantic_tools._run_async", return_value=query_result):
+            result = semantic_tools.query_metrics(metrics=["revenue"], time_start=relative_time)
+
+        assert result.success == 1
+        assert mock_adapter.query_metrics.call_args.kwargs["time_start"] == expected
+
+    def test_query_metrics_rejects_invalid_relative_time_before_adapter_call(self, semantic_tools, mock_adapter):
+        result = semantic_tools.query_metrics(metrics=["revenue"], time_start="-10years")
+
+        assert result.success == 0
+        assert "time_start must be an ISO date/timestamp or a relative value" in result.error
+        mock_adapter.query_metrics.assert_not_called()
+
     def test_query_metrics_passes_join_controls_to_supporting_adapter(self, semantic_tools):
         """Test that semantic join controls are forwarded when the adapter supports them."""
         query_result = QueryResult(columns=["x"], data=[{"x": 1}], metadata={})
