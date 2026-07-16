@@ -251,6 +251,8 @@ export type AgentInfo = components["schemas"]["EnterpriseAgentSummary"];
 
 export type AgentDetail = components["schemas"]["EnterpriseAgentDetail"];
 
+export type AgentNodeType = components["schemas"]["EnterpriseAgentNodeType"];
+
 export type CreateAgentInput = components["schemas"]["UpsertEnterpriseAgentRequest"];
 
 export type EditAgentInput = components["schemas"]["UpsertEnterpriseAgentRequest"];

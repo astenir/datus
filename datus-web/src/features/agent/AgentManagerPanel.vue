@@ -7,6 +7,7 @@ import {
   ListChecksIcon,
   LoaderCircleIcon,
   LockIcon,
+  PencilIcon,
   PlusIcon,
   RefreshCwIcon,
   SaveIcon,
@@ -65,6 +66,13 @@ const props = defineProps<{
 const manager = useAgentManager()
 type AgentRow = (typeof manager.agents.value)[number]
 
+const agentStatusOptions = [
+  { value: "draft", label: "草稿" },
+  { value: "published", label: "已发布" },
+  { value: "disabled", label: "已停用" },
+  { value: "archived", label: "已归档" },
+] as const
+
 const deleteTarget = shallowRef<AgentRow | null>(null)
 const formDialogOpen = shallowRef(false)
 const customSkillInput = shallowRef("")
@@ -89,11 +97,6 @@ const toolCatalogEntries = computed(() => manager.toolCatalogEntries())
 const useToolTypeEntries = computed(() => manager.useToolTypeEntries())
 const defaultUseTools = computed(() => manager.selectedUseTools.value?.default_tools ?? [])
 const mcpServerOptions = computed(() => manager.mcpServerOptions.value)
-const resourceCatalogBadgeLabel = computed(() => {
-  if (manager.resourceCatalogLoading.value) return "资源加载中"
-  if (manager.resourceCatalogError.value) return "资源读取失败"
-  return `${manager.datasourceOptions.value.length} 数据源 / ${manager.artifactOptions.value.length} 产物`
-})
 const selectedMcpList = computed(() =>
   manager.form.value.mcpText
     .split(/[\n,]/)
@@ -172,6 +175,10 @@ function defaultAgentActionLabel(agent: AgentRow) {
   return `将 ${agent.name} 设为我的默认 Agent`
 }
 
+function agentEditActionLabel(agent: AgentRow) {
+  return agent.source === "builtin" ? `查看 ${agent.name}` : `编辑 ${agent.name}`
+}
+
 async function setDefaultAgent(agent: AgentRow) {
   await props.workspace.setDefaultAgent(agent.agent_id === "chat" ? "" : agent.agent_id)
 }
@@ -180,6 +187,26 @@ function sourceLabel(source: string | null | undefined) {
   if (source === "builtin") return "系统内置"
   if (source === "enterprise") return "企业自定义"
   return source?.trim() || "-"
+}
+
+function agentStatusToneClass(status: string | null | undefined) {
+  switch (status?.trim().toLowerCase() || "draft") {
+    case "published":
+      return "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+    case "draft":
+      return "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
+    case "disabled":
+      return "border-destructive/30 bg-destructive/10 text-destructive"
+    case "archived":
+      return "border-slate-500/30 bg-slate-500/10 text-slate-700 dark:text-slate-300"
+    default:
+      return "bg-muted text-muted-foreground"
+  }
+}
+
+function agentStatusLabel(status: string | null | undefined) {
+  const normalizedStatus = status?.trim().toLowerCase() || "draft"
+  return agentStatusOptions.find(option => option.value === normalizedStatus)?.label ?? normalizedStatus
 }
 
 function listSummary(items: readonly string[] | null | undefined) {
@@ -229,6 +256,7 @@ async function submitForm() {
 async function refreshAll() {
   await Promise.all([
     manager.loadAgents(),
+    manager.loadNodeTypes(),
     manager.loadToolCatalog(),
     manager.loadMcpCatalog(),
     manager.loadResourceCatalogs(),
@@ -279,7 +307,6 @@ onMounted(() => {
           <div class="mt-1 flex flex-wrap items-center gap-2">
             <Badge variant="secondary">{{ manager.agentCount.value }} 个 Agent</Badge>
             <Badge variant="outline">{{ manager.toolCategoryCount.value }} 类 / {{ manager.toolCount.value }} 个工具</Badge>
-            <Badge variant="outline">{{ resourceCatalogBadgeLabel }}</Badge>
           </div>
         </div>
         <div class="flex items-center gap-2">
@@ -335,7 +362,7 @@ onMounted(() => {
                   <ToggleGroupItem value="custom">自定义 {{ customAgentCount }}</ToggleGroupItem>
                   <ToggleGroupItem value="builtin">系统内置 {{ builtinAgentCount }}</ToggleGroupItem>
                 </ToggleGroup>
-                <CardDescription class="w-full text-sm">点击一行打开详情并编辑。</CardDescription>
+                <CardDescription class="w-full text-sm">使用操作按钮查看详情或编辑。</CardDescription>
               </div>
               <Badge
                 v-if="manager.loading.value"
@@ -365,38 +392,43 @@ onMounted(() => {
                   <TableRow>
                     <TableHead>Agent</TableHead>
                     <TableHead class="w-28">状态</TableHead>
-                    <TableHead class="w-24 text-right">操作</TableHead>
+                    <TableHead class="w-32 text-right">操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   <TableRow
                     v-for="agent in visibleAgents"
                     :key="agent.agent_id"
-                    class="cursor-pointer"
-                    @click="selectAgent(agent)"
                   >
                     <TableCell class="min-w-0 overflow-hidden whitespace-normal">
                       <div class="flex min-w-0 flex-col gap-1">
-                        <div class="flex min-w-0 items-center gap-2 font-medium">
-                          <span class="truncate">{{ agent.name }}</span>
+                        <div class="flex min-w-0 items-center gap-1.5">
+                          <span class="min-w-0 flex-1 truncate font-medium">{{ agent.name }}</span>
+                          <Badge
+                            class="shrink-0"
+                            variant="secondary"
+                          >
+                            {{ agent.node_class || "gen_sql" }}
+                          </Badge>
+                          <Badge
+                            v-if="agent.source === 'builtin'"
+                            class="shrink-0"
+                            variant="outline"
+                          >
+                            系统内置
+                          </Badge>
                         </div>
-                        <div class="flex min-w-0 flex-col gap-1.5">
-                          <div class="flex min-w-0 flex-wrap items-center gap-1.5">
-                            <Badge variant="secondary">{{ agent.node_class || "gen_sql" }}</Badge>
-                            <Badge
-                              v-if="agent.source === 'builtin'"
-                              variant="outline"
-                            >
-                              系统内置
-                            </Badge>
-                          </div>
-                          <span class="block min-w-0 truncate text-xs text-muted-foreground">{{ systemPromptSummary(agent) }}</span>
-                        </div>
+                        <span class="block min-w-0 truncate text-xs text-muted-foreground">{{ systemPromptSummary(agent) }}</span>
                       </div>
                     </TableCell>
                     <TableCell>
                       <div class="flex flex-col items-start gap-1">
-                        <Badge variant="outline">{{ agent.status || "draft" }}</Badge>
+                        <Badge
+                          :class="agentStatusToneClass(agent.status)"
+                          variant="outline"
+                        >
+                          {{ agentStatusLabel(agent.status) }}
+                        </Badge>
                         <span class="text-xs text-muted-foreground">{{ formatDate(agent.created_at) || "-" }}</span>
                       </div>
                     </TableCell>
@@ -409,19 +441,28 @@ onMounted(() => {
                           :aria-label="defaultAgentActionLabel(agent)"
                           :aria-pressed="isDefaultAgent(agent)"
                           :title="defaultAgentActionLabel(agent)"
-                          @click.stop="setDefaultAgent(agent)"
+                          @click="setDefaultAgent(agent)"
                         >
                           <StarIcon
                             data-icon="inline-start"
-                            :class="cn(isDefaultAgent(agent) && 'fill-current')"
+                            :class="cn(isDefaultAgent(agent) && 'fill-yellow-400 text-yellow-500')"
                           />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          :aria-label="agentEditActionLabel(agent)"
+                          :title="agentEditActionLabel(agent)"
+                          @click="selectAgent(agent)"
+                        >
+                          <PencilIcon data-icon="inline-start" />
                         </Button>
                         <Button
                           variant="ghost"
                           size="icon-sm"
                           :disabled="agent.source === 'builtin' || manager.deleting.value"
                           aria-label="删除 Agent"
-                          @click.stop="deleteTarget = agent"
+                          @click="deleteTarget = agent"
                         >
                           <Trash2Icon data-icon="inline-start" />
                         </Button>
@@ -583,6 +624,7 @@ onMounted(() => {
                   <div class="flex flex-wrap items-center justify-between gap-2">
                     <span>当前详情来自内置模板，保存和删除操作由后端拒绝。</span>
                     <Button
+                      v-if="manager.selectedCanCloneBuiltin.value"
                       type="button"
                       size="sm"
                       variant="outline"
@@ -632,7 +674,7 @@ onMounted(() => {
                   <FieldLabel for="agent-type">节点类型</FieldLabel>
                   <Select
                     v-model="manager.form.value.nodeClass"
-                    :disabled="selectedIsReadonly"
+                    :disabled="selectedIsReadonly || manager.nodeTypesLoading.value"
                     @update:model-value="changeNodeClass"
                   >
                     <SelectTrigger id="agent-type">
@@ -651,7 +693,7 @@ onMounted(() => {
                     </SelectContent>
                   </Select>
                   <FieldDescription>
-                    {{ manager.nodeClassOptions.value.find(option => option.value === manager.form.value.nodeClass)?.description || manager.form.value.nodeClass }}
+                    {{ manager.nodeTypesError.value || manager.nodeClassOptions.value.find(option => option.value === manager.form.value.nodeClass)?.description || manager.form.value.nodeClass }}
                   </FieldDescription>
                 </Field>
               </div>
@@ -668,10 +710,13 @@ onMounted(() => {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
-                        <SelectItem value="draft">draft</SelectItem>
-                        <SelectItem value="published">published</SelectItem>
-                        <SelectItem value="disabled">disabled</SelectItem>
-                        <SelectItem value="archived">archived</SelectItem>
+                        <SelectItem
+                          v-for="status in agentStatusOptions"
+                          :key="status.value"
+                          :value="status.value"
+                        >
+                          {{ status.label }}
+                        </SelectItem>
                       </SelectGroup>
                     </SelectContent>
                   </Select>

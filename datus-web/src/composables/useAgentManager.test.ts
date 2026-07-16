@@ -5,6 +5,7 @@ const getAgent = vi.fn();
 const createAgent = vi.fn();
 const editAgent = vi.fn();
 const deleteAgent = vi.fn();
+const agentNodeTypes = vi.fn();
 const agentTools = vi.fn();
 const agentUseTools = vi.fn();
 const listDatasources = vi.fn();
@@ -29,6 +30,7 @@ vi.mock("@/lib/api", () => ({
     create: createAgent,
     edit: editAgent,
     delete: deleteAgent,
+    nodeTypes: agentNodeTypes,
     tools: agentTools,
     useTools: agentUseTools,
   },
@@ -101,6 +103,18 @@ describe("useAgentManager", () => {
     createAgent.mockResolvedValue({ agent_id: "analyst", name: "analyst" });
     editAgent.mockResolvedValue({});
     deleteAgent.mockResolvedValue({});
+    agentNodeTypes.mockResolvedValue([
+      {
+        node_class: "gen_sql",
+        label: "SQL 分析",
+        description: "生成和执行只读 SQL。",
+      },
+      {
+        node_class: "ask_metrics",
+        label: "指标问答",
+        description: "围绕指标、维度和归因分析问答。",
+      },
+    ]);
     agentTools.mockResolvedValue({
       tools: {
         sql: ["read_query", "explain_query"],
@@ -254,10 +268,18 @@ describe("useAgentManager", () => {
       default_tools: ["memory_tools.*"],
       tool_types: {},
     });
+    agentNodeTypes.mockResolvedValue([
+      {
+        node_class: "chat",
+        label: "通用聊天",
+        description: "面向普通问答、规划和多工具协作。",
+      },
+    ]);
     const { useAgentManager } = await import("./useAgentManager");
     const manager = useAgentManager();
 
     await manager.loadAgents();
+    await manager.loadNodeTypes();
     await manager.selectAgent("chat");
     const started = manager.startCreateFromSelectedBuiltin();
 
@@ -278,6 +300,31 @@ describe("useAgentManager", () => {
     expect(toastSuccess).toHaveBeenCalledWith("已复制为企业 Agent 草稿，可选择 MCP 后保存。");
   });
 
+  it("does not clone an internal builtin without an enterprise node capability", async () => {
+    getAgent.mockResolvedValue({
+      agent_id: "gen_semantic_model",
+      name: "gen_semantic_model",
+      node_class: "gen_semantic_model",
+      status: "published",
+      source: "builtin",
+      tools: [],
+      mcp: [],
+      skills: [],
+      scoped_context: {},
+      rules: [],
+      max_turns: 30,
+    });
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.loadNodeTypes();
+    await manager.selectAgent("gen_semantic_model");
+
+    expect(manager.selectedCanCloneBuiltin.value).toBe(false);
+    expect(manager.startCreateFromSelectedBuiltin()).toBe(false);
+    expect(toastError).toHaveBeenCalledWith("当前系统内置 Agent 不支持复制为企业 Agent。");
+  });
+
   it("loads available agent tool catalogs", async () => {
     const { useAgentManager } = await import("./useAgentManager");
     const manager = useAgentManager();
@@ -287,6 +334,44 @@ describe("useAgentManager", () => {
     expect(agentTools).toHaveBeenCalledWith("http://api.test");
     expect(manager.toolCategoryCount.value).toBe(1);
     expect(manager.toolCount.value).toBe(2);
+  });
+
+  it("loads node class options from the enterprise API in response order", async () => {
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.loadNodeTypes();
+
+    expect(agentNodeTypes).toHaveBeenCalledWith("http://api.test");
+    expect(manager.nodeClassOptions.value).toEqual([
+      {
+        value: "gen_sql",
+        label: "SQL 分析",
+        description: "生成和执行只读 SQL。",
+      },
+      {
+        value: "ask_metrics",
+        label: "指标问答",
+        description: "围绕指标、维度和归因分析问答。",
+      },
+    ]);
+    expect(manager.nodeTypesLoading.value).toBe(false);
+    expect(manager.nodeTypesError.value).toBeNull();
+  });
+
+  it("keeps only the selected node class when the node type catalog fails", async () => {
+    agentNodeTypes.mockRejectedValue(new Error("unavailable"));
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+    manager.form.value.nodeClass = "legacy_type";
+
+    await manager.loadNodeTypes();
+
+    expect(manager.nodeClassOptions.value).toEqual([
+      { value: "legacy_type", label: "当前：legacy_type" },
+    ]);
+    expect(manager.nodeTypesError.value).toBe("读取 Agent 节点类型失败");
+    expect(toastError).toHaveBeenCalledWith("读取 Agent 节点类型失败");
   });
 
   it("loads MCP servers and toggles agent server bindings", async () => {

@@ -1990,6 +1990,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/agents/node-types": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["list_admin_agent_node_types_api_v1_admin_agents_node_types_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/agents": {
         parameters: {
             query?: never;
@@ -3573,6 +3590,15 @@ export interface components {
             max_turns: number;
         };
 
+        EnterpriseAgentNodeType: {
+
+            node_class: string;
+
+            label: string;
+
+            description: string;
+        };
+
         EnterpriseAgentSummary: {
 
             agent_id: string;
@@ -5084,6 +5110,17 @@ export interface components {
             success: boolean;
 
             data?: components["schemas"]["AdminUserSummary"][] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
+        Result_list_EnterpriseAgentNodeType__: {
+
+            success: boolean;
+
+            data?: components["schemas"]["EnterpriseAgentNodeType"][] | null;
 
             errorCode?: string | null;
 
@@ -9831,6 +9868,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_admin_agent_node_types_api_v1_admin_agents_node_types_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_list_EnterpriseAgentNodeType__"];
                 };
             };
         };

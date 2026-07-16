@@ -14,6 +14,7 @@ from datus.api.enterprise.defaults import (
 )
 from datus.api.enterprise.loader import EnterpriseExtensions
 from datus.api.routes import chat_routes
+from datus_enterprise.agent_registry import ENTERPRISE_AGENT_NODE_CLASSES
 from datus_enterprise.api import agent_routes
 from datus_enterprise.postgres_stores import _agent_record, _normalized_agent_metadata
 
@@ -83,6 +84,41 @@ def test_admin_agent_tools_and_tool_reference(monkeypatch):
     assert reference_response.json()["success"] is True
     assert "db_tools.*" in reference_response.json()["data"]["default_tools"]
     assert "db_tools" in reference_response.json()["data"]["tool_types"]
+
+
+def test_admin_agent_node_types(monkeypatch):
+    _install_extensions(monkeypatch, InMemoryEnterpriseAgentStore())
+    ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/admin/agents/node-types")
+
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    items = response.json()["data"]
+    assert [item["node_class"] for item in items] == [
+        "chat",
+        "gen_sql",
+        "gen_report",
+        "gen_visual_report",
+        "gen_visual_dashboard",
+        "ask_metrics",
+        "ask_report",
+        "ask_dashboard",
+    ]
+    assert {item["node_class"] for item in items} == ENTERPRISE_AGENT_NODE_CLASSES
+    assert all(item["label"] and item["description"] for item in items)
+
+
+def test_admin_agent_node_types_rejects_without_permission(monkeypatch):
+    _install_extensions(monkeypatch, InMemoryEnterpriseAgentStore())
+    ctx = AppContext(user_id="operator", permissions={"module.chat"})
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/admin/agents/node-types")
+
+    assert response.status_code == 403
+    assert "module.admin.agents" in response.json()["detail"]
 
 
 def test_admin_agents_list_includes_readonly_builtins(monkeypatch):
@@ -376,6 +412,27 @@ def test_admin_agent_upsert_accepts_custom_chat_node_class(monkeypatch):
     assert response.json()["data"]["node_class"] == "chat"
     assert response.json()["data"]["mcp"] == ["filesystem"]
     assert agent_store._agents["custom_chat"]["node_class"] == "chat"
+
+
+def test_admin_agent_upsert_accepts_visual_artifact_node_classes(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store)
+    admin_ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(admin_ctx) as client:
+        report_response = client.put(
+            "/api/v1/admin/agents/visual_report_writer",
+            json={"name": "Visual Report Writer", "node_class": "gen_visual_report"},
+        )
+        dashboard_response = client.put(
+            "/api/v1/admin/agents/visual_dashboard_writer",
+            json={"name": "Visual Dashboard Writer", "node_class": "gen_visual_dashboard"},
+        )
+
+    assert report_response.json()["success"] is True
+    assert report_response.json()["data"]["node_class"] == "gen_visual_report"
+    assert dashboard_response.json()["success"] is True
+    assert dashboard_response.json()["data"]["node_class"] == "gen_visual_dashboard"
 
 
 def test_admin_agent_upsert_is_blocked_in_readonly_status(monkeypatch):

@@ -311,6 +311,7 @@ _add_many(
     "GET",
     [
         "/api/v1/admin/agents",
+        "/api/v1/admin/agents/node-types",
         "/api/v1/admin/agents/tools",
         "/api/v1/admin/agents/tool-reference",
         "/api/v1/admin/agents/{agent_id}",

@@ -31,6 +31,7 @@ from pygments.lexers.data import YamlLexer
 from pygments.lexers.html import HtmlLexer
 
 from datus.agent.node.gen_sql_agentic_node import prepare_template_context
+from datus.agent.node_capabilities import cli_agent_node_capabilities, get_agent_node_capability
 from datus.cli.autocomplete import TableCompleter
 from datus.cli.cli_styles import SUB_AGENT_WIZARD_STYLE, render_tui_title_bar
 from datus.prompts.prompt_manager import get_prompt_manager
@@ -520,16 +521,11 @@ class SubAgentWizard:
         self.name_buffer.on_text_changed += self._update_previews
         self.description_area = TextArea(text="", multiline=True, wrap_lines=True, style="class:textarea")
         self.description_area.buffer.on_text_changed += self._update_previews
-        # Node class selection (gen_sql / gen_report / gen_visual_report / gen_visual_dashboard)
+        # Node class selection comes from the canonical capability registry.
         self.node_class_radio = RadioList(
             values=[
-                ("gen_sql", "gen_sql - SQL generation (default)"),
-                ("gen_report", "gen_report - Report/analysis generation"),
-                ("gen_visual_report", "gen_visual_report - Structured report artifact (manifest + queries)"),
-                (
-                    "gen_visual_dashboard",
-                    "gen_visual_dashboard - Parameterized dashboard artifact (Jinja2 SQL templates)",
-                ),
+                (capability.node_class, capability.cli_label or capability.node_class)
+                for capability in cli_agent_node_capabilities()
             ],
             default="gen_sql",
         )
@@ -1737,14 +1733,8 @@ class SubAgentWizard:
           to the default system template for the currently-selected node_class. If they
           switch back to the original node_class, the custom template is picked up again.
         """
-        if node_class == "gen_report":
-            default_template = "gen_report_system"
-        elif node_class == "gen_visual_report":
-            default_template = "gen_visual_report_system"
-        elif node_class == "gen_visual_dashboard":
-            default_template = "gen_visual_dashboard_system"
-        else:
-            default_template = "gen_sql_system"
+        capability = get_agent_node_capability(node_class)
+        default_template = capability.prompt_template if capability and capability.prompt_template else "gen_sql_system"
         if (
             self._is_updated
             and self._pre_name

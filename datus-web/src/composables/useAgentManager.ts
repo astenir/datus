@@ -9,6 +9,7 @@ import { adminDatasourceLabel } from "@/lib/datasource-display";
 import type {
   AgentDetail,
   AgentInfo,
+  AgentNodeType,
   AgentToolsData,
   AgentUseToolsData,
   CreateAgentInput,
@@ -53,15 +54,6 @@ export interface AgentSelectOption {
 }
 
 type AgentListFormField = "toolsText" | "mcpText" | "skillsText" | "catalogsText" | "subjectsText" | "rulesText";
-
-const defaultNodeClassOptions = [
-  { value: "chat", label: "通用聊天", description: "面向普通问答、规划和多工具协作。" },
-  { value: "gen_sql", label: "SQL 分析", description: "生成和执行只读 SQL。" },
-  { value: "gen_report", label: "报表生成", description: "创建或更新报表产物。" },
-  { value: "ask_report", label: "报表问答", description: "围绕一个已存在报表做只读问答。" },
-  { value: "ask_dashboard", label: "仪表盘问答", description: "围绕一个已存在仪表盘做只读问答。" },
-  { value: "ask_metrics", label: "指标问答", description: "围绕指标、维度和归因分析问答。" },
-] satisfies AgentSelectOption[];
 
 function emptyForm(): AgentFormState {
   return {
@@ -315,6 +307,7 @@ export function useAgentManager() {
 
   const agents = ref<AgentInfo[]>([]);
   const selectedAgent = ref<AgentDetail | null>(null);
+  const nodeTypes = ref<AgentNodeType[]>([]);
   const toolCatalog = ref<AgentToolsData | null>(null);
   const selectedUseTools = ref<AgentUseToolsData | null>(null);
   const mcpServers = ref<McpServerInfo[]>([]);
@@ -327,6 +320,8 @@ export function useAgentManager() {
   const detailLoading = shallowRef(false);
   const saving = shallowRef(false);
   const deleting = shallowRef(false);
+  const nodeTypesLoading = shallowRef(false);
+  const nodeTypesError = shallowRef<string | null>(null);
   const toolsLoading = shallowRef(false);
   const mcpCatalogLoading = shallowRef(false);
   const mcpCatalogLoaded = shallowRef(false);
@@ -340,6 +335,10 @@ export function useAgentManager() {
   const selectedAgentId = computed(() => selectedAgent.value?.agent_id ?? null);
   const selectedAgentName = computed(() => selectedAgent.value?.name ?? null);
   const selectedIsBuiltin = computed(() => isBuiltinAgent(selectedAgent.value));
+  const selectedCanCloneBuiltin = computed(() =>
+    selectedIsBuiltin.value
+    && nodeTypes.value.some(item => item.node_class === selectedAgent.value?.node_class)
+  );
   const toolCategoryCount = computed(() => Object.keys(toolCatalog.value?.tools ?? {}).length);
   const toolCount = computed(() => countToolCatalogEntries(toolCatalog.value));
   const selectedUseToolCount = computed(() => countUseToolEntries(selectedUseTools.value));
@@ -362,7 +361,11 @@ export function useAgentManager() {
   );
   const nodeClassOptions = computed(() =>
     withSelectedFallbackOptions(
-      defaultNodeClassOptions,
+      nodeTypes.value.map(item => ({
+        value: item.node_class,
+        label: item.label,
+        description: item.description,
+      })),
       form.value.nodeClass ? [form.value.nodeClass] : [],
     )
   );
@@ -476,6 +479,23 @@ export function useAgentManager() {
       toast.error(message);
     } finally {
       toolsLoading.value = false;
+    }
+  }
+
+  async function loadNodeTypes() {
+    nodeTypesLoading.value = true;
+    nodeTypesError.value = null;
+
+    try {
+      nodeTypes.value = await agentApi.nodeTypes(connection.effectiveBase()) ?? [];
+    } catch (err) {
+      const message = agentRouteErrorMessage(err, "读取 Agent 节点类型失败");
+      console.error("读取 Agent 节点类型失败:", err);
+      nodeTypes.value = [];
+      nodeTypesError.value = message;
+      toast.error(message);
+    } finally {
+      nodeTypesLoading.value = false;
     }
   }
 
@@ -597,7 +617,12 @@ export function useAgentManager() {
       if (detail) {
         form.value = formFromDetail(detail);
         formMode.value = "edit";
-        await loadUseToolsForNodeClass(detail.node_class || "gen_sql");
+        const nodeClass = detail.node_class || "gen_sql";
+        if (!nodeTypes.value.length || nodeTypes.value.some(item => item.node_class === nodeClass)) {
+          await loadUseToolsForNodeClass(nodeClass);
+        } else {
+          selectedUseTools.value = null;
+        }
       } else {
         selectedUseTools.value = null;
       }
@@ -621,6 +646,10 @@ export function useAgentManager() {
     const source = selectedAgent.value;
     if (!isBuiltinAgent(source)) {
       toast.error("请选择一个系统内置 Agent 后再复制。");
+      return false;
+    }
+    if (!nodeTypes.value.some(item => item.node_class === source.node_class)) {
+      toast.error("当前系统内置 Agent 不支持复制为企业 Agent。");
       return false;
     }
 
@@ -765,6 +794,7 @@ export function useAgentManager() {
   return {
     agents: readonly(agents),
     selectedAgent: readonly(selectedAgent),
+    nodeTypes: readonly(nodeTypes),
     selectedUseTools: readonly(selectedUseTools),
     mcpServers: readonly(mcpServers),
     mcpToolsByServer: readonly(mcpToolsByServer),
@@ -777,6 +807,8 @@ export function useAgentManager() {
     detailLoading: readonly(detailLoading),
     saving: readonly(saving),
     deleting: readonly(deleting),
+    nodeTypesLoading: readonly(nodeTypesLoading),
+    nodeTypesError: readonly(nodeTypesError),
     toolsLoading: readonly(toolsLoading),
     mcpCatalogLoading: readonly(mcpCatalogLoading),
     mcpCatalogError: readonly(mcpCatalogError),
@@ -788,6 +820,7 @@ export function useAgentManager() {
     selectedAgentId,
     selectedAgentName,
     selectedIsBuiltin,
+    selectedCanCloneBuiltin,
     toolCategoryCount,
     toolCount,
     selectedUseToolCount,
@@ -803,6 +836,7 @@ export function useAgentManager() {
     selectedMcpToolCount,
     canSubmitForm,
     loadAgents,
+    loadNodeTypes,
     loadToolCatalog,
     loadMcpCatalog,
     loadResourceCatalogs,

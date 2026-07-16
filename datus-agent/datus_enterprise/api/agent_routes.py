@@ -15,6 +15,7 @@ from datus.api.models.base_models import Result
 from datus.api.services.agent_service import VALID_TOOL_METHODS, AgentService
 from datus_enterprise.agent_registry import (
     ADMIN_AGENT_PERMISSION,
+    ENTERPRISE_AGENT_NODE_CAPABILITIES,
     ENTERPRISE_AGENT_NODE_CLASSES,
     agent_audit_summary,
     builtin_agent_prompt_template,
@@ -106,6 +107,14 @@ class EnterpriseAgentDetail(EnterpriseAgentSummary):
     scoped_context: dict[str, Any] = Field(default_factory=dict)
     rules: list[str] = Field(default_factory=list)
     max_turns: int = 30
+
+
+class EnterpriseAgentNodeType(BaseModel):
+    """Supported enterprise Agent node type metadata."""
+
+    node_class: str
+    label: str
+    description: str
 
 
 class AgentPreferenceSummary(BaseModel):
@@ -277,6 +286,27 @@ async def get_admin_agent_tool_reference(
             f"Unknown node_class '{node_class}'. Must be one of: {', '.join(sorted(ENTERPRISE_AGENT_NODE_CLASSES))}",
         )
     return AgentService.get_use_tools(node_class)
+
+
+@router.get(
+    "/admin/agents/node-types",
+    response_model=Result[list[EnterpriseAgentNodeType]],
+    summary="List Supported Custom Agent Node Types",
+)
+async def list_admin_agent_node_types(ctx: AdminAgentsCtx) -> Result[list[EnterpriseAgentNodeType]]:
+    """Return node classes that enterprise administrators may use for custom Agents."""
+
+    return Result(
+        success=True,
+        data=[
+            EnterpriseAgentNodeType(
+                node_class=capability.node_class,
+                label=capability.label,
+                description=capability.description,
+            )
+            for capability in ENTERPRISE_AGENT_NODE_CAPABILITIES
+        ],
+    )
 
 
 @router.get("/admin/agents", response_model=Result[list[EnterpriseAgentSummary]], summary="List Admin Agents")

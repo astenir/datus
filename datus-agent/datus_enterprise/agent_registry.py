@@ -6,14 +6,11 @@ import re
 from fnmatch import fnmatchcase
 from typing import Any
 
+from datus.agent.node_capabilities import enterprise_agent_node_capabilities, get_agent_node_capability
 from datus.api.auth.context import AppContext
 from datus.api.constants import BUILTIN_SUBAGENTS
 from datus.api.enterprise.models import ResourceRef
-from datus.api.services.agent_service import (
-    SUBAGENT_TOOL_REFERENCE,
-    _validate_tools,
-    _validate_tools_for_agent_type,
-)
+from datus.api.services.agent_service import _validate_tools, _validate_tools_for_agent_type
 from datus.prompts.prompt_manager import PromptManager
 from datus.tools.func_tool.sub_agent_task_tool import BUILTIN_SUBAGENT_DESCRIPTIONS
 
@@ -23,21 +20,8 @@ AGENT_VISIBILITIES = {"private", "role", "enterprise"}
 ADMIN_AGENT_PERMISSION = "module.admin.agents"
 DEFAULT_CHAT_AGENT_ID = "chat"
 ENTERPRISE_BUILTIN_AGENT_IDS = set(BUILTIN_SUBAGENTS) | {DEFAULT_CHAT_AGENT_ID}
-ENTERPRISE_AGENT_NODE_CLASSES = set(SUBAGENT_TOOL_REFERENCE)
-
-_NODE_CLASS_MODULE_PERMISSIONS = {
-    "gen_sql": "module.sql_executor",
-    "gen_report": "module.report.query",
-    "gen_visual_report": "module.report.query",
-    "ask_report": "module.report.query",
-    "gen_dashboard": "module.dashboard.query",
-    "gen_visual_dashboard": "module.dashboard.query",
-    "ask_dashboard": "module.dashboard.query",
-}
-
-_BUILTIN_PROMPT_TEMPLATE_NAMES = {
-    "gen_skill": "skill_creator_system",
-}
+ENTERPRISE_AGENT_NODE_CAPABILITIES = enterprise_agent_node_capabilities()
+ENTERPRISE_AGENT_NODE_CLASSES = {capability.node_class for capability in ENTERPRISE_AGENT_NODE_CAPABILITIES}
 
 
 def validate_agent_id(agent_id: str) -> str | None:
@@ -178,7 +162,8 @@ def builtin_agent_summary(agent_id: str) -> dict[str, Any]:
 def builtin_agent_prompt_template(agent_id: str) -> dict[str, str | None]:
     """Return read-only prompt template metadata and source for one built-in agent."""
 
-    template_name = _BUILTIN_PROMPT_TEMPLATE_NAMES.get(agent_id, f"{agent_id}_system")
+    capability = get_agent_node_capability(agent_id)
+    template_name = capability.prompt_template if capability and capability.prompt_template else f"{agent_id}_system"
     prompt_manager = PromptManager()
     try:
         version = prompt_manager.get_latest_version(template_name)
@@ -207,12 +192,14 @@ def can_use_agent(ctx: AppContext, record: dict[str, Any]) -> bool:
 
 
 def can_use_node_class(ctx: AppContext, node_class: str) -> bool:
-    permission = _NODE_CLASS_MODULE_PERMISSIONS.get(node_class)
+    capability = get_agent_node_capability(node_class)
+    permission = capability.module_permission if capability else None
     return permission is None or has_permission(ctx, permission)
 
 
 def dispatch_permission_for_record(record: dict[str, Any]) -> str | None:
-    return _NODE_CLASS_MODULE_PERMISSIONS.get(str(record.get("node_class") or ""))
+    capability = get_agent_node_capability(str(record.get("node_class") or ""))
+    return capability.module_permission if capability else None
 
 
 def has_permission(ctx: AppContext, permission: str) -> bool:

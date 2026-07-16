@@ -2,6 +2,7 @@ import { apiResult, jsonBody } from "./helpers";
 import type {
   AgentDetail,
   AgentInfo,
+  AgentNodeType,
   AgentToolsData,
   AgentUseToolsData,
   CreateAgentInput,
@@ -15,6 +16,10 @@ export const agentApi = {
 
   list(baseUrl: string): Promise<AgentInfo[] | null> {
     return apiResult(baseUrl, "/api/v1/admin/agents");
+  },
+
+  nodeTypes(baseUrl: string): Promise<AgentNodeType[] | null> {
+    return apiResult(baseUrl, "/api/v1/admin/agents/node-types");
   },
 
   get(baseUrl: string, agentId: string): Promise<AgentDetail | null> {
