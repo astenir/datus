@@ -3,18 +3,13 @@ import { computed, onMounted, shallowRef } from "vue"
 import {
   BotIcon,
   BracesIcon,
-  CheckCircle2Icon,
-  ListChecksIcon,
   LoaderCircleIcon,
-  LockIcon,
   PencilIcon,
   PlusIcon,
   RefreshCwIcon,
-  SaveIcon,
   StarIcon,
   Trash2Icon,
   WrenchIcon,
-  XIcon,
 } from "@lucide/vue"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -28,16 +23,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Field, FieldDescription, FieldGroup, FieldLabel } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Table,
@@ -48,10 +33,9 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Textarea } from "@/components/ui/textarea"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { useAgentManager } from "@/composables/useAgentManager"
-import AgentMultiOptionPicker from "@/features/agent/AgentMultiOptionPicker.vue"
+import AgentFormDialog from "@/features/agent/AgentFormDialog.vue"
 import {
   filterAgentsBySource,
   type AgentSourceFilter,
@@ -75,10 +59,8 @@ const agentStatusOptions = [
 
 const deleteTarget = shallowRef<AgentRow | null>(null)
 const formDialogOpen = shallowRef(false)
-const customSkillInput = shallowRef("")
 const agentSourceFilter = shallowRef<AgentSourceFilter>("all")
 
-const selectedIsReadonly = computed(() => manager.selectedIsBuiltin.value)
 const visibleAgents = computed(() =>
   filterAgentsBySource(manager.agents.value, agentSourceFilter.value)
 )
@@ -96,55 +78,11 @@ const emptyAgentListMessage = computed(() => {
 const toolCatalogEntries = computed(() => manager.toolCatalogEntries())
 const useToolTypeEntries = computed(() => manager.useToolTypeEntries())
 const defaultUseTools = computed(() => manager.selectedUseTools.value?.default_tools ?? [])
-const mcpServerOptions = computed(() => manager.mcpServerOptions.value)
-const selectedMcpList = computed(() =>
-  manager.form.value.mcpText
-    .split(/[\n,]/)
-    .map((item) => item.trim())
-    .filter(Boolean)
-)
 const deleteDialogOpen = computed({
   get: () => deleteTarget.value !== null,
   set: (value: boolean) => {
     if (!value) deleteTarget.value = null
   },
-})
-const formModeLabel = computed(() => {
-  if (selectedIsReadonly.value) return "查看"
-  return manager.formMode.value === "edit" ? "编辑" : "新建"
-})
-const saveLabel = computed(() => {
-  if (selectedIsReadonly.value) return "只读 Agent"
-  return manager.formMode.value === "edit" ? "保存 Agent" : "创建 Agent"
-})
-const formDialogDescription = computed(() => {
-  if (selectedIsReadonly.value) {
-    return "系统内置 Agent 使用内置模板，只能查看，不能在企业 Agent 管理中修改。"
-  }
-  return manager.formMode.value === "edit"
-    ? "编辑当前 Agent 的节点类型、工具、约束和作用域，保存后会同步到企业 Agent 接口。"
-    : "创建新的可复用 Agent；列表字段支持英文逗号或换行分隔。"
-})
-const selectedAclText = computed(() => formatAcl(manager.selectedAgent.value?.acl))
-const selectedScopedContextText = computed(() => formatJson(manager.selectedAgent.value?.scoped_context))
-const selectedDetailRows = computed(() => {
-  const agent = manager.selectedAgent.value
-  if (!agent) return []
-
-  return [
-    ["Agent ID", agent.agent_id],
-    ["来源", sourceLabel(agent.source)],
-    ["所有者", agent.owner_user_id],
-    ["数据源", agent.datasource_id],
-    ["Artifact", agent.artifact_slug],
-    ["创建时间", formatDate(agent.created_at) || null],
-    ["更新时间", formatDate(agent.updated_at) || null],
-    ["模板", agent.prompt_template_name],
-    ["模板版本", agent.prompt_version],
-    ["语言", agent.prompt_language],
-    ["MCP", listSummary(agent.mcp)],
-    ["Skills", listSummary(agent.skills)],
-  ] satisfies Array<[string, string | null | undefined]>
 })
 
 function systemPromptSummary(agent: AgentRow) {
@@ -183,12 +121,6 @@ async function setDefaultAgent(agent: AgentRow) {
   await props.workspace.setDefaultAgent(agent.agent_id === "chat" ? "" : agent.agent_id)
 }
 
-function sourceLabel(source: string | null | undefined) {
-  if (source === "builtin") return "系统内置"
-  if (source === "enterprise") return "企业自定义"
-  return source?.trim() || "-"
-}
-
 function agentStatusToneClass(status: string | null | undefined) {
   switch (status?.trim().toLowerCase() || "draft") {
     case "published":
@@ -209,29 +141,6 @@ function agentStatusLabel(status: string | null | undefined) {
   return agentStatusOptions.find(option => option.value === normalizedStatus)?.label ?? normalizedStatus
 }
 
-function listSummary(items: readonly string[] | null | undefined) {
-  return items?.length ? items.join(", ") : "-"
-}
-
-function formatAcl(
-  acl: {
-    visibility?: string | null
-    allowed_roles?: readonly string[]
-    allowed_user_ids?: readonly string[]
-  } | null | undefined,
-) {
-  if (!acl) return "-"
-
-  const roles = listSummary(acl.allowed_roles)
-  const users = listSummary(acl.allowed_user_ids)
-  return `${acl.visibility || "private"} / roles: ${roles} / users: ${users}`
-}
-
-function formatJson(value: Record<string, unknown> | null | undefined) {
-  if (!value || Object.keys(value).length === 0) return "-"
-  return JSON.stringify(value, null, 2)
-}
-
 async function selectAgent(agent: AgentRow) {
   await manager.selectAgent(agent.agent_id)
   formDialogOpen.value = true
@@ -242,17 +151,6 @@ function startCreate() {
   formDialogOpen.value = true
 }
 
-function startCreateFromBuiltin() {
-  manager.startCreateFromSelectedBuiltin()
-}
-
-async function submitForm() {
-  const saved = await manager.saveForm()
-  if (saved) {
-    formDialogOpen.value = false
-  }
-}
-
 async function refreshAll() {
   await Promise.all([
     manager.loadAgents(),
@@ -261,28 +159,6 @@ async function refreshAll() {
     manager.loadMcpCatalog(),
     manager.loadResourceCatalogs(),
   ])
-}
-
-function clearDatasource() {
-  manager.form.value.datasourceId = ""
-}
-
-function clearArtifact() {
-  manager.form.value.artifactSlug = ""
-}
-
-function changeNodeClass(value: unknown) {
-  if (typeof value !== "string") return
-  manager.form.value.nodeClass = value
-  void manager.loadUseToolsForNodeClass(value)
-}
-
-function addCustomSkill() {
-  const value = customSkillInput.value.trim()
-  if (!value) return
-
-  manager.addListFieldValue("skillsText", value)
-  customSkillInput.value = ""
 }
 
 async function confirmDelete() {
@@ -601,475 +477,10 @@ onMounted(() => {
 
     </div>
 
-    <Dialog v-model:open="formDialogOpen">
-      <DialogContent class="max-h-[calc(100vh-2rem)] grid-rows-[auto_minmax(0,1fr)] sm:max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>{{ formModeLabel }} Agent</DialogTitle>
-          <DialogDescription>{{ formDialogDescription }}</DialogDescription>
-        </DialogHeader>
-
-        <form
-          class="flex min-h-0 flex-col gap-4"
-          @submit.prevent="submitForm"
-        >
-          <ScrollArea class="min-h-0 flex-1">
-            <FieldGroup class="gap-4 px-1 py-1 pr-4">
-              <Alert
-                v-if="selectedIsReadonly"
-                variant="default"
-              >
-                <LockIcon />
-                <AlertTitle>系统内置 Agent</AlertTitle>
-                <AlertDescription>
-                  <div class="flex flex-wrap items-center justify-between gap-2">
-                    <span>当前详情来自内置模板，保存和删除操作由后端拒绝。</span>
-                    <Button
-                      v-if="manager.selectedCanCloneBuiltin.value"
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      @click="startCreateFromBuiltin"
-                    >
-                      <PlusIcon data-icon="inline-start" />
-                      复制为企业 Agent
-                    </Button>
-                  </div>
-                </AlertDescription>
-              </Alert>
-
-              <div
-                v-if="manager.selectedAgent.value"
-                class="grid gap-3 rounded-lg border bg-muted/20 p-3 md:grid-cols-2"
-              >
-                <div
-                  v-for="[label, value] in selectedDetailRows"
-                  :key="label"
-                  class="min-w-0"
-                >
-                  <div class="text-xs font-medium text-muted-foreground">{{ label }}</div>
-                  <div class="mt-1 whitespace-pre-wrap break-words text-sm leading-6">{{ value || "-" }}</div>
-                </div>
-                <div class="min-w-0 md:col-span-2">
-                  <div class="text-xs font-medium text-muted-foreground">ACL</div>
-                  <div class="mt-1 whitespace-pre-wrap break-words text-sm leading-6">{{ selectedAclText }}</div>
-                </div>
-                <div class="min-w-0 md:col-span-2">
-                  <div class="text-xs font-medium text-muted-foreground">Scoped Context</div>
-                  <pre class="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded-md bg-background p-2 text-xs leading-5">{{ selectedScopedContextText }}</pre>
-                </div>
-              </div>
-
-              <div class="grid gap-4 md:grid-cols-2">
-                <Field>
-                  <FieldLabel for="agent-name">名称</FieldLabel>
-                  <Input
-                    id="agent-name"
-                    v-model="manager.form.value.name"
-                    :readonly="selectedIsReadonly"
-                    placeholder="fund_research"
-                  />
-                </Field>
-
-                <Field>
-                  <FieldLabel for="agent-type">节点类型</FieldLabel>
-                  <Select
-                    v-model="manager.form.value.nodeClass"
-                    :disabled="selectedIsReadonly || manager.nodeTypesLoading.value"
-                    @update:model-value="changeNodeClass"
-                  >
-                    <SelectTrigger id="agent-type">
-                      <SelectValue placeholder="选择节点类型" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem
-                          v-for="option in manager.nodeClassOptions.value"
-                          :key="option.value"
-                          :value="option.value"
-                        >
-                          {{ option.label }}
-                        </SelectItem>
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                  <FieldDescription>
-                    {{ manager.nodeTypesError.value || manager.nodeClassOptions.value.find(option => option.value === manager.form.value.nodeClass)?.description || manager.form.value.nodeClass }}
-                  </FieldDescription>
-                </Field>
-              </div>
-
-              <div class="grid gap-4 md:grid-cols-2">
-                <Field>
-                  <FieldLabel for="agent-status">状态</FieldLabel>
-                  <Select
-                    v-model="manager.form.value.status"
-                    :disabled="selectedIsReadonly"
-                  >
-                    <SelectTrigger id="agent-status">
-                      <SelectValue placeholder="选择状态" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem
-                          v-for="status in agentStatusOptions"
-                          :key="status.value"
-                          :value="status.value"
-                        >
-                          {{ status.label }}
-                        </SelectItem>
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </Field>
-
-                <Field>
-                  <FieldLabel for="agent-max-turns">最大轮次</FieldLabel>
-                  <Input
-                    id="agent-max-turns"
-                    v-model="manager.form.value.maxTurns"
-                    :readonly="selectedIsReadonly"
-                    inputmode="numeric"
-                    placeholder="8"
-                  />
-                </Field>
-              </div>
-
-              <Field>
-                <FieldLabel for="agent-description">描述</FieldLabel>
-                <Textarea
-                  id="agent-description"
-                  v-model="manager.form.value.description"
-                  class="min-h-16"
-                  :readonly="selectedIsReadonly"
-                  placeholder="这个 Agent 的职责范围"
-                />
-              </Field>
-
-              <div class="grid gap-4 md:grid-cols-2">
-                <Field>
-                  <FieldLabel for="agent-datasource">绑定数据源</FieldLabel>
-                  <div class="flex gap-2">
-                    <Select
-                      v-model="manager.form.value.datasourceId"
-                      :disabled="selectedIsReadonly || manager.resourceCatalogLoading.value"
-                    >
-                      <SelectTrigger id="agent-datasource">
-                        <SelectValue placeholder="选择数据源" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectItem
-                            v-for="option in manager.datasourceOptions.value"
-                            :key="option.value"
-                            :value="option.value"
-                          >
-                            {{ option.label }}
-                          </SelectItem>
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      :disabled="selectedIsReadonly || !manager.form.value.datasourceId"
-                      aria-label="清空绑定数据源"
-                      @click="clearDatasource"
-                    >
-                      <XIcon data-icon="inline-start" />
-                    </Button>
-                  </div>
-                  <FieldDescription>
-                    从管理接口返回的数据源中选择；保存为空表示不绑定固定数据源。
-                  </FieldDescription>
-                </Field>
-
-                <Field>
-                  <FieldLabel for="agent-artifact">绑定产物</FieldLabel>
-                  <div class="flex gap-2">
-                    <Select
-                      v-model="manager.form.value.artifactSlug"
-                      :disabled="selectedIsReadonly || manager.resourceCatalogLoading.value"
-                    >
-                      <SelectTrigger id="agent-artifact">
-                        <SelectValue placeholder="选择报表或仪表盘" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectItem
-                            v-for="option in manager.artifactOptions.value"
-                            :key="option.value"
-                            :value="option.value"
-                          >
-                            {{ option.label }}
-                          </SelectItem>
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      :disabled="selectedIsReadonly || !manager.form.value.artifactSlug"
-                      aria-label="清空绑定产物"
-                      @click="clearArtifact"
-                    >
-                      <XIcon data-icon="inline-start" />
-                    </Button>
-                  </div>
-                  <FieldDescription>
-                    ask_report / ask_dashboard 通常需要绑定已有报表或仪表盘。
-                  </FieldDescription>
-                </Field>
-              </div>
-
-              <Alert
-                v-if="manager.resourceCatalogError.value"
-                variant="destructive"
-              >
-                <BotIcon />
-                <AlertTitle>资源选项读取失败</AlertTitle>
-                <AlertDescription>{{ manager.resourceCatalogError.value }}</AlertDescription>
-              </Alert>
-
-              <Field>
-                <FieldLabel for="agent-prompt">系统提示词</FieldLabel>
-                <Textarea
-                  id="agent-prompt"
-                  v-model="manager.form.value.promptTemplate"
-                  class="min-h-32 font-mono text-xs leading-6"
-                  :readonly="selectedIsReadonly"
-                  spellcheck="false"
-                />
-              </Field>
-
-              <div class="grid gap-4 md:grid-cols-2">
-                <Field>
-                  <div class="flex items-center justify-between gap-2">
-                    <FieldLabel>工具</FieldLabel>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      :disabled="selectedIsReadonly || defaultUseTools.length === 0"
-                      @click="manager.applyDefaultTools"
-                    >
-                      <ListChecksIcon data-icon="inline-start" />
-                      默认工具
-                    </Button>
-                  </div>
-                  <AgentMultiOptionPicker
-                    :options="manager.toolOptions.value"
-                    :selected-values="manager.selectedTools.value"
-                    :disabled="selectedIsReadonly || manager.toolsLoading.value"
-                    placeholder="选择工具"
-                    search-placeholder="搜索工具或分类"
-                    empty-text="未选择工具；保存时后端会按节点类型使用默认行为。"
-                    @toggle="manager.toggleListFieldValue('toolsText', $event)"
-                  />
-                  <FieldDescription>
-                    工具来自当前节点类型的可用工具参考；已存在但当前目录未返回的值会保留为“当前”选项。
-                  </FieldDescription>
-                </Field>
-                <Field>
-                  <FieldLabel for="agent-rules">规则</FieldLabel>
-                  <Textarea
-                    id="agent-rules"
-                    v-model="manager.form.value.rulesText"
-                    class="min-h-24 font-mono text-xs leading-6"
-                    :readonly="selectedIsReadonly"
-                    placeholder="仅查询授权数据源"
-                  />
-                </Field>
-              </div>
-
-              <div class="grid gap-4 md:grid-cols-2">
-                <Field class="md:col-span-2">
-                  <FieldLabel>MCP</FieldLabel>
-                  <div class="rounded-lg border bg-muted/20 p-3">
-                    <div class="mb-3 flex flex-wrap items-center gap-2">
-                      <Badge variant="outline">{{ mcpServerOptions.length }} 个 Server</Badge>
-                      <Badge variant="secondary">{{ manager.selectedMcpCount.value }} 已选</Badge>
-                      <Badge variant="outline">{{ manager.selectedMcpToolCount.value }} 个工具</Badge>
-                      <Badge
-                        v-if="manager.mcpCatalogLoading.value"
-                        variant="outline"
-                      >
-                        <LoaderCircleIcon
-                          class="animate-spin"
-                          data-icon="inline-start"
-                        />
-                        加载中
-                      </Badge>
-                    </div>
-
-                    <Alert
-                      v-if="manager.mcpCatalogError.value"
-                      variant="destructive"
-                    >
-                      <BotIcon />
-                      <AlertTitle>读取 MCP 失败</AlertTitle>
-                      <AlertDescription>{{ manager.mcpCatalogError.value }}</AlertDescription>
-                    </Alert>
-
-                    <div
-                      v-else-if="mcpServerOptions.length === 0 && !manager.mcpCatalogLoading.value"
-                      class="rounded-md border bg-background p-3 text-sm text-muted-foreground"
-                    >
-                      暂无 MCP Server。
-                    </div>
-
-                    <div
-                      v-else
-                      class="grid gap-2 md:grid-cols-2"
-                    >
-                      <Button
-                        v-for="server in mcpServerOptions"
-                        :key="server.name"
-                        type="button"
-                        :variant="server.missing ? 'destructive' : server.selected ? 'secondary' : 'outline'"
-                        class="h-auto min-h-16 justify-start px-3 py-2 text-left"
-                        :aria-pressed="server.selected"
-                        :disabled="selectedIsReadonly"
-                        @click="manager.toggleMcpServer(server.name)"
-                      >
-                        <span class="flex min-w-0 flex-1 flex-col gap-1.5">
-                          <span class="flex min-w-0 items-center gap-2">
-                            <CheckCircle2Icon
-                              v-if="server.selected"
-                              class="shrink-0"
-                              data-icon="inline-start"
-                            />
-                            <span class="truncate text-sm font-medium">{{ server.name }}</span>
-                            <Badge
-                              :variant="server.missing ? 'destructive' : 'outline'"
-                              class="shrink-0"
-                            >
-                              {{ server.missing ? "已失效" : server.type }}
-                            </Badge>
-                          </span>
-                          <span class="truncate text-xs text-muted-foreground">{{ server.target }}</span>
-                          <span class="flex flex-wrap gap-1">
-                            <Badge
-                              v-for="tool in server.tools.slice(0, 4)"
-                              :key="`${server.name}:${tool}`"
-                              variant="secondary"
-                            >
-                              {{ tool }}
-                            </Badge>
-                            <Badge
-                              v-if="server.tools.length > 4"
-                              variant="outline"
-                            >
-                              +{{ server.tools.length - 4 }}
-                            </Badge>
-                          </span>
-                        </span>
-                      </Button>
-                    </div>
-
-                    <div
-                      v-if="selectedMcpList.length > 0"
-                      class="mt-3 flex flex-wrap gap-1.5"
-                    >
-                      <Badge
-                        v-for="serverName in selectedMcpList"
-                        :key="serverName"
-                        variant="outline"
-                      >
-                        {{ serverName }}
-                      </Badge>
-                    </div>
-                    <FieldDescription>
-                      标记为“已失效”的 Server 已不在 MCP 配置中；点击该项可从 Agent 中解除残留绑定。
-                    </FieldDescription>
-                  </div>
-                </Field>
-                <Field>
-                  <FieldLabel>Skills</FieldLabel>
-                  <AgentMultiOptionPicker
-                    :options="manager.skillOptions.value"
-                    :selected-values="manager.selectedSkills.value"
-                    :disabled="selectedIsReadonly || manager.skillOptions.value.length === 0"
-                    placeholder="选择 Skill"
-                    search-placeholder="搜索 Skill"
-                    empty-text="未选择 Skill。"
-                    @toggle="manager.toggleListFieldValue('skillsText', $event)"
-                  />
-                  <div class="flex gap-2">
-                    <Input
-                      v-model="customSkillInput"
-                      :readonly="selectedIsReadonly"
-                      placeholder="添加自定义 Skill"
-                      @keydown.enter.prevent="addCustomSkill"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      :disabled="selectedIsReadonly || !customSkillInput.trim()"
-                      @click="addCustomSkill"
-                    >
-                      <PlusIcon data-icon="inline-start" />
-                      添加
-                    </Button>
-                  </div>
-                  <FieldDescription>
-                    当前后端未提供全量 Skill 目录，页面会优先复用当前 Agent 的 Skill，并支持按标签添加项目内已有 Skill。
-                  </FieldDescription>
-                </Field>
-              </div>
-
-              <div class="grid gap-4 md:grid-cols-2">
-                <Field>
-                  <FieldLabel for="agent-catalogs">数据目录</FieldLabel>
-                  <Input
-                    id="agent-catalogs"
-                    v-model="manager.form.value.catalogsText"
-                    :readonly="selectedIsReadonly"
-                    placeholder="fund, market"
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel for="agent-subjects">主题域</FieldLabel>
-                  <Input
-                    id="agent-subjects"
-                    v-model="manager.form.value.subjectsText"
-                    :readonly="selectedIsReadonly"
-                    placeholder="portfolio, risk"
-                  />
-                </Field>
-              </div>
-            </FieldGroup>
-          </ScrollArea>
-
-          <DialogFooter class="shrink-0">
-            <Button
-              variant="outline"
-              type="button"
-              :disabled="manager.saving.value"
-              @click="formDialogOpen = false"
-            >
-              取消
-            </Button>
-            <Button
-              type="submit"
-              :variant="selectedIsReadonly ? 'secondary' : 'default'"
-              :disabled="!manager.canSubmitForm.value"
-            >
-              <LockIcon
-                v-if="selectedIsReadonly"
-                data-icon="inline-start"
-              />
-              <SaveIcon
-                v-else
-                data-icon="inline-start"
-              />
-              {{ saveLabel }}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
+    <AgentFormDialog
+      v-model:open="formDialogOpen"
+      :manager="manager"
+    />
 
     <Dialog v-model:open="deleteDialogOpen">
       <DialogContent>

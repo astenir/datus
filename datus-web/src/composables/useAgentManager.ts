@@ -99,13 +99,14 @@ function uniqueStrings(values: readonly string[]): string[] {
 function withSelectedFallbackOptions(
   options: readonly AgentSelectOption[],
   selectedValues: readonly string[],
+  fallbackLabel: (value: string) => string = value => `当前：${value}`,
 ): AgentSelectOption[] {
   const optionValues = new Set(options.map(option => option.value));
   const fallbackOptions = uniqueStrings(selectedValues)
     .filter(value => !optionValues.has(value))
     .map(value => ({
       value,
-      label: `当前：${value}`,
+      label: fallbackLabel(value),
     }));
   return [...fallbackOptions, ...options];
 }
@@ -377,10 +378,16 @@ export function useAgentManager() {
     const baseOptions = toolOptionsFromCatalog(
       Object.keys(typeCatalog).length ? typeCatalog : toolCatalog.value?.tools ?? {},
     );
-    return withSelectedFallbackOptions(baseOptions, [
-      ...selectedTools.value,
-      ...(selectedUseTools.value?.default_tools ?? []),
-    ]);
+    const optionsWithDefaults = withSelectedFallbackOptions(
+      baseOptions,
+      selectedUseTools.value?.default_tools ?? [],
+      value => `默认：${value}`,
+    );
+    return withSelectedFallbackOptions(
+      optionsWithDefaults,
+      selectedTools.value,
+      value => `当前配置：${value}`,
+    );
   });
   const skillOptions = computed(() => skillOptionsFromAgents(agents.value, selectedAgent.value, form.value));
   const canListMcpServers = computed(() => permission.hasPermission("mcp.server.list"));
@@ -856,6 +863,8 @@ export function useAgentManager() {
     useToolTypeEntries,
   };
 }
+
+export type AgentManagerController = ReturnType<typeof useAgentManager>;
 
 export const agentManagerInternals = {
   createInputFromForm,

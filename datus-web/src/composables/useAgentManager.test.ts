@@ -210,6 +210,44 @@ describe("useAgentManager", () => {
     expect(manager.selectedUseToolCount.value).toBe(2);
   });
 
+  it("distinguishes default tool patterns from saved catalog fallbacks", async () => {
+    getAgent.mockResolvedValue({
+      agent_id: "analyst",
+      name: "analyst",
+      node_class: "gen_sql",
+      status: "draft",
+      source: "custom",
+      tools: ["db_tools.*", "legacy_tools.old_method", "db_tools.list_tables"],
+      mcp: [],
+      skills: [],
+      scoped_context: {},
+      rules: [],
+      max_turns: 30,
+    });
+    agentUseTools.mockResolvedValue({
+      default_tools: ["db_tools.*"],
+      tool_types: {
+        db_tools: { tools: ["list_tables"] },
+      },
+    });
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+
+    await manager.selectAgent("analyst");
+
+    expect(manager.toolOptions.value).toEqual([
+      { value: "legacy_tools.old_method", label: "当前配置：legacy_tools.old_method" },
+      { value: "db_tools.*", label: "默认：db_tools.*" },
+      { value: "db_tools.list_tables", label: "list_tables", description: "db_tools" },
+    ]);
+    expect(manager.toolOptions.value.filter(option => option.value === "db_tools.*")).toHaveLength(1);
+    expect(manager.selectedTools.value).toEqual([
+      "db_tools.*",
+      "legacy_tools.old_method",
+      "db_tools.list_tables",
+    ]);
+  });
+
   it("hydrates builtin templates from the read-only detail payload", async () => {
     getAgent.mockResolvedValue({
       agent_id: "gen_sql",
