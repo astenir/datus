@@ -119,6 +119,13 @@ def test_table_and_semantic_routes_declare_request_datasource_and_table_scope_bo
         assert {DATASOURCE_PROJECTION, DATASOURCE_GRANT, TABLE_SCOPE} <= policy.data_boundaries
 
 
+def test_kb_bootstrap_declares_request_scoped_datasource_boundaries():
+    policy = ROUTE_SECURITY_MATRIX[route_key("POST", "/api/v1/kb/bootstrap")]
+
+    assert {DATASOURCE_PROJECTION, DATASOURCE_GRANT} <= policy.categories
+    assert {DATASOURCE_PROJECTION, DATASOURCE_GRANT} <= policy.data_boundaries
+
+
 def test_legacy_disabled_routes_are_audited_and_not_mixed_with_live_enterprise_policy():
     legacy_routes = {
         key: policy for key, policy in ROUTE_SECURITY_MATRIX.items() if LEGACY_DISABLED in policy.categories

@@ -547,9 +547,23 @@ _add_many(
     _policy(MODULE_RBAC, TOOL_PERMISSION, PLATFORM_STATUS_GATE, MUTATION_EXECUTION, module_permission="module.mcp"),
 )
 
+_add(
+    "POST",
+    "/api/v1/kb/bootstrap",
+    _policy(
+        MODULE_RBAC,
+        DATASOURCE_PROJECTION,
+        DATASOURCE_GRANT,
+        PLATFORM_STATUS_GATE,
+        MUTATION_EXECUTION,
+        module_permission="module.kb",
+        data_boundaries={DATASOURCE_PROJECTION, DATASOURCE_GRANT},
+        note="Knowledge bootstrap runs against the explicitly requested and authorized datasource config clone.",
+    ),
+)
 _add_many(
     "POST",
-    ["/api/v1/kb/bootstrap", "/api/v1/kb/bootstrap-docs", "/api/v1/kb/uploads"],
+    ["/api/v1/kb/bootstrap-docs", "/api/v1/kb/uploads"],
     _policy(MODULE_RBAC, PLATFORM_STATUS_GATE, MUTATION_EXECUTION, module_permission="module.kb"),
 )
 _add(

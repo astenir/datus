@@ -12,6 +12,10 @@ from datus.configuration.agent_config import DocumentConfig
 from datus.schemas.batch_events import BatchEvent, BatchStage
 
 
+def _bootstrap_input(**kwargs) -> BootstrapKbInput:
+    return BootstrapKbInput(datasource_id="test_datasource", **kwargs)
+
+
 class TestKbServiceInit:
     """Tests for KbService initialization."""
 
@@ -26,7 +30,7 @@ class TestKbServiceBuildArgs:
 
     def test_build_args_with_all_paths(self):
         """_build_args resolves all paths against project_root."""
-        request = BootstrapKbInput(
+        request = _bootstrap_input(
             components=["metadata"],
             strategy="check",
             success_story="data/stories",
@@ -44,7 +48,7 @@ class TestKbServiceBuildArgs:
 
     def test_build_args_with_empty_paths(self):
         """_build_args handles None/empty paths gracefully."""
-        request = BootstrapKbInput(
+        request = _bootstrap_input(
             components=["metadata"],
             strategy="check",
         )
@@ -54,7 +58,7 @@ class TestKbServiceBuildArgs:
 
     def test_build_args_sets_defaults(self):
         """_build_args sets default values for common fields."""
-        request = BootstrapKbInput(
+        request = _bootstrap_input(
             components=["metadata"],
             strategy="overwrite",
         )
@@ -190,7 +194,7 @@ class TestKbServiceBootstrapStream:
 
         svc = KbService(agent_config=real_agent_config)
         cancel_event = asyncio.Event()
-        request = BootstrapKbInput(components=["metadata"], strategy="check")
+        request = _bootstrap_input(components=["metadata"], strategy="check")
 
         events = []
         async for event in svc.bootstrap_stream(request, "test-stream", cancel_event, str(real_agent_config.home)):
@@ -207,7 +211,7 @@ class TestKbServiceBootstrapStream:
 
         svc = KbService(agent_config=real_agent_config)
         cancel_event = asyncio.Event()
-        request = BootstrapKbInput(components=["metadata", "reference_sql"], strategy="check")
+        request = _bootstrap_input(components=["metadata", "reference_sql"], strategy="check")
 
         events = []
         async for event in svc.bootstrap_stream(request, "multi-stream", cancel_event, str(real_agent_config.home)):
@@ -224,7 +228,7 @@ class TestKbServiceBootstrapStream:
 
         svc = KbService(agent_config=real_agent_config)
         cancel_event = asyncio.Event()
-        request = BootstrapKbInput(components=["semantic_model"], strategy="check")
+        request = _bootstrap_input(components=["semantic_model"], strategy="check")
 
         events = []
         async for event in svc.bootstrap_stream(request, "sm-stream", cancel_event, str(real_agent_config.home)):
@@ -240,7 +244,7 @@ class TestKbServiceBootstrapStream:
 
         svc = KbService(agent_config=real_agent_config)
         cancel_event = asyncio.Event()
-        request = BootstrapKbInput(components=["reference_sql"], strategy="check")
+        request = _bootstrap_input(components=["reference_sql"], strategy="check")
 
         events = []
         async for event in svc.bootstrap_stream(request, "rs-stream", cancel_event, str(real_agent_config.home)):
@@ -254,7 +258,7 @@ class TestKbServiceBootstrapStream:
 
         svc = KbService(agent_config=real_agent_config)
         cancel_event = asyncio.Event()
-        request = BootstrapKbInput(
+        request = _bootstrap_input(
             components=["metadata", "semantic_model", "reference_sql"],
             strategy="check",
         )
@@ -275,7 +279,7 @@ class TestKbServiceBootstrapStream:
         cancel_event = asyncio.Event()
         cancel_event.set()  # Pre-cancel
 
-        request = BootstrapKbInput(components=["metadata", "reference_sql"], strategy="check")
+        request = _bootstrap_input(components=["metadata", "reference_sql"], strategy="check")
 
         events = []
         async for event in svc.bootstrap_stream(request, "cancel-stream", cancel_event, str(real_agent_config.home)):
@@ -295,9 +299,11 @@ class TestKbServiceBootstrapStream:
         svc = KbService(agent_config=real_agent_config)
         cancel_event = asyncio.Event()
         worker_can_finish = Event()
-        request = BootstrapKbInput(components=["metadata", "reference_sql"], strategy="check")
+        request = _bootstrap_input(components=["metadata", "reference_sql"], strategy="check")
 
-        def fake_run_component(request, component, queue, loop, cancel_event, project_root):  # noqa: ARG001
+        def fake_run_component(
+            request, component, queue, loop, cancel_event, project_root, config
+        ):  # noqa: ARG001
             loop.call_soon_threadsafe(
                 queue.put_nowait,
                 BatchEvent(
@@ -337,7 +343,7 @@ class TestKbServiceInitMetadata:
             pool_size=1,
             dir_path=real_agent_config.rag_storage_path(),
             args=KbService._build_args(
-                BootstrapKbInput(components=["metadata"], strategy="check"),
+                _bootstrap_input(components=["metadata"], strategy="check"),
                 str(real_agent_config.home),
             ),
         )
@@ -354,7 +360,7 @@ class TestKbServiceInitMetadata:
             pool_size=1,
             dir_path=real_agent_config.rag_storage_path(),
             args=KbService._build_args(
-                BootstrapKbInput(components=["metadata"], strategy="overwrite"),
+                _bootstrap_input(components=["metadata"], strategy="overwrite"),
                 str(real_agent_config.home),
             ),
         )
@@ -374,7 +380,7 @@ class TestKbServiceRunComponent:
         cancel_event = asyncio.Event()
 
         # Use valid components list but pass unknown component name to _run_component directly
-        request = BootstrapKbInput(components=["metadata"], strategy="check")
+        request = _bootstrap_input(components=["metadata"], strategy="check")
         result = svc._run_component(request, "unknown_comp", queue, loop, cancel_event, str(real_agent_config.home))
         assert result["status"] == "failed"
         assert "Unknown component" in result["message"]
@@ -389,7 +395,7 @@ class TestKbServiceRunComponent:
         queue = asyncio.Queue()
         cancel_event = asyncio.Event()
 
-        request = BootstrapKbInput(components=["semantic_model"], strategy="check")
+        request = _bootstrap_input(components=["semantic_model"], strategy="check")
         result = svc._run_component(request, "semantic_model", queue, loop, cancel_event, str(real_agent_config.home))
         # May succeed or fail depending on whether success_story dir exists
         assert isinstance(result, dict)
@@ -404,7 +410,7 @@ class TestKbServiceRunComponent:
         queue = asyncio.Queue()
         cancel_event = asyncio.Event()
 
-        request = BootstrapKbInput(components=["metrics"], strategy="check")
+        request = _bootstrap_input(components=["metrics"], strategy="check")
         try:
             result = svc._run_component(request, "metrics", queue, loop, cancel_event, str(real_agent_config.home))
             assert isinstance(result, dict)
@@ -421,7 +427,7 @@ class TestKbServiceRunComponent:
         queue = asyncio.Queue()
         cancel_event = asyncio.Event()
 
-        request = BootstrapKbInput(components=["reference_sql"], strategy="check")
+        request = _bootstrap_input(components=["reference_sql"], strategy="check")
         result = svc._run_component(request, "reference_sql", queue, loop, cancel_event, str(real_agent_config.home))
         assert isinstance(result, dict)
         loop.close()
@@ -435,7 +441,7 @@ class TestKbServiceRunComponent:
         queue = asyncio.Queue()
         cancel_event = asyncio.Event()
 
-        request = BootstrapKbInput(components=["metadata"], strategy="check")
+        request = _bootstrap_input(components=["metadata"], strategy="check")
         result = svc._run_component(request, "metadata", queue, loop, cancel_event, str(real_agent_config.home))
         assert result["status"] == "success"
         loop.close()
@@ -449,14 +455,14 @@ async def test_kb_bootstrap_acceptance_orchestrates_components_in_order(real_age
 
     svc = KbService(agent_config=real_agent_config)
     cancel_event = asyncio.Event()
-    request = BootstrapKbInput(
+    request = _bootstrap_input(
         components=["metadata", "reference_sql"],
         strategy="check",
         subject_tree=["Education", "Schools"],
     )
     calls = []
 
-    def fake_run_component(request, component, queue, loop, cancel_event, project_root):
+    def fake_run_component(request, component, queue, loop, cancel_event, project_root, config):
         calls.append((component, request.subject_tree, project_root))
         return {
             "status": "success",

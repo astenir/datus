@@ -14,6 +14,7 @@ metrics, and reference SQL.
 
 | Field                | Type     | Default        | Notes |
 |----------------------|----------|----------------|-------|
+| `datasource_id`      | string   | _(required)_   | Authorized datasource to use for this request; the server runs against a request-scoped config clone |
 | `components`         | string[] | _(required)_   | Components to bootstrap: `metadata`, `semantic_model`, `metrics`, `reference_sql` |
 | `strategy`           | string   | `incremental`  | `check` (inspect only), `overwrite` (rebuild), or `incremental` (append/update) |
 | `schema_linking_type`| string   | `full`         | Metadata only: `table`, `view`, `mv`, or `full` |
@@ -22,6 +23,9 @@ metrics, and reference SQL.
 | `success_story`      | string?  | `null`         | Project-root-relative path to success-story CSV |
 | `subject_tree`       | string[]?| `null`         | Predefined hierarchical categories |
 | `sql_dir`            | string?  | `null`         | Project-root-relative directory with `.sql` files |
+
+The endpoint rejects a missing, blank, unknown, or unauthorized `datasource_id`; it does not fall back to the server's
+global default datasource.
 
 **Response**: `text/event-stream`. See [SSE event format](#sse-event-format) below.
 

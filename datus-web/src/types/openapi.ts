@@ -2784,6 +2784,8 @@ export interface components {
 
         BootstrapKbInput: {
 
+            datasource_id: string;
+
             components: components["schemas"]["KbComponent"][];
 
             strategy: "overwrite" | "check" | "incremental";

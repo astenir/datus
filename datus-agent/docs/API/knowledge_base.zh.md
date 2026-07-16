@@ -12,6 +12,7 @@
 
 | 字段                  | 类型      | 默认值          | 说明 |
 |----------------------|----------|----------------|------|
+| `datasource_id`      | string   | _（必填）_       | 本次请求使用的已授权数据源；后端基于请求级配置副本执行 |
 | `components`         | string[] | _（必填）_       | 要构建的组件：`metadata`、`semantic_model`、`metrics`、`reference_sql` |
 | `strategy`           | string   | `incremental`  | `check`（仅检查）、`overwrite`（重建）、`incremental`（增量更新） |
 | `schema_linking_type`| string   | `full`         | metadata 专用：`table`、`view`、`mv`、`full` |
@@ -20,6 +21,8 @@
 | `success_story`      | string?  | `null`         | 项目根目录的相对路径，指向 success-story CSV |
 | `subject_tree`       | string[]?| `null`         | 预定义层级分类 |
 | `sql_dir`            | string?  | `null`         | 项目根目录的相对路径，指向 `.sql` 文件目录 |
+
+缺少、空白、不存在或未授权的 `datasource_id` 会被拒绝，接口不会回退到服务端全局默认数据源。
 
 **响应**：`text/event-stream`，参见下方 [SSE 事件格式](#sse-events)。
 

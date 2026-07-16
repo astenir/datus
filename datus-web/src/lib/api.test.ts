@@ -120,7 +120,11 @@ describe("api client", () => {
       purpose: "success_story_csv",
       files: [new File(["question,sql\nq,select 1"], "success.csv", { type: "text/csv" })],
     });
-    await kbApi.bootstrap("/datus-api", { components: ["metadata"], database_name: "fund" });
+    await kbApi.bootstrap("/datus-api", {
+      datasource_id: "ccks_fund",
+      components: ["metadata"],
+      database_name: "fund",
+    });
     await dashboardApi.html("/datus-api", "fund_overview");
 
     expect(dashboardApi.htmlUrl("/datus-api", "fund_overview")).toBe(

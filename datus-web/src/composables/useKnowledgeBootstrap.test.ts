@@ -99,13 +99,27 @@ describe("knowledgeBootstrapInternals", () => {
       catalog: "main",
       databaseName: "fund",
       subjectTreeText: "基金\n风控\n",
-    })).toEqual({
+    }, "ccks_fund")).toEqual({
+      datasource_id: "ccks_fund",
       components: ["metadata"],
       strategy: "incremental",
       schema_linking_type: "full",
       catalog: "main",
       database_name: "fund",
     });
+  });
+
+  it("rejects business KB bootstrap requests without an active datasource", async () => {
+    const { knowledgeBootstrapInternals } = await import("./useKnowledgeBootstrap");
+
+    expect(() => knowledgeBootstrapInternals.buildKbBootstrapInput({
+      component: "metadata",
+      strategy: "incremental",
+      schemaLinkingType: "full",
+      catalog: "",
+      databaseName: "",
+      subjectTreeText: "",
+    }, "   ")).toThrow("请选择数据源");
   });
 
   it("builds a metrics bootstrap request with only metrics-specific fields", async () => {
@@ -118,10 +132,11 @@ describe("knowledgeBootstrapInternals", () => {
       catalog: "ignored",
       databaseName: "ignored",
       subjectTreeText: "基金\n风控\n",
-    }, {
+    }, "ccks_fund", {
       successStory: makeUploadRecord("success_story_csv", "upload-success", "file-success"),
       referenceSql: null,
     })).toEqual({
+      datasource_id: "ccks_fund",
       components: ["metrics"],
       strategy: "overwrite",
       success_story_upload_id: "upload-success",
@@ -140,10 +155,11 @@ describe("knowledgeBootstrapInternals", () => {
       catalog: "ignored",
       databaseName: "ignored",
       subjectTreeText: "基金\n",
-    }, {
+    }, "ccks_fund", {
       successStory: null,
       referenceSql: makeUploadRecord("reference_sql", "upload-sql", "file-sql"),
     })).toEqual({
+      datasource_id: "ccks_fund",
       components: ["reference_sql"],
       strategy: "check",
       subject_tree: ["基金"],
@@ -243,7 +259,7 @@ describe("useKnowledgeBootstrap", () => {
 
   it("runs business KB bootstrap and captures stream state", async () => {
     const { useKnowledgeBootstrap } = await import("./useKnowledgeBootstrap");
-    const manager = useKnowledgeBootstrap();
+    const manager = useKnowledgeBootstrap({ currentDatasource: () => "ccks_fund" });
     manager.forms.value.kb.component = "reference_sql";
     manager.forms.value.kb.catalog = "main";
     manager.forms.value.kb.databaseName = "fund";
@@ -253,6 +269,7 @@ describe("useKnowledgeBootstrap", () => {
     await manager.startKbBootstrap();
 
     expect(bootstrap).toHaveBeenCalledWith("http://api.test", {
+      datasource_id: "ccks_fund",
       components: ["reference_sql"],
       strategy: "incremental",
       subject_tree: ["基金", "风控"],
@@ -266,7 +283,7 @@ describe("useKnowledgeBootstrap", () => {
 
   it("uploads selected success-story CSVs before bootstrap", async () => {
     const { useKnowledgeBootstrap } = await import("./useKnowledgeBootstrap");
-    const manager = useKnowledgeBootstrap();
+    const manager = useKnowledgeBootstrap({ currentDatasource: () => "ccks_fund" });
     const file = new File(["question,sql\nq,select 1"], "success.csv", { type: "text/csv" });
     manager.forms.value.kb.component = "semantic_model";
     manager.setUploadFiles("successStory", [file]);
@@ -276,9 +293,11 @@ describe("useKnowledgeBootstrap", () => {
     expect(upload).toHaveBeenCalledWith("http://api.test", {
       purpose: "success_story_csv",
       files: [file],
+      datasourceId: "ccks_fund",
       description: "success_story_csv",
     });
     expect(bootstrap).toHaveBeenCalledWith("http://api.test", {
+      datasource_id: "ccks_fund",
       components: ["semantic_model"],
       strategy: "incremental",
       success_story_upload_id: "upload-1",
@@ -301,6 +320,9 @@ describe("useKnowledgeBootstrap", () => {
       datasourceId: "ccks_fund",
       description: "success_story_csv",
     });
+    expect(bootstrap).toHaveBeenCalledWith("http://api.test", expect.objectContaining({
+      datasource_id: "ccks_fund",
+    }));
   });
 
   it("uploads selected reference SQL files before bootstrap", async () => {
@@ -319,7 +341,7 @@ describe("useKnowledgeBootstrap", () => {
       project_id: "project",
     });
     const { useKnowledgeBootstrap } = await import("./useKnowledgeBootstrap");
-    const manager = useKnowledgeBootstrap();
+    const manager = useKnowledgeBootstrap({ currentDatasource: () => "ccks_fund" });
     const file = new File(["select 1"], "daily.sql", { type: "text/plain" });
     manager.forms.value.kb.component = "reference_sql";
     manager.forms.value.kb.subjectTreeText = "基金";
@@ -330,9 +352,11 @@ describe("useKnowledgeBootstrap", () => {
     expect(upload).toHaveBeenCalledWith("http://api.test", {
       purpose: "reference_sql",
       files: [file],
+      datasourceId: "ccks_fund",
       description: "reference_sql",
     });
     expect(bootstrap).toHaveBeenCalledWith("http://api.test", {
+      datasource_id: "ccks_fund",
       components: ["reference_sql"],
       strategy: "incremental",
       reference_sql_upload_id: "upload-sql",
@@ -342,7 +366,7 @@ describe("useKnowledgeBootstrap", () => {
 
   it("does not run docs bootstrap without uploaded files", async () => {
     const { useKnowledgeBootstrap } = await import("./useKnowledgeBootstrap");
-    const manager = useKnowledgeBootstrap();
+    const manager = useKnowledgeBootstrap({ currentDatasource: () => "ccks_fund" });
     manager.forms.value.docs.platform = "datus";
 
     await manager.startDocsBootstrap();
@@ -367,7 +391,7 @@ describe("useKnowledgeBootstrap", () => {
       project_id: "project",
     });
     const { useKnowledgeBootstrap } = await import("./useKnowledgeBootstrap");
-    const manager = useKnowledgeBootstrap();
+    const manager = useKnowledgeBootstrap({ currentDatasource: () => "ccks_fund" });
     const file = new File(["# Guide"], "guide.md", { type: "text/markdown" });
     manager.forms.value.docs.platform = "datus";
     manager.setUploadFiles("docs", [file]);
@@ -378,6 +402,7 @@ describe("useKnowledgeBootstrap", () => {
       purpose: "platform_docs",
       files: [file],
       platform: "datus",
+      datasourceId: "ccks_fund",
       description: "platform_docs",
     });
     expect(bootstrapDocs).toHaveBeenCalledWith("http://api.test", expect.objectContaining({
@@ -398,7 +423,7 @@ describe("useKnowledgeBootstrap", () => {
       "",
     ].join("\n"));
     bootstrap.mockResolvedValue(source.stream);
-    const manager = useKnowledgeBootstrap();
+    const manager = useKnowledgeBootstrap({ currentDatasource: () => "ccks_fund" });
 
     const running = manager.startKbBootstrap();
     await waitForCondition(() => manager.activeStreamId.value === "stream-kb-1");

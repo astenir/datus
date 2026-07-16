@@ -494,6 +494,7 @@ export type BootstrapStrategy = "overwrite" | "check" | "incremental";
 export type BootstrapBuildMode = "overwrite" | "check";
 
 export type BootstrapKbInput = {
+  datasource_id: string;
   components: BootstrapComponent[];
   strategy?: BootstrapStrategy;
   schema_linking_type?: string;

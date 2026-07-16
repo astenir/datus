@@ -1,9 +1,9 @@
 """Pydantic v2 models for the bootstrap-kb API."""
 
 from enum import Enum
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 
 class KbComponent(str, Enum):
@@ -73,6 +73,10 @@ class BootstrapKbInput(BaseModel):
 
     model_config = ConfigDict(use_enum_values=True)
 
+    datasource_id: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)] = Field(
+        ...,
+        description="Datasource selected for this bootstrap request.",
+    )
     components: list[KbComponent] = Field(
         ...,
         min_length=1,
