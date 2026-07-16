@@ -2381,6 +2381,23 @@ models:
             EMBEDDING_MODELS.clear()
             EMBEDDING_MODELS.update(original_models)
 
+    def test_metadata_sample_limits_default_and_allow_storage_overrides(self, tmp_path):
+        default_cfg = self._make(tmp_path)
+        custom_cfg = self._make(
+            tmp_path,
+            storage={"database": {"sample_cell_max_chars": "256", "sample_max_chars": "2048"}},
+        )
+
+        assert default_cfg.metadata_sample_cell_max_chars == 1_000
+        assert default_cfg.metadata_sample_max_chars == 8_000
+        assert custom_cfg.metadata_sample_cell_max_chars == 256
+        assert custom_cfg.metadata_sample_max_chars == 2_048
+
+    @pytest.mark.parametrize("key,value", [("sample_cell_max_chars", 0), ("sample_max_chars", "invalid")])
+    def test_metadata_sample_limits_must_be_positive_integers(self, tmp_path, key, value):
+        with pytest.raises(DatusException, match=f"storage.database.{key} must be a positive integer"):
+            self._make(tmp_path, storage={"database": {key: value}})
+
     def test_active_model_raises_when_nothing_is_configured(self, tmp_path):
         cfg = self._make(tmp_path, target="", models={})
         with pytest.raises(DatusException) as exc_info:

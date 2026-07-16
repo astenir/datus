@@ -250,6 +250,8 @@ agent:
       model_name: text-embedding-v3-small
       dim_size: 1024
       batch_size: 10 # Aliyun only supports no more than 10
+      sample_cell_max_chars: 1000 # Replace oversized sample cells before embedding
+      sample_max_chars: 8000 # Bound the complete serialized table sample
       # single_input_only: true # Enable when the OpenAI-compatible gateway rejects array input
       target_model: openai # target model in agent.models, if not set, the agent's target configuration will be used
     document:

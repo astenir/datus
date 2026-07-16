@@ -42,6 +42,18 @@ _PROJECT_NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]+$")
 _PROJECT_NAME_MAX_LEN = 200
 
 DEFAULT_SEMANTIC_ADAPTER = "metricflow"
+DEFAULT_METADATA_SAMPLE_CELL_MAX_CHARS = 1_000
+DEFAULT_METADATA_SAMPLE_MAX_CHARS = 8_000
+
+
+def _positive_int_setting(value: Any, name: str) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise DatusException(ErrorCode.COMMON_CONFIG_ERROR, message=f"{name} must be a positive integer") from exc
+    if parsed <= 0:
+        raise DatusException(ErrorCode.COMMON_CONFIG_ERROR, message=f"{name} must be a positive integer")
+    return parsed
 
 
 def _normalize_project_name(cwd: str) -> str:
@@ -1046,6 +1058,17 @@ class AgentConfig:
 
         storage_raw = kwargs.get("storage", {})
         storage_config = _resolve_nested_value(storage_raw) if isinstance(storage_raw, dict) else {}
+        database_storage_config = storage_config.get("database", {})
+        if not isinstance(database_storage_config, dict):
+            database_storage_config = {}
+        self.metadata_sample_cell_max_chars = _positive_int_setting(
+            database_storage_config.get("sample_cell_max_chars", DEFAULT_METADATA_SAMPLE_CELL_MAX_CHARS),
+            "storage.database.sample_cell_max_chars",
+        )
+        self.metadata_sample_max_chars = _positive_int_setting(
+            database_storage_config.get("sample_max_chars", DEFAULT_METADATA_SAMPLE_MAX_CHARS),
+            "storage.database.sample_max_chars",
+        )
         self.embedding_model_targets = {
             resolve_env(target).strip()
             for config in storage_config.values()
