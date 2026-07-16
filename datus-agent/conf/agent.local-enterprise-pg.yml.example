@@ -1,6 +1,8 @@
 # 本地企业 PostgreSQL 测试配置。
 #
 # 这是一个完整的 agent.yml 示例，用于没有真实企业网关时做本地 API 联调。
+# 文件名带 .example，不会自动加载；复制到未跟踪的本地文件后，必须通过
+# --config 显式加载。该配置包含开发便利项，不是生产或真实员工试点配置。
 # 默认使用 SignedHeaderAuthProvider，方便脚本生成可信签名身份 header；
 # 企业 metadata store 通过 DATUS_ENTERPRISE_PG_DSN 连接 PostgreSQL。
 #

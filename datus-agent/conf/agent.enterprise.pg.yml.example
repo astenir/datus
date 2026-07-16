@@ -1,6 +1,8 @@
 # 企业 PostgreSQL metadata 配置片段。
 #
-# 将需要的片段合并到 agent.yml，用于接近生产的企业部署。
+# 该文件不是完整配置，也不会自动加载。请把顶层 api、enterprise 合并到
+# 完整 agent.yml 的 agent: 下，再通过默认查找或 --config 加载完整文件。
+# 它用于接近生产形态的企业部署接线，但不是可直接投产的完整安全配置。
 # 该文件只把企业平台 metadata store 切到 PostgreSQL；
 # 普通业务 datasource、模型、RAG/vector、项目 subject/ 文件和 artifact bundle
 # 仍由常规 agent.yml 与运行时路径管理。
@@ -9,6 +11,7 @@
 # 加上 session_body_store，在 max_size=2 时，每个 API 进程最多会打开 20 个
 # enterprise PostgreSQL 连接；还要额外预留业务数据源和运维连接。
 # 调整 min_size/max_size 时必须同时考虑 uvicorn worker/pod 数和 PostgreSQL max_connections。
+# DSN、密码和 credential secret 必须通过环境变量或密钥系统注入，不要提交真实值。
 
 api:
   auth_provider:
