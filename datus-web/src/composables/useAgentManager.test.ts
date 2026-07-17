@@ -138,11 +138,13 @@ describe("useAgentManager", () => {
         node_class: "gen_sql",
         label: "SQL 分析",
         description: "生成和执行只读 SQL。",
+        supports_mcp: true,
       },
       {
         node_class: "ask_metrics",
         label: "指标问答",
         description: "围绕指标、维度和归因分析问答。",
+        supports_mcp: false,
       },
     ]);
     agentAclUsers.mockResolvedValue([
@@ -397,6 +399,7 @@ describe("useAgentManager", () => {
         node_class: "chat",
         label: "通用聊天",
         description: "面向普通问答、规划和多工具协作。",
+        supports_mcp: true,
       },
     ]);
     const { useAgentManager } = await import("./useAgentManager");
@@ -740,7 +743,7 @@ describe("useAgentManager", () => {
       },
       tool_policy: {
         mode: "allowlist",
-        allowed: ["read_query", "explain_query"],
+        allowed: ["explain_query", "mcp.filesystem.*", "read_query"],
         denied: ["filesystem_tools.*"],
       },
       runtime_policy: {
@@ -750,6 +753,33 @@ describe("useAgentManager", () => {
       },
     });
     expect(toastSuccess).toHaveBeenCalledWith("Agent 已创建");
+  });
+
+  it("does not persist stale MCP bindings for node types without MCP runtime support", async () => {
+    const { useAgentManager } = await import("./useAgentManager");
+    const manager = useAgentManager();
+    await manager.loadNodeTypes();
+    manager.form.value.name = "metrics_reader";
+    manager.form.value.nodeClass = "ask_metrics";
+    manager.form.value.toolsText = "semantic_tools.list_metrics";
+    manager.form.value.mcpText = "filesystem";
+
+    expect(manager.selectedNodeSupportsMcp.value).toBe(false);
+    expect(manager.selectedMcpCount.value).toBe(0);
+
+    await manager.saveForm();
+
+    expect(createAgent).toHaveBeenCalledWith(
+      "http://api.test",
+      "metrics_reader",
+      expect.objectContaining({
+        node_class: "ask_metrics",
+        mcp: undefined,
+        tool_policy: expect.objectContaining({
+          allowed: ["semantic_tools.list_metrics"],
+        }),
+      }),
+    );
   });
 
   it("explicitly publishes new enterprise agents with enterprise visibility", async () => {

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from agents import Agent, RunContextWrapper, Usage
 from agents.mcp import MCPServerStdioParams
 from agents.mcp.server import MCPServerSse, MCPServerSseParams, MCPServerStreamableHttp, MCPServerStreamableHttpParams
+from agents.mcp.util import ToolFilterStatic
 
 from datus.tools.mcp_tools.mcp_config import (
     AnyMCPServerConfig,
@@ -57,6 +58,20 @@ def create_static_tool_filter(
         blocked_tool_names=blocked_tool_names,
         enabled=enabled,
     )
+
+
+def _sdk_tool_filter(config: Optional[ToolFilterConfig]) -> Optional[ToolFilterStatic]:
+    """Translate persisted MCP filters into the Agents SDK runtime shape."""
+
+    if config is None or not config.enabled:
+        return None
+
+    tool_filter: ToolFilterStatic = {}
+    if config.allowed_tool_names is not None:
+        tool_filter["allowed_tool_names"] = list(config.allowed_tool_names)
+    if config.blocked_tool_names is not None:
+        tool_filter["blocked_tool_names"] = list(config.blocked_tool_names)
+    return tool_filter or None
 
 
 def _validate_server_exists(manager, server_name: str) -> Tuple[bool, str, Optional[AnyMCPServerConfig]]:
@@ -413,9 +428,9 @@ class MCPManager:
             if config.type == MCPServerType.STDIO:
                 return self._create_stdio_server(config, expanded_config)
             elif config.type == MCPServerType.SSE:
-                return self._create_sse_server(expanded_config)
+                return self._create_sse_server(expanded_config, config=config)
             elif config.type == MCPServerType.HTTP:
-                return self._create_http_server(expanded_config)
+                return self._create_http_server(expanded_config, config=config)
             else:
                 return None, {"error": f"Unsupported server type: {config.type}"}
         except Exception as e:
@@ -433,7 +448,11 @@ class MCPManager:
             cwd=expanded_config.get("cwd"),
         )
 
-        server_instance = SilentMCPServerStdio(params=server_params, client_session_timeout_seconds=60)
+        server_instance = SilentMCPServerStdio(
+            params=server_params,
+            client_session_timeout_seconds=60,
+            tool_filter=_sdk_tool_filter(config.tool_filter),
+        )
         details = {
             "command": expanded_config.get("command"),
             "args": expanded_config.get("args", []),
@@ -442,7 +461,12 @@ class MCPManager:
         }
         return server_instance, details
 
-    def _create_sse_server(self, expanded_config: Dict[str, Any]):
+    def _create_sse_server(
+        self,
+        expanded_config: Dict[str, Any],
+        *,
+        config: Optional[AnyMCPServerConfig] = None,
+    ):
         """Create SSE server instance."""
         url = expanded_config.get("url")
         if not url:
@@ -453,11 +477,20 @@ class MCPManager:
         headers["Accept"] = "text/event-stream"
 
         server_params = MCPServerSseParams(url=url, headers=headers, timeout=timeout, sse_read_timeout=timeout)
-        server_instance = MCPServerSse(params=server_params, client_session_timeout_seconds=60)
+        server_instance = MCPServerSse(
+            params=server_params,
+            client_session_timeout_seconds=60,
+            tool_filter=_sdk_tool_filter(config.tool_filter if config else None),
+        )
         details = {"url": url, "headers_count": len(headers) if headers else 0, "timeout": timeout}
         return server_instance, details
 
-    def _create_http_server(self, expanded_config: Dict[str, Any]):
+    def _create_http_server(
+        self,
+        expanded_config: Dict[str, Any],
+        *,
+        config: Optional[AnyMCPServerConfig] = None,
+    ):
         """Create HTTP server instance."""
         url = expanded_config.get("url")
         if not url:
@@ -476,7 +509,11 @@ class MCPManager:
             sse_read_timeout=timeout,
             terminate_on_close=True,
         )
-        server_instance = MCPServerStreamableHttp(params=server_params, client_session_timeout_seconds=60)
+        server_instance = MCPServerStreamableHttp(
+            params=server_params,
+            client_session_timeout_seconds=60,
+            tool_filter=_sdk_tool_filter(config.tool_filter if config else None),
+        )
         details = {"url": url, "headers_count": len(merged_headers), "timeout": timeout}
         return server_instance, details
 

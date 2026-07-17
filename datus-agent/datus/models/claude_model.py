@@ -620,7 +620,14 @@ class ClaudeModel(OpenAICompatibleModel):
             all_tools = []
 
             # Use context manager to manage multiple MCP servers
-            async with multiple_mcp_servers(mcp_servers) as connected_servers:
+            async with multiple_mcp_servers(
+                mcp_servers,
+                **(
+                    {"on_connection_failure": kwargs["mcp_connection_failure_callback"]}
+                    if kwargs.get("mcp_connection_failure_callback")
+                    else {}
+                ),
+            ) as connected_servers:
                 # Get all tools and build tool-name-to-server mapping once
                 tool_server_map = {}  # tool_name -> connected_server
                 mcp_tool_objs = {}  # tool_name -> SDK tool object (carries .name for hooks)

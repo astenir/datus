@@ -1141,7 +1141,14 @@ class OpenAICompatibleModel(LLMBaseModel):
 
         async def _tools_operation():
             # Use multiple_mcp_servers context manager with empty dict if no MCP servers
-            async with multiple_mcp_servers(mcp_servers or {}) as connected_servers:
+            async with multiple_mcp_servers(
+                mcp_servers or {},
+                **(
+                    {"on_connection_failure": kwargs["mcp_connection_failure_callback"]}
+                    if kwargs.get("mcp_connection_failure_callback")
+                    else {}
+                ),
+            ) as connected_servers:
                 agent_name = kwargs.get("agent_name", "default_agent")
                 agent = self._build_agent(
                     instruction=instruction,
@@ -1274,7 +1281,14 @@ class OpenAICompatibleModel(LLMBaseModel):
 
         async def _stream_operation():
             # Use multiple_mcp_servers context manager with empty dict if no MCP servers
-            async with multiple_mcp_servers(mcp_servers or {}) as connected_servers:
+            async with multiple_mcp_servers(
+                mcp_servers or {},
+                **(
+                    {"on_connection_failure": kwargs["mcp_connection_failure_callback"]}
+                    if kwargs.get("mcp_connection_failure_callback")
+                    else {}
+                ),
+            ) as connected_servers:
                 agent_name = kwargs.get("agent_name", "Tools_Agent")
                 agent = self._build_agent(
                     instruction=instruction,

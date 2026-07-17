@@ -330,7 +330,8 @@ class TestChatTaskManagerBehavior:
         task = ChatTask(session_id="s-degraded", asyncio_task=MagicMock())
         node = SimpleNamespace(
             degraded_capabilities={
-                "context_search_tools": "Context search and @ references are disabled; DB tools remain available."
+                "context_search_tools": "Context search and @ references are disabled; DB tools remain available.",
+                "mcp.remote": "MCP Server 'remote' is missing from the runtime configuration.",
             }
         )
 
@@ -346,6 +347,7 @@ class TestChatTaskManagerBehavior:
         assert event.data.payload.role == "assistant"
         assert event.data.payload.content[0].type == "markdown"
         assert "DB tools remain available" in event.data.payload.content[0].payload["content"]
+        assert "MCP Server 'remote'" in event.data.payload.content[0].payload["content"]
 
     @pytest.mark.asyncio
     async def test_run_loop_emits_final_response_when_no_plain_assistant_response(self, real_agent_config):

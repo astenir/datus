@@ -3740,6 +3740,8 @@ export interface components {
             label: string;
 
             description: string;
+
+            supports_mcp: boolean;
         };
 
         EnterpriseAgentSummary: {

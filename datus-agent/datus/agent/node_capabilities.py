@@ -23,6 +23,7 @@ class AgentNodeCapability:
     cli_label: str | None = None
     prompt_template: str | None = None
     module_permission: str | None = None
+    supports_mcp: bool = False
     default_tools: tuple[str, ...] = ()
     tool_categories: tuple[str, ...] = ()
     tool_method_allowlists: tuple[tuple[str, tuple[str, ...]], ...] = ()
@@ -93,6 +94,7 @@ AGENT_NODE_CAPABILITIES: tuple[AgentNodeCapability, ...] = (
         customizable=True,
         enterprise_visible=True,
         prompt_template="chat_system",
+        supports_mcp=True,
         default_tools=(
             "db_tools.*",
             "context_search_tools.*",
@@ -114,6 +116,7 @@ AGENT_NODE_CAPABILITIES: tuple[AgentNodeCapability, ...] = (
         cli_label="gen_sql - SQL generation (default)",
         prompt_template="gen_sql_system",
         module_permission="module.sql_executor",
+        supports_mcp=True,
         default_tools=("db_tools.*", "semantic_tools.*", "context_search_tools.*"),
         tool_categories=_ANALYSIS_TOOL_CATEGORIES,
     ),

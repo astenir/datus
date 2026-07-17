@@ -144,6 +144,7 @@ class EnterpriseAgentNodeType(BaseModel):
     node_class: str
     label: str
     description: str
+    supports_mcp: bool = False
 
 
 class AgentPreferenceSummary(BaseModel):
@@ -349,6 +350,7 @@ async def list_admin_agent_node_types(ctx: AdminAgentsCtx) -> Result[list[Enterp
                 node_class=capability.node_class,
                 label=capability.label,
                 description=capability.description,
+                supports_mcp=capability.supports_mcp,
             )
             for capability in ENTERPRISE_AGENT_NODE_CAPABILITIES
         ],
@@ -630,9 +632,9 @@ async def set_admin_agent_status(
 ) -> Result[EnterpriseAgentDetail]:
     """Set draft/published/disabled/archived status for one enterprise agent."""
 
-    invalid = (None if is_enterprise_builtin_agent_id(agent_id) else validate_agent_id(agent_id)) or validate_agent_status(
-        body.status
-    )
+    invalid = (
+        None if is_enterprise_builtin_agent_id(agent_id) else validate_agent_id(agent_id)
+    ) or validate_agent_status(body.status)
     if invalid is not None:
         await _audit_agent(ctx, agent_id=agent_id, operation="set_admin_agent_status", decision="deny", reason=invalid)
         return _agent_error("AGENT_INVALID", invalid)
@@ -995,11 +997,7 @@ async def _get_agent_best_effort(store, agent_id: str) -> dict[str, Any] | None:
 
 async def _enterprise_default_agent_id(ctx: AppContext) -> str | None:
     records = await list_available_agent_records(ctx)
-    defaults = [
-        str(record["agent_id"])
-        for record in records
-        if agent_policy_metadata(record)["enterprise_default"]
-    ]
+    defaults = [str(record["agent_id"]) for record in records if agent_policy_metadata(record)["enterprise_default"]]
     return sorted(defaults)[0] if defaults else None
 
 

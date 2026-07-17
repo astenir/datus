@@ -524,6 +524,10 @@ class GenSQLAgenticNode(AgenticNode):
 
             if not server_config:
                 logger.warning(f"MCP server '{server_name}' not found in configuration")
+                self._record_degraded_capability(
+                    f"mcp.{server_name}",
+                    f"MCP Server '{server_name}' is bound to this Agent but is missing from the runtime configuration.",
+                )
                 return None
 
             # Create server instance using the manager
@@ -535,10 +539,18 @@ class GenSQLAgenticNode(AgenticNode):
             else:
                 error_msg = details.get("error", "Unknown error")
                 logger.warning(f"Failed to create MCP server '{server_name}': {error_msg}")
+                self._record_degraded_capability(
+                    f"mcp.{server_name}",
+                    f"MCP Server '{server_name}' could not be initialized: {error_msg}",
+                )
                 return None
 
         except Exception as e:
             logger.error(f"Failed to setup MCP server '{server_name}' from config: {e}")
+            self._record_degraded_capability(
+                f"mcp.{server_name}",
+                f"MCP Server '{server_name}' could not be initialized: {e}",
+            )
             return None
 
     def _setup_mcp_servers(self) -> Dict[str, Any]:

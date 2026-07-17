@@ -112,6 +112,7 @@ def test_admin_agent_node_types(monkeypatch):
     ]
     assert {item["node_class"] for item in items} == ENTERPRISE_AGENT_NODE_CLASSES
     assert all(item["label"] and item["description"] for item in items)
+    assert {item["node_class"] for item in items if item["supports_mcp"]} == {"chat", "gen_sql"}
     assert all(capability.enterprise_visible for capability in ENTERPRISE_AGENT_NODE_CAPABILITIES)
 
 
@@ -354,9 +355,7 @@ def test_available_builtin_agents_use_persisted_acl_overlay_not_module_permissio
     with _client(chat_ctx) as client:
         chat_response = client.get("/api/v1/agents")
 
-    chat_builtin_ids = {
-        item["agent_id"] for item in chat_response.json()["data"] if item["source"] == "builtin"
-    }
+    chat_builtin_ids = {item["agent_id"] for item in chat_response.json()["data"] if item["source"] == "builtin"}
     assert chat_builtin_ids == {"chat"}
 
     privileged_ctx = AppContext(user_id="operator", permissions={"*"})
@@ -512,6 +511,7 @@ def test_admin_agent_upsert_accepts_custom_chat_node_class(monkeypatch):
                 "node_class": "chat",
                 "status": "published",
                 "mcp": ["filesystem"],
+                "tool_policy": {"mode": "allowlist", "allowed": []},
                 "acl": {"visibility": "enterprise"},
             },
         )
@@ -520,7 +520,25 @@ def test_admin_agent_upsert_accepts_custom_chat_node_class(monkeypatch):
     assert response.json()["success"] is True
     assert response.json()["data"]["node_class"] == "chat"
     assert response.json()["data"]["mcp"] == ["filesystem"]
+    assert response.json()["data"]["tool_policy"]["allowed"] == ["mcp.filesystem.*"]
     assert agent_store._agents["custom_chat"]["node_class"] == "chat"
+
+
+def test_admin_agent_upsert_rejects_mcp_for_unsupported_node_class(monkeypatch):
+    agent_store = InMemoryEnterpriseAgentStore()
+    _install_extensions(monkeypatch, agent_store)
+    admin_ctx = AppContext(user_id="operator", permissions={"module.admin.agents"})
+
+    with _client(admin_ctx) as client:
+        response = client.put(
+            "/api/v1/admin/agents/report_writer",
+            json={"node_class": "gen_report", "mcp": ["filesystem"]},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["success"] is False
+    assert "does not support MCP" in response.json()["errorMessage"]
+    assert agent_store._agents == {}
 
 
 def test_admin_agent_upsert_accepts_visual_artifact_node_classes(monkeypatch):
@@ -569,6 +587,13 @@ def test_enterprise_agent_materializes_into_request_scoped_config():
         "status": "published",
         "description": "Sales SQL",
         "tools": ["db_tools.read_query"],
+        "mcp": ["filesystem"],
+        "scoped_context": {
+            "_enterprise_agent_policy": {
+                "tool_policy": {"mode": "allowlist", "allowed": ["db_tools.read_query"]},
+                "runtime_policy": {},
+            }
+        },
         "acl": {"visibility": "enterprise"},
     }
 
@@ -579,6 +604,8 @@ def test_enterprise_agent_materializes_into_request_scoped_config():
     assert entry["id"] == "sales_sql"
     assert entry["node_class"] == "gen_sql"
     assert entry["tools"] == "db_tools.read_query"
+    assert entry["mcp"] == "filesystem"
+    assert entry["tool_policy"]["allowed"] == ["db_tools.read_query", "mcp.filesystem.*"]
 
 
 def test_pg_agent_store_helpers_preserve_runtime_record_shape():
@@ -661,9 +688,10 @@ def test_admin_can_publish_builtin_with_acl_and_tool_policy_overlay(monkeypatch)
     assert status_response.json()["success"] is True
     assert acl_response.json()["data"]["visibility"] == "enterprise"
     assert policy_response.json()["data"]["tool_policy"]["mode"] == "allowlist"
-    assert agent_store._agents["gen_sql"]["scoped_context"]["_enterprise_agent_policy"]["tool_policy"][
-        "denied"
-    ] == ["bash_tools.*", "filesystem_tools.*"]
+    assert agent_store._agents["gen_sql"]["scoped_context"]["_enterprise_agent_policy"]["tool_policy"]["denied"] == [
+        "bash_tools.*",
+        "filesystem_tools.*",
+    ]
 
     ordinary_ctx = AppContext(user_id="alice", permissions=set())
     with _client(ordinary_ctx) as client:

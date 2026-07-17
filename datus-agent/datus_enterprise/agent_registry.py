@@ -7,7 +7,7 @@ from fnmatch import fnmatchcase
 from typing import Any
 
 from datus.agent.node_capabilities import enterprise_agent_node_capabilities, get_agent_node_capability
-from datus.agent.tool_policy import normalize_runtime_policy, normalize_tool_policy
+from datus.agent.tool_policy import include_bound_mcp_servers, normalize_runtime_policy, normalize_tool_policy
 from datus.api.auth.context import AppContext
 from datus.api.constants import BUILTIN_SUBAGENTS
 from datus.api.services.agent_service import _validate_tools, _validate_tools_for_agent_type
@@ -72,6 +72,10 @@ def normalize_agent_payload(
         raise ValueError(f"Unsupported agent node_class: {node_class}.")
 
     tools = _normalize_list(payload.get("tools"))
+    mcp = _normalize_list(payload.get("mcp"))
+    capability = get_agent_node_capability(node_class)
+    if mcp and (capability is None or not capability.supports_mcp):
+        raise ValueError(f"Agent node_class '{node_class}' does not support MCP servers.")
     invalid_tools = _validate_tools(tools) + _validate_tools_for_agent_type(tools, node_class)
     if invalid_tools:
         raise ValueError(f"Invalid tools for {node_class}: {', '.join(sorted(set(invalid_tools)))}.")
@@ -85,7 +89,10 @@ def normalize_agent_payload(
     scoped_context = dict(payload.get("scoped_context") or {})
     existing_metadata = agent_policy_metadata(existing_record)
     scoped_context[AGENT_POLICY_CONTEXT_KEY] = {
-        "tool_policy": normalize_tool_policy(payload.get("tool_policy", existing_metadata.get("tool_policy"))),
+        "tool_policy": include_bound_mcp_servers(
+            payload.get("tool_policy", existing_metadata.get("tool_policy")),
+            mcp,
+        ),
         "runtime_policy": normalize_runtime_policy(
             payload.get("runtime_policy", existing_metadata.get("runtime_policy"))
         ),
@@ -104,7 +111,7 @@ def normalize_agent_payload(
         "prompt_language": str(payload.get("prompt_language") or "en").strip(),
         "prompt_version": _optional_str(payload.get("prompt_version")) or "1.0",
         "tools": tools,
-        "mcp": _normalize_list(payload.get("mcp")),
+        "mcp": mcp,
         "skills": _normalize_list(payload.get("skills")),
         "scoped_context": scoped_context,
         "rules": _normalize_list(payload.get("rules")),
@@ -117,6 +124,7 @@ def agent_record_to_runtime_entry(record: dict[str, Any]) -> dict[str, Any]:
     """Convert an enterprise agent record to ``AgentConfig.agentic_nodes`` shape."""
 
     policy = agent_policy_metadata(record)
+    policy["tool_policy"] = include_bound_mcp_servers(policy["tool_policy"], record.get("mcp"))
     entry: dict[str, Any] = {
         "id": record["agent_id"],
         "type": record["node_class"],
@@ -246,9 +254,7 @@ def agent_policy_metadata(record: dict[str, Any] | None) -> dict[str, Any]:
 
 def public_scoped_context(record: dict[str, Any]) -> dict[str, Any]:
     return {
-        key: value
-        for key, value in dict(record.get("scoped_context") or {}).items()
-        if key != AGENT_POLICY_CONTEXT_KEY
+        key: value for key, value in dict(record.get("scoped_context") or {}).items() if key != AGENT_POLICY_CONTEXT_KEY
     }
 
 
@@ -364,9 +370,7 @@ async def list_effective_agent_records(*, status: str | None = None) -> list[dic
         for agent_id in sorted(ENTERPRISE_BUILTIN_AGENT_IDS)
     ]
     effective.extend(
-        record
-        for record in records
-        if not is_enterprise_builtin_agent_id(str(record.get("agent_id") or ""))
+        record for record in records if not is_enterprise_builtin_agent_id(str(record.get("agent_id") or ""))
     )
     if status is not None:
         normalized_status = status.strip().lower()
@@ -407,6 +411,7 @@ async def resolve_enterprise_agent_for_dispatch(ctx: AppContext, agent_id: str) 
     """Return a dispatchable enterprise agent record, or ``None`` if it does not exist."""
 
     from datus.api import deps
+
     extensions = deps.get_enterprise_extensions()
     if not extensions.enabled:
         return None

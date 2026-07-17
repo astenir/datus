@@ -111,7 +111,15 @@ function addCustomSkill() {
         </Field>
       </div>
 
-      <Field>
+      <Alert v-if="!props.manager.selectedNodeSupportsMcp.value">
+        <BotIcon />
+        <AlertTitle>当前节点类型不支持 MCP</AlertTitle>
+        <AlertDescription>
+          已保存的残留绑定不会进入运行时；切换到“通用聊天”或“SQL 分析”后才能配置 MCP Server。
+        </AlertDescription>
+      </Alert>
+
+      <Field v-else>
         <FieldLabel>MCP</FieldLabel>
         <div class="rounded-lg border bg-muted/20 p-3">
           <div class="mb-3 flex flex-wrap items-center gap-2">

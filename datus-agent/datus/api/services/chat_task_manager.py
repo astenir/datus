@@ -1294,8 +1294,8 @@ class ChatTaskManager:
 
     async def _push_degraded_capability_warnings(self, task: ChatTask, node: AgenticNode, event_id: int) -> int:
         degraded = getattr(node, "degraded_capabilities", {}) or {}
-        context_warning = degraded.get("context_search_tools")
-        if not context_warning:
+        warnings = list(dict.fromkeys(str(message) for message in degraded.values() if str(message).strip()))
+        if not warnings:
             return event_id
 
         await self._push_event(
@@ -1306,12 +1306,12 @@ class ChatTaskManager:
                 data=SSEMessageData(
                     type=SSEDataType.CREATE_MESSAGE,
                     payload=SSEMessagePayload(
-                        message_id=f"context-degraded-{uuid.uuid4().hex[:8]}",
+                        message_id=f"capability-degraded-{uuid.uuid4().hex[:8]}",
                         role="assistant",
                         content=[
                             IMessageContent(
                                 type="markdown",
-                                payload={"content": context_warning},
+                                payload={"content": "\n\n".join(warnings)},
                             )
                         ],
                     ),

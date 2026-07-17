@@ -120,6 +120,35 @@ class TestGetNodeName:
 
 
 # ---------------------------------------------------------------------------
+# MCP connection failure feedback
+# ---------------------------------------------------------------------------
+
+
+class TestMcpConnectionFailureFeedback:
+    def test_drain_emits_one_failed_action_and_clears_pending_failures(self):
+        node = _make_node()
+        manager = ActionHistoryManager()
+
+        node._record_mcp_connection_failure("filesystem", "connection refused")
+        node._record_mcp_connection_failure("filesystem", "connection refused")
+
+        actions = node._drain_mcp_connection_failure_actions(manager)
+
+        assert len(actions) == 1
+        action = actions[0]
+        assert action.role == ActionRole.TOOL
+        assert action.action_type == "mcp.filesystem.connect"
+        assert action.status == ActionStatus.FAILED
+        assert action.input == {"server_name": "filesystem"}
+        assert action.output == {
+            "error": "connection refused",
+            "summary": "MCP Server 'filesystem' connection failed; the Agent continued without it.",
+        }
+        assert manager.get_actions() == actions
+        assert node._drain_mcp_connection_failure_actions(manager) == []
+
+
+# ---------------------------------------------------------------------------
 # TestParseNodeConfig
 # ---------------------------------------------------------------------------
 

@@ -4,6 +4,7 @@ import pytest
 
 from datus.agent.tool_policy import (
     apply_agent_runtime_policy,
+    include_bound_mcp_servers,
     normalize_runtime_policy,
     normalize_tool_policy,
     permission_mode_exceeds,
@@ -74,6 +75,20 @@ def test_runtime_policy_can_limit_delegation_to_explicit_agents():
 
     assert {tool.name for tool in node.tools} == {"read_file", "write_file", "execute_command", "task"}
     assert node.sub_agent_task_tool._allowed_subagents == ["safe_sql"]
+
+
+def test_bound_mcp_servers_are_added_to_allowlist_and_denies_still_win():
+    policy = include_bound_mcp_servers(
+        {"mode": "allowlist", "allowed": ["db_tools.*"], "denied": ["mcp.blocked.*"]},
+        ["remote", "blocked"],
+    )
+
+    assert policy["allowed"] == ["db_tools.*", "mcp.blocked.*", "mcp.remote.*"]
+
+    node = _node(tool_policy=policy, runtime_policy={})
+    apply_agent_runtime_policy(node)
+
+    assert set(node.mcp_servers) == {"remote"}
 
 
 def test_policy_normalization_and_permission_ceiling_fail_closed():

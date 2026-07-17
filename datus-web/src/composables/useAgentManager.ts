@@ -125,6 +125,18 @@ function uniqueStrings(values: readonly string[]): string[] {
   return [...new Set(values.map(value => value.trim()).filter(Boolean))];
 }
 
+function isMcpToolPolicyPattern(value: string): boolean {
+  return value.startsWith("mcp.") && value.endsWith(".*");
+}
+
+function allowedToolPolicyPatterns(form: AgentFormState, supportsMcp: boolean): string[] {
+  const nativeTools = parseListText(form.toolsText) ?? [];
+  const mcpTools = supportsMcp
+    ? (parseListText(form.mcpText) ?? []).map(serverName => `mcp.${serverName}.*`)
+    : [];
+  return uniqueStrings([...nativeTools, ...mcpTools]).sort((left, right) => left.localeCompare(right));
+}
+
 function toggleSelectedValue(values: readonly string[], value: string): string[] {
   const normalized = value.trim();
   if (!normalized) return [...values];
@@ -194,7 +206,9 @@ function normalizeAgentVisibility(value: string | null | undefined): AgentVisibi
 }
 
 function formFromDetail(agent: AgentDetail): AgentFormState {
-  const configuredTools = agent.tools?.length ? agent.tools : agent.tool_policy?.allowed;
+  const configuredTools = agent.tools?.length
+    ? agent.tools
+    : agent.tool_policy?.allowed?.filter(value => !isMcpToolPolicyPattern(value));
   return {
     id: agent.agent_id,
     name: agent.name,
@@ -225,7 +239,7 @@ function formFromDetail(agent: AgentDetail): AgentFormState {
   };
 }
 
-function createInputFromForm(form: AgentFormState): CreateAgentInput {
+function createInputFromForm(form: AgentFormState, supportsMcp: boolean): CreateAgentInput {
   return {
     name: trimmedOptional(form.name),
     node_class: trimmedOptional(form.nodeClass) ?? "gen_sql",
@@ -237,7 +251,7 @@ function createInputFromForm(form: AgentFormState): CreateAgentInput {
     prompt_language: "en",
     prompt_version: "1.0",
     tools: parseListText(form.toolsText),
-    mcp: parseListText(form.mcpText),
+    mcp: supportsMcp ? parseListText(form.mcpText) : undefined,
     skills: parseListText(form.skillsText),
     scoped_context: scopedContextFromForm(form),
     rules: parseListText(form.rulesText),
@@ -249,7 +263,7 @@ function createInputFromForm(form: AgentFormState): CreateAgentInput {
     },
     tool_policy: {
       mode: form.toolPolicyMode ?? "allowlist",
-      allowed: form.toolPolicyMode !== "inherit" ? (parseListText(form.toolsText) ?? []) : [],
+      allowed: form.toolPolicyMode !== "inherit" ? allowedToolPolicyPatterns(form, supportsMcp) : [],
       denied: parseListText(form.deniedToolsText) ?? [],
     },
     runtime_policy: {
@@ -260,11 +274,11 @@ function createInputFromForm(form: AgentFormState): CreateAgentInput {
   };
 }
 
-function policyInputFromForm(form: AgentFormState): AgentPolicy {
+function policyInputFromForm(form: AgentFormState, supportsMcp: boolean): AgentPolicy {
   return {
     tool_policy: {
       mode: form.toolPolicyMode ?? "allowlist",
-      allowed: form.toolPolicyMode !== "inherit" ? (parseListText(form.toolsText) ?? []) : [],
+      allowed: form.toolPolicyMode !== "inherit" ? allowedToolPolicyPatterns(form, supportsMcp) : [],
       denied: parseListText(form.deniedToolsText) ?? [],
     },
     runtime_policy: {
@@ -275,8 +289,8 @@ function policyInputFromForm(form: AgentFormState): AgentPolicy {
   };
 }
 
-function editInputFromForm(form: AgentFormState): EditAgentInput {
-  return createInputFromForm(form);
+function editInputFromForm(form: AgentFormState, supportsMcp: boolean): EditAgentInput {
+  return createInputFromForm(form, supportsMcp);
 }
 
 function agentIdentifier(agent: AgentInfo | AgentDetail): string {
@@ -453,6 +467,10 @@ export function useAgentManager() {
     selectedIsBuiltin.value
     && nodeTypes.value.some(item => item.node_class === selectedAgent.value?.node_class)
   );
+  const selectedNodeSupportsMcp = computed(() => {
+    const capability = nodeTypes.value.find(item => item.node_class === form.value.nodeClass);
+    return capability?.supports_mcp ?? ["chat", "gen_sql"].includes(form.value.nodeClass);
+  });
   const toolCategoryCount = computed(() => Object.keys(toolCatalog.value?.tools ?? {}).length);
   const toolCount = computed(() => countToolCatalogEntries(toolCatalog.value));
   const selectedUseToolCount = computed(() => countUseToolEntries(selectedUseTools.value));
@@ -535,9 +553,14 @@ export function useAgentManager() {
     return [...configuredOptions, ...missingOptions]
       .sort((left, right) => left.name.localeCompare(right.name));
   });
-  const selectedMcpCount = computed(() => selectedMcpNames.value.size);
+  const selectedMcpCount = computed(() => selectedNodeSupportsMcp.value ? selectedMcpNames.value.size : 0);
   const selectedMcpToolCount = computed(() =>
-    [...selectedMcpNames.value].reduce((total, serverName) => total + (mcpToolsByServer.value[serverName]?.length ?? 0), 0)
+    selectedNodeSupportsMcp.value
+      ? [...selectedMcpNames.value].reduce(
+          (total, serverName) => total + (mcpToolsByServer.value[serverName]?.length ?? 0),
+          0,
+        )
+      : 0
   );
   const aclUserOptions = computed(() =>
     withSelectedFallbackOptions(
@@ -947,15 +970,27 @@ export function useAgentManager() {
           allowed_roles: form.value.allowedRoleIds,
           allowed_user_ids: form.value.allowedUserIds,
         });
-        await agentApi.updatePolicy(connection.effectiveBase(), agentId, policyInputFromForm(form.value));
+        await agentApi.updatePolicy(
+          connection.effectiveBase(),
+          agentId,
+          policyInputFromForm(form.value, selectedNodeSupportsMcp.value),
+        );
         await agentApi.updateDefaultUsers(connection.effectiveBase(), agentId, defaultUserIds);
         toast.success("内置 Agent 企业策略已保存");
       } else if (formMode.value === "edit") {
-        await agentApi.edit(connection.effectiveBase(), agentId, editInputFromForm(form.value));
+        await agentApi.edit(
+          connection.effectiveBase(),
+          agentId,
+          editInputFromForm(form.value, selectedNodeSupportsMcp.value),
+        );
         await agentApi.updateDefaultUsers(connection.effectiveBase(), agentId, defaultUserIds);
         toast.success("Agent 已保存");
       } else {
-        await agentApi.create(connection.effectiveBase(), agentId, createInputFromForm(form.value));
+        await agentApi.create(
+          connection.effectiveBase(),
+          agentId,
+          createInputFromForm(form.value, selectedNodeSupportsMcp.value),
+        );
         await agentApi.updateDefaultUsers(connection.effectiveBase(), agentId, defaultUserIds);
         toast.success("Agent 已创建");
       }
@@ -1062,6 +1097,7 @@ export function useAgentManager() {
     selectedAgentName,
     selectedIsBuiltin,
     selectedCanCloneBuiltin,
+    selectedNodeSupportsMcp,
     toolCategoryCount,
     toolCount,
     selectedUseToolCount,

@@ -23,14 +23,31 @@ def normalize_tool_policy(value: Any) -> dict[str, Any]:
     }
 
 
+def include_bound_mcp_servers(value: Any, mcp_server_names: Any) -> dict[str, Any]:
+    """Keep configured MCP bindings reachable when an Agent uses an allowlist."""
+
+    policy = normalize_tool_policy(value)
+    if policy["mode"] != "allowlist":
+        return policy
+
+    if isinstance(mcp_server_names, str):
+        names = mcp_server_names.split(",")
+    elif isinstance(mcp_server_names, (list, tuple, set)):
+        names = mcp_server_names
+    else:
+        names = []
+
+    allowed = set(policy["allowed"])
+    allowed.update(f"mcp.{str(name).strip()}.*" for name in names if str(name).strip())
+    policy["allowed"] = sorted(allowed)
+    return policy
+
+
 def normalize_runtime_policy(value: Any) -> dict[str, Any]:
     raw = value if isinstance(value, dict) else {}
     max_permission_mode = str(raw.get("max_permission_mode") or "normal").strip().lower()
     if max_permission_mode not in PERMISSION_MODE_ORDER:
-        raise ValueError(
-            "Agent max_permission_mode must be one of: "
-            f"{', '.join(PERMISSION_MODE_ORDER)}."
-        )
+        raise ValueError(f"Agent max_permission_mode must be one of: {', '.join(PERMISSION_MODE_ORDER)}.")
     allowed_subagents = raw.get("allowed_subagents")
     return {
         "max_permission_mode": max_permission_mode,
@@ -54,9 +71,7 @@ def apply_agent_runtime_policy(node: Any) -> None:
     """
 
     node_config = getattr(node, "node_config", None)
-    if not isinstance(node_config, dict) or (
-        "tool_policy" not in node_config and "runtime_policy" not in node_config
-    ):
+    if not isinstance(node_config, dict) or ("tool_policy" not in node_config and "runtime_policy" not in node_config):
         return
     raw_tool_policy = node_config.get("tool_policy") if isinstance(node_config, dict) else None
     raw_runtime_policy = node_config.get("runtime_policy") if isinstance(node_config, dict) else None
@@ -97,10 +112,7 @@ def apply_agent_runtime_policy(node: Any) -> None:
     permission_manager = getattr(node, "permission_manager", None)
     global_config = getattr(permission_manager, "global_config", None)
     if global_config is not None:
-        existing = {
-            (str(rule.tool), str(rule.pattern), str(rule.permission))
-            for rule in global_config.rules
-        }
+        existing = {(str(rule.tool), str(rule.pattern), str(rule.permission)) for rule in global_config.rules}
         for category, tool_name in denied_tools:
             key = (category, tool_name, PermissionLevel.DENY.value)
             if key in existing:
@@ -112,6 +124,7 @@ def apply_agent_runtime_policy(node: Any) -> None:
 
     mcp_servers = getattr(node, "mcp_servers", None)
     if isinstance(mcp_servers, dict):
+        configured_server_names = set(mcp_servers)
         if tool_policy["mode"] == "allowlist":
             node.mcp_servers = {
                 name: server
@@ -125,6 +138,13 @@ def apply_agent_runtime_policy(node: Any) -> None:
                 for name, server in mcp_servers.items()
                 if not _matches_any(f"mcp.{name}.*", tool_policy["denied"])
             }
+        removed_server_names = sorted(configured_server_names - set(node.mcp_servers))
+        record_degraded = getattr(node, "_record_degraded_capability", None)
+        if removed_server_names and callable(record_degraded):
+            record_degraded(
+                "mcp_policy",
+                "MCP Server was removed by the Agent tool policy: " + ", ".join(removed_server_names),
+            )
 
 
 def _normalized_patterns(value: Any) -> list[str]:

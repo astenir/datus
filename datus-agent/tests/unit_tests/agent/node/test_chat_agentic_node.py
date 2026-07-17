@@ -673,6 +673,7 @@ class TestChatAgenticNodeMCPSetup:
 
         result = node._setup_mcp_server_from_config("non_existent_server_xyz")
         assert result is None
+        assert "missing from the runtime configuration" in node.degraded_capabilities["mcp.non_existent_server_xyz"]
 
 
 # ===========================================================================
