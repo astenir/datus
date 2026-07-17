@@ -19,6 +19,8 @@ interface BackendFailure {
   errorMessage?: string;
 }
 
+const ROLE_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
 function roleSaveFailureMessage(result: BackendFailure): string {
   if (result.errorCode === "ROLE_PERMISSION_FORBIDDEN") return "不能授予自己尚未拥有的权限";
   return result.errorMessage || "保存失败，请重试";
@@ -54,10 +56,12 @@ export function useRoleManager() {
   const editingRole = shallowRef<Role | null>(null);
   const roleDialogError = shallowRef<string | null>(null);
   const roleForm = ref<RoleFormData>({
+    role_id: "",
     name: "",
     description: "",
     permissions: [],
   });
+  const roleValidationRequested = shallowRef(false);
   const saving = shallowRef(false);
   const showDeleteConfirm = shallowRef(false);
   const roleToDelete = shallowRef<Role | null>(null);
@@ -86,6 +90,13 @@ export function useRoleManager() {
       .filter((preset) => permissionPresetSelected(selectedFeatures.value, preset))
       .map((preset) => preset.id)
   );
+  const roleIdValidationError = computed(() => {
+    if (dialogMode.value === "edit") return null;
+    const roleId = roleForm.value.role_id.trim();
+    if (!roleId) return roleValidationRequested.value ? "请填写 Role ID" : null;
+    if (!ROLE_ID_PATTERN.test(roleId)) return "Role ID 仅支持英文字母、数字、下划线和连字符";
+    return null;
+  });
 
   async function loadRoles() {
     loading.value = true;
@@ -154,10 +165,12 @@ export function useRoleManager() {
     dialogMode.value = "create";
     editingRole.value = null;
     roleForm.value = {
+      role_id: "",
       name: "",
       description: "",
       permissions: [],
     };
+    roleValidationRequested.value = false;
     selectedFeatures.value = [];
     advancedPermissionsOpen.value = false;
     roleDialogError.value = null;
@@ -168,10 +181,12 @@ export function useRoleManager() {
     dialogMode.value = "edit";
     editingRole.value = role;
     roleForm.value = {
+      role_id: role.role_id,
       name: role.name,
       description: role.description ?? "",
       permissions: role.permissions ?? [],
     };
+    roleValidationRequested.value = false;
     selectedFeatures.value = normalizePermissionSelection(role.permissions ?? []);
     advancedPermissionsOpen.value = false;
     roleDialogError.value = null;
@@ -179,6 +194,12 @@ export function useRoleManager() {
   }
 
   async function saveRole() {
+    roleValidationRequested.value = true;
+    if (roleIdValidationError.value) {
+      toast.error(roleIdValidationError.value);
+      return;
+    }
+
     const name = roleForm.value.name.trim();
     if (!name) {
       roleDialogError.value = "请填写角色名称";
@@ -186,7 +207,7 @@ export function useRoleManager() {
       return;
     }
 
-    const roleId = editingRole.value?.role_id ?? name;
+    const roleId = editingRole.value?.role_id ?? roleForm.value.role_id.trim();
     saving.value = true;
     roleDialogError.value = null;
     try {
@@ -271,6 +292,7 @@ export function useRoleManager() {
     editingRole,
     roleDialogError,
     roleForm,
+    roleIdValidationError,
     saving,
     showDeleteConfirm,
     roleToDelete,

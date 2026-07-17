@@ -143,6 +143,7 @@ describe("useRoleManager", () => {
     const { useRoleManager } = await import("./useRoleManager");
     const manager = useRoleManager();
     manager.roleForm.value = {
+      role_id: "resource_viewer",
       name: "资源查看员",
       description: "read only",
       permissions: [],
@@ -151,7 +152,7 @@ describe("useRoleManager", () => {
 
     await manager.saveRole();
 
-    expect(upsertRole).toHaveBeenCalledWith("资源查看员", {
+    expect(upsertRole).toHaveBeenCalledWith("resource_viewer", {
       name: "资源查看员",
       description: "read only",
       permissions: ["module.dashboard.view"],
@@ -170,6 +171,7 @@ describe("useRoleManager", () => {
     const manager = useRoleManager();
     manager.openCreateDialog();
     manager.roleForm.value = {
+      role_id: "privileged_role",
       name: "越权角色",
       description: "",
       permissions: [],
@@ -182,6 +184,33 @@ describe("useRoleManager", () => {
     expect(manager.roleDialogError.value).toBe("不能授予自己尚未拥有的权限");
     expect(manager.showDialog.value).toBe(true);
     expect(listRoles).not.toHaveBeenCalled();
+  });
+
+  it("requires an explicit role id when creating a role", async () => {
+    const { useRoleManager } = await import("./useRoleManager");
+    const manager = useRoleManager();
+    manager.openCreateDialog();
+    manager.roleForm.value.name = "数据分析员";
+
+    await manager.saveRole();
+
+    expect(manager.roleIdValidationError.value).toBe("请填写 Role ID");
+    expect(toastError).toHaveBeenCalledWith("请填写 Role ID");
+    expect(upsertRole).not.toHaveBeenCalled();
+  });
+
+  it("rejects Chinese characters in a manually entered role id", async () => {
+    const { useRoleManager } = await import("./useRoleManager");
+    const manager = useRoleManager();
+    manager.openCreateDialog();
+    manager.roleForm.value.role_id = "数据分析员";
+    manager.roleForm.value.name = "数据分析员";
+
+    await manager.saveRole();
+
+    expect(manager.roleIdValidationError.value).toBe("Role ID 仅支持英文字母、数字、下划线和连字符");
+    expect(toastError).toHaveBeenCalledWith("Role ID 仅支持英文字母、数字、下划线和连字符");
+    expect(upsertRole).not.toHaveBeenCalled();
   });
 
   it("normalizes role permissions when toggling dependent MCP permissions", async () => {
@@ -289,6 +318,7 @@ describe("useRoleManager", () => {
     const { useRoleManager } = await import("./useRoleManager");
     const manager = useRoleManager();
     manager.roleForm.value = {
+      role_id: "mcp_viewer",
       name: "MCP 查看员",
       description: "",
       permissions: [],
@@ -297,7 +327,7 @@ describe("useRoleManager", () => {
 
     await manager.saveRole();
 
-    expect(upsertRole).toHaveBeenCalledWith("MCP 查看员", {
+    expect(upsertRole).toHaveBeenCalledWith("mcp_viewer", {
       name: "MCP 查看员",
       description: null,
       permissions: ["module.mcp", "mcp.server.list", "mcp.server.connectivity"],
@@ -310,6 +340,7 @@ describe("useRoleManager", () => {
 
     manager.openEditDialog({ ...role, permissions: ["mcp.server.tools"] });
 
+    expect(manager.roleForm.value.role_id).toBe("resource_admin");
     expect(manager.selectedFeatures.value).toEqual([
       "module.mcp",
       "mcp.server.list",
