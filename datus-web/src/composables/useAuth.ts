@@ -1,9 +1,16 @@
 import { shallowRef } from "vue";
-import { setCurrentAccessToken, setCurrentUser, request } from "@/lib/request";
+import { toast } from "vue-sonner";
 import { usePermission } from "@/composables/usePermission";
+import {
+  HttpError,
+  request,
+  setAuthenticationFailureHandler,
+  setCurrentAccessToken,
+  setCurrentUser,
+} from "@/lib/request";
 
 // 权限
-const { fetchPermissions } = usePermission();
+const { clearPermissions, fetchPermissions } = usePermission();
 
 /**
  * 用户信息接口
@@ -37,7 +44,9 @@ const state = shallowRef<AuthState>({
   authenticated: false,
   user: null,
 });
+const failureMessage = shallowRef<string | null>(null);
 let checkAuthPromise: Promise<void> | null = null;
+let loginRedirectTimer: ReturnType<typeof setTimeout> | null = null;
 
 // 认证配置从环境变量获取
 const AUTH_API_URL = import.meta.env.VITE_AUTH_API_URL || "";
@@ -46,6 +55,11 @@ const DEV_ACCESS_TOKEN = import.meta.env.VITE_DEV_ACCESS_TOKEN || "";
 const DEV_USER = import.meta.env.VITE_DEV_USER || "";
 const POST_LOGIN_REDIRECT_KEY = "datus_post_login_redirect";
 const POST_LOGIN_CHAT_TARGET = "chat";
+const LOGIN_REDIRECT_DELAY_MS = 1200;
+const AUTH_EXPIRED_MESSAGE = AUTH_LOGIN_URL
+  ? "登录状态已过期，正在前往登录页。"
+  : "登录状态已过期，请重新登录后再继续操作。";
+const AUTH_SERVICE_UNAVAILABLE_MESSAGE = "认证服务暂时不可用，请稍后重新验证。";
 
 const FALLBACK_DEV_USER: UserInfo = {
   userId: 1,
@@ -138,6 +152,8 @@ function getAccessToken(): string | null {
  * 清除 cookie 中的 access_token
  */
 function clearAccessTokenCookie(): void {
+  if (typeof document === "undefined") return;
+
   // 设置过期时间为过去时间，浏览器会自动删除
   document.cookie = "access_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/";
 }
@@ -194,11 +210,41 @@ function redirectToLogin(): void {
   }
 }
 
-function clearAuthState(): void {
+function cancelScheduledLoginRedirect(): void {
+  if (loginRedirectTimer === null) return;
+  clearTimeout(loginRedirectTimer);
+  loginRedirectTimer = null;
+}
+
+function scheduleLoginRedirect(): void {
+  if (!AUTH_LOGIN_URL || loginRedirectTimer !== null) return;
+
+  loginRedirectTimer = setTimeout(() => {
+    loginRedirectTimer = null;
+    redirectToLogin();
+  }, LOGIN_REDIRECT_DELAY_MS);
+}
+
+function clearAuthState(message: string | null = null): void {
   setCurrentAccessToken(null);
   setCurrentUser(null);
+  failureMessage.value = message;
   state.value = { loading: false, authenticated: false, user: null };
 }
+
+function handleAuthenticationExpired(): void {
+  if (!state.value.authenticated && failureMessage.value === AUTH_EXPIRED_MESSAGE) return;
+
+  clearAccessTokenCookie();
+  clearPermissions();
+  clearAuthState(AUTH_EXPIRED_MESSAGE);
+  toast.error("登录已过期", {
+    description: AUTH_LOGIN_URL ? "即将跳转到登录页，请重新登录。" : "请重新登录后再继续操作。",
+  });
+  scheduleLoginRedirect();
+}
+
+setAuthenticationFailureHandler(handleAuthenticationExpired);
 
 /**
  * 获取用户详情
@@ -220,11 +266,13 @@ async function activateAuthenticatedUser(user: UserInfo, token: string | null): 
 
   const permissions = await fetchPermissions();
   if (!permissions) {
-    clearAuthState();
-    redirectToLogin();
+    if (failureMessage.value !== AUTH_EXPIRED_MESSAGE) {
+      clearAuthState(AUTH_SERVICE_UNAVAILABLE_MESSAGE);
+    }
     return;
   }
 
+  failureMessage.value = null;
   state.value = {
     loading: false,
     authenticated: true,
@@ -254,6 +302,8 @@ export function useAuth() {
   }
 
   async function runCheckAuth(): Promise<void> {
+    cancelScheduledLoginRedirect();
+    failureMessage.value = null;
     state.value = { ...state.value, loading: true };
 
     // 本地开发环境，免鉴权，使用默认用户数据
@@ -268,7 +318,7 @@ export function useAuth() {
 
       if (!token) {
         // token 为空，跳转登录页
-        clearAuthState();
+        clearAuthState("未获取到登录凭证，正在前往登录页。");
         redirectToLogin();
         return;
       }
@@ -281,14 +331,16 @@ export function useAuth() {
         await activateAuthenticatedUser(result, token);
       } else {
         // 认证失败，跳转登录页
-        clearAuthState();
-        redirectToLogin();
+        handleAuthenticationExpired();
       }
     } catch (error) {
+      if (error instanceof HttpError && error.status === 401) {
+        handleAuthenticationExpired();
+        return;
+      }
+
       console.error("认证校验失败:", error);
-      // 发生错误，跳转登录页
-      clearAuthState();
-      redirectToLogin();
+      clearAuthState(AUTH_SERVICE_UNAVAILABLE_MESSAGE);
     }
   }
 
@@ -296,6 +348,8 @@ export function useAuth() {
    * 登出
    */
   async function logout(): Promise<void> {
+    cancelScheduledLoginRedirect();
+
     // 清除认证相关的前端缓存，保留主题、API 地址等本地偏好。
     sessionStorage.removeItem("datus_permission_cache");
 
@@ -303,6 +357,7 @@ export function useAuth() {
     clearAccessTokenCookie();
 
     // 重置状态
+    clearPermissions();
     clearAuthState();
 
     // 判断是否本地开发模式
@@ -319,6 +374,7 @@ export function useAuth() {
 
   return {
     state,
+    failureMessage,
     checkAuth,
     logout,
   };

@@ -145,6 +145,26 @@ const friendlyChatErrors: Record<string, { title: string; message: string }> = {
     title: "需要重新登录",
     message: "当前会话没有有效登录凭证。请重新登录或切换到可用账号后再试。",
   },
+  AUTH_TOKEN_INVALID: {
+    title: "登录已过期",
+    message: "当前登录凭证已失效。请重新登录后再继续本次操作。",
+  },
+  AUTH_USER_DISABLED: {
+    title: "账号不可用",
+    message: "当前账号已被停用或不再允许登录。请联系管理员确认账号状态。",
+  },
+  AUTH_USERINFO_TIMEOUT: {
+    title: "认证服务暂时不可用",
+    message: "身份服务响应超时，请稍后重试。当前登录状态不会因此被清除。",
+  },
+  AUTH_USERINFO_UNAVAILABLE: {
+    title: "认证服务暂时不可用",
+    message: "身份服务当前无法访问，请稍后重试。当前登录状态不会因此被清除。",
+  },
+  AUTH_USERINFO_INVALID: {
+    title: "认证服务响应异常",
+    message: "身份服务返回了无法识别的结果，请稍后重试或联系管理员。",
+  },
   FORBIDDEN: {
     title: "没有操作权限",
     message: "当前账号没有执行这次操作所需的权限。如需继续，请联系管理员开通对应权限。",
