@@ -46,6 +46,7 @@ class ChatAgenticNode(AgenticNode):
 
     DEFAULT_SUBAGENTS = "*"
     result_class = ChatNodeResult
+    USE_REQUEST_WORKSPACE = True
 
     # Subclasses whose contract is read-only (e.g. artifact ask agents) set this
     # to True so the unified write-capable ``execute_sql`` tool hard-rejects any

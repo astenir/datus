@@ -118,6 +118,23 @@ class TestGenVisualDashboardInit:
         assert "save_query_template" in tool_names
         assert "validate_render" in tool_names
 
+    def test_enterprise_create_node_is_create_only_until_acl_binding(self, real_agent_config, mock_llm_create):
+        real_agent_config._enterprise_enabled = True
+        node = _make_node(
+            real_agent_config,
+            input_data=GenVisualDashboardNodeInput(user_message="创建仪表盘"),
+        )
+        tool_names = {tool.name for tool in node.tools}
+
+        assert "start_new_dashboard" in tool_names
+        assert "bind_existing_dashboard" not in tool_names
+        result = node.filesystem_func_tool.write_file(
+            "dashboards/not_authorized/render/app.jsx",
+            "export default function App() {}\n",
+        )
+        assert result.success == 0
+        assert "ACL-authorized binding" in (result.error or "")
+
     def test_tool_registry_registers_filesystem_tools(self, real_agent_config, mock_llm_create):
         """Same contract as the visual report node: filesystem tools must
         be declared under ``filesystem_tools`` so permission gating and

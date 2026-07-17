@@ -232,6 +232,28 @@ class TestResolveWorkspaceRoot:
         result = node._resolve_workspace_root()
         assert result == "/project/root"
 
+    def test_request_workspace_overrides_node_and_project_roots_for_opted_in_node(self):
+        node = _make_node()
+        node.USE_REQUEST_WORKSPACE = True
+        node.node_config = {"workspace_root": "/configured/node/root"}
+        cfg = MagicMock(spec=["project_root", "_request_workspace_root"])
+        cfg.project_root = "/project/root"
+        cfg._request_workspace_root = "/private/alice"
+        node.agent_config = cfg
+
+        assert node._resolve_workspace_root() == "/private/alice"
+
+    def test_project_authoring_node_ignores_request_workspace(self):
+        node = _make_node()
+        node.USE_REQUEST_WORKSPACE = False
+        node.node_config = {}
+        cfg = MagicMock(spec=["project_root", "_request_workspace_root"])
+        cfg.project_root = "/project/root"
+        cfg._request_workspace_root = "/private/alice"
+        node.agent_config = cfg
+
+        assert node._resolve_workspace_root() == "/project/root"
+
     def test_vscode_source_short_circuits_to_dot(self):
         """vscode owns its own filesystem; the resolver returns the literal "."
         so the daemon's project_root never leaks to the IDE."""

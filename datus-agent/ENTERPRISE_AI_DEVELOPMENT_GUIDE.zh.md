@@ -91,6 +91,14 @@ Authenticate -> Build Context -> Authorize -> Project Config -> Execute -> Audit
 - `SessionBodyStore` 不替代 `SessionOwnerStore`；正文表存在不能补权。
 - artifact `view` 不等于 query/export；实时查数和导出必须重新校验 ACL、模块权限、datasource grant、SQL policy、quota、audit。
 
+### Agent 用户 Workspace
+
+- Enterprise Chat 执行必须从认证后的 `user_id` 解析请求级私有 workspace，不接受客户端路径，也不修改共享 `DatusService.agent_config`。
+- 通用 Chat/Feedback/GenSQL 文件工具使用用户 workspace；项目级作者节点是否共享必须按具体资源 owner/ACL 契约逐一迁移，不能批量替换 `project_root`。
+- Visual Report/Dashboard 新建工具必须在默认 private ACL 落库后才绑定文件系统；编辑工具只能接受经过 `require_artifact_edit_access` 的服务端 edit session，并锁定唯一 Artifact slug。Enterprise 不得向新建节点暴露任意 `bind_existing_*`。
+- Enterprise 请求禁用通用 Bash；全局 Skills 只读。任何新增 MCP、Skill 或代码执行工具都要证明不能绕过同一 workspace 边界。
+- 测试至少证明用户 A/B 同名文件不覆盖、A 删除不影响 B、绝对路径/`..`/symlink 越界拒绝、匿名请求不能启动文件执行、Artifact 新建前不可写、无 ACL store 回滚、编辑不能跨 slug、本地非 Enterprise 行为保持兼容。
+
 ### Platform Status
 
 - 执行类请求和写入类 mutation 在 `DATUS_PLATFORM_STATUS != active` 时拒绝。

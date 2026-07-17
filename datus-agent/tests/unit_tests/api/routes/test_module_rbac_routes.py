@@ -658,6 +658,7 @@ def test_chat_stream_materializes_report_edit_session_subagent(monkeypatch):
     assert edit_entry["node_class"] == "gen_visual_report"
     assert edit_entry["artifact_slug"] == "sales_overview"
     assert edit_entry["edit_locked"] is True
+    assert edit_entry["_acl_authorized_artifact_edit"] is True
     rules_text = "\n".join(edit_entry["rules"])
     assert "Your first artifact tool call must be bind_existing_report('sales_overview')" in rules_text
     assert "Do not call read_file, glob" in rules_text
@@ -693,6 +694,7 @@ def test_chat_stream_materializes_dashboard_edit_session_subagent(monkeypatch):
     assert edit_entry["node_class"] == "gen_visual_dashboard"
     assert edit_entry["artifact_slug"] == "sales_overview"
     assert edit_entry["edit_locked"] is True
+    assert edit_entry["_acl_authorized_artifact_edit"] is True
     rules_text = "\n".join(edit_entry["rules"])
     assert "Your first artifact tool call must be bind_existing_dashboard('sales_overview')" in rules_text
     assert "Do not call read_file, glob" in rules_text

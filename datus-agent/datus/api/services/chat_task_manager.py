@@ -462,18 +462,22 @@ class ChatTaskManager:
         agent_config._artifact_acl_store = self._artifact_acl_store
         agent_config._enterprise_enabled = self._enterprise_enabled
         agent_config._protect_artifact_filesystem = self._enterprise_enabled
+        if self._enterprise_enabled and not user_id:
+            raise ValueError("AUTH_REQUIRED")
+        if self._enterprise_enabled:
+            from datus_enterprise.workspace import prepare_user_workspace
+
+            workspace_root = await asyncio.to_thread(prepare_user_workspace, agent_config, user_id or "")
+            agent_config._request_workspace_root = str(workspace_root)
         # API surface has no interactive broker to confirm EXTERNAL file
         # access, so force filesystem strict mode — every node constructed
         # below reads this flag via AgenticNode._resolve_filesystem_strict().
         agent_config.filesystem_strict = True
-        # Remote front-ends (vscode/web) own their own shell: the daemon must
-        # not offer a server-side BashTool. ``project_root`` is intentionally
-        # left untouched — web keeps its configured root, and the read-only
-        # ``AgentConfig.project_root`` property already falls back to the
-        # launch CWD when no root was supplied, so an empty project_root
-        # naturally resolves to the current directory.
+        # Enterprise requests never receive a server-side BashTool: changing
+        # cwd is not a filesystem sandbox. Remote front-ends (vscode/web) also
+        # own their own shell and keep the same hardening in local mode.
         effective_source = request.source or self._default_source
-        if effective_source in ("vscode", "web"):
+        if self._enterprise_enabled or effective_source in ("vscode", "web"):
             agent_config.bash_tool_enabled = False
         # Stash the resolved source on the cloned config so downstream nodes
         # can adapt prompt-side hints to the front-end (e.g. vscode renders

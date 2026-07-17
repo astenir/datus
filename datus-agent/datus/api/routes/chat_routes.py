@@ -277,6 +277,10 @@ def _materialize_artifact_edit_agent(agent_config: Any, session: ArtifactEditSes
         "node_class": node_type,
         "artifact_slug": session.artifact_slug,
         "edit_locked": True,
+        # Internal capability marker: this entry is created only after
+        # ``require_artifact_edit_access`` succeeds above.  Visual artifact
+        # nodes fail closed on Enterprise edit configs that lack this marker.
+        "_acl_authorized_artifact_edit": True,
         "agent_description": (
             f"This is a private edit session locked to {root_dir}/{session.artifact_slug}. "
             f"Call {bind_call} first; do not create a new {session.artifact_type}."

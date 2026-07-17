@@ -804,6 +804,39 @@ class TestPathZones:
         assert tool.read_file("hello.md").result == "hi"
         assert tool.write_file(".datus/skills/x/SKILL.md", "# skill\n").success == 1
 
+    def test_enterprise_global_skills_are_read_only(self, tmp_path):
+        project = tmp_path / "project"
+        project.mkdir()
+        datus_home = tmp_path / "datus-home"
+        global_skill = datus_home / "skills" / "shared" / "SKILL.md"
+        global_skill.parent.mkdir(parents=True)
+        global_skill.write_text("# shared\n")
+        tool = FilesystemFuncTool(
+            root_path=str(project),
+            datus_home=str(datus_home),
+            strict=True,
+            global_skills_read_only=True,
+        )
+
+        assert tool.read_file(str(global_skill)).result == "# shared\n"
+        assert "read-only" in (tool.write_file(str(global_skill), "changed").error or "").lower()
+        assert "read-only" in (tool.edit_file(str(global_skill), "shared", "changed").error or "").lower()
+        assert "read-only" in (tool.delete_file(str(global_skill)).error or "").lower()
+        assert global_skill.read_text() == "# shared\n"
+
+    def test_enterprise_project_skills_remain_private_workspace_writable(self, tmp_path):
+        tool = FilesystemFuncTool(
+            root_path=str(tmp_path),
+            datus_home=str(tmp_path / "datus-home"),
+            strict=True,
+            global_skills_read_only=True,
+        )
+
+        result = tool.write_file(".datus/skills/private/SKILL.md", "# private\n")
+
+        assert result.success == 1
+        assert (tmp_path / ".datus" / "skills" / "private" / "SKILL.md").exists()
+
     def test_glob_external_seed_returns_absolute_paths(self, tmp_path):
         other = tmp_path / "other"
         other.mkdir()

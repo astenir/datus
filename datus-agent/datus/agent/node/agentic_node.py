@@ -114,6 +114,11 @@ class AgenticNode(Node):
     # Visibility in ``<available_skills>`` is still filtered normally.
     SKILL_AUTHORING_MODE: bool = False
 
+    # General-purpose conversational nodes opt in to the request-scoped
+    # enterprise workspace. Project authoring nodes keep project_root until
+    # their shared resource/ACL storage contracts are migrated deliberately.
+    USE_REQUEST_WORKSPACE: bool = False
+
     def __init__(
         self,
         node_id: str,
@@ -2174,6 +2179,8 @@ class AgenticNode(Node):
             # Read by report/dashboard edit sessions to lock creation and
             # filesystem writes to one existing artifact.
             "edit_locked",
+            # Set only by the API after the artifact edit ACL check succeeds.
+            "_acl_authorized_artifact_edit",
         ]
         for attr in direct_attributes:
             # Handle both dict and object access patterns
@@ -3397,8 +3404,9 @@ class AgenticNode(Node):
 
     def _resolve_workspace_root(self) -> str:
         """
-        Resolve workspace_root with priority: node-specific ``workspace_root`` >
-        ``agent_config.project_root`` (which itself defaults to the launch CWD).
+        Resolve workspace_root with priority: enterprise request workspace >
+        node-specific ``workspace_root`` > ``agent_config.project_root`` (which
+        itself defaults to the launch CWD).
 
         Expands ``~`` to the user home directory if present.
 
@@ -3416,8 +3424,15 @@ class AgenticNode(Node):
         if getattr(self.agent_config, "_client_source", None) == "vscode":
             return "."
 
+        request_workspace_root = None
+        if self.USE_REQUEST_WORKSPACE and self.agent_config is not None:
+            request_workspace_root = getattr(self.agent_config, "_request_workspace_root", None)
+
         node_workspace_root = self.node_config.get("workspace_root")
-        if node_workspace_root:
+        if request_workspace_root:
+            workspace_root = request_workspace_root
+            logger.debug(f"Using request-scoped workspace_root: {workspace_root}")
+        elif node_workspace_root:
             workspace_root = node_workspace_root
             logger.debug(f"Using node-specific workspace_root: {workspace_root}")
         elif self.agent_config and hasattr(self.agent_config, "project_root"):
@@ -3479,6 +3494,7 @@ class AgenticNode(Node):
             strict=strict,
             session_data_dir=session_data_dir,
             protect_artifact_paths=bool(getattr(self.agent_config, "_protect_artifact_filesystem", False)),
+            global_skills_read_only=bool(getattr(self.agent_config, "_enterprise_enabled", False)),
             **kwargs,
         )
 

@@ -1867,6 +1867,39 @@ class TestStartChatRemoteSourceHardening:
         assert cfg.bash_tool_enabled is True
         assert cfg._client_source is None
 
+    @pytest.mark.asyncio
+    async def test_enterprise_no_source_disables_bash_tool(self, real_agent_config, monkeypatch):
+        from datus.api.models.cli_models import StreamChatInput
+
+        real_agent_config.bash_tool_enabled = True
+        captured = {}
+
+        async def fake_run_loop(self, task, agent_config, request, **kwargs):
+            captured["agent_config"] = agent_config
+
+        monkeypatch.setattr(ChatTaskManager, "_run_loop", fake_run_loop)
+        manager = ChatTaskManager(enterprise_enabled=True)
+        request = StreamChatInput(message="hi", session_id="enterprise-no-source")
+        task = await manager.start_chat(real_agent_config, request, user_id="alice")
+        await task.asyncio_task
+
+        assert captured["agent_config"].bash_tool_enabled is False
+        assert captured["agent_config"]._request_workspace_root.startswith(
+            str(real_agent_config.path_manager.workspace_dir)
+        )
+        assert not hasattr(real_agent_config, "_request_workspace_root")
+        assert real_agent_config.bash_tool_enabled is True
+
+    @pytest.mark.asyncio
+    async def test_enterprise_requires_authenticated_user(self, real_agent_config):
+        from datus.api.models.cli_models import StreamChatInput
+
+        manager = ChatTaskManager(enterprise_enabled=True)
+        request = StreamChatInput(message="hi", session_id="enterprise-workspace-required")
+
+        with pytest.raises(ValueError, match="AUTH_REQUIRED"):
+            await manager.start_chat(real_agent_config, request)
+
 
 class TestStartChatDatasourceOverride:
     """A per-request ``datasource`` (e.g. an IM channel override) switches the

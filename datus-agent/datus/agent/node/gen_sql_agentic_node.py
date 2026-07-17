@@ -42,6 +42,7 @@ class GenSQLAgenticNode(AgenticNode):
     """
 
     result_class = GenSQLNodeResult
+    USE_REQUEST_WORKSPACE = True
 
     def __init__(
         self,

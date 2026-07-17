@@ -240,6 +240,31 @@ class TestChatAgenticNodeToolSetup:
             if not prev_container:
                 real_agent_config.agentic_nodes = prev_container
 
+    def test_enterprise_request_workspace_overrides_node_workspace(self, real_agent_config, mock_llm_create, tmp_path):
+        from datus.agent.node.chat_agentic_node import ChatAgenticNode
+
+        request_workspace = tmp_path / "private" / "alice"
+        request_workspace.mkdir(parents=True)
+        previous_nodes = real_agent_config.agentic_nodes
+        previous_request_workspace = getattr(real_agent_config, "_request_workspace_root", None)
+        real_agent_config.agentic_nodes = {"chat": {"workspace_root": str(tmp_path / "shared")}}
+        real_agent_config._request_workspace_root = str(request_workspace)
+        try:
+            node = ChatAgenticNode(
+                node_id="test_request_workspace",
+                description="Test request workspace",
+                node_type=NodeType.TYPE_CHAT,
+                agent_config=real_agent_config,
+            )
+
+            assert node.filesystem_func_tool.root_path == str(request_workspace)
+        finally:
+            real_agent_config.agentic_nodes = previous_nodes
+            if previous_request_workspace is None:
+                del real_agent_config._request_workspace_root
+            else:
+                real_agent_config._request_workspace_root = previous_request_workspace
+
     def test_has_date_parsing_tools(self, real_agent_config, mock_llm_create):
         """Chat node has date parsing tools."""
         from datus.agent.node.chat_agentic_node import ChatAgenticNode

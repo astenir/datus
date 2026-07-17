@@ -105,6 +105,39 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
 
     # ── Construction ──────────────────────────────────────────────────────
 
+    def _artifact_access_mode(self) -> Literal["legacy", "create", "edit"]:
+        """Return the request-authorized Artifact operation mode.
+
+        Local/CLI execution keeps the historical behavior. Enterprise nodes
+        are create-only unless the API materialized an edit session after a
+        successful resource ACL check.
+        """
+
+        if not bool(getattr(self.agent_config, "_enterprise_enabled", False)):
+            return "legacy"
+        if self.node_config.get("_acl_authorized_artifact_edit"):
+            if not self.node_config.get("edit_locked") or not self.node_config.get("artifact_slug"):
+                raise ValueError("ACL-authorized artifact edit is missing its locked artifact slug.")
+            return "edit"
+        if self.node_config.get("edit_locked"):
+            raise ValueError("Enterprise artifact edit requires an ACL-authorized edit session.")
+        return "create"
+
+    def _locked_artifact_slug(self) -> Optional[str]:
+        mode = self._artifact_access_mode()
+        if mode == "edit" or (mode == "legacy" and self.node_config.get("edit_locked")):
+            value = self.node_config.get("artifact_slug")
+            return str(value) if value else None
+        return None
+
+    def _bind_authorized_artifact_slug(self, artifact_slug: str) -> None:
+        filesystem_tool = self.filesystem_func_tool
+        if filesystem_tool is None:
+            return
+        bind = getattr(filesystem_tool, "bind_authorized_artifact", None)
+        if bind is not None:
+            bind(artifact_slug)
+
     def __init__(
         self,
         node_id: str,
@@ -222,14 +255,17 @@ class BaseVisualArtifactAgenticNode(AgenticNode, Generic[InputT, ResultT]):
         if strict is None:
             strict = self._resolve_filesystem_strict()
         current_node = kwargs.pop("current_node", None) or self.get_node_name()
-        locked_artifact_slug = self.node_config.get("artifact_slug") if self.node_config.get("edit_locked") else None
+        access_mode = self._artifact_access_mode()
+        locked_artifact_slug = self._locked_artifact_slug()
         return self.FILESYSTEM_TOOL_CLS(
             root_path=root_path,
             current_node=current_node,
             datus_home=datus_home,
             strict=strict,
             protect_artifact_paths=bool(getattr(self.agent_config, "_protect_artifact_filesystem", False)),
+            global_skills_read_only=bool(getattr(self.agent_config, "_enterprise_enabled", False)),
             locked_artifact_slug=locked_artifact_slug,
+            require_authorized_artifact=access_mode != "legacy",
             **kwargs,
         )
 

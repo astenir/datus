@@ -229,6 +229,21 @@ Artifact 访问必须按 artifact type + slug 校验 ACL：
 - 创建后默认 private：owner 和 `module.admin.artifacts` 管理员可见。
 - 创建者自助分享只能使用脱敏用户/角色目录，不复用 admin 用户/角色详情接口。
 
+## Agent 用户 Workspace
+
+企业请求中的通用文件操作不能直接使用共享 `agent.project_root`。当前最小边界为：
+
+- `ChatTaskManager` 在所有授权、SQL policy、model policy 和 quota 前置检查通过后，根据服务端认证得到的 `user_id` 创建请求级私有目录：`{agent.home}/workspace/{project_name}/{sha256(user_id)}`。
+- 目录使用不暴露原始用户标识的固定摘要段，并设置为 `0700`；路径由服务端构造，不接受请求体或 Agent 提交 workspace root。
+- Chat、Feedback 和 GenSQL 节点的通用文件工具优先使用请求级 workspace，覆盖节点配置中的 `workspace_root`；共享 `DatusService.agent_config` 和原始 `project_root` 不得被修改。
+- Enterprise Chat 缺少认证用户时拒绝启动；通用 Bash 始终禁用，因为工作目录不是文件系统沙箱。
+- 全局 `{agent.home}/skills` 对 Enterprise 文件工具只读；用户 workspace 内的 `.datus/skills` 和 `.datus/plans` 仍可按工具权限写入。
+- Visual Report/Dashboard 继续写入共享 `project_root/reports|dashboards/<slug>`，但 Enterprise 新建节点只暴露 `start_new_*`；默认 private ACL 成功持久化后，文件工具才绑定新 slug。缺少 ACL store/认证 owner 时创建失败并回滚。
+- 已有 Visual Report/Dashboard 只能由通过 `require_artifact_edit_access` 的服务端 edit session 绑定；节点和文件工具锁定到唯一 slug，不能创建第二个 Artifact、绑定其他 slug、枚举其他 Artifact 或写入 Artifact 外路径。
+- 语义模型、指标和 SQL summary 等其他项目级作者节点暂时继续使用共享 `project_root`，必须依赖各自 module permission 或专用生成路径。它们不属于本轮用户 workspace 隔离完成面，后续迁移前不得宣称“全部 Agent 项目文件已按用户隔离”。
+
+当前实现是同一 API 进程内的应用级路径隔离，不是任意代码执行沙箱。若重新开放 Bash、Python、任意 MCP 文件工具或用户代码执行，必须使用仅挂载当前 workspace 的独立 worker/container，不能把 `cwd` 或工具确认提示当作隔离边界。
+
 ## Platform Status
 
 `DATUS_PLATFORM_STATUS` 支持：

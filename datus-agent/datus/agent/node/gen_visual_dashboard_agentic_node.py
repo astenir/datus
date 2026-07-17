@@ -96,15 +96,16 @@ class GenVisualDashboardAgenticNode(
     # ────────── Hooks the base class calls ──────────
 
     def _make_artifact_tools(self, user_input: GenVisualDashboardNodeInput) -> DashboardArtifactTools:
-        locked_dashboard_slug = None
-        if self.node_config.get("edit_locked"):
-            locked_dashboard_slug = self.node_config.get("artifact_slug")
+        access_mode = self._artifact_access_mode()
+        locked_dashboard_slug = self._locked_artifact_slug()
         return DashboardArtifactTools(
             agent_config=self.agent_config,
             db_func_tool=self.db_func_tool,
             user_message=getattr(user_input, "user_message", "") or "",
             locked_dashboard_slug=locked_dashboard_slug,
-            allow_create=locked_dashboard_slug is None,
+            allow_create=access_mode != "edit" and locked_dashboard_slug is None,
+            allow_bind_existing=access_mode != "create",
+            on_artifact_authorized=self._bind_authorized_artifact_slug,
         )
 
     def _read_artifact_slug_from_tools(self) -> Optional[str]:
