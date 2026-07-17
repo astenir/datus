@@ -1012,6 +1012,8 @@ describe("api client", () => {
     );
 
     await agentApi.list("http://localhost:8000/");
+    await agentApi.aclUsers("http://localhost:8000/");
+    await agentApi.aclRoles("http://localhost:8000/");
     await agentApi.get("http://localhost:8000/", "analyst");
     await agentApi.create("http://localhost:8000/", "analyst", {
       name: "Analyst",
@@ -1026,10 +1028,12 @@ describe("api client", () => {
     await agentApi.delete("http://localhost:8000/", "analyst");
 
     expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents");
-    expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/analyst");
-    expect(vi.mocked(fetch).mock.calls[2]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/analyst");
-    expect((vi.mocked(fetch).mock.calls[2]?.[1] as RequestInit).method).toBe("PUT");
-    expect(JSON.parse(String((vi.mocked(fetch).mock.calls[2]?.[1] as RequestInit).body))).toEqual({
+    expect(vi.mocked(fetch).mock.calls[1]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/acl-users?limit=100");
+    expect(vi.mocked(fetch).mock.calls[2]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/acl-roles?limit=100");
+    expect(vi.mocked(fetch).mock.calls[3]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/analyst");
+    expect(vi.mocked(fetch).mock.calls[4]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/analyst");
+    expect((vi.mocked(fetch).mock.calls[4]?.[1] as RequestInit).method).toBe("PUT");
+    expect(JSON.parse(String((vi.mocked(fetch).mock.calls[4]?.[1] as RequestInit).body))).toEqual({
       name: "Analyst",
       node_class: "gen_sql",
       status: "draft",
@@ -1037,10 +1041,41 @@ describe("api client", () => {
       prompt_version: "1.0",
       max_turns: 30,
     });
-    expect(vi.mocked(fetch).mock.calls[3]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/tools");
-    expect(vi.mocked(fetch).mock.calls[4]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/tool-reference?node_class=gen_sql");
-    expect(vi.mocked(fetch).mock.calls[5]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/analyst");
-    expect((vi.mocked(fetch).mock.calls[5]?.[1] as RequestInit).method).toBe("DELETE");
+    expect(vi.mocked(fetch).mock.calls[5]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/tools");
+    expect(vi.mocked(fetch).mock.calls[6]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/tool-reference?node_class=gen_sql");
+    expect(vi.mocked(fetch).mock.calls[7]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/analyst");
+    expect((vi.mocked(fetch).mock.calls[7]?.[1] as RequestInit).method).toBe("DELETE");
+  });
+
+  it("uses enterprise Agent policy and default assignment routes", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
+      Promise.resolve(mockJsonResponse({ success: true, data: {} }))
+    );
+
+    await agentApi.updateStatus("http://localhost:8000/", "safe_chat", "published");
+    await agentApi.updateAcl("http://localhost:8000/", "safe_chat", {
+      visibility: "enterprise",
+      allowed_roles: [],
+      allowed_user_ids: [],
+    });
+    await agentApi.updatePolicy("http://localhost:8000/", "safe_chat", {
+      tool_policy: { mode: "allowlist", allowed: ["filesystem_tools.read_file"], denied: ["bash_tools.*"] },
+      runtime_policy: { max_permission_mode: "normal", allow_subagent_delegation: false, allowed_subagents: [] },
+    });
+    await agentApi.enterpriseDefault("http://localhost:8000/");
+    await agentApi.updateEnterpriseDefault("http://localhost:8000/", "safe_chat");
+    await agentApi.defaultUsers("http://localhost:8000/", "safe_chat");
+    await agentApi.updateDefaultUsers("http://localhost:8000/", "safe_chat", ["alice"]);
+
+    const calls = vi.mocked(fetch).mock.calls;
+    expect(calls[0]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/safe_chat/status");
+    expect(calls[1]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/safe_chat/acl");
+    expect(calls[2]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/safe_chat/policy");
+    expect(calls[3]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/default");
+    expect(calls[4]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/default");
+    expect(calls[5]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/safe_chat/default-users");
+    expect(calls[6]?.[0]).toBe("http://localhost:8000/api/v1/admin/agents/safe_chat/default-users");
+    expect(JSON.parse(String((calls[6]?.[1] as RequestInit).body))).toEqual({ user_ids: ["alice"] });
   });
 
   it("keeps legacy workflow helpers scoped to typed compatibility payloads", async () => {

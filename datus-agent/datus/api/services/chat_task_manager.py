@@ -788,6 +788,9 @@ class ChatTaskManager:
             # switch the freshly created node's PermissionManager in
             # place — it is scoped to this request only.
             self._apply_permission_mode_override(node, agent_config, request.permission_mode)
+            from datus.agent.tool_policy import apply_agent_runtime_policy
+
+            apply_agent_runtime_policy(node)
 
             await self._push_event(
                 task,
@@ -1182,12 +1185,21 @@ class ChatTaskManager:
           result) are logged and swallowed because at that point the
           node still has its original, server-default profile installed.
         """
-        if not permission_mode:
-            return
         permission_manager = getattr(node, "permission_manager", None)
         if permission_manager is None:
             return
-        if getattr(permission_manager, "active_profile", None) == permission_mode:
+        from datus.agent.tool_policy import normalize_runtime_policy, permission_mode_exceeds
+
+        node_config = getattr(node, "node_config", None)
+        raw_runtime_policy = node_config.get("runtime_policy") if isinstance(node_config, dict) else None
+        if raw_runtime_policy is None and not permission_mode:
+            return
+        target_mode = permission_mode or getattr(permission_manager, "active_profile", None) or "normal"
+        if raw_runtime_policy is not None:
+            maximum = normalize_runtime_policy(raw_runtime_policy)["max_permission_mode"]
+            if permission_mode_exceeds(target_mode, maximum):
+                target_mode = maximum
+        if getattr(permission_manager, "active_profile", None) == target_mode:
             return
 
         from datus.tools.permission.profiles import build_user_overrides
@@ -1195,26 +1207,26 @@ class ChatTaskManager:
         raw_permissions = getattr(agent_config, "_raw_permissions", {}) or {}
         raw_user = {k: v for k, v in raw_permissions.items() if k != "profile"}
         try:
-            user_overrides = build_user_overrides(permission_mode, raw_user)
+            user_overrides = build_user_overrides(target_mode, raw_user)
         except Exception as exc:
             logger.error(
                 "Cannot build user overrides for permission_mode=%r from agent.yml: %s; "
                 "refusing to switch profile to avoid broadening permissions beyond the "
                 "operator-configured rules",
-                permission_mode,
+                target_mode,
                 exc,
                 exc_info=True,
             )
             raise RuntimeError(
-                f"Failed to apply permission_mode={permission_mode!r}: agent.yml permissions.rules is malformed ({exc})"
+                f"Failed to apply permission_mode={target_mode!r}: agent.yml permissions.rules is malformed ({exc})"
             ) from exc
 
         try:
-            permission_manager.switch_profile(permission_mode, user_overrides=user_overrides)
+            permission_manager.switch_profile(target_mode, user_overrides=user_overrides)
         except Exception as e:
             logger.error(
                 "Failed to switch permission profile to %r for session=%s: %s",
-                permission_mode,
+                target_mode,
                 getattr(node, "session_id", None),
                 e,
             )
@@ -1222,7 +1234,7 @@ class ChatTaskManager:
 
         logger.info(
             "Applied per-request permission profile %r for session=%s",
-            permission_mode,
+            target_mode,
             getattr(node, "session_id", None),
         )
 

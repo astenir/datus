@@ -11,12 +11,12 @@ asyncio.Task so that client disconnects do not cancel the computation.
 """
 
 import asyncio
-from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Annotated, Any, AsyncGenerator, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import StreamingResponse
 
+from datus.agent.tool_policy import normalize_runtime_policy, permission_mode_exceeds
 from datus.api import deps as api_deps
 from datus.api.auth.context import AppContext
 from datus.api.constants import BUILTIN_SUBAGENTS
@@ -25,11 +25,8 @@ from datus.api.enterprise.deps import (
     authorize_session_access,
     delete_session_owner,
     project_request_config,
-    require_authorized_module,
-    require_module,
     require_platform_active,
 )
-from datus.api.enterprise.models import ResourceRef
 from datus.api.hooks import (
     ChatHooks,
     ChatPostUsageContext,
@@ -68,7 +65,13 @@ from datus.utils.exceptions import DatusException
 from datus.utils.feedback_prompt import build_reaction_feedback_prompt
 from datus.utils.loggings import get_logger
 from datus.utils.time_utils import now_utc_iso
-from datus_enterprise.agent_registry import agent_record_to_runtime_entry, resolve_enterprise_agent_for_dispatch
+from datus_enterprise.agent_registry import (
+    agent_policy_metadata,
+    agent_record_to_runtime_entry,
+    list_available_agent_records,
+    resolve_effective_default_agent,
+    resolve_enterprise_agent_for_dispatch,
+)
 from datus_enterprise.artifact_acl import require_artifact_access, require_artifact_edit_access
 from datus_enterprise.audit import AuditEvent, audit_decision
 from datus_enterprise.model_credentials import apply_user_model_credential
@@ -81,10 +84,8 @@ if TYPE_CHECKING:
     from datus.api.services.datus_service import DatusService
 
 router = APIRouter(prefix="/api/v1/chat", tags=["chat"])
-_require_chat_module = require_module("module.chat")
-ChatModuleCtx = Annotated[AppContext, Depends(_require_chat_module)]
-ELEVATED_CHAT_PERMISSION_MODE_PERMISSION = "module.chat.permission_mode"
-_ELEVATED_PERMISSION_MODES = {"auto", "dangerous"}
+_require_chat_context = api_deps.get_request_app_context
+ChatCtx = Annotated[AppContext, Depends(_require_chat_context)]
 _FILESYSTEM_WRITE_TOOL_NAMES = ("write_file", "edit_file", "delete_file")
 SSE_RESPONSE = {
     200: {
@@ -111,33 +112,7 @@ _FUSE_IO_TIMEOUT = 15.0
 # in :meth:`ChatTaskManager._create_node`.
 _EXTRA_BUILTIN_SUBAGENTS = {"feedback"}
 
-_SUBAGENT_MODULE_PERMISSIONS = {
-    "gen_sql": "module.sql_executor",
-    "gen_report": "module.report.query",
-    "gen_visual_report": "module.report.query",
-    "ask_report": "module.report.query",
-    "gen_dashboard": "module.dashboard.query",
-    "gen_visual_dashboard": "module.dashboard.query",
-    "ask_dashboard": "module.dashboard.query",
-}
 ArtifactEditSession = ReportEditSession | DashboardEditSession
-
-
-def _permission_matches(required: str, granted: str) -> bool:
-    required_code = required.strip()
-    granted_code = granted.strip()
-    if not required_code or not granted_code:
-        return False
-    return granted_code == "*" or fnmatchcase(required_code, granted_code)
-
-
-def _can_use_elevated_permission_mode(ctx: AppContext) -> bool:
-    if getattr(ctx, "is_admin", False):
-        return True
-    permissions = getattr(ctx, "permissions", set()) or set()
-    return any(
-        _permission_matches(ELEVATED_CHAT_PERMISSION_MODE_PERMISSION, str(permission)) for permission in permissions
-    )
 
 
 def _filesystem_write_deny_rules() -> list[PermissionRule]:
@@ -158,28 +133,28 @@ def _install_filesystem_write_deny_rules(agent_config: Any) -> None:
 
 def _harden_chat_permission_mode(
     request: StreamChatInput,
-    ctx: AppContext,
     agent_config: Any,
     *,
     enterprise_enabled: bool,
+    agent_record: dict[str, Any] | None,
 ) -> None:
-    """Fail closed for ordinary enterprise users on high-risk tool profiles."""
+    """Enforce the selected Agent's maximum permission profile."""
 
     if not enterprise_enabled:
         return
-    if _can_use_elevated_permission_mode(ctx):
-        return
-
-    requested_mode = request.permission_mode
-    if requested_mode in _ELEVATED_PERMISSION_MODES:
+    runtime_policy = normalize_runtime_policy(agent_policy_metadata(agent_record)["runtime_policy"])
+    maximum = runtime_policy["max_permission_mode"]
+    if permission_mode_exceeds(request.permission_mode, maximum):
         raise HTTPException(
             status_code=403,
-            detail=(f"Permission mode '{requested_mode}' requires {ELEVATED_CHAT_PERMISSION_MODE_PERMISSION}."),
+            detail=(
+                f"Permission mode '{request.permission_mode}' exceeds Agent maximum "
+                f"'{maximum}'."
+            ),
         )
-
-    request.permission_mode = None
-    agent_config.active_profile_name = "normal"
-    _install_filesystem_write_deny_rules(agent_config)
+    if maximum == "normal":
+        agent_config.active_profile_name = "normal"
+        _install_filesystem_write_deny_rules(agent_config)
 
 
 def _is_valid_subagent_id(svc, subagent_id: str) -> bool:
@@ -232,7 +207,7 @@ async def _authorize_subagent_dispatch(
     enterprise_agent_record: Optional[dict[str, Any]] = None,
     artifact_edit_session: Optional[ArtifactEditSession] = None,
 ) -> None:
-    """Enforce module permissions before dispatching privileged builtin subagents."""
+    """Enforce non-Agent resource ACLs needed by an Agent dispatch."""
 
     if not subagent_id:
         return
@@ -245,42 +220,10 @@ async def _authorize_subagent_dispatch(
             slug=artifact_edit_session.artifact_slug,
         )
         return
-    permission_key = _subagent_module_permission(svc, subagent_id, enterprise_agent_record)
-    if permission_key is None:
-        return
-    await require_authorized_module(
-        ctx,
-        permission_key,
-        resource=ResourceRef(type="subagent", id=subagent_id),
-    )
     artifact_requirement = _subagent_artifact_acl_requirement(svc, subagent_id, enterprise_agent_record)
     if artifact_requirement is not None:
         artifact_type, artifact_slug = artifact_requirement
         await require_artifact_access(ctx, artifact_type=artifact_type, slug=artifact_slug, action="query")
-
-
-def _subagent_module_permission(
-    svc,
-    subagent_id: str,
-    enterprise_agent_record: Optional[dict[str, Any]] = None,
-) -> Optional[str]:
-    edit_session = _resolve_artifact_edit_session(svc, subagent_id)
-    if edit_session is not None:
-        return f"module.{edit_session.artifact_type}.edit"
-    permission_key = _SUBAGENT_MODULE_PERMISSIONS.get(subagent_id)
-    if permission_key is not None or svc is None:
-        return permission_key
-
-    if enterprise_agent_record is not None:
-        node_class = enterprise_agent_record.get("node_class") or enterprise_agent_record.get("type")
-        return _SUBAGENT_MODULE_PERMISSIONS.get(node_class)
-
-    entry_name, entry = _resolve_agentic_node_entry_with_name(svc, subagent_id)
-    if not isinstance(entry, dict):
-        return None
-    node_class = entry.get("node_class") or entry.get("type") or entry_name
-    return _SUBAGENT_MODULE_PERMISSIONS.get(node_class)
-
 
 def _subagent_artifact_acl_requirement(
     svc,
@@ -549,13 +492,13 @@ def _principal_path_exists(principal: dict[str, Any], path: str) -> bool:
     response_class=StreamingResponse,
     responses=SSE_RESPONSE,
     dependencies=[
-        Depends(_require_chat_module),
+        Depends(_require_chat_context),
         Depends(require_platform_active(operation="chat.stream", resource_type="chat")),
     ],
 )
 async def stream_chat(
     request: StreamChatInput,
-    ctx: ChatModuleCtx,
+    ctx: ChatCtx,
     http_request: Request,
 ):
     svc = await api_deps.resolve_datus_service_for_request(http_request)
@@ -563,11 +506,10 @@ async def stream_chat(
     sub_agent_id = request.subagent_id
     enterprise_agent_record: Optional[dict[str, Any]] = None
     artifact_edit_session: Optional[ArtifactEditSession] = None
-    if sub_agent_id:
-        if _is_valid_subagent_id(svc, sub_agent_id):
+    if enterprise_extensions.enabled:
+        if sub_agent_id and _resolve_artifact_edit_session(svc, sub_agent_id) is not None:
             artifact_edit_session = _resolve_artifact_edit_session(svc, sub_agent_id)
-            pass
-        elif enterprise_extensions.enabled:
+        elif sub_agent_id:
             try:
                 enterprise_agent_record = await resolve_enterprise_agent_for_dispatch(ctx, sub_agent_id)
             except PermissionError as exc:
@@ -578,6 +520,17 @@ async def stream_chat(
                     detail=f"Subagent '{sub_agent_id}' not found",
                 )
         else:
+            try:
+                enterprise_agent_record, _ = await resolve_effective_default_agent(ctx)
+            except Exception as exc:
+                raise HTTPException(status_code=503, detail="Default Agent resolution failed") from exc
+            if enterprise_agent_record is None:
+                raise HTTPException(status_code=404, detail="No available Agent")
+            sub_agent_id = str(enterprise_agent_record["agent_id"])
+            request.subagent_id = sub_agent_id
+            enterprise_agent_record = await resolve_enterprise_agent_for_dispatch(ctx, sub_agent_id)
+    elif sub_agent_id:
+        if not _is_valid_subagent_id(svc, sub_agent_id):
             raise HTTPException(
                 status_code=404,
                 detail=f"Subagent '{sub_agent_id}' not found",
@@ -636,10 +589,19 @@ async def stream_chat(
 
     _harden_chat_permission_mode(
         request,
-        ctx,
         projection.config,
         enterprise_enabled=enterprise_extensions.enabled,
+        agent_record=enterprise_agent_record,
     )
+
+    if enterprise_extensions.enabled:
+        available_records = await list_available_agent_records(ctx)
+        projection.config._enterprise_enabled = True
+        projection.config._enterprise_allowed_agent_ids = {
+            str(record["agent_id"]) for record in available_records
+        }
+        for record in available_records:
+            _materialize_enterprise_agent(projection.config, record)
 
     try:
         applied_credential = await apply_user_model_credential(
@@ -698,8 +660,6 @@ async def stream_chat(
             headers=_sse_headers(),
         )
 
-    if enterprise_agent_record is not None:
-        _materialize_enterprise_agent(projection.config, enterprise_agent_record)
     if artifact_edit_session is not None:
         _materialize_artifact_edit_agent(projection.config, artifact_edit_session)
 
@@ -748,13 +708,13 @@ async def stream_chat(
     response_class=StreamingResponse,
     responses=SSE_RESPONSE,
     dependencies=[
-        Depends(_require_chat_module),
+        Depends(_require_chat_context),
         Depends(require_platform_active(operation="chat.feedback", resource_type="chat")),
     ],
 )
 async def stream_chat_feedback(
     request: FeedbackChatInput,
-    ctx: ChatModuleCtx,
+    ctx: ChatCtx,
     http_request: Request,
 ):
     svc = await api_deps.resolve_datus_service_for_request(http_request)
@@ -903,13 +863,13 @@ async def stream_chat_feedback(
     response_class=StreamingResponse,
     responses=SSE_RESPONSE,
     dependencies=[
-        Depends(_require_chat_module),
+        Depends(_require_chat_context),
         Depends(require_platform_active(operation="chat.resume", resource_type="chat")),
     ],
 )
 async def resume_chat(
     request: ResumeChatInput,
-    ctx: ChatModuleCtx,
+    ctx: ChatCtx,
     http_request: Request,
 ):
     svc = await api_deps.resolve_datus_service_for_request(http_request)
@@ -949,11 +909,11 @@ async def resume_chat(
     response_model=Result[dict],
     summary="Stop Chat Session",
     description="Stop a currently running chat session",
-    dependencies=[Depends(_require_chat_module)],
+    dependencies=[Depends(_require_chat_context)],
 )
 async def stop_chat(
     request: StopChatInput,
-    ctx: ChatModuleCtx,
+    ctx: ChatCtx,
     http_request: Request,
 ) -> Result[dict]:
     svc = await api_deps.resolve_datus_service_for_request(http_request)
@@ -980,14 +940,14 @@ async def stop_chat(
     summary="Compact Chat Session",
     description="Compact chat session by summarizing conversation history",
     dependencies=[
-        Depends(_require_chat_module),
+        Depends(_require_chat_context),
         Depends(require_platform_active(operation="chat.session.compact", resource_type="session")),
     ],
 )
 async def compact_chat_session(
     session_id: Annotated[str, Path(description="Session ID to compact")],
     svc: ServiceDep,
-    ctx: ChatModuleCtx,
+    ctx: ChatCtx,
 ) -> Result[CompactSessionData]:
     access = await authorize_session_access(svc, ctx, session_id, action="compact", require_existing_session=True)
     if access.error:
@@ -1004,11 +964,11 @@ async def compact_chat_session(
         "(use 'chat' for the default chat agent, or any builtin/custom subagent id). "
         "Omit to return every session for the user."
     ),
-    dependencies=[Depends(_require_chat_module)],
+    dependencies=[Depends(_require_chat_context)],
 )
 async def list_sessions(
     svc: ServiceDep,
-    ctx: ChatModuleCtx,
+    ctx: ChatCtx,
     subagent_id: Optional[str] = Query(
         default=None,
         description="Filter by subagent id; 'chat' selects the default chat agent",
@@ -1059,14 +1019,14 @@ async def _filter_session_list_by_owner_store(
     summary="Delete Chat Session",
     description="Delete a chat session by ID",
     dependencies=[
-        Depends(_require_chat_module),
+        Depends(_require_chat_context),
         Depends(require_platform_active(operation="chat.session.delete", resource_type="session")),
     ],
 )
 async def delete_session(
     session_id: Annotated[str, Path(description="Session ID to delete")],
     svc: ServiceDep,
-    ctx: ChatModuleCtx,
+    ctx: ChatCtx,
 ) -> Result[ChatSessionData]:
     access = await authorize_session_access(svc, ctx, session_id, action="delete", require_existing_session=True)
     if access.error:
@@ -1093,11 +1053,11 @@ async def delete_session(
     response_model=Result[ChatHistoryData],
     summary="Get Chat History",
     description="Get full conversation messages for a chat session",
-    dependencies=[Depends(_require_chat_module)],
+    dependencies=[Depends(_require_chat_context)],
 )
 async def get_chat_history(
     svc: ServiceDep,
-    ctx: ChatModuleCtx,
+    ctx: ChatCtx,
     session_id: str = Query(..., description="Session ID to retrieve history for"),
 ) -> Result[ChatHistoryData]:
     access = await authorize_session_access(svc, ctx, session_id, action="history", require_existing_session=True)
@@ -1123,13 +1083,13 @@ async def get_chat_history(
     summary="Submit User Interaction",
     description="Submit user's choice or input for an interactive dialog",
     dependencies=[
-        Depends(_require_chat_module),
+        Depends(_require_chat_context),
         Depends(require_platform_active(operation="chat.user_interaction", resource_type="chat")),
     ],
 )
 async def submit_user_interaction(
     request: UserInteractionInput,
-    ctx: ChatModuleCtx,
+    ctx: ChatCtx,
     http_request: Request,
 ) -> Result[UserInteractionData]:
     svc = await api_deps.resolve_datus_service_for_request(http_request)
@@ -1183,13 +1143,13 @@ async def submit_user_interaction(
         "its final turn, the message will auto-continue the conversation in a follow-up run."
     ),
     dependencies=[
-        Depends(_require_chat_module),
+        Depends(_require_chat_context),
         Depends(require_platform_active(operation="chat.insert", resource_type="chat")),
     ],
 )
 async def insert_message(
     request: InsertMessageInput,
-    ctx: ChatModuleCtx,
+    ctx: ChatCtx,
     http_request: Request,
 ) -> Result[InsertMessageData]:
     svc = await api_deps.resolve_datus_service_for_request(http_request)
@@ -1238,13 +1198,13 @@ async def insert_message(
     summary="Submit Tool Execution Result",
     description="Receive tool execution result from frontend after filesystem operation",
     dependencies=[
-        Depends(_require_chat_module),
+        Depends(_require_chat_context),
         Depends(require_platform_active(operation="chat.tool_result", resource_type="chat")),
     ],
 )
 async def submit_tool_result(
     request: ToolResultInput,
-    ctx: ChatModuleCtx,
+    ctx: ChatCtx,
     http_request: Request,
 ) -> Result[ToolResultData]:
     """Receive tool execution result from frontend."""

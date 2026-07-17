@@ -2007,6 +2007,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/agents/acl-users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["list_admin_agent_acl_users_api_v1_admin_agents_acl_users_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/agents/acl-roles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["list_admin_agent_acl_roles_api_v1_admin_agents_acl_roles_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/agents": {
         parameters: {
             query?: never;
@@ -2017,6 +2051,24 @@ export interface paths {
 
         get: operations["list_admin_agents_api_v1_admin_agents_get"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/agents/default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["get_admin_enterprise_default_api_v1_admin_agents_default_get"];
+
+        put: operations["set_admin_enterprise_default_api_v1_admin_agents_default_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -2071,6 +2123,42 @@ export interface paths {
         get: operations["get_admin_agent_acl_api_v1_admin_agents__agent_id__acl_get"];
 
         put: operations["set_admin_agent_acl_api_v1_admin_agents__agent_id__acl_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/agents/{agent_id}/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["get_admin_agent_policy_api_v1_admin_agents__agent_id__policy_get"];
+
+        put: operations["set_admin_agent_policy_api_v1_admin_agents__agent_id__policy_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/agents/{agent_id}/default-users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+
+        get: operations["list_admin_agent_default_users_api_v1_admin_agents__agent_id__default_users_get"];
+
+        put: operations["set_admin_agent_default_users_api_v1_admin_agents__agent_id__default_users_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -2875,6 +2963,28 @@ export interface components {
             allowed_user_ids?: string[];
         };
 
+        AgentAclRoleSummary: {
+
+            role_id: string;
+
+            name: string;
+
+            description?: string | null;
+        };
+
+        AgentAclUserSummary: {
+
+            user_id: string;
+
+            display_name?: string | null;
+
+            email?: string | null;
+
+            department?: string | null;
+
+            title?: string | null;
+        };
+
         AgentConfigSummaryData: {
 
             target?: unknown | null;
@@ -2912,13 +3022,33 @@ export interface components {
             name: string;
         };
 
+        AgentPolicy: {
+            tool_policy?: components["schemas"]["AgentToolPolicy"];
+            runtime_policy?: components["schemas"]["AgentRuntimePolicy"];
+        };
+
         AgentPreferenceSummary: {
 
             default_agent_id?: string | null;
 
+            source: string;
+
+            user_default_agent_id?: string | null;
+
+            enterprise_default_agent_id?: string | null;
+
             created_at?: string | null;
 
             updated_at?: string | null;
+        };
+
+        AgentRuntimePolicy: {
+
+            max_permission_mode: string;
+
+            allow_subagent_delegation: boolean;
+
+            allowed_subagents?: string[];
         };
 
         AgentSummary: {
@@ -2930,6 +3060,15 @@ export interface components {
             type: string;
 
             description: string;
+        };
+
+        AgentToolPolicy: {
+
+            mode: string;
+
+            allowed?: string[];
+
+            denied?: string[];
         };
 
         AgentToolsData: {
@@ -3560,6 +3699,10 @@ export interface components {
 
             artifact_slug?: string | null;
             acl?: components["schemas"]["AgentAcl"] | null;
+            tool_policy?: components["schemas"]["AgentToolPolicy"];
+            runtime_policy?: components["schemas"]["AgentRuntimePolicy"];
+
+            enterprise_default: boolean;
 
             created_at?: string | null;
 
@@ -3619,6 +3762,10 @@ export interface components {
 
             artifact_slug?: string | null;
             acl?: components["schemas"]["AgentAcl"] | null;
+            tool_policy?: components["schemas"]["AgentToolPolicy"];
+            runtime_policy?: components["schemas"]["AgentRuntimePolicy"];
+
+            enterprise_default: boolean;
 
             created_at?: string | null;
 
@@ -4426,6 +4573,17 @@ export interface components {
             errorMessage?: string | null;
         };
 
+        Result_AgentPolicy_: {
+
+            success: boolean;
+
+            data?: components["schemas"]["AgentPolicy"] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
         Result_AgentPreferenceSummary_: {
 
             success: boolean;
@@ -5116,6 +5274,28 @@ export interface components {
             errorMessage?: string | null;
         };
 
+        Result_list_AgentAclRoleSummary__: {
+
+            success: boolean;
+
+            data?: components["schemas"]["AgentAclRoleSummary"][] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
+        Result_list_AgentAclUserSummary__: {
+
+            success: boolean;
+
+            data?: components["schemas"]["AgentAclUserSummary"][] | null;
+
+            errorCode?: string | null;
+
+            errorMessage?: string | null;
+        };
+
         Result_list_EnterpriseAgentNodeType__: {
 
             success: boolean;
@@ -5538,6 +5718,11 @@ export interface components {
             };
         };
 
+        UpdateDefaultUsersRequest: {
+
+            user_ids?: string[];
+        };
+
         UpdateModelPreferenceRequest: {
 
             default_credential_id?: string | null;
@@ -5652,6 +5837,8 @@ export interface components {
 
             max_turns: number;
             acl?: components["schemas"]["AgentAcl"];
+            tool_policy?: components["schemas"]["AgentToolPolicy"];
+            runtime_policy?: components["schemas"]["AgentRuntimePolicy"];
         };
 
         UpsertModelCredentialRequest: {
@@ -9892,6 +10079,72 @@ export interface operations {
             };
         };
     };
+    list_admin_agent_acl_users_api_v1_admin_agents_acl_users_get: {
+        parameters: {
+            query?: {
+
+                query?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_list_AgentAclUserSummary__"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_admin_agent_acl_roles_api_v1_admin_agents_acl_roles_get: {
+        parameters: {
+            query?: {
+
+                query?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_list_AgentAclRoleSummary__"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_admin_agents_api_v1_admin_agents_get: {
         parameters: {
             query?: {
@@ -9911,6 +10164,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Result_list_EnterpriseAgentSummary__"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_admin_enterprise_default_api_v1_admin_agents_default_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_AgentPreferenceSummary_"];
+                };
+            };
+        };
+    };
+    set_admin_enterprise_default_api_v1_admin_agents_default_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAgentPreferenceRequest"];
+            };
+        };
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_AgentPreferenceSummary_"];
                 };
             };
 
@@ -10109,6 +10415,138 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Result_AgentAcl_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_admin_agent_policy_api_v1_admin_agents__agent_id__policy_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_AgentPolicy_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_admin_agent_policy_api_v1_admin_agents__agent_id__policy_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentPolicy"];
+            };
+        };
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_AgentPolicy_"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_admin_agent_default_users_api_v1_admin_agents__agent_id__default_users_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_list_str__"];
+                };
+            };
+
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_admin_agent_default_users_api_v1_admin_agents__agent_id__default_users_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateDefaultUsersRequest"];
+            };
+        };
+        responses: {
+
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Result_list_str__"];
                 };
             };
 

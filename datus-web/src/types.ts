@@ -247,6 +247,20 @@ export type ViewType = DeveloperViewType | "settings";
 
 export type AgentAcl = components["schemas"]["AgentAcl"];
 
+export type AgentVisibility = "private" | "role" | "enterprise";
+
+export type AgentAclUserSummary = components["schemas"]["AgentAclUserSummary"];
+
+export type AgentAclRoleSummary = components["schemas"]["AgentAclRoleSummary"];
+
+export type AgentToolPolicy = components["schemas"]["AgentToolPolicy"];
+
+export type AgentRuntimePolicy = components["schemas"]["AgentRuntimePolicy"];
+
+export type AgentPolicy = components["schemas"]["AgentPolicy"];
+
+export type AgentPreferenceSummary = components["schemas"]["AgentPreferenceSummary"];
+
 export type AgentInfo = components["schemas"]["EnterpriseAgentSummary"];
 
 export type AgentDetail = components["schemas"]["EnterpriseAgentDetail"];

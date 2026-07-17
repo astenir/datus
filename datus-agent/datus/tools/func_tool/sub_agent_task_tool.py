@@ -17,7 +17,6 @@ import json
 import uuid
 from contextlib import nullcontext
 from datetime import datetime
-from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from agents import FunctionTool, Tool
@@ -46,21 +45,6 @@ if TYPE_CHECKING:
     from datus.schemas.base import BaseInput
 
 logger = get_logger(__name__)
-
-_SUBAGENT_MODULE_PERMISSIONS = {
-    "gen_sql": "module.sql_executor",
-    "gen_report": "module.report.query",
-    "gen_visual_report": "module.report.query",
-    "ask_report": "module.report.query",
-    "gen_dashboard": "module.dashboard.query",
-    "gen_visual_dashboard": "module.dashboard.query",
-    "ask_dashboard": "module.dashboard.query",
-}
-
-
-def _matches_permission(action: str, permissions: list[str]) -> bool:
-    return any(permission == "*" or fnmatchcase(action, permission) for permission in permissions)
-
 
 # Mapping from subagent type string to NodeType constants
 NODE_CLASS_MAP = {
@@ -690,9 +674,9 @@ class SubAgentTaskTool:
         # Normalize the LLM-supplied value first — strip whitespace/newlines and the
         # surrounding quotes some models wrap around string arguments — before
         # comparing against the discoverable allowlist.
-        allowed_types = self._get_available_types()
         raw_subagent_type = subagent_type
         normalized = subagent_type.strip().strip("\"'") if isinstance(subagent_type, str) else subagent_type
+        allowed_types = self._get_available_types()
         if normalized in allowed_types:
             subagent_type = normalized
         else:
@@ -711,7 +695,7 @@ class SubAgentTaskTool:
                 ),
             )
 
-        permission_denial = self._enterprise_permission_denial(subagent_type)
+        permission_denial = self._enterprise_acl_denial(subagent_type)
         if permission_denial is not None:
             return permission_denial
 
@@ -752,6 +736,9 @@ class SubAgentTaskTool:
                     )
 
             node = self._create_node(subagent_type, session_id=session_id)
+            from datus.agent.tool_policy import apply_agent_runtime_policy
+
+            apply_agent_runtime_policy(node)
 
             # Nest this subagent's session under the launching main session so the
             # parent LLM can later resume by passing back the returned session_id.
@@ -886,61 +873,24 @@ class SubAgentTaskTool:
 
         return self._convert_to_func_result(final_output, session_id=node.session_id)
 
-    def _enterprise_permission_denial(self, subagent_type: str) -> Optional[FuncToolResult]:
-        """Re-apply enterprise module permissions for in-chat task() dispatch.
-
-        Route-level checks cover ``/api/v1/chat/stream`` when the caller passes
-        ``subagent_id`` directly. A normal chat turn can still invoke this tool
-        later, so privileged subagents must be checked here as well.
-        """
+    def _enterprise_acl_denial(self, subagent_type: str) -> Optional[FuncToolResult]:
+        """Re-apply the request's effective Agent ACL for task() delegation."""
         if not bool(getattr(self.agent_config, "_enterprise_enabled", False)):
             return None
 
-        permission_key = self._required_module_permission(subagent_type)
-        if permission_key is None:
-            return None
-
-        permissions = self._request_permissions()
-        if _matches_permission(permission_key, permissions):
+        allowed_agent_ids = set(getattr(self.agent_config, "_enterprise_allowed_agent_ids", set()) or set())
+        if subagent_type in allowed_agent_ids:
             return None
 
         logger.warning(
-            "Enterprise task dispatch denied: subagent=%s permission=%s user=%r",
+            "Enterprise task dispatch denied by Agent ACL: subagent=%s user=%r",
             subagent_type,
-            permission_key,
             getattr(self.agent_config, "_request_user_id", None),
         )
         return FuncToolResult(
             success=0,
-            error=(
-                f"PERMISSION_DENIED: task(type={subagent_type!r}) requires {permission_key}. "
-                "Ask an administrator to grant the module permission or use an artifact that has been shared with you."
-            ),
+            error=f"AGENT_FORBIDDEN: task(type={subagent_type!r}) is not allowed by the Agent ACL.",
         )
-
-    def _required_module_permission(self, subagent_type: str) -> Optional[str]:
-        permission_key = _SUBAGENT_MODULE_PERMISSIONS.get(subagent_type)
-        if permission_key is not None:
-            return permission_key
-
-        try:
-            entry = self.agent_config.sub_agent_config(subagent_type)
-        except Exception:
-            entry = None
-        if not isinstance(entry, dict):
-            return None
-
-        node_class = entry.get("node_class") or entry.get("type") or subagent_type
-        return _SUBAGENT_MODULE_PERMISSIONS.get(node_class)
-
-    def _request_permissions(self) -> list[str]:
-        principal = getattr(self.agent_config, "principal", None) or {}
-        raw = principal.get("permissions")
-        if isinstance(raw, str):
-            return [raw]
-        if isinstance(raw, (list, set, tuple)):
-            return [item for item in raw if isinstance(item, str)]
-        return []
 
     def _resolve_inherited_memory_node(self, subagent_type: str) -> Optional[str]:
         """Pick the memory node a sub-agent should inherit (read-only inline).
@@ -1470,8 +1420,15 @@ class SubAgentTaskTool:
         not a delegatable subagent, so it is excluded here even though it lives
         in SYS_SUB_AGENTS (which only guards reserved system names).
         """
-        types = ["explore"]
-        types.extend(sorted(name for name in SYS_SUB_AGENTS if name != "feedback"))
+        enterprise_enabled = bool(getattr(self.agent_config, "_enterprise_enabled", False))
+        allowed_agent_ids = set(
+            getattr(self.agent_config, "_enterprise_allowed_agent_ids", set()) or set()
+        )
+        types = ["explore"] if not enterprise_enabled or "explore" in allowed_agent_ids else []
+        builtin_types = sorted(name for name in SYS_SUB_AGENTS if name != "feedback")
+        if enterprise_enabled:
+            builtin_types = [name for name in builtin_types if name in allowed_agent_ids]
+        types.extend(builtin_types)
 
         if self.agent_config and hasattr(self.agent_config, "agentic_nodes"):
             current_datasource = self.agent_config.current_datasource
@@ -1479,6 +1436,10 @@ class SubAgentTaskTool:
             for name, config in self.agent_config.agentic_nodes.items():
                 if name in ("chat", "explore", "feedback") or name in SYS_SUB_AGENTS:
                     continue
+                if enterprise_enabled:
+                    entry_id = config.get("id") if isinstance(config, dict) else None
+                    if name not in allowed_agent_ids and entry_id not in allowed_agent_ids:
+                        continue
 
                 # If scoped_context is configured, datasource must match current datasource
                 try:

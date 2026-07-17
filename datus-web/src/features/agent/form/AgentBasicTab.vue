@@ -91,10 +91,7 @@ function clearArtifact() {
 
       <Field>
         <FieldLabel for="agent-status">状态</FieldLabel>
-        <Select
-          v-model="props.manager.form.value.status"
-          :disabled="props.readonly"
-        >
+        <Select v-model="props.manager.form.value.status">
           <SelectTrigger id="agent-status">
             <SelectValue placeholder="选择状态" />
           </SelectTrigger>
@@ -110,6 +107,9 @@ function clearArtifact() {
             </SelectGroup>
           </SelectContent>
         </Select>
+        <FieldDescription v-if="props.readonly">
+          系统内置 Agent 可在此发布或停用，其他基础定义保持只读。
+        </FieldDescription>
       </Field>
 
       <Field :data-invalid="Boolean(props.maxTurnsError)">

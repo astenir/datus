@@ -7,7 +7,9 @@ import {
   LockIcon,
   MessageSquareTextIcon,
   SaveIcon,
+  ShieldCheckIcon,
   UserRoundIcon,
+  WrenchIcon,
 } from "@lucide/vue"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
@@ -26,12 +28,14 @@ import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import type { AgentManagerController } from "@/composables/useAgentManager"
 import AgentBasicTab from "@/features/agent/form/AgentBasicTab.vue"
+import AgentAccessTab from "@/features/agent/form/AgentAccessTab.vue"
 import AgentBehaviorTab from "@/features/agent/form/AgentBehaviorTab.vue"
 import AgentCapabilitiesTab from "@/features/agent/form/AgentCapabilitiesTab.vue"
 import AgentMetadataTab from "@/features/agent/form/AgentMetadataTab.vue"
+import AgentPolicyTab from "@/features/agent/form/AgentPolicyTab.vue"
 import { cn } from "@/lib/utils"
 
-type AgentFormTab = "basic" | "behavior" | "capabilities" | "metadata"
+type AgentFormTab = "basic" | "access" | "policy" | "behavior" | "capabilities" | "metadata"
 
 const props = defineProps<{
   manager: AgentManagerController
@@ -58,11 +62,11 @@ const dialogTitle = computed(() => {
 })
 const formDialogDescription = computed(() => {
   if (selectedIsReadonly.value) {
-    return "系统内置 Agent 使用内置模板，只能查看或复制为企业 Agent。"
+    return "系统内置定义保持只读，但可配置企业访问范围、默认分配和运行工具策略。"
   }
   return props.manager.formMode.value === "edit"
-    ? "编辑当前 Agent 的基础配置、运行行为和扩展能力。"
-    : "创建新的可复用 Agent，保存后会同步到企业 Agent 接口。"
+    ? "编辑当前 Agent 的基础配置、访问范围、运行行为和扩展能力。"
+    : "创建新的可复用 Agent，并明确配置发布后的企业访问范围。"
 })
 const sourceLabel = computed(() => {
   const source = props.manager.selectedAgent.value?.source
@@ -158,7 +162,7 @@ async function submitForm() {
           >
             <LockIcon />
             <AlertTitle>系统内置 Agent</AlertTitle>
-            <AlertDescription>当前配置为只读。如需调整，请复制为企业 Agent 后再编辑。</AlertDescription>
+            <AlertDescription>基础定义与提示模板只读；访问控制、默认用户和权限策略可直接保存。</AlertDescription>
           </Alert>
 
           <Tabs
@@ -189,6 +193,20 @@ async function submitForm() {
                     v-if="validationAttempted && basicHasError"
                     class="ml-auto text-destructive"
                   />
+                </TabsTrigger>
+                <TabsTrigger
+                  value="access"
+                  :class="cn(!isDesktop && 'flex-none')"
+                >
+                  <ShieldCheckIcon />
+                  访问控制
+                </TabsTrigger>
+                <TabsTrigger
+                  value="policy"
+                  :class="cn(!isDesktop && 'flex-none')"
+                >
+                  <WrenchIcon />
+                  权限策略
                 </TabsTrigger>
                 <TabsTrigger
                   value="behavior"
@@ -238,6 +256,21 @@ async function submitForm() {
                 />
               </TabsContent>
               <TabsContent
+                value="access"
+                class="m-0 p-4 sm:p-6"
+              >
+                <AgentAccessTab
+                  :manager="props.manager"
+                  :readonly="false"
+                />
+              </TabsContent>
+              <TabsContent
+                value="policy"
+                class="m-0 p-4 sm:p-6"
+              >
+                <AgentPolicyTab :manager="props.manager" />
+              </TabsContent>
+              <TabsContent
                 value="behavior"
                 class="m-0 p-4 sm:p-6"
               >
@@ -269,50 +302,40 @@ async function submitForm() {
         <div>
           <Separator />
           <DialogFooter class="px-4 py-4 sm:px-6">
-            <template v-if="selectedIsReadonly">
+            <template v-if="selectedIsReadonly && props.manager.selectedCanCloneBuiltin.value">
               <Button
                 type="button"
                 variant="outline"
-                class="w-full sm:w-auto"
-                @click="open = false"
-              >
-                关闭
-              </Button>
-              <Button
-                v-if="props.manager.selectedCanCloneBuiltin.value"
-                type="button"
-                class="w-full sm:w-auto"
+                class="w-full sm:mr-auto sm:w-auto"
                 @click="cloneBuiltin"
               >
                 复制为企业 Agent
               </Button>
             </template>
-            <template v-else>
-              <Button
-                type="button"
-                variant="outline"
-                class="w-full sm:w-auto"
-                :disabled="props.manager.saving.value"
-                @click="open = false"
-              >
-                取消
-              </Button>
-              <Button
-                type="submit"
-                class="w-full sm:w-auto"
-                :disabled="props.manager.saving.value"
-              >
-                <Spinner
-                  v-if="props.manager.saving.value"
-                  data-icon="inline-start"
-                />
-                <SaveIcon
-                  v-else
-                  data-icon="inline-start"
-                />
-                {{ props.manager.saving.value ? "保存中…" : props.manager.formMode.value === "edit" ? "保存 Agent" : "创建 Agent" }}
-              </Button>
-            </template>
+            <Button
+              type="button"
+              variant="outline"
+              class="w-full sm:w-auto"
+              :disabled="props.manager.saving.value"
+              @click="open = false"
+            >
+              取消
+            </Button>
+            <Button
+              type="submit"
+              class="w-full sm:w-auto"
+              :disabled="props.manager.saving.value || !props.manager.canSubmitForm.value"
+            >
+              <Spinner
+                v-if="props.manager.saving.value"
+                data-icon="inline-start"
+              />
+              <SaveIcon
+                v-else
+                data-icon="inline-start"
+              />
+              {{ props.manager.saving.value ? "保存中…" : selectedIsReadonly ? "保存企业策略" : props.manager.formMode.value === "edit" ? "保存 Agent" : "创建 Agent" }}
+            </Button>
           </DialogFooter>
         </div>
       </form>

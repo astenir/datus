@@ -411,7 +411,7 @@ export function useChatWorkspace() {
     if (!response.success) {
       throw new Error(response.errorMessage || response.errorCode || "Agent 偏好请求失败");
     }
-    return response.data ?? {};
+    return response.data ?? { source: "none" };
   }
 
   async function loadAgentPreference(): Promise<boolean> {
@@ -447,7 +447,13 @@ export function useChatWorkspace() {
       const savedAgentId = preference.default_agent_id?.trim() ?? "";
       defaultAgentId.value = savedAgentId;
       selectedAgent.value = savedAgentId;
-      toast.success(savedAgentId ? "已设为我的默认 Agent" : "已恢复系统默认 Agent");
+      toast.success(
+        preference.source === "user"
+          ? "已设为我的默认 Agent"
+          : preference.source === "enterprise"
+            ? "已恢复企业默认 Agent"
+            : "已恢复可用 Agent 默认选择",
+      );
       return true;
     } catch (error) {
       console.error("Failed to update default Agent preference:", error);

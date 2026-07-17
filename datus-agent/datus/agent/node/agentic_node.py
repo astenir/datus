@@ -2988,6 +2988,9 @@ class AgenticNode(Node):
             else None
         )
         effective_max_turns = explicit_turns if explicit_turns is not None else self.max_turns
+        from datus.agent.tool_policy import apply_agent_runtime_policy
+
+        apply_agent_runtime_policy(self)
         self._current_action_history = ctx.action_history_manager
         try:
             async for stream_action in self.model.generate_with_tools_stream(

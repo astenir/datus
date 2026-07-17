@@ -29,8 +29,7 @@ from datus.api.models.cli_models import (
 )
 from datus.api.routes.chat_routes import (
     _FUSE_IO_TIMEOUT,
-    ELEVATED_CHAT_PERMISSION_MODE_PERMISSION,
-    _can_use_elevated_permission_mode,
+    _authorize_subagent_dispatch,
     _harden_chat_permission_mode,
     _is_valid_subagent_id,
     delete_session,
@@ -88,28 +87,29 @@ def _request_with_service(svc):
 
 
 class TestChatPermissionModeHardening:
-    def test_elevated_permission_accepts_exact_wildcard_and_admin(self):
-        assert _can_use_elevated_permission_mode(_mock_ctx(permissions={ELEVATED_CHAT_PERMISSION_MODE_PERMISSION}))
-        assert _can_use_elevated_permission_mode(_mock_ctx(permissions={"module.chat.*"}))
-        assert _can_use_elevated_permission_mode(_mock_ctx(permissions={"*"}))
-
-        ctx = _mock_ctx()
-        ctx.is_admin = True
-        assert _can_use_elevated_permission_mode(ctx)
-
-    def test_enterprise_ordinary_user_cannot_request_auto_profile(self):
+    def test_agent_runtime_policy_rejects_profile_above_maximum(self):
         request = StreamChatInput(message="hi", permission_mode="auto")
         agent_config = SimpleNamespace(
             active_profile_name="auto",
             permissions_config=PermissionConfig(default_permission=PermissionLevel.ALLOW),
             _raw_permissions={},
         )
+        agent_record = {
+            "scoped_context": {
+                "_enterprise_agent_policy": {"runtime_policy": {"max_permission_mode": "normal"}}
+            }
+        }
 
         with pytest.raises(HTTPException) as exc_info:
-            _harden_chat_permission_mode(request, _mock_ctx(), agent_config, enterprise_enabled=True)
+            _harden_chat_permission_mode(
+                request,
+                agent_config,
+                enterprise_enabled=True,
+                agent_record=agent_record,
+            )
 
         assert exc_info.value.status_code == 403
-        assert ELEVATED_CHAT_PERMISSION_MODE_PERMISSION in str(exc_info.value.detail)
+        assert "Agent maximum 'normal'" in str(exc_info.value.detail)
 
     def test_enterprise_ordinary_user_normal_profile_denies_raw_filesystem_writes(self):
         request = StreamChatInput(message="hi", permission_mode="normal")
@@ -119,9 +119,9 @@ class TestChatPermissionModeHardening:
             _raw_permissions={},
         )
 
-        _harden_chat_permission_mode(request, _mock_ctx(), agent_config, enterprise_enabled=True)
+        _harden_chat_permission_mode(request, agent_config, enterprise_enabled=True, agent_record=None)
 
-        assert request.permission_mode is None
+        assert request.permission_mode == "normal"
         assert agent_config.active_profile_name == "normal"
         assert agent_config.permissions_config.default_permission == PermissionLevel.ASK
         deny_rules = [
@@ -139,7 +139,7 @@ class TestChatPermissionModeHardening:
             _raw_permissions={"profile": "auto"},
         )
 
-        _harden_chat_permission_mode(request, _mock_ctx(), agent_config, enterprise_enabled=True)
+        _harden_chat_permission_mode(request, agent_config, enterprise_enabled=True, agent_record=None)
 
         assert agent_config.active_profile_name == "normal"
         assert agent_config.permissions_config.default_permission == PermissionLevel.ASK
@@ -152,7 +152,7 @@ class TestChatPermissionModeHardening:
         request = StreamChatInput(message="hi", permission_mode="auto")
         agent_config = SimpleNamespace(active_profile_name="auto", permissions_config=PermissionConfig())
 
-        _harden_chat_permission_mode(request, _mock_ctx(), agent_config, enterprise_enabled=False)
+        _harden_chat_permission_mode(request, agent_config, enterprise_enabled=False, agent_record=None)
 
         assert request.permission_mode == "auto"
         assert agent_config.active_profile_name == "auto"
@@ -174,13 +174,21 @@ class FailingAuditSink:
 def _patch_owner_extensions(monkeypatch, owner_store, *, enabled=False, session_body_store=None):
     import datus.api.deps as api_deps
     import datus.api.enterprise.deps as enterprise_deps
-    from datus.api.enterprise.defaults import PassthroughConfigProjector
+    from datus.api.enterprise.defaults import (
+        InMemoryEnterpriseAgentStore,
+        InMemoryEnterpriseRoleStore,
+        InMemoryEnterpriseUserStore,
+        PassthroughConfigProjector,
+    )
 
     extensions = SimpleNamespace(
         enabled=enabled,
         session_owner_store=owner_store,
         session_body_store=session_body_store,
         config_projector=PassthroughConfigProjector(),
+        user_store=InMemoryEnterpriseUserStore(),
+        role_store=InMemoryEnterpriseRoleStore(),
+        agent_store=InMemoryEnterpriseAgentStore(),
     )
     monkeypatch.setattr(api_deps, "get_enterprise_extensions", lambda: extensions)
     monkeypatch.setattr(enterprise_deps, "get_audit_sink", lambda: SimpleNamespace(write=AsyncMock()))
@@ -320,6 +328,33 @@ class TestIsValidSubagentId:
         """Non-dict entries in ``agentic_nodes`` are ignored during UUID lookup."""
         svc = _mock_svc_with_nodes({"some_agent": "not_a_dict_value"})
         assert _is_valid_subagent_id(svc, "not_a_dict_value") is False
+
+
+class TestEnterpriseBuiltinDispatch:
+    @pytest.mark.asyncio
+    async def test_agent_dispatch_has_no_node_class_module_guard(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+
+        _patch_owner_extensions(monkeypatch, InMemorySessionOwnerStore(), enabled=True)
+
+        await _authorize_subagent_dispatch(
+            _mock_svc_with_nodes(),
+            _mock_ctx(user_id="alice", permissions=set()),
+            "gen_skill",
+            enterprise_agent_record={"agent_id": "gen_skill", "node_class": "gen_skill"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_hidden_builtin_remains_available_in_local_compatibility_mode(self, monkeypatch):
+        from datus.api.enterprise.defaults import InMemorySessionOwnerStore
+
+        _patch_owner_extensions(monkeypatch, InMemorySessionOwnerStore(), enabled=False)
+
+        await _authorize_subagent_dispatch(
+            _mock_svc_with_nodes(),
+            _mock_ctx(user_id="local"),
+            "gen_skill",
+        )
 
 
 class TestStreamChat404Gate:

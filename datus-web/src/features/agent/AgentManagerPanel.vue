@@ -3,6 +3,7 @@ import { computed, onMounted, shallowRef } from "vue"
 import {
   BotIcon,
   BracesIcon,
+  ListChecksIcon,
   LoaderCircleIcon,
   PencilIcon,
   PlusIcon,
@@ -43,7 +44,7 @@ import {
 import { cn, formatDate } from "@/lib/utils"
 import type { ChatWorkspace } from "@/composables/useChatWorkspace"
 
-const props = defineProps<{
+defineProps<{
   workspace: ChatWorkspace
 }>()
 
@@ -97,20 +98,16 @@ function updateAgentSourceFilter(value: unknown) {
 }
 
 function isDefaultAgent(agent: AgentRow) {
-  return agent.agent_id === "chat"
-    ? !props.workspace.defaultAgentId.value
-    : props.workspace.defaultAgentId.value === agent.agent_id
+  return manager.enterpriseDefaultAgentId.value === agent.agent_id
 }
 
 function canSetDefaultAgent(agent: AgentRow) {
-  if (agent.agent_id === "chat") return true
-  return props.workspace.agentOptions.value.some((option) => option.value === agent.agent_id)
+  return agent.status === "published"
 }
 
 function defaultAgentActionLabel(agent: AgentRow) {
-  if (isDefaultAgent(agent)) return `${agent.name} 已是我的默认 Agent`
-  if (agent.agent_id === "chat") return "恢复系统默认 Agent"
-  return `将 ${agent.name} 设为我的默认 Agent`
+  if (isDefaultAgent(agent)) return `${agent.name} 已是企业默认 Agent，点击清除`
+  return `将 ${agent.name} 设为企业默认 Agent`
 }
 
 function agentEditActionLabel(agent: AgentRow) {
@@ -118,7 +115,7 @@ function agentEditActionLabel(agent: AgentRow) {
 }
 
 async function setDefaultAgent(agent: AgentRow) {
-  await props.workspace.setDefaultAgent(agent.agent_id === "chat" ? "" : agent.agent_id)
+  await manager.setEnterpriseDefault(isDefaultAgent(agent) ? null : agent.agent_id)
 }
 
 function agentStatusToneClass(status: string | null | undefined) {
@@ -154,10 +151,12 @@ function startCreate() {
 async function refreshAll() {
   await Promise.all([
     manager.loadAgents(),
+    manager.loadEnterpriseDefault(),
     manager.loadNodeTypes(),
     manager.loadToolCatalog(),
     manager.loadMcpCatalog(),
     manager.loadResourceCatalogs(),
+    manager.loadAclDirectory(),
   ])
 }
 
@@ -293,6 +292,13 @@ onMounted(() => {
                           >
                             系统内置
                           </Badge>
+                          <Badge
+                            v-if="isDefaultAgent(agent)"
+                            class="shrink-0"
+                            variant="outline"
+                          >
+                            企业默认
+                          </Badge>
                         </div>
                         <span class="block min-w-0 truncate text-xs text-muted-foreground">{{ systemPromptSummary(agent) }}</span>
                       </div>
@@ -313,7 +319,7 @@ onMounted(() => {
                         <Button
                           variant="ghost"
                           size="icon-sm"
-                          :disabled="props.workspace.isSavingDefaultAgent.value || (isDefaultAgent(agent) && agent.agent_id !== 'chat') || !canSetDefaultAgent(agent)"
+                          :disabled="manager.defaultPolicyLoading.value || !canSetDefaultAgent(agent)"
                           :aria-label="defaultAgentActionLabel(agent)"
                           :aria-pressed="isDefaultAgent(agent)"
                           :title="defaultAgentActionLabel(agent)"
