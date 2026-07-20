@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-PATCHED_RENDERER_SHA256 = "da5ab349c778759cf78aea4b149ad9d4614be94f8dc3407a4f79510bd5c0432c"
+PATCHED_RENDERER_SHA256 = "4c8c89cc47578b80b8732a180f4a245655c00429e9f0ba2b7d6a0c6f57561745"
 RENDERER_PATH = "datus/agent/node/visual_artifact/vendor/web_artifact_render_dist/index.umd.js"
 TEMPLATE_PATH = "datus/agent/node/visual_artifact/templates/dashboard_index.html"
 

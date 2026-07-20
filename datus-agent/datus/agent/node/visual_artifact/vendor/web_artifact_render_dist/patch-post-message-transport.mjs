@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const upstreamPackage = "@datus/web-artifact-render@0.1.7";
 const upstreamSha256 = "37aad622dadc7d0b4213cc2ef403038bc9081033caff5cd3f6a216966105d378";
-const patchedSha256 = "da5ab349c778759cf78aea4b149ad9d4614be94f8dc3407a4f79510bd5c0432c";
+const patchedSha256 = "4c8c89cc47578b80b8732a180f4a245655c00429e9f0ba2b7d6a0c6f57561745";
 const bundlePath = fileURLToPath(new URL("./index.umd.js", import.meta.url));
 
 function sha256(content) {
@@ -39,6 +39,12 @@ function applyPatch(upstreamBundle) {
   const dashboardComponentBefore = 'B2={dashboard:"_dashboard_19jt0_1",frame:"_frame_19jt0_7"},$2=({dashboardSlug:r,renderFiles:e,queryEndpoint:n,publishedVersion:o,queryHeaders:i,queryTimeoutMs:c,title:l,className:d,refreshKey:f,sourceMaps:p,editable:m})=>{const g=x.useMemo(()=>({mode:"remote",dashboardSlug:r,endpoint:n,publishedVersion:o,headers:i,timeoutMs:c}),[r,n,o,i,c]);return Z.createElement("div",{className:`${B2.dashboard} ${d??""}`.trim()},Z.createElement(q2,{key:f??0,renderFiles:e,provider:g,kind:"dashboard",slug:r,sourceMaps:p,editable:m,title:l,className:B2.frame}))};';
   const dashboardComponentAfter = 'B2={dashboard:"_dashboard_19jt0_1",frame:"_frame_19jt0_7"},$2=({dashboardSlug:r,renderFiles:e,queryEndpoint:n,publishedVersion:o,queryHeaders:i,queryTimeoutMs:c,queryTransport:l,title:d,className:f,refreshKey:p,sourceMaps:m,editable:g})=>{const v=x.useMemo(()=>l?{...l,mode:"post-message",dashboardSlug:r,publishedVersion:o,timeoutMs:l.timeoutMs??c}:{mode:"remote",dashboardSlug:r,endpoint:n,publishedVersion:o,headers:i,timeoutMs:c},[r,n,o,i,c,l]);return Z.createElement("div",{className:`${B2.dashboard} ${f??""}`.trim()},Z.createElement(q2,{key:p??0,renderFiles:e,provider:v,kind:"dashboard",slug:r,sourceMaps:m,editable:g,title:d,className:B2.frame}))};';
 
+  const copyHelperAnchor = 'const $t={frame:"_frame_q7x45_1"';
+  const copyHelper = 'async function datusCopyText(r){const e=navigator.clipboard;if(e&&typeof e.writeText==="function")try{await e.writeText(r);return}catch{}const n=document.createElement("textarea"),o=typeof document.getSelection==="function"?document.getSelection():null,i=o&&o.rangeCount>0?o.getRangeAt(0).cloneRange():null;n.value=r,n.setAttribute("readonly",""),n.style.position="fixed",n.style.left="-9999px",n.style.opacity="0",document.body.appendChild(n),n.focus(),n.select();try{typeof n.setSelectionRange==="function"&&n.setSelectionRange(0,n.value.length);if(typeof document.execCommand!=="function"||!document.execCommand("copy"))throw new Error("Clipboard copy failed")}finally{n.parentNode&&n.parentNode.removeChild(n),i&&o&&(o.removeAllRanges(),o.addRange(i))}}const $t={frame:"_frame_q7x45_1"';
+
+  const copyFixActionBefore = 'onClick:()=>{const W=G(!0);navigator.clipboard.writeText(W),uc.success("Fix prompt copied")}';
+  const copyFixActionAfter = 'onClick:async()=>{const W=G(!0);try{await datusCopyText(W),uc.success("Fix prompt copied")}catch{uc.error("Fix prompt copy failed")}}';
+
   const initDashboardBefore = 'function y6(r){const{rootId:e="root",dataScriptId:n="datus-dashboard-data",detail:o,lang:i,queryEndpoint:c,publishedVersion:l,queryHeaders:d,queryTimeoutMs:f}=r;G2();const p=o??W2(n,"__DATUS_DASHBOARD_DATA__","[DatusArtifact:dashboard]"),m=M2({lng:i});U2({entry:"dashboard",el:`#${e}`,render:()=>Z.createElement(qh,{i18n:m},p?(()=>{const{renderFiles:g}=V2(p.files);return Z.createElement($2,{dashboardSlug:p.slug,renderFiles:g,queryEndpoint:c,publishedVersion:l??p.published_version,queryHeaders:d,queryTimeoutMs:f,title:p.name})})():K2(`No dashboard data found. Provide IDashboardDetail inline via options.detail or in a <script id="${n}" type="application/json"> tag.`))})}';
   const initDashboardAfter = 'function y6(r){const{rootId:e="root",dataScriptId:n="datus-dashboard-data",detail:o,lang:i,queryEndpoint:c,publishedVersion:l,queryHeaders:d,queryTimeoutMs:f,queryTransport:p}=r;G2();const m=o??W2(n,"__DATUS_DASHBOARD_DATA__","[DatusArtifact:dashboard]"),g=M2({lng:i});U2({entry:"dashboard",el:`#${e}`,render:()=>Z.createElement(qh,{i18n:g},m?(()=>{const{renderFiles:v}=V2(m.files);return Z.createElement($2,{dashboardSlug:m.slug,renderFiles:v,queryEndpoint:c,publishedVersion:l??m.published_version,queryHeaders:d,queryTimeoutMs:f,queryTransport:p,title:m.name})})():K2(`No dashboard data found. Provide IDashboardDetail inline via options.detail or in a <script id="${n}" type="application/json"> tag.`))})}';
 
@@ -46,6 +52,8 @@ function applyPatch(upstreamBundle) {
   replaceOnce("inner provider factory", providerFactoryBefore, providerFactoryAfter);
   replaceOnce("dashboard component", dashboardComponentBefore, dashboardComponentAfter);
   replaceOnce("dashboard initializer", initDashboardBefore, initDashboardAfter);
+  replaceOnce("copy helper", copyHelperAnchor, copyHelper);
+  replaceOnce("copy fix action", copyFixActionBefore, copyFixActionAfter);
   return bundle;
 }
 
