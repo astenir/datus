@@ -19,6 +19,7 @@ from datus.api.services.chat_admission import ChatAdmissionController
 from datus.api.services.datus_service import DatusService
 from datus.api.services.datus_service_cache import DatusServiceCache
 from datus.configuration.agent_config_loader import load_agent_config
+from datus.utils.datasource_scope import SCOPE_CONSTRAINTS_KEY, grant_may_use_tree_scope
 from datus.utils.exceptions import DatusException
 from datus.utils.loggings import get_logger
 
@@ -491,6 +492,8 @@ def _intersect_allow_grants(left: dict[str, Any], right: dict[str, Any]) -> dict
         patterns = _intersect_scope_patterns(left.get(key), right.get(key))
         if patterns is not None:
             merged[key] = patterns
+    if grant_may_use_tree_scope(left) or grant_may_use_tree_scope(right):
+        merged[SCOPE_CONSTRAINTS_KEY] = [copy.deepcopy(left), copy.deepcopy(right)]
     return merged
 
 

@@ -98,6 +98,29 @@ def test_me_returns_current_context_summary(monkeypatch):
     assert body["data"]["views"]["profile"] is True
 
 
+def test_me_hides_internal_scope_constraints(monkeypatch):
+    _install_extensions(monkeypatch)
+    ctx = AppContext(
+        user_id="u1",
+        datasource_grants={
+            "finance": {
+                "effect": "allow",
+                "tables": ["finance.public.orders"],
+                "_scope_constraints": [
+                    {"effect": "allow", "schemas": ["finance.public"]},
+                    {"effect": "allow", "tables": ["finance.public.orders"]},
+                ],
+            }
+        },
+    )
+
+    with _client(ctx) as client:
+        response = client.get("/api/v1/me/datasource-grants")
+
+    assert response.status_code == 200
+    assert response.json()["data"] == {"finance": {"effect": "allow", "tables": ["finance.public.orders"]}}
+
+
 def test_me_marks_wildcard_permission_as_admin_feature(monkeypatch):
     _install_extensions(monkeypatch)
     ctx = AppContext(

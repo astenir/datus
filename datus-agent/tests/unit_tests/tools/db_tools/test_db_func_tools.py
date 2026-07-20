@@ -217,9 +217,9 @@ class TestDBFuncTool:
 
         assert result.result == ["schema1"]
 
-    def test_list_namespaces_include_ancestors_of_qualified_table_grants(self, mock_connector):
-        """Namespace discovery must retain ancestors that contain explicitly granted tables."""
-        mock_connector.get_databases.return_value = ["ccks_fund", "other_db"]
+    def test_list_namespaces_union_independently_selected_grant_nodes(self, mock_connector):
+        """Namespace discovery must union selected database, schema, and table branches."""
+        mock_connector.get_databases.return_value = ["ccks_fund", "postgres", "other_db"]
         mock_connector.get_schemas.return_value = ["public", "test", "private"]
         tool = DBFuncTool(
             mock_connector,
@@ -228,6 +228,7 @@ class TestDBFuncTool:
                 "datasource_grants": {
                     "ccks_fund": {
                         "effect": "allow",
+                        "databases": ["postgres"],
                         "schemas": ["ccks_fund.test"],
                         "tables": ["ccks_fund.public.mf_benchmarkgrowthrate"],
                     }
@@ -238,8 +239,8 @@ class TestDBFuncTool:
         databases = tool.list_databases()
         schemas = tool.list_schemas(database="ccks_fund")
 
-        assert databases.result == ["ccks_fund"]
-        assert schemas.result == ["public"]
+        assert databases.result == ["ccks_fund", "postgres"]
+        assert schemas.result == ["public", "test"]
 
     def test_list_schemas_failure(self, db_func_tool, mock_connector):
         """Test list_schemas with exception."""
@@ -335,8 +336,8 @@ class TestDBFuncTool:
 
         assert wrong_schema.result == []
 
-    def test_list_tables_uses_qualified_table_path_over_unrelated_schema_filter(self, mock_connector):
-        """A qualified leaf grant must not be rejected by an unrelated schema filter."""
+    def test_list_tables_unions_qualified_schema_and_table_branches(self, mock_connector):
+        """Qualified schema and leaf selections must authorize their independent branches."""
         mock_connector.get_tables.return_value = [
             "mf_benchmarkgrowthrate",
             "mf_bondportifoliodetail",
@@ -376,7 +377,20 @@ class TestDBFuncTool:
             {"type": "table", "qualified_name": "mf_benchmarkgrowthrate"},
             {"type": "table", "qualified_name": "mf_bondportifoliodetail"},
         ]
-        assert test_tables.result == []
+        assert test_tables.result == [
+            {"type": "table", "qualified_name": "mf_benchmarkgrowthrate"},
+            {"type": "table", "qualified_name": "mf_bondportifoliodetail"},
+            {"type": "table", "qualified_name": "other_table"},
+        ]
+
+        private_tables = tool.list_tables(
+            database="ccks_fund",
+            schema_name="private",
+            datasource="ccks_fund",
+            include_views=False,
+        )
+
+        assert private_tables.result == []
 
     def test_table_detail_uses_same_qualified_leaf_semantics_as_listing(self, mock_connector):
         """Qualified leaf grants must remain reachable through detail while siblings stay denied."""
