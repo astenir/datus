@@ -199,15 +199,24 @@ def _prune_databases_for_datasource_grant(
     for database in databases:
         field_order = datasource_field_order(database.type or "")
         tree_scope = grant_uses_tree_scope(grant, field_order)
+        namespace_selected = False
         if tree_scope:
             namespace_field = "schema" if "schema" in field_order and database.schema_name else "database"
+            coordinate = _database_coordinate(database)
             if not datasource_scope_matches(
                 grant,
-                coordinate=_database_coordinate(database),
+                coordinate=coordinate,
                 target_field=namespace_field,
                 field_order=field_order,
             ):
                 continue
+            namespace_selected = datasource_scope_matches(
+                grant,
+                coordinate=coordinate,
+                target_field=namespace_field,
+                field_order=field_order,
+                include_descendants=False,
+            )
         else:
             if not _scope_matches(grant, "catalogs", [database.catalog_name]):
                 continue
@@ -218,7 +227,7 @@ def _prune_databases_for_datasource_grant(
 
         table_patterns = _scope_patterns(grant, "tables")
         tables = _filter_tables_for_grant(database, grant, field_order=field_order, tree_scope=tree_scope)
-        if table_patterns is not None and not tables:
+        if table_patterns is not None and not tables and not namespace_selected:
             continue
         update = {"tables": tables}
         if table_patterns is not None and tables is not None:

@@ -238,7 +238,7 @@ def test_catalog_pruning_unions_independently_selected_grant_nodes():
             current=True,
             schema_name="test",
             connection_status="connected",
-            tables=["test_table"],
+            tables=[],
         ),
         DatabaseInfo(
             name="ccks_fund",
@@ -248,6 +248,15 @@ def test_catalog_pruning_unions_independently_selected_grant_nodes():
             schema_name="private",
             connection_status="connected",
             tables=["secret_table"],
+        ),
+        DatabaseInfo(
+            name="ccks_fund",
+            uri="postgresql://ccks_fund",
+            type="postgresql",
+            current=True,
+            schema_name="leaf_only",
+            connection_status="connected",
+            tables=[],
         ),
         DatabaseInfo(
             name="postgres",
@@ -280,19 +289,21 @@ def test_catalog_pruning_unions_independently_selected_grant_nodes():
                 "tables": [
                     "ccks_fund.public.mf_benchmarkgrowthrate",
                     "ccks_fund.public.mf_bondportifoliodetail",
+                    "ccks_fund.leaf_only.missing_table",
                 ],
             }
         },
     )
 
-    assert [(item.name, item.schema_name, item.tables) for item in visible] == [
+    assert [(item.name, item.schema_name, item.tables_count, item.tables) for item in visible] == [
         (
             "ccks_fund",
             "public",
+            2,
             ["mf_benchmarkgrowthrate", "mf_bondportifoliodetail"],
         ),
-        ("ccks_fund", "test", ["test_table"]),
-        ("postgres", "public", ["server_table"]),
+        ("ccks_fund", "test", 0, []),
+        ("postgres", "public", 1, ["server_table"]),
     ]
 
 

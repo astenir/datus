@@ -37,8 +37,14 @@ def datasource_scope_matches(
     coordinate: Mapping[str, str],
     target_field: str,
     field_order: Sequence[str],
+    include_descendants: bool = True,
 ) -> bool:
-    """Evaluate a datasource scope at one catalog-tree coordinate."""
+    """Evaluate a datasource scope at one catalog-tree coordinate.
+
+    Namespace discovery normally includes ancestors of selected descendants.
+    Callers can disable that behavior when they need to distinguish an explicit
+    namespace grant from visibility derived only from a table leaf.
+    """
 
     if str(grant.get("effect", "allow")).strip().lower() != "allow":
         return False
@@ -51,6 +57,7 @@ def datasource_scope_matches(
                 coordinate=coordinate,
                 target_field=target_field,
                 field_order=field_order,
+                include_descendants=include_descendants,
             )
             for constraint in constraints
         )
@@ -60,6 +67,7 @@ def datasource_scope_matches(
             coordinate=coordinate,
             target_field=target_field,
             field_order=field_order,
+            include_descendants=include_descendants,
         )
     return _legacy_scope_matches(
         grant,
@@ -96,11 +104,12 @@ def tree_scope_matches(
     coordinate: Mapping[str, str],
     target_field: str,
     field_order: Sequence[str],
+    include_descendants: bool = True,
 ) -> bool:
     """Match a coordinate against the union of selected catalog-tree nodes.
 
-    A selected ancestor authorizes its descendants, while a selected descendant
-    keeps its ancestors visible for namespace discovery.
+    A selected ancestor authorizes its descendants. A selected descendant keeps
+    its ancestors visible unless ``include_descendants`` is false.
     """
 
     if target_field not in field_order:
@@ -110,13 +119,14 @@ def tree_scope_matches(
     for selected_field, scope_key in _SCOPE_KEYS.items():
         if selected_field not in field_order:
             continue
+        selected_index = field_order.index(selected_field)
+        if not include_descendants and selected_index > target_index:
+            continue
         for raw_pattern in grant_scope_patterns(grant, scope_key) or []:
             pattern = _parse_scope_pattern(raw_pattern, selected_field, field_order)
-            if pattern is None or any(
-                not pattern.get(field) for field in field_order[: field_order.index(selected_field) + 1]
-            ):
+            if pattern is None or any(not pattern.get(field) for field in field_order[: selected_index + 1]):
                 continue
-            common_fields = field_order[: min(target_index, field_order.index(selected_field)) + 1]
+            common_fields = field_order[: min(target_index, selected_index) + 1]
             if all(_pattern_matches(pattern[field], coordinate.get(field, ""), field=field) for field in common_fields):
                 return True
     return False
